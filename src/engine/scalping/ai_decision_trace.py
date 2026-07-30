@@ -371,23 +371,34 @@ def _is_non_secret_internal_token(
     path: tuple[str, ...],
     value: Any,
 ) -> bool:
-    if path not in _NON_SECRET_INTERNAL_TOKEN_PATHS or not isinstance(value, str):
+    canonical_path = path[1:] if path[:1] == ("exact_payload",) else path
+    if canonical_path not in _NON_SECRET_INTERNAL_TOKEN_PATHS or not isinstance(
+        value, str
+    ):
         return False
     sanitized_value, redacted = _sanitize_text(value)
     if redacted or sanitized_value != value:
         return False
-    if path == ("runtime_context", "entry_adm", "entry_adm_bucket_token"):
+    if canonical_path == (
+        "runtime_context",
+        "entry_adm",
+        "entry_adm_bucket_token",
+    ):
         return bool(_ENTRY_ADM_BUCKET_TOKEN.fullmatch(value))
     if not _INTERNAL_CACHE_TOKEN.fullmatch(value):
         return False
-    if path in {
+    if canonical_path in {
         ("runtime_context", "entry_adm", "cache_token"),
         ("runtime_context", "entry_adm", "entry_adm_cache_token"),
     }:
         return value.startswith("entry_adm:")
-    if path == ("runtime_context", "holding_exit_matrix", "cache_token"):
+    if canonical_path == (
+        "runtime_context",
+        "holding_exit_matrix",
+        "cache_token",
+    ):
         return value.startswith(("excluded:", "baseline:", "candidate:"))
-    if path == ("runtime_context", "lifecycle_ai", "cache_token"):
+    if canonical_path == ("runtime_context", "lifecycle_ai", "cache_token"):
         return value.startswith("lifecycle_ai_context:")
     return False
 
@@ -1197,6 +1208,41 @@ def _total_tokens(payload: dict[str, Any]) -> float | int | None:
     return int(bedrock_input or 0) + int(bedrock_output or 0)
 
 
+def _timeout_like_decision_failure(
+    payload: dict[str, Any], result_source: str | None
+) -> bool:
+    if str(result_source or "").strip().lower() == "timeout":
+        return True
+    if any(
+        bool(payload.get(key))
+        for key in (
+            "openai_timeout_like",
+            "openai_transport_fail_closed",
+            "openai_ws_http_fallback_fail_closed",
+            "openai_http_timeout_budget_exhausted",
+            "holding_score_timeout_like",
+        )
+    ):
+        return True
+    reason = " ".join(
+        str(payload.get(key) or "")
+        for key in (
+            "reason",
+            "error",
+            "openai_transport_fail_closed_reason",
+            "holding_score_transport_fail_closed_reason",
+        )
+    ).lower()
+    return any(
+        marker in reason
+        for marker in (
+            "timeout budget exhausted",
+            "request timed out",
+            "timed out",
+        )
+    )
+
+
 def record_ai_decision_trace(
     result: dict[str, Any] | None,
     *,
@@ -1249,6 +1295,18 @@ def record_ai_decision_trace(
                 if "provider_called" in payload
                 else str(result_source or "") == "live"
             )
+        timeout_like = _timeout_like_decision_failure(merged, result_source)
+        if timeout_like and (
+            _safe_number(merged.get("openai_http_attempt_count")) or 0
+        ) > 0:
+            provider_called = True
+        normalized_result_source = (
+            "timeout"
+            if timeout_like
+            and str(result_source or "").strip().lower()
+            in {"timeout", "exception", "error"}
+            else str(result_source or "-")
+        )
         stage = _decision_stage(prompt_type, decision_stage)
         reference_price_type = _optional(merged, "ai_trace_reference_price_type")
         reference_price = _safe_number(_optional(merged, "ai_trace_reference_price"))
@@ -1436,12 +1494,9 @@ def record_ai_decision_trace(
             ),
             "total_tokens": _total_tokens(merged),
             "cache_hit": bool(merged.get("cache_hit", False)),
-            "timeout": bool(
-                merged.get("openai_transport_fail_closed")
-                or merged.get("openai_ws_http_fallback_fail_closed")
-            ),
+            "timeout": timeout_like,
             "parse_ok": bool(merged.get("ai_parse_ok", False)),
-            "result_source": str(result_source or "-"),
+            "result_source": normalized_result_source,
             "attempt": _safe_number(merged.get("forensic_attempt")),
             "attempt_final": (
                 bool(merged.get("forensic_attempt_final"))

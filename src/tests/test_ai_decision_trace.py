@@ -25,6 +25,39 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
+def test_timeout_exception_trace_normalizes_transport_provenance(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "action": "DROP",
+            "score": 0,
+            "reason": (
+                "OpenAI Responses HTTP timeout budget exhausted: "
+                "endpoint=analyze_target, attempts=1, request timed out"
+            ),
+            "provider_called": False,
+            "openai_http_attempt_count": 1,
+            "openai_http_timeout_budget_exhausted": True,
+            "openai_transport_mode": "http",
+            "ai_parse_ok": False,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_7",
+        result_source="exception",
+        stock_code="068270",
+        provider_called=False,
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["timeout"] is True
+    assert row["result_source"] == "timeout"
+    assert row["provider_called"] is True
+    assert row["provider_actual"] == "openai"
+
+
 def test_capture_ai_request_persists_exact_payload_once(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
     user_input = {
@@ -785,6 +818,45 @@ def test_payload_sanitizer_preserves_only_approved_runtime_cache_token_paths(
     assert row["sanitized_user_input"]["runtime_context"] == runtime_context
 
 
+def test_payload_sanitizer_preserves_approved_tokens_inside_exact_payload_wrapper(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    runtime_context = {
+        "holding_exit_matrix": {
+            "cache_token": "baseline:holding_exit_matrix_v1:mid:active:midday",
+        },
+        "lifecycle_ai": {
+            "cache_token": "lifecycle_ai_context:v1:entry:abcdef123456",
+        },
+    }
+
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "exact_payload": {
+                "stock_code": "005930",
+                "runtime_context": runtime_context,
+            },
+            "exact_payload_analysis_v1": {"schema": "exact_payload_analysis_v1"},
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="request-wrapped-runtime-cache-identifiers",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+
+    row = _rows(trace._payload_path(trace._date_text()))[0]
+    assert fields["ai_input_payload_redacted"] is False
+    assert fields["ai_input_payload_replay_exact"] is True
+    assert (
+        row["sanitized_user_input"]["exact_payload"]["runtime_context"]
+        == runtime_context
+    )
+
+
 def test_payload_sanitizer_keeps_cache_token_sensitive_outside_approved_paths(
     monkeypatch, tmp_path
 ):
@@ -802,6 +874,11 @@ def test_payload_sanitizer_keeps_cache_token_sensitive_outside_approved_paths(
                     "cache_token": "entry_adm:access_token=provider-secret",
                     "access_token": "provider-secret",
                 },
+            },
+            "exact_payload": {
+                "runtime_context": {
+                    "other_component": {"cache_token": "wrapped-other-secret"}
+                }
             },
         },
         endpoint_name="analyze_target",
@@ -823,6 +900,10 @@ def test_payload_sanitizer_keeps_cache_token_sensitive_outside_approved_paths(
     assert sanitized["runtime_context"]["entry_adm"]["access_token"] == "[REDACTED]"
     assert sanitized["runtime_context"]["entry_adm"]["cache_token"] == "[REDACTED]"
     assert sanitized["runtime_context"]["entry-adm"]["cache_token"] == "[REDACTED]"
+    assert (
+        sanitized["exact_payload"]["runtime_context"]["other_component"]["cache_token"]
+        == "[REDACTED]"
+    )
 
 
 def test_request_ledger_is_not_written_when_payload_store_fails(monkeypatch, tmp_path):

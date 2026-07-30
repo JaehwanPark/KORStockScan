@@ -15,9 +15,11 @@ from typing import Any
 
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
+    DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     decision_quality_holding_v2_3_system_prompt,
+    decision_quality_v2_8_detailed_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.engine.bedrock_nova_provider import (
@@ -49,6 +51,19 @@ CONTRACT = {
         "bot_restart",
     ],
 }
+SUPPLEMENTAL_CONTRACT = {
+    **CONTRACT,
+    "decision_authority": "offline_supplemental_replay_no_runtime_change",
+    "window_policy": (
+        "captured_snapshot_approved_nondecision_cache_redaction_chronological_cohort"
+    ),
+    "sample_floor": (
+        "supplemental_semantic_rows_and_unique_symbols_without_primary_authority"
+    ),
+    "source_quality_gate": (
+        "exact_v2_fresh_same_route_conflict_free_except_approved_cache_redaction"
+    ),
+}
 
 
 def _load_rows(source_dir: Path, stem: str, dates: list[str]) -> list[dict[str, Any]]:
@@ -58,10 +73,12 @@ def _load_rows(source_dir: Path, stem: str, dates: list[str]) -> list[dict[str, 
     return rows
 
 
-def _control_by_endpoint(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _control_by_endpoint(
+    manifest: dict[str, Any], *, field: str = "controls"
+) -> dict[str, dict[str, Any]]:
     return {
         str(row.get("endpoint") or ""): dict(row)
-        for row in manifest.get("controls") or []
+        for row in manifest.get(field) or []
         if isinstance(row, dict) and row.get("endpoint")
     }
 
@@ -75,14 +92,24 @@ def prepare_stage_requests(
     promotion: dict[str, Any],
     traces: list[dict[str, Any]],
     payloads: list[dict[str, Any]],
+    allow_approved_cache_redaction_supplemental: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Freeze the first exact eligible rows and preserve every exclusion reason."""
 
     normalized_stage = str(stage or "").strip().lower()
-    if normalized_stage not in {"holding", "entry_price"}:
+    if normalized_stage not in {"entry", "holding", "entry_price"}:
         raise ValueError("unsupported_stage")
-    endpoint = "holding_score" if normalized_stage == "holding" else "entry_price"
-    control = _control_by_endpoint(control_manifest).get(endpoint)
+    endpoint = {
+        "entry": "analyze_target",
+        "holding": "holding_score",
+        "entry_price": "entry_price",
+    }[normalized_stage]
+    control_field = (
+        "supplemental_semantic_controls"
+        if allow_approved_cache_redaction_supplemental
+        else "controls"
+    )
+    control = _control_by_endpoint(control_manifest, field=control_field).get(endpoint)
     if not control:
         raise ValueError(f"control_missing:{endpoint}")
     promoted_at = quality._parse_ts(promotion.get("promoted_at"))
@@ -91,6 +118,7 @@ def prepare_stage_requests(
     exact_exclusions: Counter[str] = Counter()
     eligible: list[dict[str, Any]] = []
     exact_source_count = 0
+    supplemental_source_count = 0
     signature_fields = (
         ("prompt_version", "prompt_version"),
         ("prompt_sha256", "prompt_sha256"),
@@ -114,6 +142,19 @@ def prepare_stage_requests(
             payload=payload,
             promoted_at=promoted_at,
         )
+        supplemental = False
+        if (
+            allow_approved_cache_redaction_supplemental
+            and set(findings).issuperset({"not_exact", "payload_store_not_exact"})
+            and quality._approved_cache_redaction_supplemental(payload)
+        ):
+            findings = [
+                finding
+                for finding in findings
+                if finding not in {"not_exact", "payload_store_not_exact"}
+            ]
+            supplemental = True
+            supplemental_source_count += 1
         if any(
             trace.get(trace_key) != control.get(control_key)
             for trace_key, control_key in signature_fields
@@ -124,17 +165,23 @@ def prepare_stage_requests(
             if trace.get("payload_replay_exact") is True:
                 exact_exclusions.update(set(findings))
             continue
-        eligible.append({"trace": trace, "payload": payload})
+        eligible.append(
+            {
+                "trace": trace,
+                "payload": payload,
+                "semantic_replay_supplemental": supplemental,
+            }
+        )
 
     selected = eligible[:max_rows]
     exclusions["eligible_after_frozen_cohort_limit"] += max(
         0, len(eligible) - len(selected)
     )
-    prompt = (
-        decision_quality_holding_v2_3_system_prompt()
-        if normalized_stage == "holding"
-        else decision_quality_v2_system_prompt(normalized_stage)
-    )
+    prompt = {
+        "entry": decision_quality_v2_8_detailed_system_prompt("entry"),
+        "holding": decision_quality_holding_v2_3_system_prompt(),
+        "entry_price": decision_quality_v2_system_prompt("entry_price"),
+    }[normalized_stage]
     if normalized_stage == "entry_price":
         prompt += """
 
@@ -151,7 +198,11 @@ Entry-price replay extension:
         "prompt_version": (
             DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
             if normalized_stage == "holding"
-            else f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{normalized_stage}"
+            else (
+                DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
+                if normalized_stage == "entry"
+                else f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{normalized_stage}"
+            )
         ),
         "system_prompt": prompt,
         "system_prompt_sha256": quality._sha256(prompt),
@@ -171,7 +222,12 @@ Entry-price replay extension:
     for row in selected:
         trace = row["trace"]
         payload = row["payload"]
+        exact_payload = quality._replay_exact_payload(
+            payload.get("sanitized_user_input")
+        )
         trace_id = str(trace.get("decision_trace_id") or "")
+        supplemental = bool(row.get("semantic_replay_supplemental"))
+        authority_contract = SUPPLEMENTAL_CONTRACT if supplemental else CONTRACT
         request = {
             "paired_replay_id": (
                 f"coverage-{quality._sha256((trace_id, trace.get('payload_sha256')))[:24]}"
@@ -184,7 +240,7 @@ Entry-price replay extension:
             "effective_venue": trace.get("effective_venue"),
             "session_bucket": trace.get("session_bucket"),
             "payload_sha256": trace.get("payload_sha256"),
-            "exact_payload": payload.get("sanitized_user_input"),
+            "exact_payload": exact_payload,
             "control": {
                 "prompt_version": control.get("prompt_version"),
                 "prompt_sha256": control.get("prompt_sha256"),
@@ -199,9 +255,28 @@ Entry-price replay extension:
                 "captured_selected_price_type": trace.get("reference_price_type"),
             },
             "candidate": dict(candidate),
-            **CONTRACT,
+            "source_exactness": (
+                "non_exact_approved_cache_token_redaction"
+                if supplemental
+                else "byte_exact"
+            ),
+            "primary_exact_cohort_eligible": not supplemental,
+            "supplemental_semantic_replay": supplemental,
+            **authority_contract,
         }
-        if normalized_stage == "holding":
+        if normalized_stage == "entry":
+            exact_analysis = quality.build_exact_payload_analysis_v1(
+                exact_payload,
+                stage="entry",
+            )
+            candidate_input = {
+                "exact_payload": exact_payload,
+                quality.EXACT_PAYLOAD_ANALYSIS_SCHEMA: exact_analysis,
+            }
+            request["candidate_input"] = candidate_input
+            request["candidate_input_sha256"] = quality._sha256(candidate_input)
+            request["exact_payload_analysis_sha256"] = exact_analysis["analysis_sha256"]
+        elif normalized_stage == "holding":
             holding_facts = quality._holding_contract_facts(
                 payload.get("sanitized_user_input")
             )
@@ -214,13 +289,17 @@ Entry-price replay extension:
         requests.append(request)
     summary = {
         "exact_source_count": exact_source_count,
+        "supplemental_semantic_source_count": supplemental_source_count,
         "exact_source_excluded_count": sum(
             1
             for trace in traces
             if str(trace.get("endpoint") or "") == endpoint
             and trace.get("payload_replay_exact") is True
         )
-        - len(eligible),
+        - sum(not row.get("semantic_replay_supplemental") for row in eligible),
+        "supplemental_semantic_eligible_count": sum(
+            row.get("semantic_replay_supplemental") is True for row in eligible
+        ),
         "strict_eligible_count": len(eligible),
         "selected_frozen_cohort_count": len(requests),
         **{
@@ -380,6 +459,10 @@ def build_report(
     execution_complete = (
         bool(requests) and len(passed) == len(requests) and selection_complete
     )
+    supplemental_count = sum(
+        request.get("supplemental_semantic_replay") is True for request in requests
+    )
+    primary_exact_count = len(requests) - supplemental_count
     if not execution_complete:
         status = "coverage_replay_incomplete"
     elif not action_not_collapsed:
@@ -388,6 +471,10 @@ def build_report(
         status = "coverage_replay_complete_sample_floor_keep_collecting"
     else:
         status = "coverage_replay_complete_outcome_comparison_pending"
+    base_status = status
+    if supplemental_count and primary_exact_count == 0:
+        status = f"supplemental_semantic_{base_status}"
+    report_contract = SUPPLEMENTAL_CONTRACT if supplemental_count else CONTRACT
     return {
         "schema": SCHEMA,
         "target_date": target_date,
@@ -420,6 +507,10 @@ def build_report(
             }
         ),
         "status": status,
+        "base_status": base_status,
+        "primary_exact_request_count": primary_exact_count,
+        "supplemental_semantic_request_count": supplemental_count,
+        "primary_quality_authority": supplemental_count == 0,
         "source_summary": source_summary,
         "request_count": len(requests),
         "result_count": len(results),
@@ -493,26 +584,87 @@ def build_report(
             for request in requests
         ],
         "results": results,
-        **CONTRACT,
+        **report_contract,
     }
+
+
+def reusable_pass_results(
+    *,
+    existing_report: dict[str, Any],
+    requests: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reuse only results bound to the same payload, candidate, and input."""
+
+    request_by_pair = {
+        str(request.get("paired_replay_id") or ""): request for request in requests
+    }
+    reusable: list[dict[str, Any]] = []
+    for row in existing_report.get("results") or []:
+        if not isinstance(row, dict) or row.get("status") != "pass":
+            continue
+        pair_id = str(row.get("paired_replay_id") or "")
+        request = request_by_pair.get(pair_id)
+        if not request:
+            continue
+        candidate = request.get("candidate") or {}
+        if any(
+            (
+                row.get("payload_sha256") != request.get("payload_sha256"),
+                row.get("candidate_prompt_sha256")
+                != candidate.get("system_prompt_sha256"),
+                row.get("candidate_contract_sha256")
+                != candidate.get("contract_sha256"),
+                row.get("candidate_input_sha256")
+                != request.get("candidate_input_sha256"),
+                row.get("exact_payload_analysis_sha256")
+                != request.get("exact_payload_analysis_sha256"),
+            )
+        ):
+            continue
+        if quality.validate_candidate_response(
+            dict(row.get("candidate_response") or {}),
+            stage=str(request.get("stage") or ""),
+            exact_payload=request.get("exact_payload"),
+        ):
+            continue
+        reusable.append(row)
+    order = {
+        str(request.get("paired_replay_id") or ""): index
+        for index, request in enumerate(requests)
+    }
+    reusable.sort(
+        key=lambda row: order.get(str(row.get("paired_replay_id") or ""), len(order))
+    )
+    return reusable
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
     parser.add_argument("--source-date", action="append", required=True)
-    parser.add_argument("--stage", choices=("holding", "entry_price"), required=True)
+    parser.add_argument(
+        "--stage",
+        choices=("entry", "holding", "entry_price"),
+        required=True,
+    )
     parser.add_argument("--max-rows", type=int, required=True)
     parser.add_argument("--execute-candidate", action="store_true")
     parser.add_argument("--candidate-workers", type=int, default=4)
+    parser.add_argument(
+        "--allow-approved-cache-redaction-supplemental",
+        action="store_true",
+        help=(
+            "Replay only approved non-decision cache-token redactions as a "
+            "separate non-exact supplemental cohort."
+        ),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     if args.max_rows <= 0:
         parser.error("--max-rows must be positive")
-    promotion = quality._load_json(
-        quality.RUNTIME_DIR
-        / f"ai_multi_timeframe_context_promotion_{args.source_date[0]}.json"
-    )
+    if args.execute_candidate and not args.write:
+        parser.error("--execute-candidate requires --write")
+    promotion, _, _ = quality.load_promotion_for_target_date(args.source_date[0])
     control = quality._load_json(quality.control_path(args.source_date[0]))
     traces = _load_rows(quality.TRACE_DIR, "ai_decision_trace", args.source_date)
     payloads = _load_rows(quality.PAYLOAD_DIR, "ai_decision_payloads", args.source_date)
@@ -524,8 +676,15 @@ def main(argv: list[str] | None = None) -> int:
         promotion=promotion,
         traces=traces,
         payloads=payloads,
+        allow_approved_cache_redaction_supplemental=(
+            args.allow_approved_cache_redaction_supplemental
+        ),
     )
-    results: list[dict[str, Any]] = []
+    path = REPORT_DIR / f"ai_prompt_stage_coverage_replay_{args.date}_{args.stage}.json"
+    results = reusable_pass_results(
+        existing_report=quality._load_json(path),
+        requests=requests,
+    )
     if args.execute_candidate:
         runner = (
             execute_bedrock_candidate
@@ -542,11 +701,26 @@ def main(argv: list[str] | None = None) -> int:
                 "result_source": "captured_natural_control",
             }
 
-        results = quality.run_paired_replay_parallel(
-            requests,
+        completed_pair_ids = {str(row.get("paired_replay_id") or "") for row in results}
+        pending_requests = [
+            request
+            for request in requests
+            if str(request.get("paired_replay_id") or "") not in completed_pair_ids
+        ]
+        results += quality.run_paired_replay_parallel(
+            pending_requests,
             control_runner=captured_control,
             candidate_runner=runner,
             max_workers=args.candidate_workers,
+        )
+        order = {
+            str(request.get("paired_replay_id") or ""): index
+            for index, request in enumerate(requests)
+        }
+        results.sort(
+            key=lambda row: order.get(
+                str(row.get("paired_replay_id") or ""), len(order)
+            )
         )
     report = build_report(
         target_date=args.date,
@@ -557,7 +731,6 @@ def main(argv: list[str] | None = None) -> int:
         requests=requests,
         results=results,
     )
-    path = REPORT_DIR / f"ai_prompt_stage_coverage_replay_{args.date}_{args.stage}.json"
     if args.write:
         quality._atomic_write_json(path, report)
     print(json.dumps(report, ensure_ascii=False))

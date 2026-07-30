@@ -24,10 +24,12 @@ from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
+    decision_quality_v2_8_detailed_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
@@ -234,10 +236,19 @@ def paired_path(target_date: str) -> Path:
     return PAIRED_REPORT_DIR / f"ai_prompt_paired_replay_{target_date}.json"
 
 
-def detailed_paired_path(target_date: str) -> Path:
+def detailed_paired_path(
+    target_date: str,
+    *,
+    candidate_prompt_version: str = DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+) -> Path:
+    suffix = (
+        ""
+        if candidate_prompt_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION
+        else f"_{candidate_prompt_version}"
+    )
     return (
         DETAILED_PAIRED_REPORT_DIR
-        / f"ai_prompt_detailed_paired_replay_{target_date}.json"
+        / f"ai_prompt_detailed_paired_replay_{target_date}{suffix}.json"
     )
 
 
@@ -305,6 +316,34 @@ def _load_json(path: Path) -> dict[str, Any]:
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def load_promotion_for_target_date(
+    target_date: str,
+) -> tuple[dict[str, Any], Path, str]:
+    """Resolve the latest promotion marker at or before target_date.
+
+    The caller validates committed/rollback authority. A malformed latest marker
+    is intentionally returned as empty and therefore fails closed instead of
+    silently falling back to an older promotion.
+    """
+
+    exact_path = (
+        RUNTIME_DIR / f"ai_multi_timeframe_context_promotion_{target_date}.json"
+    )
+    candidates: list[tuple[str, Path]] = []
+    for path in RUNTIME_DIR.glob("ai_multi_timeframe_context_promotion_*.json"):
+        source_date = path.stem.removeprefix("ai_multi_timeframe_context_promotion_")
+        try:
+            datetime.strptime(source_date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if source_date <= target_date:
+            candidates.append((source_date, path))
+    if not candidates:
+        return {}, exact_path, ""
+    source_date, path = max(candidates, key=lambda item: item[0])
+    return _load_json(path), path, source_date
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -460,6 +499,75 @@ def _payload_indexes(
     return by_key, by_unique_hash
 
 
+def _replay_exact_payload(value: Any) -> Any:
+    """Return the raw exact payload from either legacy or live V2.7 storage."""
+
+    if not isinstance(value, dict):
+        return value
+    nested = value.get("exact_payload")
+    if isinstance(nested, dict) and (
+        "exact_payload_analysis_v1" in value
+        or str(value.get("input_schema") or "").startswith("decision_quality_")
+    ):
+        return nested
+    return value
+
+
+_SUPPLEMENTAL_CACHE_REDACTION_PATHS = frozenset(
+    {
+        ("exact_payload", "runtime_context", "entry_adm", "cache_token"),
+        (
+            "exact_payload",
+            "runtime_context",
+            "entry_adm",
+            "entry_adm_bucket_token",
+        ),
+        (
+            "exact_payload",
+            "runtime_context",
+            "entry_adm",
+            "entry_adm_cache_token",
+        ),
+        (
+            "exact_payload",
+            "runtime_context",
+            "holding_exit_matrix",
+            "cache_token",
+        ),
+        ("exact_payload", "runtime_context", "lifecycle_ai", "cache_token"),
+    }
+)
+
+
+def _redacted_value_paths(
+    value: Any, path: tuple[str, ...] = ()
+) -> set[tuple[str, ...]]:
+    if isinstance(value, dict):
+        return {
+            redacted_path
+            for key, child in value.items()
+            for redacted_path in _redacted_value_paths(child, (*path, str(key)))
+        }
+    if isinstance(value, list):
+        return {
+            redacted_path
+            for child in value
+            for redacted_path in _redacted_value_paths(child, path)
+        }
+    return {path} if value == "[REDACTED]" else set()
+
+
+def _approved_cache_redaction_supplemental(payload: dict[str, Any]) -> bool:
+    """Allow decision-semantic replay without claiming byte-exact provenance."""
+
+    if payload.get("redacted") is not True or payload.get("replay_exact") is not False:
+        return False
+    redacted_paths = _redacted_value_paths(payload.get("sanitized_user_input"))
+    return bool(redacted_paths) and redacted_paths.issubset(
+        _SUPPLEMENTAL_CACHE_REDACTION_PATHS
+    )
+
+
 def _stage(value: Any, endpoint: Any = None) -> str:
     for candidate in (value, endpoint):
         normalized = str(candidate or "").strip().lower()
@@ -558,13 +666,22 @@ def build_control_manifest(
     promotion: dict[str, Any],
     traces: list[dict[str, Any]],
     payloads: list[dict[str, Any]],
+    control_prompt_versions: dict[str, str] | None = None,
+    promotion_artifact_path: Path | None = None,
+    promotion_source_date: str | None = None,
 ) -> dict[str, Any]:
     """Freeze actual current prompts/routes on post-promotion exact requests."""
 
     promoted_at = _parse_ts(promotion.get("promoted_at"))
     payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    supplemental_grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     excluded = Counter()
+    selected_prompt_versions = {
+        str(endpoint).strip(): str(version).strip()
+        for endpoint, version in (control_prompt_versions or {}).items()
+        if str(endpoint).strip() and str(version).strip()
+    }
     for trace in traces:
         payload_hash = str(trace.get("payload_sha256") or "")
         endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
@@ -578,6 +695,14 @@ def build_control_manifest(
             promoted_at=promoted_at,
         )
         if exact_findings:
+            if set(exact_findings) == {"not_exact", "payload_store_not_exact"} and (
+                _approved_cache_redaction_supplemental(payload)
+                and all(
+                    str(trace.get(key) or "").strip()
+                    for key in ("prompt_version", "prompt_sha256", "model")
+                )
+            ):
+                supplemental_grouped[endpoint].append(trace)
             excluded.update(exact_findings)
             continue
         if not all(
@@ -586,36 +711,74 @@ def build_control_manifest(
         ):
             excluded["control_signature_incomplete"] += 1
             continue
+        selected_prompt_version = selected_prompt_versions.get(endpoint)
+        if (
+            selected_prompt_version
+            and str(trace.get("prompt_version") or "") != selected_prompt_version
+        ):
+            excluded["control_prompt_version_not_selected"] += 1
+            continue
         grouped[
             str(trace.get("endpoint") or trace.get("decision_stage") or "unknown")
         ].append(trace)
     controls: list[dict[str, Any]] = []
+    supplemental_controls: list[dict[str, Any]] = []
     conflicts: list[str] = []
-    for endpoint, rows in sorted(grouped.items()):
-        signatures: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            signature = {
-                "decision_stage": _stage(
-                    row.get("decision_stage"), row.get("endpoint")
-                ),
-                "endpoint": endpoint,
-                "prompt_version": row.get("prompt_version"),
-                "prompt_sha256": row.get("prompt_sha256"),
-                "provider_actual": row.get("provider_actual"),
-                "model": row.get("model"),
-                "request_temperature": row.get("request_temperature"),
-                "request_reasoning_effort": row.get("request_reasoning_effort"),
-                "response_schema": row.get("schema_name")
-                or row.get("response_schema")
-                or "captured_runtime_contract",
-            }
-            signatures[_sha256(signature)] = signature
-        if len(signatures) != 1:
-            conflicts.append(f"control_signature_conflict:{endpoint}")
-            continue
-        control = next(iter(signatures.values()))
-        control["sample_count"] = len(rows)
-        controls.append(control)
+    supplemental_conflicts: list[str] = []
+
+    def freeze_signatures(
+        source: dict[str, list[dict[str, Any]]],
+        *,
+        conflict_prefix: str,
+        conflict_sink: list[str],
+    ) -> list[dict[str, Any]]:
+        frozen: list[dict[str, Any]] = []
+        for endpoint, rows in sorted(source.items()):
+            selected_prompt_version = selected_prompt_versions.get(endpoint)
+            if selected_prompt_version:
+                rows = [
+                    row
+                    for row in rows
+                    if str(row.get("prompt_version") or "") == selected_prompt_version
+                ]
+            if not rows:
+                continue
+            signatures: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                signature = {
+                    "decision_stage": _stage(
+                        row.get("decision_stage"), row.get("endpoint")
+                    ),
+                    "endpoint": endpoint,
+                    "prompt_version": row.get("prompt_version"),
+                    "prompt_sha256": row.get("prompt_sha256"),
+                    "provider_actual": row.get("provider_actual"),
+                    "model": row.get("model"),
+                    "request_temperature": row.get("request_temperature"),
+                    "request_reasoning_effort": row.get("request_reasoning_effort"),
+                    "response_schema": row.get("schema_name")
+                    or row.get("response_schema")
+                    or "captured_runtime_contract",
+                }
+                signatures[_sha256(signature)] = signature
+            if len(signatures) != 1:
+                conflict_sink.append(f"{conflict_prefix}:{endpoint}")
+                continue
+            control = next(iter(signatures.values()))
+            control["sample_count"] = len(rows)
+            frozen.append(control)
+        return frozen
+
+    controls = freeze_signatures(
+        grouped,
+        conflict_prefix="control_signature_conflict",
+        conflict_sink=conflicts,
+    )
+    supplemental_controls = freeze_signatures(
+        supplemental_grouped,
+        conflict_prefix="supplemental_control_signature_conflict",
+        conflict_sink=supplemental_conflicts,
+    )
     required_stages = {"entry", "entry_price", "holding", "overnight"}
     observed_stages = {row["decision_stage"] for row in controls}
     missing_stages = sorted(required_stages - observed_stages)
@@ -633,6 +796,10 @@ def build_control_manifest(
             else "control_manifest_gap_fix_required"
         )
     )
+    resolved_promotion_path = promotion_artifact_path or (
+        RUNTIME_DIR / f"ai_multi_timeframe_context_promotion_{target_date}.json"
+    )
+    resolved_promotion_date = promotion_source_date or target_date
     manifest = {
         "schema": CONTROL_SCHEMA,
         "target_date": target_date,
@@ -642,11 +809,17 @@ def build_control_manifest(
         "entry_context_schema": ENTRY_CONTEXT_SCHEMA,
         "holding_context_schema": HOLDING_CONTEXT_SCHEMA,
         "input_bundle_version": INPUT_BUNDLE_VERSION,
-        "promotion_artifact": str(
-            RUNTIME_DIR / f"ai_multi_timeframe_context_promotion_{target_date}.json"
-        ),
+        "promotion_artifact": str(resolved_promotion_path),
+        "promotion_source_date": resolved_promotion_date,
+        "promotion_rollover": resolved_promotion_date != target_date,
         "promotion_sha256": _sha256(promotion) if promotion else None,
+        "selected_control_prompt_versions": selected_prompt_versions,
         "controls": controls,
+        "supplemental_semantic_controls": supplemental_controls,
+        "supplemental_semantic_control_authority": (
+            "offline_replay_only_non_exact_approved_cache_token_redaction"
+        ),
+        "supplemental_conflicts": supplemental_conflicts,
         "missing_natural_stages": missing_stages,
         "conflicts": conflicts,
         "excluded_counts": dict(excluded),
@@ -2814,6 +2987,7 @@ def prepare_paired_replay_requests(
         ):
             continue
         candidate_prompt = decision_quality_v2_system_prompt(stage)
+        replay_payload = _replay_exact_payload(payload.get("sanitized_user_input"))
         candidate = {
             "prompt_version": f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{stage}",
             "system_prompt": candidate_prompt,
@@ -2835,7 +3009,7 @@ def prepare_paired_replay_requests(
                 "effective_venue": trace.get("effective_venue"),
                 "session_bucket": trace.get("session_bucket"),
                 "payload_sha256": trace.get("payload_sha256"),
-                "exact_payload": payload.get("sanitized_user_input"),
+                "exact_payload": replay_payload,
                 "control": {
                     "prompt_version": control.get("prompt_version"),
                     "prompt_sha256": control.get("prompt_sha256"),
@@ -2886,12 +3060,20 @@ def prepare_paired_replay_requests(
 
 def prepare_detailed_paired_replay_requests(
     requests: list[dict[str, Any]],
+    *,
+    candidate_prompt_version: str = DECISION_QUALITY_DETAILED_PROMPT_VERSION,
 ) -> list[dict[str, Any]]:
     """Attach a deterministic analysis ledger to the same exact payload."""
 
+    supported_prompt_versions = {
+        DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+        DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
+    }
+    if candidate_prompt_version not in supported_prompt_versions:
+        raise ValueError("unsupported_detailed_candidate_prompt_version")
     detailed_requests: list[dict[str, Any]] = []
     for request in requests:
-        exact_payload = request.get("exact_payload")
+        exact_payload = _replay_exact_payload(request.get("exact_payload"))
         if not isinstance(exact_payload, dict):
             continue
         stage = str(request.get("stage") or "")
@@ -2917,14 +3099,19 @@ def prepare_detailed_paired_replay_requests(
             "exact_payload": exact_payload,
             EXACT_PAYLOAD_ANALYSIS_SCHEMA: analysis,
         }
-        prompt = decision_quality_v2_detailed_system_prompt(stage)
+        prompt = (
+            decision_quality_v2_8_detailed_system_prompt(stage)
+            if candidate_prompt_version
+            == DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
+            else decision_quality_v2_detailed_system_prompt(stage)
+        )
         original_candidate = request.get("candidate")
         original_candidate = (
             original_candidate if isinstance(original_candidate, dict) else {}
         )
         candidate = {
             **original_candidate,
-            "prompt_version": (f"{DECISION_QUALITY_DETAILED_PROMPT_VERSION}_{stage}"),
+            "prompt_version": f"{candidate_prompt_version}_{stage}",
             "system_prompt": prompt,
             "system_prompt_sha256": _sha256(prompt),
             "analysis_schema": EXACT_PAYLOAD_ANALYSIS_SCHEMA,
@@ -4024,6 +4211,21 @@ def _default_sources(
     }
 
 
+def _parse_control_prompt_versions(values: list[str]) -> dict[str, str]:
+    selected: dict[str, str] = {}
+    for value in values:
+        endpoint, separator, version = str(value or "").partition("=")
+        endpoint = endpoint.strip()
+        version = version.strip()
+        if not separator or not endpoint or not version:
+            raise ValueError("control_prompt_version_must_be_ENDPOINT_equals_VERSION")
+        previous = selected.get(endpoint)
+        if previous and previous != version:
+            raise ValueError(f"control_prompt_version_conflict:{endpoint}")
+        selected[endpoint] = version
+    return selected
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build offline exact AI decision-quality artifacts."
@@ -4059,20 +4261,51 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--candidate-timeout-sec", type=float, default=45.0)
     parser.add_argument("--candidate-workers", type=int, default=4)
+    parser.add_argument(
+        "--control-prompt-version",
+        action="append",
+        default=[],
+        metavar="ENDPOINT=VERSION",
+        help=(
+            "Freeze only the named natural runtime prompt version for an endpoint. "
+            "Repeat per endpoint; valid only in control mode."
+        ),
+    )
+    parser.add_argument(
+        "--detailed-candidate-version",
+        choices=(
+            DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+            DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
+        ),
+        default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     if args.execute_candidate and (
         args.mode not in {"paired", "detailed"} or not args.write
     ):
         parser.error("--execute-candidate requires --mode paired|detailed --write")
+    if (
+        args.mode != "detailed"
+        and args.detailed_candidate_version != DECISION_QUALITY_DETAILED_PROMPT_VERSION
+    ):
+        parser.error("--detailed-candidate-version requires --mode detailed")
+    if args.mode != "control" and args.control_prompt_version:
+        parser.error("--control-prompt-version requires --mode control")
+    try:
+        selected_control_prompt_versions = _parse_control_prompt_versions(
+            args.control_prompt_version
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     sources = _default_sources(
         args.date,
         include_pipeline=(
             args.mode != "control" and args.outcome_price_source == "pipeline"
         ),
     )
-    promotion = _load_json(
-        RUNTIME_DIR / f"ai_multi_timeframe_context_promotion_{args.date}.json"
+    promotion, promotion_artifact_path, promotion_source_date = (
+        load_promotion_for_target_date(args.date)
     )
     if args.mode == "control":
         report = build_control_manifest(
@@ -4080,6 +4313,9 @@ def main(argv: list[str] | None = None) -> int:
             promotion=promotion,
             traces=sources["traces"],
             payloads=sources["payloads"],
+            control_prompt_versions=selected_control_prompt_versions,
+            promotion_artifact_path=promotion_artifact_path,
+            promotion_source_date=promotion_source_date,
         )
         path = control_path(args.date)
     else:
@@ -4184,7 +4420,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.mode == "detailed":
                 prepared_requests = prepare_detailed_paired_replay_requests(
-                    prepared_requests
+                    prepared_requests,
+                    candidate_prompt_version=args.detailed_candidate_version,
                 )
             requests = [
                 request
@@ -4194,7 +4431,10 @@ def main(argv: list[str] | None = None) -> int:
             results: list[dict[str, Any]] = []
             if args.execute_candidate and requests:
                 output_path = (
-                    detailed_paired_path(args.date)
+                    detailed_paired_path(
+                        args.date,
+                        candidate_prompt_version=args.detailed_candidate_version,
+                    )
                     if args.mode == "detailed"
                     else paired_path(args.date)
                 )
@@ -4327,7 +4567,10 @@ def main(argv: list[str] | None = None) -> int:
             report["outcome_price_source"] = args.outcome_price_source
             report["price_source_provenance"] = price_source_provenance
             path = (
-                detailed_paired_path(args.date)
+                detailed_paired_path(
+                    args.date,
+                    candidate_prompt_version=args.detailed_candidate_version,
+                )
                 if args.mode == "detailed"
                 else paired_path(args.date)
             )

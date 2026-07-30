@@ -611,6 +611,7 @@ Return JSON only:
 # version override and the runtime fail-closed adapter.
 DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_6"
 DECISION_QUALITY_DETAILED_PROMPT_VERSION = "decision_quality_v2_7"
+DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION = "decision_quality_v2_8"
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -961,3 +962,53 @@ Detailed-analysis input contract:
    recovery_required or failed immediate triggers.
 6. {ledger_authority}
 """.strip()
+
+
+_DECISION_QUALITY_V2_8_ENTRY_RULES = """
+V2.8 deterministic contract resolution:
+1. Read exact_payload_analysis_v1.deterministic_contract_facts before choosing
+   edge_state, action, positive_edge, adverse_risk, trigger, or setup. The ledger
+   is derived from the unchanged exact payload and is authoritative for response
+   contract classification unless raw exact_payload values demonstrably conflict.
+2. Apply these mappings in order:
+   - structural_edge_floor=true: use EDGE and moderate/strong positive_edge.
+     Never emit edge_absent or no_positive_edge for this case.
+   - blocking_overextension=true: preserve EDGE but use DROP, blocking risk, and
+     failed trigger.
+   - orderly_pullback_recovery=true: use EDGE/WAIT, pullback_recovery,
+     recovery_required, and non-blocking risk.
+   - trusted_supportive_trigger=true: use supportive tape and confirmed trigger.
+     Use BUY only with low/moderate risk and reward/risk >=1.25; otherwise DROP
+     with blocking risk or risk_reward_unfavorable. Never use WAIT.
+   - adverse_distribution_no_edge=true without structural edge: use
+     NO_EDGE/DROP, no_setup, adverse trend, and failed/not_applicable trigger.
+   - ask_wall_wide_spread=true: use adverse liquidity, high/blocking risk, and
+     never BUY.
+3. If structural_edge_floor=false and no mandatory positive contract is true,
+   NO_EDGE requires positive_edge=none or weak and setup=no_setup or
+   not_applicable. Do not preserve a continuation/pullback setup under NO_EDGE.
+4. Reason codes are a closed enum. Never invent evidence labels such as
+   tape_mixed, trigger_state_unconfirmed, trigger_not_applicable, or strings with
+   '=' as reason codes. Put those meanings only in evidence. Select reason_codes
+   solely from the enum printed in the base prompt.
+5. expected_upside_pct is always zero or positive. expected_downside_pct is
+   always zero or negative. For EDGE and NO_EDGE both are numeric; only
+   INSUFFICIENT_DATA uses null.
+6. Complete this response consistency checklist before returning JSON:
+   edge_state versus positive_edge; edge_state versus setup; action versus
+   trigger/adverse_risk/reward-risk; deterministic facts versus evidence; reason
+   codes versus the closed enum.
+""".strip()
+
+
+def decision_quality_v2_8_detailed_system_prompt(stage: str) -> str:
+    """Return the offline V2.8 candidate without changing the live V2.7 prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.8 currently supports entry only")
+    return (
+        decision_quality_v2_detailed_system_prompt(normalized)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_8_ENTRY_RULES
+    )

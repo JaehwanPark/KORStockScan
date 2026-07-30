@@ -94,6 +94,158 @@ def test_control_manifest_freezes_exact_post_promotion_signature():
     assert report["runtime_effect"] is False
 
 
+def test_control_manifest_selects_named_prompt_version_and_records_rollover(tmp_path):
+    old_trace = {
+        **_trace(),
+        "prompt_version": "hot_v1",
+        "prompt_sha256": "prompt-old",
+    }
+    current_trace = {
+        **_trace(),
+        "decision_trace_id": "trace-current",
+        "prompt_version": "decision_quality_v2_7",
+        "prompt_sha256": "prompt-current",
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-30",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[old_trace, current_trace],
+        payloads=[_payload()],
+        control_prompt_versions={"analyze_target": "decision_quality_v2_7"},
+        promotion_artifact_path=tmp_path / "promotion_2026-07-29.json",
+        promotion_source_date="2026-07-29",
+    )
+
+    assert report["status"] == "control_manifest_frozen_collect_exact_samples"
+    assert report["controls"][0]["prompt_version"] == "decision_quality_v2_7"
+    assert report["controls"][0]["sample_count"] == 1
+    assert report["excluded_counts"]["control_prompt_version_not_selected"] == 1
+    assert report["promotion_rollover"] is True
+    assert report["promotion_source_date"] == "2026-07-29"
+
+
+def test_control_manifest_separates_approved_cache_redaction_supplemental():
+    trace = {
+        **_trace(),
+        "payload_replay_exact": False,
+        "prompt_version": "decision_quality_v2_7",
+        "prompt_sha256": "prompt-current",
+    }
+    payload = _payload()
+    raw_exact = payload["sanitized_user_input"]
+    raw_exact["runtime_context"] = {"lifecycle_ai": {"cache_token": "[REDACTED]"}}
+    payload.update(
+        {
+            "redacted": True,
+            "replay_exact": False,
+            "sanitized_user_input": {
+                "exact_payload": raw_exact,
+                "exact_payload_analysis_v1": {"schema": "exact_payload_analysis_v1"},
+            },
+        }
+    )
+    report = quality.build_control_manifest(
+        target_date="2026-07-30",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[trace],
+        payloads=[payload],
+        control_prompt_versions={"analyze_target": "decision_quality_v2_7"},
+    )
+
+    assert report["controls"] == []
+    assert report["supplemental_semantic_controls"][0]["sample_count"] == 1
+    assert report["supplemental_semantic_controls"][0]["prompt_version"] == (
+        "decision_quality_v2_7"
+    )
+    assert report["excluded_counts"]["not_exact"] == 1
+    assert report["excluded_counts"]["payload_store_not_exact"] == 1
+
+    payload["sanitized_user_input"]["exact_payload"]["api_key"] = "[REDACTED]"
+    assert quality._approved_cache_redaction_supplemental(payload) is False
+
+
+def test_supplemental_signature_conflict_does_not_block_primary_control():
+    supplemental_payloads = []
+    supplemental_traces = []
+    for index, prompt_hash in enumerate(("supplemental-a", "supplemental-b"), start=2):
+        payload = _payload()
+        payload["payload_sha256"] = f"payload-{index}"
+        raw_exact = payload["sanitized_user_input"]
+        raw_exact["runtime_context"] = {"lifecycle_ai": {"cache_token": "[REDACTED]"}}
+        payload.update(
+            {
+                "redacted": True,
+                "replay_exact": False,
+                "sanitized_user_input": {
+                    "exact_payload": raw_exact,
+                    "exact_payload_analysis_v1": {
+                        "schema": "exact_payload_analysis_v1"
+                    },
+                },
+            }
+        )
+        supplemental_payloads.append(payload)
+        supplemental_traces.append(
+            {
+                **_trace(),
+                "decision_trace_id": f"trace-{index}",
+                "payload_sha256": f"payload-{index}",
+                "payload_replay_exact": False,
+                "prompt_version": "decision_quality_v2_7",
+                "prompt_sha256": prompt_hash,
+            }
+        )
+
+    report = quality.build_control_manifest(
+        target_date="2026-07-30",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[_trace(), *supplemental_traces],
+        payloads=[_payload(), *supplemental_payloads],
+    )
+
+    assert report["status"] == "control_manifest_frozen_collect_exact_samples"
+    assert report["conflicts"] == []
+    assert report["supplemental_semantic_controls"] == []
+    assert report["supplemental_conflicts"] == [
+        "supplemental_control_signature_conflict:analyze_target"
+    ]
+
+
+def test_load_promotion_for_target_date_uses_latest_prior_artifact(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(quality, "RUNTIME_DIR", tmp_path)
+    (tmp_path / "ai_multi_timeframe_context_promotion_2026-07-28.json").write_text(
+        '{"marker":"old"}', encoding="utf-8"
+    )
+    latest = tmp_path / "ai_multi_timeframe_context_promotion_2026-07-29.json"
+    latest.write_text('{"marker":"latest"}', encoding="utf-8")
+    (tmp_path / "ai_multi_timeframe_context_promotion_2026-07-31.json").write_text(
+        '{"marker":"future"}', encoding="utf-8"
+    )
+
+    promotion, path, source_date = quality.load_promotion_for_target_date("2026-07-30")
+
+    assert promotion["marker"] == "latest"
+    assert path == latest
+    assert source_date == "2026-07-29"
+
+
 def test_control_manifest_rejects_non_exact_preflight_mode():
     trace = {**_trace(), "input_preflight_mode": "baseline_v1"}
     report = quality.build_control_manifest(
@@ -1394,6 +1546,31 @@ def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
         f"{quality.DECISION_QUALITY_DETAILED_PROMPT_VERSION}_entry"
     )
     assert request["runtime_effect"] is False
+    wrapped_request = {
+        **base_request,
+        "exact_payload": {
+            "exact_payload": exact_payload,
+            "exact_payload_analysis_v1": {"schema": "stale-analysis-must-recompute"},
+        },
+    }
+    v2_8_request = quality.prepare_detailed_paired_replay_requests(
+        [wrapped_request],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
+        ),
+    )[0]
+    assert v2_8_request["candidate_input"]["exact_payload"] == exact_payload
+    assert v2_8_request["candidate"]["prompt_version"] == (
+        f"{quality.DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION}_entry"
+    )
+    assert "tape_mixed" in v2_8_request["candidate"]["system_prompt"]
+    assert quality.DECISION_QUALITY_DETAILED_PROMPT_VERSION == ("decision_quality_v2_7")
+    assert quality.detailed_paired_path(
+        "2026-07-30",
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
+        ),
+    ).name.endswith("_decision_quality_v2_8.json")
     response = {
         "edge_state": "EDGE",
         "action": "BUY",
