@@ -8861,6 +8861,9 @@ def test_verify_runtime_env_handoff_pid_accepts_launcher_safe_disable(
     runtime_dir = tmp_path / "runtime_env"
     runtime_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(
+        mod, "authoritative_ai_context_runtime_env", lambda *_args, **_kwargs: {}
+    )
     (runtime_dir / "threshold_runtime_env_2026-07-28.json").write_text(
         json.dumps(
             {
@@ -9000,12 +9003,51 @@ def test_verify_runtime_env_handoff_committed_context_promotion_owns_pid_values(
     assert result["authoritative_ai_context_runtime_env_keys"] == sorted(exact_env)
 
 
+def test_verify_runtime_env_handoff_uses_catalog_context_without_manifest_pointer(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    exact_env = {
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE": "2026-07-31",
+        "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED": "true",
+    }
+    (runtime_dir / "threshold_runtime_env_2026-07-31.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-31",
+                "selected_families": ["holding_decision_context_v1"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE": ("2026-07-24"),
+                    "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED": "true",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "authoritative_ai_context_runtime_env",
+        lambda *_args, **_kwargs: dict(exact_env),
+    )
+    monkeypatch.setattr(mod, "_read_pid_environ", lambda _pid: dict(exact_env))
+
+    result = mod.verify_runtime_env_handoff("2026-07-31", pid=12345)
+
+    assert result["pid_mismatches"] == []
+    assert result["authoritative_ai_context_runtime_env_keys"] == sorted(exact_env)
+
+
 def test_verify_runtime_env_handoff_validates_holding_and_persistent_overlays(
     tmp_path, monkeypatch
 ):
     runtime_dir = tmp_path / "runtime_env"
     runtime_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(
+        mod, "authoritative_ai_context_runtime_env", lambda *_args, **_kwargs: {}
+    )
     holding_env = {
         "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED": "true",
         "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ACTIVE_DATE": "2026-07-23",

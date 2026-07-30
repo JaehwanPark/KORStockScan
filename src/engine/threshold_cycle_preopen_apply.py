@@ -4536,24 +4536,28 @@ def verify_runtime_env_handoff(
     promotion_artifact_value = str(
         manifest.get("ai_multi_timeframe_context_promotion") or ""
     ).strip()
-    if promotion_artifact_value:
-        try:
+    try:
+        if promotion_artifact_value:
             authoritative_context_env = authoritative_ai_context_runtime_env(
                 target_date,
                 artifact_file=Path(promotion_artifact_value),
                 manifest_file=manifest_path,
                 env_file=runtime_env_path(target_date),
             )
-        except ValueError as exc:
-            findings.append(
-                {
-                    "family": "ai_multi_timeframe_context_promotion",
-                    "missing_env_keys": [],
-                    "severity": "runtime_policy_unusable",
-                    "detail": str(exc),
-                    "policy_reason": "committed_promotion_runtime_env_invalid",
-                }
+        else:
+            authoritative_context_env = authoritative_ai_context_runtime_env(
+                target_date
             )
+    except ValueError as exc:
+        findings.append(
+            {
+                "family": "ai_multi_timeframe_context_promotion",
+                "missing_env_keys": [],
+                "severity": "runtime_policy_unusable",
+                "detail": str(exc),
+                "policy_reason": "committed_promotion_runtime_env_invalid",
+            }
+        )
     effective_env_overrides.update(authoritative_context_env)
     for family in retired_selected_families:
         findings.append(
