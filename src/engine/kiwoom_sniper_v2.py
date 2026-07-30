@@ -9320,10 +9320,14 @@ def _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
         return False
     if not bool((target or {}).get("_scanner_scheduler_warm_parked")):
         return False
-    if (
-        str((target or {}).get("_scanner_scheduler_warm_reason") or "")
-        != "heavy_eval_completed_generation_warm_parked"
-    ):
+    warm_reason = str(
+        (target or {}).get("_scanner_scheduler_warm_reason") or ""
+    )
+    if warm_reason not in {
+        "precheck_not_eligible_generation_warm_parked",
+        "heavy_eval_completed_generation_warm_parked",
+        "async_commit_completed_generation_warm_parked",
+    }:
         return False
 
     generation = scheduler.current_generation((target or {}).get("code"))
@@ -9407,6 +9411,7 @@ def _scanner_scheduler_reactivate_rising_cross_park_on_fresh_ws(
             "broker_order_forbidden": True,
             "scheduler_action": "rising_cross_warm_park_reactivated",
             "scheduler_reason": "fresh_0B_crossed_existing_rising_threshold",
+            "scanner_rising_cross_warm_reason": warm_reason,
             "scanner_generation_id": generation_id,
             "scanner_rising_cross_freshness_source": freshness_source,
             "scanner_rising_cross_anchor_price": round(anchor_price, 4),

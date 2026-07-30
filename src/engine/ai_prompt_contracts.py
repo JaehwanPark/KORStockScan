@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from src.engine.ai_response_contracts import normalize_ai_reason_language
+from src.engine.ai_response_contracts import (
+    DECISION_QUALITY_V2_REASON_CODES,
+    normalize_ai_reason_language,
+)
 
 # ==========================================
 # 1. Scalping system prompt with V2.0 tick-acceleration context.
@@ -603,9 +606,11 @@ Return JSON only:
 }
 """
 
-# Offline-only Prompt V2 candidates. These prompts are never selected by the
-# live engine directly; decision-quality paired replay owns their evaluation.
-DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_5"
+# Decision-quality Prompt V2 contracts. Offline replay remains the default
+# consumer; the entry stage may be selected live only by an explicit operator
+# version override and the runtime fail-closed adapter.
+DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_6"
+DECISION_QUALITY_DETAILED_PROMPT_VERSION = "decision_quality_v2_7"
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -629,44 +634,6 @@ DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
         "trigger": ("confirmed|recovery_required|failed|not_applicable|insufficient"),
     },
 }
-
-DECISION_QUALITY_V2_REASON_CODES = (
-    "adverse_risk_high",
-    "broker_state_missing",
-    "completed_bars_missing",
-    "continuation_supported",
-    "edge_absent",
-    "edge_positive",
-    "fillability_adverse",
-    "forming_bar_ignored",
-    "insufficient_core_data",
-    "liquidity_adverse",
-    "liquidity_supportive",
-    "micro_pullback_adverse",
-    "no_positive_edge",
-    "optional_source_missing",
-    "overextension_chase_risk",
-    "pullback_recovery_candidate",
-    "quote_missing",
-    "recovery_trigger_confirmed",
-    "recovery_trigger_failed",
-    "recovery_trigger_required",
-    "reversal_candidate",
-    "risk_reward_favorable",
-    "risk_reward_unfavorable",
-    "setup_invalidated",
-    "source_conflict",
-    "source_stale",
-    "structural_edge_without_trigger",
-    "structural_trend_supportive",
-    "tape_adverse",
-    "tape_missing",
-    "tape_supportive",
-    "trend_adverse",
-    "trend_supportive",
-    "trend_tape_aligned",
-    "venue_session_mismatch",
-)
 
 _DECISION_QUALITY_V2_STAGE_RULES = {
     "entry": (
@@ -772,24 +739,38 @@ Entry edge/risk separation:
 7. Keep tape and liquidity evidence separate. When
    entry_order_flow_status=supportive is backed by
    order_flow_pressure_source=trusted_aggressor, usable trusted aggressor ticks,
-   buy_pressure_10t of at least 60, at least five trusted aggressor ticks,
+   buy_pressure_10t of at least 60, all ten trusted aggressor ticks,
    positive net_aggressive_delta_10t, and an explicit false
-   large_sell_print_detected value, classify tape as supportive. Ask-heavy depth,
-   thin fillability, or a wide spread belongs in the liquidity and adverse-risk
-   ledgers and must not relabel trusted supportive tape as adverse. When this
-   trusted tape agrees with a positive latest completed 1m or 3m return and the
-   structural edge floor, trigger must be confirmed. A confirmed trigger is not an
-   automatic BUY: use DROP when liquidity/risk is blocking or reward/risk is
-   unfavorable.
-8. BUY requires edge_state=EDGE, positive_edge=moderate or strong,
+   large_sell_print_detected value, classify tape as supportive. A percentage or
+   pressure score from fewer than ten trusted ticks, an accel_insufficient_ticks
+   quality state, or tick_accel_source=insufficient_ticks is thin evidence:
+   classify tape as mixed, add tape_sample_insufficient, and never confirm the
+   trigger from it. Ask-heavy depth, thin fillability, or a wide spread belongs in
+   the liquidity and adverse-risk ledgers and must not relabel fully sampled
+   trusted supportive tape as adverse. When fully sampled trusted tape agrees with
+   a positive latest completed 1m or 3m return and the structural edge floor,
+   trigger must be confirmed. A confirmed trigger is not an automatic BUY: use
+   DROP when liquidity/risk is blocking or reward/risk is unfavorable.
+8. Treat the completed-bar distribution as adverse and absent a current entry edge
+   when all of these are present without the structural edge floor: 5-minute
+   return <= -0.5 percent, 10-minute return <= -1.0 percent, peak drawdown <=
+   -2.0 percent, completed-bar highs are falling, and volume ratio <= 0.5 or
+   price_volume_divergence. Use NO_EDGE/DROP with distribution_adverse and
+   volume_confirmation_missing. A tiny positive tape sample cannot reverse this
+   completed-bar conclusion.
+9. Treat liquidity as high or blocking adverse risk when spread_bp >= 50 and
+   top1 ask notional is at least five times top1 bid notional. Add ask_wall_adverse.
+   This combination cannot support BUY and reinforces DROP when the completed-bar
+   distribution is also adverse.
+10. BUY requires edge_state=EDGE, positive_edge=moderate or strong,
    trigger=confirmed, adverse_risk=low or moderate, and
    a strictly negative expected_downside_pct with
    expected_upside_pct / abs(expected_downside_pct) >= 1.25.
-9. WAIT is not the default for sufficient data. Use WAIT only for
+11. WAIT is not the default for sufficient data. Use WAIT only for
    (a) EDGE with trigger=recovery_required and non-blocking adverse risk, or
    (b) INSUFFICIENT_DATA. State the missing recovery condition with canonical
    reason codes.
-10. Use DROP for NO_EDGE. Also use DROP when a structural edge exists but the setup
+12. Use DROP for NO_EDGE. Also use DROP when a structural edge exists but the setup
    is invalidated, trigger=failed, adverse_risk=blocking, or a confirmed-trigger
    setup has reward/risk below 1.25. An intact pullback edge with
    trigger=recovery_required may remain WAIT while awaiting recovery. NO_EDGE with
@@ -797,10 +778,12 @@ Entry edge/risk separation:
 """.strip()
 
 
-def decision_quality_v2_system_prompt(stage: str) -> str:
-    """Return an English ASCII offline paired-replay prompt for one stage."""
+def decision_quality_v2_system_prompt(stage: str, *, live_entry: bool = False) -> str:
+    """Return an English ASCII decision-quality prompt for one stage."""
 
     normalized = str(stage or "").strip().lower()
+    if live_entry and normalized != "entry":
+        raise ValueError("live decision-quality prompt supports entry stage only")
     stage_rule = _DECISION_QUALITY_V2_STAGE_RULES.get(normalized)
     stage_input_rule = _DECISION_QUALITY_V2_STAGE_INPUT_RULES.get(normalized)
     if stage_rule is None or stage_input_rule is None:
@@ -809,9 +792,21 @@ def decision_quality_v2_system_prompt(stage: str) -> str:
     entry_decision_rules = (
         _DECISION_QUALITY_V2_ENTRY_DECISION_RULES if normalized == "entry" else ""
     )
+    authority_rule = (
+        "You are the live Korean-stock scalping entry classifier selected by an "
+        "explicit operator override. Your authority is limited to BUY, WAIT, or "
+        "DROP for the entry stage. You do not decide order price, quantity, "
+        "provider/model routing, broker submission, or safety policy. External "
+        "hard-safety and broker guards remain authoritative."
+        if live_entry
+        else (
+            "You are an offline Korean-stock scalping decision-quality evaluator.\n"
+            "You have no live order, threshold, provider, model-routing, quantity, "
+            "or safety authority."
+        )
+    )
     return f"""
-You are an offline Korean-stock scalping decision-quality evaluator.
-You have no live order, threshold, provider, model-routing, quantity, or safety authority.
+{authority_rule}
 Use only the exact captured payload. Do not infer missing data.
 
 Stage objective:
@@ -864,4 +859,41 @@ Return JSON only with this contract:
       "not_applicable" | "insufficient"
   }}
 }}
+""".strip()
+
+
+def decision_quality_v2_detailed_system_prompt(
+    stage: str, *, live_entry: bool = False
+) -> str:
+    """Return the two-pass prompt that consumes a deterministic ledger."""
+
+    base_prompt = decision_quality_v2_system_prompt(stage, live_entry=live_entry)
+    ledger_authority = (
+        "The ledger only organizes evidence for the selected live entry "
+        "classifier. It cannot submit an order or change thresholds, providers, "
+        "prices, quantities, broker guards, or safety guards."
+        if live_entry
+        else (
+            "The ledger is offline evidence organization only. It has no order, "
+            "threshold, provider, price, quantity, broker, safety, or live-runtime "
+            "authority."
+        )
+    )
+    return f"""
+{base_prompt}
+
+Detailed-analysis input contract:
+1. The candidate input contains the unchanged exact_payload and a deterministic
+   exact_payload_analysis_v1 ledger derived only from that payload.
+2. Audit the ledger against exact_payload. Raw source values remain authoritative
+   if a ledger field conflicts with them.
+3. Use the ledger to compare completed-bar structure, volume confirmation, tape
+   sample sufficiency, executable liquidity, and contradictions before deciding.
+4. A high buy-pressure percentage from a thin tape sample is not an immediate
+   trigger. Do not let it override adverse completed-bar distribution or blocking
+   liquidity.
+5. Do not turn every adverse micro state into DROP. Preserve structural edge when
+   multi-horizon completed returns and slopes support it; separate that edge from
+   recovery_required or failed immediate triggers.
+6. {ledger_authority}
 """.strip()

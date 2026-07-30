@@ -65,6 +65,10 @@ from src.engine.scalping.ai_decision_trace import (  # noqa: E402
     capture_canonical_context_candidate,
     record_ai_decision_trace,
 )
+from src.engine.scalping.ai_decision_quality import (  # noqa: E402
+    build_exact_payload_analysis_v1,
+    validate_candidate_response,
+)
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     entry_candle_context_log_fields,
@@ -93,6 +97,8 @@ from src.engine.ai_prompt_contracts import (
     REALTIME_ANALYSIS_PROMPT_SWING,
     REALTIME_ANALYSIS_PROMPT_DUAL,
     SCALPING_OVERNIGHT_DECISION_PROMPT,
+    DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    decision_quality_v2_detailed_system_prompt,
 )
 
 DUAL_PERSONA_AGGRESSIVE_PROMPT = """
@@ -1664,6 +1670,23 @@ class GPTSniperEngine:
             )
 
         if profile == "watching":
+            selected_version = str(
+                getattr(
+                    TRADING_RULES,
+                    "OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
+                    "hot_v1",
+                )
+                or "hot_v1"
+            ).strip()
+            if selected_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION:
+                return (
+                    decision_quality_v2_detailed_system_prompt(
+                        "entry", live_entry=True
+                    ),
+                    "scalping_entry",
+                    DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+                    "watching",
+                )
             if bool(
                 getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED", True)
             ):
@@ -1687,6 +1710,46 @@ class GPTSniperEngine:
                 "holding",
             )
         return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v2", "shared"
+
+    def _normalize_decision_quality_entry_result(self, result, *, exact_payload):
+        payload = dict(result or {}) if isinstance(result, dict) else {}
+        contract_errors = validate_candidate_response(
+            payload,
+            stage="entry",
+            exact_payload=exact_payload,
+        )
+        if contract_errors:
+            return {
+                **payload,
+                "action": "DROP",
+                "score": 0,
+                "reason": "decision_quality_v2_7_semantic_rejected",
+                "decision_quality_contract_status": "semantic_rejected",
+                "decision_quality_contract_errors": contract_errors,
+                "decision_quality_live_adapter": "decision_quality_v2_7_entry_v1",
+            }
+
+        action = str(payload.get("action") or "DROP").upper()
+        confidence = max(0, min(100, int(payload.get("confidence") or 0)))
+        if action == "BUY":
+            score = max(75, confidence)
+        elif action == "WAIT":
+            score = min(74, max(50, 50 + round(confidence * 0.24)))
+        else:
+            score = min(49, max(0, round(49 * (1.0 - confidence / 100.0))))
+        reason_codes = [
+            str(code) for code in payload.get("reason_codes") or [] if str(code)
+        ]
+        return {
+            **payload,
+            "action": action,
+            "score": score,
+            "reason": ",".join(reason_codes[:4])[:120] or "decision_quality_v2_7",
+            "decision_quality_contract_status": "pass",
+            "decision_quality_contract_errors": [],
+            "decision_quality_live_adapter": "decision_quality_v2_7_entry_v1",
+            "decision_quality_model_confidence": confidence,
+        }
 
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
         payload = dict(result or {}) if isinstance(result, dict) else {}
@@ -1884,6 +1947,13 @@ class GPTSniperEngine:
                 "action": "DROP",
                 "score": 0,
                 "reason": "openai_ws_http_fallback_timeout_fail_closed",
+            }
+        elif request.schema_name == "decision_quality_v2_7_entry":
+            payload = {
+                "action": "DROP",
+                "confidence": 0,
+                "reason_codes": ["insufficient_core_data"],
+                "openai_transport_fail_closed": True,
             }
         else:
             return None
@@ -2456,6 +2526,10 @@ class GPTSniperEngine:
                     "Classify the provided market data. Use only the numeric fields in the input. "
                     "Return JSON only with action HOLD, TRIM, or EXIT; score as 0-100 integer; "
                     "reason as a short neutral numeric summary in English ASCII only."
+                )
+            elif request.schema_name == "decision_quality_v2_7_entry":
+                safe_prompt = decision_quality_v2_detailed_system_prompt(
+                    "entry", live_entry=True
                 )
             else:
                 safe_prompt = (
@@ -5787,6 +5861,11 @@ class GPTSniperEngine:
             prompt, prompt_type, prompt_version, normalized_profile = (
                 self._resolve_scalping_prompt(prompt_profile)
             )
+            decision_quality_v2_7_selected = (
+                prompt_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION
+                and prompt_type == "scalping_entry"
+                and normalized_profile == "watching"
+            )
             matrix_runtime = build_holding_exit_matrix_runtime_context(
                 prompt_profile=normalized_profile,
                 ws_data=ws_data if isinstance(ws_data, dict) else {},
@@ -5831,12 +5910,18 @@ class GPTSniperEngine:
             )
             cache_strategy = f"{cache_strategy}:{entry_adm_cache_token}"
             cache_strategy = f"{cache_strategy}:{lifecycle_ai_runtime.get('cache_token', 'disabled')}"
+            cache_strategy = f"{cache_strategy}:prompt:{prompt_version}"
+        if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
+            decision_quality_v2_7_selected = False
         use_hot_entry_input = (
             strategy not in ["KOSPI_ML", "KOSDAQ_ML"]
             and prompt_type == "scalping_entry"
             and normalized_profile == "watching"
             and bool(
-                getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED", True)
+                decision_quality_v2_7_selected
+                or getattr(
+                    TRADING_RULES, "OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED", True
+                )
             )
             and not bool(
                 getattr(TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False)
@@ -5862,7 +5947,11 @@ class GPTSniperEngine:
                         )
                     )
                     else (
-                        "entry_screen_hot_v1"
+                        (
+                            "decision_quality_v2_7_entry"
+                            if decision_quality_v2_7_selected
+                            else "entry_screen_hot_v1"
+                        )
                         if use_hot_entry_input
                         else (
                             "entry_screen_compact_v1"
@@ -6111,6 +6200,22 @@ class GPTSniperEngine:
                     formatted_data = self._format_entry_screen_hot_data(
                         ws_data, recent_ticks, recent_candles, **hot_runtime
                     )
+                    if decision_quality_v2_7_selected:
+                        exact_payload = json.loads(formatted_data)
+                        exact_payload_analysis = build_exact_payload_analysis_v1(
+                            exact_payload,
+                            stage="entry",
+                            live_entry=True,
+                        )
+                        formatted_data = json.dumps(
+                            {
+                                "exact_payload": exact_payload,
+                                "exact_payload_analysis_v1": exact_payload_analysis,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            default=str,
+                        )
                 else:
                     try:
                         format_kwargs = {"feature_packet": feature_packet}
@@ -6209,7 +6314,11 @@ class GPTSniperEngine:
                             )
                         )
                         else (
-                            "entry_screen_hot_v1"
+                            (
+                                "decision_quality_v2_7_entry"
+                                if decision_quality_v2_7_selected
+                                else "entry_screen_hot_v1"
+                            )
                             if use_hot_entry_input
                             else (
                                 "entry_screen_compact_v1"
@@ -6293,7 +6402,11 @@ class GPTSniperEngine:
                 schema_name=(
                     "holding_exit_v1"
                     if prompt_type == "scalping_holding"
-                    else "entry_v1"
+                    else (
+                        "decision_quality_v2_7_entry"
+                        if decision_quality_v2_7_selected
+                        else "entry_v1"
+                    )
                 ),
                 endpoint_name="analyze_target",
                 symbol=trace_symbol or "-",
@@ -6321,6 +6434,11 @@ class GPTSniperEngine:
             result = self._merge_last_transport_meta(result)
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
+                if decision_quality_v2_7_selected:
+                    result = self._normalize_decision_quality_entry_result(
+                        result,
+                        exact_payload=exact_payload,
+                    )
                 result = self._apply_remote_entry_guard(
                     result,
                     prompt_type=prompt_type,

@@ -1347,6 +1347,9 @@ class TradingConfig:
     OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED: bool = (
         True  # watching entry hot path 전용 short prompt 사용
     )
+    OPENAI_ANALYZE_TARGET_PROMPT_VERSION: str = (
+        "hot_v1"  # hot_v1 | decision_quality_v2_7
+    )
     OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED: bool = (
         True  # watching entry hot path 전용 핵심 feature JSON 사용
     )
@@ -6031,6 +6034,9 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_analyze_target_hot_prompt = _env_bool(
         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED"
     )
+    env_openai_analyze_target_prompt_version = _env_str(
+        "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION"
+    )
     env_openai_analyze_target_hot_input = _env_bool(
         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED"
     )
@@ -6083,6 +6089,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_late_discard is not None
         or env_openai_entry_timeout_reject is not None
         or env_openai_analyze_target_hot_prompt is not None
+        or env_openai_analyze_target_prompt_version is not None
         or env_openai_analyze_target_hot_input is not None
         or env_openai_entry_price_compact_input is not None
         or env_openai_entry_screen_v2_input is not None
@@ -6225,6 +6232,11 @@ def _build_trading_rules() -> TradingConfig:
                 env_openai_analyze_target_hot_prompt
                 if env_openai_analyze_target_hot_prompt is not None
                 else config.OPENAI_ANALYZE_TARGET_HOT_PROMPT_ENABLED
+            ),
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                env_openai_analyze_target_prompt_version
+                if env_openai_analyze_target_prompt_version is not None
+                else config.OPENAI_ANALYZE_TARGET_PROMPT_VERSION
             ),
             OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=(
                 env_openai_analyze_target_hot_input

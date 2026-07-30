@@ -461,9 +461,7 @@ def test_apply_transaction_preserves_env_and_writes_commit_marker_last(
     assert promotion.promotion_path("2026-07-27").exists()
 
 
-def test_committed_promotion_exports_authoritative_exact_v2_env(
-    tmp_path, monkeypatch
-):
+def test_committed_promotion_exports_authoritative_exact_v2_env(tmp_path, monkeypatch):
     runtime_dir = tmp_path / "runtime_env"
     runtime_dir.mkdir()
     promotion_dir = tmp_path / "runtime"
@@ -487,11 +485,12 @@ def test_committed_promotion_exports_authoritative_exact_v2_env(
     assert "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE=exact_v2" in (
         promotion.authoritative_runtime_env_exports("2026-07-27")
     )
+    assert promotion.authoritative_runtime_env("2026-07-28") == (
+        promotion.full_market_env("2026-07-28")
+    )
 
 
-def test_authoritative_runtime_env_rejects_tampered_commit_file(
-    tmp_path, monkeypatch
-):
+def test_authoritative_runtime_env_rejects_tampered_commit_file(tmp_path, monkeypatch):
     runtime_dir = tmp_path / "runtime_env"
     runtime_dir.mkdir()
     promotion_dir = tmp_path / "runtime"
@@ -517,6 +516,34 @@ def test_authoritative_runtime_env_rejects_tampered_commit_file(
         promotion.authoritative_runtime_env("2026-07-27")
 
 
+def test_authoritative_runtime_env_rejects_tampered_authority_on_rollover(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir()
+    promotion_dir = tmp_path / "runtime"
+    monkeypatch.setattr(promotion, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(promotion, "PROMOTION_DIR", promotion_dir)
+    manifest = _runtime_manifest(runtime_dir)
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=manifest,
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+    promotion.apply_promotion_transaction(report, manifest, now=TEST_NOW)
+    artifact_path = promotion.promotion_path("2026-07-27")
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    artifact["operator_authorization_id"] = "tampered"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="active committed promotion"):
+        promotion.authoritative_runtime_env("2026-07-28")
+
+
 def test_authoritative_runtime_env_does_not_reactivate_rolled_back_context(
     tmp_path, monkeypatch
 ):
@@ -536,6 +563,7 @@ def test_authoritative_runtime_env_does_not_reactivate_rolled_back_context(
     )
 
     assert promotion.authoritative_runtime_env("2026-07-27") == {}
+    assert promotion.authoritative_runtime_env("2026-07-28") == {}
 
 
 def test_promotion_rollback_restores_previous_preflight_contract(tmp_path):
@@ -696,6 +724,22 @@ def test_runtime_hook_accepts_only_a_committed_operator_directed_artifact(
         )
         is False
     )
+
+    rollover_env = promotion.authoritative_runtime_env("2026-07-28")
+    assert rollover_env == promotion.full_market_env("2026-07-28")
+    for name, value in rollover_env.items():
+        monkeypatch.setenv(name, value)
+    multi_timeframe_context._ACTIVATION_CACHE.clear()
+
+    rollover_state = multi_timeframe_context.promotion_activation_state(
+        datetime(2026, 7, 28, 8, 30, tzinfo=KST)
+    )
+
+    assert rollover_state["active"] is True
+    assert rollover_state["target_date"] == "2026-07-28"
+    assert rollover_state["promotion_target_date"] == "2026-07-27"
+    assert rollover_state["promotion_rollover"] is True
+    assert rollover_state["runtime_env_readback"] == "complete_exact_v2"
 
 
 def _payload(endpoint, schema, venue="KRX"):

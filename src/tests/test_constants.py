@@ -1579,6 +1579,7 @@ def test_scalping_entry_openai_http_primary_defaults_and_env_override(monkeypatc
         "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_MODEL",
         "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TRANSPORT_MODE",
         "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TIMEOUT_MS",
+        "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
     )
     for name in names:
         monkeypatch.delenv(name, raising=False)
@@ -1588,17 +1589,26 @@ def test_scalping_entry_openai_http_primary_defaults_and_env_override(monkeypatc
     assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_MODEL == "gpt-5.4-nano"
     assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TRANSPORT_MODE == "http"
     assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TIMEOUT_MS == 5000
+    assert reloaded.TRADING_RULES.OPENAI_ANALYZE_TARGET_PROMPT_VERSION == "hot_v1"
 
     monkeypatch.setenv("KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_MODEL", "gpt-entry")
     monkeypatch.setenv(
         "KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TRANSPORT_MODE", "responses_ws"
     )
     monkeypatch.setenv("KORSTOCKSCAN_OPENAI_SCALPING_ENTRY_TIMEOUT_MS", "6500")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
+        "decision_quality_v2_7",
+    )
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_MODEL == "gpt-entry"
     assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TRANSPORT_MODE == "responses_ws"
     assert reloaded.TRADING_RULES.OPENAI_SCALPING_ENTRY_TIMEOUT_MS == 6500
+    assert (
+        reloaded.TRADING_RULES.OPENAI_ANALYZE_TARGET_PROMPT_VERSION
+        == "decision_quality_v2_7"
+    )
 
 
 def test_holding_ai_models_and_openai_primary_fallback_defaults(monkeypatch):

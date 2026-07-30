@@ -944,6 +944,391 @@ def test_entry_candidate_contract_separates_structural_edge_and_adverse_risk():
     )
 
 
+def test_entry_candidate_rejects_thin_tape_over_adverse_completed_distribution():
+    exact_payload = {
+        "current": {"price": 30150, "fluctuation_pct": 5.42},
+        "features": {
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "buy_pressure_10t": 100.0,
+            "net_aggressive_delta_10t": 8,
+            "tick_aggressor_pressure_usable": True,
+            "tick_aggressor_trusted_count": 6,
+            "tick_context_quality": "accel_insufficient_ticks",
+            "tick_accel_source": "insufficient_ticks",
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "large_sell_print_detected": False,
+            "spread_bp": 82.92,
+            "top1_bid_notional": 331650,
+            "top1_ask_notional": 5065200,
+        },
+        "entry_candle_context": {
+            "structure": {
+                "returns_pct": {"1": -0.1656, "3": 0.5, "5": -0.8224, "10": -2.4272},
+                "slopes_pct_per_bar": {
+                    "1": -0.1656,
+                    "3": -0.1653,
+                    "5": 0.0663,
+                    "10": -0.1202,
+                    "20": -0.0277,
+                },
+                "peak_drawdown_pct": -3.9809,
+                "high_direction": "down",
+                "volume_ratio": 0.253,
+                "volume_direction_alignment": "price_volume_divergence",
+                "regime": "range",
+                "alignment": "neutral",
+            }
+        },
+    }
+    correct = {
+        "edge_state": "NO_EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.4,
+        "expected_downside_pct": -1.0,
+        "confidence": 82,
+        "reason_codes": [
+            "edge_absent",
+            "distribution_adverse",
+            "volume_confirmation_missing",
+            "tape_sample_insufficient",
+            "ask_wall_adverse",
+        ],
+        "evidence": {
+            "trend": "adverse",
+            "liquidity": "adverse",
+            "tape": "mixed",
+            "risk": "high",
+            "uncertainty": "medium",
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "blocking",
+            "trigger": "failed",
+        },
+    }
+    assert (
+        quality.validate_candidate_response(
+            correct,
+            stage="entry",
+            exact_payload=exact_payload,
+        )
+        == []
+    )
+    generic_liquidity_code = {
+        **correct,
+        "reason_codes": [
+            code if code != "ask_wall_adverse" else "liquidity_adverse"
+            for code in correct["reason_codes"]
+        ],
+    }
+    assert (
+        quality.validate_candidate_response(
+            generic_liquidity_code,
+            stage="entry",
+            exact_payload=exact_payload,
+        )
+        == []
+    )
+    overstated = {
+        **correct,
+        "edge_state": "EDGE",
+        "action": "BUY",
+        "expected_upside_pct": 1.4,
+        "expected_downside_pct": -0.8,
+        "reason_codes": [
+            "edge_positive",
+            "tape_supportive",
+            "recovery_trigger_confirmed",
+        ],
+        "evidence": {
+            **correct["evidence"],
+            "trend": "mixed",
+            "liquidity": "supportive",
+            "tape": "supportive",
+            "setup": "reversal",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    errors = quality.validate_candidate_response(
+        overstated,
+        stage="entry",
+        exact_payload=exact_payload,
+    )
+    assert "entry_thin_tape_sample_overstated" in errors
+    assert "entry_adverse_distribution_misclassified" in errors
+    assert "entry_ask_wall_wide_spread_misclassified" in errors
+
+    missing_tick_count_payload = {
+        **exact_payload,
+        "features": {
+            **exact_payload["features"],
+        },
+    }
+    missing_tick_count_payload["features"].pop(
+        "tick_aggressor_trusted_count", None
+    )
+    missing_tick_count_errors = quality.validate_candidate_response(
+        overstated,
+        stage="entry",
+        exact_payload=missing_tick_count_payload,
+    )
+    assert "entry_thin_tape_sample_overstated" in missing_tick_count_errors
+
+    insufficient = {
+        **correct,
+        "edge_state": "INSUFFICIENT_DATA",
+        "action": "WAIT",
+        "expected_upside_pct": None,
+        "expected_downside_pct": None,
+        "reason_codes": ["insufficient_core_data"],
+        "evidence": {
+            **correct["evidence"],
+            "trend": "insufficient",
+            "liquidity": "insufficient",
+            "tape": "insufficient",
+            "risk": "insufficient",
+            "setup": "insufficient",
+            "positive_edge": "insufficient",
+            "adverse_risk": "insufficient",
+            "trigger": "insufficient",
+        },
+    }
+    assert (
+        quality.validate_candidate_response(
+            insufficient,
+            stage="entry",
+            exact_payload=exact_payload,
+        )
+        == []
+    )
+
+    analysis = quality.build_exact_payload_analysis_v1(
+        exact_payload,
+        stage="entry",
+    )
+    assert analysis["schema"] == "exact_payload_analysis_v1"
+    assert analysis["completed_structure"]["phase"] == "distribution"
+    assert analysis["completed_structure"]["structural_edge"] == "absent"
+    assert analysis["volume_confirmation"]["state"] == "confirmation_absent"
+    assert analysis["tape_sample"]["state"] == "too_thin"
+    assert analysis["executable_liquidity"]["state"] == "blocking"
+    assert analysis["trigger_state"] == "failed"
+    assert analysis["analysis_sha256"]
+    assert analysis["observation_contract"]["runtime_effect"] is False
+
+
+def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
+    exact_payload = {
+        "current": {"price": 10000},
+        "features": {
+            "tick_aggressor_trusted_count": 10,
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "tick_aggressor_pressure_usable": True,
+            "net_aggressive_delta_10t": 20,
+            "buy_pressure_10t": 80,
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "large_sell_print_detected": False,
+            "entry_momentum_status": "accelerating",
+            "spread_bp": 10,
+            "top1_bid_notional": 1000000,
+            "top1_ask_notional": 900000,
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 61,
+            "structure": {
+                "returns_pct": {
+                    "1": 0.2,
+                    "3": 0.4,
+                    "5": 0.8,
+                    "10": 1.1,
+                    "20": 1.5,
+                    "60": 2.0,
+                },
+                "slopes_pct_per_bar": {
+                    "5": 0.1,
+                    "10": 0.1,
+                    "20": 0.1,
+                    "60": 0.1,
+                },
+                "volume_ratio": 1.2,
+                "volume_direction_alignment": "price_volume_aligned",
+                "regime": "breakout",
+                "alignment": "positive",
+            },
+        },
+    }
+    payload_hash = quality._sha256(exact_payload)
+    base_request = {
+        "paired_replay_id": "pair-base",
+        "decision_trace_id": "trace-base",
+        "stage": "entry",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "payload_sha256": payload_hash,
+        "exact_payload": exact_payload,
+        "control": {
+            "provider": "openai",
+            "model": "gpt-5.4-nano",
+            "captured_action": "WAIT",
+        },
+        "candidate": {
+            "provider": "openai",
+            "model": "gpt-5.4-nano",
+            "response_schema_sha256": "schema-hash",
+        },
+        "sample_floor": {"pass": True},
+        **quality.OFFLINE_CONTRACT,
+    }
+    requests = quality.prepare_detailed_paired_replay_requests([base_request])
+    assert len(requests) == 1
+    request = requests[0]
+    assert request["paired_replay_id"] == "detailed-pair-base"
+    assert request["candidate_input"]["exact_payload"] == exact_payload
+    assert request["candidate_exact_payload_sha256"] == payload_hash
+    assert request["source_exact_payload_sha256"] == payload_hash
+    assert request["exact_payload_analysis"]["schema"] == ("exact_payload_analysis_v1")
+    assert request["candidate"]["prompt_version"] == (
+        f"{quality.DECISION_QUALITY_DETAILED_PROMPT_VERSION}_entry"
+    )
+    assert request["runtime_effect"] is False
+    response = {
+        "edge_state": "EDGE",
+        "action": "BUY",
+        "expected_upside_pct": 1.5,
+        "expected_downside_pct": -0.8,
+        "confidence": 75,
+        "reason_codes": [
+            "edge_positive",
+            "tape_supportive",
+            "recovery_trigger_confirmed",
+            "risk_reward_favorable",
+        ],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "supportive",
+            "tape": "supportive",
+            "risk": "medium",
+            "uncertainty": "low",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    results = quality.run_paired_replay(
+        requests,
+        control_runner=lambda _: {"action": "WAIT"},
+        candidate_runner=lambda _: response,
+    )
+    assert results[0]["status"] == "pass"
+    assert results[0]["same_payload_confirmed"] is True
+    assert results[0]["deterministic_analysis_confirmed"] is True
+    assert results[0]["exact_payload_analysis_schema"] == ("exact_payload_analysis_v1")
+    report = quality.build_paired_replay_report(
+        target_date="2026-07-29",
+        requests=requests,
+        results=results,
+        labels=[
+            {
+                "decision_trace_id": "trace-base",
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 1.0,
+                        "mfe_pct": 1.2,
+                        "mae_pct": -0.2,
+                        "first_hit": "target",
+                    }
+                },
+            }
+        ],
+    )
+    assert "exact_payload" not in report["requests"][0]
+    assert "candidate_input" not in report["requests"][0]
+    assert report["requests"][0]["exact_payload_analysis"]["schema"] == (
+        "exact_payload_analysis_v1"
+    )
+
+    unsupported = quality.prepare_detailed_paired_replay_requests(
+        [{**base_request, "stage": "holding"}]
+    )[0]
+    assert unsupported["sample_floor"]["pass"] is False
+    assert unsupported["sample_floor"]["detailed_analysis_stage_supported"] is False
+    assert unsupported["detailed_analysis_exclusion_reason"] == (
+        "detailed_analysis_stage_not_implemented"
+    )
+    assert "candidate_input" not in unsupported
+
+
+def test_three_way_comparison_uses_only_common_comparable_rows():
+    one_pass = {
+        "requests": [{"candidate": {"prompt_version": "decision_quality_v2_6_entry"}}],
+        "paired_comparisons": [
+            {
+                "decision_trace_id": "trace-1",
+                "stock_code": "005930",
+                "effective_venue": "KRX",
+                "session_bucket": "krx_regular",
+                "control_action": "WAIT",
+                "candidate_action": "DROP",
+                "outcome_return_pct": 1.0,
+                "control_decision_value_pct": 0.0,
+                "candidate_decision_value_pct": 0.0,
+                "candidate_error_taxonomy": ["false_drop"],
+            }
+        ],
+    }
+    detailed = {
+        "requests": [{"candidate": {"prompt_version": "decision_quality_v2_7_entry"}}],
+        "paired_comparisons": [
+            {
+                "decision_trace_id": "trace-1",
+                "stock_code": "005930",
+                "effective_venue": "KRX",
+                "session_bucket": "krx_regular",
+                "control_action": "WAIT",
+                "candidate_action": "BUY",
+                "outcome_return_pct": 1.0,
+                "control_decision_value_pct": 0.0,
+                "candidate_decision_value_pct": 1.0,
+                "candidate_error_taxonomy": [],
+            },
+            {
+                "decision_trace_id": "trace-detailed-only",
+                "candidate_decision_value_pct": 1.0,
+            },
+            {
+                "decision_trace_id": "trace-missing-value",
+                "candidate_decision_value_pct": None,
+            },
+        ],
+    }
+    one_pass["paired_comparisons"].append(
+        {
+            "decision_trace_id": "trace-missing-value",
+            "candidate_decision_value_pct": 1.0,
+        }
+    )
+    comparison = quality.build_detailed_three_way_comparison(
+        one_pass_report=one_pass,
+        detailed_report=detailed,
+    )
+    assert comparison["common_comparable_count"] == 1
+    assert comparison["common_cohort_sha256"] == quality._sha256(["trace-1"])
+    assert comparison["detailed_vs_one_pass_ev_delta_pct"] == 1.0
+    assert comparison["action_transition_counts"] == {"DROP->BUY": 1}
+    assert comparison["one_pass_error_taxonomy_counts"] == {"false_drop": 1}
+    assert comparison["detailed_error_taxonomy_counts"] == {}
+    assert comparison["runtime_effect"] is False
+
+
 def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     control_manifest = quality.build_control_manifest(
         target_date="2026-07-27",

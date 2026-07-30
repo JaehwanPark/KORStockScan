@@ -124,7 +124,7 @@ FAIL이면 `runtime_activation=false`를 유지한다. partial rollout, canary, 
 - 사용자가 명시적으로 validation gate 우회를 지시한 경우에만 `operator-directed-apply`를 사용할 수 있다. 이 경로는 `operator_directed_full_promotion` mode, dated authorization ID, operator reason, 그리고 원래 validation/review finding 전체를 promotion artifact에 보존한다. 이를 일반 validation PASS로 표시하지 않는다.
 - override는 runtime manifest/verify와 PREMARKET transaction window를 계속 요구하며, 전체 symbol·session·endpoint에만 적용된다. partial rollout은 허용하지 않는다.
 - runtime preflight artifact readiness만 override marker로 대체한다. 각 호출의 fresh source, venue/session consistency, completed-bar, source-quality, broker/hard-safety guard는 그대로 fail-closed다.
-- marker는 target date에만 유효하며 다음 거래일로 자동 이월되지 않는다. marker만으로 baseline PID를 활성화하지 않으며, 적용 PID가 전체 Exact V2 runtime env를 read-back한 경우에만 활성화한다. 적용 PID 반영은 별도 승인된 graceful restart와 runtime env read-back이 필요하다.
+- committed full-market promotion marker는 명시적 committed rollback 전까지 다음 거래일에도 승격 authority를 유지한다. 원 marker·runtime manifest·env의 authority/path/target-date/hash는 승격일 원본 기준으로 매번 검증하고, launcher는 검증 성공 시에만 당일 날짜값으로 전체 Exact V2 runtime env overlay를 재생성한다. marker만으로 baseline PID를 활성화하지 않으며 적용 PID가 당일 전체 Exact V2 runtime env를 read-back한 경우에만 활성화한다. malformed/tampered/future/rollback marker는 fail-closed이고, 적용 PID 반영은 별도 승인된 graceful restart와 runtime env read-back이 필요하다.
 
 ## 3. Promotion 후 natural Exact V2 표본 수집
 

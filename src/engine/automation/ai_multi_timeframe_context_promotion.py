@@ -30,9 +30,10 @@ OBSERVATION_SCHEMA = "ai_multi_timeframe_context_first_observation_v1"
 AUTHORITY_ID = "operator_full_market_context_promotion_2026-07-27"
 VALIDATED_PROMOTION_MODE = "validated_premarket_full_promotion"
 OPERATOR_DIRECTED_PROMOTION_MODE = "operator_directed_full_promotion"
-# This is intentionally a narrow, dated operator authority.  It is accepted
-# only by the dedicated CLI mode below and is persisted with every bypassed
-# validation finding; it is never inferred from a generic environment flag.
+# This is issued only by the dedicated, dated CLI authority below and persists
+# until an explicit committed rollback.  The issue date stays in the authority
+# id and source artifact; a launcher rollover may only translate the already
+# committed full-market env dates to the current trading date.
 OPERATOR_DIRECTED_AUTHORITY_PREFIX = "operator_directed_full_promotion_"
 FAMILY = "scalping_multi_timeframe_context_v1"
 PROMOTION_DIR = DATA_DIR / "runtime"
@@ -149,6 +150,42 @@ def runtime_env_path(target_date: str) -> Path:
     return RUNTIME_ENV_DIR / f"threshold_runtime_env_{target_date}.env"
 
 
+def _latest_promotion_source_date(target_date: str) -> str:
+    candidates: list[str] = []
+    for path in PROMOTION_DIR.glob("ai_multi_timeframe_context_promotion_*.json"):
+        artifact_date = path.stem.removeprefix("ai_multi_timeframe_context_promotion_")
+        try:
+            datetime.strptime(artifact_date, "%Y-%m-%d")
+        except ValueError:
+            continue
+        if artifact_date <= target_date:
+            candidates.append(artifact_date)
+    for artifact_date in sorted(set(candidates), reverse=True):
+        if _load_json(promotion_path(artifact_date)):
+            return artifact_date
+    return ""
+
+
+def _promotion_authority_valid(
+    artifact: dict[str, Any],
+    *,
+    source_date: str,
+) -> bool:
+    promotion_mode = str(artifact.get("promotion_mode") or "")
+    if promotion_mode in {"", VALIDATED_PROMOTION_MODE}:
+        return artifact.get("operator_authorization_id") == AUTHORITY_ID
+    validation_gate = artifact.get("validation_gate")
+    return bool(
+        promotion_mode == OPERATOR_DIRECTED_PROMOTION_MODE
+        and artifact.get("operator_authorization_id")
+        == operator_directed_authority_id(source_date)
+        and isinstance(validation_gate, dict)
+        and validation_gate.get("mode") == "operator_directed_bypass"
+        and validation_gate.get("bypassed") is True
+        and str(validation_gate.get("operator_reason") or "").strip()
+    )
+
+
 def authoritative_runtime_env(
     target_date: str,
     *,
@@ -156,18 +193,33 @@ def authoritative_runtime_env(
     manifest_file: Path | None = None,
     env_file: Path | None = None,
 ) -> dict[str, str]:
-    """Return the committed promotion overlay after verifying its commit files.
+    """Return the durable committed promotion overlay for a trading date.
 
     A missing artifact means that no context promotion owns the launcher
-    environment for the date.  Once an artifact exists, however, it must be a
-    complete and hash-consistent commit; silently ignoring a broken marker
-    would let a later generic operator override downgrade Exact V2.
+    environment.  A prior committed full-market promotion remains authoritative
+    until an explicit committed rollback.  Its original commit files stay
+    immutable and hash-verified while only date-valued env fields roll forward.
+    Silently ignoring a broken latest marker would let a generic operator
+    override downgrade Exact V2, so malformed or tampered markers fail closed.
     """
 
-    artifact_file = artifact_file or promotion_path(target_date)
+    source_date = target_date
+    resolved_from_catalog = artifact_file is None
+    if artifact_file is None:
+        source_date = _latest_promotion_source_date(target_date)
+        if not source_date:
+            return {}
+        artifact_file = promotion_path(source_date)
     if not artifact_file.exists():
         return {}
     artifact = _load_json(artifact_file)
+    artifact_target_date = str(artifact.get("target_date") or "")
+    if resolved_from_catalog and artifact_target_date != source_date:
+        raise ValueError("promotion artifact filename target date mismatch")
+    if not resolved_from_catalog and artifact_target_date:
+        source_date = artifact_target_date
+    if source_date > target_date:
+        raise ValueError("promotion artifact is from a future trading date")
     if (
         artifact.get("transaction_status") == "rolled_back"
         and artifact.get("decision") == "rolled_back_context_only"
@@ -175,16 +227,23 @@ def authoritative_runtime_env(
     ):
         return {}
     if (
-        str(artifact.get("target_date") or "") != target_date
+        artifact.get("schema") != SCHEMA
+        or artifact_target_date != source_date
         or artifact.get("decision") != "promoted_all_market_sessions_full"
         or artifact.get("runtime_activation") is not True
         or artifact.get("transaction_status") != "committed"
+        or not _promotion_authority_valid(artifact, source_date=source_date)
     ):
         raise ValueError("promotion artifact is not an active committed promotion")
-    manifest_file = manifest_file or runtime_manifest_path(target_date)
-    env_file = env_file or runtime_env_path(target_date)
+    manifest_file = manifest_file or runtime_manifest_path(source_date)
+    env_file = env_file or runtime_env_path(source_date)
     if not manifest_file.exists() or not env_file.exists():
         raise ValueError("promotion runtime commit files are missing")
+    if artifact.get("runtime_manifest_path") not in (
+        None,
+        str(manifest_file),
+    ) or artifact.get("runtime_env_path") not in (None, str(env_file)):
+        raise ValueError("promotion runtime commit path mismatch")
     manifest_bytes = manifest_file.read_bytes()
     env_bytes = env_file.read_bytes()
     if str(artifact.get("runtime_manifest_sha256") or "") != _sha256(manifest_bytes):
@@ -192,13 +251,15 @@ def authoritative_runtime_env(
     if str(artifact.get("runtime_env_sha256") or "") != _sha256(env_bytes):
         raise ValueError("promotion runtime env hash mismatch")
     manifest = _load_json(manifest_file)
+    if str(manifest.get("target_date") or "") != source_date:
+        raise ValueError("promotion runtime manifest target date mismatch")
     manifest_env = manifest.get("env_overrides")
     if not isinstance(manifest_env, dict):
         raise ValueError("promotion runtime manifest env is missing")
     artifact_env = artifact.get("env_overrides")
     if not isinstance(artifact_env, dict):
         raise ValueError("promotion artifact env is missing")
-    expected = full_market_env(target_date)
+    expected = full_market_env(source_date)
     mismatches = [
         key
         for key, value in expected.items()
@@ -209,7 +270,7 @@ def authoritative_runtime_env(
         raise ValueError(
             "promotion exact runtime env mismatch:" + ",".join(sorted(mismatches))
         )
-    return expected
+    return full_market_env(target_date)
 
 
 def authoritative_runtime_env_exports(target_date: str) -> str:

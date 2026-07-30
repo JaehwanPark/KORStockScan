@@ -25,6 +25,14 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
+- [x] `[ExactV2PromotionRolloverFix0730] 전일 full-market Exact V2 승격의 거래일 rollover fail-closed 결함 보완` (`Due: 2026-07-30`, `Slot: PREOPEN`, `TimeWindow: 08:00~08:30`, `Track: ScalpingLogic`)
+  - Source: [ai_multi_timeframe_context_promotion_2026-07-29.json](/home/ubuntu/KORStockScan/data/runtime/ai_multi_timeframe_context_promotion_2026-07-29.json), [ai_multi_timeframe_context_promotion.py](/home/ubuntu/KORStockScan/src/engine/automation/ai_multi_timeframe_context_promotion.py), [multi_timeframe_context.py](/home/ubuntu/KORStockScan/src/engine/scalping/multi_timeframe_context.py), [ai_decision_trace_2026-07-30.jsonl](/home/ubuntu/KORStockScan/data/ai_decision_trace/ai_decision_trace_2026-07-30.jsonl)
+  - 결함 증거: 재기동 PID에서 `KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE=2026-07-29`가 남고 당일 operator-directed promotion rollover가 거부되어 최초 AI trace `6/6`건이 `runtime_preflight_artifact_not_ready`, provider 호출 `0`건으로 닫혔다.
+  - 구현 판정: 최신 committed full-market promotion을 명시적 committed rollback 전까지 launcher authority로 유지한다. 원 promotion artifact·manifest·env의 authority/path/target-date/hash는 원본 날짜 기준으로 검증하고, 당일 launcher에는 날짜값만 `full_market_env(target_date)`로 재생성한다. malformed/tampered/future/rollback marker는 계속 fail-closed다.
+  - 금지: validation/source-quality blocker 우회, provider/model/threshold/가격/수량/주문/broker guard 변경, 과거 artifact 재작성은 수행하지 않는다. 재기동은 코드리뷰 finding `0`과 targeted validation 통과 후에만 수행한다.
+  - 적용 결과: targeted pytest `92 passed`, Black/Ruff/compile/diff check와 parser가 통과했고 표준 `restart.flag` 경로로 PID `30477 -> 45966` 우아한 재기동을 완료했다. runtime env handoff는 `passed=true`, `pid_passed=true`, missing/mismatch `0`이며 새 PID에서 당일 전체 Exact V2 env와 `ready_operator_directed_exact_v2`, promotion source date `2026-07-29 -> runtime target date 2026-07-30` rollover를 확인했다.
+  - 첫 자연 관찰: 재기동 후 AI trace 최초 `6/6`건이 provider 호출에 도달하고 provider none과 `runtime_preflight_artifact_not_ready`는 각각 `0`건이다. entry `3`건은 OpenAI, entry_price `2`건은 Bedrock, holding_score `1`건은 OpenAI이며 모두 `result_source=live`, `input_preflight_allowed=true`, blocker 없음, completed bar `19`, exact replay payload를 기록했다. holding_flow 첫 자연 표본은 아직 발생하지 않아 다음 보유 흐름 호출에서 같은 계약을 계속 확인한다.
+
 - [ ] `[ThresholdEnvAutoApplyPreopen0730] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-07-30`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-29.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
@@ -38,6 +46,36 @@
   - 다음 액션: `runtime_env_reflected_and_verified`, `implemented_but_runtime_not_selected`, `source_only_no_runtime_authority`, `blocked_by_apply_guard`, `report_missing_or_stale`, `verify_missing_or_failed` 중 하나로 닫는다.
 
 ## 장중 체크리스트 (09:05~15:20)
+
+- [ ] `[EntryPromptV27OperatorOverride0730] hot_v1 진입 프롬프트를 decision_quality_v2_7로 명시 전환` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:20`, `Track: ScalpingLogic`)
+  - Source: [ai_prompt_detailed_paired_replay_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/ai_prompt_detailed_paired_replay/ai_prompt_detailed_paired_replay_2026-07-29.json), [ai_prompt_contracts.py](/home/ubuntu/KORStockScan/src/engine/ai_prompt_contracts.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [operator_runtime_overrides_2026-07-30.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-30.env)
+  - 사용자 명시 지시: watching/analyze_target의 현재 `hot_v1`을 `decision_quality_v2_7`로 교체한다. 동일 exact payload와 deterministic `exact_payload_analysis_v1` ledger를 사용하고 구조화 판단을 기존 `action/score/reason` 소비 계약으로 변환한다.
+  - 적용 경계: entry prompt 단일 축만 변경한다. provider/model/transport/threshold/order price/quantity/cap, holding·entry_price 프롬프트, hard safety와 broker/account/order/cooldown guard는 변경하지 않는다.
+  - 실패 폐쇄: v2.7 응답이 schema·semantic 계약을 위반하면 `DROP/score=0`과 `decision_quality_v2_7_semantic_rejected`로 닫고 주문 권한을 만들지 않는다.
+  - 롤백: `KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION=hot_v1`로 복원하고 표준 graceful restart를 수행한다. provider none, 반복 semantic reject, 호출 지연 급증, exact context 결손, hard/broker guard 이상을 즉시 롤백 조건으로 본다.
+  - 다음 액션: review finding 0, targeted tests/compile/diff/parser pass와 clean local commit 후 graceful restart하고 새 PID의 env, 최초 자연 trace의 prompt version/provider/schema/semantic status를 확인한다.
+
+- [ ] `[CrossSessionSoftStopRevalidation0730] 휴장구간 soft-stop 결정의 정규장 첫 fresh quote 재검증 계약 보완` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 09:00~09:30`, `Track: ScalpingLogic`)
+  - Source: [pipeline_events_2026-07-30.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-30.jsonl), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [kiwoom_orders.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_orders.py)
+  - 결함 증거: 지엔씨에너지 `119850`은 `08:59:13` soft-stop 결정 후 broker 휴장 거절을 반복했고 `09:00:19` SOR 매도 제출, `09:00:23` 28,650원(-5.19%) 체결 뒤 1분 MFE +3.32%, 3분 MFE +6.81%를 기록했다. 휴장 판단가·개장 executable quote·첫 microstructure를 하나의 확정 청산 판단으로 연결한 계약을 재검토한다.
+  - 판정 기준: soft/profit/trailing과 hard/protect/emergency를 분리하고, 휴장 중 비체결 결정은 정규장 첫 fresh BBO·tape·venue로 재검증한다. 재검증이 hard safety를 지연하거나 broker 거절을 반복하지 않으며, 주문 결정→전송→체결 지연과 post-sell MFE/MAE가 귀속돼야 한다.
+  - 금지: hard/protect/emergency 완화, broker/order guard 우회, provider·수량·cap 변경, 단일 post-sell 반등을 실현손익과 합산하거나 즉시 live threshold 근거로 사용하는 행위.
+  - 다음 액션: 기존 real 휴장경계 표본 replay → 단일 owner 확인 → source/report/instrumentation 우선 보완 → 코드리뷰와 targeted regression 통과 후 runtime_effect 변경 여부를 별도 승인한다.
+
+- [ ] `[ScannerWarmParkRisingCross0730] 장전 warm-park 후보의 정규장 fresh 상승 교차 재평가 계약 반영 확인` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:30`, `Track: ScalpingLogic`)
+  - Source: [pipeline_events_2026-07-30.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-30.jsonl), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [test_kiwoom_sniper_market_regime_runtime.py](/home/ubuntu/KORStockScan/src/tests/test_kiwoom_sniper_market_regime_runtime.py)
+  - 결함 증거: `precheck_not_eligible_generation_warm_parked` 뒤 삼현 35,650→36,750(+3.09%), GS글로벌 2,400→2,500(+4.17%), PS일렉트로닉스 6,860→7,010(+2.19%), 율촌화학 12,010→12,450(+3.66%)의 fresh `ws_curr` 상승에도 promotion payload의 `price_delta_since_first_seen_pct`가 0.00/0.00/0.00/0.42에 머물러 정규장 재평가 없이 `scanner_scheduler_generation_warm_parked`로 소실됐다.
+  - 구현 판정: 기존 rising threshold와 fresh post-park 0B를 모두 충족할 때 `precheck_not_eligible`, `heavy_eval_completed`, `async_commit_completed` park를 generation당 한 번 FAST_PRECHECK로만 재활성화한다. event에 원 park reason을 남기고 BUY/submit/threshold/provider/가격/수량/broker 권한은 추가하지 않는다.
+  - 검증: 관련 reactivation 회귀 `8 passed`, scheduler 단위 테스트 `33 passed`, compile 및 `git diff --check` 통과. 현재 PID에는 미반영이므로 반영 후 `scanner_rising_cross_warm_reason`, reactivation 1회 제한, 후속 AI/TP1 귀속을 자연 표본으로 확인한다.
+  - 금지: warm-park 전체 무조건 재실행, 동일 generation 반복 재활성화, stale quote 사용, threshold 완화, 주문·broker guard 우회.
+  - 다음 액션: 무결함 최종 리뷰 후 별도 우아한 재기동 승인/요청 시 반영 → post-apply 자연 표본에서 `warm_park_reactivated → FAST_PRECHECK → AI/TP1 또는 적정 차단` 흐름을 확인하고 회귀 시 변경을 되돌린다.
+
+- [ ] `[HoldingExactPreflightStorm0730] holding exact preflight 반복 차단과 호출 수명 계약 보완` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:35`, `Track: ScalpingLogic`)
+  - Source: [ai_decision_trace_2026-07-30.jsonl](/home/ubuntu/KORStockScan/data/ai_decision_trace/ai_decision_trace_2026-07-30.jsonl), [ai_decision_quality.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py), [multi_timeframe_context.py](/home/ubuntu/KORStockScan/src/engine/scalping/multi_timeframe_context.py)
+  - 결함 증거: PID `45966`의 08:22:27~09:15:59 trace에서 `holding_exit_flow` 59건이 모두 provider 미호출 `input_preflight_blocked`였고, 119850의 premarket BBO/current/tape stale·missing 구간에서 약 1초 간격으로 반복됐다. `scalping_holding_score`도 7건 모두 차단됐으며 정규장 sim 138040은 `candle_source_quality`, `krx_integrated_event_venue_unproven`과 sim에서 자연스러운 broker position/open-order missing이 함께 기록됐다.
+  - 판정 기준: exact source blocker는 fail-closed를 유지하되 동일 blocker·동일 snapshot 반복 호출을 bounded dedupe/backoff하고, real holding과 sim holding의 broker source 요구를 권한에 맞게 분리한다. fresh KRX/SOR route proof와 candle provenance가 완성된 자연 표본만 provider 호출과 판단 품질 평가 대상으로 인정한다.
+  - 금지: provider 호출을 위해 source-quality/venue/position reconciliation을 우회하거나, sim position을 real broker position으로 간주하거나, fallback score 50을 유효 AI 판단으로 사용하는 행위.
+  - 다음 액션: 다른 세션의 holding exact 변경 diff와 충돌 여부 확인 → 동일 blocker 반복률·provider call rate 회귀 테스트 → 현재 PID 미반영분 코드리뷰 완료 후 별도 재기동 판단 → endpoint별 live/blocked/timeout/parse 귀속 재확인.
 
 - [ ] `[RuntimeEnvIntradayObserve0730] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-29.json)

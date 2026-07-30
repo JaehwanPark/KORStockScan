@@ -23,9 +23,11 @@ from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
+    DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
+    decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
@@ -36,6 +38,8 @@ CONTROL_SCHEMA = "ai_decision_quality_control_v1"
 LABEL_REPORT_SCHEMA = "ai_decision_outcome_labels_v1"
 BASELINE_SCHEMA = "ai_decision_quality_baseline_v1"
 PAIRED_SCHEMA = "ai_prompt_paired_replay_v1"
+DETAILED_PAIRED_SCHEMA = "ai_prompt_detailed_paired_replay_v1"
+EXACT_PAYLOAD_ANALYSIS_SCHEMA = "exact_payload_analysis_v1"
 SCORE_CORRELATION_SCHEMA = "ai_score_outcome_correlation_v1"
 RECOVERY_TRIGGER_SCHEMA = "ai_prompt_recovery_trigger_labels_v1"
 INPUT_BUNDLE_VERSION = "scalping_multi_timeframe_context_v1"
@@ -62,6 +66,7 @@ RUNTIME_DIR = DATA_DIR / "runtime"
 LABEL_REPORT_DIR = DATA_DIR / "report" / "ai_decision_outcome_labels"
 BASELINE_REPORT_DIR = DATA_DIR / "report" / "ai_decision_quality_baseline"
 PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_paired_replay"
+DETAILED_PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_detailed_paired_replay"
 SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlation"
 RECOVERY_TRIGGER_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_recovery_trigger"
 PAIRED_REPLAY_MIN_ROWS = 30
@@ -226,6 +231,13 @@ def baseline_path(target_date: str) -> Path:
 
 def paired_path(target_date: str) -> Path:
     return PAIRED_REPORT_DIR / f"ai_prompt_paired_replay_{target_date}.json"
+
+
+def detailed_paired_path(target_date: str) -> Path:
+    return (
+        DETAILED_PAIRED_REPORT_DIR
+        / f"ai_prompt_detailed_paired_replay_{target_date}.json"
+    )
 
 
 def score_correlation_path(target_date: str) -> Path:
@@ -1647,6 +1659,7 @@ def _window_value(values: Any, horizon: int) -> float | None:
 
 
 def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
+    exact_payload_supplied = isinstance(exact_payload, dict)
     payload = exact_payload if isinstance(exact_payload, dict) else {}
     context = payload.get("entry_candle_context")
     context = context if isinstance(context, dict) else {}
@@ -1679,6 +1692,14 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     quote_fresh = features.get("quote_fresh_for_entry") is True
     tick_fresh = features.get("tick_context_stale") is False
     large_sell_print_absent = features.get("large_sell_print_detected") is False
+    tick_context_quality = str(features.get("tick_context_quality") or "").lower()
+    tick_accel_source = str(features.get("tick_accel_source") or "").lower()
+    thin_tape_sample = bool(
+        (exact_payload_supplied and trusted_tick_count is None)
+        or (trusted_tick_count is not None and trusted_tick_count < 10)
+        or "insufficient_ticks" in tick_context_quality
+        or tick_accel_source == "insufficient_ticks"
+    )
     blocking_overextension = bool(
         structural_edge_floor
         and daily_runup is not None
@@ -1707,7 +1728,8 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and net_aggressive_delta > 0
         and trusted_tape_usable
         and trusted_tick_count is not None
-        and trusted_tick_count >= 5
+        and trusted_tick_count >= 10
+        and not thin_tape_sample
         and quote_fresh
         and tick_fresh
         and large_sell_print_absent
@@ -1724,12 +1746,301 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and regime not in {"failed_breakout", "breakdown"}
         and alignment != "adverse"
     )
+    return_5m = _window_value(returns, 5)
+    return_10m = _window_value(returns, 10)
+    peak_drawdown = _number(structure.get("peak_drawdown_pct"))
+    high_direction = str(structure.get("high_direction") or "").lower()
+    volume_ratio = _number(structure.get("volume_ratio"))
+    volume_alignment = str(structure.get("volume_direction_alignment") or "").lower()
+    adverse_distribution_no_edge = bool(
+        not structural_edge_floor
+        and return_5m is not None
+        and return_5m <= -0.5
+        and return_10m is not None
+        and return_10m <= -1.0
+        and peak_drawdown is not None
+        and peak_drawdown <= -2.0
+        and high_direction == "down"
+        and (
+            (volume_ratio is not None and volume_ratio <= 0.5)
+            or volume_alignment == "price_volume_divergence"
+        )
+    )
+    spread_bp = _number(features.get("spread_bp"))
+    top1_bid_notional = _number(features.get("top1_bid_notional"))
+    top1_ask_notional = _number(features.get("top1_ask_notional"))
+    ask_wall_wide_spread = bool(
+        spread_bp is not None
+        and spread_bp >= 50
+        and top1_bid_notional is not None
+        and top1_bid_notional > 0
+        and top1_ask_notional is not None
+        and top1_ask_notional / top1_bid_notional >= 5
+    )
     return {
         "structural_edge_floor": structural_edge_floor,
         "blocking_overextension": blocking_overextension,
         "orderly_pullback_recovery": orderly_pullback_recovery,
         "trusted_supportive_trigger": trusted_supportive_trigger,
+        "thin_tape_sample": thin_tape_sample,
+        "adverse_distribution_no_edge": adverse_distribution_no_edge,
+        "ask_wall_wide_spread": ask_wall_wide_spread,
     }
+
+
+def build_exact_payload_analysis_v1(
+    exact_payload: Any,
+    *,
+    stage: str,
+    live_entry: bool = False,
+) -> dict[str, Any]:
+    """Build a deterministic, non-authoritative evidence ledger."""
+
+    if live_entry and str(stage or "").strip().lower() != "entry":
+        raise ValueError("live exact-payload analysis supports entry stage only")
+    payload = exact_payload if isinstance(exact_payload, dict) else {}
+    current = payload.get("current")
+    current = current if isinstance(current, dict) else {}
+    features = payload.get("features")
+    features = features if isinstance(features, dict) else {}
+    candle = payload.get("entry_candle_context")
+    candle = candle if isinstance(candle, dict) else {}
+    structure = candle.get("structure")
+    structure = structure if isinstance(structure, dict) else {}
+    returns = structure.get("returns_pct")
+    returns = returns if isinstance(returns, dict) else {}
+    slopes = structure.get("slopes_pct_per_bar")
+    slopes = slopes if isinstance(slopes, dict) else {}
+    horizons = (1, 3, 5, 10, 20, 60)
+    normalized_returns = {
+        f"{horizon}m": _window_value(returns, horizon) for horizon in horizons
+    }
+    normalized_slopes = {
+        f"{horizon}m": _window_value(slopes, horizon) for horizon in horizons
+    }
+    facts = _entry_contract_facts(payload) if str(stage).lower() == "entry" else {}
+    completed_bar_count = _number(candle.get("completed_bar_count"))
+    if completed_bar_count is None:
+        completed_bar_count = float(
+            sum(
+                isinstance(row, dict) and not bool(row.get("forming", False))
+                for row in candle.get("bars") or []
+            )
+        )
+    forming_bar_count = sum(
+        isinstance(row, dict) and bool(row.get("forming", False))
+        for row in candle.get("bars") or []
+    )
+    current_price = _number(current.get("price"))
+    trusted_tick_count = _number(features.get("tick_aggressor_trusted_count"))
+    net_aggressive_delta = _number(features.get("net_aggressive_delta_10t"))
+    tape_notional = (
+        abs(net_aggressive_delta) * current_price
+        if net_aggressive_delta is not None
+        and current_price is not None
+        and current_price > 0
+        else None
+    )
+    tape_status = str(features.get("entry_order_flow_status") or "unknown").lower()
+    tape_sample_sufficient = bool(
+        trusted_tick_count is not None
+        and trusted_tick_count >= 10
+        and "insufficient_ticks"
+        not in str(features.get("tick_context_quality") or "").lower()
+        and str(features.get("tick_accel_source") or "").lower() != "insufficient_ticks"
+    )
+    spread_bp = _number(features.get("spread_bp"))
+    top1_bid_notional = _number(features.get("top1_bid_notional"))
+    top1_ask_notional = _number(features.get("top1_ask_notional"))
+    top1_ask_to_bid_ratio = (
+        top1_ask_notional / top1_bid_notional
+        if top1_ask_notional is not None
+        and top1_bid_notional is not None
+        and top1_bid_notional > 0
+        else None
+    )
+    if facts.get("ask_wall_wide_spread"):
+        liquidity_state = "blocking"
+    elif spread_bp is None:
+        liquidity_state = "insufficient"
+    elif spread_bp >= 30 or (
+        top1_ask_to_bid_ratio is not None and top1_ask_to_bid_ratio >= 2
+    ):
+        liquidity_state = "adverse"
+    elif spread_bp <= 15 and (
+        top1_ask_to_bid_ratio is None or top1_ask_to_bid_ratio <= 1.5
+    ):
+        liquidity_state = "supportive"
+    else:
+        liquidity_state = "mixed"
+    volume_ratio = _number(structure.get("volume_ratio"))
+    volume_alignment = str(
+        structure.get("volume_direction_alignment") or "unknown"
+    ).lower()
+    if volume_alignment == "price_volume_divergence" or (
+        volume_ratio is not None and volume_ratio <= 0.5
+    ):
+        volume_state = "confirmation_absent"
+    elif volume_ratio is not None and volume_ratio >= 1.0:
+        volume_state = "confirmed"
+    elif volume_ratio is None:
+        volume_state = "insufficient"
+    else:
+        volume_state = "mixed"
+    return_1m = normalized_returns["1m"]
+    return_3m = normalized_returns["3m"]
+    if facts.get("adverse_distribution_no_edge"):
+        structure_phase = "distribution"
+        structural_edge = "absent"
+    elif str(structure.get("regime") or "").lower() in {
+        "failed_breakout",
+        "breakdown",
+    }:
+        structure_phase = "failed_breakout"
+        structural_edge = "moderate" if facts.get("structural_edge_floor") else "absent"
+    elif facts.get("structural_edge_floor") and (
+        (return_1m or 0) > 0 or (return_3m or 0) > 0
+    ):
+        structure_phase = "continuation"
+        structural_edge = "moderate"
+    elif facts.get("structural_edge_floor"):
+        structure_phase = "pullback"
+        structural_edge = "moderate"
+    elif (
+        (normalized_returns["5m"] or 0) < 0
+        and (normalized_returns["10m"] or 0) < 0
+        and ((return_1m or 0) > 0 or (return_3m or 0) > 0)
+    ):
+        structure_phase = "rebound_attempt"
+        structural_edge = "weak"
+    else:
+        structure_phase = "range_or_no_setup"
+        structural_edge = "weak"
+    contradictions: list[str] = []
+    if tape_status == "supportive" and not tape_sample_sufficient:
+        contradictions.append("supportive_tape_ratio_from_thin_sample")
+    if tape_status == "supportive" and facts.get("adverse_distribution_no_edge"):
+        contradictions.append("supportive_micro_tape_vs_adverse_distribution")
+    if facts.get("structural_edge_floor") and liquidity_state == "blocking":
+        contradictions.append("structural_edge_vs_blocking_liquidity")
+    return_signs = {
+        "positive" if value > 0 else "negative" if value < 0 else "flat"
+        for value in normalized_returns.values()
+        if value is not None
+    }
+    if "positive" in return_signs and "negative" in return_signs:
+        contradictions.append("multi_horizon_direction_conflict")
+    snapshot = payload.get("ai_market_snapshot_v1")
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    sources = snapshot.get("sources")
+    sources = sources if isinstance(sources, dict) else {}
+    program = sources.get("program")
+    program = program if isinstance(program, dict) else {}
+    program_value = program.get("value")
+    program_value = program_value if isinstance(program_value, dict) else {}
+    program_net_qty = _number(program_value.get("net_qty"))
+    if (
+        tape_status == "supportive"
+        and program_net_qty is not None
+        and program_net_qty < 0
+    ):
+        contradictions.append("supportive_micro_tape_vs_program_net_sell")
+    if facts.get("adverse_distribution_no_edge"):
+        trigger_state = "failed"
+    elif facts.get("trusted_supportive_trigger"):
+        trigger_state = "confirmed"
+    elif facts.get("orderly_pullback_recovery"):
+        trigger_state = "recovery_required"
+    elif not tape_sample_sufficient:
+        trigger_state = "insufficient_tape_confirmation"
+    else:
+        trigger_state = "unconfirmed"
+    source_quality = candle.get("source_quality")
+    source_quality = source_quality if isinstance(source_quality, dict) else {}
+    analysis = {
+        "schema": EXACT_PAYLOAD_ANALYSIS_SCHEMA,
+        "stage": str(stage or "unknown"),
+        "source_quality": {
+            "status": source_quality.get("status"),
+            "completed_bar_count": int(completed_bar_count),
+            "forming_bar_count": forming_bar_count,
+            "forming_bar_excluded": structure.get("forming_bar_excluded"),
+            "risk_flags": list(candle.get("risk_flags") or []),
+        },
+        "completed_structure": {
+            "phase": structure_phase,
+            "structural_edge": structural_edge,
+            "returns_pct": normalized_returns,
+            "slopes_pct_per_bar": normalized_slopes,
+            "peak_drawdown_pct": _number(structure.get("peak_drawdown_pct")),
+            "high_direction": structure.get("high_direction"),
+            "low_direction": structure.get("low_direction"),
+            "regime": structure.get("regime"),
+            "alignment": structure.get("alignment"),
+        },
+        "volume_confirmation": {
+            "state": volume_state,
+            "volume_ratio": volume_ratio,
+            "alignment": volume_alignment,
+        },
+        "tape_sample": {
+            "state": "sufficient" if tape_sample_sufficient else "too_thin",
+            "raw_status": tape_status,
+            "trusted_tick_count": trusted_tick_count,
+            "buy_pressure_pct": _number(features.get("buy_pressure_10t")),
+            "net_aggressive_delta_shares": net_aggressive_delta,
+            "net_aggressive_notional_krw": tape_notional,
+            "tick_context_quality": features.get("tick_context_quality"),
+            "tick_accel_source": features.get("tick_accel_source"),
+        },
+        "executable_liquidity": {
+            "state": liquidity_state,
+            "spread_bp": spread_bp,
+            "top1_bid_notional": top1_bid_notional,
+            "top1_ask_notional": top1_ask_notional,
+            "top1_ask_to_bid_ratio": top1_ask_to_bid_ratio,
+            "fillability_score": _number(features.get("fillability_score")),
+            "would_fill_now": features.get("would_fill_now"),
+        },
+        "program_flow": {
+            "net_qty": program_net_qty,
+            "source": program.get("source"),
+        },
+        "trigger_state": trigger_state,
+        "contradictions": contradictions,
+        "deterministic_contract_facts": facts,
+        "observation_contract": {
+            "metric_role": "ai_input_feature_analysis",
+            "decision_authority": (
+                "operator_directed_live_entry_prompt_input"
+                if live_entry
+                else "offline_replay_evidence_organization_only"
+            ),
+            "window_policy": "same_exact_payload_completed_bar_snapshot",
+            "sample_floor": "one_exact_payload_with_completed_bar",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": "exact_payload_fresh_same_route",
+            "runtime_effect": live_entry,
+            "allowed_runtime_apply": live_entry,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "forbidden_uses": (
+                (
+                    "direct_order_submission|provider_change|"
+                    "threshold_price_quantity_change|broker_guard_bypass|"
+                    "safety_guard_bypass"
+                )
+                if live_entry
+                else (
+                    "standalone_live_action|runtime_prompt_promotion|"
+                    "provider_change|threshold_price_quantity_change|"
+                    "broker_guard_bypass|bot_restart"
+                )
+            ),
+        },
+    }
+    analysis["analysis_sha256"] = _sha256(analysis)
+    return analysis
 
 
 def validate_candidate_response(
@@ -1783,6 +2094,7 @@ def validate_candidate_response(
     if confidence is None or not 0 <= confidence <= 100:
         errors.append("confidence_invalid")
     codes = response.get("reason_codes")
+    reason_code_set = set(map(str, codes)) if isinstance(codes, list) else set()
     if (
         not isinstance(codes, list)
         or not codes
@@ -1892,6 +2204,42 @@ def validate_candidate_response(
                     or action == "WAIT"
                 ):
                     errors.append("entry_trusted_supportive_trigger_misclassified")
+            if edge_state != "INSUFFICIENT_DATA" and contract_facts["thin_tape_sample"]:
+                if (
+                    str(evidence.get("tape") or "").lower() == "supportive"
+                    or trigger == "confirmed"
+                ):
+                    errors.append("entry_thin_tape_sample_overstated")
+            if (
+                edge_state != "INSUFFICIENT_DATA"
+                and contract_facts["adverse_distribution_no_edge"]
+            ):
+                if (
+                    edge_state != "NO_EDGE"
+                    or action != "DROP"
+                    or str(evidence.get("trend") or "").lower() != "adverse"
+                    or setup != "no_setup"
+                    or trigger not in {"failed", "not_applicable"}
+                    or not {
+                        "distribution_adverse",
+                        "volume_confirmation_missing",
+                    }.issubset(reason_code_set)
+                ):
+                    errors.append("entry_adverse_distribution_misclassified")
+            if (
+                edge_state != "INSUFFICIENT_DATA"
+                and contract_facts["ask_wall_wide_spread"]
+            ):
+                if (
+                    str(evidence.get("liquidity") or "").lower() != "adverse"
+                    or adverse_risk not in {"high", "blocking"}
+                    or action == "BUY"
+                    or not {
+                        "ask_wall_adverse",
+                        "liquidity_adverse",
+                    }.intersection(reason_code_set)
+                ):
+                    errors.append("entry_ask_wall_wide_spread_misclassified")
     if normalized_stage not in STAGE_ACTIONS:
         errors.append("stage_unsupported")
     return errors
@@ -1953,13 +2301,15 @@ def _prompt_v2_openai_schema(stage: str) -> dict[str, Any]:
 
 
 def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
-    return _sha256(
-        {
-            "prompt_version": candidate.get("prompt_version"),
-            "system_prompt_sha256": candidate.get("system_prompt_sha256"),
-            "response_schema_sha256": candidate.get("response_schema_sha256"),
-        }
-    )
+    contract = {
+        "prompt_version": candidate.get("prompt_version"),
+        "system_prompt_sha256": candidate.get("system_prompt_sha256"),
+        "response_schema_sha256": candidate.get("response_schema_sha256"),
+    }
+    if candidate.get("analysis_schema") is not None:
+        contract["analysis_schema"] = candidate.get("analysis_schema")
+        contract["analysis_schema_sha256"] = candidate.get("analysis_schema_sha256")
+    return _sha256(contract)
 
 
 def _openai_output_text(response: Any) -> str:
@@ -2037,7 +2387,7 @@ def execute_openai_prompt_v2_candidate(
 
     pair_id = str(request.get("paired_replay_id") or "")
     key_index = int(hashlib.sha256(pair_id.encode("utf-8")).hexdigest(), 16) % len(keys)
-    exact_payload = request.get("exact_payload")
+    exact_payload = request.get("candidate_input", request.get("exact_payload"))
     user_input = (
         exact_payload
         if isinstance(exact_payload, str)
@@ -2149,6 +2499,25 @@ def execute_openai_prompt_v2_candidate(
                 "reward/risk is at least 1.25; otherwise return DROP with "
                 "blocking risk or numeric unfavorable reward/risk"
             )
+        if "entry_thin_tape_sample_overstated" in correction_errors:
+            correction_rules.append(
+                "The tape sample is too thin for supportive or confirmed evidence. "
+                "For otherwise sufficient core data use tape=mixed; do not confirm "
+                "the trigger, and include tape_sample_insufficient"
+            )
+        if "entry_adverse_distribution_misclassified" in correction_errors:
+            correction_rules.append(
+                "The completed-bar distribution meets the adverse no-edge "
+                "contract. Return NO_EDGE/DROP with trend=adverse, setup=no_setup, "
+                "trigger=failed or not_applicable, and include "
+                "distribution_adverse and volume_confirmation_missing"
+            )
+        if "entry_ask_wall_wide_spread_misclassified" in correction_errors:
+            correction_rules.append(
+                "The spread and top1 ask wall meet the adverse liquidity contract. "
+                "Use liquidity=adverse, adverse_risk=high or blocking, never BUY, "
+                "and include ask_wall_adverse"
+            )
         if "reason_codes_conflict" in correction_errors:
             correction_rules.append(
                 "Use at most one of edge_positive/edge_absent/no_positive_edge, at "
@@ -2188,6 +2557,7 @@ def execute_openai_prompt_v2_candidate(
                 candidate.get("contract_sha256")
                 or _candidate_contract_sha256(candidate)
             ),
+            "candidate_input_sha256": str(request.get("candidate_input_sha256") or ""),
             "runtime_effect": "false",
         },
         timeout=max(1.0, float(timeout_sec)),
@@ -2370,6 +2740,74 @@ def prepare_paired_replay_requests(
     return requests
 
 
+def prepare_detailed_paired_replay_requests(
+    requests: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach a deterministic analysis ledger to the same exact payload."""
+
+    detailed_requests: list[dict[str, Any]] = []
+    for request in requests:
+        exact_payload = request.get("exact_payload")
+        if not isinstance(exact_payload, dict):
+            continue
+        stage = str(request.get("stage") or "")
+        if stage != "entry":
+            sample_floor = request.get("sample_floor")
+            sample_floor = sample_floor if isinstance(sample_floor, dict) else {}
+            detailed_requests.append(
+                {
+                    **request,
+                    "detailed_analysis_exclusion_reason": (
+                        "detailed_analysis_stage_not_implemented"
+                    ),
+                    "sample_floor": {
+                        **sample_floor,
+                        "pass": False,
+                        "detailed_analysis_stage_supported": False,
+                    },
+                }
+            )
+            continue
+        analysis = build_exact_payload_analysis_v1(exact_payload, stage=stage)
+        candidate_input = {
+            "exact_payload": exact_payload,
+            EXACT_PAYLOAD_ANALYSIS_SCHEMA: analysis,
+        }
+        prompt = decision_quality_v2_detailed_system_prompt(stage)
+        original_candidate = request.get("candidate")
+        original_candidate = (
+            original_candidate if isinstance(original_candidate, dict) else {}
+        )
+        candidate = {
+            **original_candidate,
+            "prompt_version": (f"{DECISION_QUALITY_DETAILED_PROMPT_VERSION}_{stage}"),
+            "system_prompt": prompt,
+            "system_prompt_sha256": _sha256(prompt),
+            "analysis_schema": EXACT_PAYLOAD_ANALYSIS_SCHEMA,
+            "analysis_schema_sha256": _sha256(EXACT_PAYLOAD_ANALYSIS_SCHEMA),
+        }
+        candidate["contract_sha256"] = _candidate_contract_sha256(candidate)
+        detailed_requests.append(
+            {
+                **request,
+                "paired_replay_id": str(request.get("paired_replay_id") or "").replace(
+                    "pair-", "detailed-pair-", 1
+                ),
+                "exact_payload_analysis": analysis,
+                "exact_payload_analysis_sha256": analysis["analysis_sha256"],
+                "source_exact_payload_sha256": _sha256(exact_payload),
+                "candidate_exact_payload_sha256": _sha256(
+                    candidate_input["exact_payload"]
+                ),
+                "candidate_input": candidate_input,
+                "candidate_input_sha256": _sha256(candidate_input),
+                "candidate": candidate,
+                "detailed_analysis_stage_supported": True,
+            }
+        )
+    return detailed_requests
+
+
 def run_paired_replay(
     requests: list[dict[str, Any]],
     *,
@@ -2455,7 +2893,31 @@ def run_paired_replay(
                 "candidate_contract_sha256": _candidate_contract_sha256(
                     request.get("candidate") or {}
                 ),
-                "same_payload_confirmed": True,
+                "exact_payload_analysis_schema": (
+                    (request.get("candidate") or {}).get("analysis_schema")
+                ),
+                "exact_payload_analysis_sha256": request.get(
+                    "exact_payload_analysis_sha256"
+                ),
+                "candidate_input_sha256": request.get("candidate_input_sha256"),
+                "deterministic_analysis_confirmed": (
+                    not request.get("exact_payload_analysis_sha256")
+                    or request.get("exact_payload_analysis_sha256")
+                    == _sha256(
+                        {
+                            key: value
+                            for key, value in (
+                                request.get("exact_payload_analysis") or {}
+                            ).items()
+                            if key != "analysis_sha256"
+                        }
+                    )
+                ),
+                "same_payload_confirmed": (
+                    not request.get("candidate_exact_payload_sha256")
+                    or request.get("candidate_exact_payload_sha256")
+                    == request.get("source_exact_payload_sha256")
+                ),
                 "control_response": control_response,
                 "candidate_response": candidate_response,
                 "candidate_schema_errors": candidate_errors,
@@ -2770,7 +3232,11 @@ def build_paired_replay_report(
     else:
         status = "paired_replay_complete_candidate_quality_rejected"
     report_requests = [
-        {key: value for key, value in request.items() if key not in {"exact_payload"}}
+        {
+            key: value
+            for key, value in request.items()
+            if key not in {"exact_payload", "candidate_input"}
+        }
         for request in requests
     ]
     provider_attempts = [
@@ -2841,6 +3307,108 @@ def build_paired_replay_report(
         "paired_comparisons": comparable_rows,
         "requests": report_requests,
         "results": results,
+        **OFFLINE_CONTRACT,
+    }
+
+
+def build_detailed_three_way_comparison(
+    *,
+    one_pass_report: dict[str, Any],
+    detailed_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare control, one-pass V2, and detailed two-pass on common rows."""
+
+    one_pass_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in one_pass_report.get("paired_comparisons") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    detailed_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in detailed_report.get("paired_comparisons") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    trace_ids = sorted(set(one_pass_by_trace) & set(detailed_by_trace))
+    rows: list[dict[str, Any]] = []
+    for trace_id in trace_ids:
+        one_pass = one_pass_by_trace[trace_id]
+        detailed = detailed_by_trace[trace_id]
+        outcome = _number(detailed.get("outcome_return_pct"))
+        control_value = _number(detailed.get("control_decision_value_pct"))
+        one_pass_value = _number(one_pass.get("candidate_decision_value_pct"))
+        detailed_value = _number(detailed.get("candidate_decision_value_pct"))
+        if None in {outcome, control_value, one_pass_value, detailed_value}:
+            continue
+        rows.append(
+            {
+                "decision_trace_id": trace_id,
+                "stock_code": detailed.get("stock_code"),
+                "effective_venue": detailed.get("effective_venue"),
+                "session_bucket": detailed.get("session_bucket"),
+                "outcome_return_pct": outcome,
+                "control_action": detailed.get("control_action"),
+                "one_pass_action": one_pass.get("candidate_action"),
+                "detailed_action": detailed.get("candidate_action"),
+                "control_decision_value_pct": control_value,
+                "one_pass_decision_value_pct": one_pass_value,
+                "detailed_decision_value_pct": detailed_value,
+                "detailed_vs_one_pass_delta_pct": detailed_value - one_pass_value,
+                "one_pass_error_taxonomy": list(
+                    one_pass.get("candidate_error_taxonomy") or []
+                ),
+                "detailed_error_taxonomy": list(
+                    detailed.get("candidate_error_taxonomy") or []
+                ),
+            }
+        )
+    comparable_trace_ids = [row["decision_trace_id"] for row in rows]
+
+    def mean_field(field: str) -> float | None:
+        return fmean(row[field] for row in rows) if rows else None
+
+    transition_counts = Counter(
+        f"{row['one_pass_action']}->{row['detailed_action']}" for row in rows
+    )
+    one_pass_errors = Counter(
+        error for row in rows for error in row["one_pass_error_taxonomy"]
+    )
+    detailed_errors = Counter(
+        error for row in rows for error in row["detailed_error_taxonomy"]
+    )
+    return {
+        "schema": "ai_prompt_three_way_comparison_v1",
+        "one_pass_prompt_version": (
+            ((one_pass_report.get("requests") or [{}])[0].get("candidate") or {}).get(
+                "prompt_version"
+            )
+            if one_pass_report.get("requests")
+            else None
+        ),
+        "detailed_prompt_version": (
+            ((detailed_report.get("requests") or [{}])[0].get("candidate") or {}).get(
+                "prompt_version"
+            )
+            if detailed_report.get("requests")
+            else None
+        ),
+        "common_comparable_count": len(rows),
+        "common_cohort_sha256": _sha256(comparable_trace_ids),
+        "control_source_quality_adjusted_ev_pct": mean_field(
+            "control_decision_value_pct"
+        ),
+        "one_pass_source_quality_adjusted_ev_pct": mean_field(
+            "one_pass_decision_value_pct"
+        ),
+        "detailed_source_quality_adjusted_ev_pct": mean_field(
+            "detailed_decision_value_pct"
+        ),
+        "detailed_vs_one_pass_ev_delta_pct": mean_field(
+            "detailed_vs_one_pass_delta_pct"
+        ),
+        "action_transition_counts": dict(transition_counts),
+        "one_pass_error_taxonomy_counts": dict(one_pass_errors),
+        "detailed_error_taxonomy_counts": dict(detailed_errors),
+        "rows": rows,
         **OFFLINE_CONTRACT,
     }
 
@@ -3324,6 +3892,7 @@ def main(argv: list[str] | None = None) -> int:
             "mature",
             "baseline",
             "paired",
+            "detailed",
             "correlation",
             "recovery",
         ),
@@ -3348,8 +3917,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-workers", type=int, default=4)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    if args.execute_candidate and (args.mode != "paired" or not args.write):
-        parser.error("--execute-candidate requires --mode paired --write")
+    if args.execute_candidate and (
+        args.mode not in {"paired", "detailed"} or not args.write
+    ):
+        parser.error("--execute-candidate requires --mode paired|detailed --write")
     sources = _default_sources(
         args.date,
         include_pipeline=(
@@ -3467,6 +4038,10 @@ def main(argv: list[str] | None = None) -> int:
                 payloads=sources["payloads"],
                 labels=labels,
             )
+            if args.mode == "detailed":
+                prepared_requests = prepare_detailed_paired_replay_requests(
+                    prepared_requests
+                )
             requests = [
                 request
                 for request in prepared_requests
@@ -3474,7 +4049,12 @@ def main(argv: list[str] | None = None) -> int:
             ]
             results: list[dict[str, Any]] = []
             if args.execute_candidate and requests:
-                existing_report = _load_json(paired_path(args.date))
+                output_path = (
+                    detailed_paired_path(args.date)
+                    if args.mode == "detailed"
+                    else paired_path(args.date)
+                )
+                existing_report = _load_json(output_path)
                 request_by_pair = {
                     str(request.get("paired_replay_id") or ""): request
                     for request in requests
@@ -3503,6 +4083,14 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         or {}
                     ).get("contract_sha256")
+                    and row.get("candidate_input_sha256")
+                    == request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                        "candidate_input_sha256"
+                    )
+                    and row.get("exact_payload_analysis_sha256")
+                    == request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                        "exact_payload_analysis_sha256"
+                    )
                     and not validate_candidate_response(
                         dict(row.get("candidate_response") or {}),
                         stage=str(
@@ -3564,6 +4152,13 @@ def main(argv: list[str] | None = None) -> int:
                 results=results,
                 labels=labels,
             )
+            if args.mode == "detailed":
+                report["schema"] = DETAILED_PAIRED_SCHEMA
+                report["analysis_schema"] = EXACT_PAYLOAD_ANALYSIS_SCHEMA
+                report["three_way_comparison"] = build_detailed_three_way_comparison(
+                    one_pass_report=_load_json(paired_path(args.date)),
+                    detailed_report=report,
+                )
             floor_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
             for request in prepared_requests:
                 key = (
@@ -3587,7 +4182,11 @@ def main(argv: list[str] | None = None) -> int:
             ]
             report["outcome_price_source"] = args.outcome_price_source
             report["price_source_provenance"] = price_source_provenance
-            path = paired_path(args.date)
+            path = (
+                detailed_paired_path(args.date)
+                if args.mode == "detailed"
+                else paired_path(args.date)
+            )
     if args.write:
         _atomic_write_json(path, report)
     print(json.dumps(report, ensure_ascii=False))

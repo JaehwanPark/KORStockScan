@@ -228,9 +228,8 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
     )
     operator_directed_authority = (
         promotion_mode == OPERATOR_DIRECTED_PROMOTION_MODE
-        and promotion_target_date == target_date
         and artifact.get("operator_authorization_id")
-        == f"{OPERATOR_DIRECTED_AUTHORITY_PREFIX}{target_date}"
+        == f"{OPERATOR_DIRECTED_AUTHORITY_PREFIX}{promotion_target_date}"
         and isinstance(artifact.get("validation_gate"), dict)
         and artifact["validation_gate"].get("mode") == "operator_directed_bypass"
         and artifact["validation_gate"].get("bypassed") is True
@@ -328,6 +327,7 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
                 "promotion_sha256": _file_sha256(artifact_path),
                 "promoted_at": artifact.get("promoted_at"),
                 "promotion_mode": promotion_mode,
+                "promotion_rollover": promotion_target_date != target_date,
                 "runtime_env_readback": "complete_exact_v2",
             }
     else:

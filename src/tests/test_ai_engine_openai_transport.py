@@ -17,8 +17,10 @@ from src.engine.ai_engine_openai import (
     OpenAIWSRequestIdMismatchError,
 )
 from src.engine.ai_prompt_contracts import (
+    DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
+    decision_quality_v2_detailed_system_prompt,
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine import bedrock_nova_provider
@@ -2656,6 +2658,124 @@ def test_analyze_target_watching_uses_hot_prompt_and_input_schema(monkeypatch):
     assert result["ai_prompt_version"] == "hot_v1"
     assert result["ai_input_schema"] == "entry_screen_hot_v1"
     assert result["ai_input_contract_mode"] == "structured_json"
+
+
+def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION="decision_quality_v2_7",
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=False,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+        ),
+    )
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["payload"] = json.loads(user_input)
+        captured["schema_name"] = kwargs.get("schema_name")
+        return {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.5,
+            "expected_downside_pct": -1.0,
+            "confidence": 80,
+            "reason_codes": ["edge_absent", "risk_reward_unfavorable"],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "mixed",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "failed",
+            },
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+    )
+
+    assert captured["prompt"] == decision_quality_v2_detailed_system_prompt(
+        "entry", live_entry=True
+    )
+    assert captured["schema_name"] == "decision_quality_v2_7_entry"
+    assert captured["payload"]["exact_payload"]["input_schema"] == "entry_screen_hot_v1"
+    analysis = captured["payload"]["exact_payload_analysis_v1"]
+    assert (
+        analysis["observation_contract"]["decision_authority"]
+        == "operator_directed_live_entry_prompt_input"
+    )
+    assert analysis["observation_contract"]["runtime_effect"] is True
+    assert result["action"] == "DROP"
+    assert result["score"] == 10
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["ai_prompt_version"] == DECISION_QUALITY_DETAILED_PROMPT_VERSION
+    assert result["ai_input_schema"] == "decision_quality_v2_7_entry"
+
+
+def test_decision_quality_v2_7_semantic_failure_is_fail_closed(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION="decision_quality_v2_7",
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: {
+            "edge_state": "EDGE",
+            "action": "BUY",
+            "expected_upside_pct": 0.5,
+            "expected_downside_pct": -1.0,
+            "confidence": 95,
+            "reason_codes": ["edge_positive"],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "supportive",
+                "tape": "supportive",
+                "risk": "low",
+                "uncertainty": "low",
+                "setup": "continuation",
+                "positive_edge": "strong",
+                "adverse_risk": "low",
+                "trigger": "confirmed",
+            },
+        },
+    )
+
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+    )
+
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
+    assert result["decision_quality_contract_status"] == "semantic_rejected"
+    assert (
+        "entry_buy_reward_risk_below_floor"
+        in result["decision_quality_contract_errors"]
+    )
 
 
 def test_hot_entry_keeps_observe_only_snapshot_out_of_model_but_in_trace_metadata(

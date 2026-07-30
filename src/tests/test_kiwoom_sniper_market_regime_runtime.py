@@ -9064,8 +9064,17 @@ def test_scanner_stale_snapshot_park_reactivates_once_on_new_fresh_trade(
     coordinator.shutdown()
 
 
-def test_scanner_completed_park_reactivates_once_on_existing_rising_threshold_cross(
+@pytest.mark.parametrize(
+    "park_reason",
+    [
+        "precheck_not_eligible_generation_warm_parked",
+        "heavy_eval_completed_generation_warm_parked",
+        "async_commit_completed_generation_warm_parked",
+    ],
+)
+def test_scanner_warm_park_reactivates_once_on_existing_rising_threshold_cross(
     monkeypatch,
+    park_reason,
 ):
     scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
     coordinator = ScannerAsyncEvalCoordinator(
@@ -9110,7 +9119,7 @@ def test_scanner_completed_park_reactivates_once_on_existing_rising_threshold_cr
         scheduler,
         target,
         now_epoch=101.0,
-        reason="heavy_eval_completed_generation_warm_parked",
+        reason=park_reason,
         expected_generation=registered.item.generation,
     )
 
@@ -9150,6 +9159,7 @@ def test_scanner_completed_park_reactivates_once_on_existing_rising_threshold_cr
     assert emitted[-1]["fields"]["scheduler_action"] == (
         "rising_cross_warm_park_reactivated"
     )
+    assert emitted[-1]["fields"]["scanner_rising_cross_warm_reason"] == park_reason
 
     scheduler.next_decision(now_epoch=101.4)
     assert (

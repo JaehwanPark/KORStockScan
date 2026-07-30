@@ -7,6 +7,47 @@ from copy import deepcopy
 AI_REASON_LANGUAGE_POLICY = "english_ascii_only"
 AI_REASON_LANGUAGE_FALLBACK = "Reason unavailable: non-English output from AI"
 SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME = "swing_ai_structured_output_eval_v1"
+DECISION_QUALITY_V2_REASON_CODES = (
+    "adverse_risk_high",
+    "ask_wall_adverse",
+    "broker_state_missing",
+    "completed_bars_missing",
+    "continuation_supported",
+    "edge_absent",
+    "edge_positive",
+    "fillability_adverse",
+    "forming_bar_ignored",
+    "insufficient_core_data",
+    "liquidity_adverse",
+    "liquidity_supportive",
+    "distribution_adverse",
+    "micro_pullback_adverse",
+    "no_positive_edge",
+    "optional_source_missing",
+    "overextension_chase_risk",
+    "pullback_recovery_candidate",
+    "quote_missing",
+    "recovery_trigger_confirmed",
+    "recovery_trigger_failed",
+    "recovery_trigger_required",
+    "reversal_candidate",
+    "risk_reward_favorable",
+    "risk_reward_unfavorable",
+    "setup_invalidated",
+    "source_conflict",
+    "source_stale",
+    "structural_edge_without_trigger",
+    "structural_trend_supportive",
+    "tape_adverse",
+    "tape_missing",
+    "tape_sample_insufficient",
+    "tape_supportive",
+    "trend_adverse",
+    "trend_supportive",
+    "trend_tape_aligned",
+    "volume_confirmation_missing",
+    "venue_session_mismatch",
+)
 
 FLOW_STATE_LABELS = {
     "흡수": "absorption",
@@ -313,6 +354,114 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "reason": {"type": "string"},
         },
         "required": ["action", "score", "reason"],
+    },
+    "decision_quality_v2_7_entry": {
+        "type": "object",
+        "properties": {
+            "edge_state": {
+                "type": "string",
+                "enum": ["EDGE", "NO_EDGE", "INSUFFICIENT_DATA"],
+            },
+            "action": {"type": "string", "enum": ["BUY", "WAIT", "DROP"]},
+            "expected_upside_pct": {"type": ["number", "null"], "minimum": 0},
+            "expected_downside_pct": {"type": ["number", "null"], "maximum": 0},
+            "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+            "reason_codes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "string",
+                    "enum": list(DECISION_QUALITY_V2_REASON_CODES),
+                },
+            },
+            "evidence": {
+                "type": "object",
+                "properties": {
+                    "trend": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "liquidity": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "tape": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "risk": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "insufficient"],
+                    },
+                    "uncertainty": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                    "setup": {
+                        "type": "string",
+                        "enum": [
+                            "continuation",
+                            "pullback_recovery",
+                            "reversal",
+                            "no_setup",
+                            "not_applicable",
+                            "insufficient",
+                        ],
+                    },
+                    "positive_edge": {
+                        "type": "string",
+                        "enum": [
+                            "strong",
+                            "moderate",
+                            "weak",
+                            "none",
+                            "insufficient",
+                        ],
+                    },
+                    "adverse_risk": {
+                        "type": "string",
+                        "enum": [
+                            "low",
+                            "moderate",
+                            "high",
+                            "blocking",
+                            "insufficient",
+                        ],
+                    },
+                    "trigger": {
+                        "type": "string",
+                        "enum": [
+                            "confirmed",
+                            "recovery_required",
+                            "failed",
+                            "not_applicable",
+                            "insufficient",
+                        ],
+                    },
+                },
+                "required": [
+                    "trend",
+                    "liquidity",
+                    "tape",
+                    "risk",
+                    "uncertainty",
+                    "setup",
+                    "positive_edge",
+                    "adverse_risk",
+                    "trigger",
+                ],
+            },
+        },
+        "required": [
+            "edge_state",
+            "action",
+            "expected_upside_pct",
+            "expected_downside_pct",
+            "confidence",
+            "reason_codes",
+            "evidence",
+        ],
     },
     "entry_price_v1": {
         "type": "object",
