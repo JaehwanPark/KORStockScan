@@ -1217,7 +1217,6 @@ def _timeout_like_decision_failure(
         bool(payload.get(key))
         for key in (
             "openai_timeout_like",
-            "openai_transport_fail_closed",
             "openai_ws_http_fallback_fail_closed",
             "openai_http_timeout_budget_exhausted",
             "holding_score_timeout_like",
@@ -1296,9 +1295,10 @@ def record_ai_decision_trace(
                 else str(result_source or "") == "live"
             )
         timeout_like = _timeout_like_decision_failure(merged, result_source)
-        if timeout_like and (
-            _safe_number(merged.get("openai_http_attempt_count")) or 0
-        ) > 0:
+        if (
+            timeout_like
+            and (_safe_number(merged.get("openai_http_attempt_count")) or 0) > 0
+        ):
             provider_called = True
         normalized_result_source = (
             "timeout"

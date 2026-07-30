@@ -25,9 +25,7 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
-def test_timeout_exception_trace_normalizes_transport_provenance(
-    monkeypatch, tmp_path
-):
+def test_timeout_exception_trace_normalizes_transport_provenance(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
 
     trace.record_ai_decision_trace(
@@ -56,6 +54,32 @@ def test_timeout_exception_trace_normalizes_transport_provenance(
     assert row["result_source"] == "timeout"
     assert row["provider_called"] is True
     assert row["provider_actual"] == "openai"
+
+
+def test_non_timeout_transport_failure_is_not_labeled_timeout(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "action": "DROP",
+            "score": 0,
+            "reason": "provider returned invalid response",
+            "provider_called": True,
+            "openai_transport_fail_closed": True,
+            "openai_transport_mode": "http",
+            "ai_parse_ok": False,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_7",
+        result_source="exception",
+        stock_code="068270",
+        provider_called=True,
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["timeout"] is False
+    assert row["result_source"] == "exception"
+    assert row["provider_called"] is True
 
 
 def test_capture_ai_request_persists_exact_payload_once(monkeypatch, tmp_path):

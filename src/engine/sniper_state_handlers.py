@@ -31770,6 +31770,12 @@ def _adverse_micro_for_rising_missed_scout_quality_guard(
         and has_signed_tape_samples
         and int(signed_tape_sample_count) >= signed_tape_min_samples
     )
+    signed_tape_buy_dominated = bool(
+        signed_tape_state == "buy_dominated"
+        and has_signed_tape_samples
+        and int(signed_tape_sample_count) >= signed_tape_min_samples
+        and not signed_tape_sell_dominated_flag
+    )
 
     micro_vwap_bp, has_micro_vwap, _micro_vwap_source = (
         _first_numeric_field_with_source(
@@ -31787,7 +31793,17 @@ def _adverse_micro_for_rising_missed_scout_quality_guard(
         + int(signed_tape_sell_dominated)
         + int(micro_vwap_below_floor)
     )
-    adverse_micro = bool(weak_buy_pressure and adverse_signal_count >= 1)
+    micro_vwap_only_conflict_relief = bool(
+        signed_tape_buy_dominated
+        and micro_vwap_below_floor
+        and not true_ofi_below_floor
+        and not signed_tape_sell_dominated
+    )
+    adverse_micro = bool(
+        weak_buy_pressure
+        and adverse_signal_count >= 1
+        and not micro_vwap_only_conflict_relief
+    )
     return adverse_micro, {
         "rising_missed_scout_quality_guard_adverse_micro": adverse_micro,
         "rising_missed_scout_quality_guard_weak_buy_pressure": weak_buy_pressure,
@@ -31813,6 +31829,10 @@ def _adverse_micro_for_rising_missed_scout_quality_guard(
         ),
         "rising_missed_scout_quality_guard_signed_tape_min_samples": signed_tape_min_samples,
         "rising_missed_scout_quality_guard_signed_tape_sell_dominated": signed_tape_sell_dominated,
+        "rising_missed_scout_quality_guard_signed_tape_buy_dominated": signed_tape_buy_dominated,
+        "rising_missed_scout_quality_guard_micro_vwap_only_conflict_relief": (
+            micro_vwap_only_conflict_relief
+        ),
         "rising_missed_scout_quality_guard_micro_vwap_available": bool(has_micro_vwap),
         "rising_missed_scout_quality_guard_curr_vs_micro_vwap_bp": (
             f"{micro_vwap_bp:.3f}" if has_micro_vwap else "-"
@@ -47966,7 +47986,9 @@ def _record_opening_rotation_general_entry_handoff(
         set_fields={
             **handoff_fields,
             "opening_rotation_entry_owner_handoff_at": runtime["now_ts"],
+            "opening_rotation_handoff_deferred_pre_ai_gates": [],
         },
+        pop_fields=["opening_rotation_handoff_last_deferred_pre_ai_gate"],
     )
     if not should_log:
         return
@@ -47998,6 +48020,77 @@ def _record_opening_rotation_general_entry_handoff(
         allowed_runtime_apply=True,
         forbidden_uses=(
             "standalone_buy,direct_broker_submit,opening_rotation_pattern_bypass,"
+            "stale_or_conflict_bypass,account_order_quantity_cooldown_guard_bypass,"
+            "threshold_mutation,provider_route_change,order_price_change,"
+            "quantity_or_cap_change"
+        ),
+    )
+
+
+def _opening_rotation_handoff_defers_pre_ai_baseline(runtime: dict | None) -> bool:
+    runtime = runtime if isinstance(runtime, dict) else {}
+    return bool(
+        runtime.get("opening_rotation_entry_owner_handoff")
+        and str(
+            runtime.get("opening_rotation_entry_owner_handoff_target") or ""
+        ).strip()
+        == "general_scalping_ai_entry"
+    )
+
+
+def _record_opening_rotation_pre_ai_baseline_deferral(
+    stock: dict,
+    code: str,
+    runtime: dict,
+    *,
+    gate: str,
+    reason: str | None = None,
+) -> None:
+    """Record that a handoff baseline became AI context instead of a terminal gate.
+
+    This does not authorize a BUY or broker submission.  Existing source-quality,
+    stale/conflict, submit, account, order, quantity, cooldown, and broker guards
+    remain downstream owners.
+    """
+
+    if not _opening_rotation_handoff_defers_pre_ai_baseline(runtime):
+        return
+    gate_name = str(gate or "unknown").strip() or "unknown"
+    current = list(stock.get("opening_rotation_handoff_deferred_pre_ai_gates") or [])
+    if gate_name not in current:
+        current.append(gate_name)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "opening_rotation_handoff_deferred_pre_ai_gates": current[-8:],
+            "opening_rotation_handoff_last_deferred_pre_ai_gate": gate_name,
+        },
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "opening_rotation_handoff_pre_ai_baseline_deferred",
+        opening_rotation_entry_owner_handoff=True,
+        opening_rotation_entry_owner_handoff_reason=runtime.get(
+            "opening_rotation_entry_owner_handoff_reason"
+        )
+        or "-",
+        opening_rotation_entry_owner_handoff_target=("general_scalping_ai_entry"),
+        opening_rotation_handoff_deferred_gate=gate_name,
+        opening_rotation_handoff_deferred_reason=str(reason or "-"),
+        gate_action="ai_risk_context_then_existing_submit_guards",
+        metric_role="funnel_count",
+        decision_authority="entry_owner_handoff_to_existing_general_ai_entry",
+        window_policy="same_symbol_same_runtime_evaluation",
+        sample_floor="one_fresh_handoff_evaluation",
+        primary_decision_metric="provider_evaluation_reached_after_handoff",
+        source_quality_gate="fresh_non_conflicted_opening_rotation_handoff",
+        runtime_effect=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        allowed_runtime_apply=True,
+        forbidden_uses=(
+            "standalone_buy,direct_broker_submit,source_quality_bypass,"
             "stale_or_conflict_bypass,account_order_quantity_cooldown_guard_bypass,"
             "threshold_mutation,provider_route_change,order_price_change,"
             "quantity_or_cap_change"
@@ -49460,6 +49553,9 @@ def _handle_watching_strategy_branch(
         )
         if opening_rotation_handled:
             return True
+        opening_rotation_handoff_defers_baseline = (
+            _opening_rotation_handoff_defers_pre_ai_baseline(runtime)
+        )
 
         current_ai_score = float(stock.get("rt_ai_prob", 0.5) or 0.5) * 100
         # Quantity authority is resolved only after the orderable budget is
@@ -49648,8 +49744,25 @@ def _handle_watching_strategy_branch(
                     stage="blocked_overbought",
                     risk_state=overbought_context.get("risk_state"),
                 )
-                if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):
+                overbought_baseline_would_block = not _rule_bool(
+                    "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                )
+                if (
+                    overbought_baseline_would_block
+                    and not opening_rotation_handoff_defers_baseline
+                ):
                     return False
+                if (
+                    opening_rotation_handoff_defers_baseline
+                    and overbought_baseline_would_block
+                ):
+                    _record_opening_rotation_pre_ai_baseline_deferral(
+                        stock,
+                        code,
+                        runtime,
+                        gate="overbought",
+                        reason=overbought_context.get("risk_state"),
+                    )
 
             try:
                 tick_data = build_tick_data_from_ws(ws_data)
@@ -49867,7 +49980,18 @@ def _handle_watching_strategy_branch(
                                 **strength_gate_quality_fields,
                                 **pre_ai_ws_refresh_fields,
                             )
-                            return False
+                            if (
+                                source_quality_block_reason
+                                or not opening_rotation_handoff_defers_baseline
+                            ):
+                                return False
+                            _record_opening_rotation_pre_ai_baseline_deferral(
+                                stock,
+                                code,
+                                runtime,
+                                gate="strength_momentum_stability_recheck",
+                                reason=momentum_gate.get("reason"),
+                            )
                         _mutate_stock_state(
                             stock,
                             set_fields={
@@ -50078,13 +50202,28 @@ def _handle_watching_strategy_branch(
                                 stage="blocked_strength_momentum",
                                 risk_state=strength_context.get("risk_state"),
                             )
-                            if source_quality_block_reason or (
+                            strength_baseline_would_block = bool(
                                 not observe_only
                                 and not _rule_bool(
                                     "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
                                 )
+                            )
+                            if source_quality_block_reason or (
+                                not opening_rotation_handoff_defers_baseline
+                                and strength_baseline_would_block
                             ):
                                 return False
+                            if (
+                                opening_rotation_handoff_defers_baseline
+                                and strength_baseline_would_block
+                            ):
+                                _record_opening_rotation_pre_ai_baseline_deferral(
+                                    stock,
+                                    code,
+                                    runtime,
+                                    gate="strength_momentum",
+                                    reason=momentum_gate.get("reason"),
+                                )
                     else:
                         _mutate_stock_state(
                             stock,
@@ -50227,8 +50366,25 @@ def _handle_watching_strategy_branch(
                             stage="blocked_vpw",
                             risk_state=vpw_context.get("risk_state"),
                         )
-                        if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):
+                        vpw_baseline_would_block = not _rule_bool(
+                            "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                        )
+                        if (
+                            vpw_baseline_would_block
+                            and not opening_rotation_handoff_defers_baseline
+                        ):
                             return False
+                        if (
+                            opening_rotation_handoff_defers_baseline
+                            and vpw_baseline_would_block
+                        ):
+                            _record_opening_rotation_pre_ai_baseline_deferral(
+                                stock,
+                                code,
+                                runtime,
+                                gate="vpw",
+                                reason="below_static_vpw_context",
+                            )
 
                 if liquidity_value < min_liquidity:
                     liquidity_risk_state = (
@@ -50285,8 +50441,25 @@ def _handle_watching_strategy_branch(
                         ),
                         **_build_ai_input_not_evaluated_fields("pre_ai_liquidity_gate"),
                     )
-                    if not _rule_bool("SCALP_PRE_AI_SOFT_GATE_ENABLED", True):
+                    liquidity_baseline_would_block = not _rule_bool(
+                        "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                    )
+                    if (
+                        liquidity_baseline_would_block
+                        and not opening_rotation_handoff_defers_baseline
+                    ):
                         return False
+                    if (
+                        opening_rotation_handoff_defers_baseline
+                        and liquidity_baseline_would_block
+                    ):
+                        _record_opening_rotation_pre_ai_baseline_deferral(
+                            stock,
+                            code,
+                            runtime,
+                            gate="liquidity",
+                            reason=liquidity_risk_state,
+                        )
 
                 scanner_price = stock.get("buy_price") or 0
                 if scanner_price > 0:

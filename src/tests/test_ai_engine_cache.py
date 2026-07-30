@@ -3316,9 +3316,61 @@ def test_analyze_target_timeout_reject_is_not_marked_score50_fallback(monkeypatc
 
     assert result["action"] == "DROP"
     assert result["score"] == 0
-    assert result["ai_result_source"] == "exception"
+    assert result["ai_result_source"] == "timeout"
     assert result["ai_parse_fail"] is True
     assert result["ai_fallback_score_50"] is False
+    assert result["provider_called"] is True
+    assert result["openai_timeout_like"] is True
+    assert result["openai_transport_fail_closed"] is True
+
+
+def test_analyze_target_pre_provider_timeout_like_error_is_not_transport_timeout(
+    monkeypatch,
+):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "TRADING_RULES",
+        replace(
+            ai_engine_openai_module.TRADING_RULES,
+            OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED=True,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=True,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(
+        ai_engine_openai_module,
+        "extract_scalping_feature_packet",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            TimeoutError("local feature timeout")
+        ),
+    )
+
+    result = engine.analyze_target(
+        "PRE_PROVIDER_TIMEOUT_TEST",
+        {
+            "curr": 10000,
+            "fluctuation": 0.8,
+            "v_pw": 122,
+            "quote_stale": False,
+            "orderbook": {
+                "asks": [{"price": 10010, "volume": 100}],
+                "bids": [{"price": 10000, "volume": 120}],
+            },
+        },
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"현재가": 10000, "고가": 10020, "저가": 9990, "거래량": 1000}],
+        strategy="SCALPING",
+        cache_profile="pre_provider_timeout_test",
+        prompt_profile="shared",
+    )
+
+    assert result["ai_result_source"] == "exception"
+    assert result["provider_called"] is False
+    assert result["openai_timeout_like"] is False
+    assert result["openai_transport_fail_closed"] is False
+    assert "openai_transport_fail_closed_reason" not in result
+    assert result["openai_local_failure_reason"] == "local feature timeout"
 
 
 def test_openai_sim_observation_overnight_failure_does_not_disable_engine(monkeypatch):

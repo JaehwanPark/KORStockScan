@@ -24775,8 +24775,12 @@ def test_weak_context_late_entry_guard_skips_when_entry_live_tuning_selected(
     assert result["reason"] == "entry_live_tuning_selected"
 
 
-def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("soft_gate_enabled", "opening_rotation_handoff"),
+    [(True, False), (False, True)],
+)
+def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
+    monkeypatch, soft_gate_enabled, opening_rotation_handoff
 ):
     class FixedDateTime(datetime):
         @classmethod
@@ -24786,7 +24790,7 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
     state_handlers.datetime = FixedDateTime
     state_handlers.TRADING_RULES = replace(
         CONFIG,
-        SCALP_PRE_AI_SOFT_GATE_ENABLED=True,
+        SCALP_PRE_AI_SOFT_GATE_ENABLED=soft_gate_enabled,
         SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
         SCALP_LIQUIDITY_PRE_SUBMIT_GUARD_ENABLED=True,
         SCALP_OVERBOUGHT_PULLBACK_GUARD_ENABLED=True,
@@ -24854,6 +24858,42 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
         state_handlers,
         "_log_entry_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_handle_watching_opening_rotation",
+        lambda stock, code, ws_data, runtime, config: (
+            runtime.update(
+                {
+                    "opening_rotation_entry_owner_handoff": True,
+                    "opening_rotation_entry_owner_handoff_reason": (
+                        "pullback_not_observed"
+                    ),
+                    "opening_rotation_entry_owner_handoff_target": (
+                        "general_scalping_ai_entry"
+                    ),
+                }
+            )
+            if opening_rotation_handoff
+            else None
+        )
+        or False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_strength_momentum_stability_recheck_decision",
+        lambda *args, **kwargs: {
+            "pending": bool(opening_rotation_handoff),
+            "reason": (
+                "transient_strength_window_unstable"
+                if opening_rotation_handoff
+                else "not_pending"
+            ),
+            "recheck_after_epoch": "1001.000",
+            "recheck_delay_sec": 1,
+            "recheck_attempt_count": int(opening_rotation_handoff),
+            "recheck_max_attempts": 1,
+        },
     )
     monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(
@@ -24986,10 +25026,93 @@ def test_scalping_pre_ai_soft_gate_allows_ai_and_blocks_low_liquidity_at_submit(
         == "provider_route_change/bot_restart/runtime_threshold_apply_without_approval"
     )
     assert sent_orders == []
+    if opening_rotation_handoff:
+        assert "opening_rotation_handoff_pre_ai_baseline_deferred" in by_stage
+        assert stock["opening_rotation_handoff_deferred_pre_ai_gates"]
+        assert (
+            "strength_momentum_stability_recheck"
+            in stock["opening_rotation_handoff_deferred_pre_ai_gates"]
+        )
     assert (
         ai.seen_context["liquidity"]["threshold_family"]
         == "liquidity_pre_submit_guard_p1"
     )
+
+
+def test_rising_missed_scout_quality_guard_relaxes_micro_vwap_only_conflict(
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False
+    )
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        {
+            "last_watching_ai_score": 72,
+            "last_watching_ai_action": "BUY",
+        },
+        "067290",
+        {
+            "curr": 2500,
+            "quote_age_ms": 150.0,
+            "quote_stale": False,
+            "buy_pressure_10t": 0.91,
+            "curr_vs_micro_vwap_bp": -11.01,
+            "true_ofi_ewma": 0.08,
+            "true_ofi_sample_count": 10,
+            "market_data_signed_tape_state": "buy_dominated",
+            "market_data_signed_tape_sample_count": 5,
+        },
+        {"now_ts": 1000.0, "current_ai_score": 72.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is False
+    assert (
+        decision["rising_missed_scout_quality_guard_signed_tape_buy_dominated"] is True
+    )
+    assert (
+        decision["rising_missed_scout_quality_guard_micro_vwap_only_conflict_relief"]
+        is True
+    )
+    assert decision["rising_missed_scout_quality_guard_adverse_micro"] is False
+    assert decision["block_reason"] == "quality_guard_pass"
+
+
+def test_rising_missed_scout_quality_guard_keeps_independent_ofi_veto(
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_RISING_MISSED_SCOUT_QUALITY_GUARD_ENABLED", raising=False
+    )
+
+    decision = state_handlers._evaluate_rising_missed_scout_quality_guard(
+        {
+            "last_watching_ai_score": 72,
+            "last_watching_ai_action": "BUY",
+        },
+        "067290",
+        {
+            "curr": 2500,
+            "quote_age_ms": 150.0,
+            "quote_stale": False,
+            "buy_pressure_10t": 0.91,
+            "curr_vs_micro_vwap_bp": -11.01,
+            "true_ofi_ewma": -0.20,
+            "true_ofi_sample_count": 10,
+            "market_data_signed_tape_state": "buy_dominated",
+            "market_data_signed_tape_sample_count": 5,
+        },
+        {"now_ts": 1000.0, "current_ai_score": 72.0},
+        {},
+    )
+
+    assert decision["rising_missed_scout_quality_guard_blocked"] is True
+    assert (
+        decision["rising_missed_scout_quality_guard_micro_vwap_only_conflict_relief"]
+        is False
+    )
+    assert decision["block_reason"] == "fresh_adverse_micro_submit_safety"
 
 
 def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):

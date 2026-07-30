@@ -6151,6 +6151,7 @@ class GPTSniperEngine:
                 input_contract_fields=input_contract_fields,
             )
 
+        provider_attempted = False
         try:
             cached_result = self._cache_get("_analysis_cache", cache_key)
             if cached_result is not None:
@@ -6432,6 +6433,7 @@ class GPTSniperEngine:
                 or target_name
                 or "-"
             ).strip()
+            provider_attempted = True
             result = self._call_openai_safe(
                 prompt,
                 formatted_data,
@@ -6541,6 +6543,10 @@ class GPTSniperEngine:
             failure_count = self._record_failure_and_maybe_disable(
                 context_name=f"{target_name}({strategy}:{prompt_type})"
             )
+            timeout_like = bool(
+                provider_attempted and self._is_openai_timeout_like_error(e)
+            )
+            result_source = "timeout" if timeout_like else "exception"
             log_error(
                 f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}"
             )
@@ -6555,6 +6561,20 @@ class GPTSniperEngine:
                 else {"action": "WAIT", "score": 50, "reason": f"에러: {e}"}
             )
             fallback_payload = self._merge_last_transport_meta(fallback_payload)
+            timing_meta = getattr(e, "timing_meta", None)
+            if isinstance(timing_meta, dict):
+                fallback_payload.update(timing_meta)
+            fallback_payload.update(
+                {
+                    "provider_called": bool(provider_attempted),
+                    "openai_timeout_like": bool(timeout_like),
+                    "openai_transport_fail_closed": bool(provider_attempted),
+                }
+            )
+            if provider_attempted:
+                fallback_payload["openai_transport_fail_closed_reason"] = str(e)[:240]
+            else:
+                fallback_payload["openai_local_failure_reason"] = str(e)[:240]
             fallback_payload = _merge_runtime_fields(fallback_payload)
             try:
                 fallback_score_50 = float(fallback_payload.get("score")) == 50.0
@@ -6570,7 +6590,7 @@ class GPTSniperEngine:
                 fallback_score_50=fallback_score_50,
                 cache_hit=False,
                 cache_mode="miss",
-                result_source="exception",
+                result_source=result_source,
                 input_contract_fields=input_contract_fields,
             )
         finally:
