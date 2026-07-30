@@ -493,12 +493,25 @@ def test_observation_registry_suppresses_trade_signal():
 
 def test_postclose_report_groups_ordered_intraday_path(tmp_path):
     event_path = tmp_path / "events.jsonl"
+    candidate_path = tmp_path / "candidates.json"
     rows = [
         {
             "pipeline": "LIMIT_DOWN_WATCH",
             "stage": "limit_down_watch_registered",
             "stock_code": "000001",
-            "fields": {},
+            "fields": {
+                "cohort": "consecutive_limit_down_2plus",
+                "price_band": "1000_4999",
+            },
+        },
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_registered",
+            "stock_code": "000002",
+            "fields": {
+                "cohort": "consecutive_limit_down_2plus",
+                "price_band": "1000_4999",
+            },
         },
         {
             "pipeline": "LIMIT_DOWN_WATCH",
@@ -511,6 +524,12 @@ def test_postclose_report_groups_ordered_intraday_path(tmp_path):
             "stage": "limit_down_watch_state_transition",
             "stock_code": "000001",
             "fields": {"phase": "RELOCKED"},
+        },
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_state_transition",
+            "stock_code": "000002",
+            "fields": {"phase": "ROTATED"},
         },
         {
             "pipeline": "LIMIT_DOWN_WATCH",
@@ -529,12 +548,94 @@ def test_postclose_report_groups_ordered_intraday_path(tmp_path):
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
         encoding="utf-8",
     )
-    report = limit_down_watch_report.build_report("2026-07-27", event_path=event_path)
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "report_type": "limit_down_watch_candidate_source",
+                "target_date": "2026-07-27",
+                "status": "pass",
+                "candidates": [
+                    {
+                        "code": "000001",
+                        "source_quality": "pass",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = limit_down_watch_report.build_report(
+        "2026-07-27",
+        event_path=event_path,
+        candidate_path=candidate_path,
+    )
     group = report["groups"][0]
     assert report["status"] == "pass"
-    assert group["unlock_rate_pct"] == 100.0
-    assert group["relock_rate_pct"] == 100.0
-    assert group["ordered_intraday_path_capture_rate"] == 100.0
+    assert group["registered_codes"] == 2
+    assert group["snapshot_codes"] == 1
+    assert group["unlock_rate_pct"] == 50.0
+    assert group["relock_rate_pct"] == 50.0
+    assert group["ordered_intraday_path_capture_rate"] == 50.0
     assert group["avg_high_vs_limit_down_close_pct"] == 25.0
     assert group["avg_low_vs_limit_down_close_pct"] == -5.0
     assert report["actual_order_submitted"] is False
+    assert report["allowed_sim_apply"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert report["evidence_readiness"]["sim_candidate_ready"] is False
+    assert report["evidence_readiness"]["real_trading_ready"] is False
+    assert report["evidence_readiness"]["ordered_path_captured_code_count"] == 1
+    assert (
+        "counterfactual_entry_exit_labels_missing"
+        in report["evidence_readiness"]["blockers"]
+    )
+    assert (
+        "ordered_intraday_path_capture_incomplete"
+        in report["evidence_readiness"]["blockers"]
+    )
+
+
+def test_postclose_report_no_observation_stays_fail_closed(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    candidate_path = tmp_path / "candidates.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "pipeline": "LIMIT_DOWN_WATCH",
+                "stage": "limit_down_watch_registered",
+                "stock_code": "000001",
+                "fields": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "report_type": "limit_down_watch_candidate_source",
+                "target_date": "2026-07-27",
+                "status": "pass",
+                "candidates": [
+                    {
+                        "code": "000001",
+                        "source_quality": "pass",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = limit_down_watch_report.build_report(
+        "2026-07-27",
+        event_path=event_path,
+        candidate_path=candidate_path,
+    )
+
+    assert report["status"] == "no_observation"
+    assert report["evidence_readiness"]["source_quality_status"] == "pass"
+    assert report["evidence_readiness"]["sim_candidate_ready"] is False
+    assert report["evidence_readiness"]["real_trading_ready"] is False
+    assert (
+        "ordered_intraday_path_sample_missing"
+        in report["evidence_readiness"]["blockers"]
+    )

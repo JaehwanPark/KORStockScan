@@ -449,6 +449,126 @@ def test_artifact_paths_include_one_share_threshold_opportunity():
     )
 
 
+def test_artifact_paths_include_limit_down_watch():
+    path = mod._artifact_paths("2026-07-30")["limit_down_watch"]
+
+    assert str(path).endswith(
+        "data/report/limit_down_watch/limit_down_watch_2026-07-30.json"
+    )
+
+
+def test_limit_down_watch_report_status_passes_source_only_contract():
+    status = mod._limit_down_watch_report_status(
+        {
+            "report_type": "limit_down_watch",
+            "target_date": "2026-07-30",
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": {
+                "candidate_source_valid": True,
+                "source_quality_status": "pass",
+                "sim_candidate_ready": False,
+                "real_trading_ready": False,
+                "blockers": ["clean_baseline_rolling_ev_missing"],
+            },
+        },
+        enabled=True,
+        target_date="2026-07-30",
+    )
+
+    assert status["status"] == "pass"
+    assert status["sim_candidate_ready"] is False
+    assert status["real_trading_ready"] is False
+
+
+def test_limit_down_watch_report_status_fails_authority_leak():
+    status = mod._limit_down_watch_report_status(
+        {
+            "report_type": "limit_down_watch",
+            "target_date": "2026-07-30",
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": {
+                "candidate_source_valid": True,
+                "source_quality_status": "pass",
+                "sim_candidate_ready": True,
+                "real_trading_ready": True,
+            },
+        },
+        enabled=True,
+        target_date="2026-07-30",
+    )
+
+    assert status["status"] == "fail"
+    assert "limit_down_watch_sim_authority_leak" in status["issues"]
+    assert "limit_down_watch_real_authority_leak" in status["issues"]
+
+
+def test_limit_down_watch_report_status_warns_without_ordered_path():
+    status = mod._limit_down_watch_report_status(
+        {
+            "report_type": "limit_down_watch",
+            "target_date": "2026-07-30",
+            "status": "no_observation",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": {
+                "candidate_source_valid": True,
+                "source_quality_status": "pass",
+                "sim_candidate_ready": False,
+                "real_trading_ready": False,
+            },
+        },
+        enabled=True,
+        target_date="2026-07-30",
+    )
+
+    assert status["status"] == "warning"
+    assert status["warnings"] == ["limit_down_watch_ordered_path_not_observed"]
+
+
+def test_limit_down_watch_report_status_fails_stale_candidate_source():
+    status = mod._limit_down_watch_report_status(
+        {
+            "report_type": "limit_down_watch",
+            "target_date": "2026-07-29",
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": {
+                "candidate_source_valid": False,
+                "source_quality_status": "stale_or_invalid",
+                "sim_candidate_ready": False,
+                "real_trading_ready": False,
+            },
+        },
+        enabled=True,
+        target_date="2026-07-30",
+    )
+
+    assert status["status"] == "fail"
+    assert "limit_down_watch_contract_mismatch:target_date" in status["issues"]
+    assert "limit_down_watch_candidate_source_invalid" in status["warnings"]
+
+
 def test_postclose_verifier_fails_runtime_apply_gap_audit_fail(tmp_path, monkeypatch):
     project_root = tmp_path
     report_dir = project_root / "data" / "report"

@@ -570,6 +570,66 @@ def _is_real_primary_sample_book(value: Any) -> bool:
     return text == "real" or text.startswith("real_")
 
 
+def _limit_down_watch_report_status(
+    report: dict[str, Any], *, enabled: bool, target_date: str
+) -> dict[str, Any]:
+    if not enabled:
+        return {
+            "status": "disabled",
+            "issues": [],
+            "warnings": [],
+            "sim_candidate_ready": False,
+            "real_trading_ready": False,
+        }
+    issues: list[str] = []
+    warnings: list[str] = []
+    readiness = (
+        report.get("evidence_readiness")
+        if isinstance(report.get("evidence_readiness"), dict)
+        else {}
+    )
+    if not report:
+        issues.append("limit_down_watch_report_missing")
+    else:
+        expected = {
+            "report_type": "limit_down_watch",
+            "target_date": target_date,
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+        }
+        for field, expected_value in expected.items():
+            if report.get(field) != expected_value:
+                issues.append(f"limit_down_watch_contract_mismatch:{field}")
+        if report.get("status") not in {"pass", "no_observation"}:
+            issues.append("limit_down_watch_status_invalid")
+        if readiness.get("sim_candidate_ready") is not False:
+            issues.append("limit_down_watch_sim_authority_leak")
+        if readiness.get("real_trading_ready") is not False:
+            issues.append("limit_down_watch_real_authority_leak")
+        if readiness.get("candidate_source_valid") is not True:
+            warnings.append("limit_down_watch_candidate_source_invalid")
+        if readiness.get("source_quality_status") not in {
+            "pass",
+            "pass_with_exclusions",
+            "no_candidate",
+        }:
+            warnings.append("limit_down_watch_candidate_source_quality_blocked")
+        if report.get("status") == "no_observation":
+            warnings.append("limit_down_watch_ordered_path_not_observed")
+    return {
+        "status": "fail" if issues else "warning" if warnings else "pass",
+        "issues": issues,
+        "warnings": warnings,
+        "sim_candidate_ready": readiness.get("sim_candidate_ready", False),
+        "real_trading_ready": readiness.get("real_trading_ready", False),
+        "blockers": readiness.get("blockers") or [],
+    }
+
+
 def _artifact_paths(target_date: str) -> dict[str, Path]:
     next_day = _next_krx_trading_day(target_date)
     paths = {
@@ -591,6 +651,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "one_share_threshold_opportunity": REPORT_DIR
         / "one_share_threshold_opportunity"
         / f"one_share_threshold_opportunity_{target_date}.json",
+        "limit_down_watch": REPORT_DIR
+        / "limit_down_watch"
+        / f"limit_down_watch_{target_date}.json",
         "buy_funnel_sentinel": REPORT_DIR
         / "buy_funnel_sentinel"
         / f"buy_funnel_sentinel_{target_date}.json",
@@ -4647,6 +4710,7 @@ def build_threshold_cycle_postclose_verification(
     bridge_report = _load_json(paths["runtime_apply_bridge"])
     entry_split_order_plan = _load_json(paths["entry_split_order_plan"])
     quote_consistency_report = _load_json(paths["quote_consistency"])
+    limit_down_watch_report = _load_json(paths["limit_down_watch"])
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
     active_priority_preopen_apply = preopen_apply_current or preopen_apply_next
@@ -5220,6 +5284,15 @@ def build_threshold_cycle_postclose_verification(
         )
     if (
         done_line
+        and "limit_down_watch_report" in execution_flags
+        and "limit_down_watch_report" not in missing_execution_flags
+    ):
+        required_execution_flags = (
+            *required_execution_flags,
+            "limit_down_watch_report",
+        )
+    if (
+        done_line
         and "stage_hook_workorder_discovery" in execution_flags
         and "stage_hook_workorder_discovery" not in missing_execution_flags
     ):
@@ -5301,6 +5374,7 @@ def build_threshold_cycle_postclose_verification(
             "time_window_regime_counterfactual",
             "producer_gap_discovery",
             "one_share_threshold_opportunity",
+            "limit_down_watch_report",
             "stage_hook_workorder_discovery",
             "stage_hook_runtime_scaffold",
             "pattern_lab_propagation_audit",
@@ -5452,6 +5526,8 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("producer_gap_discovery")
     if execution_flags.get("one_share_threshold_opportunity") is not True:
         disabled_artifact_labels.add("one_share_threshold_opportunity")
+    if execution_flags.get("limit_down_watch_report") is not True:
+        disabled_artifact_labels.add("limit_down_watch")
     if execution_flags.get("stage_hook_workorder_discovery") is not True:
         disabled_artifact_labels.add("stage_hook_workorder_discovery")
     if execution_flags.get("stage_hook_runtime_scaffold") is not True:
@@ -5486,6 +5562,15 @@ def build_threshold_cycle_postclose_verification(
         quote_consistency_warnings.append("quote_consistency_report_missing")
     if quote_consistency_warnings:
         handoff_warnings.extend(quote_consistency_warnings)
+    limit_down_watch_status = _limit_down_watch_report_status(
+        limit_down_watch_report,
+        enabled=execution_flags.get("limit_down_watch_report") is True,
+        target_date=target_date,
+    )
+    if limit_down_watch_status["status"] == "fail":
+        log_issues.extend(limit_down_watch_status["issues"])
+    elif limit_down_watch_status["status"] == "warning":
+        handoff_warnings.extend(limit_down_watch_status["warnings"])
     entry_split_grid = (
         entry_split_order_plan.get("candidate_grid")
         if isinstance(entry_split_order_plan.get("candidate_grid"), list)
@@ -6211,6 +6296,7 @@ def build_threshold_cycle_postclose_verification(
         },
         "artifact_status": artifact_status,
         "missing_required_artifacts": missing_required_artifacts,
+        "limit_down_watch": limit_down_watch_status,
         "workorder_snapshot": {
             **workorder_snapshot,
             "status": workorder_snapshot_status,

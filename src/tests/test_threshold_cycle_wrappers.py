@@ -444,6 +444,19 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert (
+        'RUN_LIMIT_DOWN_WATCH_REPORT="${THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT:-true}"'
+        in script
+    )
+    assert "src.engine.monitoring.limit_down_watch_report" in script
+    assert (
+        '"$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.json"'
+        in script
+    )
+    assert (
+        '"$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.md"'
+        in script
+    )
+    assert (
         'RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"'
         in script
     )
@@ -818,6 +831,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         "rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE"
         in script
     )
+    assert "limit_down_watch_report=$RUN_LIMIT_DOWN_WATCH_REPORT" in script
     assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
     assert (
         "rising_missed_normal_buy_bridge_candidate_discovery="

@@ -47,6 +47,14 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
+- [x] `[LimitDownWatchPostcloseEvidenceGate0730] 하한가 순환관찰 장후 리포트·전환 준비 게이트 연결` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 11:30~13:00`, `Track: ScalpingLogic`)
+  - Source: [limit_down_watch_report.py](/home/ubuntu/KORStockScan/src/engine/monitoring/limit_down_watch_report.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 구현 범위: 표준 postclose 체인에서 JSON/Markdown 관찰 리포트를 생성하고, 최종 verifier가 산출물·source-only 계약·sim/live authority 차단을 검증한다. 리포트는 후보 source quality, ordered path 표본, multi-day sample floor, counterfactual label, clean-baseline rolling EV, sim catalog/PREOPEN, post-sim attribution, 별도 live 승인/rollback의 결손을 명시한다.
+  - 완료 기준: targeted pytest, compile/import, shell syntax, `git diff --check`, checklist parser와 review gate finding `0`; 2026-07-29 산출물 재생성에서 `runtime_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`, `allowed_sim_apply=false`, `allowed_runtime_apply=false`를 확인한다.
+  - 완료 결과: standard postclose producer와 final verifier 연결, JSON/Markdown 산출, stale/invalid candidate source 및 sim/live authority 누수 fail-closed 검증, 미수신 등록 종목을 포함한 ordered path 분모 보정을 완료했다. targeted pytest `187 passed`, Black/Ruff/compile/bash/parser/diff 검증이 통과했다. 7/29 재생성은 등록 `3`, snapshot `2`; 2회 이상 cohort capture `0/1`, 1회 cohort capture `2/2`이며 verifier `pass`, sim/live ready 모두 `false`다.
+  - 금지: 관찰 표본만으로 BUY/submit/threshold/provider/가격/수량/cap/broker guard/bot 변경 또는 실매매 전환 권한을 생성하지 않는다.
+  - 다음 액션: 장후 누적 표본과 counterfactual label/EV 생산자 설계 후 별도 sim-first 작업지시로 연결한다.
+
 - [ ] `[EntryPromptV27OperatorOverride0730] hot_v1 진입 프롬프트를 decision_quality_v2_7로 명시 전환` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:20`, `Track: ScalpingLogic`)
   - Source: [ai_prompt_detailed_paired_replay_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/ai_prompt_detailed_paired_replay/ai_prompt_detailed_paired_replay_2026-07-29.json), [ai_prompt_contracts.py](/home/ubuntu/KORStockScan/src/engine/ai_prompt_contracts.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [operator_runtime_overrides_2026-07-30.env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-07-30.env)
   - 사용자 명시 지시: watching/analyze_target의 현재 `hot_v1`을 `decision_quality_v2_7`로 교체한다. 동일 exact payload와 deterministic `exact_payload_analysis_v1` ledger를 사용하고 구조화 판단을 기존 `action/score/reason` 소비 계약으로 변환한다.
@@ -106,6 +114,12 @@
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
 
 ## 장후 체크리스트 (20:05~21:55)
+
+- [ ] `[LimitDownWatchCounterfactualEvidence0730] 하한가 관찰 cohort별 counterfactual label·rolling EV 설계 착수` (`Due: 2026-07-30`, `Slot: POSTCLOSE`, `TimeWindow: 20:20~20:40`, `Track: ScalpingLogic`)
+  - Source: [limit_down_watch_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/limit_down_watch/limit_down_watch_2026-07-30.json), [limit_down_watch_candidate_source_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/limit_down_watch_candidate_source/limit_down_watch_candidate_source_2026-07-30.json), [pipeline_events_2026-07-30.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-30.jsonl)
+  - 판정 기준: `2회 이상/1회 × 가격대` parent cohort에 대해 실제 ordered unlock 시점을 가상 entry anchor로 삼고 MFE/MAE·유동성·스프레드·재잠김을 결합한 source-only label 계약과 multi-day sample floor를 정의한다. 완전한 경로가 없는 row는 EV 입력에서 제외한다.
+  - 산출 경계: 초기 producer는 `runtime_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`, `allowed_sim_apply=false`, `allowed_runtime_apply=false`로 고정하고 `source_quality_adjusted_ev_pct`가 생성되기 전에는 sim 후보도 만들지 않는다.
+  - 다음 액션: rolling clean-baseline EV와 표본 기준을 충족한 parent cohort만 별도 sim policy catalog/PREOPEN 작업지시 후보로 전달한다. 실매매 전환은 post-sim attribution과 별도 사용자 승인·rollback artifact 이후에만 검토한다.
 
 - [ ] `[PostcloseSourceQualityGateReview0730] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-07-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-30.json), [threshold_cycle_ev_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-30.json), [code_improvement_workorder_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-30.json), [threshold_cycle_postclose_verification_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-07-30.json)
