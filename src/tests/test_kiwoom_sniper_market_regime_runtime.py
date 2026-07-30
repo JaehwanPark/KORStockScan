@@ -5832,6 +5832,41 @@ def test_async_commit_routes_rising_missed_before_generic_watching_handler():
     assert commit_idx < opening_adapter_idx < rising_adapter_idx < generic_handler_idx
 
 
+def test_opening_rotation_async_strategy_miss_handoffs_to_generic_watching_owner():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
+    opening_adapter_idx = source.index(
+        "opening_rotation_commit_handled = "
+        "sniper_state_handlers.handle_scanner_async_opening_rotation_commit(",
+        commit_idx,
+    )
+    generation_marker_idx = source.index(
+        "opening_rotation_handoff_generation_id = str(", opening_adapter_idx
+    )
+    handoff_gate_idx = source.index(
+        "not opening_rotation_commit_handled", generation_marker_idx
+    )
+    generation_match_idx = source.index(
+        "== scheduler_generation.generation_id", handoff_gate_idx
+    )
+    generic_handler_idx = source.index("handle_watching_state(", generation_match_idx)
+    skip_direct_scout_idx = source.index(
+        "skip_rising_missed_hook=True", generic_handler_idx
+    )
+    normal_commit_phase_idx = source.index(
+        "scanner_async_commit_phase=False", skip_direct_scout_idx
+    )
+
+    assert (
+        opening_adapter_idx
+        < generation_marker_idx
+        < handoff_gate_idx
+        < generation_match_idx
+        < generic_handler_idx
+    )
+    assert generic_handler_idx < skip_direct_scout_idx < normal_commit_phase_idx
+
+
 def test_async_commit_preserves_same_generation_followup_before_warm_parking():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")

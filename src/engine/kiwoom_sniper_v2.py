@@ -13025,7 +13025,7 @@ def run_sniper(is_test_mode=False):
                                         and not stock.get("_scanner_async_cache_key")
                                     )
                                     if opening_rotation_context_commit:
-                                        sniper_state_handlers.handle_scanner_async_opening_rotation_commit(
+                                        opening_rotation_commit_handled = sniper_state_handlers.handle_scanner_async_opening_rotation_commit(
                                             stock,
                                             code,
                                             ws_data,
@@ -13040,6 +13040,35 @@ def run_sniper(is_test_mode=False):
                                                 scheduler_generation
                                             ),
                                         )
+                                        opening_rotation_handoff_generation_id = str(
+                                            stock.get(
+                                                "_opening_rotation_general_entry_handoff_once_generation_id"
+                                            )
+                                            or ""
+                                        ).strip()
+                                        if (
+                                            not opening_rotation_commit_handled
+                                            and opening_rotation_handoff_generation_id
+                                            == scheduler_generation.generation_id
+                                        ):
+                                            handle_watching_state(
+                                                stock,
+                                                code,
+                                                ws_data,
+                                                admin_id,
+                                                now_ts=time.time(),
+                                                now_dt=datetime.now(),
+                                                radar=radar,
+                                                ai_engine=ai_engine,
+                                                skip_rising_missed_hook=True,
+                                                scanner_async_eval_coordinator=(
+                                                    async_coordinator
+                                                ),
+                                                scanner_async_generation=(
+                                                    scheduler_generation
+                                                ),
+                                                scanner_async_commit_phase=False,
+                                            )
                                     elif sniper_state_handlers.handle_scanner_async_rising_missed_commit(
                                         stock,
                                         code,

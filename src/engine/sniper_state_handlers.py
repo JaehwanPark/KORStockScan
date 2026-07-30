@@ -47854,10 +47854,165 @@ def _opening_rotation_rising_missed_owner_reason(
     return ""
 
 
+_OPENING_ROTATION_GENERAL_ENTRY_HANDOFF_REASONS = frozenset(
+    {
+        "pullback_not_observed",
+        "pullback_out_of_range",
+        "reacceleration_not_observed",
+        "spread_too_wide",
+        "buy_pressure_below_min",
+        "trusted_tick_sample_below_min",
+        "tick_acceleration_below_min",
+        "tick_price_change_below_min",
+        "volume_reacceleration_below_min",
+        "micro_vwap_unavailable",
+        "micro_vwap_distance_out_of_range",
+        "ask_sweep_below_min",
+        "post_sweep_hold_below_min",
+        "bid_replenishment_below_min",
+        "wall_replenishment_risk",
+        "vi_proximity_risk",
+    }
+)
+
+
+def _opening_rotation_general_entry_handoff_allowed(
+    decision: dict | None,
+    *,
+    direct_position: bool,
+) -> bool:
+    """Yield strategy-only misses to the existing general AI entry owner.
+
+    The handoff never turns an Opening Rotation miss into a BUY.  It only
+    removes the exclusive-owner dead end after quote/tape source quality has
+    already passed.  The ordinary entry path still owns AI, price, account,
+    order, quantity, cooldown, and broker-submit guards.
+    """
+
+    decision = decision if isinstance(decision, dict) else {}
+    reason = str(decision.get("reason") or "")
+    if direct_position or decision.get("qualified"):
+        return False
+    if reason not in _OPENING_ROTATION_GENERAL_ENTRY_HANDOFF_REASONS:
+        return False
+
+    quote_age_ms = _safe_float(decision.get("quote_age_ms"), None)
+    quote_stale_threshold_ms = _safe_float(
+        decision.get("quote_stale_threshold_ms"), 3000.0
+    )
+    if (
+        quote_age_ms is None
+        or quote_stale_threshold_ms is None
+        or quote_age_ms < 0
+        or quote_age_ms > quote_stale_threshold_ms
+        or bool(decision.get("quote_stale"))
+        or bool(decision.get("tick_context_stale"))
+    ):
+        return False
+    if str(decision.get("tick_context_quality") or "").strip().lower() != (
+        "fresh_computed"
+    ):
+        return False
+    if not bool(decision.get("tick_aggressor_pressure_usable")):
+        return False
+    if str(decision.get("market_data_freshness_state") or "").lower() == "conflicted":
+        return False
+    if str(decision.get("market_data_orderbook_state") or "").lower() == "conflicted":
+        return False
+    return True
+
+
+def _record_opening_rotation_general_entry_handoff(
+    stock: dict,
+    code: str,
+    runtime: dict,
+    decision: dict,
+    *,
+    should_log: bool,
+) -> None:
+    reason = str(decision.get("reason") or "not_evaluated")
+    handoff_fields = {
+        "opening_rotation_entry_owner_handoff": True,
+        "opening_rotation_entry_owner_handoff_reason": reason,
+        "opening_rotation_entry_owner_handoff_target": "general_scalping_ai_entry",
+    }
+    runtime.update(handoff_fields)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            **handoff_fields,
+            "opening_rotation_entry_owner_handoff_at": runtime["now_ts"],
+        },
+    )
+    if not should_log:
+        return
+    _log_entry_pipeline(
+        stock,
+        code,
+        "opening_rotation_entry_owner_handoff",
+        **handoff_fields,
+        opening_rotation_downstream_preview_pass_count=decision.get(
+            "opening_rotation_downstream_preview_pass_count", "-"
+        ),
+        opening_rotation_downstream_preview_total_count=decision.get(
+            "opening_rotation_downstream_preview_total_count", "-"
+        ),
+        opening_rotation_downstream_preview_first_blocker=decision.get(
+            "opening_rotation_downstream_preview_first_blocker", "-"
+        ),
+        metric_role="funnel_count",
+        decision_authority="entry_owner_handoff_to_existing_general_ai_entry",
+        window_policy="same_symbol_same_runtime_evaluation",
+        sample_floor="one_fresh_quote_and_trusted_tape_strategy_miss",
+        primary_decision_metric="general_entry_handoff_after_rotation_strategy_miss",
+        source_quality_gate=(
+            "fresh_non_conflicted_quote_and_trusted_ws_aggressor_context"
+        ),
+        runtime_effect=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        allowed_runtime_apply=True,
+        forbidden_uses=(
+            "standalone_buy,direct_broker_submit,opening_rotation_pattern_bypass,"
+            "stale_or_conflict_bypass,account_order_quantity_cooldown_guard_bypass,"
+            "threshold_mutation,provider_route_change,order_price_change,"
+            "quantity_or_cap_change"
+        ),
+    )
+
+
 def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> bool:
     now_ts = runtime["now_ts"]
     now_dt = runtime.get("now_dt") or datetime.fromtimestamp(now_ts)
     pos_tag = runtime["pos_tag"]
+    handoff_generation = str(
+        stock.get("_opening_rotation_general_entry_handoff_once_generation_id") or ""
+    ).strip()
+    runtime_generation = runtime.get("scanner_async_generation")
+    runtime_generation_id = (
+        runtime_generation.generation_id
+        if isinstance(runtime_generation, ScannerGeneration)
+        else ""
+    )
+    if handoff_generation:
+        _mutate_stock_state(
+            stock,
+            pop_fields=["_opening_rotation_general_entry_handoff_once_generation_id"],
+        )
+        if handoff_generation == runtime_generation_id:
+            runtime.update(
+                {
+                    "opening_rotation_entry_owner_handoff": True,
+                    "opening_rotation_entry_owner_handoff_reason": stock.get(
+                        "opening_rotation_entry_owner_handoff_reason"
+                    )
+                    or "strategy_miss",
+                    "opening_rotation_entry_owner_handoff_target": (
+                        "general_scalping_ai_entry"
+                    ),
+                }
+            )
+            return False
     entry_config = _opening_rotation_entry_config()
     source_signature = stock.get("source_signature") or stock.get(
         "scanner_source_signature"
@@ -48166,6 +48321,18 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             **event_contract_fields,
         )
     if not decision.get("qualified"):
+        if _opening_rotation_general_entry_handoff_allowed(
+            decision,
+            direct_position=direct_position,
+        ):
+            _record_opening_rotation_general_entry_handoff(
+                stock,
+                code,
+                runtime,
+                decision,
+                should_log=should_log,
+            )
+            return False
         return True
 
     current_price = _safe_int(decision.get("curr_price"), runtime["curr_price"])
@@ -67160,17 +67327,20 @@ def handle_scanner_async_opening_rotation_commit(
     scanner_async_eval_coordinator=None,
     scanner_async_generation=None,
 ) -> bool:
-    """Commit an Opening Rotation context result without re-entering full WATCHING.
+    """Commit an Opening Rotation result or yield a strategy miss to WATCHING.
 
     ``COMMIT`` is a scheduler safety lane.  Re-entering the ordinary WATCHING
     handler here used to run its complete generic preamble before consuming an
     already completed context result.  That could make the otherwise fresh
-    result stale.  Opening Rotation has a self-contained mechanical owner, so
-    this path retains its normal entry submit owner while avoiding unrelated
-    generic WATCHING/AI preparation work.
+    result stale.  This path therefore consumes Opening Rotation first.  A
+    qualified result retains its mechanical submit owner; a fresh,
+    source-quality-valid strategy miss returns ``False`` so the caller can
+    enter the established general AI owner once for the same generation.
 
     It is intentionally limited to an outstanding Opening Rotation context
     result.  Generic async entry results still use ``handle_watching_state``.
+    ``True`` means the mechanical owner or a fail-closed guard consumed the
+    result.  ``False`` means the caller must perform the bounded handoff.
     """
 
     stock = stock if isinstance(stock, dict) else {}
@@ -67252,7 +67422,17 @@ def handle_scanner_async_opening_rotation_commit(
         "MIN_SCALP_LIQUIDITY": _rule_float("MIN_SCALP_LIQUIDITY", 500_000_000),
     }
     if not _handle_watching_opening_rotation(stock, code, ws_data, runtime, config):
-        return True
+        if not bool(runtime.get("opening_rotation_entry_owner_handoff")):
+            return True
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "_opening_rotation_general_entry_handoff_once_generation_id": (
+                    generation.generation_id
+                )
+            },
+        )
+        return False
     if runtime["is_trigger"]:
         _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
     return True

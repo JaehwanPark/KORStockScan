@@ -946,6 +946,128 @@ def test_opening_rotation_async_commit_does_not_claim_generic_result(monkeypatch
     )
 
 
+def test_opening_rotation_async_commit_yields_strategy_miss_to_generic_owner(
+    monkeypatch,
+):
+    generation = _generation("KRX")
+    stock = {
+        "strategy": "SCALPING",
+        "_scanner_opening_rotation_async_generation_id": generation.generation_id,
+        "_scanner_opening_rotation_async_cache_key": "opening_rotation:test",
+    }
+    monkeypatch.setattr(
+        handlers, "_manual_control_exclusion_blocked", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _value: True)
+    monkeypatch.setattr(handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(handlers, "ALERTED_STOCKS", set())
+
+    def _opening_handler(_stock, _code, _ws_data, runtime, _config):
+        runtime.update(
+            {
+                "opening_rotation_entry_owner_handoff": True,
+                "opening_rotation_entry_owner_handoff_reason": (
+                    "pullback_not_observed"
+                ),
+                "opening_rotation_entry_owner_handoff_target": (
+                    "general_scalping_ai_entry"
+                ),
+            }
+        )
+        return False
+
+    monkeypatch.setattr(handlers, "_handle_watching_opening_rotation", _opening_handler)
+
+    assert not handlers.handle_scanner_async_opening_rotation_commit(
+        stock,
+        "005930",
+        {"curr": 1001},
+        admin_id=1,
+        now_ts=time.time(),
+        now_dt=datetime.now(),
+        scanner_async_generation=generation,
+    )
+    assert (
+        stock["_opening_rotation_general_entry_handoff_once_generation_id"]
+        == generation.generation_id
+    )
+
+
+def test_opening_rotation_async_commit_does_not_handoff_unmarked_false_result(
+    monkeypatch,
+):
+    generation = _generation("KRX")
+    stock = {
+        "strategy": "SCALPING",
+        "_scanner_opening_rotation_async_generation_id": generation.generation_id,
+        "_scanner_opening_rotation_async_cache_key": "opening_rotation:test",
+    }
+    monkeypatch.setattr(
+        handlers, "_manual_control_exclusion_blocked", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda _value: True)
+    monkeypatch.setattr(handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(
+        handlers,
+        "_handle_watching_opening_rotation",
+        lambda *_a, **_k: False,
+    )
+
+    assert handlers.handle_scanner_async_opening_rotation_commit(
+        stock,
+        "005930",
+        {"curr": 1001},
+        admin_id=1,
+        now_ts=time.time(),
+        now_dt=datetime.now(),
+        scanner_async_generation=generation,
+    )
+    assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
+
+
+def test_opening_rotation_handoff_marker_bypasses_same_generation_re_evaluation(
+    monkeypatch,
+):
+    generation = _generation("KRX")
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "_opening_rotation_general_entry_handoff_once_generation_id": (
+            generation.generation_id
+        ),
+        "opening_rotation_entry_owner_handoff_reason": "pullback_not_observed",
+    }
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": time.time(),
+        "now_dt": datetime.now(),
+        "scanner_async_generation": generation,
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_opening_rotation_context",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("same generation must not re-evaluate opening rotation")
+        ),
+    )
+
+    assert not handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 1001},
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+    assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
+    assert runtime["opening_rotation_entry_owner_handoff"] is True
+    assert runtime["opening_rotation_entry_owner_handoff_reason"] == (
+        "pullback_not_observed"
+    )
+
+
 def test_async_opening_rotation_defers_reentry_hydration_until_submit(monkeypatch):
     generation = _generation("KRX")
     coordinator = ScannerAsyncEvalCoordinator(

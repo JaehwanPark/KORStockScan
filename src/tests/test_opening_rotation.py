@@ -528,8 +528,13 @@ def test_runtime_observed_event_carries_no_pullback_continuation_provenance(
         {"MIN_SCALP_LIQUIDITY": 500_000_000},
     )
 
-    assert handled is True
+    assert handled is False
     assert runtime["is_trigger"] is False
+    assert runtime["opening_rotation_entry_owner_handoff"] is True
+    assert (
+        runtime["opening_rotation_entry_owner_handoff_target"]
+        == "general_scalping_ai_entry"
+    )
     observed = next(
         fields
         for args, fields in emitted
@@ -547,7 +552,140 @@ def test_runtime_observed_event_carries_no_pullback_continuation_provenance(
     assert observed["allowed_runtime_apply"] is False
     assert observed["actual_order_submitted"] is False
     assert observed["broker_order_forbidden"] is True
+    handoff = next(
+        fields
+        for args, fields in emitted
+        if args[2] == "opening_rotation_entry_owner_handoff"
+    )
+    assert handoff["opening_rotation_entry_owner_handoff_reason"] == (
+        "pullback_not_observed"
+    )
+    assert handoff["runtime_effect"] is True
+    assert handoff["actual_order_submitted"] is False
+    assert handoff["broker_order_forbidden"] is True
     assert stock.get("rising_missed_buy") is None
+
+
+def test_runtime_does_not_handoff_opening_rotation_source_quality_failure(monkeypatch):
+    now_dt = datetime(2026, 7, 30, 10, 5)
+    stock = {
+        "id": 7,
+        "name": "테스트",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "intraday_high_price": 10_100,
+    }
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": now_dt.timestamp(),
+        "now_dt": now_dt,
+        "fluctuation": 3.0,
+        "curr_price": 10_000,
+        "is_trigger": False,
+    }
+    source_gap_packet = _packet(10_000)
+    source_gap_packet.update(
+        {
+            "tick_context_quality": "missing",
+            "tick_aggressor_pressure_usable": False,
+            "tick_aggressor_trusted_count": 0,
+        }
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_opening_rotation_feature_packet",
+        lambda *args, **kwargs: source_gap_packet,
+    )
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 10_000, "fluctuation": 3.0},
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is True
+    assert runtime["is_trigger"] is False
+    assert "opening_rotation_entry_owner_handoff" not in runtime
+    assert not any(
+        args[2] == "opening_rotation_entry_owner_handoff" for args, _fields in emitted
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    sorted(
+        {
+            "pullback_not_observed",
+            "pullback_out_of_range",
+            "reacceleration_not_observed",
+            "spread_too_wide",
+            "buy_pressure_below_min",
+            "trusted_tick_sample_below_min",
+            "tick_acceleration_below_min",
+            "tick_price_change_below_min",
+            "volume_reacceleration_below_min",
+            "micro_vwap_unavailable",
+            "micro_vwap_distance_out_of_range",
+            "ask_sweep_below_min",
+            "post_sweep_hold_below_min",
+            "bid_replenishment_below_min",
+            "wall_replenishment_risk",
+            "vi_proximity_risk",
+        }
+    ),
+)
+def test_opening_rotation_strategy_miss_reasons_can_handoff_to_general_owner(reason):
+    assert handlers._opening_rotation_general_entry_handoff_allowed(
+        {
+            "qualified": False,
+            "reason": reason,
+            "quote_age_ms": 100.0,
+            "quote_stale_threshold_ms": 3000.0,
+            "quote_stale": False,
+            "tick_context_stale": False,
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "market_data_freshness_state": "fresh",
+            "market_data_orderbook_state": "fresh",
+        },
+        direct_position=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "quote_freshness_unavailable",
+        "stale_market_context",
+        "trusted_tick_context_unavailable",
+        "async_context_commit_rejected",
+        "feature_context_fetch_failed",
+    ],
+)
+def test_opening_rotation_source_quality_miss_reasons_remain_fail_closed(reason):
+    assert not handlers._opening_rotation_general_entry_handoff_allowed(
+        {
+            "qualified": False,
+            "reason": reason,
+            "quote_age_ms": 100.0,
+            "quote_stale_threshold_ms": 3000.0,
+            "quote_stale": False,
+            "tick_context_stale": False,
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+        },
+        direct_position=False,
+    )
 
 
 def test_runtime_blocks_opening_rotation_before_async_on_promotion_price_conflict(
