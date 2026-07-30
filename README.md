@@ -36,7 +36,7 @@ KORStockScan은 단순한 매수/매도 봇이 아니라, 매매 판단을 계�
 
 **장후 리포트와 자동 보완 후보**
 
-하루 동안 쌓인 이벤트는 threshold cycle, lifecycle matrix, sentinel, panic report, swing audit, bottom rebound research, pattern lab 같은 리포트와 분석으로 정리됩니다. 자동화는 여기서 다음 장전 적용 후보, sim-auto 후보, 코드 보완 workorder를 만들 수 있습니다. sim/probe/real-flow 결과를 봐야만 드러나는 누락 관찰축은 `producer_gap_discovery`가 source-only로 발굴하고, AI two-pass review가 우선순위와 구현요건을 보강한 뒤 high-priority 항목을 code improvement workorder로 넘깁니다. 이후 `stage_hook_workorder_discovery`와 `stage_hook_runtime_scaffold`가 hook 구현 필요성과 disabled/source-only scaffold 구현 여부를 workorder provenance로 분리합니다. `implement_now` 처리는 1차 instrumentation/report/provenance 구현, 2차 관련 리포트 재생성과 workorder lineage diff 확인으로 닫으며, 새로 추가 구현하는 대상은 `runtime_effect=false` contract를 유지한 항목으로 제한합니다.
+하루 동안 쌓인 이벤트는 threshold cycle, lifecycle matrix, sentinel과 활성화된 분석 리포트로 정리됩니다. 기본 자동화는 다음 장전 적용 후보와 sim-auto 후보를 만들고, 비용이 큰 source-only discovery는 필요한 날짜에 명시적으로 opt-in합니다. opt-in된 `producer_gap_discovery`, `stage_hook_workorder_discovery`, `stage_hook_runtime_scaffold`는 누락 관찰축과 hook 구현 필요성을 workorder provenance로 남기지만 runtime 권한은 만들지 않습니다. `implement_now`는 1차 instrumentation/report/provenance 구현, 2차 관련 리포트 재생성과 workorder lineage diff 확인으로 닫으며, 새 구현은 `runtime_effect=false` contract를 유지한 항목으로 제한합니다.
 
 **운영 감시**
 
@@ -186,7 +186,7 @@ README는 bucket taxonomy와 권한 경계만 고정합니다. 최신 bucket row
 
 Pattern lab은 이 시뮬레이션 자동화의 장후 해석 계층입니다. `analysis/gemini_scalping_pattern_lab`, `analysis/claude_scalping_pattern_lab`, `analysis/deepseek_swing_pattern_lab`가 fact table과 EV 결과를 다시 묶어 손실/수익 패턴, opportunity cost, source-quality gap, AI review payload를 생성합니다. 이 산출물은 `code_improvement_order`, `auto_family_candidate`, workorder 입력으로만 쓰며, 단독으로 실주문, threshold apply, provider 변경, bot restart를 실행하지 않습니다.
 
-`producer_gap_discovery`는 pattern lab과 별도로 “분석 결과를 더 잘 보기 위해 필요한 producer가 무엇인지”를 발굴합니다. 후보 생성은 결정론으로 시작하고, AI review는 gap type, priority, implementation requirements, acceptance tests를 보강합니다. AI unavailable, parse reject, audit fail은 fail-closed로 처리되며, high-priority 후보는 workorder selection limit과 무관하게 code improvement workorder에 남습니다. Hook 구현 후보는 `stage_hook_workorder_discovery`가 별도로 표면화하고, 구현 완료 여부는 `stage_hook_runtime_scaffold`가 `runtime_effect=false`, `allowed_runtime_apply=false` provenance로 남깁니다. scaffold가 붙은 workorder는 다음 재생성 때 기존 구현, 신규 구현, 보류 항목이 분리되도록 `attach_existing_family` 또는 `implement_now` lineage로 재판정됩니다.
+`producer_gap_discovery`와 후속 stage-hook producer는 기본 OFF인 source-only 분석입니다. 명시적으로 opt-in한 경우 후보 생성은 결정론으로 시작하고 AI review가 gap type, priority, 구현요건과 acceptance test를 보강합니다. AI unavailable, parse reject, audit fail은 fail-closed로 처리합니다. Hook 구현 여부는 `runtime_effect=false`, `allowed_runtime_apply=false` provenance로 남기며, 관련 workorder는 재생성 시 기존 구현·신규 구현·보류 항목으로 분리합니다.
 
 자동화는 sim 결과를 다음 세 가지로 나눠 소비합니다.
 

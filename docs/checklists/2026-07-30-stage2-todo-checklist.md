@@ -16,6 +16,12 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+- [x] `[PostcloseResourceDiskEfficiency0730] 장후 과부하·장중 raw 증가·검증압축 단절 보완` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 15:30~17:00`, `Track: RuntimeStability`)
+  - Source: [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [run_tuning_monitoring_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_tuning_monitoring_postclose.sh), [build_tuning_monitoring_parquet.py](/home/ubuntu/KORStockScan/src/engine/build_tuning_monitoring_parquet.py), [pipeline_event_logger.py](/home/ubuntu/KORStockScan/src/utils/pipeline_event_logger.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 현재 상태: 실매매 연결 장후 producer는 유지하고, WATCHING smoothing·codebase performance·time-window·producer-gap·stage-hook source-only producer는 기본 OFF/명시 opt-in으로 운영한다. source-quality 원본은 보존하되 wrapper stdout은 summary만 출력하고, scanner 고빈도 이벤트는 structured fields를 유지한 채 중복 text payload와 동일 skip 기록 빈도를 줄인다.
+  - 저장 정책: tuning monitoring은 postclose 완료를 최대 `14400s` 기다리고, 5,000행 chunked parquet를 원자 교체한 뒤 같은 날짜 verified raw/snapshot만 압축한다. 미검증 raw는 보존하며 threshold/provider/order/broker/cap과 bot 상태는 변경하지 않는다.
+  - 검증: producer/consumer·verifier 재리뷰 finding `0`, targeted pytest `207 passed`, Black/Ruff, compile, shell syntax/ShellCheck, checklist parser와 `git diff --check`를 통과했다. 관련 logger 변경은 다음 정상 재기동부터 반영한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-07-29` postclose -> `2026-07-30`)
 
@@ -177,6 +183,20 @@
   - 판정 기준: trigger decision summary의 total_steps=`16`, run_count=`15`, skip_count=`1`, source_missing_count=`5`, force_override_count=`0`, run_steps_sample=`lifecycle_window_rolling5d, lifecycle_window_rolling10d, lifecycle_window_mtd, pattern_lab_currentness_audit, pattern_lab_ai_review`, skip_steps_sample=`scalp_sim_ai_deferred_review`, top_reasons=`upstream_drift_signal:9, output_missing_or_unreadable:8, source_missing_or_unreadable:5, upstream_artifact_newer:5, fresh_outputs_no_trigger:1`를 확인하고 wrapper 로그의 `[SKIP] threshold-cycle postclose ... trigger_decision=skip` marker와 대조한다.
   - 금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
+
+- [x] `[ExactTraceActionOutcomeCalibration0730] WATCHING 점수 smoothing을 exact trace 누적 action/outcome 보정기로 교체하고 OFI 귀속 계약 보완` (`Due: 2026-07-30`, `Slot: POSTCLOSE`, `TimeWindow: 15:30~17:00`, `Track: ScalpingLogic`)
+  - Source: [ai_action_outcome_calibration.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_action_outcome_calibration.py), [ai_decision_action_outcome_calibration_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-07-30.json), [ai_decision_quality.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 구현 판정: legacy WATCHING numeric-score EMA의 live score 소비와 `report_only` projection REST/AI 재호출을 제거했다. state-change refresh는 독립 explicit enable일 때만 동작한다. 새 postclose 원장은 clean baseline 이후 exact trace를 candidate version별로 dedupe하고 첫 mature row부터 raw/final action, MFE/MAE/first-hit, source-quality-adjusted EV를 cumulative 갱신한다.
+  - OFI 보완: `entry_price`의 `SKIP→USE_DEFENSIVE`와 `holding_flow`의 `EXIT→HOLD`, `HOLD/TRIM→EXIT`에 exact trace/snapshot, raw/final action, regime/source-age, runtime-effect 계약을 기록한다. 보유 AI 호출 전 계산한 OFI state 재사용 시 빠지던 `usable/regime/age` provenance를 복구했다. 1건은 learning ledger를 즉시 갱신하지만 runtime authority 확대나 hard-safety 우회 근거가 아니다.
+  - 현재 증거: 기존 PID의 7/30 holding OFI 이벤트 `60`건은 모두 `NO_CHANGE`이고 exact trace/snapshot/contract provenance가 `0`건이어서 새 OFI outcome cohort에서는 `exact_decision_trace_missing` 제외 증거로 보존했다. 새 코드 반영 후 첫 자연 action 개입부터 same-trace mature outcome을 누적한다.
+  - 금지: 1건 또는 score smoothing 결과만으로 BUY/EXIT action, threshold, provider/model, 가격/수량/cap, broker/hard-safety, bot 상태를 자동 변경하지 않는다.
+  - 검증: exact cumulative/OFI unit·runtime regression과 wrapper 검증을 수행하고, 최종 review finding `0`, compile, Ruff/Black, shell syntax, parser, `git diff --check`로 닫는다.
+
+- [ ] `[ExactTraceOfiFirstNaturalAttribution0731] 새 PID 첫 OFI action 개입의 exact trace·outcome 누적 귀속 확인` (`Due: 2026-07-31`, `Slot: INTRADAY`, `TimeWindow: 08:00~15:20`, `Track: ScalpingLogic`)
+  - Source: [ai_decision_action_outcome_calibration_2026-07-30.json](/home/ubuntu/KORStockScan/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-07-30.json), [pipeline_events_2026-07-31.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-31.jsonl)
+  - 판정 기준: 자연 `entry_ai_price_ofi_skip_demoted` 또는 `holding_flow_ofi_smoothing_applied`에서 `ai_decision_trace_id`, `ai_input_snapshot_id`, usable regime/age, raw/final action, metric contract가 모두 기록되고, outcome 성숙 후 `ofi_exact_trace_action_outcome_calibration_v1`에 중복 없이 1건부터 반영되는지 확인한다.
+  - 금지: 인위적 주문·합성 holding·provider route 변경·hard safety 완화로 표본을 만들지 않는다.
+  - 다음 액션: `first_exact_ofi_outcome_attributed`, `natural_sample_not_yet_observed`, `trace_or_snapshot_gap`, `outcome_pending`, `source_quality_excluded` 중 하나로 닫는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
