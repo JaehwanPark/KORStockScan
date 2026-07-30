@@ -8,8 +8,10 @@ compact 20-minute line chart from completed one-minute closes.
 
 The current-price query and previous-price delta refresh every 10 seconds;
 the trend and chart remain based on completed one-minute candles. During the
-NXT aftermarket (`15:40~20:00 KST`), the endpoint requests `005930_NX` for
-both the quote and minute chart and the widget status line shows `NXT`.
+NXT premarket (`08:00~08:50 KST`), the endpoint requests `005930_NX` for both
+the quote and minute chart, attributes it to `PREMARKET_KRX_LIKE`, and the
+widget status line shows `PRE`. During the NXT aftermarket
+(`15:40~20:00 KST`), it uses the same NXT request code and shows `NXT`.
 
 It calls the KORStockScan AWS endpoint, not Kiwoom directly. The AWS endpoint
 uses only the existing `data/runtime/kiwoom_token_cache.json` shared cache and
@@ -57,20 +59,23 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
 
 ## Official Kiwoom reference gate
 
-- Retrieved: `2026-07-28T16:10:00+09:00`
+- Retrieved: `2026-07-31T08:25:53+09:00`
 - Upstream: `Kiwoom-Securities/Kiwoom-REST-API`
-  `1504d45fa145eb11fdd662a08aa9d873eee55849`
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
 - Inspected: `kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`,
-  `examples/OAuth 인증/접근토큰발급/create_access_token.py`, `kiwoom/core/auth.py`,
-  `kiwoom/specs.py`, and the local `docs/kiwoom-api-data-contract.md`.
+  `examples/국내주식/차트/get_domestic_stock_minute_chart.py`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/core/client.py`,
+  `postman/kiwoom-openapi.postman_collection.json`, and the local
+  `docs/kiwoom-api-data-contract.md`.
 - Contract used: real `https://api.kiwoom.com`, `POST /api/dostk/stkinfo`,
   `authorization: Bearer ...`, `api-id: ka10001`, body `{"stk_cd":"005930"}`;
   quote value `cur_prc`.
 
 The endpoint uses `ka10001.low_pric` for today's low and `ka10080` with
 `tic_scope: "1"` for the three completed one-minute closes. Both official
-request contracts accept `005930_NX` for NXT, while KRX uses `005930`; the
-response exposes `market_venue`, `market_session`, and `quote_request_code`
-for display provenance. The widget endpoint deliberately does not implement
-REST/WebSocket auth, REG/REMOVE, recovery, continuation, order, account, or
-bot lifecycle flows.
+request contracts accept `005930_NX` for NXT, while KRX uses `005930`.
+`08:00~08:50 KST` NXT responses retain the project cohort
+`PREMARKET_KRX_LIKE`; the response exposes `market_venue`, `market_session`,
+and `quote_request_code` for display provenance. The widget endpoint
+deliberately does not implement REST/WebSocket auth, REG/REMOVE, recovery,
+continuation, order, account, or bot lifecycle flows.

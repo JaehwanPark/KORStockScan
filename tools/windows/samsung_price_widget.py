@@ -102,7 +102,7 @@ def parse_quote_payload(payload: object) -> Quote:
     if trend not in {"up", "down", "flat", "unavailable"}:
         raise ValueError("invalid_minute_trend")
     market_venue = str(payload.get("market_venue") or "KRX").strip().upper()
-    if market_venue not in {"KRX", "NXT"}:
+    if market_venue not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
         raise ValueError("invalid_market_venue")
     market_session = str(payload.get("market_session") or "unknown").strip()
     raw_chart = payload.get("minute_chart", [])
@@ -278,10 +278,15 @@ class SamsungPriceWidget:
             color = "#ff6b6b" if delta > 0 else "#5ca9ff" if delta < 0 else "#aab7c8"
             sign = "+" if delta > 0 else ""
             self.delta_label.configure(text=f"직전: {sign}{delta:,}원", fg=color)
+        venue_label = {
+            "KRX": "KRX",
+            "NXT": "NXT",
+            "PREMARKET_KRX_LIKE": "PRE",
+        }[quote.market_venue]
         self.status_label.configure(
             text=(
                 f"갱신 {datetime.now().strftime('%H:%M:%S')} · "
-                f"{quote.market_venue} · AWS 공유 토큰"
+                f"{venue_label} · AWS 공유 토큰"
             ),
             fg="#8fa2b7",
         )

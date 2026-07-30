@@ -64,6 +64,24 @@ def test_widget_payload_parser_preserves_nxt_venue():
     assert quote.market_session == "nxt_aftermarket"
 
 
+def test_widget_payload_parser_preserves_premarket_venue():
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 221500,
+            "day_low_delta": 3000,
+            "day_low_delta_pct": 1.37,
+            "minute_trend": "up",
+            "minute_chart": [],
+            "market_venue": "PREMARKET_KRX_LIKE",
+            "market_session": "krx_like_premarket",
+        }
+    )
+
+    assert quote.market_venue == "PREMARKET_KRX_LIKE"
+    assert quote.market_session == "krx_like_premarket"
+
+
 @pytest.mark.parametrize(
     "payload",
     [

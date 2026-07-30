@@ -29,6 +29,8 @@ _SAMSUNG_NAME = "삼성전자"
 _REQUEST_TIMEOUT_SEC = 5
 _MINUTE_TREND_BAR_COUNT = 3
 _MINUTE_CHART_BAR_COUNT = 20
+_NXT_PREMARKET_START = datetime_time(hour=8)
+_NXT_PREMARKET_END = datetime_time(hour=8, minute=50)
 _NXT_AFTERMARKET_START = datetime_time(hour=15, minute=40)
 _NXT_AFTERMARKET_END = datetime_time(hour=20)
 
@@ -55,6 +57,12 @@ def _quote_route_for_observed_at(observed_at: datetime) -> tuple[str, str, str]:
         else observed_at.astimezone(ZoneInfo("Asia/Seoul"))
     )
     clock = normalized.time()
+    if _NXT_PREMARKET_START <= clock < _NXT_PREMARKET_END:
+        return (
+            f"{_SAMSUNG_CODE}_NX",
+            "PREMARKET_KRX_LIKE",
+            "krx_like_premarket",
+        )
     if _NXT_AFTERMARKET_START <= clock < _NXT_AFTERMARKET_END:
         return f"{_SAMSUNG_CODE}_NX", "NXT", "nxt_aftermarket"
     return _SAMSUNG_CODE, "KRX", "krx_or_closed"
