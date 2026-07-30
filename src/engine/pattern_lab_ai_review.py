@@ -2010,6 +2010,144 @@ def _implementation_marker_for_conclusion(
     order_prefix = f"order_{REPORT_TYPE}_"
     if normalized_review_id.startswith(order_prefix):
         normalized_review_id = normalized_review_id[len(order_prefix) :]
+    if normalized_review_id == "scalp_entry_adm_sample_floor_below":
+        source_summary = _source_summary(context, "scalping_pattern_lab_automation")
+        contracts = (
+            source_summary.get("source_quality_contracts")
+            if isinstance(source_summary.get("source_quality_contracts"), dict)
+            else {}
+        )
+        contract = (
+            contracts.get("scalp_entry_adm")
+            if isinstance(contracts.get("scalp_entry_adm"), dict)
+            else {}
+        )
+        sample_count = _safe_int(contract.get("sample_count"), 0)
+        sample_floor = _safe_int(contract.get("sample_floor"), 0)
+        blocked_reasons = (
+            contract.get("blocked_reasons")
+            if isinstance(contract.get("blocked_reasons"), list)
+            else []
+        )
+        if (
+            contract.get("source_contract_status") == "implemented"
+            and sample_floor > 0
+            and sample_count < sample_floor
+            and "joined_sample_below_sample_floor" in blocked_reasons
+        ):
+            return (
+                "implemented_but_waiting_sample",
+                {
+                    "implementation_type": (
+                        "pattern_lab_scalp_entry_adm_sample_floor_provenance"
+                    ),
+                    "implemented_scope": (
+                        "The Pattern Lab AI review workorder now preserves the ADM source "
+                        "contract, observed joined sample, sample floor, and deterministic "
+                        "block reason as source-only provenance."
+                    ),
+                    "source_report_type": "scalping_pattern_lab_automation",
+                    "review_id": review_id,
+                    "normalized_review_id": normalized_review_id,
+                    "source_contract_id": contract.get("contract_id"),
+                    "source_contract_version": contract.get("source_contract_version"),
+                    "source_contract_status": contract.get("source_contract_status"),
+                    "sample_count": sample_count,
+                    "sample_floor": sample_floor,
+                    "sample_floor_status": contract.get("sample_floor_status"),
+                    "blocked_reasons": blocked_reasons,
+                    "metric_role": contract.get("metric_role"),
+                    "primary_decision_metric": contract.get("primary_decision_metric"),
+                    "source_quality_gate": contract.get("source_quality_gate"),
+                    "window_policy": contract.get("window_policy"),
+                    "decision_authority": "pattern_lab_ai_review_source_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "requires_separate_runtime_apply_candidate": True,
+                    "runtime_mutation_allowed": False,
+                    "forbidden_uses": FORBIDDEN_USES,
+                    "source_paths": conclusion.get("source_paths") or [],
+                    "root_cause_closure_status_hint": (
+                        "handoff_closed_root_cause_open"
+                    ),
+                },
+            )
+    if normalized_review_id == "sim_auto_nonpositive_ev_present":
+        source_summary = _source_summary(context, "lifecycle_bucket_discovery")
+        nested_summary = _nested_report_summary(source_summary)
+        nonpositive = (
+            nested_summary.get("sim_auto_nonpositive_ev_top")
+            if isinstance(nested_summary.get("sim_auto_nonpositive_ev_top"), list)
+            else []
+        )
+        candidate_rows = [
+            {
+                "bucket_id": item.get("bucket_id"),
+                "classification_state": item.get("classification_state"),
+                "stage": item.get("stage"),
+                "bucket_type": item.get("bucket_type"),
+                "source_quality_adjusted_ev_pct": item.get(
+                    "source_quality_adjusted_ev_pct"
+                ),
+                "joined_sample": item.get("joined_sample"),
+                "sample": item.get("sample"),
+            }
+            for item in nonpositive
+            if isinstance(item, dict)
+            and item.get("classification_state") == "sim_auto_approved"
+            and isinstance(item.get("source_quality_adjusted_ev_pct"), (int, float))
+            and float(item.get("source_quality_adjusted_ev_pct")) <= 0.0
+        ]
+        if (
+            _safe_int(nested_summary.get("sim_auto_nonpositive_ev_count"), 0) > 0
+            and candidate_rows
+        ):
+            return (
+                "implemented",
+                {
+                    "implementation_type": (
+                        "pattern_lab_sim_auto_nonpositive_ev_provenance"
+                    ),
+                    "implemented_scope": (
+                        "The Pattern Lab AI review workorder now preserves the exact "
+                        "sim-auto bucket ids, source-quality-adjusted EV, stage, and "
+                        "sample provenance while keeping runtime application forbidden."
+                    ),
+                    "source_report_type": "lifecycle_bucket_discovery",
+                    "review_id": review_id,
+                    "normalized_review_id": normalized_review_id,
+                    "sim_auto_approved_count": _safe_int(
+                        nested_summary.get("sim_auto_approved_count"), 0
+                    ),
+                    "sim_auto_positive_ev_count": _safe_int(
+                        nested_summary.get("sim_auto_positive_ev_count"), 0
+                    ),
+                    "sim_auto_nonpositive_ev_count": _safe_int(
+                        nested_summary.get("sim_auto_nonpositive_ev_count"), 0
+                    ),
+                    "candidate_rows": candidate_rows,
+                    "metric_role": "sim_auto_nonpositive_ev_source_audit",
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": (
+                        "lifecycle_bucket_discovery_source_quality_valid"
+                    ),
+                    "window_policy": "current_postclose_discovery_summary",
+                    "decision_authority": "pattern_lab_ai_review_source_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "requires_separate_runtime_apply_candidate": True,
+                    "runtime_mutation_allowed": False,
+                    "forbidden_uses": FORBIDDEN_USES,
+                    "source_paths": conclusion.get("source_paths") or [],
+                    "root_cause_closure_status_hint": (
+                        "handoff_closed_root_cause_open"
+                    ),
+                },
+            )
     if review_id == "code_improvement_workorder_duplicate_orders":
         source_summary = _source_summary(context, "code_improvement_workorder")
         nested_summary = _nested_report_summary(source_summary)

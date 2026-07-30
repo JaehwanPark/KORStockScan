@@ -3339,6 +3339,130 @@ def test_pattern_lab_ai_review_keeps_sample_warning_followup_visible():
         assert provenance["allowed_runtime_apply"] is False
 
 
+def test_pattern_lab_ai_review_marks_adm_sample_floor_provenance_implemented():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "scalp_entry_adm_sample_floor_below",
+            "final_state": "source_quality_gap",
+            "final_decision": "block_runtime_use",
+            "source_paths": ["/tmp/scalping_pattern_lab_automation.json"],
+        },
+        {
+            "sources": {
+                "scalping_pattern_lab_automation": {
+                    "summary": {
+                        "source_quality_contracts": {
+                            "scalp_entry_adm": {
+                                "contract_id": "adm_contract",
+                                "source_contract_version": "adm_contract_v1",
+                                "source_contract_status": "implemented",
+                                "sample_count": 2,
+                                "sample_floor": 20,
+                                "sample_floor_status": "hold_sample",
+                                "blocked_reasons": ["joined_sample_below_sample_floor"],
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert status == "implemented_but_waiting_sample"
+    assert provenance["sample_count"] == 2
+    assert provenance["sample_floor"] == 20
+    assert provenance["runtime_effect"] is False
+    assert provenance["allowed_runtime_apply"] is False
+    assert provenance["root_cause_closure_status_hint"] == (
+        "handoff_closed_root_cause_open"
+    )
+
+
+def test_pattern_lab_ai_review_marks_nonpositive_sim_auto_provenance_implemented():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "sim_auto_nonpositive_ev_present",
+            "final_state": "source_quality_gap",
+            "final_decision": "block_runtime_use",
+            "source_paths": ["/tmp/lifecycle_bucket_discovery.json"],
+        },
+        {
+            "sources": {
+                "lifecycle_bucket_discovery": {
+                    "summary": {
+                        "summary": {
+                            "sim_auto_approved_count": 1,
+                            "sim_auto_positive_ev_count": 0,
+                            "sim_auto_nonpositive_ev_count": 1,
+                            "sim_auto_nonpositive_ev_top": [
+                                {
+                                    "bucket_id": (
+                                        "scale_in:stage_policy:"
+                                        "scale_in_weighted_adm_v1"
+                                    ),
+                                    "classification_state": "sim_auto_approved",
+                                    "stage": "scale_in",
+                                    "bucket_type": "stage_policy",
+                                    "source_quality_adjusted_ev_pct": -0.4302,
+                                    "joined_sample": 71,
+                                    "sample": 71,
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert status == "implemented"
+    assert provenance["sim_auto_nonpositive_ev_count"] == 1
+    assert provenance["candidate_rows"] == [
+        {
+            "bucket_id": "scale_in:stage_policy:scale_in_weighted_adm_v1",
+            "classification_state": "sim_auto_approved",
+            "stage": "scale_in",
+            "bucket_type": "stage_policy",
+            "source_quality_adjusted_ev_pct": -0.4302,
+            "joined_sample": 71,
+            "sample": 71,
+        }
+    ]
+    assert provenance["runtime_effect"] is False
+    assert provenance["allowed_runtime_apply"] is False
+
+
+def test_pattern_lab_ai_review_does_not_mark_positive_sim_auto_as_nonpositive():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "sim_auto_nonpositive_ev_present",
+            "final_state": "source_quality_gap",
+            "final_decision": "block_runtime_use",
+        },
+        {
+            "sources": {
+                "lifecycle_bucket_discovery": {
+                    "summary": {
+                        "summary": {
+                            "sim_auto_nonpositive_ev_count": 1,
+                            "sim_auto_nonpositive_ev_top": [
+                                {
+                                    "bucket_id": "positive_bucket",
+                                    "classification_state": "sim_auto_approved",
+                                    "source_quality_adjusted_ev_pct": 0.1,
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    assert status is None
+    assert provenance is None
+
+
 def test_pattern_lab_ai_review_refreshes_late_bound_sources_without_provider_call(
     tmp_path,
     monkeypatch,

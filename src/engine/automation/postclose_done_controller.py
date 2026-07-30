@@ -57,6 +57,7 @@ DONE_ACCEPTABLE_WARNING_ISSUES = {
     "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
     "lifecycle_complete_flow_absent_workorder_handoff",
     "lifecycle_join_contract_blocked_workorder_handoff",
+    "limit_down_watch_ordered_path_not_observed",
     "swing_active_arm_priority_preopen_handoff_pending",
     "swing_active_arm_priority_runtime_observation_missing",
     "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked",
@@ -479,7 +480,8 @@ def _build_codex_runner_action(target_date: str) -> RecoveryAction:
 
 
 def _verification_artifacts_passable(verification: dict[str, Any]) -> bool:
-    if verification.get("missing_required_artifacts"):
+    missing_required = verification.get("missing_required_artifacts")
+    if missing_required:
         return False
     if verification.get("missing_downstream_links"):
         return False
@@ -489,6 +491,8 @@ def _verification_artifacts_passable(verification: dict[str, Any]) -> bool:
     for item in artifact_status:
         if not isinstance(item, dict) or not item.get("label") or "exists" not in item:
             return False
+        if isinstance(missing_required, list):
+            continue
         if (
             item.get("exists") is False
             and item.get("label") in OPTIONAL_MISSING_ARTIFACT_LABELS
@@ -500,6 +504,9 @@ def _verification_artifacts_passable(verification: dict[str, Any]) -> bool:
 
 
 def _has_invalid_artifact_status(verification: dict[str, Any]) -> bool:
+    missing_required = verification.get("missing_required_artifacts")
+    if isinstance(missing_required, list):
+        return bool(missing_required)
     artifact_status = verification.get("artifact_status") or []
     if not isinstance(artifact_status, list):
         return True

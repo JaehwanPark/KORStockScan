@@ -75,7 +75,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "scalping_feature_packet.py",
     "scalping_pattern_lab_automation.py",
     "sentinel_event_cache.py",
-    "server_report_comparison.py",
     "signal_radar.py",
     "sniper_analysis.py",
     "sniper_condition_handlers.py",

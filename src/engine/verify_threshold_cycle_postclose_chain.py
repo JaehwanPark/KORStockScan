@@ -5525,6 +5525,7 @@ def build_threshold_cycle_postclose_verification(
             if "lifecycle_decision_matrix" in disabled_stage_flags
             else ""
         ),
+        ("swing_daily_simulation" if "swing_lifecycle" in disabled_stage_flags else ""),
         ("swing_lifecycle_audit" if "swing_lifecycle" in disabled_stage_flags else ""),
         (
             "swing_strategy_discovery_sim"

@@ -16,6 +16,9 @@ FAMILY = "scalping_avg_down_recovery_quality_gate"
 STAGE = "scale_in"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 CLEAN_BASELINE_DATE = "2026-06-04"
+CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
+RUNTIME_PROMOTION_SHALLOW_SAMPLE_FLOOR = 10
+RUNTIME_PROMOTION_DEEP_SAMPLE_FLOOR = 5
 FORBIDDEN_USES = [
     "intraday_threshold_mutation",
     "hard_safety_relaxation",
@@ -471,8 +474,21 @@ def build_report(
     deep_metrics = _row_summary(deep_primary)
     daily_shallow_metrics = _row_summary(daily_shallow_primary)
     daily_deep_metrics = _row_summary(daily_deep_primary)
+    cumulative_primary_sample_count = (
+        shallow_metrics["sample_count"] + deep_metrics["sample_count"]
+    )
+    target_date_primary_contribution_count = (
+        daily_shallow_metrics["sample_count"] + daily_deep_metrics["sample_count"]
+    )
+    cumulative_learning_ready = (
+        cumulative_primary_sample_count >= CUMULATIVE_LEARNING_SAMPLE_FLOOR
+    )
+    cumulative_learning_includes_target_date = (
+        target_date_primary_contribution_count > 0
+    )
     sample_floor_met = (
-        shallow_metrics["sample_count"] >= 10 and deep_metrics["sample_count"] >= 5
+        shallow_metrics["sample_count"] >= RUNTIME_PROMOTION_SHALLOW_SAMPLE_FLOOR
+        and deep_metrics["sample_count"] >= RUNTIME_PROMOTION_DEEP_SAMPLE_FLOOR
     )
     target_hit_edge_ok = (
         shallow_metrics["hit03_rate"] >= 0.25 and deep_metrics["hit03_rate"] >= 0.50
@@ -517,7 +533,15 @@ def build_report(
         "decision_authority": "postclose_calibration_candidate_preopen_only",
         "window_policy": "rolling_clean_baseline_pipeline_events",
         "clean_baseline_date": CLEAN_BASELINE_DATE,
-        "sample_floor": "rolling_shallow_primary>=10 and rolling_deep_primary>=5",
+        "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+        "learning_update_policy": (
+            "one_mature_primary_row_updates_cumulative_judgment_quality"
+        ),
+        "sample_floor": ("rolling_shallow_primary>=10 and rolling_deep_primary>=5"),
+        "runtime_promotion_sample_floor": {
+            "rolling_shallow_primary": RUNTIME_PROMOTION_SHALLOW_SAMPLE_FLOOR,
+            "rolling_deep_primary": RUNTIME_PROMOTION_DEEP_SAMPLE_FLOOR,
+        },
         "primary_decision_metric": (
             "rolling_post_add_equal_weight_avg_profit_pct_with_mfe_mae_and_hit03_guard"
         ),
@@ -532,7 +556,12 @@ def build_report(
         "calibration_state": state,
         "calibration_reason": calibration_reason,
         "threshold_version": f"{FAMILY}:{target_date}:v1",
-        "sample_count": shallow_metrics["sample_count"] + deep_metrics["sample_count"],
+        "sample_count": cumulative_primary_sample_count,
+        "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+        "learning_sample_floor_passed": cumulative_learning_ready,
+        "cumulative_learning_includes_target_date": (
+            cumulative_learning_includes_target_date
+        ),
         "sample_floor": "rolling_shallow_primary>=10 and rolling_deep_primary>=5",
         "sample_floor_passed": bool(sample_floor_met),
         "allowed_runtime_apply": state == "adjust_up",
@@ -546,6 +575,26 @@ def build_report(
         "source_event_paths": [str(path) for path in window_paths],
         "metric_contract": metric_contract,
         "source_metrics": {
+            "cumulative_judgment_quality": {
+                "status": (
+                    "includes_target_date_primary_rows"
+                    if cumulative_learning_includes_target_date
+                    else (
+                        "reused_existing_cumulative"
+                        if cumulative_learning_ready
+                        else "no_mature_primary_sample"
+                    )
+                ),
+                "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
+                "learning_sample_floor_passed": cumulative_learning_ready,
+                "target_date_primary_contribution_count": (
+                    target_date_primary_contribution_count
+                ),
+                "cumulative_primary_sample_count": cumulative_primary_sample_count,
+                "applied_to_calibration_decision": cumulative_learning_ready,
+                "runtime_promotion_authority": False,
+                "runtime_promotion_sample_floor_passed": bool(sample_floor_met),
+            },
             "shallow_primary": shallow_metrics,
             "rolling_shallow_primary": shallow_metrics,
             "shallow_observation_extension_post_add": _row_summary(shallow_observation),
@@ -620,6 +669,7 @@ def write_outputs(
         f"- allowed_runtime_apply: `{str(candidate.get('allowed_runtime_apply')).lower()}`",
         "- runtime_effect: `false`",
         f"- window_policy: `{(candidate.get('metric_contract') or {}).get('window_policy')}`",
+        f"- cumulative_judgment_quality: `{metrics.get('cumulative_judgment_quality')}`",
         f"- shallow_primary: `{metrics.get('shallow_primary')}`",
         f"- daily_shallow_primary: `{metrics.get('daily_shallow_primary')}`",
         f"- shallow_observation_extension_post_add: `{metrics.get('shallow_observation_extension_post_add')}`",

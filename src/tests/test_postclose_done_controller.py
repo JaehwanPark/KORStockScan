@@ -1823,6 +1823,29 @@ def test_postclose_done_controller_accepts_done_marker_with_known_warning(
     )
 
 
+def test_disabled_artifact_inventory_does_not_trigger_wrapper_rerun():
+    verification = {
+        "missing_required_artifacts": [],
+        "artifact_status": [
+            {
+                "label": "swing_daily_simulation",
+                "exists": False,
+                "json_valid": False,
+            }
+        ],
+    }
+
+    assert mod._verification_artifacts_passable(verification) is True
+    assert mod._has_invalid_artifact_status(verification) is False
+
+
+def test_limit_down_no_observation_is_done_acceptable_warning():
+    assert (
+        "limit_down_watch_ordered_path_not_observed"
+        in mod.DONE_ACCEPTABLE_WARNING_ISSUES
+    )
+
+
 def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_required(
     monkeypatch, tmp_path
 ):

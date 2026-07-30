@@ -151,6 +151,44 @@ def test_scalping_avg_down_recovery_calibration_uses_rolling_window_for_apply(
     assert candidate["source_event_dates"] == ["2026-07-09", "2026-07-10"]
 
 
+def test_scalping_avg_down_recovery_calibration_updates_cumulative_learning_from_one_row(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    _write_good_samples(
+        events_dir / "pipeline_events_2026-07-10.jsonl",
+        "2026-07-10",
+        shallow_count=1,
+        deep_count=0,
+    )
+
+    report = mod.build_report("2026-07-10")
+    candidate = report["calibration_candidates"][0]
+    quality = candidate["source_metrics"]["cumulative_judgment_quality"]
+
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["learning_sample_floor"] == 1
+    assert candidate["learning_sample_floor_passed"] is True
+    assert candidate["cumulative_learning_includes_target_date"] is True
+    assert quality == {
+        "status": "includes_target_date_primary_rows",
+        "learning_sample_floor": 1,
+        "learning_sample_floor_passed": True,
+        "target_date_primary_contribution_count": 1,
+        "cumulative_primary_sample_count": 1,
+        "applied_to_calibration_decision": True,
+        "runtime_promotion_authority": False,
+        "runtime_promotion_sample_floor_passed": False,
+    }
+    assert candidate["metric_contract"]["runtime_promotion_sample_floor"] == {
+        "rolling_shallow_primary": 10,
+        "rolling_deep_primary": 5,
+    }
+
+
 def test_scalping_avg_down_recovery_calibration_requires_positive_final_ev(
     tmp_path, monkeypatch
 ):

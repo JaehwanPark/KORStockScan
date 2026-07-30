@@ -5280,6 +5280,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "swing_lifecycle_bucket_discovery",
         "deepseek_swing_lab",
     }
+    assert "swing_daily_simulation" not in pending_report["missing_required_artifacts"]
     assert "swing_lifecycle_audit" not in pending_report["missing_required_artifacts"]
     assert (
         "swing_lifecycle_handoff_missing"
