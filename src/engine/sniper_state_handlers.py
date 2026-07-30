@@ -48019,10 +48019,6 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
         else ""
     )
     if handoff_generation:
-        _mutate_stock_state(
-            stock,
-            pop_fields=["_opening_rotation_general_entry_handoff_once_generation_id"],
-        )
         if handoff_generation == runtime_generation_id:
             runtime.update(
                 {
@@ -48037,6 +48033,15 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 }
             )
             return False
+        # The marker owns the whole scanner generation, not only the immediate
+        # async-COMMIT callback.  Retaining it prevents later bounded rechecks
+        # from returning the same generation to Opening Rotation after the
+        # general entry owner already accepted the handoff.  A genuinely new
+        # generation clears the stale marker and may evaluate the strategy.
+        _mutate_stock_state(
+            stock,
+            pop_fields=["_opening_rotation_general_entry_handoff_once_generation_id"],
+        )
     entry_config = _opening_rotation_entry_config()
     source_signature = stock.get("source_signature") or stock.get(
         "scanner_source_signature"

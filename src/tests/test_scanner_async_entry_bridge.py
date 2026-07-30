@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -1170,11 +1171,66 @@ def test_opening_rotation_handoff_marker_bypasses_same_generation_re_evaluation(
         runtime,
         {"MIN_SCALP_LIQUIDITY": 500_000_000},
     )
-    assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
+    assert (
+        stock["_opening_rotation_general_entry_handoff_once_generation_id"]
+        == generation.generation_id
+    )
     assert runtime["opening_rotation_entry_owner_handoff"] is True
     assert runtime["opening_rotation_entry_owner_handoff_reason"] == (
         "pullback_not_observed"
     )
+    runtime.pop("opening_rotation_entry_owner_handoff", None)
+    assert not handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 1002},
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+    assert (
+        stock["_opening_rotation_general_entry_handoff_once_generation_id"]
+        == generation.generation_id
+    )
+    assert runtime["opening_rotation_entry_owner_handoff"] is True
+
+
+def test_opening_rotation_handoff_marker_clears_for_new_generation(monkeypatch):
+    prior_generation = _generation("KRX")
+    next_generation = replace(
+        prior_generation,
+        revision=prior_generation.revision + 1,
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "_opening_rotation_general_entry_handoff_once_generation_id": (
+            prior_generation.generation_id
+        ),
+        "opening_rotation_entry_owner_handoff_reason": "pullback_not_observed",
+    }
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": time.time(),
+        "now_dt": datetime.now(),
+        "scanner_async_generation": next_generation,
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_opening_rotation_context",
+        lambda *_a, **_k: {
+            "status": "blocked",
+            "reason": "async_context_commit_rejected",
+        },
+    )
+
+    handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 1001},
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+    assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
 
 
 def test_async_opening_rotation_defers_reentry_hydration_until_submit(monkeypatch):
