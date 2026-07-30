@@ -471,6 +471,23 @@ def _limit_down_readiness(**overrides):
     return payload
 
 
+def _limit_down_metric_contract():
+    return {
+        "metric_role": "diagnostic",
+        "window_policy": "same_symbol_same_krx_session_ordered_raw_tick",
+        "sample_floor": "not_applicable_source_observation",
+        "primary_decision_metric": "ordered_intraday_path_capture_rate",
+        "source_quality_gate": (
+            "official_ka10017_and_completed_ka10081_db_close_match"
+        ),
+        "forbidden_uses": (
+            "real_order,buy_analysis,threshold_change,provider_route_change,"
+            "order_price_or_quantity_change,cap_change,broker_guard_change,"
+            "bot_restart_authority"
+        ),
+    }
+
+
 def test_artifact_paths_include_limit_down_watch():
     paths = mod._artifact_paths("2026-07-30")
 
@@ -521,6 +538,7 @@ def test_limit_down_watch_report_status_passes_source_only_contract():
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
             "generated_at": "2026-07-30T20:10:00+09:00",
+            **_limit_down_metric_contract(),
             "status": "pass",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -546,6 +564,7 @@ def test_limit_down_watch_report_status_fails_authority_leak():
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
             "generated_at": "2026-07-30T20:10:00+09:00",
+            **_limit_down_metric_contract(),
             "status": "pass",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -574,6 +593,7 @@ def test_limit_down_watch_report_status_warns_without_ordered_path():
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
             "generated_at": "2026-07-30T20:10:00+09:00",
+            **_limit_down_metric_contract(),
             "status": "no_observation",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -598,6 +618,7 @@ def test_limit_down_watch_report_status_fails_stale_candidate_source():
             "report_type": "limit_down_watch",
             "target_date": "2026-07-29",
             "generated_at": "2026-07-30T20:10:00+09:00",
+            **_limit_down_metric_contract(),
             "status": "pass",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -626,6 +647,7 @@ def test_limit_down_watch_report_status_warns_for_blocked_event_source():
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
             "generated_at": "2026-07-30T20:10:00+09:00",
+            **_limit_down_metric_contract(),
             "status": "source_blocked",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -657,6 +679,7 @@ def test_limit_down_watch_report_status_fails_stale_markdown_pair():
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
             "generated_at": "2026-07-30T20:10:00+09:00",
+            **_limit_down_metric_contract(),
             "status": "pass",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,

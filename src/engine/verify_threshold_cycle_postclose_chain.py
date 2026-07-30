@@ -606,7 +606,19 @@ def _limit_down_watch_report_status(
             "schema_version": 1,
             "report_type": "limit_down_watch",
             "target_date": target_date,
+            "metric_role": "diagnostic",
             "decision_authority": "limit_down_source_observation_only",
+            "window_policy": "same_symbol_same_krx_session_ordered_raw_tick",
+            "sample_floor": "not_applicable_source_observation",
+            "primary_decision_metric": "ordered_intraday_path_capture_rate",
+            "source_quality_gate": (
+                "official_ka10017_and_completed_ka10081_db_close_match"
+            ),
+            "forbidden_uses": (
+                "real_order,buy_analysis,threshold_change,provider_route_change,"
+                "order_price_or_quantity_change,cap_change,broker_guard_change,"
+                "bot_restart_authority"
+            ),
             "runtime_effect": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
