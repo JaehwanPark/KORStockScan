@@ -611,6 +611,7 @@ Return JSON only:
 # version override and the runtime fail-closed adapter.
 DECISION_QUALITY_V2_PROMPT_VERSION = "decision_quality_v2_6"
 DECISION_QUALITY_DETAILED_PROMPT_VERSION = "decision_quality_v2_7"
+DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION = "decision_quality_v2_7_probe_v1"
 DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION = "decision_quality_v2_8"
 DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION = "decision_quality_v2_9_anticipatory"
 DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION = (
@@ -973,6 +974,41 @@ Detailed-analysis input contract:
    as independent reasons to return DROP when they are blocking.
 7. {ledger_authority}
 """.strip()
+
+
+_DECISION_QUALITY_V2_7_PROBE_ENTRY_RULES = """
+Bounded early-probe decision rules:
+1. BUY remains a confirmed full-entry classifier result under the existing
+   response contract. This prompt does not relax the BUY semantic floor.
+2. When structural edge is moderate or strong, the setup is continuation,
+   pullback_recovery, or reversal, and the immediate trigger still needs recovery,
+   use EDGE/WAIT with non-blocking adverse risk. This WAIT is an upstream
+   one-share probe intent; it is not permission to submit an order.
+3. Do not use DROP solely because confirmation is incomplete, adverse-first risk
+   is bounded, or a fresh observable spread is wide. Record a wide spread as
+   adverse liquidity and high risk. Use DROP when the risk is blocking, the setup
+   failed, the completed structure is invalidated, or the reward/risk is
+   unfavorable.
+4. Use NO_EDGE/DROP when sufficient exact data shows no positive edge. Use
+   INSUFFICIENT_DATA/WAIT when a required source is missing, stale, conflicted, or
+   venue/session inconsistent. Neither result creates a probe intent.
+5. External submit guards own quote freshness, executable price, spread/depth
+   safety, account, broker, order, cooldown, and quantity checks. Never assume
+   those guards will pass, never choose quantity, and never bypass their veto.
+""".strip()
+
+
+def decision_quality_v2_7_probe_system_prompt(stage: str) -> str:
+    """Return the live V2.7 prompt with bounded WAIT probe intent."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.7 probe prompt supports entry only")
+    return (
+        decision_quality_v2_detailed_system_prompt(normalized, live_entry=True)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_7_PROBE_ENTRY_RULES
+    )
 
 
 _DECISION_QUALITY_V2_8_ENTRY_RULES = """

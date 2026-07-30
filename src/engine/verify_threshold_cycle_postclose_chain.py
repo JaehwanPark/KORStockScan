@@ -213,59 +213,56 @@ def _source_quality_hard_block_status(
     }
 
 
-def _watching_score_smoothing_diagnostic_status(
+def _ai_decision_action_outcome_calibration_status(
     report: dict[str, Any],
 ) -> dict[str, Any]:
     if not isinstance(report, dict) or not report:
         return {
             "status": "missing",
-            "automatic_generation": False,
-            "eligible": False,
-            "transition_status": "missing_artifact",
-            "root_cause_closure_status": "artifact_missing",
+            "contract_errors": ["artifact_missing"],
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
-    transition_guard = (
-        report.get("transition_guard")
-        if isinstance(report.get("transition_guard"), dict)
+    errors: list[str] = []
+    if report.get("schema") != "ai_decision_action_outcome_calibration_v1":
+        errors.append("schema_invalid")
+    for key, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if report.get(key) is not expected:
+            errors.append(f"{key}_contract_invalid")
+    legacy = (
+        report.get("legacy_watching_score_smoothing")
+        if isinstance(report.get("legacy_watching_score_smoothing"), dict)
         else {}
     )
-    automation_chain = (
-        report.get("automation_chain")
-        if isinstance(report.get("automation_chain"), dict)
-        else {}
-    )
-    transition_status = str(transition_guard.get("status") or "unknown")
-    eligible = bool(transition_guard.get("eligible"))
-    if eligible:
-        status = "pass"
-        closure_status = "eligible_for_next_preopen_review"
-    elif transition_status in {
-        "auto_followup_required",
-        "manual_postclose_review_required",
-        "await_required_evidence",
-    }:
-        status = "warning"
-        closure_status = "report_only_followup_open"
-    else:
-        status = "warning"
-        closure_status = "unknown_transition_state"
+    if legacy.get("status") != "retired_from_runtime_authority":
+        errors.append("legacy_watching_score_smoothing_not_retired")
+    if legacy.get("numeric_score_ema_used_for_live_decision") is not False:
+        errors.append("legacy_numeric_score_runtime_consumption_present")
+    for key in (
+        "projection_submitter_removed",
+        "projection_refresh_removed",
+        "runtime_env_family_removed",
+        "runtime_config_surface_removed",
+        "default_postclose_generation_removed",
+    ):
+        if legacy.get(key) is not True:
+            errors.append(f"legacy_{key}_not_closed")
     return {
-        "status": status,
-        "automatic_generation": bool(automation_chain.get("automatic_generation")),
-        "eligible": eligible,
-        "transition_status": transition_status,
-        "applied_candidate_status": transition_guard.get("applied_candidate_status"),
-        "auto_followup_required_criteria": transition_guard.get(
-            "auto_followup_required_criteria"
-        )
-        or [],
-        "manual_review_required_criteria": transition_guard.get(
-            "manual_review_required_criteria"
-        )
-        or [],
-        "root_cause_closure_status": closure_status,
+        "status": "fail" if errors else "pass",
+        "contract_errors": errors,
+        "calibration_status": report.get("status"),
+        "candidate_count": len(report.get("candidate_summaries") or []),
+        "selected_review_candidate": report.get("selected_review_candidate"),
+        "ofi_calibration_status": (
+            (report.get("ofi_action_outcome_calibration") or {}).get("status")
+            if isinstance(report.get("ofi_action_outcome_calibration"), dict)
+            else None
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -753,9 +750,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "observation_source_quality_audit": REPORT_DIR
         / "observation_source_quality_audit"
         / f"observation_source_quality_audit_{target_date}.json",
-        "ai_watching_score_smoothing_diagnostic": REPORT_DIR
-        / "ai_watching_score_smoothing_diagnostic"
-        / f"ai_watching_score_smoothing_diagnostic_{target_date}.json",
+        "ai_decision_action_outcome_calibration": REPORT_DIR
+        / "ai_decision_action_outcome_calibration"
+        / f"ai_decision_action_outcome_calibration_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR
         / "runtime_approval_summary"
         / f"runtime_approval_summary_{target_date}.json",
@@ -4782,8 +4779,8 @@ def build_threshold_cycle_postclose_verification(
     observation_source_quality_audit = _load_json(
         paths["observation_source_quality_audit"]
     )
-    watching_score_smoothing_diagnostic = _load_json(
-        paths["ai_watching_score_smoothing_diagnostic"]
+    ai_decision_action_outcome_calibration = _load_json(
+        paths["ai_decision_action_outcome_calibration"]
     )
     runtime_summary = _load_json(paths["runtime_approval_summary"])
     runtime_apply_gap_audit = _load_json(paths["runtime_apply_gap_audit"])
@@ -4875,11 +4872,13 @@ def build_threshold_cycle_postclose_verification(
         observation_source_quality_audit,
         workorder=workorder,
     )
-    watching_score_smoothing_status = _watching_score_smoothing_diagnostic_status(
-        watching_score_smoothing_diagnostic
+    ai_decision_action_outcome_calibration_status = (
+        _ai_decision_action_outcome_calibration_status(
+            ai_decision_action_outcome_calibration
+        )
     )
-    if watching_score_smoothing_status.get("status") == "warning":
-        handoff_warnings.append("ai_watching_score_smoothing_diagnostic_followup_open")
+    if ai_decision_action_outcome_calibration_status.get("status") == "fail":
+        log_issues.append("ai_decision_action_outcome_calibration_contract_invalid")
     if raw_row_exclusion_handoff.get("status") == "fail":
         log_issues.append("raw_row_exclusion_workorder_handoff_missing")
     entry_bucket_handoff = _entry_bucket_handoff_status(
@@ -5413,12 +5412,12 @@ def build_threshold_cycle_postclose_verification(
         )
     if (
         done_line
-        and "ai_watching_score_smoothing_diagnostic" in execution_flags
-        and "ai_watching_score_smoothing_diagnostic" not in missing_execution_flags
+        and "ai_decision_action_outcome_calibration" in execution_flags
+        and "ai_decision_action_outcome_calibration" not in missing_execution_flags
     ):
         required_execution_flags = (
             *required_execution_flags,
-            "ai_watching_score_smoothing_diagnostic",
+            "ai_decision_action_outcome_calibration",
         )
     if (
         done_line
@@ -5602,8 +5601,8 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("swing_lifecycle_bucket_discovery")
     if execution_flags.get("pattern_lab_ai_review") is not True:
         disabled_artifact_labels.add("pattern_lab_ai_review")
-    if execution_flags.get("ai_watching_score_smoothing_diagnostic") is not True:
-        disabled_artifact_labels.add("ai_watching_score_smoothing_diagnostic")
+    if execution_flags.get("ai_decision_action_outcome_calibration") is not True:
+        disabled_artifact_labels.add("ai_decision_action_outcome_calibration")
     if execution_flags.get("time_window_regime_counterfactual") is not True:
         disabled_artifact_labels.add("time_window_regime_counterfactual")
     if execution_flags.get("producer_gap_discovery") is not True:
@@ -6441,7 +6440,9 @@ def build_threshold_cycle_postclose_verification(
         "clean_baseline_analytics_residue": clean_baseline_analytics_residue,
         "source_quality_hard_block": source_quality_hard_block,
         "raw_row_exclusion_handoff": raw_row_exclusion_handoff,
-        "ai_watching_score_smoothing_diagnostic": watching_score_smoothing_status,
+        "ai_decision_action_outcome_calibration": (
+            ai_decision_action_outcome_calibration_status
+        ),
         "ai_correction": ai_correction,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,

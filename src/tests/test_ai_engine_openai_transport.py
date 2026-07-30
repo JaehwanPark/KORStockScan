@@ -18,9 +18,11 @@ from src.engine.ai_engine_openai import (
 )
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     decision_quality_v2_detailed_system_prompt,
+    decision_quality_v2_7_probe_system_prompt,
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine import bedrock_nova_provider
@@ -2769,6 +2771,124 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
         result["decision_quality_score_semantics"]
         == "confidence_clamped_to_legacy_action_band"
     )
+
+
+def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
+            ),
+        ),
+    )
+
+    prompt, prompt_type, prompt_version, profile = engine._resolve_scalping_prompt(
+        "watching"
+    )
+    assert prompt == decision_quality_v2_7_probe_system_prompt("entry")
+    assert "one-share probe intent" in prompt
+    assert prompt_type == "scalping_entry"
+    assert prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
+    assert profile == "watching"
+
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "EDGE",
+            "action": "WAIT",
+            "expected_upside_pct": 1.5,
+            "expected_downside_pct": -1.0,
+            "confidence": 70,
+            "reason_codes": ["edge_positive", "recovery_trigger_required"],
+            "evidence": {
+                "trend": "mixed",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "reversal",
+                "positive_edge": "moderate",
+                "adverse_risk": "high",
+                "trigger": "recovery_required",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["action"] == "WAIT"
+    assert result["entry_probe_intent"] is True
+    assert result["entry_probe_intent_status"] == "eligible_wait_probe"
+    assert result["entry_probe_intent_submit_guard_required"] is True
+    assert result["entry_probe_intent_actual_order_submitted"] is False
+    assert (
+        result["decision_quality_live_adapter"]
+        == "decision_quality_v2_7_probe_entry_v1"
+    )
+
+
+def test_analyze_target_probe_prompt_keeps_exact_schema_and_version(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
+            ),
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=False,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True,
+        ),
+    )
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["payload"] = json.loads(user_input)
+        captured["schema_name"] = kwargs.get("schema_name")
+        return {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.5,
+            "expected_downside_pct": -1.0,
+            "confidence": 80,
+            "reason_codes": ["edge_absent", "risk_reward_unfavorable"],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "mixed",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "failed",
+            },
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
+    )
+
+    assert captured["prompt"] == decision_quality_v2_7_probe_system_prompt("entry")
+    assert captured["schema_name"] == "decision_quality_v2_7_entry"
+    assert captured["payload"]["exact_payload"]["input_schema"] == "entry_screen_hot_v1"
+    assert result["ai_prompt_version"] == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
+    assert result["ai_input_schema"] == "decision_quality_v2_7_entry_input"
+    assert result["entry_probe_intent"] is False
+    assert result["entry_probe_intent_status"] == "not_eligible"
 
 
 def test_decision_quality_v2_7_semantic_failure_is_fail_closed(monkeypatch):

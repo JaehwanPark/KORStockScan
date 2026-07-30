@@ -2091,6 +2091,68 @@ def test_rising_missed_tp1_support_reversal_lane_requires_two_independent_suppor
     assert one_support.reason == "rising_missed_tp1_lane_not_eligible"
 
 
+def test_rising_missed_tp1_probe_intent_bypasses_only_nonhard_candidate_filters():
+    stock = {"source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"}
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_actual_watch_delta_pct": 0.2,
+        "rising_missed_tp1_effective_quote_age_ms": 250.0,
+        "rising_missed_tp1_spread_ratio": 0.006,
+        "rising_missed_tp1_micro_confidence": 0.2,
+        "rising_missed_tp1_true_ofi_ewma": -0.1,
+        "rising_missed_tp1_pressure_ewma": 45.0,
+        "rising_missed_tp1_depth_imbalance_ewma": -0.2,
+        "rising_missed_tp1_top_depth_ratio": 0.7,
+        "rising_missed_tp1_tick_acceleration_fresh": False,
+        "rising_missed_tp1_micro_vwap_fresh": False,
+        "market_data_signed_tape_state": "mixed",
+    }
+    allowed = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-30",
+        current_date="2026-07-30",
+        current_ai_action="WAIT",
+        current_probe_intent=True,
+    )
+    stale = evaluate_rising_missed_tp1_candidate(
+        stock,
+        {**decision_input, "rising_missed_tp1_effective_quote_age_ms": 3500.0},
+        selector_enabled=True,
+        active_date="2026-07-30",
+        current_date="2026-07-30",
+        current_ai_action="WAIT",
+        current_probe_intent=True,
+    )
+    vetoed = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-30",
+        current_date="2026-07-30",
+        current_ai_action="DROP",
+        current_probe_intent=True,
+    )
+
+    assert allowed.allowed is True
+    assert allowed.lane == "ai_wait_probe_intent"
+    assert allowed.log_fields["rising_missed_tp1_positive_support_min"] == 0
+    assert (
+        allowed.log_fields["rising_missed_tp1_ai_probe_intent_nonhard_filters_bypassed"]
+        is True
+    )
+    assert (
+        allowed.log_fields["rising_missed_tp1_ai_probe_intent_submit_guard_required"]
+        is True
+    )
+    assert stale.allowed is False
+    assert stale.deferred is True
+    assert stale.reason == "tp1_effective_quote_stale"
+    assert vetoed.allowed is False
+    assert vetoed.reason == "rising_missed_tp1_lane_not_eligible"
+
+
 def test_rising_missed_tp1_nxt_price_jump_recovery_is_nxt_only():
     stock = {
         "source_signature": "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
@@ -4956,8 +5018,7 @@ def test_scanner_entry_realtime_latency_excludes_external_first_trade_wait():
     assert fields["attach_to_first_entry_realtime_sec"] == 110.0
     assert fields["first_entry_realtime_to_ai_dispatch_sec"] == 3.5
     assert (
-        fields["scanner_external_wait_excluded_from_post_source_ready_latency"]
-        is True
+        fields["scanner_external_wait_excluded_from_post_source_ready_latency"] is True
     )
     assert fields["scanner_post_source_ready_latency_comparable"] is True
     assert (
@@ -26650,6 +26711,8 @@ def test_entry_ai_price_canary_falls_back_on_guard_block(monkeypatch):
                 "max_wait_sec": 90,
                 "ai_parse_ok": True,
                 "ai_parse_fail": False,
+                "ai_decision_trace_id": "entry-price-trace-1",
+                "ai_input_snapshot_id": "entry-price-snapshot-1",
             }
 
     latency_gate = {
@@ -29004,6 +29067,8 @@ def test_entry_ai_price_skip_logs_bearish_policy_basis(monkeypatch):
                 "max_wait_sec": 90,
                 "ai_parse_ok": True,
                 "ai_parse_fail": False,
+                "ai_decision_trace_id": "entry-price-trace-1",
+                "ai_input_snapshot_id": "entry-price-snapshot-1",
             }
 
     stock = {
@@ -29200,6 +29265,8 @@ def test_entry_ai_price_low_confidence_skip_demotes_to_p1_when_ofi_not_bearish(
                 "max_wait_sec": 90,
                 "ai_parse_ok": True,
                 "ai_parse_fail": False,
+                "ai_decision_trace_id": "entry-price-trace-1",
+                "ai_input_snapshot_id": "entry-price-snapshot-1",
             }
 
     planned_orders = [
@@ -29247,7 +29314,15 @@ def test_entry_ai_price_low_confidence_skip_demotes_to_p1_when_ofi_not_bearish(
     assert latency_gate["ai_entry_price_canary_raw_action"] == "SKIP"
     assert latency_gate["ai_entry_price_canary_final_action"] == "USE_DEFENSIVE"
     assert latency_gate["price_resolution_reason"] == "ai_tier2_skip_demoted_to_p1"
-    assert any(stage == "entry_ai_price_ofi_skip_demoted" for stage, _ in logs)
+    demotion_log = next(
+        fields for stage, fields in logs if stage == "entry_ai_price_ofi_skip_demoted"
+    )
+    assert demotion_log["ai_decision_trace_id"] == "entry-price-trace-1"
+    assert demotion_log["ai_input_snapshot_id"] == "entry-price-snapshot-1"
+    assert demotion_log["runtime_effect"] is True
+    assert demotion_log["sample_floor"] == (
+        "one_mature_exact_trace_updates_cumulative_learning"
+    )
     assert not any(stage == "entry_ai_price_canary_skip_order" for stage, _ in logs)
 
 

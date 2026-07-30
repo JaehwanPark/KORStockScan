@@ -113,6 +113,7 @@ RETIRED_RUNTIME_ENV_KEYS = {
     "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_MIN_MICRO_VWAP_BP",
 }
 REMOVED_RUNTIME_ENV_KEYS = {
+    "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE",
     "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED",
     "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY",
     "KORSTOCKSCAN_SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
@@ -123,6 +124,7 @@ REMOVED_TARGET_ENV_KEYS = {
     key.removeprefix("KORSTOCKSCAN_") for key in REMOVED_RUNTIME_ENV_KEYS
 }
 REMOVED_CALIBRATION_FAMILIES = {
+    "ai_watching_score_smoothing_report_only",
     "position_sizing_cap_release",
 }
 ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
@@ -3778,9 +3780,6 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     "quote_consistency_normalization": [
         "KORSTOCKSCAN_QUOTE_CONSISTENCY_RUNTIME_ENABLED",
     ],
-    "ai_watching_score_smoothing_report_only": [
-        "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE",
-    ],
     "weak_pullback_entry_block_runtime": [
         "KORSTOCKSCAN_SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED",
     ],
@@ -4427,10 +4426,20 @@ def verify_runtime_env_handoff(
 ) -> dict[str, Any]:
     manifest_path = runtime_env_manifest_path(target_date)
     manifest = _load_json(manifest_path) if manifest_path.exists() else {}
-    selected_families = [
+    raw_selected_families = [
         str(item)
         for item in (manifest.get("selected_families") or [])
         if isinstance(item, str) and item.strip()
+    ]
+    removed_selected_families = sorted(
+        family
+        for family in raw_selected_families
+        if family in REMOVED_CALIBRATION_FAMILIES
+    )
+    selected_families = [
+        family
+        for family in raw_selected_families
+        if family not in REMOVED_CALIBRATION_FAMILIES
     ]
     retired_selected_families = sorted(
         family
@@ -4443,10 +4452,13 @@ def verify_runtime_env_handoff(
     retired_manifest_override_keys = sorted(
         key for key in raw_env_overrides if key in RETIRED_RUNTIME_ENV_KEYS
     )
+    removed_manifest_override_keys = sorted(
+        key for key in raw_env_overrides if key in REMOVED_RUNTIME_ENV_KEYS
+    )
     env_overrides = {
         key: value
         for key, value in raw_env_overrides.items()
-        if key not in RETIRED_RUNTIME_ENV_KEYS
+        if key not in RETIRED_RUNTIME_ENV_KEYS and key not in REMOVED_RUNTIME_ENV_KEYS
     }
     operator_override_path = RUNTIME_ENV_DIR / "operator_runtime_overrides.env"
     raw_operator_overrides = _read_shell_export_env(operator_override_path)
@@ -4466,15 +4478,25 @@ def verify_runtime_env_handoff(
             *retired_dated_operator_override_keys,
         }
     )
+    removed_operator_override_keys = sorted(
+        {
+            *(key for key in raw_operator_overrides if key in REMOVED_RUNTIME_ENV_KEYS),
+            *(
+                key
+                for key in raw_dated_operator_overrides
+                if key in REMOVED_RUNTIME_ENV_KEYS
+            ),
+        }
+    )
     operator_overrides = {
         key: value
         for key, value in raw_operator_overrides.items()
-        if key not in RETIRED_RUNTIME_ENV_KEYS
+        if key not in RETIRED_RUNTIME_ENV_KEYS and key not in REMOVED_RUNTIME_ENV_KEYS
     }
     dated_operator_overrides = {
         key: value
         for key, value in raw_dated_operator_overrides.items()
-        if key not in RETIRED_RUNTIME_ENV_KEYS
+        if key not in RETIRED_RUNTIME_ENV_KEYS and key not in REMOVED_RUNTIME_ENV_KEYS
     }
     effective_env_overrides = dict(env_overrides)
     effective_env_overrides.update(operator_overrides)
@@ -4833,6 +4855,9 @@ def verify_runtime_env_handoff(
         "manifest_path": str(manifest_path) if manifest_path.exists() else None,
         "selected_families": selected_families,
         "retired_selected_families_blocked": retired_selected_families,
+        "removed_selected_families_ignored": removed_selected_families,
+        "removed_manifest_override_keys_ignored": removed_manifest_override_keys,
+        "removed_operator_override_keys_ignored": removed_operator_override_keys,
         "passed": passed,
         "findings": findings,
         "missing_family_count": len(missing_families),
@@ -4857,9 +4882,7 @@ def verify_runtime_env_handoff(
             else None
         ),
         "dated_operator_runtime_override_keys": sorted(dated_operator_overrides),
-        "authoritative_ai_context_runtime_env_keys": sorted(
-            authoritative_context_env
-        ),
+        "authoritative_ai_context_runtime_env_keys": sorted(authoritative_context_env),
         "runtime_policy_audits": runtime_policy_audits,
         "runtime_policy_fail_count": sum(
             audit.get("status") == "fail" for audit in runtime_policy_audits

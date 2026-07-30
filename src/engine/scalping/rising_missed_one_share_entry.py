@@ -167,6 +167,7 @@ def evaluate_rising_missed_tp1_candidate(
     active_date: str,
     current_date: str,
     current_ai_action: Any = None,
+    current_probe_intent: Any = False,
     nxt_price_jump_recovery_enabled: bool = False,
     nxt_price_jump_recovery_active_date: str = "",
 ) -> RisingMissedTP1CandidateDecision:
@@ -206,6 +207,7 @@ def evaluate_rising_missed_tp1_candidate(
         .strip()
         .upper()
     )
+    probe_intent = bool(_field_present(current_probe_intent) and ai_action == "WAIT")
     bid_imbalance_surge = _has_signature(stock, "BID_IMBALANCE_SURGE")
     input_ready = bool(decision_input.get("rising_missed_tp1_input_ready"))
     effective_quote_age_ms = _safe_float(
@@ -296,6 +298,8 @@ def evaluate_rising_missed_tp1_candidate(
     )
     if support_reversal_lane:
         lane = "support_reversal"
+    if lane == "none" and probe_intent:
+        lane = "ai_wait_probe_intent"
     hard_negative_reasons = []
     if ai_action in {"DROP", "NOT_EVALUATED", "FAIL_CLOSED", "UNAVAILABLE"}:
         hard_negative_reasons.append("ai_explicit_veto")
@@ -346,6 +350,12 @@ def evaluate_rising_missed_tp1_candidate(
             f"{watch_delta_pct:.4f}" if watch_delta_available else "-"
         ),
         "rising_missed_tp1_ai_action": ai_action or "-",
+        "rising_missed_tp1_ai_probe_intent": probe_intent,
+        "rising_missed_tp1_ai_probe_intent_lane": lane == "ai_wait_probe_intent",
+        "rising_missed_tp1_ai_probe_intent_nonhard_filters_bypassed": bool(
+            lane == "ai_wait_probe_intent"
+        ),
+        "rising_missed_tp1_ai_probe_intent_submit_guard_required": True,
         "rising_missed_tp1_bid_imbalance_surge": bid_imbalance_surge,
         "rising_missed_tp1_selector_policy": "probability_support_v3",
         "rising_missed_tp1_support_reversal_lane": support_reversal_lane,
@@ -360,9 +370,13 @@ def evaluate_rising_missed_tp1_candidate(
         ),
         "rising_missed_tp1_positive_support_count": len(positive_supports),
         "rising_missed_tp1_positive_support_min": (
-            1
-            if nxt_price_jump_recovery_lane
-            else TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
+            0
+            if lane == "ai_wait_probe_intent"
+            else (
+                1
+                if nxt_price_jump_recovery_lane
+                else TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
+            )
         ),
         "rising_missed_tp1_positive_support_families": ",".join(positive_supports)
         or "-",
@@ -522,9 +536,13 @@ def evaluate_rising_missed_tp1_candidate(
             ),
         )
     required_positive_supports = (
-        1
-        if nxt_price_jump_recovery_lane
-        else (TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES)
+        0
+        if lane == "ai_wait_probe_intent"
+        else (
+            1
+            if nxt_price_jump_recovery_lane
+            else (TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES)
+        )
     )
     if len(positive_supports) < required_positive_supports:
         return RisingMissedTP1CandidateDecision(

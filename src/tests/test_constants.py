@@ -1336,7 +1336,6 @@ def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
         "KORSTOCKSCAN_AI_HOLDING_CRITICAL_MIN_COOLDOWN",
         "KORSTOCKSCAN_AI_HOLDING_CRITICAL_COOLDOWN",
         "KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED",
-        "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -1345,7 +1344,7 @@ def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     assert reloaded.TRADING_RULES.AI_WATCHING_COOLDOWN == 90
     assert reloaded.TRADING_RULES.AI_WAIT_DROP_COOLDOWN == 300
     assert reloaded.TRADING_RULES.AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED is False
-    assert reloaded.TRADING_RULES.AI_WATCHING_SCORE_SMOOTHING_MODE == "off"
+    assert not hasattr(reloaded.TRADING_RULES, "AI_WATCHING_SCORE_SMOOTHING_MODE")
     assert reloaded.TRADING_RULES.AI_HOLDING_MIN_COOLDOWN == 45
     assert reloaded.TRADING_RULES.AI_HOLDING_MAX_COOLDOWN == 180
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_MIN_COOLDOWN == 20
@@ -1474,7 +1473,7 @@ def test_trading_rules_ai_cadence_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.AI_WATCHING_COOLDOWN == 120
     assert reloaded.TRADING_RULES.AI_WAIT_DROP_COOLDOWN == 180
     assert reloaded.TRADING_RULES.AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED is True
-    assert reloaded.TRADING_RULES.AI_WATCHING_SCORE_SMOOTHING_MODE == "report_only"
+    assert not hasattr(reloaded.TRADING_RULES, "AI_WATCHING_SCORE_SMOOTHING_MODE")
     assert reloaded.TRADING_RULES.AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA == 12.5
     assert reloaded.TRADING_RULES.AI_HOLDING_MIN_COOLDOWN == 60
     assert reloaded.TRADING_RULES.AI_HOLDING_MAX_COOLDOWN == 240

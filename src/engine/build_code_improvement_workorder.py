@@ -32,8 +32,8 @@ HOLDING_EXIT_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
-AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR = (
-    REPORT_DIR / "ai_watching_score_smoothing_diagnostic"
+AI_DECISION_ACTION_OUTCOME_CALIBRATION_DIR = (
+    REPORT_DIR / "ai_decision_action_outcome_calibration"
 )
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
@@ -1129,10 +1129,7 @@ def _is_actionable_existing_family_recheck(order: dict[str, Any]) -> bool:
 def _structural_blocker_signal(order: dict[str, Any]) -> tuple[str, str] | None:
     if _is_keep_visible_non_implement_order(order):
         return None
-    order_id = str(order.get("order_id") or "").strip()
-    title = str(order.get("title") or "").strip().lower()
     next_metric = str(order.get("next_postclose_metric") or "").strip()
-    haystack = " ".join([order_id, title, next_metric]).lower()
     if "must produce a selected implement_now workorder" in next_metric.lower():
         return (
             "submit_drought_handoff_still_requires_actionable_workorder",
@@ -4862,10 +4859,10 @@ def _observation_source_quality_audit_path(target_date: str) -> Path:
     )
 
 
-def _ai_watching_score_smoothing_diagnostic_path(target_date: str) -> Path:
+def _ai_decision_action_outcome_calibration_path(target_date: str) -> Path:
     return (
-        AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC_DIR
-        / f"ai_watching_score_smoothing_diagnostic_{target_date}.json"
+        AI_DECISION_ACTION_OUTCOME_CALIBRATION_DIR
+        / f"ai_decision_action_outcome_calibration_{target_date}.json"
     )
 
 
@@ -7544,8 +7541,8 @@ def build_code_improvement_workorder(
         observation_source_quality_path,
         isolated_source_mode=isolated_source_mode,
     )
-    watching_score_smoothing_diagnostic_path = (
-        _ai_watching_score_smoothing_diagnostic_path(target_date)
+    ai_decision_action_outcome_calibration_path = (
+        _ai_decision_action_outcome_calibration_path(target_date)
     )
     codebase_performance_path = _codebase_performance_report_path(target_date)
     codebase_performance = _load_source_json(
@@ -7653,7 +7650,9 @@ def build_code_improvement_workorder(
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
         "pipeline_event_verbosity": pipeline_event_verbosity_path,
         "observation_source_quality_audit": observation_source_quality_path,
-        "ai_watching_score_smoothing_diagnostic": watching_score_smoothing_diagnostic_path,
+        "ai_decision_action_outcome_calibration": (
+            ai_decision_action_outcome_calibration_path
+        ),
         "codebase_performance_workorder": codebase_performance_path,
         "pattern_lab_currentness_audit": pattern_lab_currentness_path,
         "pattern_lab_ai_review": pattern_lab_ai_review_path,
@@ -8401,8 +8400,8 @@ def build_code_improvement_workorder(
             "observation_source_quality_audit": source_ref(
                 "observation_source_quality_audit"
             ),
-            "ai_watching_score_smoothing_diagnostic": source_ref(
-                "ai_watching_score_smoothing_diagnostic"
+            "ai_decision_action_outcome_calibration": source_ref(
+                "ai_decision_action_outcome_calibration"
             ),
             "codebase_performance_workorder": source_ref(
                 "codebase_performance_workorder"
@@ -8757,7 +8756,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- threshold_cycle_calibration: `{source.get('threshold_cycle_calibration') or '-'}`",
         f"- pipeline_event_verbosity: `{source.get('pipeline_event_verbosity') or '-'}`",
         f"- observation_source_quality_audit: `{source.get('observation_source_quality_audit') or '-'}`",
-        f"- ai_watching_score_smoothing_diagnostic: `{source.get('ai_watching_score_smoothing_diagnostic') or '-'}`",
+        f"- ai_decision_action_outcome_calibration: `{source.get('ai_decision_action_outcome_calibration') or '-'}`",
         f"- codebase_performance_workorder: `{source.get('codebase_performance_workorder') or '-'}`",
         f"- pattern_lab_currentness_audit: `{source.get('pattern_lab_currentness_audit') or '-'}`",
         f"- pattern_lab_ai_review: `{source.get('pattern_lab_ai_review') or '-'}`",

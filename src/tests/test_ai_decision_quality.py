@@ -688,6 +688,44 @@ def test_mature_outcome_uses_bar_high_low_and_marks_same_bar_first_hit_ambiguous
     assert metric["first_hit"] == "ambiguous_same_bar"
 
 
+def test_mature_outcome_classifies_drawdown_then_profit_recovery():
+    labels = quality.mature_outcome_labels(
+        pending_labels=[_pending("DROP")],
+        price_rows=[
+            {
+                "timestamp": "2026-07-27T09:01:00+09:00",
+                "stock_code": "005930",
+                "price": 99.5,
+                "high": 100.2,
+                "low": 99.0,
+                "close": 99.5,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass_completed_ka10080_bar",
+            },
+            {
+                "timestamp": "2026-07-27T09:02:00+09:00",
+                "stock_code": "005930",
+                "price": 101.2,
+                "high": 101.2,
+                "low": 99.4,
+                "close": 101.0,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass_completed_ka10080_bar",
+            },
+        ],
+        lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 3, tzinfo=KST),
+    )
+
+    metric = labels[0]["horizon_metrics"]["3m"]
+    assert metric["profit_opportunity_observed"] is True
+    assert metric["profit_opportunity_threshold_pct"] == 1.0
+    assert metric["profit_opportunity_sequence"] == ("drawdown_then_profit_recovery")
+    assert metric["pre_profit_mae_pct"] == -1.0
+
+
 def test_kiwoom_completed_minute_loader_preserves_nxt_request_suffix():
     pending = {
         **_pending(),
@@ -847,6 +885,34 @@ def test_default_sources_skips_large_pipeline_load_when_not_requested(monkeypatc
     sources = quality._default_sources("2026-07-27", include_pipeline=False)
 
     assert sources["pipeline"] == []
+    assert all(path.parent != quality.PIPELINE_DIR for path in loaded_paths)
+
+
+def test_default_sources_keeps_pipeline_lazy_and_limits_entry_to_target_date(
+    monkeypatch,
+):
+    loaded_paths = []
+
+    def fake_load(path):
+        loaded_paths.append(path)
+        if path.parent == quality.OUTCOME_DIR:
+            return [
+                {
+                    "decision_stage": "entry",
+                    "decision_ts": "2026-07-27T09:00:00+09:00",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(quality, "_load_jsonl", fake_load)
+    sources = quality._default_sources("2026-07-27", include_pipeline=True)
+
+    assert sources["pipeline"] == []
+    assert len(sources["pipeline_paths"]) == 1
+    assert sources["pipeline_paths"][0].name in {
+        "pipeline_events_2026-07-27.jsonl",
+        "pipeline_events_2026-07-27.jsonl.gz",
+    }
     assert all(path.parent != quality.PIPELINE_DIR for path in loaded_paths)
 
 
@@ -1580,6 +1646,81 @@ def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
             quality.DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
         ),
     ).name.endswith("_decision_quality_v2_8.json")
+    model_request = quality.prepare_detailed_paired_replay_requests(
+        [base_request],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION
+        ),
+        candidate_model_override="gpt-5-nano",
+    )[0]
+    assert model_request["candidate"]["model"] == "gpt-5-nano"
+    assert model_request["candidate"]["model_comparison"] == {
+        "enabled": True,
+        "baseline_model": "gpt-5.4-nano",
+        "candidate_model": "gpt-5-nano",
+        "baseline_reasoning_effort": None,
+        "candidate_reasoning_effort": "minimal",
+        "reasoning_compatibility_mapping": "none_to_minimal",
+        "decision_authority": "offline_model_comparison_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    assert model_request["paired_replay_id"].startswith("detailed-pair-base-model-")
+    assert quality.detailed_paired_path(
+        "2026-07-30",
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION
+        ),
+        candidate_model="gpt-5-nano",
+    ).name.endswith("_decision_quality_v2_9_1_anticipatory_model_gpt-5-nano.json")
+    baseline_result = {
+        "status": "pass",
+        "decision_trace_id": model_request["decision_trace_id"],
+        "payload_sha256": model_request["payload_sha256"],
+        "candidate_prompt_sha256": model_request["candidate"]["system_prompt_sha256"],
+        "candidate_input_sha256": model_request["candidate_input_sha256"],
+        "exact_payload_analysis_sha256": model_request["exact_payload_analysis_sha256"],
+        "anticipatory_reversal_analysis_sha256": model_request[
+            "anticipatory_reversal_analysis_sha256"
+        ],
+        "candidate_attempts": [
+            {
+                "status": "pass",
+                "provider_provenance": {"model": "gpt-5.4-nano"},
+            }
+        ],
+    }
+    assert (
+        quality.validate_model_comparison_baseline(
+            [model_request],
+            {
+                "requests": [
+                    {
+                        "candidate": {
+                            "model": "gpt-5.4-nano",
+                            "reasoning_effort": None,
+                        }
+                    }
+                ],
+                "results": [baseline_result],
+            },
+        )
+        == []
+    )
+    assert quality.validate_model_comparison_baseline(
+        [model_request],
+        {
+            "requests": [
+                {
+                    "candidate": {
+                        "model": "gpt-5.4-nano",
+                        "reasoning_effort": None,
+                    }
+                }
+            ],
+            "results": [{**baseline_result, "payload_sha256": "other"}],
+        },
+    ) == [f"baseline_payload_sha256_mismatch:{model_request['decision_trace_id']}"]
     response = {
         "edge_state": "EDGE",
         "action": "BUY",
@@ -1933,6 +2074,225 @@ def test_three_way_comparison_uses_only_common_comparable_rows():
     assert comparison["runtime_effect"] is False
 
 
+def test_model_replay_comparison_keeps_exact_cohort_and_reports_model_delta():
+    baseline = {
+        "status": "paired_replay_complete_candidate_quality_rejected",
+        "result_count": 2,
+        "candidate_source_quality_adjusted_ev_pct": 0.1,
+        "candidate_primary_decision_ev_pct": 0.08,
+        "candidate_action_counts": {"DROP": 1, "WAIT": 1},
+        "candidate_error_taxonomy_counts": {"false_drop": 1},
+        "candidate_quality_gate_pass": False,
+        "paired_comparisons": [
+            {
+                "decision_trace_id": "trace-1",
+                "candidate_decision_value_pct": 0.1,
+                "candidate_primary_decision_value_pct": 0.08,
+                "candidate_error_taxonomy": ["false_drop"],
+            },
+            {
+                "decision_trace_id": "trace-2",
+                "candidate_decision_value_pct": 0.1,
+                "candidate_primary_decision_value_pct": 0.08,
+                "candidate_error_taxonomy": [],
+            },
+        ],
+        "results": [
+            {
+                "status": "pass",
+                "decision_trace_id": "trace-1",
+                "payload_sha256": "payload-1",
+                "candidate_prompt_sha256": "prompt",
+                "candidate_input_sha256": "input-1",
+                "candidate_response": {"action": "DROP"},
+                "candidate_attempts": [
+                    {
+                        "status": "pass",
+                        "provider_provenance": {
+                            "provider": "openai",
+                            "model": "gpt-5.4-nano",
+                            "latency_ms": 100,
+                            "input_tokens": 10,
+                            "output_tokens": 2,
+                            "total_tokens": 12,
+                            "provider_none": False,
+                        },
+                    }
+                ],
+            },
+            {
+                "status": "pass",
+                "decision_trace_id": "trace-2",
+                "payload_sha256": "payload-2",
+                "candidate_prompt_sha256": "prompt",
+                "candidate_input_sha256": "input-2",
+                "candidate_response": {"action": "WAIT"},
+                "candidate_attempts": [],
+            },
+        ],
+    }
+    candidate = {
+        **baseline,
+        "candidate_source_quality_adjusted_ev_pct": 0.3,
+        "candidate_primary_decision_ev_pct": 0.25,
+        "candidate_action_counts": {"WAIT": 2},
+        "candidate_error_taxonomy_counts": {},
+        "paired_comparisons": [
+            {
+                "decision_trace_id": "trace-1",
+                "candidate_decision_value_pct": 0.3,
+                "candidate_primary_decision_value_pct": 0.25,
+                "candidate_error_taxonomy": [],
+            },
+            {
+                "decision_trace_id": "trace-2",
+                "candidate_decision_value_pct": 0.3,
+                "candidate_primary_decision_value_pct": 0.25,
+                "candidate_error_taxonomy": [],
+            },
+        ],
+        "results": [
+            {
+                **baseline["results"][0],
+                "candidate_response": {"action": "WAIT"},
+                "candidate_attempts": [
+                    {
+                        "status": "pass",
+                        "provider_provenance": {
+                            "provider": "openai",
+                            "model": "gpt-5-nano",
+                            "latency_ms": 80,
+                            "input_tokens": 10,
+                            "output_tokens": 2,
+                            "total_tokens": 12,
+                            "provider_none": False,
+                        },
+                    }
+                ],
+            },
+            {
+                **baseline["results"][1],
+                "candidate_response": {"action": "WAIT"},
+            },
+        ],
+    }
+
+    comparison = quality.build_model_replay_comparison(
+        baseline_report=baseline,
+        candidate_report=candidate,
+        baseline_model="gpt-5.4-nano",
+        candidate_model="gpt-5-nano",
+    )
+
+    assert comparison["common_pass_count"] == 2
+    assert comparison["payload_hash_mismatch_count"] == 0
+    assert comparison["prompt_hash_mismatch_count"] == 0
+    assert comparison["candidate_input_hash_mismatch_count"] == 0
+    assert comparison["action_agreement_count"] == 1
+    assert comparison["action_transition_counts"] == {
+        "DROP->WAIT": 1,
+        "WAIT->WAIT": 1,
+    }
+    assert (
+        comparison["candidate_vs_baseline_common_source_quality_adjusted_ev_delta_pct"]
+        == 0.19999999999999998
+    )
+    assert comparison["common_comparable_count"] == 2
+    assert comparison["baseline_common_error_taxonomy_counts"] == {"false_drop": 1}
+    assert comparison["full_eligible_cohort_count"] == 2
+    assert comparison["candidate_fail_closed_nonpass_value_policy"] == (
+        "zero_no_exposure"
+    )
+    assert (
+        comparison[
+            "candidate_vs_baseline_fail_closed_full_eligible_primary_decision_ev_delta_pct"
+        ]
+        == 0.16999999999999998
+    )
+    assert comparison["baseline_pass_rate_pct"] == 100.0
+    assert comparison["candidate_pass_rate_pct"] == 100.0
+    assert comparison["candidate_attempt_stats"]["provider_models"] == ["gpt-5-nano"]
+    assert comparison["candidate_attempt_stats"]["openai_api_attempt_count"] == 1
+    assert comparison["runtime_effect"] is False
+
+
+def test_model_replay_comparison_keeps_nonpass_rows_as_zero_exposure():
+    baseline = {
+        "status": "baseline",
+        "result_count": 2,
+        "paired_comparisons": [
+            {
+                "decision_trace_id": "trace-pass",
+                "candidate_decision_value_pct": 0.2,
+                "candidate_primary_decision_value_pct": 0.1,
+            },
+            {
+                "decision_trace_id": "trace-rejected",
+                "candidate_decision_value_pct": 0.4,
+                "candidate_primary_decision_value_pct": 0.3,
+            },
+        ],
+        "results": [
+            {
+                "status": "pass",
+                "decision_trace_id": "trace-pass",
+                "candidate_response": {"action": "WAIT"},
+            },
+            {
+                "status": "pass",
+                "decision_trace_id": "trace-rejected",
+                "candidate_response": {"action": "BUY"},
+            },
+        ],
+    }
+    candidate = {
+        "status": "candidate",
+        "result_count": 2,
+        "paired_comparisons": [
+            {
+                "decision_trace_id": "trace-pass",
+                "candidate_decision_value_pct": 0.2,
+                "candidate_primary_decision_value_pct": 0.1,
+            }
+        ],
+        "results": [
+            {
+                "status": "pass",
+                "decision_trace_id": "trace-pass",
+                "candidate_response": {"action": "WAIT"},
+            },
+            {
+                "status": "schema_rejected",
+                "decision_trace_id": "trace-rejected",
+            },
+        ],
+    }
+
+    comparison = quality.build_model_replay_comparison(
+        baseline_report=baseline,
+        candidate_report=candidate,
+        baseline_model="gpt-5.4-nano",
+        candidate_model="gpt-5-nano",
+    )
+
+    assert comparison["common_pass_count"] == 1
+    assert comparison["candidate_nonpass_count"] == 1
+    assert comparison["candidate_pass_rate_pct"] == 50.0
+    assert comparison["full_eligible_cohort_count"] == 2
+    assert comparison["full_eligible_primary_metric_missing_count"] == 0
+    assert comparison["baseline_full_eligible_primary_decision_ev_pct"] == 0.2
+    assert (
+        comparison["candidate_fail_closed_full_eligible_primary_decision_ev_pct"]
+        == 0.05
+    )
+    assert (
+        comparison[
+            "candidate_vs_baseline_fail_closed_full_eligible_primary_decision_ev_delta_pct"
+        ]
+        == -0.15000000000000002
+    )
+
+
 def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     control_manifest = quality.build_control_manifest(
         target_date="2026-07-27",
@@ -1954,7 +2314,13 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "horizon_metrics": {
                 "10m": {
                     "end_return_pct": 2.0,
+                    "mfe_pct": 2.2,
+                    "mae_pct": -0.7,
                     "first_hit": "target",
+                    "profit_opportunity_threshold_pct": 1.0,
+                    "profit_opportunity_observed": True,
+                    "profit_opportunity_sequence": "drawdown_then_profit_recovery",
+                    "pre_profit_mae_pct": -0.7,
                 }
             },
         }
@@ -2010,6 +2376,35 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     assert report["control_source_quality_adjusted_ev_pct"] == 0
     assert report["candidate_source_quality_adjusted_ev_pct"] == 0
     assert report["paired_comparable_count"] == 1
+    assert report["candidate_drop_outcome_trajectory"] == {
+        "result_drop_count": 1,
+        "comparable_drop_count": 1,
+        "outcome_unavailable_drop_count": 0,
+        "profit_opportunity_threshold_pct": 1.0,
+        "profit_opportunity_count": 1,
+        "drawdown_then_profit_recovery_count": 1,
+        "direct_profit_count": 0,
+        "same_bar_sequence_ambiguous_count": 0,
+        "positive_excursion_below_profit_count": 0,
+        "no_positive_excursion_count": 0,
+        "profit_sequence_counts": {"drawdown_then_profit_recovery": 1},
+        "pre_profit_mae_buckets": {
+            "nonnegative": 0,
+            "minus_0_to_0_5": 0,
+            "minus_0_5_to_1": 1,
+            "minus_1_to_2": 0,
+            "below_minus_2": 0,
+            "not_recorded": 0,
+        },
+        "interpretation": (
+            "DROP is not equivalent to a monotonic decline. Profit opportunity "
+            "and drawdown-before-profit are evaluated separately."
+        ),
+    }
+    assert report["candidate_error_taxonomy_counts"] == {
+        "false_drop": 1,
+        "false_drop_drawdown_recovery": 1,
+    }
     assert report["candidate_exposure_decision_count"] == 0
     assert report["candidate_exposure_sample_floor"]["pass"] is False
     assert report["status"] == "paired_replay_complete_candidate_quality_rejected"
@@ -2045,7 +2440,10 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
                 "candidate_exposure_sample_floor_pass": False,
             },
             "candidate_quality_gate_pass": False,
-            "candidate_error_taxonomy_counts": {},
+            "candidate_error_taxonomy_counts": {
+                "false_drop": 1,
+                "false_drop_drawdown_recovery": 1,
+            },
         }
     ]
 
@@ -2357,6 +2755,309 @@ def test_recovery_trigger_report_values_edge_wait_as_retained_observation():
     assert missing_next_open_report["comparable_row_count"] == 0
 
 
+def test_reversal_sequence_uses_only_predecision_state_and_dedupes_episode():
+    def request(trace_id, payload_hash):
+        return {
+            "decision_trace_id": trace_id,
+            "stock_code": "005930",
+            "stage": "entry",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+            "payload_sha256": payload_hash,
+            "candidate_input_sha256": f"input-{payload_hash}",
+            "candidate_exact_payload_sha256": payload_hash,
+            "source_exact_payload_sha256": payload_hash,
+            "candidate": {"prompt_version": "decision_quality_v2_9_1_entry"},
+            "exact_payload_analysis": {
+                "source_quality": {
+                    "status": "fresh_consistent",
+                    "completed_bar_count": 20,
+                },
+                "completed_structure": {
+                    "phase": "failed_breakout",
+                    "structural_edge": "moderate",
+                    "returns_pct": {
+                        "1m": -0.2,
+                        "3m": -0.1,
+                        "5m": 0.5,
+                        "10m": 0.8,
+                        "20m": 1.2,
+                    },
+                },
+            },
+            "anticipatory_reversal_analysis": {
+                "execution_cost": {"conservative_execution_cost_pct": 0.2}
+            },
+        }
+
+    def payload(
+        trace_id,
+        payload_hash,
+        captured_at,
+        *,
+        price,
+        net_delta,
+        buy_pressure,
+        absorption,
+        price_change,
+        ma5_distance,
+        large_sell=False,
+    ):
+        return {
+            "request_id": trace_id,
+            "symbol": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+            "captured_at": captured_at,
+            "payload_sha256": payload_hash,
+            "replay_exact": True,
+            "sanitized_user_input": {
+                "current": {
+                    "price": price,
+                    "fluctuation_pct": -1.0,
+                    "execution_strength": 100.0,
+                },
+                "features": {
+                    "net_aggressive_delta_10t": net_delta,
+                    "buy_pressure_10t": buy_pressure,
+                    "same_price_buy_absorption": absorption,
+                    "price_change_10t_pct": price_change,
+                    "curr_vs_ma5_bp": ma5_distance,
+                    "curr_vs_micro_vwap_bp": ma5_distance,
+                    "distance_from_day_high_pct": -2.0,
+                    "large_sell_print_detected": large_sell,
+                    "spread_bp": 70.0,
+                    "orderbook_total_ratio": 1.0,
+                    "fillability_score": 50.0,
+                    "quote_fresh_for_entry": True,
+                    "tick_context_stale": False,
+                    "minute_candle_window_fresh": True,
+                },
+                "entry_candle_context": {
+                    "schema": "entry_candle_context_v1",
+                    "venue": "KRX",
+                    "session": "krx_regular",
+                    "completed_bar_count": 1,
+                    "bars": [
+                        {
+                            "t": "2026-07-29T08:59:00+09:00",
+                            "o": 100,
+                            "h": 101,
+                            "l": 99,
+                            "c": 100,
+                            "v": 1000,
+                            "forming": False,
+                        }
+                    ],
+                    "input_bundle_version": "scalping_multi_timeframe_context_v1",
+                    "multi_timeframe_context": {
+                        "previous_day_levels": {
+                            "low": 100.0,
+                            "close": 101.0,
+                            "high": 102.0,
+                        },
+                        "session_bar_vwap": {"value": 100.0},
+                    },
+                },
+            },
+        }
+
+    trace_ids = ("trace-armed", "trace-confirmed", "trace-invalidated")
+    payload_hashes = ("payload-armed", "payload-confirmed", "payload-invalidated")
+    paired_report = {
+        "status": "paired_replay_complete_candidate_quality_rejected",
+        "requests": [
+            request(trace_id, payload_hash)
+            for trace_id, payload_hash in zip(trace_ids, payload_hashes)
+        ],
+        "results": [
+            {"status": "pass", "decision_trace_id": trace_id} for trace_id in trace_ids
+        ],
+        "paired_comparisons": [
+            {
+                "decision_trace_id": trace_id,
+                "candidate_action": "DROP",
+                "control_action": "WAIT",
+            }
+            for trace_id in trace_ids
+        ],
+    }
+    payloads = [
+        payload(
+            trace_ids[0],
+            payload_hashes[0],
+            "2026-07-29T09:00:00+09:00",
+            price=100.0,
+            net_delta=-100,
+            buy_pressure=30,
+            absorption=2,
+            price_change=0.1,
+            ma5_distance=-50,
+        ),
+        payload(
+            trace_ids[1],
+            payload_hashes[1],
+            "2026-07-29T09:01:00+09:00",
+            price=99.8,
+            net_delta=-50,
+            buy_pressure=40,
+            absorption=2,
+            price_change=0.1,
+            ma5_distance=-20,
+        ),
+        payload(
+            trace_ids[2],
+            payload_hashes[2],
+            "2026-07-29T09:02:00+09:00",
+            price=99.0,
+            net_delta=-200,
+            buy_pressure=20,
+            absorption=0,
+            price_change=-1.0,
+            ma5_distance=-200,
+            large_sell=True,
+        ),
+    ]
+
+    def labels(end_return):
+        return [
+            {
+                "decision_trace_id": trace_id,
+                "label_id": f"label-{trace_id}",
+                "source_quality_status": "pass",
+                "primary_cohort_eligible": True,
+                "horizon_metrics": {
+                    "20m": {
+                        "mfe_pct": 1.5,
+                        "mae_pct": -0.5,
+                        "end_return_pct": end_return,
+                        "profit_opportunity_observed": True,
+                        "profit_opportunity_sequence": (
+                            "drawdown_then_profit_recovery"
+                        ),
+                    }
+                },
+            }
+            for trace_id in trace_ids
+        ]
+
+    report = quality.build_entry_reversal_sequence_report(
+        target_date="2026-07-29",
+        paired_report=paired_report,
+        labels=labels(1.0),
+        payloads=payloads,
+    )
+    changed_outcome_report = quality.build_entry_reversal_sequence_report(
+        target_date="2026-07-29",
+        paired_report=paired_report,
+        labels=labels(-5.0),
+        payloads=payloads,
+    )
+
+    assert report["reversal_state_counts"] == {
+        "ARMED": 1,
+        "CONFIRMED": 1,
+        "INVALIDATED": 1,
+    }
+    assert report["status"] == "sequence_hypothesis_keep_collecting"
+    assert report["cohorts"]["reversal_armed"]["first_signal_episode_count"] == 1
+    assert report["cohorts"]["reversal_confirmed"]["first_signal_episode_count"] == 1
+    assert (
+        report["cohorts"]["reversal_confirmed"]["first_signal_episode"]["20m"][
+            "source_quality_adjusted_ev_pct"
+        ]
+        == 0.8
+    )
+    assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+    scale_in = report["scale_in_counterfactual"]
+    assert scale_in["status"] == "scale_in_economics_pass_offline_only"
+    assert scale_in["pair_count"] == 1
+    assert scale_in["primary_20m_pair_count"] == 1
+    assert scale_in["economic_quality_pass"] is True
+    assert scale_in["probe_learning_value_pass"] is False
+    assert scale_in["rows"][0]["sizing_policy"] == (
+        "one_share_probe_plus_one_share_confirmation"
+    )
+    assert scale_in["runtime_effect"] is False
+    assert scale_in["allowed_runtime_apply"] is False
+    one_share_probe = report["one_share_probe_counterfactual"]
+    assert one_share_probe["first_signal_episode_count"] == 1
+    assert one_share_probe["runtime_promotion"]["required_cap"] == (
+        "one_share_probe_only"
+    )
+    assert one_share_probe["runtime_promotion"]["scale_in_authority"] is False
+    assert one_share_probe["proposed_authority_separation"] == {
+        "status": "offline_validated_not_runtime_applied",
+        "entry_ai_role": "permissive_one_share_probe_intent",
+        "upstream_policy": (
+            "do_not_require_retrospective_economic_quality_pass_before_"
+            "one_share_probe_intent"
+        ),
+        "upstream_required": (
+            "exact_source_and_semantic_contract_without_known_hard_safety_block"
+        ),
+        "final_submit_authority": (
+            "existing_freshness_price_broker_account_order_cooldown_quantity_"
+            "and_hard_safety_guards"
+        ),
+        "economic_quality_role": "cumulative_post_outcome_learning_not_submit_veto",
+        "submit_guard_is_not_directional_alpha_proof": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+    }
+    assert one_share_probe["rows"][0]["decision_trace_id"] == "trace-armed"
+    assert (
+        one_share_probe["rows"][0]["horizons"]["20m"][
+            "favorable_excursion_after_cost_observed"
+        ]
+        is True
+    )
+    assert one_share_probe["runtime_effect"] is False
+    assert one_share_probe["allowed_runtime_apply"] is False
+    assert all(
+        row["source_quality"]["future_outcome_feature_count"] == 0
+        for row in report["rows"]
+    )
+    assert all(
+        row["source_quality"]["payload_venue_session_match"] is True
+        and row["source_quality"]["canonical_raw_completed_bar_count"] == 1
+        for row in report["rows"]
+    )
+    assert [
+        (row["reversal_state"], row["sequence_context_sha256"])
+        for row in report["rows"]
+    ] == [
+        (row["reversal_state"], row["sequence_context_sha256"])
+        for row in changed_outcome_report["rows"]
+    ]
+
+    route_conflict_payloads = [dict(row) for row in payloads]
+    route_conflict_payloads[0] = {
+        **route_conflict_payloads[0],
+        "effective_venue": "NXT",
+    }
+    route_conflict_report = quality.build_entry_reversal_sequence_report(
+        target_date="2026-07-29",
+        paired_report=paired_report,
+        labels=labels(1.0),
+        payloads=route_conflict_payloads,
+    )
+    assert route_conflict_report["exclusion_counts"] == {
+        "payload_venue_session_contract_mismatch": 1
+    }
+
+    missing_source_report = quality.build_entry_reversal_sequence_report(
+        target_date="2026-07-29",
+        paired_report={},
+        labels=labels(1.0),
+        payloads=payloads,
+    )
+    assert missing_source_report["status"] == "sequence_source_artifact_missing"
+
+
 def test_prepare_paired_replay_marks_stage_floor_without_cherry_picking():
     traces = []
     payloads = []
@@ -2565,6 +3266,7 @@ def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
         "candidate": {
             "provider": "openai",
             "model": "gpt-test",
+            "reasoning_effort": "minimal",
             "system_prompt": "Return JSON.",
         },
         **quality.OFFLINE_CONTRACT,
@@ -2583,6 +3285,8 @@ def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
     assert "test-secret" not in str(envelope)
     assert captured["store"] is False
     assert captured["input"] == '{"value":1}'
+    assert captured["reasoning"] == {"effort": "minimal"}
+    assert envelope["provider_provenance"]["reasoning_effort"] == "minimal"
     output_schema = captured["text"]["format"]["schema"]
     assert output_schema["properties"]["expected_upside_pct"]["minimum"] == 0
     assert output_schema["properties"]["expected_downside_pct"]["maximum"] == 0

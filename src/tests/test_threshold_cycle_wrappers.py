@@ -559,6 +559,10 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "ai_watching_score_smoothing_diagnostic=$RUN_AI_WATCHING_SCORE_SMOOTHING_DIAGNOSTIC"
         in script
     )
+    assert (
+        "ai_decision_action_outcome_calibration="
+        "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" in script
+    )
     assert "optional microstructure_reaction_context failed" in script
     assert "optional microstructure_reaction_context artifact wait failed" in script
 

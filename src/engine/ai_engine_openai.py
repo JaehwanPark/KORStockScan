@@ -98,8 +98,10 @@ from src.engine.ai_prompt_contracts import (
     REALTIME_ANALYSIS_PROMPT_DUAL,
     SCALPING_OVERNIGHT_DECISION_PROMPT,
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
+    decision_quality_v2_7_probe_system_prompt,
 )
 
 DUAL_PERSONA_AGGRESSIVE_PROMPT = """
@@ -1679,6 +1681,13 @@ class GPTSniperEngine:
                 )
                 or "hot_v1"
             ).strip()
+            if selected_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION:
+                return (
+                    decision_quality_v2_7_probe_system_prompt("entry"),
+                    "scalping_entry",
+                    DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+                    "watching",
+                )
             if selected_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION:
                 return (
                     decision_quality_v2_detailed_system_prompt(
@@ -1712,8 +1721,26 @@ class GPTSniperEngine:
             )
         return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v2", "shared"
 
-    def _normalize_decision_quality_entry_result(self, result, *, exact_payload):
+    def _normalize_decision_quality_entry_result(
+        self,
+        result,
+        *,
+        exact_payload,
+        prompt_version=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    ):
         payload = dict(result or {}) if isinstance(result, dict) else {}
+        normalized_prompt_version = (
+            str(prompt_version or DECISION_QUALITY_DETAILED_PROMPT_VERSION).strip()
+            or DECISION_QUALITY_DETAILED_PROMPT_VERSION
+        )
+        probe_prompt_selected = (
+            normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
+        )
+        adapter_version = (
+            "decision_quality_v2_7_probe_entry_v1"
+            if probe_prompt_selected
+            else "decision_quality_v2_7_entry_v2"
+        )
         model_action = str(payload.get("action") or "").strip().upper() or None
         model_edge_state = str(payload.get("edge_state") or "").strip().upper() or None
         model_reason_codes = (
@@ -1922,11 +1949,16 @@ class GPTSniperEngine:
                 "reason": "decision_quality_v2_7_semantic_rejected",
                 "decision_quality_contract_status": "semantic_rejected",
                 "decision_quality_contract_errors": contract_errors,
-                "decision_quality_live_adapter": "decision_quality_v2_7_entry_v2",
+                "decision_quality_live_adapter": adapter_version,
                 "decision_quality_response_schema": "decision_quality_v2_7_entry",
                 "decision_quality_score_semantics": (
                     "fail_closed_not_model_quality_score"
                 ),
+                "entry_probe_intent": False,
+                "entry_probe_intent_status": "semantic_rejected",
+                "entry_probe_intent_prompt_version": normalized_prompt_version,
+                "entry_probe_intent_submit_guard_required": True,
+                "entry_probe_intent_actual_order_submitted": False,
             }
 
         action = str(payload.get("action") or "DROP").upper()
@@ -1940,6 +1972,22 @@ class GPTSniperEngine:
         reason_codes = [
             str(code) for code in payload.get("reason_codes") or [] if str(code)
         ]
+        evidence = (
+            payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+        )
+        entry_probe_intent = bool(
+            probe_prompt_selected
+            and action == "WAIT"
+            and str(payload.get("edge_state") or "").strip().upper() == "EDGE"
+            and str(evidence.get("setup") or "").strip().lower()
+            in {"continuation", "pullback_recovery", "reversal"}
+            and str(evidence.get("positive_edge") or "").strip().lower()
+            in {"moderate", "strong"}
+            and str(evidence.get("adverse_risk") or "").strip().lower()
+            in {"low", "moderate", "high"}
+            and str(evidence.get("trigger") or "").strip().lower()
+            == "recovery_required"
+        )
         return {
             **payload,
             **model_fields,
@@ -1949,12 +1997,28 @@ class GPTSniperEngine:
             "reason": ",".join(reason_codes[:4])[:120] or "decision_quality_v2_7",
             "decision_quality_contract_status": "pass",
             "decision_quality_contract_errors": [],
-            "decision_quality_live_adapter": "decision_quality_v2_7_entry_v2",
+            "decision_quality_live_adapter": adapter_version,
             "decision_quality_model_confidence": confidence,
             "decision_quality_response_schema": "decision_quality_v2_7_entry",
             "decision_quality_score_semantics": (
                 "confidence_clamped_to_legacy_action_band"
             ),
+            "entry_probe_intent": entry_probe_intent,
+            "entry_probe_intent_status": (
+                "eligible_wait_probe"
+                if entry_probe_intent
+                else (
+                    "not_selected_prompt"
+                    if not probe_prompt_selected
+                    else "not_eligible"
+                )
+            ),
+            "entry_probe_intent_prompt_version": normalized_prompt_version,
+            "entry_probe_intent_authority": (
+                "candidate_only_existing_submit_guard_required"
+            ),
+            "entry_probe_intent_submit_guard_required": True,
+            "entry_probe_intent_actual_order_submitted": False,
         }
 
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
@@ -6068,7 +6132,11 @@ class GPTSniperEngine:
                 self._resolve_scalping_prompt(prompt_profile)
             )
             decision_quality_v2_7_selected = (
-                prompt_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION
+                prompt_version
+                in {
+                    DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+                }
                 and prompt_type == "scalping_entry"
                 and normalized_profile == "watching"
             )
@@ -6657,6 +6725,7 @@ class GPTSniperEngine:
                     result = self._normalize_decision_quality_entry_result(
                         result,
                         exact_payload=exact_payload,
+                        prompt_version=prompt_version,
                     )
                 result = self._apply_remote_entry_guard(
                     result,
@@ -9396,47 +9465,6 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 except Exception as exc:
                     log_error(
                         f"🚨 [WATCHING shared prompt shadow callback] {stock_name}({stock_code}) 실패: {exc}"
-                    )
-
-            future.add_done_callback(_emit_result)
-        return future
-
-    def submit_watching_score_projection(
-        self,
-        *,
-        stock_name,
-        stock_code,
-        ws_data,
-        recent_ticks,
-        recent_candles,
-        record_id=None,
-        candle_context=None,
-        callback=None,
-    ):
-        """Run the exact WATCHING contract on the isolated shadow engine."""
-        future = self.shadow_executor.submit(
-            self.analyze_target,
-            stock_name,
-            ws_data,
-            recent_ticks,
-            recent_candles,
-            prompt_profile="watching",
-            metadata_extra={
-                "record_id": record_id,
-                "stock_code": stock_code,
-                "source_event_stage": "ai_watching_score_projection",
-                "decision_authority": "report_only_no_runtime_effect",
-            },
-            candle_context=candle_context,
-        )
-        if callback is not None:
-
-            def _emit_result(done_future):
-                try:
-                    callback(done_future.result())
-                except Exception as exc:
-                    log_error(
-                        f"[WATCHING score projection callback] {stock_name}({stock_code}) failed: {exc}"
                     )
 
             future.add_done_callback(_emit_result)

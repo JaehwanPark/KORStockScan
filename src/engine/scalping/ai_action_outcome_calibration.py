@@ -164,6 +164,10 @@ def _transition_rows(
             or source_date < CLEAN_BASELINE_DATE
             or source_date > target_date
             or report.get("runtime_effect") is not False
+            or (
+                isinstance(report.get("model_comparison_contract"), dict)
+                and report["model_comparison_contract"].get("enabled") is True
+            )
         ):
             continue
         candidate_version = _candidate_version(report, path)
@@ -205,12 +209,22 @@ def _transition_summary(
     source_reports: list[dict[str, Any]],
 ) -> dict[str, Any]:
     values = list(rows)
-    control_values = [
-        value
-        for row in values
-        if (value := _number(row.get("control_decision_value_pct"))) is not None
-    ]
-    candidate_values = [
+    raw_value_pairs: list[tuple[float, float]] = []
+    for row in values:
+        control_value = _number(row.get("control_decision_value_pct"))
+        candidate_raw_value = _number(row.get("candidate_decision_value_pct"))
+        if (
+            candidate_raw_value is None
+            and row.get("candidate_execution_cost_contract_applied") is not True
+        ):
+            candidate_raw_value = _number(
+                row.get("candidate_primary_decision_value_pct")
+            )
+        if control_value is not None and candidate_raw_value is not None:
+            raw_value_pairs.append((control_value, candidate_raw_value))
+    control_raw_values = [control for control, _ in raw_value_pairs]
+    candidate_raw_values = [candidate for _, candidate in raw_value_pairs]
+    candidate_primary_values = [
         value
         for row in values
         if (
@@ -253,12 +267,17 @@ def _transition_summary(
     schema_rejected_count = sum(row["schema_rejected_count"] for row in reports)
     provider_failed_count = sum(row["provider_failed_count"] for row in reports)
     provider_none_count = sum(row["provider_none_count"] for row in reports)
-    ev_delta = fmean(delta_values) if delta_values else None
+    primary_ev_delta = fmean(delta_values) if delta_values else None
+    source_quality_ev_delta = (
+        fmean(candidate - control for control, candidate in raw_value_pairs)
+        if raw_value_pairs
+        else None
+    )
     adverse_not_increased = candidate_adverse <= control_adverse
     review_ready = bool(
         values
-        and ev_delta is not None
-        and ev_delta > 0
+        and primary_ev_delta is not None
+        and primary_ev_delta > 0
         and adverse_not_increased
         and schema_rejected_count == 0
         and provider_failed_count == 0
@@ -276,12 +295,24 @@ def _transition_summary(
         ),
         "candidate_exposure_count": len(exposure_rows),
         "control_source_quality_adjusted_ev_pct": (
-            fmean(control_values) if control_values else None
+            fmean(control_raw_values) if control_raw_values else None
         ),
         "candidate_source_quality_adjusted_ev_pct": (
-            fmean(candidate_values) if candidate_values else None
+            fmean(candidate_raw_values) if candidate_raw_values else None
         ),
-        "source_quality_adjusted_ev_delta_pct": ev_delta,
+        "candidate_primary_decision_ev_pct": (
+            fmean(candidate_primary_values) if candidate_primary_values else None
+        ),
+        "source_quality_adjusted_ev_delta_pct": source_quality_ev_delta,
+        "candidate_primary_decision_ev_delta_pct": primary_ev_delta,
+        "candidate_primary_decision_metric": (
+            "candidate_execution_cost_adjusted_ev_pct"
+            if any(
+                row.get("candidate_execution_cost_contract_applied") is True
+                for row in values
+            )
+            else "source_quality_adjusted_ev_pct"
+        ),
         "control_adverse_first_exposure_count": control_adverse,
         "candidate_adverse_first_exposure_count": candidate_adverse,
         "candidate_error_taxonomy_counts": dict(
@@ -428,6 +459,31 @@ def _decision_value(action: str, outcome_return_pct: float) -> float | None:
     return None
 
 
+def _attach_ofi_outcome(
+    row: dict[str, Any],
+    outcome: dict[str, Any] | None,
+) -> None:
+    if not outcome or outcome.get("outcome_return_pct") is None:
+        row["outcome_status"] = "pending"
+        return
+    outcome_return = float(outcome["outcome_return_pct"])
+    raw_value = _decision_value(str(row.get("raw_action") or ""), outcome_return)
+    final_value = _decision_value(str(row.get("final_action") or ""), outcome_return)
+    row.update(outcome)
+    row["raw_action_decision_value_pct"] = raw_value
+    row["final_action_decision_value_pct"] = final_value
+    if raw_value is None or final_value is None:
+        row["outcome_status"] = "mature_not_comparable"
+        row["outcome_not_comparable_reason"] = (
+            "action_value_requires_exact_quantity_or_cashflow_contract"
+        )
+        row["ofi_action_adjustment_delta_pct"] = None
+        return
+    row["outcome_status"] = "mature"
+    row["outcome_not_comparable_reason"] = None
+    row["ofi_action_adjustment_delta_pct"] = final_value - raw_value
+
+
 def _current_ofi_outcome_rows(
     pipeline_path: Path,
     *,
@@ -488,17 +544,7 @@ def _current_ofi_outcome_rows(
             "outcome_status": "mature" if outcome else "pending",
             **(outcome or {}),
         }
-        if outcome and outcome.get("outcome_return_pct") is not None:
-            outcome_return = float(outcome["outcome_return_pct"])
-            raw_value = _decision_value(raw_action, outcome_return)
-            final_value = _decision_value(final_action, outcome_return)
-            row["raw_action_decision_value_pct"] = raw_value
-            row["final_action_decision_value_pct"] = final_value
-            row["ofi_action_adjustment_delta_pct"] = (
-                final_value - raw_value
-                if raw_value is not None and final_value is not None
-                else None
-            )
+        _attach_ofi_outcome(row, outcome)
         rows[row["ledger_key"]] = row
     return list(rows.values()), exclusions
 
@@ -543,11 +589,18 @@ def build_ofi_action_outcome_calibration(
     for row in current_rows:
         prior_rows[str(row["ledger_key"])] = row
     rows = list(prior_rows.values())
+    for row in rows:
+        trace_id = str(row.get("decision_trace_id") or "")
+        _attach_ofi_outcome(row, outcome_by_trace.get(trace_id))
     mature_rows = [
         row
         for row in rows
         if row.get("outcome_status") == "mature"
         and _number(row.get("ofi_action_adjustment_delta_pct")) is not None
+    ]
+    pending_rows = [row for row in rows if row.get("outcome_status") == "pending"]
+    not_comparable_rows = [
+        row for row in rows if row.get("outcome_status") == "mature_not_comparable"
     ]
     deltas = [float(row["ofi_action_adjustment_delta_pct"]) for row in mature_rows]
     return {
@@ -557,13 +610,24 @@ def build_ofi_action_outcome_calibration(
             if mature_rows
             else (
                 "exact_trace_rows_waiting_for_mature_outcome"
-                if rows
-                else "sample_floor_keep_collecting"
+                if pending_rows
+                else (
+                    "mature_outcome_not_comparable_keep_collecting"
+                    if not_comparable_rows
+                    else "sample_floor_keep_collecting"
+                )
             )
         ),
         "exact_trace_row_count": len(rows),
         "mature_outcome_row_count": len(mature_rows),
-        "pending_outcome_row_count": len(rows) - len(mature_rows),
+        "pending_outcome_row_count": len(pending_rows),
+        "mature_not_comparable_outcome_row_count": len(not_comparable_rows),
+        "mature_not_comparable_reason_counts": dict(
+            Counter(
+                str(row.get("outcome_not_comparable_reason") or "unknown")
+                for row in not_comparable_rows
+            )
+        ),
         "raw_to_final_transition_counts": dict(
             Counter(
                 f"{row.get('raw_action')}->{row.get('final_action')}"
@@ -609,7 +673,7 @@ def build_report(
     selected = (
         max(
             review_ready,
-            key=lambda row: _number(row.get("source_quality_adjusted_ev_delta_pct"))
+            key=lambda row: _number(row.get("candidate_primary_decision_ev_delta_pct"))
             or float("-inf"),
         )
         if review_ready
@@ -654,7 +718,12 @@ def build_report(
             "status": "retired_from_runtime_authority",
             "replacement": POLICY_VERSION,
             "numeric_score_ema_used_for_live_decision": False,
-            "state_change_refresh_requires_independent_explicit_enable": True,
+            "projection_submitter_removed": True,
+            "projection_refresh_removed": True,
+            "runtime_env_family_removed": True,
+            "runtime_config_surface_removed": True,
+            "default_postclose_generation_removed": True,
+            "legacy_artifact_role": "explicit_archive_audit_only",
         },
         "ofi_smoothing_audit": build_ofi_smoothing_audit(pipeline_path),
         "ofi_action_outcome_calibration": ofi_action_outcome_calibration,

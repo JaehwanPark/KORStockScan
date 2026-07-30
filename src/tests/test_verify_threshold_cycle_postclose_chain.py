@@ -32,24 +32,31 @@ def test_source_quality_hard_block_status_fails_runtime_candidate_without_handof
     assert status["workorder_handoff_present"] is False
 
 
-def test_watching_score_smoothing_diagnostic_status_warns_for_auto_followup():
-    status = mod._watching_score_smoothing_diagnostic_status(
+def test_ai_decision_action_outcome_calibration_status_closes_legacy_dependency():
+    status = mod._ai_decision_action_outcome_calibration_status(
         {
-            "transition_guard": {
-                "status": "auto_followup_required",
-                "eligible": False,
-                "applied_candidate_status": "auto_followup_required",
-                "auto_followup_required_criteria": [
-                    "projected_buy_source_quality_adjusted_ev_pct",
-                ],
+            "schema": "ai_decision_action_outcome_calibration_v1",
+            "status": "cumulative_action_outcome_calibration_updated",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "candidate_summaries": [{"candidate_prompt_version": "candidate_v1"}],
+            "legacy_watching_score_smoothing": {
+                "status": "retired_from_runtime_authority",
+                "numeric_score_ema_used_for_live_decision": False,
+                "projection_submitter_removed": True,
+                "projection_refresh_removed": True,
+                "runtime_env_family_removed": True,
+                "runtime_config_surface_removed": True,
+                "default_postclose_generation_removed": True,
             },
-            "automation_chain": {"automatic_generation": True},
         }
     )
 
-    assert status["status"] == "warning"
-    assert status["automatic_generation"] is True
-    assert status["root_cause_closure_status"] == "report_only_followup_open"
+    assert status["status"] == "pass"
+    assert status["candidate_count"] == 1
+    assert status["contract_errors"] == []
 
 
 def test_source_quality_hard_block_status_detects_bridge_selected_alias_without_handoff():
@@ -5150,7 +5157,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "\n".join(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
-                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false ai_watching_score_smoothing_diagnostic=false scalp_entry_adm=true lifecycle_decision_matrix=false code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false ai_watching_score_smoothing_diagnostic=false ai_decision_action_outcome_calibration=false scalp_entry_adm=true lifecycle_decision_matrix=false code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",
@@ -5246,7 +5253,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "lifecycle_decision_matrix",
     ]
     assert (
-        "ai_watching_score_smoothing_diagnostic"
+        "ai_decision_action_outcome_calibration"
         not in report["missing_required_artifacts"]
     )
 

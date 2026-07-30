@@ -49,11 +49,14 @@ EXACT_PAYLOAD_ANALYSIS_SCHEMA = "exact_payload_analysis_v1"
 ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA = "anticipatory_reversal_analysis_v1"
 SCORE_CORRELATION_SCHEMA = "ai_score_outcome_correlation_v1"
 RECOVERY_TRIGGER_SCHEMA = "ai_prompt_recovery_trigger_labels_v1"
+REVERSAL_SEQUENCE_SCHEMA = "ai_entry_reversal_sequence_replay_v1"
+REVERSAL_SEQUENCE_CONTEXT_SCHEMA = "entry_reversal_sequence_context_v1"
 INPUT_BUNDLE_VERSION = "scalping_multi_timeframe_context_v1"
 ENTRY_CONTEXT_SCHEMA = "entry_candle_context_v1"
 HOLDING_CONTEXT_SCHEMA = "holding_decision_context_v1"
 HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 HORIZON_END_MAX_LAG_SEC = 90
+PROFIT_OPPORTUNITY_THRESHOLD_PCT = 1.0
 PIPELINE_FORWARD_DAYS = 7
 PRIMARY_HORIZON_BY_STAGE = {
     "entry": "10m",
@@ -76,6 +79,7 @@ PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_paired_replay"
 DETAILED_PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_detailed_paired_replay"
 SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlation"
 RECOVERY_TRIGGER_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_recovery_trigger"
+REVERSAL_SEQUENCE_REPORT_DIR = DATA_DIR / "report" / "ai_entry_reversal_sequence_replay"
 PAIRED_REPLAY_MIN_ROWS = 30
 PAIRED_REPLAY_MIN_SYMBOLS = 10
 PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS = 10
@@ -92,6 +96,12 @@ RECOVERY_TRIGGER_MIN_ROWS = 15
 RECOVERY_TRIGGER_MIN_SYMBOLS = 10
 RECOVERY_TRIGGER_WINDOW_MIN = 5
 RECOVERY_OUTCOME_HORIZONS_MIN = (1, 3, 5, 10)
+REVERSAL_SEQUENCE_HORIZONS_MIN = (5, 10, 20, 30, 60)
+REVERSAL_SEQUENCE_MAX_PREVIOUS_SEC = 300
+REVERSAL_SEQUENCE_EPISODE_GAP_SEC = 300
+REVERSAL_SEQUENCE_REFERENCE_NEAR_BP = 150.0
+REVERSAL_SEQUENCE_MA_NEAR_BP = 100.0
+REVERSAL_SEQUENCE_MAX_PRICE_DECLINE_PCT = -0.35
 
 OFFLINE_CONTRACT = {
     "metric_role": "ai_decision_quality_observation",
@@ -136,6 +146,39 @@ RECOVERY_TRIGGER_CONTRACT = {
         "counterfactual_realized_pnl_merge",
         "provider_model_threshold_price_quantity_or_cap_change",
         "broker_or_safety_guard_bypass",
+        "bot_restart",
+    ],
+}
+
+REVERSAL_SEQUENCE_CONTRACT = {
+    "metric_role": "ai_entry_reversal_sequence_quality_observation",
+    "decision_authority": "offline_sequence_replay_only_no_runtime_change",
+    "window_policy": (
+        "previous_and_current_exact_snapshot_same_symbol_venue_session_then_"
+        "mature_5_10_20_30_60m_outcome"
+    ),
+    "sample_floor": (
+        "one_first_signal_episode_starts_observation_three_symbols_required_for_"
+        "prompt_candidate_review"
+    ),
+    "primary_decision_metric": (
+        "20m_first_signal_episode_source_quality_adjusted_ev_pct"
+    ),
+    "source_quality_gate": (
+        "exact_payload_hash_match_fresh_same_route_mature_horizon_no_future_feature"
+    ),
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "future_outcome_as_entry_feature",
+        "standalone_live_buy_wait_or_drop_authority",
+        "prompt_or_model_runtime_promotion",
+        "provider_threshold_price_quantity_or_cap_change",
+        "wide_spread_or_stale_quote_safety_bypass",
+        "broker_or_hard_safety_bypass",
+        "counterfactual_realized_pnl_merge",
         "bot_restart",
     ],
 }
@@ -251,12 +294,16 @@ def detailed_paired_path(
     target_date: str,
     *,
     candidate_prompt_version: str = DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    candidate_model: str | None = None,
 ) -> Path:
     suffix = (
         ""
         if candidate_prompt_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION
         else f"_{candidate_prompt_version}"
     )
+    if candidate_model:
+        model_slug = re.sub(r"[^a-z0-9._-]+", "_", candidate_model.strip().lower())
+        suffix += f"_model_{model_slug}"
     return (
         DETAILED_PAIRED_REPORT_DIR
         / f"ai_prompt_detailed_paired_replay_{target_date}{suffix}.json"
@@ -273,6 +320,13 @@ def score_correlation_path(target_date: str) -> Path:
 def recovery_trigger_path(target_date: str) -> Path:
     return (
         RECOVERY_TRIGGER_REPORT_DIR / f"ai_prompt_recovery_trigger_{target_date}.json"
+    )
+
+
+def reversal_sequence_path(target_date: str) -> Path:
+    return (
+        REVERSAL_SEQUENCE_REPORT_DIR
+        / f"ai_entry_reversal_sequence_replay_{target_date}.json"
     )
 
 
@@ -358,10 +412,13 @@ def load_promotion_for_target_date(
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+    return list(_iter_jsonl(path))
+
+
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
     resolved_path = existing_or_gzip_path(path)
     if not resolved_path.exists():
-        return rows
+        return
     with open_text_auto(resolved_path) as handle:
         for line in handle:
             try:
@@ -369,8 +426,7 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
             if isinstance(value, dict):
-                rows.append(value)
-    return rows
+                yield value
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -908,6 +964,10 @@ def annotate_primary_cohort_eligibility(
 
 def load_pipeline_price_and_lifecycle_rows(
     rows: Iterable[dict[str, Any]],
+    *,
+    stock_codes: set[str] | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     prices: list[dict[str, Any]] = []
     lifecycle: list[dict[str, Any]] = []
@@ -925,6 +985,16 @@ def load_pipeline_price_and_lifecycle_rows(
         fields = fields if isinstance(fields, dict) else {}
         timestamp = _parse_ts(row.get("emitted_at") or fields.get("event_ts"))
         code = _normalize_stock_code(row.get("stock_code") or fields.get("stock_code"))
+        if stock_codes is not None and code not in stock_codes:
+            continue
+        if (
+            timestamp is not None
+            and window_start is not None
+            and timestamp < window_start
+        ):
+            continue
+        if timestamp is not None and window_end is not None and timestamp > window_end:
+            continue
         price = next(
             (
                 parsed
@@ -959,27 +1029,34 @@ def load_pipeline_price_and_lifecycle_rows(
                     ),
                 }
             )
-        lifecycle.append(
-            {
-                "timestamp": timestamp.isoformat() if timestamp else None,
-                "stage": row.get("stage"),
-                "stock_code": code,
-                "record_id": row.get("record_id") or fields.get("record_id"),
-                "recommendation_id": fields.get("recommendation_id"),
-                "probe_bundle_id": fields.get("probe_bundle_id"),
-                "position_cycle_id": fields.get("position_cycle_id"),
-                "broker_order_no": fields.get("broker_order_no")
-                or fields.get("order_no"),
-                "actual_order_submitted": _bool(fields.get("actual_order_submitted")),
-                "filled": "fill" in str(row.get("stage") or "").lower()
-                or _bool(fields.get("filled")),
-                "realized_profit_pct": _number(
-                    fields.get("realized_profit_pct")
-                    if fields.get("realized_profit_pct") is not None
-                    else fields.get("profit_rate")
-                ),
-            }
-        )
+        lifecycle_identifiers = {
+            "record_id": row.get("record_id") or fields.get("record_id"),
+            "recommendation_id": fields.get("recommendation_id"),
+            "probe_bundle_id": fields.get("probe_bundle_id"),
+            "position_cycle_id": fields.get("position_cycle_id"),
+            "broker_order_no": fields.get("broker_order_no") or fields.get("order_no"),
+        }
+        if any(
+            value not in (None, "", "-") for value in lifecycle_identifiers.values()
+        ):
+            lifecycle.append(
+                {
+                    "timestamp": timestamp.isoformat() if timestamp else None,
+                    "stage": row.get("stage"),
+                    "stock_code": code,
+                    **lifecycle_identifiers,
+                    "actual_order_submitted": _bool(
+                        fields.get("actual_order_submitted")
+                    ),
+                    "filled": "fill" in str(row.get("stage") or "").lower()
+                    or _bool(fields.get("filled")),
+                    "realized_profit_pct": _number(
+                        fields.get("realized_profit_pct")
+                        if fields.get("realized_profit_pct") is not None
+                        else fields.get("profit_rate")
+                    ),
+                }
+            )
     return prices, lifecycle
 
 
@@ -1424,6 +1501,50 @@ def mature_outcome_labels(
                     else ("adverse" if adverse_hit else "neither")
                 )
             )
+            profit_opportunity_price = reference * (
+                1.0 + (PROFIT_OPPORTUNITY_THRESHOLD_PCT / 100.0)
+            )
+            profit_opportunity_index = next(
+                (
+                    index
+                    for index, row in enumerate(window)
+                    if row["_high"] >= profit_opportunity_price
+                ),
+                None,
+            )
+            below_reference_index = next(
+                (index for index, row in enumerate(window) if row["_low"] < reference),
+                None,
+            )
+            if profit_opportunity_index is None:
+                profit_opportunity_sequence = (
+                    "below_reference_without_profit"
+                    if below_reference_index is not None
+                    else "neither"
+                )
+            elif below_reference_index is None:
+                profit_opportunity_sequence = "profit_without_prior_drawdown"
+            elif below_reference_index < profit_opportunity_index:
+                profit_opportunity_sequence = "drawdown_then_profit_recovery"
+            elif profit_opportunity_index < below_reference_index:
+                profit_opportunity_sequence = "profit_before_drawdown"
+            else:
+                profit_opportunity_sequence = "ambiguous_same_bar"
+            profit_opportunity_row = (
+                window[profit_opportunity_index]
+                if profit_opportunity_index is not None
+                else None
+            )
+            below_reference_row = (
+                window[below_reference_index]
+                if below_reference_index is not None
+                else None
+            )
+            pre_profit_rows = (
+                window[: profit_opportunity_index + 1]
+                if profit_opportunity_index is not None
+                else []
+            )
             horizon_metrics[f"{horizon}m"] = {
                 "sample_count": len(window),
                 "mfe_pct": max(high_returns),
@@ -1432,6 +1553,27 @@ def mature_outcome_labels(
                 "target_hit_at": target_hit,
                 "adverse_hit_at": adverse_hit,
                 "first_hit": first_hit,
+                "profit_opportunity_threshold_pct": (PROFIT_OPPORTUNITY_THRESHOLD_PCT),
+                "profit_opportunity_observed": (profit_opportunity_index is not None),
+                "profit_opportunity_hit_at": (
+                    profit_opportunity_row["_timestamp"].isoformat()
+                    if profit_opportunity_row is not None
+                    else None
+                ),
+                "below_reference_excursion_at": (
+                    below_reference_row["_timestamp"].isoformat()
+                    if below_reference_row is not None
+                    else None
+                ),
+                "profit_opportunity_sequence": profit_opportunity_sequence,
+                "pre_profit_mae_pct": (
+                    min(
+                        round(((row["_low"] / reference) - 1.0) * 100.0, 10)
+                        for row in pre_profit_rows
+                    )
+                    if pre_profit_rows
+                    else None
+                ),
                 "counterfactual_only": True,
                 "window_basis": (
                     "next_session_from_first_observation"
@@ -3206,6 +3348,8 @@ def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
         contract["exposure_semantics"] = candidate.get("exposure_semantics")
     if candidate.get("learning_sample_floor") is not None:
         contract["learning_sample_floor"] = candidate.get("learning_sample_floor")
+    if candidate.get("model_comparison") is not None:
+        contract["model_comparison"] = candidate.get("model_comparison")
     return _sha256(contract)
 
 
@@ -3268,10 +3412,27 @@ def execute_openai_prompt_v2_candidate(
     candidate = request.get("candidate") or {}
     provider = str(candidate.get("provider") or "").strip().lower()
     model = str(candidate.get("model") or "").strip()
+    reasoning_effort = str(candidate.get("reasoning_effort") or "").strip().lower()
+    control_provider = str(control.get("provider") or "").strip().lower()
+    control_model = str(control.get("model") or "").strip()
+    model_comparison = candidate.get("model_comparison")
+    model_comparison = model_comparison if isinstance(model_comparison, dict) else {}
+    model_comparison_allowed = bool(
+        model_comparison.get("enabled") is True
+        and model_comparison.get("decision_authority")
+        == "offline_model_comparison_only"
+        and model_comparison.get("baseline_model") == control_model
+        and model_comparison.get("candidate_model") == model
+        and str(model_comparison.get("baseline_reasoning_effort") or "")
+        == str(control.get("reasoning_effort") or "")
+        and str(model_comparison.get("candidate_reasoning_effort") or "")
+        == reasoning_effort
+        and model != control_model
+    )
     if (
         provider != "openai"
-        or provider != str(control.get("provider") or "").strip().lower()
-        or model != str(control.get("model") or "").strip()
+        or provider != control_provider
+        or (model != control_model and not model_comparison_allowed)
     ):
         raise ValueError("provider_or_model_control_mismatch")
     keys = list(api_keys or _offline_openai_api_keys())
@@ -3466,11 +3627,11 @@ def execute_openai_prompt_v2_candidate(
         )
     started = time.perf_counter()
     client = OpenAI(api_key=keys[key_index], max_retries=0)
-    response = client.responses.create(
-        model=model,
-        instructions=instructions,
-        input=user_input,
-        text={
+    response_kwargs: dict[str, Any] = {
+        "model": model,
+        "instructions": instructions,
+        "input": user_input,
+        "text": {
             "format": {
                 "type": "json_schema",
                 "name": f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{stage}",
@@ -3479,8 +3640,8 @@ def execute_openai_prompt_v2_candidate(
             },
             "verbosity": "low",
         },
-        store=False,
-        metadata={
+        "store": False,
+        "metadata": {
             "paired_replay_id": pair_id,
             "decision_stage": stage,
             "candidate_prompt_version": str(
@@ -3493,8 +3654,11 @@ def execute_openai_prompt_v2_candidate(
             "candidate_input_sha256": str(request.get("candidate_input_sha256") or ""),
             "runtime_effect": "false",
         },
-        timeout=max(1.0, float(timeout_sec)),
-    )
+        "timeout": max(1.0, float(timeout_sec)),
+    }
+    if reasoning_effort:
+        response_kwargs["reasoning"] = {"effort": reasoning_effort}
+    response = client.responses.create(**response_kwargs)
     raw_text = _openai_output_text(response)
     parse_error = ""
     try:
@@ -3513,6 +3677,7 @@ def execute_openai_prompt_v2_candidate(
         "provider_provenance": {
             "provider": "openai",
             "model": model,
+            "reasoning_effort": reasoning_effort or None,
             "transport": "openai_responses_http_offline",
             "response_id": str(response_id or "") or None,
             "response_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
@@ -3537,6 +3702,80 @@ def _candidate_envelope(
             dict(value.get("provider_provenance") or {}),
         )
     return dict(value), {}
+
+
+def _successful_candidate_result_model(result: dict[str, Any]) -> str:
+    attempts = result.get("candidate_attempts") or []
+    for attempt in reversed(attempts):
+        if not isinstance(attempt, dict):
+            continue
+        provenance = attempt.get("provider_provenance")
+        if isinstance(provenance, dict) and provenance.get("model"):
+            return str(provenance["model"])
+    return ""
+
+
+def validate_model_comparison_baseline(
+    requests: list[dict[str, Any]],
+    baseline_report: dict[str, Any],
+) -> list[str]:
+    if not requests:
+        return ["model_comparison_requests_missing"]
+    first_comparison = (requests[0].get("candidate") or {}).get("model_comparison")
+    first_comparison = first_comparison if isinstance(first_comparison, dict) else {}
+    baseline_model = str(first_comparison.get("baseline_model") or "")
+    if not baseline_model:
+        return ["model_comparison_baseline_model_missing"]
+    expected_baseline_effort = str(
+        first_comparison.get("baseline_reasoning_effort") or ""
+    )
+    baseline_request_models = {
+        str((row.get("candidate") or {}).get("model") or "")
+        for row in baseline_report.get("requests") or []
+        if isinstance(row, dict)
+    }
+    baseline_request_efforts = {
+        str((row.get("candidate") or {}).get("reasoning_effort") or "")
+        for row in baseline_report.get("requests") or []
+        if isinstance(row, dict)
+    }
+    baseline_results = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in baseline_report.get("results") or []
+        if isinstance(row, dict) and row.get("status") == "pass"
+    }
+    errors: list[str] = []
+    if not baseline_report:
+        errors.append("model_comparison_baseline_report_missing")
+    if baseline_request_models != {baseline_model}:
+        errors.append("model_comparison_baseline_report_model_mismatch")
+    if baseline_request_efforts != {expected_baseline_effort}:
+        errors.append("model_comparison_baseline_report_reasoning_effort_mismatch")
+    for request in requests:
+        trace_id = str(request.get("decision_trace_id") or "")
+        result = baseline_results.get(trace_id)
+        if not result:
+            errors.append(f"baseline_pass_result_missing:{trace_id}")
+            continue
+        if _successful_candidate_result_model(result) != baseline_model:
+            errors.append(f"baseline_provider_model_mismatch:{trace_id}")
+        expected_values = {
+            "payload_sha256": request.get("payload_sha256"),
+            "candidate_prompt_sha256": (request.get("candidate") or {}).get(
+                "system_prompt_sha256"
+            ),
+            "candidate_input_sha256": request.get("candidate_input_sha256"),
+            "exact_payload_analysis_sha256": request.get(
+                "exact_payload_analysis_sha256"
+            ),
+            "anticipatory_reversal_analysis_sha256": request.get(
+                "anticipatory_reversal_analysis_sha256"
+            ),
+        }
+        for key, expected in expected_values.items():
+            if result.get(key) != expected:
+                errors.append(f"baseline_{key}_mismatch:{trace_id}")
+    return list(dict.fromkeys(errors))
 
 
 def prepare_paired_replay_requests(
@@ -3678,6 +3917,7 @@ def prepare_detailed_paired_replay_requests(
     requests: list[dict[str, Any]],
     *,
     candidate_prompt_version: str = DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    candidate_model_override: str | None = None,
 ) -> list[dict[str, Any]]:
     """Attach a deterministic analysis ledger to the same exact payload."""
 
@@ -3689,6 +3929,11 @@ def prepare_detailed_paired_replay_requests(
     }
     if candidate_prompt_version not in supported_prompt_versions:
         raise ValueError("unsupported_detailed_candidate_prompt_version")
+    if candidate_model_override and not re.fullmatch(
+        r"[a-z0-9][a-z0-9._-]{0,127}",
+        candidate_model_override,
+    ):
+        raise ValueError("invalid_offline_candidate_model_override")
     detailed_requests: list[dict[str, Any]] = []
     for request in requests:
         exact_payload = _replay_exact_payload(request.get("exact_payload"))
@@ -3751,6 +3996,36 @@ def prepare_detailed_paired_replay_requests(
             "analysis_schema": EXACT_PAYLOAD_ANALYSIS_SCHEMA,
             "analysis_schema_sha256": _sha256(EXACT_PAYLOAD_ANALYSIS_SCHEMA),
         }
+        if candidate_model_override:
+            baseline_model = str(original_candidate.get("model") or "").strip()
+            if not baseline_model:
+                raise ValueError("offline_model_comparison_baseline_model_missing")
+            if candidate_model_override == baseline_model:
+                raise ValueError("offline_candidate_model_matches_baseline")
+            baseline_reasoning_effort = str(
+                original_candidate.get("reasoning_effort") or ""
+            ).strip()
+            candidate_reasoning_effort = baseline_reasoning_effort
+            reasoning_compatibility_mapping = "exact"
+            if (
+                candidate_model_override == "gpt-5-nano"
+                and baseline_reasoning_effort in {"", "none"}
+            ):
+                candidate_reasoning_effort = "minimal"
+                reasoning_compatibility_mapping = "none_to_minimal"
+            candidate["model"] = candidate_model_override
+            candidate["reasoning_effort"] = candidate_reasoning_effort
+            candidate["model_comparison"] = {
+                "enabled": True,
+                "baseline_model": baseline_model,
+                "candidate_model": candidate_model_override,
+                "baseline_reasoning_effort": baseline_reasoning_effort or None,
+                "candidate_reasoning_effort": candidate_reasoning_effort or None,
+                "reasoning_compatibility_mapping": (reasoning_compatibility_mapping),
+                "decision_authority": "offline_model_comparison_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
         if anticipatory_analysis is not None:
             candidate.update(
                 {
@@ -3795,8 +4070,15 @@ def prepare_detailed_paired_replay_requests(
         detailed_requests.append(
             {
                 **request,
-                "paired_replay_id": str(request.get("paired_replay_id") or "").replace(
-                    "pair-", "detailed-pair-", 1
+                "paired_replay_id": (
+                    str(request.get("paired_replay_id") or "").replace(
+                        "pair-", "detailed-pair-", 1
+                    )
+                    + (
+                        f"-model-{_sha256(candidate_model_override)[:8]}"
+                        if candidate_model_override
+                        else ""
+                    )
                 ),
                 "exact_payload_analysis": analysis,
                 "exact_payload_analysis_sha256": analysis["analysis_sha256"],
@@ -4209,9 +4491,29 @@ def build_paired_replay_report(
         mfe = _number(preferred.get("mfe_pct"))
         mae = _number(preferred.get("mae_pct"))
         first_hit = str(preferred.get("first_hit") or "")
+        profit_opportunity_observed = preferred.get("profit_opportunity_observed")
+        if profit_opportunity_observed is None:
+            profit_opportunity_observed = bool(
+                mfe is not None and mfe >= PROFIT_OPPORTUNITY_THRESHOLD_PCT
+            )
+        else:
+            profit_opportunity_observed = bool(profit_opportunity_observed)
+        profit_opportunity_sequence = str(
+            preferred.get("profit_opportunity_sequence") or "not_recorded_legacy"
+        )
+        pre_profit_mae = _number(preferred.get("pre_profit_mae_pct"))
         candidate_errors: list[str] = []
-        if candidate_action == "DROP" and mfe is not None and mfe >= 1.0:
+        if candidate_action == "DROP" and profit_opportunity_observed:
             candidate_errors.append("false_drop")
+            if profit_opportunity_sequence == "drawdown_then_profit_recovery":
+                candidate_errors.append("false_drop_drawdown_recovery")
+            elif profit_opportunity_sequence in {
+                "profit_without_prior_drawdown",
+                "profit_before_drawdown",
+            }:
+                candidate_errors.append("false_drop_direct_profit")
+            elif profit_opportunity_sequence == "ambiguous_same_bar":
+                candidate_errors.append("false_drop_same_bar_sequence_ambiguous")
         if candidate_action == "WAIT" and mfe is not None and mfe >= 1.0:
             candidate_errors.append("false_wait")
         if candidate_action == "BUY" and (
@@ -4248,6 +4550,17 @@ def build_paired_replay_report(
                 "outcome_mfe_pct": mfe,
                 "outcome_mae_pct": mae,
                 "first_hit": first_hit,
+                "profit_opportunity_threshold_pct": (
+                    _number(preferred.get("profit_opportunity_threshold_pct"))
+                    or PROFIT_OPPORTUNITY_THRESHOLD_PCT
+                ),
+                "profit_opportunity_observed": profit_opportunity_observed,
+                "profit_opportunity_hit_at": preferred.get("profit_opportunity_hit_at"),
+                "below_reference_excursion_at": preferred.get(
+                    "below_reference_excursion_at"
+                ),
+                "profit_opportunity_sequence": profit_opportunity_sequence,
+                "pre_profit_mae_pct": pre_profit_mae,
                 "candidate_error_taxonomy": candidate_errors,
             }
         )
@@ -4447,6 +4760,79 @@ def build_paired_replay_report(
         if valid_results
         else None
     )
+    candidate_drop_rows = [
+        row for row in comparable_rows if row["candidate_action"] == "DROP"
+    ]
+    candidate_drop_profit_rows = [
+        row for row in candidate_drop_rows if row["profit_opportunity_observed"]
+    ]
+    candidate_drop_trajectory = {
+        "result_drop_count": candidate_action_counter.get("DROP", 0),
+        "comparable_drop_count": len(candidate_drop_rows),
+        "outcome_unavailable_drop_count": (
+            candidate_action_counter.get("DROP", 0) - len(candidate_drop_rows)
+        ),
+        "profit_opportunity_threshold_pct": PROFIT_OPPORTUNITY_THRESHOLD_PCT,
+        "profit_opportunity_count": len(candidate_drop_profit_rows),
+        "drawdown_then_profit_recovery_count": sum(
+            row["profit_opportunity_sequence"] == "drawdown_then_profit_recovery"
+            for row in candidate_drop_profit_rows
+        ),
+        "direct_profit_count": sum(
+            row["profit_opportunity_sequence"]
+            in {"profit_without_prior_drawdown", "profit_before_drawdown"}
+            for row in candidate_drop_profit_rows
+        ),
+        "same_bar_sequence_ambiguous_count": sum(
+            row["profit_opportunity_sequence"] == "ambiguous_same_bar"
+            for row in candidate_drop_profit_rows
+        ),
+        "positive_excursion_below_profit_count": sum(
+            (row["outcome_mfe_pct"] or 0.0) > 0.0
+            and not row["profit_opportunity_observed"]
+            for row in candidate_drop_rows
+        ),
+        "no_positive_excursion_count": sum(
+            (row["outcome_mfe_pct"] or 0.0) <= 0.0 for row in candidate_drop_rows
+        ),
+        "profit_sequence_counts": dict(
+            Counter(row["profit_opportunity_sequence"] for row in candidate_drop_rows)
+        ),
+        "pre_profit_mae_buckets": {
+            "nonnegative": sum(
+                row["pre_profit_mae_pct"] is not None
+                and row["pre_profit_mae_pct"] >= 0.0
+                for row in candidate_drop_profit_rows
+            ),
+            "minus_0_to_0_5": sum(
+                row["pre_profit_mae_pct"] is not None
+                and -0.5 <= row["pre_profit_mae_pct"] < 0.0
+                for row in candidate_drop_profit_rows
+            ),
+            "minus_0_5_to_1": sum(
+                row["pre_profit_mae_pct"] is not None
+                and -1.0 <= row["pre_profit_mae_pct"] < -0.5
+                for row in candidate_drop_profit_rows
+            ),
+            "minus_1_to_2": sum(
+                row["pre_profit_mae_pct"] is not None
+                and -2.0 <= row["pre_profit_mae_pct"] < -1.0
+                for row in candidate_drop_profit_rows
+            ),
+            "below_minus_2": sum(
+                row["pre_profit_mae_pct"] is not None
+                and row["pre_profit_mae_pct"] < -2.0
+                for row in candidate_drop_profit_rows
+            ),
+            "not_recorded": sum(
+                row["pre_profit_mae_pct"] is None for row in candidate_drop_profit_rows
+            ),
+        },
+        "interpretation": (
+            "DROP is not equivalent to a monotonic decline. Profit opportunity "
+            "and drawdown-before-profit are evaluated separately."
+        ),
+    }
     quality_checks = {
         "all_pairs_comparable": bool(requests)
         and len(comparable_rows) == len(requests),
@@ -4579,6 +4965,7 @@ def build_paired_replay_report(
             )
         ),
         "candidate_action_counts": dict(candidate_action_counter),
+        "candidate_drop_outcome_trajectory": candidate_drop_trajectory,
         "candidate_edge_state_counts": dict(
             Counter(
                 str(
@@ -4701,6 +5088,408 @@ def build_detailed_three_way_comparison(
         "detailed_error_taxonomy_counts": dict(detailed_errors),
         "rows": rows,
         **OFFLINE_CONTRACT,
+    }
+
+
+def _model_replay_attempt_stats(report: dict[str, Any]) -> dict[str, Any]:
+    attempts = [
+        attempt
+        for result in report.get("results") or []
+        if isinstance(result, dict)
+        for attempt in result.get("candidate_attempts") or []
+        if isinstance(attempt, dict)
+    ]
+    provenance_rows = [
+        row
+        for attempt in attempts
+        if isinstance((row := attempt.get("provider_provenance")), dict)
+    ]
+    openai_provenance_rows = [
+        row
+        for row in provenance_rows
+        if str(row.get("provider") or "").lower() == "openai" and row.get("model")
+    ]
+    latencies = sorted(
+        value
+        for row in provenance_rows
+        if (value := _number(row.get("latency_ms"))) is not None
+    )
+
+    def percentile(fraction: float) -> float | None:
+        if not latencies:
+            return None
+        index = max(
+            0, min(len(latencies) - 1, math.ceil(len(latencies) * fraction) - 1)
+        )
+        return latencies[index]
+
+    return {
+        "provider_attempt_count": len(attempts),
+        "openai_api_attempt_count": len(openai_provenance_rows),
+        "deterministic_adapter_attempt_count": sum(
+            str(row.get("provider") or "") == "deterministic_offline_adapter"
+            for row in provenance_rows
+        ),
+        "provider_models": sorted(
+            {str(row.get("model") or "") for row in provenance_rows if row.get("model")}
+        ),
+        "provider_reasoning_efforts": sorted(
+            {
+                str(row.get("reasoning_effort") or "")
+                for row in provenance_rows
+                if row.get("reasoning_effort")
+            }
+        ),
+        "configured_reasoning_efforts": sorted(
+            {
+                str((request.get("candidate") or {}).get("reasoning_effort") or "")
+                for request in report.get("requests") or []
+                if isinstance(request, dict)
+                and (request.get("candidate") or {}).get("reasoning_effort")
+            }
+        ),
+        "provider_none_count": sum(
+            row.get("provider_none") is True for row in provenance_rows
+        ),
+        "latency_ms_mean": fmean(latencies) if latencies else None,
+        "latency_ms_p50": percentile(0.50),
+        "latency_ms_p95": percentile(0.95),
+        "input_tokens_total": sum(
+            int(value)
+            for row in provenance_rows
+            if (value := _number(row.get("input_tokens"))) is not None
+        ),
+        "output_tokens_total": sum(
+            int(value)
+            for row in provenance_rows
+            if (value := _number(row.get("output_tokens"))) is not None
+        ),
+        "total_tokens": sum(
+            int(value)
+            for row in provenance_rows
+            if (value := _number(row.get("total_tokens"))) is not None
+        ),
+    }
+
+
+def build_model_replay_comparison(
+    *,
+    baseline_report: dict[str, Any],
+    candidate_report: dict[str, Any],
+    baseline_model: str,
+    candidate_model: str,
+) -> dict[str, Any]:
+    """Compare two model runs over the same exact-payload replay cohort."""
+
+    baseline_results = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in baseline_report.get("results") or []
+        if isinstance(row, dict) and row.get("status") == "pass"
+    }
+    candidate_results = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in candidate_report.get("results") or []
+        if isinstance(row, dict) and row.get("status") == "pass"
+    }
+    common_trace_ids = sorted(set(baseline_results) & set(candidate_results))
+    baseline_all_results = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in baseline_report.get("results") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    candidate_all_results = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in candidate_report.get("results") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    baseline_pairs = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in baseline_report.get("paired_comparisons") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    candidate_pairs = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in candidate_report.get("paired_comparisons") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    common_comparable_trace_ids = [
+        trace_id
+        for trace_id in common_trace_ids
+        if trace_id in baseline_pairs and trace_id in candidate_pairs
+    ]
+    transition_counts: Counter[str] = Counter()
+    exact_response_match_count = 0
+    payload_hash_mismatch_count = 0
+    prompt_hash_mismatch_count = 0
+    candidate_input_hash_mismatch_count = 0
+    for trace_id in common_trace_ids:
+        baseline = baseline_results[trace_id]
+        candidate = candidate_results[trace_id]
+        baseline_response = baseline.get("candidate_response") or {}
+        candidate_response = candidate.get("candidate_response") or {}
+        baseline_action = str(baseline_response.get("action") or "UNKNOWN")
+        candidate_action = str(candidate_response.get("action") or "UNKNOWN")
+        transition_counts[f"{baseline_action}->{candidate_action}"] += 1
+        exact_response_match_count += _sha256(baseline_response) == _sha256(
+            candidate_response
+        )
+        payload_hash_mismatch_count += baseline.get("payload_sha256") != candidate.get(
+            "payload_sha256"
+        )
+        prompt_hash_mismatch_count += baseline.get(
+            "candidate_prompt_sha256"
+        ) != candidate.get("candidate_prompt_sha256")
+        candidate_input_hash_mismatch_count += baseline.get(
+            "candidate_input_sha256"
+        ) != candidate.get("candidate_input_sha256")
+
+    def common_mean(
+        rows: dict[str, dict[str, Any]],
+        key: str,
+    ) -> float | None:
+        values = [
+            value
+            for trace_id in common_comparable_trace_ids
+            if (value := _number(rows[trace_id].get(key))) is not None
+        ]
+        return fmean(values) if values else None
+
+    baseline_common_raw_ev = common_mean(
+        baseline_pairs,
+        "candidate_decision_value_pct",
+    )
+    candidate_common_raw_ev = common_mean(
+        candidate_pairs,
+        "candidate_decision_value_pct",
+    )
+    baseline_common_primary_ev = common_mean(
+        baseline_pairs,
+        "candidate_primary_decision_value_pct",
+    )
+    candidate_common_primary_ev = common_mean(
+        candidate_pairs,
+        "candidate_primary_decision_value_pct",
+    )
+    full_eligible_trace_ids = sorted(set(baseline_pairs) & set(candidate_all_results))
+
+    def full_eligible_means(
+        key: str,
+    ) -> tuple[float | None, float | None, int]:
+        baseline_values: list[float] = []
+        candidate_values: list[float] = []
+        missing_metric_count = 0
+        for trace_id in full_eligible_trace_ids:
+            baseline_value = _number(baseline_pairs[trace_id].get(key))
+            candidate_result = candidate_all_results[trace_id]
+            candidate_pair = candidate_pairs.get(trace_id)
+            if baseline_value is None:
+                missing_metric_count += 1
+                continue
+            if candidate_result.get("status") == "pass":
+                candidate_value = (
+                    _number(candidate_pair.get(key))
+                    if isinstance(candidate_pair, dict)
+                    else None
+                )
+                if candidate_value is None:
+                    missing_metric_count += 1
+                    continue
+            else:
+                # Provider/schema failures close without exposure in this offline
+                # comparison. Retain them in the eligible denominator rather than
+                # comparing only the candidate model's successful subset.
+                candidate_value = 0.0
+            baseline_values.append(baseline_value)
+            candidate_values.append(candidate_value)
+        return (
+            fmean(baseline_values) if baseline_values else None,
+            fmean(candidate_values) if candidate_values else None,
+            missing_metric_count,
+        )
+
+    (
+        baseline_full_eligible_raw_ev,
+        candidate_fail_closed_full_eligible_raw_ev,
+        full_eligible_raw_metric_missing_count,
+    ) = full_eligible_means("candidate_decision_value_pct")
+    (
+        baseline_full_eligible_primary_ev,
+        candidate_fail_closed_full_eligible_primary_ev,
+        full_eligible_primary_metric_missing_count,
+    ) = full_eligible_means("candidate_primary_decision_value_pct")
+
+    def delta(
+        candidate_value: float | None, baseline_value: float | None
+    ) -> float | None:
+        if candidate_value is None or baseline_value is None:
+            return None
+        return candidate_value - baseline_value
+
+    baseline_common_errors = Counter(
+        error
+        for trace_id in common_comparable_trace_ids
+        for error in baseline_pairs[trace_id].get("candidate_error_taxonomy") or []
+    )
+    candidate_common_errors = Counter(
+        error
+        for trace_id in common_comparable_trace_ids
+        for error in candidate_pairs[trace_id].get("candidate_error_taxonomy") or []
+    )
+
+    return {
+        "schema": "ai_prompt_model_replay_comparison_v1",
+        "baseline_model": baseline_model,
+        "candidate_model": candidate_model,
+        "baseline_report_status": baseline_report.get("status"),
+        "candidate_report_status": candidate_report.get("status"),
+        "baseline_result_count": baseline_report.get("result_count"),
+        "candidate_result_count": candidate_report.get("result_count"),
+        "common_pass_count": len(common_trace_ids),
+        "common_comparable_count": len(common_comparable_trace_ids),
+        "candidate_nonpass_count": (
+            int(candidate_report.get("result_count") or 0) - len(common_trace_ids)
+        ),
+        "baseline_pass_rate_pct": (
+            len(baseline_results) / len(baseline_all_results) * 100.0
+            if baseline_all_results
+            else None
+        ),
+        "candidate_pass_rate_pct": (
+            len(candidate_results) / len(candidate_all_results) * 100.0
+            if candidate_all_results
+            else None
+        ),
+        "common_cohort_sha256": _sha256(common_trace_ids),
+        "common_comparable_cohort_sha256": _sha256(common_comparable_trace_ids),
+        "full_eligible_cohort_count": len(full_eligible_trace_ids),
+        "full_eligible_cohort_sha256": _sha256(full_eligible_trace_ids),
+        "candidate_fail_closed_nonpass_value_policy": "zero_no_exposure",
+        "full_eligible_raw_metric_missing_count": (
+            full_eligible_raw_metric_missing_count
+        ),
+        "full_eligible_primary_metric_missing_count": (
+            full_eligible_primary_metric_missing_count
+        ),
+        "payload_hash_mismatch_count": payload_hash_mismatch_count,
+        "prompt_hash_mismatch_count": prompt_hash_mismatch_count,
+        "candidate_input_hash_mismatch_count": candidate_input_hash_mismatch_count,
+        "action_agreement_count": sum(
+            count
+            for transition, count in transition_counts.items()
+            if len(set(transition.split("->"))) == 1
+        ),
+        "action_agreement_rate_pct": (
+            sum(
+                count
+                for transition, count in transition_counts.items()
+                if len(set(transition.split("->"))) == 1
+            )
+            / len(common_trace_ids)
+            * 100.0
+            if common_trace_ids
+            else None
+        ),
+        "exact_response_match_count": exact_response_match_count,
+        "action_transition_counts": dict(transition_counts),
+        "baseline_common_action_counts": dict(
+            Counter(
+                str(
+                    (baseline_results[trace_id].get("candidate_response") or {}).get(
+                        "action"
+                    )
+                    or "UNKNOWN"
+                )
+                for trace_id in common_trace_ids
+            )
+        ),
+        "candidate_common_action_counts": dict(
+            Counter(
+                str(
+                    (candidate_results[trace_id].get("candidate_response") or {}).get(
+                        "action"
+                    )
+                    or "UNKNOWN"
+                )
+                for trace_id in common_trace_ids
+            )
+        ),
+        "baseline_full_action_counts": baseline_report.get("candidate_action_counts")
+        or {},
+        "candidate_full_pass_action_counts": candidate_report.get(
+            "candidate_action_counts"
+        )
+        or {},
+        "baseline_common_candidate_source_quality_adjusted_ev_pct": (
+            baseline_common_raw_ev
+        ),
+        "candidate_common_source_quality_adjusted_ev_pct": candidate_common_raw_ev,
+        "candidate_vs_baseline_common_source_quality_adjusted_ev_delta_pct": delta(
+            candidate_common_raw_ev,
+            baseline_common_raw_ev,
+        ),
+        "baseline_common_candidate_primary_decision_ev_pct": (
+            baseline_common_primary_ev
+        ),
+        "candidate_common_primary_decision_ev_pct": candidate_common_primary_ev,
+        "candidate_vs_baseline_common_primary_decision_ev_delta_pct": delta(
+            candidate_common_primary_ev,
+            baseline_common_primary_ev,
+        ),
+        "baseline_full_candidate_source_quality_adjusted_ev_pct": baseline_report.get(
+            "candidate_source_quality_adjusted_ev_pct"
+        ),
+        "candidate_full_pass_source_quality_adjusted_ev_pct": candidate_report.get(
+            "candidate_source_quality_adjusted_ev_pct"
+        ),
+        "baseline_full_candidate_primary_decision_ev_pct": baseline_report.get(
+            "candidate_primary_decision_ev_pct"
+        ),
+        "candidate_full_pass_primary_decision_ev_pct": candidate_report.get(
+            "candidate_primary_decision_ev_pct"
+        ),
+        "baseline_full_eligible_source_quality_adjusted_ev_pct": (
+            baseline_full_eligible_raw_ev
+        ),
+        "candidate_fail_closed_full_eligible_source_quality_adjusted_ev_pct": (
+            candidate_fail_closed_full_eligible_raw_ev
+        ),
+        "candidate_vs_baseline_fail_closed_full_eligible_source_quality_adjusted_ev_delta_pct": delta(
+            candidate_fail_closed_full_eligible_raw_ev,
+            baseline_full_eligible_raw_ev,
+        ),
+        "baseline_full_eligible_primary_decision_ev_pct": (
+            baseline_full_eligible_primary_ev
+        ),
+        "candidate_fail_closed_full_eligible_primary_decision_ev_pct": (
+            candidate_fail_closed_full_eligible_primary_ev
+        ),
+        "candidate_vs_baseline_fail_closed_full_eligible_primary_decision_ev_delta_pct": delta(
+            candidate_fail_closed_full_eligible_primary_ev,
+            baseline_full_eligible_primary_ev,
+        ),
+        "baseline_common_error_taxonomy_counts": dict(baseline_common_errors),
+        "candidate_common_error_taxonomy_counts": dict(candidate_common_errors),
+        "baseline_full_error_taxonomy_counts": baseline_report.get(
+            "candidate_error_taxonomy_counts"
+        )
+        or {},
+        "candidate_full_pass_error_taxonomy_counts": candidate_report.get(
+            "candidate_error_taxonomy_counts"
+        )
+        or {},
+        "baseline_quality_gate_pass": baseline_report.get(
+            "candidate_quality_gate_pass"
+        ),
+        "candidate_quality_gate_pass": candidate_report.get(
+            "candidate_quality_gate_pass"
+        ),
+        "baseline_attempt_stats": _model_replay_attempt_stats(baseline_report),
+        "candidate_attempt_stats": _model_replay_attempt_stats(candidate_report),
+        "decision_authority": "offline_model_comparison_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
     }
 
 
@@ -5149,25 +5938,1348 @@ def build_recovery_trigger_report(
     }
 
 
+def _distance_bp(price: float | None, reference: Any) -> float | None:
+    reference_value = _number(reference)
+    if price is None or price <= 0 or reference_value is None or reference_value <= 0:
+        return None
+    return ((price / reference_value) - 1.0) * 10000.0
+
+
+def _entry_multi_timeframe_context(exact_payload: dict[str, Any]) -> dict[str, Any]:
+    candle_context = exact_payload.get("entry_candle_context")
+    candle_context = candle_context if isinstance(candle_context, dict) else {}
+    context = candle_context.get("multi_timeframe_context")
+    return context if isinstance(context, dict) else {}
+
+
+def _reversal_sequence_context_sha256(context: dict[str, Any]) -> str:
+    non_feature_fields = {
+        "candidate_action",
+        "control_action",
+        "conservative_execution_cost_pct",
+        "episode_id",
+        "outcome_join_key",
+        "outcomes",
+        "counterfactual_only",
+        "sequence_context_sha256",
+    }
+    return _sha256(
+        {
+            key: value
+            for key, value in context.items()
+            if key not in non_feature_fields and not key.startswith("_")
+        }
+    )
+
+
+def _entry_reversal_snapshot_context(
+    *,
+    request: dict[str, Any],
+    payload_row: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    exact_payload = _replay_exact_payload(payload_row.get("sanitized_user_input"))
+    if not isinstance(exact_payload, dict):
+        return None, "exact_payload_missing"
+    request_payload_sha256 = str(request.get("payload_sha256") or "")
+    stored_payload_sha256 = str(payload_row.get("payload_sha256") or "")
+    source_exact_sha256 = str(request.get("source_exact_payload_sha256") or "")
+    candidate_exact_sha256 = str(request.get("candidate_exact_payload_sha256") or "")
+    if (
+        payload_row.get("replay_exact") is not True
+        or not request_payload_sha256
+        or stored_payload_sha256 != request_payload_sha256
+        or not source_exact_sha256
+        or source_exact_sha256 != candidate_exact_sha256
+        or request.get("stage") != "entry"
+    ):
+        return None, "exact_payload_contract_mismatch"
+    request_code = _normalize_stock_code(request.get("stock_code"))
+    request_venue = _venue(request.get("effective_venue"))
+    request_session = _session(request.get("session_bucket"))
+    payload_code = _normalize_stock_code(
+        payload_row.get("symbol") or payload_row.get("stock_code")
+    )
+    payload_venue = _venue(payload_row.get("effective_venue"))
+    payload_session = _session(payload_row.get("session_bucket"))
+    if (
+        not request_code
+        or request_code != payload_code
+        or not request_venue
+        or request_venue != payload_venue
+        or not request_session
+        or request_session != payload_session
+        or not _venue_session_consistent(request_venue, request_session)
+    ):
+        return None, "payload_venue_session_contract_mismatch"
+    candle_context = exact_payload.get("entry_candle_context")
+    candle_context = candle_context if isinstance(candle_context, dict) else {}
+    completed_bars = [
+        row
+        for row in candle_context.get("bars") or []
+        if isinstance(row, dict) and row.get("forming") is not True
+    ]
+    if (
+        candle_context.get("schema") != ENTRY_CONTEXT_SCHEMA
+        or candle_context.get("input_bundle_version") != INPUT_BUNDLE_VERSION
+        or _venue(candle_context.get("venue")) != request_venue
+        or _session(candle_context.get("session")) != request_session
+        or not completed_bars
+        or (_number(candle_context.get("completed_bar_count")) or 0)
+        < len(completed_bars)
+    ):
+        return None, "canonical_completed_bar_contract_mismatch"
+    captured_at = _parse_ts(payload_row.get("captured_at"))
+    if captured_at is None:
+        return None, "captured_at_missing"
+    current = exact_payload.get("current")
+    current = current if isinstance(current, dict) else {}
+    features = exact_payload.get("features")
+    features = features if isinstance(features, dict) else {}
+    analysis = request.get("exact_payload_analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
+    source_quality = analysis.get("source_quality")
+    source_quality = source_quality if isinstance(source_quality, dict) else {}
+    structure = analysis.get("completed_structure")
+    structure = structure if isinstance(structure, dict) else {}
+    returns = structure.get("returns_pct")
+    returns = returns if isinstance(returns, dict) else {}
+    multi_timeframe = _entry_multi_timeframe_context(exact_payload)
+    previous_day = multi_timeframe.get("previous_day_levels")
+    previous_day = previous_day if isinstance(previous_day, dict) else {}
+    session_vwap = multi_timeframe.get("session_bar_vwap")
+    session_vwap = session_vwap if isinstance(session_vwap, dict) else {}
+
+    price = _number(current.get("price"))
+    net_aggressive_delta = _number(features.get("net_aggressive_delta_10t"))
+    buy_pressure = _number(features.get("buy_pressure_10t"))
+    absorption_count = _number(features.get("same_price_buy_absorption"))
+    price_change_10t_pct = _number(features.get("price_change_10t_pct"))
+    ma5_distance_bp = _number(features.get("curr_vs_ma5_bp"))
+    micro_vwap_distance_bp = _number(features.get("curr_vs_micro_vwap_bp"))
+    if None in {
+        price,
+        net_aggressive_delta,
+        buy_pressure,
+        absorption_count,
+        price_change_10t_pct,
+    }:
+        return None, "required_reversal_feature_missing"
+
+    reference_distances_bp = {
+        "micro_vwap": micro_vwap_distance_bp,
+        "ma5": ma5_distance_bp,
+        "session_vwap": _distance_bp(price, session_vwap.get("value")),
+        "previous_low": _distance_bp(price, previous_day.get("low")),
+        "previous_close": _distance_bp(price, previous_day.get("close")),
+        "previous_high": _distance_bp(price, previous_day.get("high")),
+    }
+    valid_reference_distances = {
+        key: value for key, value in reference_distances_bp.items() if value is not None
+    }
+    nearest_reference = (
+        min(
+            valid_reference_distances,
+            key=lambda key: abs(valid_reference_distances[key]),
+        )
+        if valid_reference_distances
+        else None
+    )
+    nearest_reference_distance_bp = (
+        valid_reference_distances[nearest_reference]
+        if nearest_reference is not None
+        else None
+    )
+    return_1m = _number(returns.get("1m"))
+    return_3m = _number(returns.get("3m"))
+    return_5m = _number(returns.get("5m"))
+    return_10m = _number(returns.get("10m"))
+    return_20m = _number(returns.get("20m"))
+    fluctuation_pct = _number(current.get("fluctuation_pct"))
+    distance_from_day_high_pct = _number(features.get("distance_from_day_high_pct"))
+
+    reference_near = bool(
+        nearest_reference_distance_bp is not None
+        and abs(nearest_reference_distance_bp) <= REVERSAL_SEQUENCE_REFERENCE_NEAR_BP
+    )
+    moving_average_near = bool(
+        (
+            ma5_distance_bp is not None
+            and abs(ma5_distance_bp) <= REVERSAL_SEQUENCE_MA_NEAR_BP
+        )
+        or (
+            micro_vwap_distance_bp is not None
+            and abs(micro_vwap_distance_bp) <= REVERSAL_SEQUENCE_MA_NEAR_BP
+        )
+    )
+    support_flush = bool(
+        fluctuation_pct is not None
+        and fluctuation_pct < 0
+        and (reference_near or moving_average_near)
+    )
+    trend_pullback = bool(
+        return_20m is not None
+        and return_20m > 0
+        and (
+            (return_1m is not None and return_1m <= 0)
+            or (return_3m is not None and return_3m <= 0)
+        )
+        and (reference_near or moving_average_near)
+    )
+    continuation_shakeout = bool(
+        all(
+            value is not None and value > 0
+            for value in (return_5m, return_10m, return_20m)
+        )
+        and distance_from_day_high_pct is not None
+        and distance_from_day_high_pct >= -1.5
+    )
+    adverse_tape = bool(net_aggressive_delta < 0 and buy_pressure < 50)
+    price_resilience = bool(
+        absorption_count >= 1
+        and price_change_10t_pct >= REVERSAL_SEQUENCE_MAX_PRICE_DECLINE_PCT
+    )
+    source_fresh = bool(
+        source_quality.get("status") == "fresh_consistent"
+        and (_number(source_quality.get("completed_bar_count")) or 0) > 0
+        and features.get("quote_fresh_for_entry") is True
+        and features.get("tick_context_stale") is not True
+        and features.get("minute_candle_window_fresh") is True
+        and request.get("candidate_exact_payload_sha256")
+        == request.get("source_exact_payload_sha256")
+    )
+    archetypes = {
+        "support_flush": support_flush,
+        "trend_pullback": trend_pullback,
+        "continuation_shakeout": continuation_shakeout,
+    }
+    reversal_armed = bool(
+        source_fresh and adverse_tape and price_resilience and any(archetypes.values())
+    )
+    spread_bp = _number(features.get("spread_bp"))
+    context = {
+        "schema": REVERSAL_SEQUENCE_CONTEXT_SCHEMA,
+        "decision_trace_id": request.get("decision_trace_id"),
+        "captured_at": captured_at.isoformat(),
+        "stock_code": request_code,
+        "effective_venue": request_venue,
+        "session_bucket": request_session,
+        "payload_sha256": request_payload_sha256,
+        "candidate_input_sha256": request.get("candidate_input_sha256"),
+        "source_quality": {
+            "status": source_quality.get("status"),
+            "completed_bar_count": source_quality.get("completed_bar_count"),
+            "exact_payload_hash_match": (
+                bool(source_exact_sha256)
+                and source_exact_sha256 == candidate_exact_sha256
+            ),
+            "payload_venue_session_match": True,
+            "canonical_raw_completed_bar_count": len(completed_bars),
+            "future_outcome_feature_count": 0,
+        },
+        "current": {
+            "price": price,
+            "fluctuation_pct": fluctuation_pct,
+            "execution_strength": _number(current.get("execution_strength")),
+        },
+        "tape_price_response": {
+            "net_aggressive_delta_10t": net_aggressive_delta,
+            "buy_pressure_10t": buy_pressure,
+            "same_price_buy_absorption": absorption_count,
+            "price_change_10t_pct": price_change_10t_pct,
+            "large_sell_print_detected": bool(
+                features.get("large_sell_print_detected")
+            ),
+            "adverse_tape": adverse_tape,
+            "price_resilience": price_resilience,
+        },
+        "liquidity": {
+            "spread_bp": spread_bp,
+            "wide_spread_observed": bool(spread_bp is not None and spread_bp >= 60.0),
+            "orderbook_total_ratio": _number(features.get("orderbook_total_ratio")),
+            "fillability_score": _number(features.get("fillability_score")),
+            "quote_fresh_for_entry": features.get("quote_fresh_for_entry") is True,
+        },
+        "completed_structure": {
+            "phase": structure.get("phase"),
+            "structural_edge": structure.get("structural_edge"),
+            "return_1m_pct": return_1m,
+            "return_3m_pct": return_3m,
+            "return_5m_pct": return_5m,
+            "return_10m_pct": return_10m,
+            "return_20m_pct": return_20m,
+            "distance_from_day_high_pct": distance_from_day_high_pct,
+        },
+        "reference_context": {
+            "distances_bp": reference_distances_bp,
+            "nearest_reference": nearest_reference,
+            "nearest_reference_distance_bp": nearest_reference_distance_bp,
+            "reference_near": reference_near,
+            "moving_average_near": moving_average_near,
+        },
+        "archetypes": archetypes,
+        "reversal_armed": reversal_armed,
+        "reversal_state": "ARMED" if reversal_armed else "NOT_ARMED",
+        "state_reason_codes": [
+            reason
+            for reason, present in (
+                ("fresh_exact_source", source_fresh),
+                ("adverse_tape", adverse_tape),
+                ("price_resilient_to_sell_pressure", price_resilience),
+                ("meaningful_reference_near", reference_near or moving_average_near),
+                ("support_flush", support_flush),
+                ("trend_pullback", trend_pullback),
+                ("continuation_shakeout", continuation_shakeout),
+                (
+                    "wide_spread_observation_not_confirmation",
+                    spread_bp is not None and spread_bp >= 60.0,
+                ),
+            )
+            if present
+        ],
+        "transition": {
+            "previous_snapshot_available": False,
+            "previous_decision_trace_id": None,
+            "elapsed_sec": None,
+            "confirmation_score": 0,
+            "confirmation_components": {},
+        },
+        **REVERSAL_SEQUENCE_CONTRACT,
+    }
+    context["sequence_context_sha256"] = _reversal_sequence_context_sha256(context)
+    return context, None
+
+
+def _attach_reversal_transition(
+    current: dict[str, Any],
+    previous: dict[str, Any] | None,
+) -> dict[str, Any]:
+    context = dict(current)
+    context["transition"] = dict(current.get("transition") or {})
+    if previous is None:
+        context["sequence_context_sha256"] = _reversal_sequence_context_sha256(context)
+        return context
+    current_at = _parse_ts(current.get("captured_at"))
+    previous_at = _parse_ts(previous.get("captured_at"))
+    if current_at is None or previous_at is None:
+        return context
+    elapsed_sec = (current_at - previous_at).total_seconds()
+    if elapsed_sec <= 0 or elapsed_sec > REVERSAL_SEQUENCE_MAX_PREVIOUS_SEC:
+        return context
+
+    current_price = _number((current.get("current") or {}).get("price"))
+    previous_price = _number((previous.get("current") or {}).get("price"))
+    price_delta_pct = (
+        ((current_price / previous_price) - 1.0) * 100.0
+        if current_price is not None
+        and previous_price is not None
+        and previous_price > 0
+        else None
+    )
+    current_tape = current.get("tape_price_response") or {}
+    previous_tape = previous.get("tape_price_response") or {}
+    current_net = _number(current_tape.get("net_aggressive_delta_10t"))
+    previous_net = _number(previous_tape.get("net_aggressive_delta_10t"))
+    current_pressure = _number(current_tape.get("buy_pressure_10t"))
+    previous_pressure = _number(previous_tape.get("buy_pressure_10t"))
+    current_absorption = _number(current_tape.get("same_price_buy_absorption"))
+    previous_absorption = _number(previous_tape.get("same_price_buy_absorption"))
+    current_reference = _number(
+        (current.get("reference_context") or {}).get("nearest_reference_distance_bp")
+    )
+    previous_reference = _number(
+        (previous.get("reference_context") or {}).get("nearest_reference_distance_bp")
+    )
+    price_floor_held = bool(
+        price_delta_pct is not None
+        and price_delta_pct >= REVERSAL_SEQUENCE_MAX_PRICE_DECLINE_PCT
+    )
+    reference_not_worse = bool(
+        current_reference is not None
+        and previous_reference is not None
+        and abs(current_reference) <= abs(previous_reference) + 25.0
+    )
+    sell_pressure_not_worsening = bool(
+        (
+            current_net is not None
+            and previous_net is not None
+            and current_net >= previous_net
+        )
+        or (
+            current_pressure is not None
+            and previous_pressure is not None
+            and current_pressure >= previous_pressure
+        )
+        or (price_delta_pct is not None and price_delta_pct >= 0)
+    )
+    absorption_persistent = bool(
+        current_absorption is not None
+        and previous_absorption is not None
+        and current_absorption >= 1
+        and previous_absorption >= 1
+    )
+    large_sell_cleared = bool(
+        previous_tape.get("large_sell_print_detected") is True
+        and current_tape.get("large_sell_print_detected") is False
+    )
+    sell_shock_absorbed = bool(
+        current.get("reversal_armed") is True
+        and previous_net is not None
+        and previous_net >= 0
+        and current_net is not None
+        and current_net < 0
+        and price_floor_held
+        and absorption_persistent
+    )
+    resilience_persistent = bool(
+        previous.get("reversal_armed") is True
+        and current.get("reversal_armed") is True
+        and price_floor_held
+        and reference_not_worse
+    )
+    confirmation_components = {
+        "price_floor_held": price_floor_held,
+        "reference_not_worse": reference_not_worse,
+        "sell_pressure_not_worsening": sell_pressure_not_worsening,
+        "absorption_persistent": absorption_persistent,
+        "large_sell_cleared": large_sell_cleared,
+        "sell_shock_absorbed": sell_shock_absorbed,
+        "resilience_persistent": resilience_persistent,
+    }
+    confirmation_score = sum(
+        confirmation_components[key]
+        for key in (
+            "price_floor_held",
+            "reference_not_worse",
+            "sell_pressure_not_worsening",
+            "absorption_persistent",
+            "large_sell_cleared",
+        )
+    )
+    confirmed = bool(
+        current.get("reversal_armed") is True
+        and (sell_shock_absorbed or resilience_persistent)
+        and confirmation_score >= 3
+    )
+    invalidated = bool(
+        previous.get("reversal_armed") is True
+        and current.get("reversal_armed") is not True
+        and price_delta_pct is not None
+        and price_delta_pct < REVERSAL_SEQUENCE_MAX_PRICE_DECLINE_PCT
+        and current_tape.get("adverse_tape") is True
+    )
+    state = (
+        "CONFIRMED"
+        if confirmed
+        else (
+            "INVALIDATED"
+            if invalidated
+            else ("ARMED" if current.get("reversal_armed") is True else "NOT_ARMED")
+        )
+    )
+    context["reversal_state"] = state
+    context["state_reason_codes"] = list(current.get("state_reason_codes") or []) + [
+        reason
+        for reason, present in (
+            ("sell_shock_absorbed", sell_shock_absorbed),
+            ("price_resilience_persistent", resilience_persistent),
+            ("reversal_transition_confirmed", confirmed),
+            ("reversal_transition_invalidated", invalidated),
+        )
+        if present
+    ]
+    context["transition"] = {
+        "previous_snapshot_available": True,
+        "previous_decision_trace_id": previous.get("decision_trace_id"),
+        "elapsed_sec": elapsed_sec,
+        "price_delta_pct": price_delta_pct,
+        "net_aggressive_delta_change": (
+            current_net - previous_net
+            if current_net is not None and previous_net is not None
+            else None
+        ),
+        "buy_pressure_change": (
+            current_pressure - previous_pressure
+            if current_pressure is not None and previous_pressure is not None
+            else None
+        ),
+        "nearest_reference_abs_distance_change_bp": (
+            abs(current_reference) - abs(previous_reference)
+            if current_reference is not None and previous_reference is not None
+            else None
+        ),
+        "confirmation_score": confirmation_score,
+        "confirmation_components": confirmation_components,
+    }
+    context["sequence_context_sha256"] = _reversal_sequence_context_sha256(context)
+    return context
+
+
+def _sequence_horizon_summary(
+    rows: list[dict[str, Any]],
+    horizon: int,
+) -> dict[str, Any]:
+    horizon_key = f"{horizon}m"
+    mature_rows = [
+        row
+        for row in rows
+        if isinstance((row.get("outcomes") or {}).get(horizon_key), dict)
+    ]
+    metrics = [(row.get("outcomes") or {})[horizon_key] for row in mature_rows]
+
+    def mean_metric(key: str) -> float | None:
+        values = [
+            value
+            for metric in metrics
+            if (value := _number(metric.get(key))) is not None
+        ]
+        return fmean(values) if values else None
+
+    adjusted_values = [
+        end_return - cost
+        for row, metric in zip(mature_rows, metrics)
+        if (end_return := _number(metric.get("end_return_pct"))) is not None
+        and (cost := _number(row.get("conservative_execution_cost_pct"))) is not None
+    ]
+    recovery_count = sum(
+        metric.get("profit_opportunity_sequence") == "drawdown_then_profit_recovery"
+        for metric in metrics
+    )
+    return {
+        "horizon_min": horizon,
+        "sample_count": len(mature_rows),
+        "unique_symbol_count": len(
+            {
+                _normalize_stock_code(row.get("stock_code"))
+                for row in mature_rows
+                if _normalize_stock_code(row.get("stock_code"))
+            }
+        ),
+        "drawdown_recovery_count": recovery_count,
+        "drawdown_recovery_rate_pct": (
+            recovery_count / len(mature_rows) * 100.0 if mature_rows else None
+        ),
+        "profit_opportunity_count": sum(
+            metric.get("profit_opportunity_observed") is True for metric in metrics
+        ),
+        "profit_opportunity_rate_pct": (
+            sum(metric.get("profit_opportunity_observed") is True for metric in metrics)
+            / len(mature_rows)
+            * 100.0
+            if mature_rows
+            else None
+        ),
+        "equal_weight_avg_profit_pct": mean_metric("end_return_pct"),
+        "source_quality_adjusted_ev_pct": (
+            fmean(adjusted_values) if adjusted_values else None
+        ),
+        "avg_mfe_pct": mean_metric("mfe_pct"),
+        "avg_mae_pct": mean_metric("mae_pct"),
+        "worst_mae_pct": (
+            min(
+                value
+                for metric in metrics
+                if (value := _number(metric.get("mae_pct"))) is not None
+            )
+            if any(_number(metric.get("mae_pct")) is not None for metric in metrics)
+            else None
+        ),
+        "counterfactual_only": True,
+    }
+
+
+def _first_signal_episode_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    first_rows: dict[str, dict[str, Any]] = {}
+    for row in sorted(
+        rows,
+        key=lambda value: (
+            str(value.get("episode_id") or ""),
+            str(value.get("captured_at") or ""),
+        ),
+    ):
+        episode_id = str(row.get("episode_id") or "")
+        if episode_id and episode_id not in first_rows:
+            first_rows[episode_id] = row
+    return list(first_rows.values())
+
+
+def _scale_in_horizon_counterfactual(
+    *,
+    first_signal: dict[str, Any],
+    second_confirmation: dict[str, Any],
+    horizon: int,
+) -> dict[str, Any] | None:
+    metric = (second_confirmation.get("outcomes") or {}).get(f"{horizon}m")
+    if not isinstance(metric, dict):
+        return None
+    first_price = _number((first_signal.get("current") or {}).get("price"))
+    second_price = _number((second_confirmation.get("current") or {}).get("price"))
+    end_return = _number(metric.get("end_return_pct"))
+    mfe = _number(metric.get("mfe_pct"))
+    mae = _number(metric.get("mae_pct"))
+    first_cost = _number(first_signal.get("conservative_execution_cost_pct"))
+    second_cost = _number(second_confirmation.get("conservative_execution_cost_pct"))
+    if (
+        first_price is None
+        or first_price <= 0
+        or second_price is None
+        or second_price <= 0
+        or end_return is None
+        or mfe is None
+        or mae is None
+        or first_cost is None
+        or second_cost is None
+    ):
+        return None
+    average_cost = (first_price + second_price) / 2.0
+    end_price = second_price * (1.0 + (end_return / 100.0))
+    high_price = second_price * (1.0 + (mfe / 100.0))
+    low_price = second_price * (1.0 + (mae / 100.0))
+    combined_cost_pct = ((first_price * first_cost) + (second_price * second_cost)) / (
+        first_price + second_price
+    )
+    probe_only_end_return = ((end_price / first_price) - 1.0) * 100.0
+    combined_end_return = ((end_price / average_cost) - 1.0) * 100.0
+    combined_mfe = ((high_price / average_cost) - 1.0) * 100.0
+    combined_mae = ((low_price / average_cost) - 1.0) * 100.0
+    probe_only_net_ev = probe_only_end_return - first_cost
+    combined_net_ev = combined_end_return - combined_cost_pct
+    second_leg_net_ev = end_return - second_cost
+    return {
+        "horizon_min": horizon,
+        "average_cost": average_cost,
+        "probe_only_end_return_pct": probe_only_end_return,
+        "probe_only_net_ev_pct": probe_only_net_ev,
+        "second_leg_end_return_pct": end_return,
+        "second_leg_incremental_net_ev_pct": second_leg_net_ev,
+        "combined_end_return_pct": combined_end_return,
+        "combined_net_ev_pct": combined_net_ev,
+        "combined_mfe_pct": combined_mfe,
+        "combined_mae_pct": combined_mae,
+        "combined_cost_pct": combined_cost_pct,
+        "scale_in_vs_probe_only_net_ev_delta_pct": (
+            combined_net_ev - probe_only_net_ev
+        ),
+        "combined_positive_excursion_after_cost": (combined_mfe > combined_cost_pct),
+        "combined_end_profitable_after_cost": combined_net_ev > 0,
+        "second_leg_incremental_ev_positive": second_leg_net_ev > 0,
+        "counterfactual_only": True,
+    }
+
+
+def _build_scale_in_counterfactual(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("episode_id"):
+            grouped[str(row["episode_id"])].append(row)
+    pair_rows: list[dict[str, Any]] = []
+    exclusion_counts: Counter[str] = Counter()
+    for episode_id, episode_rows in grouped.items():
+        ordered = sorted(
+            episode_rows, key=lambda row: str(row.get("captured_at") or "")
+        )
+        armed_rows = [
+            row
+            for row in ordered
+            if row.get("reversal_armed") is True
+            and row.get("candidate_action") == "DROP"
+        ]
+        if not armed_rows:
+            exclusion_counts["first_reversal_signal_missing"] += 1
+            continue
+        first_signal = armed_rows[0]
+        first_at = _parse_ts(first_signal.get("captured_at"))
+        first_price = _number((first_signal.get("current") or {}).get("price"))
+        if first_at is None or first_price is None or first_price <= 0:
+            exclusion_counts["first_signal_time_or_price_missing"] += 1
+            continue
+        second_confirmation = None
+        invalidated_before_second = False
+        for row in ordered:
+            row_at = _parse_ts(row.get("captured_at"))
+            if row_at is None or row_at <= first_at:
+                continue
+            if row.get("reversal_state") == "INVALIDATED":
+                invalidated_before_second = True
+                break
+            row_price = _number((row.get("current") or {}).get("price"))
+            if (
+                row.get("reversal_state") == "CONFIRMED"
+                and row.get("candidate_action") == "DROP"
+                and row_price is not None
+                and row_price < first_price
+            ):
+                second_confirmation = row
+                break
+        if second_confirmation is None:
+            exclusion_counts[
+                (
+                    "invalidated_before_lower_confirmation"
+                    if invalidated_before_second
+                    else "lower_second_confirmation_missing"
+                )
+            ] += 1
+            continue
+        second_at = _parse_ts(second_confirmation.get("captured_at"))
+        second_price = _number((second_confirmation.get("current") or {}).get("price"))
+        horizon_metrics = {
+            f"{horizon}m": metric
+            for horizon in REVERSAL_SEQUENCE_HORIZONS_MIN
+            if (
+                metric := _scale_in_horizon_counterfactual(
+                    first_signal=first_signal,
+                    second_confirmation=second_confirmation,
+                    horizon=horizon,
+                )
+            )
+            is not None
+        }
+        pair_rows.append(
+            {
+                "episode_id": episode_id,
+                "stock_code": first_signal.get("stock_code"),
+                "effective_venue": first_signal.get("effective_venue"),
+                "session_bucket": first_signal.get("session_bucket"),
+                "first_decision_trace_id": first_signal.get("decision_trace_id"),
+                "first_signal_at": first_at.isoformat(),
+                "first_signal_state": first_signal.get("reversal_state"),
+                "first_price": first_price,
+                "second_decision_trace_id": second_confirmation.get(
+                    "decision_trace_id"
+                ),
+                "second_confirmation_at": (
+                    second_at.isoformat() if second_at is not None else None
+                ),
+                "second_price": second_price,
+                "second_price_change_from_probe_pct": (
+                    ((second_price / first_price) - 1.0) * 100.0
+                    if second_price is not None
+                    else None
+                ),
+                "elapsed_sec": (
+                    (second_at - first_at).total_seconds()
+                    if second_at is not None
+                    else None
+                ),
+                "sizing_policy": "one_share_probe_plus_one_share_confirmation",
+                "horizon_metrics": horizon_metrics,
+                "counterfactual_only": True,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+            }
+        )
+    primary_rows = [
+        row["horizon_metrics"]["20m"]
+        for row in pair_rows
+        if isinstance(row.get("horizon_metrics", {}).get("20m"), dict)
+    ]
+
+    def primary_mean(key: str) -> float | None:
+        values = [
+            value
+            for row in primary_rows
+            if (value := _number(row.get(key))) is not None
+        ]
+        return fmean(values) if values else None
+
+    symbol_count = len(
+        {str(row.get("stock_code") or "") for row in pair_rows if row.get("stock_code")}
+    )
+    combined_positive_count = sum(
+        row.get("combined_end_profitable_after_cost") is True for row in primary_rows
+    )
+    excursion_positive_count = sum(
+        row.get("combined_positive_excursion_after_cost") is True
+        for row in primary_rows
+    )
+    excursion_negative_count = len(primary_rows) - excursion_positive_count
+    sample_floor_pass = bool(primary_rows)
+    learning_value_pass = bool(
+        sample_floor_pass
+        and excursion_positive_count > 0
+        and excursion_negative_count > 0
+        and excursion_positive_count / len(primary_rows) >= 0.5
+    )
+    economics_pass = bool(
+        sample_floor_pass
+        and (primary_mean("combined_net_ev_pct") or 0) > 0
+        and (primary_mean("second_leg_incremental_net_ev_pct") or 0) > 0
+        and combined_positive_count / len(primary_rows) >= 0.5
+    )
+    status = (
+        "scale_in_economics_pass_offline_only"
+        if economics_pass
+        else (
+            "probe_learning_candidate_ready_economics_rejected"
+            if learning_value_pass
+            else "scale_in_economics_rejected_probe_floor_not_met"
+        )
+    )
+    return {
+        "schema": "entry_reversal_scale_in_counterfactual_v1",
+        "status": status,
+        "decision": status,
+        "pair_count": len(pair_rows),
+        "primary_20m_pair_count": len(primary_rows),
+        "unique_symbol_count": symbol_count,
+        "exclusion_counts": dict(exclusion_counts),
+        "sizing_policy": "one_share_probe_plus_one_share_confirmation",
+        "pair_selection_policy": (
+            "first_armed_then_first_lower_price_confirmed_before_invalidation_"
+            "same_exact_episode"
+        ),
+        "sample_floor": "one_exact_pair_starts_cumulative_probe_learning",
+        "primary_decision_metric": "20m_combined_and_incremental_net_ev_pct",
+        "economic_quality_pass": economics_pass,
+        "probe_learning_value_pass": learning_value_pass,
+        "probe_learning_minimum_favorable_rate_pct": 50.0,
+        "primary_20m": {
+            "combined_end_profitable_after_cost_count": combined_positive_count,
+            "combined_end_profitable_after_cost_rate_pct": (
+                combined_positive_count / len(primary_rows) * 100.0
+                if primary_rows
+                else None
+            ),
+            "combined_positive_excursion_after_cost_count": (excursion_positive_count),
+            "combined_positive_excursion_after_cost_rate_pct": (
+                excursion_positive_count / len(primary_rows) * 100.0
+                if primary_rows
+                else None
+            ),
+            "combined_net_ev_pct": primary_mean("combined_net_ev_pct"),
+            "second_leg_incremental_net_ev_pct": primary_mean(
+                "second_leg_incremental_net_ev_pct"
+            ),
+            "scale_in_vs_probe_only_net_ev_delta_pct": primary_mean(
+                "scale_in_vs_probe_only_net_ev_delta_pct"
+            ),
+            "combined_mfe_pct": primary_mean("combined_mfe_pct"),
+            "combined_mae_pct": primary_mean("combined_mae_pct"),
+            "worst_combined_mae_pct": (
+                min(
+                    value
+                    for row in primary_rows
+                    if (value := _number(row.get("combined_mae_pct"))) is not None
+                )
+                if any(
+                    _number(row.get("combined_mae_pct")) is not None
+                    for row in primary_rows
+                )
+                else None
+            ),
+        },
+        "runtime_promotion": {
+            "status": "not_authorized_by_offline_validation",
+            "required_cap": "one_share_each_leg",
+            "hard_safety_unchanged": True,
+            "provider_route_unchanged": True,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+        },
+        "rows": pair_rows,
+        "metric_role": "ai_entry_reversal_scale_in_counterfactual_observation",
+        "decision_authority": "offline_probe_learning_validation_only",
+        "window_policy": (
+            "second_confirmation_same_exact_episode_then_mature_5_10_20_30_60m"
+        ),
+        "source_quality_gate": (
+            "exact_hash_route_session_completed_bar_and_no_prior_invalidation"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _build_one_share_probe_counterfactual(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    first_signals = _first_signal_episode_rows(
+        [row for row in rows if row.get("reversal_armed") is True]
+    )
+    probe_rows: list[dict[str, Any]] = []
+    for row in first_signals:
+        cost = _number(row.get("conservative_execution_cost_pct"))
+        probe_rows.append(
+            {
+                "episode_id": row.get("episode_id"),
+                "decision_trace_id": row.get("decision_trace_id"),
+                "stock_code": row.get("stock_code"),
+                "effective_venue": row.get("effective_venue"),
+                "session_bucket": row.get("session_bucket"),
+                "signal_at": row.get("captured_at"),
+                "signal_state": row.get("reversal_state"),
+                "price": (row.get("current") or {}).get("price"),
+                "conservative_execution_cost_pct": cost,
+                "horizons": {
+                    key: {
+                        "mfe_pct": metric.get("mfe_pct"),
+                        "mae_pct": metric.get("mae_pct"),
+                        "end_return_pct": metric.get("end_return_pct"),
+                        "favorable_excursion_after_cost_observed": bool(
+                            cost is not None
+                            and _number(metric.get("mfe_pct")) is not None
+                            and _number(metric.get("mfe_pct")) > cost
+                        ),
+                        "net_end_return_pct": (
+                            _number(metric.get("end_return_pct")) - cost
+                            if cost is not None
+                            and _number(metric.get("end_return_pct")) is not None
+                            else None
+                        ),
+                    }
+                    for key, metric in (row.get("outcomes") or {}).items()
+                    if isinstance(metric, dict)
+                },
+                "counterfactual_only": True,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+            }
+        )
+    horizon_summaries: dict[str, Any] = {}
+    for horizon in REVERSAL_SEQUENCE_HORIZONS_MIN:
+        horizon_key = f"{horizon}m"
+        mature: list[tuple[dict[str, Any], dict[str, Any], float]] = []
+        for row in first_signals:
+            metric = (row.get("outcomes") or {}).get(horizon_key)
+            cost = _number(row.get("conservative_execution_cost_pct"))
+            if (
+                not isinstance(metric, dict)
+                or cost is None
+                or _number(metric.get("mfe_pct")) is None
+                or _number(metric.get("mae_pct")) is None
+                or _number(metric.get("end_return_pct")) is None
+            ):
+                continue
+            mature.append((row, metric, cost))
+        favorable_count = sum(
+            _number(metric.get("mfe_pct")) > cost for _, metric, cost in mature
+        )
+        net_end_values = [
+            _number(metric.get("end_return_pct")) - cost for _, metric, cost in mature
+        ]
+        horizon_summaries[horizon_key] = {
+            "horizon_min": horizon,
+            "sample_count": len(mature),
+            "unique_symbol_count": len(
+                {
+                    str(row.get("stock_code") or "")
+                    for row, _, _ in mature
+                    if row.get("stock_code")
+                }
+            ),
+            "favorable_excursion_after_cost_count": favorable_count,
+            "favorable_excursion_after_cost_rate_pct": (
+                favorable_count / len(mature) * 100.0 if mature else None
+            ),
+            "net_end_profitable_count": sum(value > 0 for value in net_end_values),
+            "net_end_profitable_rate_pct": (
+                sum(value > 0 for value in net_end_values) / len(mature) * 100.0
+                if mature
+                else None
+            ),
+            "source_quality_adjusted_ev_pct": (
+                fmean(net_end_values) if net_end_values else None
+            ),
+            "avg_mfe_pct": (
+                fmean(_number(metric.get("mfe_pct")) for _, metric, _ in mature)
+                if mature
+                else None
+            ),
+            "avg_mae_pct": (
+                fmean(_number(metric.get("mae_pct")) for _, metric, _ in mature)
+                if mature
+                else None
+            ),
+            "worst_mae_pct": (
+                min(_number(metric.get("mae_pct")) for _, metric, _ in mature)
+                if mature
+                else None
+            ),
+            "mfe_to_abs_mae_ratio": (
+                (
+                    fmean(_number(metric.get("mfe_pct")) for _, metric, _ in mature)
+                    / abs(
+                        fmean(_number(metric.get("mae_pct")) for _, metric, _ in mature)
+                    )
+                )
+                if mature
+                and fmean(_number(metric.get("mae_pct")) for _, metric, _ in mature)
+                != 0
+                else None
+            ),
+            "counterfactual_only": True,
+        }
+    learning_horizons = [
+        key
+        for key, summary in horizon_summaries.items()
+        if (summary.get("sample_count") or 0) > 0
+        and (summary.get("favorable_excursion_after_cost_count") or 0) > 0
+        and summary.get("favorable_excursion_after_cost_count")
+        < summary.get("sample_count")
+        and (_number(summary.get("favorable_excursion_after_cost_rate_pct")) or 0)
+        >= 50.0
+    ]
+    primary = horizon_summaries.get("20m") or {}
+    economic_quality_pass = bool(
+        (_number(primary.get("source_quality_adjusted_ev_pct")) or 0) > 0
+        and (_number(primary.get("net_end_profitable_rate_pct")) or 0) >= 50.0
+    )
+    learning_value_pass = bool(learning_horizons)
+    status = (
+        "one_share_probe_economics_pass_offline_only"
+        if economic_quality_pass
+        else (
+            "one_share_probe_learning_candidate_ready_economics_rejected"
+            if learning_value_pass
+            else "one_share_probe_learning_floor_not_met"
+        )
+    )
+    return {
+        "schema": "entry_reversal_one_share_probe_counterfactual_v1",
+        "status": status,
+        "decision": status,
+        "first_signal_episode_count": len(first_signals),
+        "sample_floor": "one_exact_episode_starts_cumulative_probe_learning",
+        "learning_minimum_favorable_rate_pct": 50.0,
+        "learning_value_pass": learning_value_pass,
+        "economic_quality_pass": economic_quality_pass,
+        "learning_ready_horizons": learning_horizons,
+        "learning_objective": (
+            "holding_exit_timing_after_one_share_probe_favorable_excursion"
+        ),
+        "learning_value_basis": (
+            "observed_outcome_diversity_not_trade_success_probability"
+        ),
+        "horizons": horizon_summaries,
+        "interpretation": (
+            "A favorable MFE above estimated cost supports one-share outcome "
+            "collection. It does not prove that the excursion occurred before a "
+            "hard-safety exit or that the end-of-horizon position is profitable."
+        ),
+        "forbidden_inference": (
+            "favorable_excursion_rate_is_not_entry_accuracy_or_live_ev"
+        ),
+        "runtime_promotion": {
+            "status": "not_authorized_by_offline_validation",
+            "required_cap": "one_share_probe_only",
+            "scale_in_authority": False,
+            "hard_safety_unchanged": True,
+            "provider_route_unchanged": True,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+        },
+        "proposed_authority_separation": {
+            "status": "offline_validated_not_runtime_applied",
+            "entry_ai_role": "permissive_one_share_probe_intent",
+            "upstream_policy": (
+                "do_not_require_retrospective_economic_quality_pass_before_"
+                "one_share_probe_intent"
+            ),
+            "upstream_required": (
+                "exact_source_and_semantic_contract_without_known_hard_safety_block"
+            ),
+            "final_submit_authority": (
+                "existing_freshness_price_broker_account_order_cooldown_quantity_"
+                "and_hard_safety_guards"
+            ),
+            "economic_quality_role": "cumulative_post_outcome_learning_not_submit_veto",
+            "submit_guard_is_not_directional_alpha_proof": True,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+        },
+        "rows": probe_rows,
+        "metric_role": "ai_entry_reversal_one_share_probe_learning_observation",
+        "decision_authority": "offline_probe_learning_validation_only",
+        "window_policy": (
+            "first_armed_exact_episode_then_mature_5_10_20_30_60m_outcome"
+        ),
+        "source_quality_gate": (
+            "exact_hash_route_session_completed_bar_and_first_signal_episode"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def build_entry_reversal_sequence_report(
+    *,
+    target_date: str,
+    paired_report: dict[str, Any],
+    labels: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+    outcome_source: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluate pre-decision reversal states without using outcome as a feature."""
+
+    requests = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in paired_report.get("requests") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    results = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in paired_report.get("results") or []
+        if isinstance(row, dict)
+        and row.get("decision_trace_id")
+        and row.get("status") == "pass"
+    }
+    comparisons = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in paired_report.get("paired_comparisons") or []
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    label_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in labels
+        if isinstance(row, dict)
+        and row.get("decision_trace_id")
+        and row.get("source_quality_status") == "pass"
+        and row.get("primary_cohort_eligible") is True
+    }
+    payload_by_request = {
+        str(row.get("request_id") or ""): row
+        for row in payloads
+        if isinstance(row, dict) and row.get("request_id")
+    }
+    exclusions: Counter[str] = Counter()
+    snapshots: list[dict[str, Any]] = []
+    for trace_id, comparison in comparisons.items():
+        request = requests.get(trace_id)
+        result = results.get(trace_id)
+        label = label_by_trace.get(trace_id)
+        payload_row = payload_by_request.get(trace_id)
+        if request is None or result is None or label is None or payload_row is None:
+            exclusions["required_join_missing"] += 1
+            continue
+        context, exclusion = _entry_reversal_snapshot_context(
+            request=request,
+            payload_row=payload_row,
+        )
+        if context is None:
+            exclusions[exclusion or "snapshot_context_invalid"] += 1
+            continue
+        context["candidate_action"] = comparison.get("candidate_action")
+        context["control_action"] = comparison.get("control_action")
+        context["conservative_execution_cost_pct"] = _number(
+            (request.get("anticipatory_reversal_analysis") or {})
+            .get("execution_cost", {})
+            .get("conservative_execution_cost_pct")
+        )
+        snapshots.append(context)
+
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for snapshot in snapshots:
+        grouped[
+            (
+                str(snapshot.get("stock_code") or ""),
+                str(snapshot.get("effective_venue") or ""),
+                str(snapshot.get("session_bucket") or ""),
+            )
+        ].append(snapshot)
+    transitioned: list[dict[str, Any]] = []
+    for group_rows in grouped.values():
+        group_rows.sort(key=lambda row: str(row.get("captured_at") or ""))
+        previous: dict[str, Any] | None = None
+        episode_index = 0
+        previous_at: datetime | None = None
+        for snapshot in group_rows:
+            current_at = _parse_ts(snapshot.get("captured_at"))
+            if (
+                previous_at is None
+                or current_at is None
+                or (current_at - previous_at).total_seconds()
+                > REVERSAL_SEQUENCE_EPISODE_GAP_SEC
+            ):
+                episode_index += 1
+            context = _attach_reversal_transition(snapshot, previous)
+            context["episode_id"] = (
+                f"reversal-episode-{_sha256((*_reversal_group_key(snapshot), episode_index))[:20]}"
+            )
+            transitioned.append(context)
+            previous = snapshot
+            previous_at = current_at
+
+    labeled_transition_rows: list[dict[str, Any]] = []
+    for context in transitioned:
+        label = label_by_trace.get(str(context.get("decision_trace_id") or ""), {})
+        horizon_metrics = label.get("horizon_metrics")
+        horizon_metrics = horizon_metrics if isinstance(horizon_metrics, dict) else {}
+        outcomes = {
+            f"{horizon}m": {
+                key: metric.get(key)
+                for key in (
+                    "mfe_pct",
+                    "mae_pct",
+                    "end_return_pct",
+                    "profit_opportunity_observed",
+                    "profit_opportunity_sequence",
+                    "profit_opportunity_hit_at",
+                    "pre_profit_mae_pct",
+                )
+            }
+            for horizon in REVERSAL_SEQUENCE_HORIZONS_MIN
+            if isinstance((metric := horizon_metrics.get(f"{horizon}m")), dict)
+        }
+        context["outcomes"] = outcomes
+        context["outcome_join_key"] = label.get("label_id")
+        context["counterfactual_only"] = True
+        labeled_transition_rows.append(context)
+    evaluation_rows = [
+        context
+        for context in labeled_transition_rows
+        if context.get("candidate_action") == "DROP"
+    ]
+
+    cohort_predicates: dict[str, Callable[[dict[str, Any]], bool]] = {
+        "all_candidate_drop": lambda row: True,
+        "reversal_armed": lambda row: row.get("reversal_armed") is True,
+        "reversal_confirmed": lambda row: row.get("reversal_state") == "CONFIRMED",
+        "support_flush_armed": lambda row: row.get("reversal_armed") is True
+        and (row.get("archetypes") or {}).get("support_flush") is True,
+        "trend_pullback_armed": lambda row: row.get("reversal_armed") is True
+        and (row.get("archetypes") or {}).get("trend_pullback") is True,
+        "continuation_shakeout_armed": lambda row: row.get("reversal_armed") is True
+        and (row.get("archetypes") or {}).get("continuation_shakeout") is True,
+        "wide_spread_reversal_armed": lambda row: row.get("reversal_armed") is True
+        and (row.get("liquidity") or {}).get("wide_spread_observed") is True,
+    }
+    cohorts: dict[str, Any] = {}
+    for cohort_name, predicate in cohort_predicates.items():
+        cohort_rows = [row for row in evaluation_rows if predicate(row)]
+        first_signal_rows = _first_signal_episode_rows(cohort_rows)
+        cohorts[cohort_name] = {
+            "row_count": len(cohort_rows),
+            "first_signal_episode_count": len(first_signal_rows),
+            "row_level": {
+                f"{horizon}m": _sequence_horizon_summary(cohort_rows, horizon)
+                for horizon in REVERSAL_SEQUENCE_HORIZONS_MIN
+            },
+            "first_signal_episode": {
+                f"{horizon}m": _sequence_horizon_summary(
+                    first_signal_rows,
+                    horizon,
+                )
+                for horizon in REVERSAL_SEQUENCE_HORIZONS_MIN
+            },
+        }
+    confirmed_primary = (
+        cohorts.get("reversal_confirmed", {})
+        .get("first_signal_episode", {})
+        .get("20m", {})
+    )
+    confirmed_ready = bool(
+        (confirmed_primary.get("sample_count") or 0) >= 3
+        and (confirmed_primary.get("unique_symbol_count") or 0) >= 3
+        and (_number(confirmed_primary.get("source_quality_adjusted_ev_pct")) or 0) > 0
+    )
+    if not requests or not comparisons:
+        status = "sequence_source_artifact_missing"
+    elif not snapshots:
+        status = "sequence_source_quality_blocked"
+    elif not evaluation_rows:
+        status = "sequence_candidate_drop_cohort_empty"
+    elif confirmed_ready:
+        status = "sequence_prompt_candidate_review_ready"
+    else:
+        status = "sequence_hypothesis_keep_collecting"
+    clean_rows = [
+        {key: value for key, value in row.items() if not key.startswith("_")}
+        for row in evaluation_rows
+    ]
+    return {
+        "schema": REVERSAL_SEQUENCE_SCHEMA,
+        "context_schema": REVERSAL_SEQUENCE_CONTEXT_SCHEMA,
+        "target_date": target_date,
+        "generated_at": datetime.now(KST).isoformat(),
+        "status": status,
+        "decision": status,
+        "paired_report_status": paired_report.get("status"),
+        "paired_prompt_version": (
+            ((paired_report.get("requests") or [{}])[0].get("candidate") or {}).get(
+                "prompt_version"
+            )
+            if paired_report.get("requests")
+            else None
+        ),
+        "eligible_snapshot_count": len(snapshots),
+        "candidate_drop_sequence_row_count": len(clean_rows),
+        "exclusion_counts": dict(exclusions),
+        "reversal_state_counts": dict(
+            Counter(str(row.get("reversal_state") or "UNKNOWN") for row in clean_rows)
+        ),
+        "archetype_counts": {
+            archetype: sum(
+                (row.get("archetypes") or {}).get(archetype) is True
+                for row in clean_rows
+            )
+            for archetype in (
+                "support_flush",
+                "trend_pullback",
+                "continuation_shakeout",
+            )
+        },
+        "transition_policy": {
+            "previous_snapshot_max_sec": REVERSAL_SEQUENCE_MAX_PREVIOUS_SEC,
+            "episode_gap_sec": REVERSAL_SEQUENCE_EPISODE_GAP_SEC,
+            "reference_near_bp": REVERSAL_SEQUENCE_REFERENCE_NEAR_BP,
+            "moving_average_near_bp": REVERSAL_SEQUENCE_MA_NEAR_BP,
+            "max_price_decline_pct": REVERSAL_SEQUENCE_MAX_PRICE_DECLINE_PCT,
+            "outcome_fields_forbidden_during_state_classification": True,
+            "wide_spread_role": "observed_execution_risk_not_positive_confirmation",
+        },
+        "prompt_candidate_review_ready": confirmed_ready,
+        "one_share_probe_counterfactual": _build_one_share_probe_counterfactual(
+            evaluation_rows
+        ),
+        "scale_in_counterfactual": _build_scale_in_counterfactual(
+            labeled_transition_rows
+        ),
+        "outcome_source": dict(outcome_source or {}),
+        "cohorts": cohorts,
+        "rows": clean_rows,
+        **REVERSAL_SEQUENCE_CONTRACT,
+    }
+
+
+def _reversal_group_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("stock_code") or ""),
+        str(row.get("effective_venue") or ""),
+        str(row.get("session_bucket") or ""),
+    )
+
+
 def _default_sources(
     target_date: str, *, include_pipeline: bool = True
-) -> dict[str, list[dict[str, Any]]]:
+) -> dict[str, Any]:
     traces = _load_jsonl(TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl")
     payloads = _load_jsonl(PAYLOAD_DIR / f"ai_decision_payloads_{target_date}.jsonl")
     pending = _load_jsonl(OUTCOME_DIR / f"ai_decision_outcomes_{target_date}.jsonl")
-    pipeline = []
+    pipeline_paths: list[Path] = []
     if include_pipeline:
         target = datetime.strptime(target_date, "%Y-%m-%d").date()
-        for offset in range(PIPELINE_FORWARD_DAYS + 1):
+        has_overnight = any(
+            _stage(row.get("decision_stage")) == "overnight" for row in pending
+        )
+        max_offset = PIPELINE_FORWARD_DAYS if has_overnight else 0
+        for offset in range(max_offset + 1):
             source_date = (target + timedelta(days=offset)).isoformat()
-            pipeline.extend(
-                _load_jsonl(PIPELINE_DIR / f"pipeline_events_{source_date}.jsonl")
+            pipeline_paths.append(
+                existing_or_gzip_path(
+                    PIPELINE_DIR / f"pipeline_events_{source_date}.jsonl"
+                )
             )
     return {
         "traces": traces,
         "payloads": payloads,
         "pending": pending,
-        "pipeline": pipeline,
+        "pipeline": [],
+        "pipeline_paths": pipeline_paths,
     }
 
 
@@ -5201,6 +7313,7 @@ def main(argv: list[str] | None = None) -> int:
             "detailed",
             "correlation",
             "recovery",
+            "reversal_sequence",
         ),
         required=True,
     )
@@ -5222,6 +7335,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--candidate-timeout-sec", type=float, default=45.0)
     parser.add_argument("--candidate-workers", type=int, default=4)
     parser.add_argument(
+        "--candidate-max-new-requests",
+        type=int,
+        default=0,
+        help=(
+            "Optional offline checkpoint limit for newly executed requests. "
+            "Zero executes every pending request; existing valid results are reused."
+        ),
+    )
+    parser.add_argument(
         "--control-prompt-version",
         action="append",
         default=[],
@@ -5241,6 +7363,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
         default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     )
+    parser.add_argument(
+        "--candidate-model",
+        default="",
+        help=(
+            "Offline detailed-replay model override. It creates a separate "
+            "model-comparison artifact and never changes runtime routing."
+        ),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     if args.execute_candidate and (
@@ -5252,6 +7382,14 @@ def main(argv: list[str] | None = None) -> int:
         and args.detailed_candidate_version != DECISION_QUALITY_DETAILED_PROMPT_VERSION
     ):
         parser.error("--detailed-candidate-version requires --mode detailed")
+    if args.candidate_model and args.mode != "detailed":
+        parser.error("--candidate-model requires --mode detailed")
+    if args.candidate_model and not args.execute_candidate:
+        parser.error("--candidate-model requires --execute-candidate")
+    if args.candidate_max_new_requests < 0:
+        parser.error("--candidate-max-new-requests must be zero or positive")
+    if args.candidate_max_new_requests and not args.execute_candidate:
+        parser.error("--candidate-max-new-requests requires --execute-candidate")
     if args.mode != "control" and args.control_prompt_version:
         parser.error("--control-prompt-version requires --mode control")
     try:
@@ -5282,7 +7420,45 @@ def main(argv: list[str] | None = None) -> int:
         path = control_path(args.date)
     else:
         as_of = _parse_ts(args.as_of) or datetime.now(KST)
-        prices, lifecycle = load_pipeline_price_and_lifecycle_rows(sources["pipeline"])
+        pending_decision_times = [
+            timestamp
+            for row in sources["pending"]
+            if (timestamp := _parse_ts(row.get("decision_ts"))) is not None
+        ]
+        pipeline_window_start = (
+            min(pending_decision_times) if pending_decision_times else None
+        )
+        pipeline_window_end = (
+            max(pending_decision_times)
+            + timedelta(
+                days=PIPELINE_FORWARD_DAYS,
+                minutes=max(HORIZONS_MIN),
+            )
+            if pending_decision_times
+            and any(
+                _stage(row.get("decision_stage")) == "overnight"
+                for row in sources["pending"]
+            )
+            else (
+                max(pending_decision_times) + timedelta(minutes=max(HORIZONS_MIN))
+                if pending_decision_times
+                else None
+            )
+        )
+        pipeline_stock_codes = {
+            code
+            for row in sources["pending"]
+            if (code := _normalize_stock_code(row.get("stock_code")))
+        }
+        pipeline_rows = (
+            row for path in sources["pipeline_paths"] for row in _iter_jsonl(path)
+        )
+        prices, lifecycle = load_pipeline_price_and_lifecycle_rows(
+            pipeline_rows,
+            stock_codes=pipeline_stock_codes,
+            window_start=pipeline_window_start,
+            window_end=pipeline_window_end,
+        )
         price_source_provenance: list[dict[str, Any]] = []
         if args.outcome_price_source == "kiwoom_completed_1m":
             from src.utils import kiwoom_utils
@@ -5373,6 +7549,40 @@ def main(argv: list[str] | None = None) -> int:
             )
             report["outcome_price_source"] = args.outcome_price_source
             path = recovery_trigger_path(args.date)
+        elif args.mode == "reversal_sequence":
+            stored_label_path = label_report_path(args.date)
+            stored_label_report = _load_json(stored_label_path)
+            stored_labels = stored_label_report.get("labels")
+            stored_labels_reused = bool(
+                stored_label_report.get("target_date") == args.date
+                and isinstance(stored_labels, list)
+                and stored_labels
+            )
+            sequence_labels = stored_labels if stored_labels_reused else labels
+            sequence_paired_path = detailed_paired_path(
+                args.date,
+                candidate_prompt_version=(
+                    DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION
+                ),
+            )
+            report = build_entry_reversal_sequence_report(
+                target_date=args.date,
+                paired_report=_load_json(sequence_paired_path),
+                labels=sequence_labels,
+                payloads=sources["payloads"],
+                outcome_source={
+                    "label_report_path": str(stored_label_path),
+                    "label_report_reused": stored_labels_reused,
+                    "label_schema": stored_label_report.get("schema"),
+                    "outcome_price_source": (
+                        stored_label_report.get("outcome_price_source")
+                        if stored_labels_reused
+                        else args.outcome_price_source
+                    ),
+                    "paired_report_path": str(sequence_paired_path),
+                },
+            )
+            path = reversal_sequence_path(args.date)
         else:
             prepared_requests = prepare_paired_replay_requests(
                 control_manifest=_load_json(control_path(args.date)),
@@ -5384,18 +7594,51 @@ def main(argv: list[str] | None = None) -> int:
                 prepared_requests = prepare_detailed_paired_replay_requests(
                     prepared_requests,
                     candidate_prompt_version=args.detailed_candidate_version,
+                    candidate_model_override=args.candidate_model or None,
                 )
             requests = [
                 request
                 for request in prepared_requests
                 if (request.get("sample_floor") or {}).get("pass") is True
             ]
+            model_comparison_baseline_path: Path | None = None
+            model_comparison_baseline_report: dict[str, Any] = {}
+            model_comparison_baseline_model = ""
+            if args.candidate_model and requests:
+                model_comparison_baseline_path = detailed_paired_path(
+                    args.date,
+                    candidate_prompt_version=args.detailed_candidate_version,
+                )
+                model_comparison_baseline_report = _load_json(
+                    model_comparison_baseline_path
+                )
+                model_comparison_errors = validate_model_comparison_baseline(
+                    requests,
+                    model_comparison_baseline_report,
+                )
+                if model_comparison_errors:
+                    raise RuntimeError(
+                        "offline_model_comparison_baseline_invalid:"
+                        + ",".join(model_comparison_errors[:20])
+                    )
+                model_comparison_baseline_model = str(
+                    (
+                        ((requests[0].get("candidate") or {}).get("model_comparison"))
+                        or {}
+                    ).get("baseline_model")
+                    or ""
+                )
             results: list[dict[str, Any]] = []
+            existing_report: dict[str, Any] = {}
+            existing_result_reuse_count = 0
+            new_candidate_execution_count = 0
+            deferred_candidate_execution_count = 0
             if args.execute_candidate and requests:
                 output_path = (
                     detailed_paired_path(
                         args.date,
                         candidate_prompt_version=args.detailed_candidate_version,
+                        candidate_model=args.candidate_model or None,
                     )
                     if args.mode == "detailed"
                     else paired_path(args.date)
@@ -5441,6 +7684,16 @@ def main(argv: list[str] | None = None) -> int:
                     == request_by_pair[str(row.get("paired_replay_id") or "")].get(
                         "anticipatory_reversal_analysis_sha256"
                     )
+                    and _successful_candidate_result_model(row)
+                    == str(
+                        (
+                            request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                                "candidate"
+                            )
+                            or {}
+                        ).get("model")
+                        or ""
+                    )
                     and not validate_replay_candidate_response(
                         request_by_pair[str(row.get("paired_replay_id") or "")],
                         dict(row.get("candidate_response") or {}),
@@ -5455,6 +7708,18 @@ def main(argv: list[str] | None = None) -> int:
                     if str(request.get("paired_replay_id") or "")
                     not in completed_pair_ids
                 ]
+                if (
+                    args.candidate_max_new_requests
+                    and len(pending_requests) > args.candidate_max_new_requests
+                ):
+                    deferred_candidate_execution_count = (
+                        len(pending_requests) - args.candidate_max_new_requests
+                    )
+                    pending_requests = pending_requests[
+                        : args.candidate_max_new_requests
+                    ]
+                existing_result_reuse_count = len(existing_results)
+                new_candidate_execution_count = len(pending_requests)
                 api_keys = _offline_openai_api_keys()
 
                 def captured_control(request: dict[str, Any]) -> dict[str, Any]:
@@ -5508,6 +7773,33 @@ def main(argv: list[str] | None = None) -> int:
                     one_pass_report=_load_json(paired_path(args.date)),
                     detailed_report=report,
                 )
+                if args.candidate_model:
+                    request_model_comparison = (requests[0].get("candidate") or {}).get(
+                        "model_comparison"
+                    ) or {}
+                    report["model_comparison_contract"] = {
+                        **dict(request_model_comparison),
+                        "baseline_report_path": str(
+                            model_comparison_baseline_path or ""
+                        ),
+                    }
+                    report["model_comparison"] = build_model_replay_comparison(
+                        baseline_report=model_comparison_baseline_report,
+                        candidate_report=report,
+                        baseline_model=model_comparison_baseline_model,
+                        candidate_model=args.candidate_model,
+                    )
+                replay_reconstruction = existing_report.get(
+                    "replay_input_reconstruction"
+                )
+                if isinstance(replay_reconstruction, dict):
+                    report["replay_input_reconstruction"] = dict(replay_reconstruction)
+            if args.execute_candidate:
+                report["existing_result_reuse_count"] = existing_result_reuse_count
+                report["new_candidate_execution_count"] = new_candidate_execution_count
+                report["deferred_candidate_execution_count"] = (
+                    deferred_candidate_execution_count
+                )
             floor_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
             for request in prepared_requests:
                 key = (
@@ -5535,6 +7827,7 @@ def main(argv: list[str] | None = None) -> int:
                 detailed_paired_path(
                     args.date,
                     candidate_prompt_version=args.detailed_candidate_version,
+                    candidate_model=args.candidate_model or None,
                 )
                 if args.mode == "detailed"
                 else paired_path(args.date)

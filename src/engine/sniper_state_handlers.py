@@ -45541,9 +45541,7 @@ def _evaluate_holding_flow_override(
             code, curr_price=curr_price
         )
     if ofi_state is not None:
-        ofi_log_fields = ofi_smoothing_log_fields(
-            ofi_state, prefix="holding_flow_ofi"
-        )
+        ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi")
     if orderbook_micro is not None:
         micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
     if _is_swing_orderbook_micro_context_enabled(strategy):
@@ -60519,6 +60517,7 @@ def _evaluate_rising_missed_normal_buy_bridge(
             active_date=_rising_missed_tp1_selector_active_date(),
             current_date=_rising_missed_tp1_selector_current_date(runtime),
             current_ai_action=current_ai_action,
+            current_probe_intent=stock.get("last_watching_ai_probe_intent"),
             nxt_price_jump_recovery_enabled=(
                 _rising_missed_nxt_price_jump_recovery_enabled(runtime)
             ),
@@ -60737,10 +60736,15 @@ def _record_scanner_entry_ai_attempt(
         str(ai_decision.get("decision_quality_contract_status") or "").strip().lower()
     )
     parse_ok = ai_decision.get("parse_ok")
+    contract_valid_zero_score_drop = bool(
+        normalized_action == "DROP"
+        and contract_status == "pass"
+        and float(score) == 0.0
+    )
     trusted = bool(
         normalized_source in {"live", "prior_valid"}
         and normalized_action in {"BUY", "WAIT", "DROP"}
-        and float(score) > 0.0
+        and (float(score) > 0.0 or contract_valid_zero_score_drop)
         and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
         and parse_ok is not False
     )
@@ -60751,6 +60755,11 @@ def _record_scanner_entry_ai_attempt(
         or ""
     )
     decision_trace_id = ai_decision.get("ai_decision_trace_id") or ""
+    probe_intent = bool(
+        trusted
+        and normalized_action == "WAIT"
+        and _boolish_true(ai_decision.get("entry_probe_intent"))
+    )
     attempt_fields = {
         "last_watching_ai_attempt_action": normalized_action,
         "last_watching_ai_attempt_score": float(score),
@@ -60763,7 +60772,14 @@ def _record_scanner_entry_ai_attempt(
         "last_watching_ai_attempt_decision_trace_id": decision_trace_id,
         "last_watching_ai_attempt_trusted": trusted,
         "last_watching_ai_attempt_contract_status": contract_status or "unreported",
+        "last_watching_ai_attempt_zero_score_drop_trusted": (
+            contract_valid_zero_score_drop
+        ),
         "last_watching_ai_attempt_trigger_reason": trigger_reason,
+        "last_watching_ai_attempt_probe_intent": probe_intent,
+        "last_watching_ai_attempt_probe_intent_status": str(
+            ai_decision.get("entry_probe_intent_status") or "not_reported"
+        ),
         "last_watching_ai_attempt_source_quality_fields": dict(
             source_quality_fields or {}
         ),
@@ -60789,6 +60805,14 @@ def _record_scanner_entry_ai_attempt(
             "last_watching_ai_decision_trace_id": decision_trace_id,
             "last_watching_ai_source_quality_fields": dict(source_quality_fields or {}),
             "last_watching_ai_call_trigger_reason": trigger_reason,
+            "last_watching_ai_probe_intent": probe_intent,
+            "last_watching_ai_probe_intent_status": str(
+                ai_decision.get("entry_probe_intent_status") or "not_reported"
+            ),
+            "last_watching_ai_probe_intent_prompt_version": str(
+                ai_decision.get("entry_probe_intent_prompt_version") or ""
+            ),
+            "last_watching_ai_probe_intent_submit_guard_required": True,
         },
     )
     return True
@@ -62523,6 +62547,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             or stock.get("last_watching_ai_action")
             or "WAIT"
         ),
+        current_probe_intent=stock.get("last_watching_ai_probe_intent"),
         nxt_price_jump_recovery_enabled=(
             _rising_missed_nxt_price_jump_recovery_enabled(runtime)
         ),

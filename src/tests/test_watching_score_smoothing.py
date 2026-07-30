@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.engine.ai_engine_openai import OpenAIDualPersonaShadowEngine
 from src.engine.scalping.watching_score_smoothing import (
     MAX_OBSERVATIONS,
     build_diagnostic_artifact,
@@ -1300,3 +1301,9 @@ def test_explicit_state_refresh_enforces_min_interval(monkeypatch):
 
 def test_projection_refresh_helper_is_removed():
     assert not hasattr(handlers, "_run_watching_score_projection_refresh")
+
+
+def test_projection_submitter_is_removed_from_openai_engine():
+    assert not hasattr(
+        OpenAIDualPersonaShadowEngine, "submit_watching_score_projection"
+    )

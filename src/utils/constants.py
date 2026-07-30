@@ -1227,7 +1227,6 @@ class TradingConfig:
     AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED: bool = (
         False  # cooldown 내 상태변화 기반 1회 조기 재평가
     )
-    AI_WATCHING_SCORE_SMOOTHING_MODE: str = "off"  # off|report_only|applied
     AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA: float = 10.0
     AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED: bool = (
         True  # score=50 fallback/neutral 진입은 매수보류
@@ -2167,9 +2166,6 @@ def _build_trading_rules() -> TradingConfig:
     env_ai_watching_state_change_refresh = _env_bool(
         "KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED"
     )
-    env_ai_watching_score_smoothing_mode = _env_str(
-        "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE"
-    )
     env_ai_watching_state_change_buy_pressure_delta = _env_float(
         "KORSTOCKSCAN_AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA"
     )
@@ -2209,7 +2205,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_ai_watching_cooldown is not None
         or env_ai_wait_drop_cooldown is not None
         or env_ai_watching_state_change_refresh is not None
-        or env_ai_watching_score_smoothing_mode is not None
         or env_ai_watching_state_change_buy_pressure_delta is not None
         or env_ai_holding_min_cooldown is not None
         or env_ai_holding_max_cooldown is not None
@@ -2343,11 +2338,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_ai_watching_state_change_refresh
                 if env_ai_watching_state_change_refresh is not None
                 else config.AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED
-            ),
-            AI_WATCHING_SCORE_SMOOTHING_MODE=(
-                env_ai_watching_score_smoothing_mode
-                if env_ai_watching_score_smoothing_mode is not None
-                else config.AI_WATCHING_SCORE_SMOOTHING_MODE
             ),
             AI_WATCHING_STATE_CHANGE_BUY_PRESSURE_DELTA=(
                 env_ai_watching_state_change_buy_pressure_delta

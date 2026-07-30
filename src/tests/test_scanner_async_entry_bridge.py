@@ -122,6 +122,9 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
             "score": 64,
             "reason": "positive edge needs confirmation",
             "decision_quality_contract_status": "pass",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "entry_probe_intent_prompt_version": "decision_quality_v2_7_probe_v1",
             "parse_ok": True,
             "ai_decision_snapshot_id": "aims-pass",
             "ai_decision_trace_id": "aidt-pass",
@@ -142,6 +145,54 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
     assert stock["last_watching_ai_score"] == 64.0
     assert stock["last_watching_ai_snapshot_id"] == "aims-pass"
     assert stock["last_watching_ai_attempt_trusted"] is True
+    assert stock["last_watching_ai_probe_intent"] is True
+    assert stock["last_watching_ai_probe_intent_status"] == "eligible_wait_probe"
+    assert (
+        stock["last_watching_ai_probe_intent_prompt_version"]
+        == "decision_quality_v2_7_probe_v1"
+    )
+    assert stock["last_watching_ai_probe_intent_submit_guard_required"] is True
+
+
+def test_scanner_entry_ai_contract_valid_zero_score_drop_clears_prior_probe_intent():
+    generation = _generation("KRX")
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 64.0,
+        "last_watching_ai_probe_intent": True,
+        "last_watching_ai_confirmed_at": 900.0,
+    }
+
+    trusted = handlers._record_scanner_entry_ai_attempt(
+        stock,
+        ai_decision={
+            "action": "DROP",
+            "score": 0,
+            "reason": "blocking risk",
+            "decision_quality_contract_status": "pass",
+            "entry_probe_intent": False,
+            "entry_probe_intent_status": "not_eligible",
+            "parse_ok": True,
+            "ai_decision_snapshot_id": "aims-drop",
+            "ai_decision_trace_id": "aidt-drop",
+        },
+        action="DROP",
+        score=0.0,
+        result_source="live",
+        completed_epoch=1004.0,
+        generation=generation,
+        decision_price=995,
+        state_signature={"available_axes": ["quote_freshness"]},
+        source_quality_fields={"ai_result_source": "live"},
+        trigger_reason="rising_missed_entry_ai_not_evaluated_async_v1",
+    )
+
+    assert trusted is True
+    assert stock["last_watching_ai_action"] == "DROP"
+    assert stock["last_watching_ai_score"] == 0.0
+    assert stock["last_watching_ai_probe_intent"] is False
+    assert stock["last_watching_ai_attempt_zero_score_drop_trusted"] is True
+    assert stock["last_watching_ai_confirmed_at"] == 1004.0
 
 
 def test_expired_ai_response_arms_fresh_snapshot_recheck(monkeypatch):

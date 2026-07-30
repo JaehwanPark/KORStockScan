@@ -28,6 +28,8 @@ class DummyFlowAI:
             "ai_model": "tier2-model",
             "ai_model_tier": "tier2",
             "cache_mode": "miss",
+            "ai_decision_trace_id": "holding-trace-1",
+            "ai_input_snapshot_id": "holding-snapshot-1",
         }
 
 
@@ -434,6 +436,11 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
     assert any(
         stage == "holding_flow_ofi_smoothing_applied"
         and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
+        and fields.get("ai_decision_trace_id") == "holding-trace-1"
+        and fields.get("ai_input_snapshot_id") == "holding-snapshot-1"
+        and fields.get("runtime_effect") is True
+        and fields.get("sample_floor")
+        == "one_mature_exact_trace_updates_cumulative_learning"
         for stage, fields in logs
     )
     assert any(
@@ -1509,15 +1516,9 @@ def test_trailing_continuation_recheck_uses_bounded_rest_quote_recovery(
     assert event["quote_recovery_spread_bps"] == "9.443"
     assert event["quote_recovery_large_sell_state"] == "unknown"
     assert decision_quote_envelope["exit_quote_envelope_recheck_attempted"] is True
-    assert (
-        decision_quote_envelope["exit_quote_envelope_recheck_reuse_allowed"] is True
-    )
-    assert (
-        decision_quote_envelope["exit_quote_envelope_recheck_best_bid"] == 10_590
-    )
-    assert (
-        decision_quote_envelope["exit_quote_envelope_recheck_rest_state"] == "ok"
-    )
+    assert decision_quote_envelope["exit_quote_envelope_recheck_reuse_allowed"] is True
+    assert decision_quote_envelope["exit_quote_envelope_recheck_best_bid"] == 10_590
+    assert decision_quote_envelope["exit_quote_envelope_recheck_rest_state"] == "ok"
 
     expired = handlers._evaluate_scalp_trailing_continuation_recheck(
         stock=stock,
@@ -1588,9 +1589,7 @@ def test_trailing_continuation_recheck_quote_recovery_fails_open(
     assert deferred is False
     assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
     assert decision_quote_envelope["exit_quote_envelope_recheck_attempted"] is True
-    assert (
-        decision_quote_envelope["exit_quote_envelope_recheck_reuse_allowed"] is False
-    )
+    assert decision_quote_envelope["exit_quote_envelope_recheck_reuse_allowed"] is False
     assert (
         decision_quote_envelope["exit_quote_envelope_recheck_rest_state"] == "timeout"
     )
