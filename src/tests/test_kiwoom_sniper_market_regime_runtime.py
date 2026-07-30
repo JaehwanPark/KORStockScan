@@ -9463,6 +9463,35 @@ def test_scanner_async_commit_window_covers_one_busy_outer_loop():
     assert enqueue_idx < deadline_idx < quote_guard_idx
 
 
+def test_watching_wrapper_forwards_general_entry_handoff_controls(monkeypatch):
+    forwarded = {}
+
+    def fake_handle_watching_state(*args, **kwargs):
+        forwarded.update(kwargs)
+        return "handled"
+
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "handle_watching_state",
+        fake_handle_watching_state,
+    )
+
+    result = kiwoom_sniper_v2.handle_watching_state(
+        {},
+        "005930",
+        {"curr": 1000},
+        1,
+        skip_rising_missed_hook=True,
+        scout_upgrade_entry=True,
+        scanner_async_commit_phase=False,
+    )
+
+    assert result == "handled"
+    assert forwarded["skip_rising_missed_hook"] is True
+    assert forwarded["scout_upgrade_entry"] is True
+    assert forwarded["scanner_async_commit_phase"] is False
+
+
 def test_persistent_ws_gap_uses_dedicated_repair_batch_queue():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     queue_def_idx = source.index("pending_scanner_ws_persistent_repair")
