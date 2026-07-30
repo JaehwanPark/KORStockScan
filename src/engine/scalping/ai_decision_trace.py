@@ -979,6 +979,9 @@ def capture_ai_request(
             "session_bucket": context.get("session_bucket"),
             "broker_route": context.get("broker_route"),
             "market_data_route": context.get("market_data_route"),
+            "sim_record_id": (metadata or {}).get("sim_record_id"),
+            "sim_parent_record_id": (metadata or {}).get("sim_parent_record_id"),
+            "source_event_stage": (metadata or {}).get("source_event_stage"),
             "payload_sha256": payload_sha256,
             "payload_bytes": len(raw_input),
             "request_envelope_sha256": request_envelope_sha256,
@@ -1024,6 +1027,9 @@ def capture_ai_request(
             "session_bucket": context.get("session_bucket"),
             "broker_route": context.get("broker_route"),
             "market_data_route": context.get("market_data_route"),
+            "sim_record_id": (metadata or {}).get("sim_record_id"),
+            "sim_parent_record_id": (metadata or {}).get("sim_parent_record_id"),
+            "source_event_stage": (metadata or {}).get("source_event_stage"),
             "payload_sha256": payload_sha256,
             "request_envelope_sha256": request_envelope_sha256,
             "prompt_sha256": prompt_sha256,
@@ -1086,6 +1092,9 @@ def capture_ai_request(
             "ai_trace_session_bucket": context.get("session_bucket"),
             "ai_trace_broker_route": context.get("broker_route"),
             "ai_trace_market_data_route": context.get("market_data_route"),
+            "sim_record_id": (metadata or {}).get("sim_record_id"),
+            "sim_parent_record_id": (metadata or {}).get("sim_parent_record_id"),
+            "source_event_stage": (metadata or {}).get("source_event_stage"),
             "ai_trace_reference_price_type": context.get("reference_price_type"),
             "ai_trace_reference_price": context.get("reference_price"),
             "ai_trace_best_bid": context.get("best_bid"),
@@ -1291,6 +1300,9 @@ def record_ai_decision_trace(
                 "ai_input_market_data_route",
             ),
             "record_id": _optional(merged, "ai_trace_record_id", "record_id"),
+            "sim_record_id": _optional(merged, "sim_record_id"),
+            "sim_parent_record_id": _optional(merged, "sim_parent_record_id"),
+            "source_event_stage": _optional(merged, "source_event_stage"),
             "recommendation_id": _optional(
                 merged, "ai_trace_recommendation_id", "recommendation_id"
             ),
@@ -1441,6 +1453,39 @@ def record_ai_decision_trace(
                 if isinstance(merged.get("forensic_semantic_errors"), list)
                 else []
             ),
+            "decision_quality_contract_status": _optional(
+                merged, "decision_quality_contract_status"
+            ),
+            "decision_quality_contract_errors": (
+                [
+                    str(error)
+                    for error in merged.get("decision_quality_contract_errors") or []
+                ]
+                if isinstance(merged.get("decision_quality_contract_errors"), list)
+                else []
+            ),
+            "decision_quality_model_action": _optional(
+                merged, "decision_quality_model_action"
+            ),
+            "decision_quality_model_edge_state": _optional(
+                merged, "decision_quality_model_edge_state"
+            ),
+            "decision_quality_model_expected_upside_pct": _safe_number(
+                merged.get("decision_quality_model_expected_upside_pct")
+            ),
+            "decision_quality_model_expected_downside_pct": _safe_number(
+                merged.get("decision_quality_model_expected_downside_pct")
+            ),
+            "decision_quality_model_evidence": (
+                {
+                    str(key): str(value)
+                    for key, value in merged.get(
+                        "decision_quality_model_evidence", {}
+                    ).items()
+                }
+                if isinstance(merged.get("decision_quality_model_evidence"), dict)
+                else {}
+            ),
             "action": _optional(
                 merged, "action_v2", "action", "action_key", "action_label"
             ),
@@ -1459,6 +1504,14 @@ def record_ai_decision_trace(
             "input_preflight_allowed": (
                 bool(merged.get("ai_input_preflight_allowed"))
                 if "ai_input_preflight_allowed" in merged
+                else None
+            ),
+            "position_reconciliation_mode": _optional(
+                merged, "ai_input_preflight_position_reconciliation_mode"
+            ),
+            "simulation_position_reconciled": (
+                bool(merged.get("ai_input_preflight_simulation_position_reconciled"))
+                if "ai_input_preflight_simulation_position_reconciled" in merged
                 else None
             ),
             "input_blockers": merged.get("ai_input_preflight_blockers", []),

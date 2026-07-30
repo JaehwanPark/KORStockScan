@@ -6427,7 +6427,9 @@ def restore_scalp_simulator_targets(targets=None) -> int:
         row["simulation_owner"] = (
             row.get("simulation_owner") or _scalp_live_simulator_owner()
         )
+        row["decision_authority"] = "sim_observation_only"
         row["actual_order_submitted"] = False
+        row["broker_order_forbidden"] = True
         row["simulated_order"] = True
         target_list.append(row)
         if str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT":
@@ -8969,7 +8971,11 @@ def _initialize_scalp_sim_holding_defaults(stock: dict, buy_price: int) -> None:
         "position_tag": position_tag,
         "last_ai_reviewed_at": stock.get("last_ai_reviewed_at"),
         "near_ai_exit_started_at": stock.get("near_ai_exit_started_at"),
+        "simulation_book": SCALP_SIMULATION_BOOK,
+        "simulation_owner": _scalp_live_simulator_owner(),
+        "decision_authority": "sim_observation_only",
         "actual_order_submitted": False,
+        "broker_order_forbidden": True,
         "simulated_order": True,
     }
     if is_default_position_tag(strategy, position_tag):
@@ -37108,12 +37114,13 @@ def _apply_entry_ai_price_canary(
         return [], True
 
     ai_eval_started_at = time.perf_counter()
+    simulation_subject = _is_scalp_simulator_target(stock)
     entry_price_metadata = {
         "record_id": stock.get("record_id") or stock.get("id"),
-        "sim_record_id": stock.get("sim_record_id"),
-        "sim_parent_record_id": stock.get("sim_parent_record_id")
-        or stock.get("record_id")
-        or stock.get("id"),
+        "sim_record_id": stock.get("sim_record_id") if simulation_subject else None,
+        "sim_parent_record_id": (
+            stock.get("sim_parent_record_id") if simulation_subject else None
+        ),
         "entry_adm_candidate_id": stock.get("entry_adm_candidate_id")
         or stock.get("candidate_id"),
         "source_event_stage": "entry_price",
@@ -66162,7 +66169,11 @@ def _manual_control_open_loss_session(now_dt: datetime | None) -> str:
         ("NXT_OPEN", datetime_time(8, 0)),
         ("KRX_OPEN", datetime_time(9, 0)),
     ):
-        start_dt = datetime.combine(now_dt.date(), start_time)
+        start_dt = datetime.combine(
+            now_dt.date(),
+            start_time,
+            tzinfo=now_dt.tzinfo,
+        )
         elapsed_sec = (now_dt - start_dt).total_seconds()
         if 0 <= elapsed_sec <= window_sec:
             return session
@@ -69462,7 +69473,11 @@ def handle_holding_state(
                                 "entry_adm_candidate_id": stock.get(
                                     "entry_adm_candidate_id"
                                 ),
-                                "source_event_stage": "scalp_sim_holding_review",
+                                "source_event_stage": (
+                                    "scalp_sim_holding_review"
+                                    if _is_scalp_simulator_target(stock)
+                                    else "holding_score"
+                                ),
                             }
                             holding_call_kwargs = {
                                 "metadata_extra": metadata_extra,

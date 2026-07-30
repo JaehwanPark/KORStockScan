@@ -503,6 +503,111 @@ def test_shared_positive_inventory_quantity_mismatch_blocks_holding_preflight():
     )
 
 
+def test_simulation_book_reconciles_holding_flow_without_broker_inventory():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_flow",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(),
+        position={
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_qty": 1,
+            "buy_price": 10_000,
+            "simulation_book": "scalp_ai_buy_all",
+            "simulation_owner": "ScalpAiBuyAllLiveSimulator0511",
+            "scalp_live_simulator": True,
+            "sim_record_id": "sim-005930-1",
+            "decision_authority": "sim_observation_only",
+            "simulated_order": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        now_ts=now,
+        require_position_reconciliation=True,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["allowed"] is True
+    assert preflight["position_reconciled"] is False
+    assert preflight["position_authority_reconciled"] is True
+    assert preflight["position_reconciliation_mode"] == "simulation_book"
+    assert preflight["simulation_position_reconciled"] is True
+    assert "broker_position_or_open_orders_unreconciled" not in preflight["blockers"]
+
+
+def test_simulation_position_missing_authority_remains_fail_closed():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_flow",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(),
+        position={
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_qty": 1,
+            "buy_price": 10_000,
+            "simulation_book": "scalp_ai_buy_all",
+            "simulation_owner": "ScalpAiBuyAllLiveSimulator0511",
+            "scalp_live_simulator": True,
+            "sim_record_id": "sim-005930-1",
+            "simulated_order": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        now_ts=now,
+        require_position_reconciliation=True,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["allowed"] is False
+    assert preflight["position_authority_reconciled"] is False
+    assert preflight["simulation_position_reconciled"] is False
+    assert "broker_position_or_open_orders_unreconciled" in preflight["blockers"]
+
+
+def test_unknown_simulation_book_cannot_bypass_broker_reconciliation():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_flow",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(),
+        position={
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_qty": 1,
+            "buy_price": 10_000,
+            "simulation_book": "unknown_simulation_book",
+            "simulation_owner": "unknown_owner",
+            "scalp_live_simulator": True,
+            "sim_record_id": "sim-005930-1",
+            "decision_authority": "sim_observation_only",
+            "simulated_order": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        now_ts=now,
+        require_position_reconciliation=True,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["allowed"] is False
+    assert preflight["simulation_position_reconciled"] is False
+    assert "broker_position_or_open_orders_unreconciled" in preflight["blockers"]
+
+
 def test_disabled_preflight_does_not_read_runtime_artifact(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", raising=False)

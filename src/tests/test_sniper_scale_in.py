@@ -25926,8 +25926,11 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
 
+    captured_metadata = {}
+
     class DummyAI:
         def evaluate_scalping_entry_price(self, *args, **kwargs):
+            captured_metadata.update(kwargs.get("metadata_extra") or {})
             return {
                 "action": "IMPROVE_LIMIT",
                 "order_price": 10010,
@@ -25955,6 +25958,7 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
         {"tag": "normal", "qty": 1, "price": 9990, "tif": "DAY", "order_type": "LIMIT"}
     ]
     stock = {
+        "record_id": 123,
         "name": "TEST",
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
@@ -25981,6 +25985,9 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
     assert latency_gate["openai_endpoint_name"] == "entry_price"
     assert latency_gate["openai_transport_mode"] == "responses_ws"
     assert stock["entry_timeout_sec_override"] == 45
+    assert captured_metadata["record_id"] == 123
+    assert captured_metadata["sim_record_id"] is None
+    assert captured_metadata["sim_parent_record_id"] is None
     applied = [
         fields for stage, fields in logs if stage == "entry_ai_price_canary_applied"
     ][0]

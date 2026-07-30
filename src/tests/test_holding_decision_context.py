@@ -129,6 +129,79 @@ def test_holding_context_recovers_shared_positive_broker_reconciliation(monkeypa
     assert snapshot["ai_input_preflight_v1"]["position_reconciled"] is True
 
 
+def test_holding_flow_uses_explicit_simulation_book_reconciliation(monkeypatch):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    stock = _stock()
+    stock.pop("broker_holding_qty")
+    stock.pop("broker_snapshot_age_sec")
+    stock.update(
+        {
+            "status": "HOLDING",
+            "strategy": "SCALPING",
+            "buy_price": 10_000,
+            "simulation_book": "scalp_ai_buy_all",
+            "simulation_owner": "ScalpAiBuyAllLiveSimulator0511",
+            "scalp_live_simulator": True,
+            "sim_record_id": "sim-322000-1",
+            "decision_authority": "sim_observation_only",
+            "simulated_order": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    )
+    ws_data = _ws(now, route="krx_only")
+    ws_data.update(
+        {
+            "last_realtime_type_ts": {
+                "0B": now.timestamp() - 0.1,
+                "0D": now.timestamp() - 0.2,
+            },
+            "last_realtime_type_item": {"0B": "322000", "0D": "322000"},
+            "last_realtime_type_market_suffix": {"0B": "", "0D": ""},
+            "last_realtime_type_market_route": {
+                "0B": "krx_only",
+                "0D": "krx_only",
+            },
+        }
+    )
+
+    context = build_holding_decision_context(
+        None,
+        "322000",
+        ws_data,
+        stock,
+        "KRX",
+        "krx_regular",
+        "holding_flow",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+    )
+
+    source_quality = context["source_quality"]
+    assert source_quality["position_reconciled"] is False
+    assert source_quality["position_authority_reconciled"] is True
+    assert source_quality["position_reconciliation_mode"] == "simulation_book"
+    assert source_quality["simulation_position_reconciled"] is True
+    assert context["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["allowed"] is True
+    assert source_quality["scale_in_support_allowed"] is False
+
+
+def test_scalp_sim_holding_defaults_pin_observation_only_authority():
+    stock = {"sim_record_id": "sim-005930-1"}
+
+    state_handlers._initialize_scalp_sim_holding_defaults(stock, 10_000)
+
+    assert stock["simulation_book"] == state_handlers.SCALP_SIMULATION_BOOK
+    assert stock["decision_authority"] == "sim_observation_only"
+    assert stock["simulated_order"] is True
+    assert stock["actual_order_submitted"] is False
+    assert stock["broker_order_forbidden"] is True
+
+
 def _candles(
     count: int,
     *,

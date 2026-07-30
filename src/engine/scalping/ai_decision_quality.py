@@ -500,6 +500,11 @@ def _exact_trace_payload_findings(
         findings.append("input_preflight_not_exact_v2")
     if trace.get("input_blockers"):
         findings.append("source_quality_blockers_present")
+    if (
+        str(trace.get("sim_record_id") or "").strip()
+        or str(trace.get("position_reconciliation_mode") or "") == "simulation_book"
+    ):
+        findings.append("simulation_observation_not_natural_cohort")
     contract = _payload_contract(payload)
     expected_schema = (
         ENTRY_CONTEXT_SCHEMA

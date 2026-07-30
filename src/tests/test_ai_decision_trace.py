@@ -101,6 +101,67 @@ def test_capture_ai_request_persists_exact_payload_once(monkeypatch, tmp_path):
     assert payload_row["reasoning_effort"] == "low"
 
 
+def test_capture_ai_request_preserves_simulation_cohort_provenance(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input={
+            "input_schema": "holding_score_v2",
+            "stock_code": "005930",
+            "holding_decision_context": {
+                "schema": "holding_decision_context_v1",
+                "candle": {
+                    "input_bundle_version": "scalping_multi_timeframe_context_v1",
+                    "bars": [
+                        {
+                            "minute": "09:00",
+                            "close": 100,
+                            "is_forming": False,
+                        }
+                    ],
+                },
+            },
+        },
+        endpoint_name="holding_score",
+        symbol="005930",
+        request_id="holding-sim-request",
+        model="gpt-test",
+        schema_name="holding_score_v2",
+        require_json=True,
+        metadata={
+            "sim_record_id": "sim-005930-1",
+            "sim_parent_record_id": "sim-parent-1",
+            "source_event_stage": "scalp_sim_holding_review",
+        },
+    )
+
+    assert fields["sim_record_id"] == "sim-005930-1"
+    assert fields["sim_parent_record_id"] == "sim-parent-1"
+    assert fields["source_event_stage"] == "scalp_sim_holding_review"
+    request_row = _rows(trace._request_path(trace._date_text()))[0]
+    assert request_row["sim_record_id"] == "sim-005930-1"
+    assert request_row["source_event_stage"] == "scalp_sim_holding_review"
+    trace.record_ai_decision_trace(
+        {
+            **fields,
+            "action": "HOLD",
+            "score": 60,
+            "provider_called": True,
+            "provider": "openai",
+            "ai_parse_ok": True,
+        },
+        prompt_type="scalping_holding_score",
+        prompt_version="holding_score_v2",
+        result_source="live",
+    )
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert trace_row["sim_record_id"] == "sim-005930-1"
+    assert trace_row["position_reconciliation_mode"] is None
+    assert trace_row["source_event_stage"] == "scalp_sim_holding_review"
+
+
 def test_capture_ai_request_prefers_resolved_entry_price_over_earlier_market_values(
     monkeypatch, tmp_path
 ):
@@ -998,6 +1059,52 @@ def test_rejected_physical_attempt_has_trace_without_outcome_label(
         "not_applicable_rejected_attempt"
     )
     assert not trace._outcome_path(trace._date_text()).exists()
+
+
+def test_decision_quality_contract_rejection_is_preserved_in_trace(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "ai_decision_trace_id": "decision-quality-rejected-1",
+            "action": "DROP",
+            "score": 0,
+            "provider_called": True,
+            "provider": "openai",
+            "decision_quality_contract_status": "semantic_rejected",
+            "decision_quality_contract_errors": [
+                "entry_structural_edge_floor_misclassified",
+            ],
+            "decision_quality_model_action": "WAIT",
+            "decision_quality_model_edge_state": "NO_EDGE",
+            "decision_quality_model_expected_upside_pct": 0.4,
+            "decision_quality_model_expected_downside_pct": -0.8,
+            "decision_quality_model_evidence": {
+                "liquidity": "adverse",
+                "trigger": "recovery_required",
+            },
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_7",
+        result_source="live",
+        provider_called=True,
+    )
+
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert trace_row["decision_quality_contract_status"] == "semantic_rejected"
+    assert trace_row["decision_quality_contract_errors"] == [
+        "entry_structural_edge_floor_misclassified"
+    ]
+    assert trace_row["decision_quality_model_action"] == "WAIT"
+    assert trace_row["decision_quality_model_edge_state"] == "NO_EDGE"
+    assert trace_row["decision_quality_model_expected_upside_pct"] == 0.4
+    assert trace_row["decision_quality_model_expected_downside_pct"] == -0.8
+    assert trace_row["decision_quality_model_evidence"] == {
+        "liquidity": "adverse",
+        "trigger": "recovery_required",
+    }
 
 
 def test_pending_outcome_is_recovered_without_duplicate_trace_after_write_failure(

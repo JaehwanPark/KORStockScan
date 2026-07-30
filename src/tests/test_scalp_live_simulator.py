@@ -311,6 +311,14 @@ def test_scalp_live_simulator_restore_respects_max_open_cap(monkeypatch):
         "SIM-2",
         "SIM-3",
     ]
+    for target in state_handlers.ACTIVE_TARGETS:
+        assert target["simulation_owner"] == (
+            state_handlers._scalp_live_simulator_owner()
+        )
+        assert target["decision_authority"] == "sim_observation_only"
+        assert target["actual_order_submitted"] is False
+        assert target["broker_order_forbidden"] is True
+        assert target["simulated_order"] is True
 
 
 def test_scalp_live_simulator_sync_removes_state_rows_beyond_max_open(monkeypatch):
@@ -1343,8 +1351,11 @@ def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkey
         lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
     )
 
+    captured_metadata = {}
+
     class FakeAiEngine:
         def evaluate_scalping_entry_price(self, *args, **kwargs):
+            captured_metadata.update(kwargs.get("metadata_extra") or {})
             return {
                 "action": "IMPROVE_LIMIT",
                 "order_price": 10_000,
@@ -1394,6 +1405,8 @@ def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkey
     assert sim_target["entry_ai_price_canary_applied"] is True
     assert sim_target["scalp_sim_entry_limit_price"] == 10_000
     assert sim_target["buy_price"] == 10_030
+    assert captured_metadata["sim_record_id"] == sim_target["sim_record_id"]
+    assert captured_metadata["sim_parent_record_id"] == 101
     applied = next(
         fields for stage, fields in logs if stage == "entry_ai_price_canary_applied"
     )
@@ -3230,10 +3243,15 @@ def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(
         "send_smart_sell_order",
         lambda *args, **kwargs: pytest.fail("real sell order must not be called"),
     )
+    monkeypatch.setattr(
+        state_handlers,
+        "_manual_control_exclusion_blocked",
+        lambda *args, **kwargs: False,
+    )
 
     stock = {
-        "name": "TEST",
-        "code": "123456",
+        "name": "삼성전자",
+        "code": "005930",
         "strategy": "SCALPING",
         "position_tag": "SCALP_BASE",
         "status": "HOLDING",
@@ -3255,7 +3273,7 @@ def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(
 
     state_handlers.handle_holding_state(
         stock,
-        "123456",
+        "005930",
         {
             "curr": 10_150,
             "orderbook": {

@@ -1713,6 +1713,24 @@ class GPTSniperEngine:
 
     def _normalize_decision_quality_entry_result(self, result, *, exact_payload):
         payload = dict(result or {}) if isinstance(result, dict) else {}
+        model_action = str(payload.get("action") or "").strip().upper() or None
+        model_edge_state = str(payload.get("edge_state") or "").strip().upper() or None
+        model_evidence = (
+            {str(key): str(value) for key, value in payload.get("evidence", {}).items()}
+            if isinstance(payload.get("evidence"), dict)
+            else {}
+        )
+        model_fields = {
+            "decision_quality_model_action": model_action,
+            "decision_quality_model_edge_state": model_edge_state,
+            "decision_quality_model_expected_upside_pct": payload.get(
+                "expected_upside_pct"
+            ),
+            "decision_quality_model_expected_downside_pct": payload.get(
+                "expected_downside_pct"
+            ),
+            "decision_quality_model_evidence": model_evidence,
+        }
         contract_errors = validate_candidate_response(
             payload,
             stage="entry",
@@ -1721,6 +1739,7 @@ class GPTSniperEngine:
         if contract_errors:
             return {
                 **payload,
+                **model_fields,
                 "action": "DROP",
                 "score": 0,
                 "reason": "decision_quality_v2_7_semantic_rejected",
@@ -1746,6 +1765,7 @@ class GPTSniperEngine:
         ]
         return {
             **payload,
+            **model_fields,
             "action": action,
             "score": score,
             "reason": ",".join(reason_codes[:4])[:120] or "decision_quality_v2_7",

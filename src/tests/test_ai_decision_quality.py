@@ -111,6 +111,77 @@ def test_control_manifest_rejects_non_exact_preflight_mode():
     assert report["excluded_counts"]["input_preflight_not_exact_v2"] == 1
 
 
+def test_control_manifest_excludes_simulation_observation_from_natural_cohort():
+    trace = {
+        **_trace(),
+        "sim_record_id": "sim-005930-1",
+        "source_event_stage": "scalp_sim_holding_review",
+        "position_reconciliation_mode": "simulation_book",
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[trace],
+        payloads=[_payload()],
+    )
+
+    assert report["status"] == "control_manifest_gap_fix_required"
+    assert report["excluded_counts"]["simulation_observation_not_natural_cohort"] == 1
+
+
+def test_control_manifest_does_not_exclude_real_holding_for_legacy_sim_stage_label():
+    trace = {
+        **_trace(),
+        "source_event_stage": "scalp_sim_holding_review",
+        "position_reconciliation_mode": "broker_account",
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[trace],
+        payloads=[_payload()],
+    )
+
+    assert (
+        report["excluded_counts"].get("simulation_observation_not_natural_cohort", 0)
+        == 0
+    )
+
+
+def test_control_manifest_does_not_exclude_legacy_real_record_in_sim_parent_field():
+    trace = {
+        **_trace(),
+        "sim_parent_record_id": "real-db-record-123",
+        "position_reconciliation_mode": "not_required",
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[trace],
+        payloads=[_payload()],
+    )
+
+    assert (
+        report["excluded_counts"].get("simulation_observation_not_natural_cohort", 0)
+        == 0
+    )
+
+
 def test_control_manifest_rejects_canonical_context_without_completed_bars():
     payload = _payload()
     payload["sanitized_user_input"]["entry_candle_context"]["bars"] = [
@@ -1067,9 +1138,7 @@ def test_entry_candidate_rejects_thin_tape_over_adverse_completed_distribution()
             **exact_payload["features"],
         },
     }
-    missing_tick_count_payload["features"].pop(
-        "tick_aggressor_trusted_count", None
-    )
+    missing_tick_count_payload["features"].pop("tick_aggressor_trusted_count", None)
     missing_tick_count_errors = quality.validate_candidate_response(
         overstated,
         stage="entry",

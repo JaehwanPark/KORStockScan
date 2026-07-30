@@ -2826,6 +2826,11 @@ def test_decision_quality_v2_7_semantic_failure_is_fail_closed(monkeypatch):
         "entry_buy_reward_risk_below_floor"
         in result["decision_quality_contract_errors"]
     )
+    assert result["decision_quality_model_action"] == "BUY"
+    assert result["decision_quality_model_edge_state"] == "EDGE"
+    assert result["decision_quality_model_expected_upside_pct"] == 0.5
+    assert result["decision_quality_model_expected_downside_pct"] == -1.0
+    assert result["decision_quality_model_evidence"]["trigger"] == "confirmed"
 
 
 def test_decision_quality_v2_7_requires_exact_preflight_even_if_global_gate_off(

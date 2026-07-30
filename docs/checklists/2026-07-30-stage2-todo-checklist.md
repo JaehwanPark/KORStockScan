@@ -52,8 +52,10 @@
   - 사용자 명시 지시: watching/analyze_target의 현재 `hot_v1`을 `decision_quality_v2_7`로 교체한다. 동일 exact payload와 deterministic `exact_payload_analysis_v1` ledger를 사용하고 구조화 판단을 기존 `action/score/reason` 소비 계약으로 변환한다.
   - 적용 경계: entry prompt 단일 축만 변경한다. provider/model/transport/threshold/order price/quantity/cap, holding·entry_price 프롬프트, hard safety와 broker/account/order/cooldown guard는 변경하지 않는다.
   - 실패 폐쇄: v2.7 응답이 schema·semantic 계약을 위반하면 `DROP/score=0`과 `decision_quality_v2_7_semantic_rejected`로 닫고 주문 권한을 만들지 않는다.
+  - 장중 관찰: 오늘 `entry_price`는 08:22 119850, 08:23 010120, 09:09 138040에서 Bedrock Qwen3 32B 실호출 `3`건이 모두 `result_source=live`, exact preflight allowed, blocker `0`으로 기록됐다. PID `93335`(09:30:53 기동) 이후에는 analyze_target `9`건이 모두 DROP이라 downstream `entry_price` 자연호출은 `0`건이다.
+  - 리뷰 보완: 실거래 `entry_price`의 일반 DB record를 `sim_parent_record_id`로 잘못 기록하던 provenance를 제거하고, 자연 cohort의 sim 제외는 `sim_record_id` 또는 검증된 `position_reconciliation_mode=simulation_book`만 사용한다. sim entry_price는 기존 sim ID/parent ID를 유지한다.
   - 롤백: `KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION=hot_v1`로 복원하고 표준 graceful restart를 수행한다. provider none, 반복 semantic reject, 호출 지연 급증, exact context 결손, hard/broker guard 이상을 즉시 롤백 조건으로 본다.
-  - 다음 액션: review finding 0, targeted tests/compile/diff/parser pass와 clean local commit 후 graceful restart하고 새 PID의 env, 최초 자연 trace의 prompt version/provider/schema/semantic status를 확인한다.
+  - 다음 액션: review finding 0, targeted tests/compile/diff/parser pass와 clean local commit 후 graceful restart하고 새 PID의 env, 최초 자연 trace의 prompt version/provider/schema/semantic status 및 첫 BUY 이후 entry_price provenance를 확인한다.
 
 - [ ] `[CrossSessionSoftStopRevalidation0730] 휴장구간 soft-stop 결정의 정규장 첫 fresh quote 재검증 계약 보완` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 09:00~09:30`, `Track: ScalpingLogic`)
   - Source: [pipeline_events_2026-07-30.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-07-30.jsonl), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [kiwoom_orders.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_orders.py)
@@ -75,7 +77,11 @@
   - 결함 증거: PID `45966`의 08:22:27~09:15:59 trace에서 `holding_exit_flow` 59건이 모두 provider 미호출 `input_preflight_blocked`였고, 119850의 premarket BBO/current/tape stale·missing 구간에서 약 1초 간격으로 반복됐다. `scalping_holding_score`도 7건 모두 차단됐으며 정규장 sim 138040은 `candle_source_quality`, `krx_integrated_event_venue_unproven`과 sim에서 자연스러운 broker position/open-order missing이 함께 기록됐다.
   - 판정 기준: exact source blocker는 fail-closed를 유지하되 동일 blocker·동일 snapshot 반복 호출을 bounded dedupe/backoff하고, real holding과 sim holding의 broker source 요구를 권한에 맞게 분리한다. fresh KRX/SOR route proof와 candle provenance가 완성된 자연 표본만 provider 호출과 판단 품질 평가 대상으로 인정한다.
   - 금지: provider 호출을 위해 source-quality/venue/position reconciliation을 우회하거나, sim position을 real broker position으로 간주하거나, fallback score 50을 유효 AI 판단으로 사용하는 행위.
-  - 다음 액션: 다른 세션의 holding exact 변경 diff와 충돌 여부 확인 → 동일 blocker 반복률·provider call rate 회귀 테스트 → 현재 PID 미반영분 코드리뷰 완료 후 별도 재기동 판단 → endpoint별 live/blocked/timeout/parse 귀속 재확인.
+  - 구현 결과: sim holding은 `simulation_book`, sim record, `decision_authority=sim_observation_only`, `simulated_order=true`, `actual_order_submitted=false`, `broker_order_forbidden=true`, 활성 수량·평균가가 모두 일치할 때만 `position_reconciliation_mode=simulation_book`으로 exact preflight를 통과할 수 있다. real holding은 기존 broker account/open-order/수량/route reconciliation을 그대로 요구하며, sim context도 `scale_in_support_allowed=false`를 유지한다.
+  - 판단품질 격리: sim record/provenance를 request·payload·decision trace에 연결하고 `simulation_observation_not_natural_cohort`로 자연 Exact V2 Control cohort에서 제외한다. 과거 blocked/compact 표본은 사후 승격하지 않는다.
+  - 검증 결과: 관련 snapshot/context/trace/quality 단위 테스트 `150 passed`, 연결 consumer 테스트 `103 passed`, Black/Ruff/compile/`git diff --check` 통과. 09:54 생성한 당일 outcome label `141`건은 price outcome 미연결로 모두 `pending`이며 baseline은 `partial_horizons_keep_maturing`, paired replay는 `sample_floor_keep_collecting`으로 안전하게 종료됐다.
+  - 재리뷰 보완: holding source stage는 AI budget gate가 아니라 명시적 sim position identity로 분리했다. timezone-aware 장중 시각과 naive 장 시작시각을 빼던 manual-control open-loss session 결함도 동일 timezone 결합으로 보완했다.
+  - 다음 액션: 현재 PID 미반영분은 별도 우아한 재기동 승인/요청 후 반영 → 자연 sim holding에서 fresh exact source일 때 `holding_score`/`holding_exit_flow` provider 도달과 no-broker authority provenance를 확인 → real holding은 별도 자연 표본에서 broker reconciliation을 확인 → 60분 outcome 성숙 후 Control baseline과 paired replay를 재생성한다.
 
 - [ ] `[RuntimeEnvIntradayObserve0730] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-07-30`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-29.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-29.json)

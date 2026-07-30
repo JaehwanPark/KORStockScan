@@ -532,6 +532,12 @@ def test_open_loss_session_resolves_nxt_and_krx_windows(monkeypatch):
         )
         == ""
     )
+    assert (
+        sniper_state_handlers._manual_control_open_loss_session(
+            datetime(2026, 7, 2, 9, 0, 0, tzinfo=sniper_state_handlers._KST)
+        )
+        == "KRX_OPEN"
+    )
 
 
 def test_open_loss_holding_auto_exclusion_ignores_non_open_window(

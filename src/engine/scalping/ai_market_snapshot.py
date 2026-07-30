@@ -686,6 +686,36 @@ def _active_holding_position(position: dict[str, Any]) -> bool:
     return bool(quantity is not None and quantity > 0 and avg_price and avg_price > 0)
 
 
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _simulation_position_reconciled(position: dict[str, Any]) -> bool:
+    """Validate a simulation-book position without claiming broker inventory."""
+
+    simulation_book = str(position.get("simulation_book") or "").strip()
+    simulation_owner = str(position.get("simulation_owner") or "").strip()
+    strategy = str(position.get("strategy") or "").strip().upper()
+    sim_record_id = str(
+        position.get("sim_record_id") or position.get("sim_parent_record_id") or ""
+    ).strip()
+    decision_authority = str(position.get("decision_authority") or "").strip()
+    return bool(
+        simulation_book == "scalp_ai_buy_all"
+        and simulation_owner
+        and strategy in {"SCALPING", "SCALP"}
+        and _boolish(position.get("scalp_live_simulator"))
+        and sim_record_id
+        and decision_authority == "sim_observation_only"
+        and _boolish(position.get("simulated_order"))
+        and not _boolish(position.get("actual_order_submitted"))
+        and _boolish(position.get("broker_order_forbidden"))
+        and _active_holding_position(position)
+    )
+
+
 def enrich_position_with_broker_account_snapshot(
     *,
     stock_code: str,
@@ -1345,6 +1375,17 @@ def build_ai_market_snapshot(
         and broker_age_sec <= _POSITION_FRESH_SEC
         and open_orders is not None
     )
+    simulation_position_reconciled = _simulation_position_reconciled(
+        explicit_position_ctx
+    )
+    position_reconciliation_mode = (
+        "simulation_book"
+        if simulation_position_reconciled
+        else ("broker_account" if require_position_reconciliation else "not_required")
+    )
+    position_authority_reconciled = bool(
+        simulation_position_reconciled or position_reconciled
+    )
     venue_value = normalized_venue
     broker_route_value = str(broker_route or "").strip().upper()
     broker_route_matches = _broker_route_matches_cohort(
@@ -1352,17 +1393,22 @@ def build_ai_market_snapshot(
         venue_cohort=venue_value,
         session=session_bucket,
     )
-    if require_position_reconciliation and not position_reconciled:
+    if require_position_reconciliation and not position_authority_reconciled:
         blockers.append("broker_position_or_open_orders_unreconciled")
     if (
         require_position_reconciliation
+        and not simulation_position_reconciled
         and explicit_position_is_active
         and broker_qty_value is not None
         and memory_qty_value is not None
         and broker_qty_value != memory_qty_value
     ):
         blockers.append("broker_position_quantity_mismatch")
-    if require_position_reconciliation and not broker_route_matches:
+    if (
+        require_position_reconciliation
+        and not simulation_position_reconciled
+        and not broker_route_matches
+    ):
         blockers.append("broker_route_venue_mismatch_or_missing")
     observed_epochs = [
         value for value in (quote_epoch, tape_epoch) if isinstance(value, (int, float))
@@ -1409,6 +1455,9 @@ def build_ai_market_snapshot(
         "missing_sources": missing_sources,
         "venue_consistent": venue_consistent,
         "position_reconciled": position_reconciled,
+        "position_authority_reconciled": position_authority_reconciled,
+        "position_reconciliation_mode": position_reconciliation_mode,
+        "simulation_position_reconciled": simulation_position_reconciled,
         "broker_route_matches_venue": broker_route_matches,
         "max_source_skew_ms": max_skew_ms,
     }
@@ -1448,6 +1497,8 @@ def build_ai_market_snapshot(
         "effective_venue_input": effective_venue,
         "venue_resolution": venue_resolution,
         "broker_route": broker_route_value or None,
+        "position_reconciliation_mode": position_reconciliation_mode,
+        "simulation_position_reconciled": simulation_position_reconciled,
         "market_data_route": market_data_route,
         "underlying_event_venue": underlying_event_venue,
         "underlying_event_venue_source": underlying_event_venue_source,
@@ -1476,6 +1527,8 @@ def build_ai_market_snapshot(
         "effective_venue_input": effective_venue,
         "venue_resolution": venue_resolution,
         "broker_route": broker_route_value or None,
+        "position_reconciliation_mode": position_reconciliation_mode,
+        "simulation_position_reconciled": simulation_position_reconciled,
         "market_data_route": market_data_route,
         "underlying_event_venue": underlying_event_venue,
         "underlying_event_venue_source": underlying_event_venue_source,
@@ -1522,6 +1575,9 @@ def ai_input_preflight(
         "missing_sources": ["ai_market_snapshot_v1"],
         "venue_consistent": False,
         "position_reconciled": False,
+        "position_authority_reconciled": False,
+        "position_reconciliation_mode": "missing_snapshot",
+        "simulation_position_reconciled": False,
         "broker_route_matches_venue": False,
         "max_source_skew_ms": None,
     }
@@ -1608,6 +1664,15 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_input_preflight_position_reconciled": bool(
             preflight.get("position_reconciled", False)
+        ),
+        "ai_input_preflight_position_authority_reconciled": bool(
+            preflight.get("position_authority_reconciled", False)
+        ),
+        "ai_input_preflight_position_reconciliation_mode": preflight.get(
+            "position_reconciliation_mode"
+        ),
+        "ai_input_preflight_simulation_position_reconciled": bool(
+            preflight.get("simulation_position_reconciled", False)
         ),
         "ai_input_preflight_broker_route_matches_venue": bool(
             preflight.get("broker_route_matches_venue", False)

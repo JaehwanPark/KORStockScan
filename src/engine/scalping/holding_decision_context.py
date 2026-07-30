@@ -1172,6 +1172,15 @@ def build_holding_decision_context(
     context["source_quality"]["position_reconciled"] = bool(
         preflight.get("position_reconciled", False)
     )
+    context["source_quality"]["position_authority_reconciled"] = bool(
+        preflight.get("position_authority_reconciled", False)
+    )
+    context["source_quality"]["position_reconciliation_mode"] = preflight.get(
+        "position_reconciliation_mode"
+    )
+    context["source_quality"]["simulation_position_reconciled"] = bool(
+        preflight.get("simulation_position_reconciled", False)
+    )
     context["source_quality"]["scale_in_support_allowed"] = bool(
         preflight.get("allowed", False)
         and preflight.get("position_reconciled", False)
@@ -1373,6 +1382,9 @@ def holding_decision_context_model_payload(
                     "position_valid",
                     "order_consistent",
                     "position_reconciled",
+                    "position_authority_reconciled",
+                    "position_reconciliation_mode",
+                    "simulation_position_reconciled",
                     "scale_in_support_allowed",
                 ),
             ),
