@@ -1223,6 +1223,21 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
         in script
     )
     assert 'export KORSTOCKSCAN_RUNTIME_GIT_COMMIT="$commit"' in script
+    assert (
+        'export KORSTOCKSCAN_RUNTIME_LAUNCHER_GIT_COMMIT='
+        '"$LAUNCHER_SOURCE_GIT_COMMIT"' in script
+    )
+    assert (
+        'export KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256='
+        '"$LAUNCHER_SOURCE_RUN_BOT_SHA256"' in script
+    )
+    assert (
+        'export KORSTOCKSCAN_RUNTIME_LAUNCHER_LOADED_AT_KST='
+        '"$LAUNCHER_SOURCE_LOADED_AT_KST"' in script
+    )
+    assert 'sha256sum "${BASH_SOURCE[0]}"' in script
+    assert "readonly LAUNCHER_SOURCE_GIT_COMMIT" in script
+    assert "readonly LAUNCHER_SOURCE_RUN_BOT_SHA256" in script
     assert 'export KORSTOCKSCAN_RUNTIME_SOURCE_ROOT="$PROJECT_DIR"' in script
     assert 'export KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY="$source_dirty"' in script
     assert "KORSTOCKSCAN_RUNTIME_STARTED_AT_KST" in script

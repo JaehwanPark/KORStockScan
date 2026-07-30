@@ -4,6 +4,26 @@ THRESHOLD_RUNTIME_ENV_WAIT_SEC="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_WAIT_SEC:-1
 THRESHOLD_RUNTIME_ENV_REQUIRED="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_REQUIRED:-true}"
 THRESHOLD_RUNTIME_ENV_BOOTSTRAP="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_BOOTSTRAP:-true}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LAUNCHER_SOURCE_LOADED_AT_KST="$(TZ=Asia/Seoul date --iso-8601=seconds)"
+LAUNCHER_SOURCE_GIT_COMMIT="$(
+    git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true
+)"
+if [ -z "$LAUNCHER_SOURCE_GIT_COMMIT" ]; then
+    LAUNCHER_SOURCE_GIT_COMMIT="unknown"
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+    LAUNCHER_SOURCE_RUN_BOT_SHA256="$(
+        sha256sum "${BASH_SOURCE[0]}" 2>/dev/null | awk '{print $1}'
+    )"
+else
+    LAUNCHER_SOURCE_RUN_BOT_SHA256="unknown"
+fi
+if [ -z "$LAUNCHER_SOURCE_RUN_BOT_SHA256" ]; then
+    LAUNCHER_SOURCE_RUN_BOT_SHA256="unknown"
+fi
+readonly LAUNCHER_SOURCE_LOADED_AT_KST
+readonly LAUNCHER_SOURCE_GIT_COMMIT
+readonly LAUNCHER_SOURCE_RUN_BOT_SHA256
 # shellcheck source=../deploy/cpu_affinity_profile.sh
 . "$PROJECT_DIR/deploy/cpu_affinity_profile.sh"
 DEFAULT_BOT_CPU_AFFINITY="$(korstockscan_default_cpu_affinity bot)"
@@ -237,10 +257,13 @@ export_runtime_source_provenance() {
         source_dirty="true"
     fi
     export KORSTOCKSCAN_RUNTIME_GIT_COMMIT="$commit"
+    export KORSTOCKSCAN_RUNTIME_LAUNCHER_GIT_COMMIT="$LAUNCHER_SOURCE_GIT_COMMIT"
+    export KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256="$LAUNCHER_SOURCE_RUN_BOT_SHA256"
+    export KORSTOCKSCAN_RUNTIME_LAUNCHER_LOADED_AT_KST="$LAUNCHER_SOURCE_LOADED_AT_KST"
     export KORSTOCKSCAN_RUNTIME_SOURCE_ROOT="$PROJECT_DIR"
     export KORSTOCKSCAN_RUNTIME_SOURCE_DIRTY="$source_dirty"
     export KORSTOCKSCAN_RUNTIME_STARTED_AT_KST="$(TZ=Asia/Seoul date --iso-8601=seconds)"
-    echo "📌 runtime source provenance: commit=$commit source_root=$PROJECT_DIR source_dirty=$source_dirty started_at=$KORSTOCKSCAN_RUNTIME_STARTED_AT_KST"
+    echo "📌 runtime source provenance: commit=$commit launcher_commit=$KORSTOCKSCAN_RUNTIME_LAUNCHER_GIT_COMMIT launcher_sha256=$KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256 launcher_loaded_at=$KORSTOCKSCAN_RUNTIME_LAUNCHER_LOADED_AT_KST source_root=$PROJECT_DIR source_dirty=$source_dirty started_at=$KORSTOCKSCAN_RUNTIME_STARTED_AT_KST"
 }
 
 reset_runtime_policy_env_before_handoff() {
