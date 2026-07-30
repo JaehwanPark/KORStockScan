@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
+import tempfile
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -36,25 +39,75 @@ CONTRACT = {
 
 def _safe_float(value: Any) -> float | None:
     try:
-        return float(value)
+        numeric = float(value)
     except (TypeError, ValueError):
         return None
+    return numeric if math.isfinite(numeric) else None
 
 
-def _load_events(path: Path) -> list[dict[str, Any]]:
-    rows = []
+def _contract_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    return None
+
+
+def _event_contract_valid(row: dict[str, Any]) -> bool:
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    return (
+        fields.get("decision_authority") == "limit_down_source_observation_only"
+        and _contract_bool(fields.get("runtime_effect")) is False
+        and _contract_bool(fields.get("actual_order_submitted")) is False
+        and _contract_bool(fields.get("broker_order_forbidden")) is True
+    )
+
+
+def _load_events(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    status = {
+        "path": str(path),
+        "exists": path.exists(),
+        "readable": False,
+        "line_count": 0,
+        "invalid_json_line_count": 0,
+        "invalid_schema_line_count": 0,
+        "matching_event_count": 0,
+        "contract_violation_count": 0,
+    }
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return rows
+    except (OSError, UnicodeError):
+        return rows, status
+    status["readable"] = True
     for line in lines:
+        if not line.strip():
+            continue
+        status["line_count"] += 1
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
+            status["invalid_json_line_count"] += 1
             continue
-        if isinstance(row, dict) and row.get("pipeline") == "LIMIT_DOWN_WATCH":
+        if not isinstance(row, dict):
+            status["invalid_schema_line_count"] += 1
+            continue
+        if row.get("pipeline") == "LIMIT_DOWN_WATCH":
             rows.append(row)
-    return rows
+            if not _event_contract_valid(row):
+                status["contract_violation_count"] += 1
+    status["matching_event_count"] = len(rows)
+    status["valid"] = bool(
+        status["exists"]
+        and status["readable"]
+        and status["invalid_json_line_count"] == 0
+        and status["invalid_schema_line_count"] == 0
+        and status["contract_violation_count"] == 0
+    )
+    return rows, status
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -69,6 +122,7 @@ def _evidence_readiness(
     *,
     target_date: str,
     candidate_source: dict[str, Any],
+    event_source: dict[str, Any],
     registered_code_count: int,
     snapshot_code_count: int,
     ordered_path_captured_code_count: int,
@@ -84,9 +138,16 @@ def _evidence_readiness(
         if isinstance(row, dict) and row.get("source_quality") == "pass"
     )
     candidate_source_valid = (
-        candidate_source.get("report_type") == "limit_down_watch_candidate_source"
+        candidate_source.get("schema_version") == 1
+        and candidate_source.get("report_type") == "limit_down_watch_candidate_source"
         and candidate_source.get("target_date") == target_date
         and candidate_source.get("status") in {"pass", "partial"}
+        and candidate_source.get("candidate_count") == len(candidates)
+        and candidate_source.get("decision_authority")
+        == "limit_down_source_observation_only"
+        and candidate_source.get("runtime_effect") is False
+        and candidate_source.get("actual_order_submitted") is False
+        and candidate_source.get("broker_order_forbidden") is True
     )
     if not candidate_source:
         source_quality_status = "missing"
@@ -103,6 +164,8 @@ def _evidence_readiness(
     blockers = []
     if source_quality_status not in {"pass", "pass_with_exclusions", "no_candidate"}:
         blockers.append(f"candidate_source_quality_{source_quality_status}")
+    if not event_source.get("valid"):
+        blockers.append("ordered_intraday_event_source_invalid")
     if snapshot_code_count <= 0:
         blockers.append("ordered_intraday_path_sample_missing")
     if ordered_path_captured_code_count <= 0:
@@ -125,6 +188,8 @@ def _evidence_readiness(
         "source_quality_status": source_quality_status,
         "candidate_source_valid": candidate_source_valid,
         "candidate_source_report_status": candidate_source.get("status"),
+        "event_source_valid": bool(event_source.get("valid")),
+        "event_source": event_source,
         "candidate_count": len(candidates),
         "source_pass_count": source_pass_count,
         "registered_code_count": registered_code_count,
@@ -157,7 +222,7 @@ def build_report(
     candidate_path = candidate_path or (
         CANDIDATE_DIR / f"limit_down_watch_candidate_source_{target_date}.json"
     )
-    events = _load_events(event_path)
+    events, event_source = _load_events(event_path)
     candidate_source = _load_json(candidate_path)
     snapshots: dict[str, dict[str, Any]] = {}
     transitions: dict[str, list[str]] = defaultdict(list)
@@ -260,25 +325,37 @@ def build_report(
     ordered_path_captured_code_count = sum(
         int(row["ordered_path_captured_codes"]) for row in groups
     )
+    evidence_readiness = _evidence_readiness(
+        target_date=target_date,
+        candidate_source=candidate_source,
+        event_source=event_source,
+        registered_code_count=len(registered_meta),
+        snapshot_code_count=len(snapshots),
+        ordered_path_captured_code_count=ordered_path_captured_code_count,
+    )
+    source_blocked = (
+        not evidence_readiness["candidate_source_valid"]
+        or not evidence_readiness["event_source_valid"]
+        or evidence_readiness["source_quality_status"]
+        not in {"pass", "pass_with_exclusions", "no_candidate"}
+    )
     return {
         "schema_version": 1,
         "report_type": "limit_down_watch",
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(),
-        "status": "pass" if snapshots else "no_observation",
+        "status": (
+            "source_blocked"
+            if source_blocked
+            else "pass" if snapshots else "no_observation"
+        ),
         "registered_code_count": len(registered_meta),
         "snapshot_code_count": len(snapshots),
         "group_count": len(groups),
         "groups": groups,
         "candidate_source_path": str(candidate_path),
         "event_source_path": str(event_path),
-        "evidence_readiness": _evidence_readiness(
-            target_date=target_date,
-            candidate_source=candidate_source,
-            registered_code_count=len(registered_meta),
-            snapshot_code_count=len(snapshots),
-            ordered_path_captured_code_count=ordered_path_captured_code_count,
-        ),
+        "evidence_readiness": evidence_readiness,
         **CONTRACT,
     }
 
@@ -292,6 +369,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     lines = [
         f"# Limit-Down Watch Report — {payload.get('target_date')}",
         "",
+        f"- generated_at: `{payload.get('generated_at')}`",
         f"- status: `{payload.get('status')}`",
         f"- registered_code_count: `{payload.get('registered_code_count')}`",
         f"- snapshot_code_count: `{payload.get('snapshot_code_count')}`",
@@ -313,6 +391,31 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Cohort / Price Band",
+            "",
+            "| cohort | price_band | registered | snapshots | unlocked | relocked | ordered_path_capture_rate |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    groups = payload.get("groups") if isinstance(payload.get("groups"), list) else []
+    for row in groups:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            "| {cohort} | {price_band} | {registered} | {snapshots} | "
+            "{unlocked} | {relocked} | {capture} |".format(
+                cohort=row.get("cohort") or "unknown",
+                price_band=row.get("price_band") or "unknown",
+                registered=row.get("registered_codes") or 0,
+                snapshots=row.get("snapshot_codes") or 0,
+                unlocked=row.get("unlocked_codes") or 0,
+                relocked=row.get("relocked_codes") or 0,
+                capture=row.get("ordered_intraday_path_capture_rate"),
+            )
+        )
+    lines.extend(
+        [
+            "",
             "## Contract",
             "",
             f"- decision_authority: `{payload.get('decision_authority')}`",
@@ -327,16 +430,38 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
 def write_report(target_date: str) -> tuple[Path, Path]:
     payload = build_report(target_date)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     base = OUTPUT_DIR / f"limit_down_watch_{target_date}"
     json_path = base.with_suffix(".json")
     markdown_path = base.with_suffix(".md")
-    json_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    _atomic_write_text(
+        json_path,
+        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False),
     )
-    markdown_path.write_text(_render_markdown(payload), encoding="utf-8")
+    _atomic_write_text(markdown_path, _render_markdown(payload))
     return json_path, markdown_path
 
 
@@ -345,12 +470,12 @@ def main() -> int:
     parser.add_argument("--target-date", default=date.today().isoformat())
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args()
-    payload = build_report(args.target_date)
     if args.write:
         json_path, markdown_path = write_report(args.target_date)
         print(json_path)
         print(markdown_path)
     else:
+        payload = build_report(args.target_date)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 

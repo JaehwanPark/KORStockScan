@@ -118,6 +118,13 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _load_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+
+
 def _has_runtime_applicable_candidate(value: Any) -> bool:
     if isinstance(value, list):
         return any(_has_runtime_applicable_candidate(item) for item in value)
@@ -571,7 +578,11 @@ def _is_real_primary_sample_book(value: Any) -> bool:
 
 
 def _limit_down_watch_report_status(
-    report: dict[str, Any], *, enabled: bool, target_date: str
+    report: dict[str, Any],
+    *,
+    enabled: bool,
+    target_date: str,
+    markdown_text: str | None = None,
 ) -> dict[str, Any]:
     if not enabled:
         return {
@@ -592,6 +603,7 @@ def _limit_down_watch_report_status(
         issues.append("limit_down_watch_report_missing")
     else:
         expected = {
+            "schema_version": 1,
             "report_type": "limit_down_watch",
             "target_date": target_date,
             "decision_authority": "limit_down_source_observation_only",
@@ -604,21 +616,57 @@ def _limit_down_watch_report_status(
         for field, expected_value in expected.items():
             if report.get(field) != expected_value:
                 issues.append(f"limit_down_watch_contract_mismatch:{field}")
-        if report.get("status") not in {"pass", "no_observation"}:
+        generated_at = str(report.get("generated_at") or "").strip()
+        if not generated_at:
+            issues.append("limit_down_watch_generated_at_missing")
+        if markdown_text is not None and (
+            not markdown_text
+            or f"# Limit-Down Watch Report — {target_date}" not in markdown_text
+            or f"- generated_at: `{generated_at}`" not in markdown_text
+        ):
+            issues.append("limit_down_watch_markdown_generation_mismatch")
+        if report.get("status") not in {
+            "pass",
+            "no_observation",
+            "source_blocked",
+        }:
             issues.append("limit_down_watch_status_invalid")
+        if readiness.get("stage") != "source_observation":
+            issues.append("limit_down_watch_readiness_stage_invalid")
+        if readiness.get("decision") != "collect_source_then_build_sim_candidate":
+            issues.append("limit_down_watch_readiness_decision_invalid")
         if readiness.get("sim_candidate_ready") is not False:
             issues.append("limit_down_watch_sim_authority_leak")
         if readiness.get("real_trading_ready") is not False:
             issues.append("limit_down_watch_real_authority_leak")
+        blockers = (
+            set(readiness.get("blockers"))
+            if isinstance(readiness.get("blockers"), list)
+            else set()
+        )
+        required_blockers = {
+            "multi_day_cohort_sample_floor_not_established",
+            "counterfactual_entry_exit_labels_missing",
+            "clean_baseline_rolling_ev_missing",
+            "sim_policy_catalog_handoff_missing",
+            "post_sim_attribution_missing",
+            "separate_live_conversion_approval_missing",
+        }
+        if not required_blockers.issubset(blockers):
+            issues.append("limit_down_watch_conversion_blockers_missing")
         if readiness.get("candidate_source_valid") is not True:
             warnings.append("limit_down_watch_candidate_source_invalid")
+        if readiness.get("event_source_valid") is not True:
+            warnings.append("limit_down_watch_event_source_invalid")
         if readiness.get("source_quality_status") not in {
             "pass",
             "pass_with_exclusions",
             "no_candidate",
         }:
             warnings.append("limit_down_watch_candidate_source_quality_blocked")
-        if report.get("status") == "no_observation":
+        if report.get("status") == "source_blocked":
+            warnings.append("limit_down_watch_source_blocked")
+        elif report.get("status") == "no_observation":
             warnings.append("limit_down_watch_ordered_path_not_observed")
     return {
         "status": "fail" if issues else "warning" if warnings else "pass",
@@ -654,6 +702,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "limit_down_watch": REPORT_DIR
         / "limit_down_watch"
         / f"limit_down_watch_{target_date}.json",
+        "limit_down_watch_markdown": REPORT_DIR
+        / "limit_down_watch"
+        / f"limit_down_watch_{target_date}.md",
         "buy_funnel_sentinel": REPORT_DIR
         / "buy_funnel_sentinel"
         / f"buy_funnel_sentinel_{target_date}.json",
@@ -4620,6 +4671,25 @@ def _postclose_not_yet_due(target_date: str) -> bool:
     return parsed == now.date() and now.time() < dtime(16, 10)
 
 
+def _limit_down_watch_report_required(target_date: str) -> bool:
+    try:
+        return date.fromisoformat(target_date) >= date(2026, 7, 30)
+    except ValueError:
+        return False
+
+
+def _limit_down_watch_verification_enabled(
+    target_date: str,
+    *,
+    execution_flags: dict[str, bool],
+    recovery_done: bool,
+) -> bool:
+    explicit = execution_flags.get("limit_down_watch_report")
+    if explicit is not None:
+        return explicit
+    return recovery_done and _limit_down_watch_report_required(target_date)
+
+
 def build_threshold_cycle_postclose_verification(
     target_date: str,
     *,
@@ -4711,6 +4781,7 @@ def build_threshold_cycle_postclose_verification(
     entry_split_order_plan = _load_json(paths["entry_split_order_plan"])
     quote_consistency_report = _load_json(paths["quote_consistency"])
     limit_down_watch_report = _load_json(paths["limit_down_watch"])
+    limit_down_watch_markdown = _load_text(paths["limit_down_watch_markdown"])
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
     active_priority_preopen_apply = preopen_apply_current or preopen_apply_next
@@ -5236,6 +5307,11 @@ def build_threshold_cycle_postclose_verification(
     marker_reconciliation_done = recovery_action == "marker_reconciliation"
     execution_flags = _parse_bool_flags(done_line or "")
     execution_flags.update(explicit_execution_flags)
+    limit_down_watch_verification_enabled = _limit_down_watch_verification_enabled(
+        target_date,
+        execution_flags=execution_flags,
+        recovery_done=recovery_done,
+    )
     required_execution_flags = (
         "swing_lifecycle",
         "pattern_labs",
@@ -5249,6 +5325,11 @@ def build_threshold_cycle_postclose_verification(
         "runtime_approval_summary",
         "next_stage2_checklist",
     )
+    if _limit_down_watch_report_required(target_date):
+        required_execution_flags = (
+            *required_execution_flags,
+            "limit_down_watch_report",
+        )
     missing_execution_flags = [
         key
         for key in required_execution_flags
@@ -5281,15 +5362,6 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (
             *required_execution_flags,
             "one_share_threshold_opportunity",
-        )
-    if (
-        done_line
-        and "limit_down_watch_report" in execution_flags
-        and "limit_down_watch_report" not in missing_execution_flags
-    ):
-        required_execution_flags = (
-            *required_execution_flags,
-            "limit_down_watch_report",
         )
     if (
         done_line
@@ -5526,8 +5598,9 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("producer_gap_discovery")
     if execution_flags.get("one_share_threshold_opportunity") is not True:
         disabled_artifact_labels.add("one_share_threshold_opportunity")
-    if execution_flags.get("limit_down_watch_report") is not True:
+    if not limit_down_watch_verification_enabled:
         disabled_artifact_labels.add("limit_down_watch")
+        disabled_artifact_labels.add("limit_down_watch_markdown")
     if execution_flags.get("stage_hook_workorder_discovery") is not True:
         disabled_artifact_labels.add("stage_hook_workorder_discovery")
     if execution_flags.get("stage_hook_runtime_scaffold") is not True:
@@ -5564,8 +5637,9 @@ def build_threshold_cycle_postclose_verification(
         handoff_warnings.extend(quote_consistency_warnings)
     limit_down_watch_status = _limit_down_watch_report_status(
         limit_down_watch_report,
-        enabled=execution_flags.get("limit_down_watch_report") is True,
+        enabled=limit_down_watch_verification_enabled,
         target_date=target_date,
+        markdown_text=limit_down_watch_markdown,
     )
     if limit_down_watch_status["status"] == "fail":
         log_issues.extend(limit_down_watch_status["issues"])

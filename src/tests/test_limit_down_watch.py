@@ -72,6 +72,31 @@ def _candidate(code="000001", count=2):
     )
 
 
+def _observation_event_fields(**fields):
+    return {
+        "decision_authority": "limit_down_source_observation_only",
+        "runtime_effect": "False",
+        "actual_order_submitted": "False",
+        "broker_order_forbidden": "True",
+        **fields,
+    }
+
+
+def _candidate_source_payload(*candidates):
+    return {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_candidate_source",
+        "target_date": "2026-07-27",
+        "status": "pass",
+        "candidate_count": len(candidates),
+        "candidates": list(candidates),
+        "decision_authority": "limit_down_source_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def test_ka10017_previous_limit_down_request_and_parser(monkeypatch):
     captured = {}
 
@@ -499,49 +524,49 @@ def test_postclose_report_groups_ordered_intraday_path(tmp_path):
             "pipeline": "LIMIT_DOWN_WATCH",
             "stage": "limit_down_watch_registered",
             "stock_code": "000001",
-            "fields": {
-                "cohort": "consecutive_limit_down_2plus",
-                "price_band": "1000_4999",
-            },
+            "fields": _observation_event_fields(
+                cohort="consecutive_limit_down_2plus",
+                price_band="1000_4999",
+            ),
         },
         {
             "pipeline": "LIMIT_DOWN_WATCH",
             "stage": "limit_down_watch_registered",
             "stock_code": "000002",
-            "fields": {
-                "cohort": "consecutive_limit_down_2plus",
-                "price_band": "1000_4999",
-            },
+            "fields": _observation_event_fields(
+                cohort="consecutive_limit_down_2plus",
+                price_band="1000_4999",
+            ),
         },
         {
             "pipeline": "LIMIT_DOWN_WATCH",
             "stage": "limit_down_watch_state_transition",
             "stock_code": "000001",
-            "fields": {"phase": "UNLOCKED"},
+            "fields": _observation_event_fields(phase="UNLOCKED"),
         },
         {
             "pipeline": "LIMIT_DOWN_WATCH",
             "stage": "limit_down_watch_state_transition",
             "stock_code": "000001",
-            "fields": {"phase": "RELOCKED"},
+            "fields": _observation_event_fields(phase="RELOCKED"),
         },
         {
             "pipeline": "LIMIT_DOWN_WATCH",
             "stage": "limit_down_watch_state_transition",
             "stock_code": "000002",
-            "fields": {"phase": "ROTATED"},
+            "fields": _observation_event_fields(phase="ROTATED"),
         },
         {
             "pipeline": "LIMIT_DOWN_WATCH",
             "stage": "limit_down_watch_snapshot",
             "stock_code": "000001",
-            "fields": {
-                "cohort": "consecutive_limit_down_2plus",
-                "price_band": "1000_4999",
-                "low_to_high_range_pct": "20.0",
-                "high_vs_limit_down_close_pct": "25.0",
-                "low_vs_limit_down_close_pct": "-5.0",
-            },
+            "fields": _observation_event_fields(
+                cohort="consecutive_limit_down_2plus",
+                price_band="1000_4999",
+                low_to_high_range_pct="20.0",
+                high_vs_limit_down_close_pct="25.0",
+                low_vs_limit_down_close_pct="-5.0",
+            ),
         },
     ]
     event_path.write_text(
@@ -550,17 +575,12 @@ def test_postclose_report_groups_ordered_intraday_path(tmp_path):
     )
     candidate_path.write_text(
         json.dumps(
-            {
-                "report_type": "limit_down_watch_candidate_source",
-                "target_date": "2026-07-27",
-                "status": "pass",
-                "candidates": [
-                    {
-                        "code": "000001",
-                        "source_quality": "pass",
-                    }
-                ],
-            }
+            _candidate_source_payload(
+                {
+                    "code": "000001",
+                    "source_quality": "pass",
+                }
+            )
         ),
         encoding="utf-8",
     )
@@ -603,24 +623,19 @@ def test_postclose_report_no_observation_stays_fail_closed(tmp_path):
                 "pipeline": "LIMIT_DOWN_WATCH",
                 "stage": "limit_down_watch_registered",
                 "stock_code": "000001",
-                "fields": {},
+                "fields": _observation_event_fields(),
             }
         ),
         encoding="utf-8",
     )
     candidate_path.write_text(
         json.dumps(
-            {
-                "report_type": "limit_down_watch_candidate_source",
-                "target_date": "2026-07-27",
-                "status": "pass",
-                "candidates": [
-                    {
-                        "code": "000001",
-                        "source_quality": "pass",
-                    }
-                ],
-            }
+            _candidate_source_payload(
+                {
+                    "code": "000001",
+                    "source_quality": "pass",
+                }
+            )
         ),
         encoding="utf-8",
     )
@@ -639,3 +654,78 @@ def test_postclose_report_no_observation_stays_fail_closed(tmp_path):
         "ordered_intraday_path_sample_missing"
         in report["evidence_readiness"]["blockers"]
     )
+
+
+def test_postclose_report_distinguishes_missing_event_source(tmp_path):
+    candidate_path = tmp_path / "candidates.json"
+    candidate_path.write_text(
+        json.dumps(
+            _candidate_source_payload(
+                {
+                    "code": "000001",
+                    "source_quality": "pass",
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    report = limit_down_watch_report.build_report(
+        "2026-07-27",
+        event_path=tmp_path / "missing-events.jsonl",
+        candidate_path=candidate_path,
+    )
+
+    assert report["status"] == "source_blocked"
+    assert report["evidence_readiness"]["event_source_valid"] is False
+    assert (
+        "ordered_intraday_event_source_invalid"
+        in report["evidence_readiness"]["blockers"]
+    )
+
+
+def test_postclose_report_blocks_event_contract_violation(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    candidate_path = tmp_path / "candidates.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "pipeline": "LIMIT_DOWN_WATCH",
+                "stage": "limit_down_watch_registered",
+                "stock_code": "000001",
+                "fields": {
+                    **_observation_event_fields(),
+                    "runtime_effect": "True",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_path.write_text(
+        json.dumps(
+            _candidate_source_payload(
+                {
+                    "code": "000001",
+                    "source_quality": "pass",
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    report = limit_down_watch_report.build_report(
+        "2026-07-27",
+        event_path=event_path,
+        candidate_path=candidate_path,
+    )
+
+    assert report["status"] == "source_blocked"
+    event_source = report["evidence_readiness"]["event_source"]
+    assert event_source["contract_violation_count"] == 1
+    assert report["evidence_readiness"]["event_source_valid"] is False
+
+
+def test_postclose_report_ignores_non_finite_metric_values():
+    assert limit_down_watch_report._safe_float("nan") is None
+    assert limit_down_watch_report._safe_float("inf") is None
+    assert limit_down_watch_report._safe_float("-inf") is None

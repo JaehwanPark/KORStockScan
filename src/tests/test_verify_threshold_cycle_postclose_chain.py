@@ -449,19 +449,78 @@ def test_artifact_paths_include_one_share_threshold_opportunity():
     )
 
 
-def test_artifact_paths_include_limit_down_watch():
-    path = mod._artifact_paths("2026-07-30")["limit_down_watch"]
+def _limit_down_readiness(**overrides):
+    payload = {
+        "stage": "source_observation",
+        "decision": "collect_source_then_build_sim_candidate",
+        "candidate_source_valid": True,
+        "event_source_valid": True,
+        "source_quality_status": "pass",
+        "sim_candidate_ready": False,
+        "real_trading_ready": False,
+        "blockers": [
+            "multi_day_cohort_sample_floor_not_established",
+            "counterfactual_entry_exit_labels_missing",
+            "clean_baseline_rolling_ev_missing",
+            "sim_policy_catalog_handoff_missing",
+            "post_sim_attribution_missing",
+            "separate_live_conversion_approval_missing",
+        ],
+    }
+    payload.update(overrides)
+    return payload
 
-    assert str(path).endswith(
+
+def test_artifact_paths_include_limit_down_watch():
+    paths = mod._artifact_paths("2026-07-30")
+
+    assert str(paths["limit_down_watch"]).endswith(
         "data/report/limit_down_watch/limit_down_watch_2026-07-30.json"
+    )
+    assert str(paths["limit_down_watch_markdown"]).endswith(
+        "data/report/limit_down_watch/limit_down_watch_2026-07-30.md"
+    )
+
+
+def test_limit_down_watch_report_flag_required_from_rollout_date():
+    assert mod._limit_down_watch_report_required("2026-07-29") is False
+    assert mod._limit_down_watch_report_required("2026-07-30") is True
+
+
+def test_limit_down_watch_report_stays_verified_during_marker_recovery():
+    assert (
+        mod._limit_down_watch_verification_enabled(
+            "2026-07-30",
+            execution_flags={},
+            recovery_done=True,
+        )
+        is True
+    )
+    assert (
+        mod._limit_down_watch_verification_enabled(
+            "2026-07-30",
+            execution_flags={"limit_down_watch_report": False},
+            recovery_done=True,
+        )
+        is False
+    )
+    assert (
+        mod._limit_down_watch_verification_enabled(
+            "2026-07-30",
+            execution_flags={},
+            recovery_done=False,
+        )
+        is False
     )
 
 
 def test_limit_down_watch_report_status_passes_source_only_contract():
     status = mod._limit_down_watch_report_status(
         {
+            "schema_version": 1,
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
+            "generated_at": "2026-07-30T20:10:00+09:00",
             "status": "pass",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -469,13 +528,7 @@ def test_limit_down_watch_report_status_passes_source_only_contract():
             "broker_order_forbidden": True,
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
-            "evidence_readiness": {
-                "candidate_source_valid": True,
-                "source_quality_status": "pass",
-                "sim_candidate_ready": False,
-                "real_trading_ready": False,
-                "blockers": ["clean_baseline_rolling_ev_missing"],
-            },
+            "evidence_readiness": _limit_down_readiness(),
         },
         enabled=True,
         target_date="2026-07-30",
@@ -489,8 +542,10 @@ def test_limit_down_watch_report_status_passes_source_only_contract():
 def test_limit_down_watch_report_status_fails_authority_leak():
     status = mod._limit_down_watch_report_status(
         {
+            "schema_version": 1,
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
+            "generated_at": "2026-07-30T20:10:00+09:00",
             "status": "pass",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -498,12 +553,10 @@ def test_limit_down_watch_report_status_fails_authority_leak():
             "broker_order_forbidden": True,
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
-            "evidence_readiness": {
-                "candidate_source_valid": True,
-                "source_quality_status": "pass",
-                "sim_candidate_ready": True,
-                "real_trading_ready": True,
-            },
+            "evidence_readiness": _limit_down_readiness(
+                sim_candidate_ready=True,
+                real_trading_ready=True,
+            ),
         },
         enabled=True,
         target_date="2026-07-30",
@@ -517,8 +570,10 @@ def test_limit_down_watch_report_status_fails_authority_leak():
 def test_limit_down_watch_report_status_warns_without_ordered_path():
     status = mod._limit_down_watch_report_status(
         {
+            "schema_version": 1,
             "report_type": "limit_down_watch",
             "target_date": "2026-07-30",
+            "generated_at": "2026-07-30T20:10:00+09:00",
             "status": "no_observation",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -526,12 +581,7 @@ def test_limit_down_watch_report_status_warns_without_ordered_path():
             "broker_order_forbidden": True,
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
-            "evidence_readiness": {
-                "candidate_source_valid": True,
-                "source_quality_status": "pass",
-                "sim_candidate_ready": False,
-                "real_trading_ready": False,
-            },
+            "evidence_readiness": _limit_down_readiness(),
         },
         enabled=True,
         target_date="2026-07-30",
@@ -544,8 +594,10 @@ def test_limit_down_watch_report_status_warns_without_ordered_path():
 def test_limit_down_watch_report_status_fails_stale_candidate_source():
     status = mod._limit_down_watch_report_status(
         {
+            "schema_version": 1,
             "report_type": "limit_down_watch",
             "target_date": "2026-07-29",
+            "generated_at": "2026-07-30T20:10:00+09:00",
             "status": "pass",
             "decision_authority": "limit_down_source_observation_only",
             "runtime_effect": False,
@@ -553,12 +605,10 @@ def test_limit_down_watch_report_status_fails_stale_candidate_source():
             "broker_order_forbidden": True,
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
-            "evidence_readiness": {
-                "candidate_source_valid": False,
-                "source_quality_status": "stale_or_invalid",
-                "sim_candidate_ready": False,
-                "real_trading_ready": False,
-            },
+            "evidence_readiness": _limit_down_readiness(
+                candidate_source_valid=False,
+                source_quality_status="stale_or_invalid",
+            ),
         },
         enabled=True,
         target_date="2026-07-30",
@@ -567,6 +617,65 @@ def test_limit_down_watch_report_status_fails_stale_candidate_source():
     assert status["status"] == "fail"
     assert "limit_down_watch_contract_mismatch:target_date" in status["issues"]
     assert "limit_down_watch_candidate_source_invalid" in status["warnings"]
+
+
+def test_limit_down_watch_report_status_warns_for_blocked_event_source():
+    status = mod._limit_down_watch_report_status(
+        {
+            "schema_version": 1,
+            "report_type": "limit_down_watch",
+            "target_date": "2026-07-30",
+            "generated_at": "2026-07-30T20:10:00+09:00",
+            "status": "source_blocked",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": _limit_down_readiness(
+                event_source_valid=False,
+                blockers=[
+                    *_limit_down_readiness()["blockers"],
+                    "ordered_intraday_event_source_invalid",
+                ],
+            ),
+        },
+        enabled=True,
+        target_date="2026-07-30",
+    )
+
+    assert status["status"] == "warning"
+    assert "limit_down_watch_event_source_invalid" in status["warnings"]
+    assert "limit_down_watch_source_blocked" in status["warnings"]
+
+
+def test_limit_down_watch_report_status_fails_stale_markdown_pair():
+    status = mod._limit_down_watch_report_status(
+        {
+            "schema_version": 1,
+            "report_type": "limit_down_watch",
+            "target_date": "2026-07-30",
+            "generated_at": "2026-07-30T20:10:00+09:00",
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": _limit_down_readiness(),
+        },
+        enabled=True,
+        target_date="2026-07-30",
+        markdown_text=(
+            "# Limit-Down Watch Report — 2026-07-30\n"
+            "- generated_at: `2026-07-30T19:00:00+09:00`\n"
+        ),
+    )
+
+    assert status["status"] == "fail"
+    assert "limit_down_watch_markdown_generation_mismatch" in status["issues"]
 
 
 def test_postclose_verifier_fails_runtime_apply_gap_audit_fail(tmp_path, monkeypatch):
