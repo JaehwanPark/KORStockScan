@@ -257,6 +257,7 @@ def run_monitor_snapshot_isolated(target_date: str) -> dict[str, str]:
             "MONITOR_SNAPSHOT_ASYNC": "0",
             "MONITOR_SNAPSHOT_FORCE": "1",
             "MONITOR_SNAPSHOT_PROFILE": "full",
+            "MONITOR_SNAPSHOT_IO_DELAY_SEC": "1.0",
             "ALLOW_EXISTING_FULL_BUILD_WITH_BOT": "1",
         }
     )

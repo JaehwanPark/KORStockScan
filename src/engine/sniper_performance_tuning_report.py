@@ -11,14 +11,14 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
 from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
+from src.engine.dashboard_data_repository import iter_pipeline_events
+from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.engine.trade_profit import calculate_net_realized_pnl
 from src.market_regime import summarize_market_regime
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL, TRADING_RULES
-from src.engine.dashboard_data_repository import load_pipeline_events
 
 _ENTRY_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\].*?\[ENTRY_PIPELINE\] "
@@ -54,6 +54,58 @@ _STRATEGY_LABELS = {
 }
 _STRATEGY_ORDER = ("scalping", "swing")
 PERFORMANCE_TUNING_SCHEMA_VERSION = 8
+_PERF_EVENT_FIELD_KEYS = frozenset(
+    {
+        "action",
+        "action_age_sec",
+        "action_key",
+        "aggr_action",
+        "agreement_bucket",
+        "ai_cache",
+        "allow_entry_age_sec",
+        "blocked_stage",
+        "cons_action",
+        "cons_veto",
+        "decision_type",
+        "exit_rule",
+        "fill_quality",
+        "fused_action",
+        "gatekeeper",
+        "gatekeeper_cache",
+        "gatekeeper_eval_ms",
+        "gatekeeper_lock_wait_ms",
+        "gatekeeper_model_call_ms",
+        "gatekeeper_packet_build_ms",
+        "gatekeeper_total_internal_ms",
+        "gemini_action",
+        "hard_flags",
+        "holding_action_applied",
+        "holding_force_exit_triggered",
+        "holding_override_rule_version",
+        "id",
+        "latency_danger_reasons",
+        "market_regime_prior_reason",
+        "orderbook_micro_ofi_bucket_key",
+        "orderbook_micro_ofi_calibration_bucket",
+        "orderbook_micro_ofi_calibration_warning",
+        "orderbook_micro_ofi_threshold_source",
+        "orderbook_micro_state",
+        "overbought_blocked",
+        "override_rule_version",
+        "profit_rate",
+        "quote_stale",
+        "reason",
+        "reason_codes",
+        "review_ms",
+        "shadow_extra_ms",
+        "sig_delta",
+        "simulation_book",
+        "strategy",
+        "sync_status",
+        "winner",
+        "ws_age_sec",
+    }
+)
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
@@ -146,13 +198,10 @@ def _stringify_field_value(value) -> str:
 def _load_pipeline_events_from_jsonl(
     *, target_date: str
 ) -> tuple[list[PerfEvent], list[PerfEvent]]:
-    # DB 우선, 당일 파일 병합으로 pipeline events 로드
-    raw_events = load_pipeline_events(target_date, include_file_for_today=True)
-
     entry_events: list[PerfEvent] = []
     holding_events: list[PerfEvent] = []
 
-    for payload in raw_events:
+    for payload in iter_pipeline_events(target_date, include_file_for_today=True):
         pipeline = str(payload.get("pipeline") or "").strip()
         if pipeline not in {"ENTRY_PIPELINE", "HOLDING_PIPELINE"}:
             continue
@@ -176,10 +225,20 @@ def _load_pipeline_events_from_jsonl(
         fields = {
             str(key): _stringify_field_value(value)
             for key, value in fields_payload.items()
+            if str(key) in _PERF_EVENT_FIELD_KEYS
         }
         record_id = payload.get("record_id")
         if record_id not in (None, "", 0):
             fields.setdefault("id", str(record_id))
+
+        compact_raw_line = ""
+        if stage == "blocked_gatekeeper_reject":
+            match = _GATEKEEPER_ACTION_RE.search(str(payload.get("text_payload") or ""))
+            if match:
+                compact_raw_line = (
+                    f" action={str(match.group('action') or '').strip()}"
+                    " gatekeeper_eval_ms="
+                )
 
         event = PerfEvent(
             timestamp=timestamp,
@@ -187,7 +246,7 @@ def _load_pipeline_events_from_jsonl(
             code=stock_code,
             stage=stage,
             fields=fields,
-            raw_line=str(payload.get("text_payload") or ""),
+            raw_line=compact_raw_line,
         )
         if pipeline == "ENTRY_PIPELINE":
             entry_events.append(event)
@@ -987,7 +1046,6 @@ def _build_flow_bottleneck_lane(
         budget_pass = int(metrics.get("budget_pass_events", 0) or 0)
         submitted = int(metrics.get("order_bundle_submitted_events", 0) or 0)
         latency_block = int(metrics.get("latency_block_events", 0) or 0)
-        latency_pass = int(metrics.get("latency_pass_events", 0) or 0)
         quote_pass_rate = float(
             metrics.get("quote_fresh_latency_pass_rate", 0.0) or 0.0
         )

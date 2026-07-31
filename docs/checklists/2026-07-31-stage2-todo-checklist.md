@@ -80,6 +80,18 @@
 
 ## 장후 체크리스트 (20:05~21:55)
 
+- [x] `[FullMonitorSnapshotMemoryBound0731] 자동 full monitor snapshot JSONL 전량 적재·swap 압박 해소` (`Due: 2026-07-31`, `Slot: POSTCLOSE`, `TimeWindow: 15:45~16:15`, `Track: RuntimeStability`) (`실행: 2026-07-31 16:09 KST`)
+  - Source: [dashboard_data_repository.py](/home/ubuntu/KORStockScan/src/engine/dashboard_data_repository.py), [sniper_performance_tuning_report.py](/home/ubuntu/KORStockScan/src/engine/sniper_performance_tuning_report.py), [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py), [system_metric_samples.jsonl](/home/ubuntu/KORStockScan/logs/system_metric_samples.jsonl)
+  - 판정: `resolved_code_pending_runtime_reflection`. 15:45 구 구현은 2.94GB `pipeline_events`를 전량 list 적재해 RSS 약 5.2GB와 process swap 약 2.9GB를 사용했고 가용 메모리를 458.5MB까지 낮췄다. canonical iterator와 performance 필드 투영으로 변경한 exact-date replay는 274,192건, 16.5초, peak RSS 345MB, swap 0으로 통과했다.
+  - 안전 경계: snapshot payload/report 지표 계약과 기존 list API를 유지하며 BUY/SELL, provider, threshold, broker/account/order/quantity/cooldown, hard/protect/emergency 동작은 변경하지 않는다. 스케줄러는 stale manifest 수용 회귀를 막기 위해 당일 15:45 full freshness 강제 생성 계약을 유지하고 stage I/O delay 1초를 적용한다.
+  - 검증: 관련 pytest 159건, Ruff, Black, py_compile, `git diff --check` 통과. 최종 graceful restart PID 442973(16:34 시작)은 streaming/projection과 scheduler I/O delay·freshness 보완을 모두 반영했고 runtime env verify, 계좌 reconciliation, WS 로그인, OpenAI main route가 통과했다. 리소스 detector는 16:08 `pass`로 회복했다.
+
+- [ ] `[FullMonitorSnapshotMemoryPostApply0803] 다음 자동 15:45 full snapshot 메모리·완료 artifact post-apply 확인` (`Due: 2026-08-03`, `Slot: POSTCLOSE`, `TimeWindow: 15:45~16:10`, `Track: RuntimeStability`)
+  - Source: [monitor_snapshot_manifest_2026-07-31_full.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/manifests/monitor_snapshot_manifest_2026-07-31_full.json), [monitor_snapshot_runtime.py](/home/ubuntu/KORStockScan/src/engine/monitor_snapshot_runtime.py), [error_detection_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-07-31.json)
+  - 판정 기준: 수정 반영 PID에서 자동 full snapshot이 timeout 없이 completion/manifest를 fresh success로 닫고, worker peak RSS 500MB 이하, swap-in/out 급증 없음, `resource_usage=pass` 또는 일시 warning 후 즉시 회복인지 확인한다.
+  - 금지: post-apply 검증을 위해 장중 full rebuild를 강제하거나 cooldown/lock, broker/order/provider/threshold/bot safety를 우회하지 않는다.
+  - 다음 액션: `memory_bound_effect_confirmed`, `artifact_success_memory_warning`, `timeout_or_stale_completion_defect`, `runtime_not_reflected` 중 하나로 닫는다.
+
 - [ ] `[PostcloseSourceQualityGateReview0731] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-07-31`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-07-31.json), [threshold_cycle_ev_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-31.json), [code_improvement_workorder_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-31.json), [threshold_cycle_postclose_verification_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-07-31.json)
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.

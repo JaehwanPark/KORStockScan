@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 
@@ -89,28 +90,49 @@ def load_pipeline_events(
     storage removed, same-day calls with include_file_for_today=False return no
     rows because there is no alternate DB source.
     """
+    return list(
+        iter_pipeline_events(
+            target_date,
+            include_file_for_today=include_file_for_today,
+            prefer_file_for_past=prefer_file_for_past,
+            prefer_file_for_today=prefer_file_for_today,
+        )
+    )
+
+
+def iter_pipeline_events(
+    target_date: str,
+    *,
+    include_file_for_today: bool = True,
+    prefer_file_for_past: bool = False,
+    prefer_file_for_today: bool = False,
+) -> Iterator[dict]:
+    """Yield canonical pipeline events without materializing the whole JSONL."""
     del prefer_file_for_past, prefer_file_for_today
     try:
         target_dt = date.fromisoformat(str(target_date))
     except ValueError:
         logger.warning("Invalid date format: %s", target_date)
-        return []
+        return
 
     today = date.today()
     if target_dt > today:
-        return []
+        return
     if target_dt == today and not include_file_for_today:
-        return []
-    return _load_pipeline_events_from_file(target_date)
+        return
+    yield from _iter_pipeline_events_from_file(target_date)
 
 
 def _load_pipeline_events_from_file(target_date: str) -> list[dict]:
+    return list(_iter_pipeline_events_from_file(target_date))
+
+
+def _iter_pipeline_events_from_file(target_date: str) -> Iterator[dict]:
     path = _existing_or_gzip_path(
         PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
     )
-    events = []
     if not path.exists():
-        return events
+        return
     try:
         with _open_text(path) as handle:
             for line in handle:
@@ -118,9 +140,10 @@ def _load_pipeline_events_from_file(target_date: str) -> list[dict]:
                 if not stripped:
                     continue
                 try:
-                    events.append(json.loads(stripped))
+                    payload = json.loads(stripped)
                 except json.JSONDecodeError:
-                    pass
+                    continue
+                if isinstance(payload, dict):
+                    yield payload
     except Exception as exc:
         logger.error("Failed to read pipeline events file %s: %s", path, exc)
-    return events

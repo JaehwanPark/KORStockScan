@@ -143,6 +143,7 @@ def test_monitor_snapshot_runs_in_resource_isolated_wrapper(monkeypatch, tmp_pat
     assert captured["env"]["MONITOR_SNAPSHOT_ASYNC"] == "0"
     assert captured["env"]["MONITOR_SNAPSHOT_FORCE"] == "1"
     assert captured["env"]["MONITOR_SNAPSHOT_PROFILE"] == "full"
+    assert captured["env"]["MONITOR_SNAPSHOT_IO_DELAY_SEC"] == "1.0"
     assert captured["env"]["ALLOW_EXISTING_FULL_BUILD_WITH_BOT"] == "1"
 
 

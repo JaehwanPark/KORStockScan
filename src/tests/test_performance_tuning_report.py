@@ -81,6 +81,52 @@ def test_performance_tuning_report_prefers_jsonl_events(monkeypatch, tmp_path):
     assert report["metrics"]["holding_skips"] == 0
 
 
+def test_performance_tuning_loader_projects_large_payload_fields(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    pipeline_dir = data_dir / "pipeline_events"
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "event_type": "pipeline_event",
+        "pipeline": "ENTRY_PIPELINE",
+        "stock_name": "테스트A",
+        "stock_code": "000001",
+        "stage": "blocked_gatekeeper_reject",
+        "emitted_at": "2026-04-03T10:00:00+09:00",
+        "fields": {
+            "action": "눌림",
+            "gatekeeper_eval_ms": 420,
+            "exact_payload": "x" * 100_000,
+        },
+        "text_payload": (
+            "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) "
+            "stage=blocked_gatekeeper_reject action=WAIT_FOR_PULLBACK "
+            "gatekeeper_eval_ms=420 exact_payload=" + ("x" * 100_000)
+        ),
+        "record_id": 101,
+    }
+    (pipeline_dir / "pipeline_events_2026-04-03.jsonl").write_text(
+        json.dumps(payload, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    import src.engine.dashboard_data_repository as dash_repo
+
+    monkeypatch.setattr(dash_repo, "PIPELINE_EVENTS_DIR", pipeline_dir)
+
+    entry_events, holding_events = report_mod._load_pipeline_events_from_jsonl(
+        target_date="2026-04-03"
+    )
+
+    assert holding_events == []
+    assert len(entry_events) == 1
+    assert entry_events[0].fields == {
+        "action": "눌림",
+        "gatekeeper_eval_ms": "420",
+        "id": "101",
+    }
+    assert report_mod._extract_gatekeeper_action(entry_events[0]) == "WAIT_FOR_PULLBACK"
+    assert len(entry_events[0].raw_line) < 100
+
+
 def test_performance_tuning_report_filters_since_without_datetime_reparse(
     monkeypatch, tmp_path
 ):

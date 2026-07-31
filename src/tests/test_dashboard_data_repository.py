@@ -8,6 +8,7 @@ from src.engine.dashboard_data_repository import (
     _list_snapshot_kinds,
     _load_monitor_snapshot_from_file,
     _load_pipeline_events_from_file,
+    iter_pipeline_events,
     load_monitor_snapshot_file_first,
     load_pipeline_events,
 )
@@ -85,6 +86,26 @@ def test_load_pipeline_events_from_plain_file(monkeypatch, tmp_path):
 
     assert _load_pipeline_events_from_file("2026-04-01") == payloads
     assert load_pipeline_events("2026-04-01") == payloads
+    assert list(iter_pipeline_events("2026-04-01")) == payloads
+
+
+def test_iter_pipeline_events_is_lazy(monkeypatch, tmp_path):
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "src.engine.dashboard_data_repository.PIPELINE_EVENTS_DIR", events_dir
+    )
+    event_path = events_dir / "pipeline_events_2026-04-01.jsonl"
+    event_path.write_text(
+        json.dumps({"event": "first"}) + "\n" + "{malformed",
+        encoding="utf-8",
+    )
+
+    events = iter_pipeline_events("2026-04-01")
+
+    assert iter(events) is events
+    assert next(events) == {"event": "first"}
+    assert list(events) == []
 
 
 def test_load_pipeline_events_from_gzip_file(monkeypatch, tmp_path):
