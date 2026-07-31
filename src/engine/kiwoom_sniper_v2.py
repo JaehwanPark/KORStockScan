@@ -154,6 +154,7 @@ from src.engine.sniper_sync import (
     sync_balance_with_db,
     sync_state_with_broker,
     periodic_account_sync,
+    refresh_broker_account_snapshot_read_only,
 )
 from src.engine.sniper_analysis import (
     bind_analysis_dependencies,
@@ -279,6 +280,12 @@ _STOCK_NAME_CACHE: dict[str, tuple[str, float]] = {}  # code -> (name, expiry_ts
 _STOCK_NAME_CACHE_TTL: int = 3600
 _ACCOUNT_SYNC_EXECUTOR: ThreadPoolExecutor | None = None
 _ACCOUNT_SYNC_IN_FLIGHT: bool = False
+_ACCOUNT_SYNC_RERUN_PENDING: tuple[str, str, str] | None = None
+_ACCOUNT_SYNC_SUBMIT_LOCK = threading.RLock()
+# Holding exact context rejects broker facts older than 60 seconds.  Keep the
+# periodic producer inside that consumer TTL with enough scheduling margin.
+BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC = 45.0
+ACCOUNT_RECONCILIATION_INTERVAL_SEC = 90.0
 _SCANNER_OBSERVATION_EXECUTOR = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="scanner_observation"
 )
@@ -437,23 +444,122 @@ def _scanner_fast_precheck_requires_recovery(result, reason):
     )
 
 
-def _run_account_sync_with_cleanup():
-    """periodic_account_sync를 감싸서 예외 발생 시에도 in-flight 플래그를 해제합니다."""
+def _run_account_task_with_cleanup(task_kind: str):
+    """Run one account-data task and release or replay the shared single-flight."""
+
     try:
-        periodic_account_sync()
+        if task_kind == "broker_snapshot_read_only":
+            refresh_broker_account_snapshot_read_only()
+        else:
+            periodic_account_sync()
     except Exception:
         import traceback
 
         traceback.print_exc()
     finally:
-        global _ACCOUNT_SYNC_IN_FLIGHT
-        _ACCOUNT_SYNC_IN_FLIGHT = False
+        rerun_request = _clear_account_sync_in_flight()
+        if rerun_request is not None:
+            rerun_kind, rerun_reason, rerun_code = rerun_request
+            try:
+                _submit_account_task(
+                    task_kind=rerun_kind,
+                    reason=rerun_reason,
+                    code=rerun_code,
+                    coalesce_if_busy=True,
+                )
+            except Exception as exc:
+                log_error(
+                    "[BROKER_SNAPSHOT_REFRESH_RERUN] "
+                    f"reason={rerun_reason} code={rerun_code or '-'} failed={exc}"
+                )
 
 
 def _clear_account_sync_in_flight():
-    """add_done_callback에서 in-flight 플래그를 해제합니다."""
-    global _ACCOUNT_SYNC_IN_FLIGHT
-    _ACCOUNT_SYNC_IN_FLIGHT = False
+    """Release the worker and return one coalesced execution refresh, if any."""
+    global _ACCOUNT_SYNC_IN_FLIGHT, _ACCOUNT_SYNC_RERUN_PENDING
+    with _ACCOUNT_SYNC_SUBMIT_LOCK:
+        _ACCOUNT_SYNC_IN_FLIGHT = False
+        rerun_request = _ACCOUNT_SYNC_RERUN_PENDING
+        _ACCOUNT_SYNC_RERUN_PENDING = None
+        return rerun_request
+
+
+def _submit_account_task(
+    *,
+    task_kind: str,
+    reason: str,
+    code: str = "",
+    coalesce_if_busy: bool = False,
+) -> bool:
+    """Submit a read-only snapshot or periodic reconciliation as one shared task."""
+
+    global _ACCOUNT_SYNC_EXECUTOR, _ACCOUNT_SYNC_IN_FLIGHT
+    global _ACCOUNT_SYNC_RERUN_PENDING
+    normalized_kind = str(task_kind or "periodic_reconciliation")
+    normalized_reason = str(reason or "unspecified")
+    normalized_code = str(code or "").strip()[:6]
+    queued_for_rerun = False
+    submitted = False
+    with _ACCOUNT_SYNC_SUBMIT_LOCK:
+        if _ACCOUNT_SYNC_EXECUTOR is None:
+            _ACCOUNT_SYNC_EXECUTOR = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="acct_sync"
+            )
+        if _ACCOUNT_SYNC_IN_FLIGHT:
+            if coalesce_if_busy:
+                _ACCOUNT_SYNC_RERUN_PENDING = (
+                    normalized_kind,
+                    normalized_reason,
+                    normalized_code,
+                )
+                queued_for_rerun = True
+        else:
+            _ACCOUNT_SYNC_IN_FLIGHT = True
+            try:
+                _ACCOUNT_SYNC_EXECUTOR.submit(
+                    _run_account_task_with_cleanup,
+                    normalized_kind,
+                )
+            except Exception:
+                _ACCOUNT_SYNC_IN_FLIGHT = False
+                raise
+            submitted = True
+    if queued_for_rerun:
+        log_info(
+            "[BROKER_SNAPSHOT_REFRESH_REQUEST] "
+            f"task_kind={normalized_kind} reason={normalized_reason} "
+            f"code={normalized_code or '-'} "
+            "submitted=False coalesced_rerun=True"
+        )
+        return False
+    if not submitted:
+        return False
+    log_info(
+        "[BROKER_SNAPSHOT_REFRESH_REQUEST] "
+        f"task_kind={normalized_kind} reason={normalized_reason} "
+        f"code={normalized_code or '-'} submitted=True"
+    )
+    return True
+
+
+def _submit_account_sync(*, reason: str, code: str = "") -> bool:
+    """Submit the existing lifecycle reconciliation without queueing duplicates."""
+
+    return _submit_account_task(
+        task_kind="periodic_reconciliation",
+        reason=reason,
+        code=code,
+        coalesce_if_busy=False,
+    )
+
+
+def _request_broker_snapshot_refresh_after_execution(*, code: str, reason: str) -> bool:
+    return _submit_account_task(
+        task_kind="broker_snapshot_read_only",
+        reason=f"execution_receipt:{str(reason or 'execution')}",
+        code=code,
+        coalesce_if_busy=True,
+    )
 
 
 MARKET_REGIME = MarketRegimeService(refresh_minutes=15)
@@ -814,6 +920,7 @@ bind_execution_dependencies(
     scalp_exit_completed_callback=(
         sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
     ),
+    broker_snapshot_refresh_callback=(_request_broker_snapshot_refresh_after_execution),
 )
 
 _STATE_HANDLER_DEPS = {}
@@ -938,6 +1045,9 @@ def _ensure_execution_deps():
         ),
         "scalp_exit_completed_callback": (
             sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
+        ),
+        "broker_snapshot_refresh_callback": (
+            _request_broker_snapshot_refresh_after_execution
         ),
     }
     if any(_EXECUTION_DEPS.get(k) is not v for k, v in snapshot.items()):
@@ -10673,6 +10783,7 @@ def run_sniper(is_test_mode=False):
     log_info(f"[DEBUG] run_sniper started at {datetime.now()}")
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
+    run_sniper.last_broker_snapshot_refresh_time = 0
     requested_scheduler_mode = normalize_scanner_scheduler_mode(
         os.getenv("KORSTOCKSCAN_SCANNER_SCHEDULER_MODE", "legacy")
     )
@@ -11222,22 +11333,25 @@ def run_sniper(is_test_mode=False):
                 run_sniper.last_fifo_time = now_ts
 
             # =====================================================
-            # 90초 주기 계좌 동기화 (P1: ThreadPoolExecutor)
+            # 90초 lifecycle reconciliation과 45초 read-only broker snapshot
             # =====================================================
             _t0_acct = time.perf_counter()
-            global _ACCOUNT_SYNC_EXECUTOR, _ACCOUNT_SYNC_IN_FLIGHT
-            if _ACCOUNT_SYNC_EXECUTOR is None:
-                _ACCOUNT_SYNC_EXECUTOR = ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix="acct_sync"
-                )
-            if now_ts - getattr(run_sniper, "last_account_sync_time", 0) > 90:
-                if not _ACCOUNT_SYNC_IN_FLIGHT:
-                    _ACCOUNT_SYNC_IN_FLIGHT = True
-                    future = _ACCOUNT_SYNC_EXECUTOR.submit(
-                        _run_account_sync_with_cleanup
-                    )
-                    future.add_done_callback(lambda _f: _clear_account_sync_in_flight())
+            if (
+                now_ts - getattr(run_sniper, "last_account_sync_time", 0)
+                > ACCOUNT_RECONCILIATION_INTERVAL_SEC
+            ):
+                if _submit_account_sync(reason="periodic_90s"):
                     run_sniper.last_account_sync_time = now_ts
+                    run_sniper.last_broker_snapshot_refresh_time = now_ts
+            elif (
+                now_ts - getattr(run_sniper, "last_broker_snapshot_refresh_time", 0)
+                > BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC
+            ):
+                if _submit_account_task(
+                    task_kind="broker_snapshot_read_only",
+                    reason="periodic_holding_context_45s",
+                ):
+                    run_sniper.last_broker_snapshot_refresh_time = now_ts
             _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
 
             # =====================================================

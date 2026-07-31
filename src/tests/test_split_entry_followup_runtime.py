@@ -258,6 +258,7 @@ def test_post_probe_observation_contract_uses_existing_resolver_family(monkeypat
 
 def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_path):
     scheduled = []
+    broker_refresh_requests = []
     monkeypatch.setenv(
         "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
     )
@@ -285,6 +286,11 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
                 stock.get("sell_ord_no"),
             )
         ),
+    )
+    monkeypatch.setattr(
+        receipts,
+        "_broker_snapshot_refresh_callback",
+        lambda **kwargs: broker_refresh_requests.append(kwargs),
     )
     monkeypatch.setattr(
         receipts,
@@ -365,6 +371,9 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
         == "dynamic_entry_price_resolver_p1_post_probe"
     )
     assert scheduled == [(stock, "123456", False, None, None)]
+    assert broker_refresh_requests == [
+        {"code": "123456", "reason": "entry_buy_execution"}
+    ]
     assert "entry_lifecycle_conflict" not in stock
     assert stock["probe_expand_forbidden"] is False
     assert stock["entry_split_probe_scale_in_forbidden"] is True

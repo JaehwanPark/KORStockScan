@@ -1296,6 +1296,7 @@ def build_ai_market_snapshot(
             market_suffix=None,
             market_route=str(broker_route or ""),
             missing_reason="broker_position_snapshot_missing",
+            freshness_limit_ms=_POSITION_FRESH_SEC * 1000.0,
         ),
         "open_orders": _source_row(
             value=open_orders,
@@ -1308,6 +1309,7 @@ def build_ai_market_snapshot(
             market_suffix=None,
             market_route=str(broker_route or ""),
             missing_reason="broker_open_orders_snapshot_missing",
+            freshness_limit_ms=_POSITION_FRESH_SEC * 1000.0,
         ),
     }
     sources["broker_position"]["verification"] = position_ctx.get(

@@ -16218,6 +16218,7 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
+    broker_refresh_requests = []
 
     class DummyThread:
         def __init__(self, target=None, args=(), daemon=None):
@@ -16230,6 +16231,11 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
 
     monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
     monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(
+        receipts,
+        "_broker_snapshot_refresh_callback",
+        lambda **kwargs: broker_refresh_requests.append(kwargs),
+    )
 
     target_stock = {
         "id": 1,
@@ -16260,6 +16266,10 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
     assert target_stock["avg_down_count"] == 1
     assert target_stock["initial_buy_qty"] == 10
     assert target_stock["scale_in_filled_qty"] == 7
+    assert broker_refresh_requests == [
+        {"code": "123456", "reason": "scale_in_buy_execution"},
+        {"code": "123456", "reason": "scale_in_buy_execution"},
+    ]
 
 
 @pytest.mark.parametrize(

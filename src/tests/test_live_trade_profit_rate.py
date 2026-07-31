@@ -973,6 +973,45 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(monkeypatch)
     assert "EV" not in exact_fields["forbidden_uses"]
 
 
+def test_execution_broker_snapshot_refresh_is_read_only(monkeypatch):
+    published = []
+    sentinel_db = object()
+    sentinel_targets = [{"code": "005930", "status": "HOLDING", "buy_qty": 1}]
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = sentinel_db
+    sniper_sync.ACTIVE_TARGETS = sentinel_targets
+
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: (
+            [{"code": "005930", "qty": 1, "buy_price": 70_000}],
+            {"KRX"},
+        ),
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_unfilled_order_snapshot_ka10075_with_meta",
+        lambda *args, **kwargs: (
+            [{"code": "005930", "side": "SELL", "remaining_qty": 1}],
+            {"request_succeeded": True},
+        ),
+    )
+    monkeypatch.setattr(
+        sniper_sync,
+        "publish_broker_account_snapshot",
+        lambda **kwargs: published.append(kwargs),
+    )
+
+    assert sniper_sync.refresh_broker_account_snapshot_read_only() is True
+    assert sniper_sync.DB is sentinel_db
+    assert sniper_sync.ACTIVE_TARGETS == sentinel_targets
+    assert len(published) == 1
+    assert published[0]["inventory"][0]["qty"] == 1
+    assert published[0]["open_orders"][0]["remaining_qty"] == 1
+    assert published[0]["open_orders_request_succeeded"] is True
+
+
 def test_periodic_account_sync_attaches_fresh_broker_reconciliation(monkeypatch):
     record = type(
         "Record",

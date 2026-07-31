@@ -53,6 +53,7 @@ _weighted_avg = None
 _now_ts = None
 _probe_fill_continuation_callback = None
 _scalp_exit_completed_callback = None
+_broker_snapshot_refresh_callback = None
 
 # Receipt module의 임시/DB 작업은 독립 락으로 직렬화하고,
 # ACTIVE_TARGETS 같은 shared runtime truth는 주입된 _STATE_LOCK(실운영에서는 ENTRY_LOCK)으로만 만집니다.
@@ -594,6 +595,7 @@ def bind_execution_dependencies(
     state_lock=None,
     probe_fill_continuation_callback=None,
     scalp_exit_completed_callback=None,
+    broker_snapshot_refresh_callback=None,
     state_machine=None,
     **_unused_kwargs,
 ):
@@ -606,6 +608,7 @@ def bind_execution_dependencies(
     global KIWOOM_TOKEN, DB, event_bus, ACTIVE_TARGETS, highest_prices
     global _get_fast_state, _weighted_avg, _now_ts, _STATE_LOCK
     global _probe_fill_continuation_callback, _scalp_exit_completed_callback
+    global _broker_snapshot_refresh_callback
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -629,6 +632,8 @@ def bind_execution_dependencies(
         _probe_fill_continuation_callback = probe_fill_continuation_callback
     if scalp_exit_completed_callback is not None:
         _scalp_exit_completed_callback = scalp_exit_completed_callback
+    if broker_snapshot_refresh_callback is not None:
+        _broker_snapshot_refresh_callback = broker_snapshot_refresh_callback
 
 
 def _log_holding_pipeline(name, code, target_id, stage, **fields):
@@ -652,6 +657,19 @@ def _run_probe_fill_continuation(target_stock: dict[str, Any], code: str) -> Non
         log_error(
             f"[PROBE_RESIDUAL_IMMEDIATE] {target_stock.get('name')}({code}) "
             f"failed={exc}"
+        )
+
+
+def _request_broker_snapshot_refresh(code: str, *, reason: str) -> None:
+    callback = _broker_snapshot_refresh_callback
+    if callback is None:
+        return
+    try:
+        callback(code=str(code or "").strip()[:6], reason=str(reason or "execution"))
+    except Exception as exc:
+        log_error(
+            f"[BROKER_SNAPSHOT_REFRESH_REQUEST] code={str(code or '').strip()[:6] or '-'} "
+            f"reason={reason or '-'} failed={exc}"
         )
 
 
@@ -2998,6 +3016,7 @@ def _handle_add_buy_execution(
     if isinstance(highest_prices, dict):
         # 추가매수 후 포지션 평단/수량이 바뀌면 기존 고점 기준 trailing은 새 포지션에 과민하다.
         highest_prices[code] = max(float(exec_price or 0), float(new_avg or 0))
+    _request_broker_snapshot_refresh(code, reason="scale_in_buy_execution")
 
     count_increment = False
     if not target_stock.get("pending_add_counted"):
@@ -3212,6 +3231,7 @@ def _handle_entry_buy_execution(
     if not target_stock.get("holding_started_at"):
         target_stock["holding_started_at"] = now
     highest_prices[code] = max(highest_prices.get(code, 0), exec_price)
+    _request_broker_snapshot_refresh(code, reason="entry_buy_execution")
 
     probe_phase = str(target_stock.get("entry_split_probe_phase") or "").strip()
     if probe_phase in {"probe_submitting", "probe_submitted"}:

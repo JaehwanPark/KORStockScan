@@ -936,7 +936,7 @@ def sync_balance_with_db():
         unfilled_rows, unfilled_source_meta = (
             kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
                 KIWOOM_TOKEN,
-                all_stk_tp="1",
+                all_stk_tp="0",
                 trde_tp="0",
                 stex_tp="0",
             )
@@ -1208,6 +1208,72 @@ def _unique_sell_execution_reconciliation(
     return None, "ambiguous_multiple_sell_executions"
 
 
+def refresh_broker_account_snapshot_read_only() -> bool:
+    """Fetch and publish broker facts without reconciling lifecycle state.
+
+    Execution receipts call this producer after BUY fills so holding AI can use
+    a fresh position/open-orders snapshot.  This path must never mutate the DB,
+    ACTIVE_TARGETS, orders, quantities, or lifecycle status.
+    """
+
+    global KIWOOM_TOKEN
+    if not KIWOOM_TOKEN:
+        log_error(
+            "🚨 [broker snapshot refresh] token missing; read-only refresh skipped"
+        )
+        return False
+
+    try:
+        inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(
+            KIWOOM_TOKEN
+        )
+    except Exception as exc:
+        log_error(f"🚨 [broker snapshot refresh] balance request failed: {exc}")
+        return False
+    if not successful_exchanges:
+        log_error(
+            "🚨 [broker snapshot refresh] no successful balance exchange response"
+        )
+        return False
+
+    open_orders = []
+    open_orders_request_succeeded = False
+    try:
+        open_orders, source_meta = (
+            kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
+                KIWOOM_TOKEN,
+                all_stk_tp="0",
+                trde_tp="0",
+                stex_tp="0",
+            )
+        )
+        open_orders_request_succeeded = bool(
+            (source_meta or {}).get("request_succeeded", False)
+        )
+        if not open_orders_request_succeeded:
+            log_error(
+                "🚨 [broker snapshot refresh] open-orders response unavailable: "
+                f"{source_meta}"
+            )
+    except Exception as exc:
+        log_error(f"🚨 [broker snapshot refresh] open-orders request failed: {exc}")
+
+    publish_broker_account_snapshot(
+        inventory=inventory,
+        successful_exchanges=successful_exchanges,
+        open_orders=open_orders,
+        open_orders_request_succeeded=open_orders_request_succeeded,
+        captured_at=datetime.now().timestamp(),
+    )
+    log_info(
+        "[BROKER_SNAPSHOT_REFRESHED] "
+        f"inventory={len(inventory or [])} "
+        f"open_orders={len(open_orders or [])} "
+        f"open_orders_verified={open_orders_request_succeeded}"
+    )
+    return open_orders_request_succeeded
+
+
 def periodic_account_sync():
     """
     주기적으로 실제 증권사 잔고를 조회하여, 웹소켓 체결 누락으로 인해
@@ -1265,7 +1331,7 @@ def periodic_account_sync():
         unfilled_rows, unfilled_source_meta = (
             kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta(
                 KIWOOM_TOKEN,
-                all_stk_tp="1",
+                all_stk_tp="0",
                 trde_tp="0",
                 stex_tp="0",
             )

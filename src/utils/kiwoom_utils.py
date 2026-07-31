@@ -1029,7 +1029,7 @@ def get_unfilled_order_snapshot_ka10075(
     token,
     *,
     stk_cd="",
-    all_stk_tp="1",
+    all_stk_tp=None,
     trde_tp="0",
     stex_tp="0",
     extra_payload=None,
@@ -1039,10 +1039,14 @@ def get_unfilled_order_snapshot_ka10075(
     - 목적: 취소 거절 시 원주문 거래소(stex_tp/sor_yn) 보강 확인
     """
     url = get_api_url("/api/dostk/acnt")
+    normalized_code = str(stk_cd or "").strip()
+    normalized_all_stk_tp = (
+        str(all_stk_tp) if all_stk_tp is not None else ("1" if normalized_code else "0")
+    )
     payload = {
-        "all_stk_tp": str(all_stk_tp or "1"),
+        "all_stk_tp": normalized_all_stk_tp,
         "trde_tp": str(trde_tp or "0"),
-        "stk_cd": str(stk_cd or ""),
+        "stk_cd": normalized_code,
         "stex_tp": str(stex_tp or "0"),
     }
     if extra_payload:
@@ -1061,7 +1065,7 @@ def get_unfilled_order_snapshot_ka10075_with_meta(
     token,
     *,
     stk_cd="",
-    all_stk_tp="1",
+    all_stk_tp=None,
     trde_tp="0",
     stex_tp="0",
     extra_payload=None,
@@ -1069,10 +1073,14 @@ def get_unfilled_order_snapshot_ka10075_with_meta(
     """Return normalized open orders plus an explicit request-success contract."""
 
     url = get_api_url("/api/dostk/acnt")
+    normalized_code = str(stk_cd or "").strip()
+    normalized_all_stk_tp = (
+        str(all_stk_tp) if all_stk_tp is not None else ("1" if normalized_code else "0")
+    )
     payload = {
-        "all_stk_tp": str(all_stk_tp or "1"),
+        "all_stk_tp": normalized_all_stk_tp,
         "trde_tp": str(trde_tp or "0"),
-        "stk_cd": str(stk_cd or ""),
+        "stk_cd": normalized_code,
         "stex_tp": str(stex_tp or "0"),
     }
     if extra_payload:

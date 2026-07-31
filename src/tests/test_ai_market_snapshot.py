@@ -1494,7 +1494,39 @@ def test_broker_snapshot_timestamp_expires_even_if_legacy_age_is_zero():
         require_position_reconciliation=True,
     )
 
+    assert snapshot["sources"]["broker_position"]["quality"] == "stale"
+    assert snapshot["sources"]["open_orders"]["quality"] == "stale"
     assert snapshot["ai_input_preflight_v1"]["position_reconciled"] is False
+
+
+def test_broker_snapshot_uses_position_reconciliation_ttl_not_ws_ttl():
+    now = datetime(2026, 7, 23, 14, 0, tzinfo=KST).timestamp()
+    position = {
+        "broker_holding_qty": 3,
+        "broker_snapshot_at": now - 30,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+        "broker_position_verification": "present",
+        "broker_open_orders_verification": "verified_zero",
+    }
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_flow",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(),
+        position=position,
+        now_ts=now,
+        require_position_reconciliation=True,
+    )
+
+    assert snapshot["sources"]["broker_position"]["quality"] == "fresh"
+    assert snapshot["sources"]["open_orders"]["quality"] == "fresh"
+    assert snapshot["sources"]["broker_position"]["freshness_limit_ms"] == 60_000.0
+    assert snapshot["sources"]["open_orders"]["freshness_limit_ms"] == 60_000.0
+    assert snapshot["ai_input_preflight_v1"]["position_reconciled"] is True
 
 
 def test_future_broker_snapshot_is_not_reconciled():

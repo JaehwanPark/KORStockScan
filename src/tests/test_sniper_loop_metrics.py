@@ -24,7 +24,10 @@ from src.engine.kiwoom_sniper_v2 import (
     _MARCAP_CACHE,
     _MARCAP_CACHE_TTL,
     _ACCOUNT_SYNC_EXECUTOR,
+    ACCOUNT_RECONCILIATION_INTERVAL_SEC,
+    BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC,
 )
+from src.engine.scalping.ai_market_snapshot import _POSITION_FRESH_SEC
 from src.engine.sniper_gatekeeper_replay import (
     _RECENT_SNAPSHOT_SIGNATURES,
     _WRITE_LOCK,
@@ -157,6 +160,104 @@ def test_loop_metrics_log_zero_values():
 def test_account_sync_executor_none_by_default():
     """_ACCOUNT_SYNC_EXECUTOR는 초기 import 시 None이어야 함."""
     assert _ACCOUNT_SYNC_EXECUTOR is None
+
+
+def test_broker_snapshot_interval_stays_within_holding_ttl_without_reconcile_change():
+    assert 0 < BROKER_SNAPSHOT_REFRESH_INTERVAL_SEC < _POSITION_FRESH_SEC
+    assert ACCOUNT_RECONCILIATION_INTERVAL_SEC == 90.0
+
+
+def test_execution_snapshot_refresh_reuses_account_sync_inflight_gate(monkeypatch):
+    from src.engine import kiwoom_sniper_v2 as sniper
+
+    submitted = []
+
+    class _Future:
+        def add_done_callback(self, callback):
+            self.callback = callback
+
+    class _Executor:
+        def submit(self, target, *args):
+            submitted.append((target, args))
+            return _Future()
+
+    monkeypatch.setattr(sniper, "_ACCOUNT_SYNC_EXECUTOR", _Executor())
+    monkeypatch.setattr(sniper, "_ACCOUNT_SYNC_IN_FLIGHT", False)
+    monkeypatch.setattr(sniper, "_ACCOUNT_SYNC_RERUN_PENDING", None)
+    monkeypatch.setattr(
+        sniper, "refresh_broker_account_snapshot_read_only", lambda: True
+    )
+    monkeypatch.setattr(sniper, "log_info", lambda *_args, **_kwargs: None)
+
+    assert (
+        sniper._request_broker_snapshot_refresh_after_execution(
+            code="005930",
+            reason="entry_buy_execution",
+        )
+        is True
+    )
+    assert (
+        sniper._request_broker_snapshot_refresh_after_execution(
+            code="005930",
+            reason="entry_buy_execution",
+        )
+        is False
+    )
+    assert submitted == [
+        (sniper._run_account_task_with_cleanup, ("broker_snapshot_read_only",))
+    ]
+    assert sniper._ACCOUNT_SYNC_RERUN_PENDING == (
+        "broker_snapshot_read_only",
+        "execution_receipt:entry_buy_execution",
+        "005930",
+    )
+
+    submitted[0][0](*submitted[0][1])
+    assert submitted == [
+        (sniper._run_account_task_with_cleanup, ("broker_snapshot_read_only",)),
+        (sniper._run_account_task_with_cleanup, ("broker_snapshot_read_only",)),
+    ]
+    assert sniper._ACCOUNT_SYNC_IN_FLIGHT is True
+    assert sniper._ACCOUNT_SYNC_RERUN_PENDING is None
+
+    submitted[1][0](*submitted[1][1])
+    assert sniper._ACCOUNT_SYNC_IN_FLIGHT is False
+
+
+def test_periodic_account_sync_keeps_lifecycle_reconciliation_worker(monkeypatch):
+    from src.engine import kiwoom_sniper_v2 as sniper
+
+    submitted = []
+    reconciled = []
+    snapshot_only = []
+
+    class _Executor:
+        def submit(self, target, *args):
+            submitted.append((target, args))
+            return object()
+
+    monkeypatch.setattr(sniper, "_ACCOUNT_SYNC_EXECUTOR", _Executor())
+    monkeypatch.setattr(sniper, "_ACCOUNT_SYNC_IN_FLIGHT", False)
+    monkeypatch.setattr(sniper, "_ACCOUNT_SYNC_RERUN_PENDING", None)
+    monkeypatch.setattr(
+        sniper, "periodic_account_sync", lambda: reconciled.append(True)
+    )
+    monkeypatch.setattr(
+        sniper,
+        "refresh_broker_account_snapshot_read_only",
+        lambda: snapshot_only.append(True),
+    )
+    monkeypatch.setattr(sniper, "log_info", lambda *_args, **_kwargs: None)
+
+    assert sniper._submit_account_sync(reason="periodic_90s") is True
+    assert submitted == [
+        (sniper._run_account_task_with_cleanup, ("periodic_reconciliation",))
+    ]
+    submitted[0][0](*submitted[0][1])
+
+    assert reconciled == [True]
+    assert snapshot_only == []
+    assert sniper._ACCOUNT_SYNC_IN_FLIGHT is False
 
 
 def test_marcap_cache_ttl_positive():

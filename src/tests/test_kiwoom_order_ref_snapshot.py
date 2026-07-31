@@ -167,13 +167,19 @@ def test_unfilled_order_snapshot_meta_distinguishes_empty_success_from_failure(
     monkeypatch,
 ):
     response = [{"oso": [], "return_code": 0}]
+    calls = []
+
+    def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return (
+            response,
+            {"api_id": "ka10075", "page_count": 1, "rest_received_ts_ms": 123},
+        )
+
     monkeypatch.setattr(
         kiwoom_utils,
         "_fetch_kiwoom_api_continuous_with_meta",
-        lambda **kwargs: (
-            response,
-            {"api_id": "ka10075", "page_count": 1, "rest_received_ts_ms": 123},
-        ),
+        fake_fetch,
     )
     monkeypatch.setattr(
         kiwoom_utils, "get_api_url", lambda path: f"https://example.test{path}"
@@ -185,6 +191,12 @@ def test_unfilled_order_snapshot_meta_distinguishes_empty_success_from_failure(
     assert meta["request_succeeded"] is True
     assert meta["response_codes"] == ["0"]
     assert meta["received_count"] == 0
+    assert calls[-1]["payload"] == {
+        "all_stk_tp": "0",
+        "trde_tp": "0",
+        "stk_cd": "",
+        "stex_tp": "0",
+    }
 
     response[:] = [{"return_code": 17, "return_msg": "rejected"}]
     rows, meta = kiwoom_utils.get_unfilled_order_snapshot_ka10075_with_meta("token")
