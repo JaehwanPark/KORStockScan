@@ -20340,9 +20340,7 @@ def reconcile_rising_missed_reentry_after_sell_completed(
             )
         else:
             action = "confirm"
-            reason = (
-                "prior_rising_missed_exit_clean_profit_requires_confirmation"
-            )
+            reason = "prior_rising_missed_exit_clean_profit_requires_confirmation"
             ttl_sec = _rising_missed_clean_profit_reentry_confirm_sec()
             expires_at = completed_at_value + ttl_sec
         row.update(
@@ -20693,8 +20691,8 @@ def _snapshot_rising_missed_same_day_reentry_guard(
             reconciliation.get("sell_completed_at"),
             _safe_float(row.get("marked_at"), 0.0),
         )
-        block_expires_at, block_ttl_sec = (
-            _rising_missed_same_day_reentry_expires_at(block_marked_at)
+        block_expires_at, block_ttl_sec = _rising_missed_same_day_reentry_expires_at(
+            block_marked_at
         )
         row.update(
             {
@@ -20833,8 +20831,8 @@ def evaluate_rising_missed_same_day_reentry_guard(
             reconciliation.get("sell_completed_at"),
             _safe_float(row.get("marked_at"), 0.0),
         )
-        block_expires_at, block_ttl_sec = (
-            _rising_missed_same_day_reentry_expires_at(block_marked_at)
+        block_expires_at, block_ttl_sec = _rising_missed_same_day_reentry_expires_at(
+            block_marked_at
         )
         row = {
             **row,
@@ -20932,9 +20930,7 @@ def _rising_missed_recent_exit_ai_context(
     remaining_sec = max(0, _safe_int(guard.get("risk_remaining_sec"), 0))
     if exit_at <= 0.0 or exit_price <= 0 or remaining_sec <= 0:
         return {}
-    receipt_reconciled = _boolish_true(
-        guard.get("last_exit_receipt_reconciled")
-    )
+    receipt_reconciled = _boolish_true(guard.get("last_exit_receipt_reconciled"))
     exit_price_source = (
         "broker_sell_completed_receipt"
         if receipt_reconciled

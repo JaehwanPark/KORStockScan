@@ -914,8 +914,7 @@ def test_fast_exit_reuses_or_blocks_continuation_recheck_quote_envelope(
     if reuse_allowed:
         assert len(dispatches) == 1
         assert (
-            dispatches[0]["ws_data"]["executable_sell_price"]
-            == expected_decision_price
+            dispatches[0]["ws_data"]["executable_sell_price"] == expected_decision_price
         )
         claim = next(
             fields for stage, fields in logs if stage == "scalp_fast_exit_claimed"

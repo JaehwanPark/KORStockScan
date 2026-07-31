@@ -170,9 +170,7 @@ def test_opening_rotation_upstream_block_dedupes_same_state_but_logs_change(
         "opening_rotation_1pct_upstream_blocked",
     ]
     assert all(fields["runtime_effect"] is False for _stage, fields in emitted)
-    assert all(
-        fields["actual_order_submitted"] is False for _stage, fields in emitted
-    )
+    assert all(fields["actual_order_submitted"] is False for _stage, fields in emitted)
 
 
 def test_opening_rotation_upstream_scope_hydrates_scanner_source(monkeypatch):
