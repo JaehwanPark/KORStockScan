@@ -1260,6 +1260,9 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
             ),
             "entry_probe_intent_submit_guard_required": True,
             "entry_probe_intent_actual_order_submitted": False,
+            "entry_recent_exit_context_status": "active",
+            "entry_recent_exit_probe_blocked": True,
+            "entry_recent_exit_price_vs_exit_pct": 0.273723,
         },
         prompt_type="scalping_entry",
         prompt_version="decision_quality_v2_7_probe_v1",
@@ -1273,9 +1276,15 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
     assert trace_row["entry_probe_intent_status"] == "eligible_wait_probe"
     assert trace_row["entry_probe_intent_submit_guard_required"] is True
     assert trace_row["entry_probe_intent_actual_order_submitted"] is False
+    assert trace_row["entry_recent_exit_context_status"] == "active"
+    assert trace_row["entry_recent_exit_probe_blocked"] is True
+    assert trace_row["entry_recent_exit_price_vs_exit_pct"] == 0.273723
     assert pending_row["entry_probe_intent"] is True
     assert pending_row["entry_probe_intent_status"] == "eligible_wait_probe"
     assert pending_row["entry_probe_intent_actual_order_submitted"] is False
+    assert pending_row["entry_recent_exit_context_status"] == "active"
+    assert pending_row["entry_recent_exit_probe_blocked"] is True
+    assert pending_row["entry_recent_exit_price_vs_exit_pct"] == 0.273723
 
 
 def test_decision_quality_non_buy_repair_provenance_is_preserved_in_trace(

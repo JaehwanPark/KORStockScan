@@ -20208,6 +20208,10 @@ def _rising_missed_same_day_reentry_log_fields(decision: dict | None) -> dict:
         "last_exit_price": decision.get("last_exit_price", "-"),
         "last_exit_at": decision.get("last_exit_at", "-"),
         "last_exit_avg_down_count": decision.get("last_exit_avg_down_count", 0),
+        "last_exit_source_stage": decision.get("last_exit_source_stage", "-"),
+        "last_exit_receipt_reconciled": _boolish_true(
+            decision.get("last_exit_receipt_reconciled")
+        ),
         "reentry_confirmation_status": decision.get("reentry_confirmation_status", "-"),
         "reentry_confirmation_ai_action": decision.get(
             "reentry_confirmation_ai_action", "-"
@@ -20292,6 +20296,101 @@ def _record_rising_missed_same_day_reentry_risk(
     return {"marked": True, **row}
 
 
+def reconcile_rising_missed_reentry_after_sell_completed(
+    code: str,
+    *,
+    profit_rate,
+    exit_price,
+    exit_rule: str | None,
+    completed_at: float | None = None,
+) -> dict:
+    """Replace submit-time re-entry context with realized broker receipt truth."""
+
+    norm_code = str(code or "").strip()[:6]
+    completed_at_value = float(completed_at or time.time())
+    realized_profit = _safe_float(profit_rate, 0.0)
+    realized_exit_price = max(0, _safe_int(exit_price, 0))
+    if not ENTRY_LOCK.acquire(timeout=0.25):
+        return {
+            "reconciled": False,
+            "reason": "entry_lock_busy_sell_completed_fallback_required",
+        }
+    try:
+        row = dict(_RISING_MISSED_SAME_DAY_REENTRY_RISK.get(norm_code) or {})
+        if not norm_code or not row:
+            return {"reconciled": False, "reason": "active_reentry_context_missing"}
+        avg_down_count = _safe_int(row.get("avg_down_count"), 0)
+        if realized_profit <= 0.0:
+            action = "block"
+            reason = "prior_rising_missed_exit_non_positive"
+            expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(
+                completed_at_value
+            )
+        elif avg_down_count >= 2:
+            action = "block"
+            reason = "prior_rising_missed_exit_avgdown_ge2"
+            expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(
+                completed_at_value
+            )
+        elif avg_down_count >= 1:
+            action = "low_priority"
+            reason = "prior_rising_missed_exit_recovered_with_avgdown"
+            expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(
+                completed_at_value
+            )
+        else:
+            action = "confirm"
+            reason = (
+                "prior_rising_missed_exit_clean_profit_requires_confirmation"
+            )
+            ttl_sec = _rising_missed_clean_profit_reentry_confirm_sec()
+            expires_at = completed_at_value + ttl_sec
+        row.update(
+            {
+                "marked_at": completed_at_value,
+                "expires_at": expires_at,
+                "ttl_sec": ttl_sec,
+                "exit_rule": str(exit_rule or row.get("exit_rule") or "-"),
+                "profit_rate": realized_profit,
+                "exit_price": realized_exit_price,
+                "reentry_action": action,
+                "reason": reason,
+                "source_stage": "sell_completed",
+                "exit_receipt_reconciled": True,
+            }
+        )
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+    finally:
+        ENTRY_LOCK.release()
+    _log_entry_pipeline(
+        {"name": row.get("stock_name") or "-"},
+        norm_code,
+        "rising_missed_reentry_exit_receipt_reconciled",
+        metric_role="execution_quality_real_only",
+        decision_authority="rising_missed_same_day_reentry_guard",
+        window_policy="same_real_sell_receipt_short_reentry_window",
+        sample_floor="one_completed_rising_missed_sell_receipt",
+        primary_decision_metric="realized_profit_rate_and_exit_price",
+        source_quality_gate="broker_sell_completed_receipt",
+        runtime_effect=True,
+        allowed_runtime_apply=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+        reentry_action=action,
+        risk_reason=reason,
+        profit_rate=f"{realized_profit:+.2f}",
+        exit_price=realized_exit_price or "-",
+        exit_rule=row["exit_rule"],
+        avg_down_count=row["avg_down_count"],
+        ttl_sec=ttl_sec,
+        risk_expires_at=expires_at,
+        source_stage="sell_completed",
+        exit_receipt_reconciled=True,
+    )
+    return {"reconciled": True, **row}
+
+
 def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[dict]]:
     path = existing_or_gzip_path(
         DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
@@ -20338,14 +20437,17 @@ def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[
     )
     payloads, next_offset = _read_pipeline_events_for_stages(
         path,
-        {"rising_missed_same_day_reentry_risk_marked"},
+        {
+            "rising_missed_same_day_reentry_risk_marked",
+            "rising_missed_reentry_exit_receipt_reconciled",
+        },
         start_offset=start_offset,
     )
     for payload in payloads:
-        if (
-            str(payload.get("stage") or "")
-            != "rising_missed_same_day_reentry_risk_marked"
-        ):
+        if str(payload.get("stage") or "") not in {
+            "rising_missed_same_day_reentry_risk_marked",
+            "rising_missed_reentry_exit_receipt_reconciled",
+        }:
             continue
         fields = (
             payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
@@ -20378,6 +20480,9 @@ def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[
                 "reentry_action": str(fields.get("reentry_action") or "block"),
                 "reason": str(fields.get("risk_reason") or "-"),
                 "source_stage": str(fields.get("source_stage") or "-"),
+                "exit_receipt_reconciled": _boolish_true(
+                    fields.get("exit_receipt_reconciled")
+                ),
             }
         )
     for rows in rows_by_code.values():
@@ -20461,10 +20566,11 @@ def _reconcile_rising_missed_reentry_risk_with_sell_completed(
     if str((row or {}).get("reentry_action") or "") == "confirm":
         if realized_profit <= 0.0:
             return {
-                "action": "keep",
+                "action": "block_realized_non_positive",
                 "reason": "sell_completed_realized_non_positive",
                 "realized_profit_rate": realized_profit,
                 "realized_exit_rule": latest_completed.get("exit_rule"),
+                "realized_exit_price": latest_completed.get("sell_price"),
                 "sell_completed_at": latest_completed.get("completed_at"),
             }
         return {
@@ -20582,6 +20688,36 @@ def _snapshot_rising_missed_same_day_reentry_guard(
                 ),
             }
         )
+    if action == "block_realized_non_positive":
+        block_marked_at = _safe_float(
+            reconciliation.get("sell_completed_at"),
+            _safe_float(row.get("marked_at"), 0.0),
+        )
+        block_expires_at, block_ttl_sec = (
+            _rising_missed_same_day_reentry_expires_at(block_marked_at)
+        )
+        row.update(
+            {
+                "reentry_action": "block",
+                "reason": "prior_rising_missed_exit_non_positive",
+                "profit_rate": reconciliation.get(
+                    "realized_profit_rate", row.get("profit_rate")
+                ),
+                "exit_rule": reconciliation.get(
+                    "realized_exit_rule", row.get("exit_rule")
+                ),
+                "exit_price": _safe_int(
+                    reconciliation.get("realized_exit_price"),
+                    _safe_int(row.get("exit_price"), 0),
+                ),
+                "marked_at": block_marked_at,
+                "expires_at": block_expires_at,
+                "ttl_sec": block_ttl_sec,
+                "source_stage": "sell_completed_fallback_reconciliation",
+                "exit_receipt_reconciled": True,
+            }
+        )
+        expires_at = block_expires_at
     if action == "refresh_confirmation":
         confirmation_marked_at = _safe_float(
             reconciliation.get("sell_completed_at"),
@@ -20627,6 +20763,10 @@ def _snapshot_rising_missed_same_day_reentry_guard(
         "last_exit_price": row.get("exit_price") or "-",
         "last_exit_at": row.get("marked_at") or "-",
         "last_exit_avg_down_count": row.get("avg_down_count", 0),
+        "last_exit_source_stage": row.get("source_stage") or "-",
+        "last_exit_receipt_reconciled": _boolish_true(
+            row.get("exit_receipt_reconciled")
+        ),
         "reentry_action": reentry_action,
         "watching_budget_priority": ("blocked" if reentry_action == "block" else "low"),
         "reentry_confirmation_status": (
@@ -20688,6 +20828,34 @@ def evaluate_rising_missed_same_day_reentry_guard(
             "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
         }
         _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+    elif reconciliation_action == "block_realized_non_positive":
+        block_marked_at = _safe_float(
+            reconciliation.get("sell_completed_at"),
+            _safe_float(row.get("marked_at"), 0.0),
+        )
+        block_expires_at, block_ttl_sec = (
+            _rising_missed_same_day_reentry_expires_at(block_marked_at)
+        )
+        row = {
+            **row,
+            "reentry_action": "block",
+            "reason": "prior_rising_missed_exit_non_positive",
+            "profit_rate": reconciliation.get(
+                "realized_profit_rate", row.get("profit_rate")
+            ),
+            "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
+            "exit_price": _safe_int(
+                reconciliation.get("realized_exit_price"),
+                _safe_int(row.get("exit_price"), 0),
+            ),
+            "marked_at": block_marked_at,
+            "expires_at": block_expires_at,
+            "ttl_sec": block_ttl_sec,
+            "source_stage": "sell_completed_fallback_reconciliation",
+            "exit_receipt_reconciled": True,
+        }
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+        expires_at = block_expires_at
     elif reconciliation_action == "refresh_confirmation":
         confirmation_marked_at = _safe_float(
             reconciliation.get("sell_completed_at"),
@@ -20733,6 +20901,10 @@ def evaluate_rising_missed_same_day_reentry_guard(
             "last_exit_price": row.get("exit_price") or "-",
             "last_exit_at": row.get("marked_at") or "-",
             "last_exit_avg_down_count": row.get("avg_down_count", 0),
+            "last_exit_source_stage": row.get("source_stage") or "-",
+            "last_exit_receipt_reconciled": _boolish_true(
+                row.get("exit_receipt_reconciled")
+            ),
             "reentry_action": action,
             "watching_budget_priority": "blocked" if action == "block" else "low",
             "reentry_confirmation_status": (
@@ -20760,6 +20932,14 @@ def _rising_missed_recent_exit_ai_context(
     remaining_sec = max(0, _safe_int(guard.get("risk_remaining_sec"), 0))
     if exit_at <= 0.0 or exit_price <= 0 or remaining_sec <= 0:
         return {}
+    receipt_reconciled = _boolish_true(
+        guard.get("last_exit_receipt_reconciled")
+    )
+    exit_price_source = (
+        "broker_sell_completed_receipt"
+        if receipt_reconciled
+        else "sell_submit_executable_price_or_revalidated_mark"
+    )
     return {
         "schema": "recent_scalp_exit_context_v1",
         "symbol": str(stock.get("stock_code") or stock.get("code") or "")[:6],
@@ -20771,6 +20951,8 @@ def _rising_missed_recent_exit_ai_context(
             _safe_float(guard.get("last_exit_profit_rate"), 0.0), 4
         ),
         "exit_rule": str(guard.get("last_exit_rule") or "-"),
+        "exit_source_stage": str(guard.get("last_exit_source_stage") or "-"),
+        "exit_receipt_reconciled": receipt_reconciled,
         "reentry_policy": "fresh_post_exit_confirmation_required",
         "metric_role": "recent_exit_entry_context",
         "decision_authority": "ai_input_and_bounded_reentry_confirmation",
@@ -20778,9 +20960,11 @@ def _rising_missed_recent_exit_ai_context(
         "sample_floor": "not_applicable_runtime_context",
         "primary_decision_metric": "reentry_price_vs_exit_pct",
         "source_quality_gate": (
-            "recorded_exit_submit_executable_price_or_revalidated_mark_time_and_profit"
+            "broker_sell_completed_receipt"
+            if receipt_reconciled
+            else "recorded_exit_submit_executable_price_or_revalidated_mark_time_and_profit"
         ),
-        "exit_price_source": "sell_submit_executable_price_or_revalidated_mark",
+        "exit_price_source": exit_price_source,
         "forbidden_uses": (
             "standalone_buy,broker_guard_bypass,stale_quote_bypass,"
             "provider_route_change,quantity_or_cap_change"

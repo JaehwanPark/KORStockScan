@@ -52,6 +52,7 @@ _get_fast_state = None
 _weighted_avg = None
 _now_ts = None
 _probe_fill_continuation_callback = None
+_scalp_exit_completed_callback = None
 
 # Receipt module의 임시/DB 작업은 독립 락으로 직렬화하고,
 # ACTIVE_TARGETS 같은 shared runtime truth는 주입된 _STATE_LOCK(실운영에서는 ENTRY_LOCK)으로만 만집니다.
@@ -592,6 +593,7 @@ def bind_execution_dependencies(
     now_ts=None,
     state_lock=None,
     probe_fill_continuation_callback=None,
+    scalp_exit_completed_callback=None,
     state_machine=None,
     **_unused_kwargs,
 ):
@@ -603,7 +605,7 @@ def bind_execution_dependencies(
     """
     global KIWOOM_TOKEN, DB, event_bus, ACTIVE_TARGETS, highest_prices
     global _get_fast_state, _weighted_avg, _now_ts, _STATE_LOCK
-    global _probe_fill_continuation_callback
+    global _probe_fill_continuation_callback, _scalp_exit_completed_callback
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -625,6 +627,8 @@ def bind_execution_dependencies(
         _STATE_LOCK = state_lock
     if probe_fill_continuation_callback is not None:
         _probe_fill_continuation_callback = probe_fill_continuation_callback
+    if scalp_exit_completed_callback is not None:
+        _scalp_exit_completed_callback = scalp_exit_completed_callback
 
 
 def _log_holding_pipeline(name, code, target_id, stage, **fields):
@@ -2768,6 +2772,31 @@ def _update_db_for_sell(
                 f"실매도가: {exec_price:,}원 / 수익률: {profit_rate}%"
             )
 
+            if strategy == "SCALPING" and callable(_scalp_exit_completed_callback):
+                try:
+                    callback_result = _scalp_exit_completed_callback(
+                        str(receipt_snapshot.get("code", "")).strip()[:6],
+                        profit_rate=profit_rate,
+                        exit_price=exec_price,
+                        exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
+                        completed_at=now.timestamp(),
+                    )
+                    if (
+                        isinstance(callback_result, dict)
+                        and callback_result.get("reconciled") is False
+                        and callback_result.get("reason")
+                        != "active_reentry_context_missing"
+                    ):
+                        log_error(
+                            "[RISING_MISSED_REENTRY] sell receipt reconciliation "
+                            f"deferred to sell_completed fallback (id={target_id}, "
+                            f"reason={callback_result.get('reason')})"
+                        )
+                except Exception as exc:
+                    log_error(
+                        "[RISING_MISSED_REENTRY] sell receipt reconciliation "
+                        f"failed (id={target_id}): {exc}"
+                    )
             _publish_sell_execution_message(
                 name=receipt_snapshot.get("name") or "-",
                 pending_msg=receipt_snapshot.get("pending_sell_msg") or "",

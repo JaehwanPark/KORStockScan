@@ -282,6 +282,54 @@ def test_sell_receipt_persists_net_profit_rate(monkeypatch):
     assert "-0.13%" in payload["message"]
 
 
+def test_scalp_sell_receipt_reconciles_rising_missed_reentry_context(monkeypatch):
+    record = type(
+        "Record",
+        (),
+        {
+            "buy_price": 100000.0,
+            "buy_qty": 1,
+            "status": "SELL_ORDERED",
+            "sell_price": 0,
+            "sell_time": None,
+            "profit_rate": 0.0,
+        },
+    )()
+    calls = []
+    receipts.DB = _ReceiptDB(record)
+    receipts.event_bus = _Bus()
+    monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts, "record_post_sell_candidate", lambda **kwargs: {})
+    monkeypatch.setattr(
+        receipts,
+        "_scalp_exit_completed_callback",
+        lambda code, **kwargs: calls.append((code, kwargs)),
+    )
+    completed_at = datetime(2026, 7, 31, 10, 24, 32)
+
+    receipts._update_db_for_sell(
+        7,
+        100500,
+        completed_at,
+        {
+            "code": "096770",
+            "name": "SK innovation",
+            "msg_audience": "ADMIN_ONLY",
+            "last_exit_rule": "scalp_trailing_take_profit",
+        },
+        "SCALPING",
+        False,
+    )
+
+    assert len(calls) == 1
+    code, kwargs = calls[0]
+    assert code == "096770"
+    assert kwargs["profit_rate"] == record.profit_rate
+    assert kwargs["exit_price"] == 100500
+    assert kwargs["exit_rule"] == "scalp_trailing_take_profit"
+    assert kwargs["completed_at"] == completed_at.timestamp()
+
+
 def test_scalp_revive_sell_receipt_declares_real_execution_contract(monkeypatch):
     record = type(
         "Record",
