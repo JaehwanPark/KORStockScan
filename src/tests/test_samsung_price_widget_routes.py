@@ -112,6 +112,11 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
     assert response.get_json()["market_venue"] == "KRX"
     assert response.get_json()["quote_request_code"] == "005930"
     assert response.get_json()["token_mode"] == "shared_cache_only"
+    assert response.get_json()["minute_trends"] == {
+        "1m": "up",
+        "3m": "unavailable",
+        "5m": "unavailable",
+    }
     assert captured["calls"][0]["url"] == "https://api.example.test/api/dostk/stkinfo"
     assert captured["calls"][0]["headers"]["api-id"] == "ka10001"
     assert captured["calls"][0]["headers"]["authorization"] == "Bearer TOKEN"
@@ -292,3 +297,75 @@ def test_minute_chart_and_trend_use_completed_bars_and_exclude_forming_bar():
     ]
     assert trend == "up"
     assert trend_at == "20260728100200"
+
+
+def test_minute_trends_classify_contiguous_1m_3m_5m_horizons():
+    completed = [
+        (f"20260728100{minute}00", 70_000 + minute * 100) for minute in range(7)
+    ]
+
+    trends, trend_at = routes._classify_minute_trends(completed)
+
+    assert trends == {"1m": "up", "3m": "up", "5m": "up"}
+    assert trend_at == "20260728100600"
+
+
+def test_minute_trends_mark_gapped_horizons_unavailable():
+    completed = [
+        ("20260728100000", 70_000),
+        ("20260728100100", 70_100),
+        ("20260728100300", 70_200),
+        ("20260728100400", 70_300),
+    ]
+
+    trends, trend_at = routes._classify_minute_trends(completed)
+
+    assert trends == {"1m": "up", "3m": "unavailable", "5m": "unavailable"}
+    assert trend_at == "20260728100400"
+
+
+def test_completed_minute_closes_do_not_cross_session_start():
+    rows = [
+        {"cntr_tm": "20260728153800", "cur_prc": "70,000"},
+        {"cntr_tm": "20260728153900", "cur_prc": "70,100"},
+        {"cntr_tm": "20260728154000", "cur_prc": "70,200"},
+        {"cntr_tm": "20260728154100", "cur_prc": "70,300"},
+        {"cntr_tm": "20260728154200", "cur_prc": "70,400"},
+    ]
+
+    completed = routes._completed_minute_closes(
+        rows,
+        observed_at=datetime(
+            2026,
+            7,
+            28,
+            15,
+            42,
+            30,
+            tzinfo=ZoneInfo("Asia/Seoul"),
+        ),
+        limit=20,
+        session_start=routes._NXT_AFTERMARKET_START,
+    )
+    trends, _ = routes._classify_minute_trends(completed)
+
+    assert completed == [
+        ("20260728154000", 70_200),
+        ("20260728154100", 70_300),
+    ]
+    assert trends == {"1m": "up", "3m": "unavailable", "5m": "unavailable"}
+
+
+def test_minute_trend_uses_flat_band_for_small_net_change():
+    completed = [
+        ("20260728100000", 70_000),
+        ("20260728100100", 70_030),
+    ]
+
+    trend, trend_at = routes._classify_horizon_trend(
+        completed,
+        horizon_minutes=1,
+    )
+
+    assert trend == "flat"
+    assert trend_at == "20260728100100"

@@ -33,6 +33,7 @@ def test_widget_payload_parser_accepts_positive_current_price():
             "day_low_delta": 400,
             "day_low_delta_pct": 0.56,
             "minute_trend": "up",
+            "minute_trends": {"1m": "up", "3m": "flat", "5m": "down"},
             "minute_chart": [
                 {"time_kst": "10:00", "close": 70000},
                 {"time_kst": "10:01", "close": 70500},
@@ -43,7 +44,24 @@ def test_widget_payload_parser_accepts_positive_current_price():
     assert quote.current_price == 71200
     assert quote.day_low_delta == 400
     assert quote.minute_trend == "up"
+    assert quote.minute_trend_3m == "flat"
+    assert quote.minute_trend_5m == "down"
     assert quote.minute_chart[-1] == ("10:01", 70500)
+
+
+def test_widget_payload_parser_keeps_legacy_trend_response_compatible():
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 71200,
+            "minute_trend": "down",
+            "minute_chart": [],
+        }
+    )
+
+    assert quote.minute_trend == "down"
+    assert quote.minute_trend_3m == "unavailable"
+    assert quote.minute_trend_5m == "unavailable"
 
 
 def test_widget_payload_parser_preserves_nxt_venue():

@@ -73,6 +73,8 @@ class Quote:
     day_low_delta: int | None
     day_low_delta_pct: float | None
     minute_trend: str
+    minute_trend_3m: str
+    minute_trend_5m: str
     minute_chart: tuple[tuple[str, int], ...]
     market_venue: str
     market_cohort: str
@@ -99,9 +101,19 @@ def parse_quote_payload(payload: object) -> Quote:
         low_delta_pct = float(low_delta_pct) if low_delta_pct is not None else None
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid_day_low_delta_pct") from exc
-    trend = str(payload.get("minute_trend") or "unavailable")
-    if trend not in {"up", "down", "flat", "unavailable"}:
-        raise ValueError("invalid_minute_trend")
+    raw_trends = payload.get("minute_trends")
+    if raw_trends is not None and not isinstance(raw_trends, dict):
+        raise ValueError("invalid_minute_trends")
+    raw_trends = raw_trends or {}
+    trends = {
+        "1m": str(raw_trends.get("1m") or payload.get("minute_trend") or "unavailable"),
+        "3m": str(raw_trends.get("3m") or "unavailable"),
+        "5m": str(raw_trends.get("5m") or "unavailable"),
+    }
+    if any(
+        trend not in {"up", "down", "flat", "unavailable"} for trend in trends.values()
+    ):
+        raise ValueError("invalid_minute_trends")
     market_venue = str(payload.get("market_venue") or "KRX").strip().upper()
     if market_venue not in {"KRX", "NXT"}:
         raise ValueError("invalid_market_venue")
@@ -128,7 +140,9 @@ def parse_quote_payload(payload: object) -> Quote:
         current_price=price,
         day_low_delta=low_delta,
         day_low_delta_pct=low_delta_pct,
-        minute_trend=trend,
+        minute_trend=trends["1m"],
+        minute_trend_3m=trends["3m"],
+        minute_trend_5m=trends["5m"],
         minute_chart=tuple(minute_chart),
         market_venue=market_venue,
         market_cohort=market_cohort,
@@ -197,7 +211,7 @@ class SamsungPriceWidget:
         self.low_label.pack(fill="x")
         self.trend_label = tk.Label(
             frame,
-            text="1분봉: —",
+            text="1분 — · 3분 — · 5분 —",
             fg="#aab7c8",
             bg="#1e2430",
             font=("Malgun Gothic", 8),
@@ -268,12 +282,35 @@ class SamsungPriceWidget:
                 ),
                 fg="#ff6b6b" if quote.day_low_delta > 0 else "#aab7c8",
             )
-        trend_text, trend_color = {
-            "up": ("1분봉: ▲ 상승", "#ff6b6b"),
-            "down": ("1분봉: ▼ 하락", "#5ca9ff"),
-            "flat": ("1분봉: ─ 보합", "#aab7c8"),
-            "unavailable": ("1분봉: 데이터 대기", "#aab7c8"),
-        }[quote.minute_trend]
+        trend_symbols = {
+            "up": "▲",
+            "down": "▼",
+            "flat": "─",
+            "unavailable": "—",
+        }
+        displayed_trends = (
+            quote.minute_trend,
+            quote.minute_trend_3m,
+            quote.minute_trend_5m,
+        )
+        trend_text = (
+            f"1분 {trend_symbols[displayed_trends[0]]} · "
+            f"3분 {trend_symbols[displayed_trends[1]]} · "
+            f"5분 {trend_symbols[displayed_trends[2]]}"
+        )
+        available_trends = [
+            trend for trend in displayed_trends if trend != "unavailable"
+        ]
+        trend_color = (
+            "#ff6b6b"
+            if available_trends and all(trend == "up" for trend in available_trends)
+            else (
+                "#5ca9ff"
+                if available_trends
+                and all(trend == "down" for trend in available_trends)
+                else "#aab7c8"
+            )
+        )
         self.trend_label.configure(text=trend_text, fg=trend_color)
         self._draw_minute_chart(quote.minute_chart)
         if previous is None:
