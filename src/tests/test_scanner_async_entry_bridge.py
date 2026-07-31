@@ -102,6 +102,28 @@ def test_clean_profit_reentry_confirmation_blocks_wait_above_exit():
     assert decision["reentry_confirmation_price_vs_exit_pct"] == pytest.approx(0.273723)
 
 
+def test_recent_exit_ai_context_declares_executable_price_provenance():
+    context = handlers._rising_missed_recent_exit_ai_context(
+        {"code": "096770"},
+        {
+            "reentry_action": "confirm",
+            "last_exit_at": 1000.0,
+            "last_exit_price": 109600,
+            "last_exit_profit_rate": 0.5,
+            "last_exit_rule": "scalp_trailing_take_profit",
+            "risk_remaining_sec": 50,
+        },
+        now_ts=1010.0,
+    )
+
+    assert context["exit_price"] == 109600
+    assert (
+        context["exit_price_source"]
+        == "sell_submit_executable_price_or_revalidated_mark"
+    )
+    assert "executable_price_or_revalidated_mark" in context["source_quality_gate"]
+
+
 @pytest.mark.parametrize(
     ("action", "decision_price", "probe_intent", "expected_reason"),
     [

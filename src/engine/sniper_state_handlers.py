@@ -20666,16 +20666,8 @@ def evaluate_rising_missed_same_day_reentry_guard(
     expires_at = _safe_float((row or {}).get("expires_at"), 0.0)
     if not row or expires_at <= now_value:
         return base
-    reconciliation = (
-        {
-            "action": "keep",
-            "reason": "bounded_clean_profit_submit_context",
-        }
-        if str((row or {}).get("reentry_action") or "") == "confirm"
-        and _safe_int((row or {}).get("exit_price"), 0) > 0
-        else _reconcile_rising_missed_reentry_risk_with_sell_completed(
-            norm_code, row, now_value
-        )
+    reconciliation = _reconcile_rising_missed_reentry_risk_with_sell_completed(
+        norm_code, row, now_value
     )
     reconciliation_action = str(reconciliation.get("action") or "keep")
     if reconciliation_action == "invalidate":
@@ -20785,8 +20777,10 @@ def _rising_missed_recent_exit_ai_context(
         "window_policy": "same_symbol_short_post_exit_window",
         "sample_floor": "not_applicable_runtime_context",
         "primary_decision_metric": "reentry_price_vs_exit_pct",
-        "source_quality_gate": "recorded_exit_submit_mark_time_and_profit",
-        "exit_price_source": "sell_submit_current_price",
+        "source_quality_gate": (
+            "recorded_exit_submit_executable_price_or_revalidated_mark_time_and_profit"
+        ),
+        "exit_price_source": "sell_submit_executable_price_or_revalidated_mark",
         "forbidden_uses": (
             "standalone_buy,broker_guard_bypass,stale_quote_bypass,"
             "provider_route_change,quantity_or_cap_change"
