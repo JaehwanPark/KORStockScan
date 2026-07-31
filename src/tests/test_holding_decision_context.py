@@ -590,6 +590,75 @@ def test_krx_real_holding_does_not_infer_missing_broker_route(monkeypatch):
     assert context["ai_market_snapshot_v1"]["broker_route"] is None
 
 
+@pytest.mark.parametrize("decision_kind", ["holding_score", "holding_flow"])
+def test_krx_real_sor_holding_uses_integrated_execution_view(
+    monkeypatch,
+    decision_kind,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    stock = {
+        **_stock(),
+        "entry_execution_broker_route": "SOR",
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "broker_snapshot_at": now.timestamp() - 0.2,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+    }
+    ws = _ws(now, suffix="_AL", route="krx_nxt_integrated")
+    ws.update(
+        {
+            "last_realtime_type_ts": {
+                "0B": now.timestamp() - 0.1,
+                "0D": now.timestamp() - 0.2,
+            },
+            "last_realtime_type_item": {
+                "0B": "000660_AL",
+                "0D": "000660_AL",
+            },
+            "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+            "last_realtime_type_market_route": {
+                "0B": "krx_nxt_integrated",
+                "0D": "krx_nxt_integrated",
+            },
+        }
+    )
+
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        ws,
+        stock,
+        "KRX",
+        "krx_regular",
+        decision_kind,
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+        candle_meta={
+            "api_id": "ka10080",
+            "received_count": 60,
+            "entry_candle_request_code": "000660_AL",
+        },
+    )
+
+    assert context["request_code"] == "000660_AL"
+    assert context["rest_route"] == "_AL"
+    assert context["source_quality"]["hold_defer_allowed"] is True
+    snapshot = context["ai_market_snapshot_v1"]
+    assert snapshot["integrated_sor_route_proven"] is True
+    assert snapshot["integrated_sor_execution_view_only"] is True
+    assert snapshot["ai_input_preflight_v1"]["allowed"] is True
+    assert "candle_source_quality" not in snapshot["ai_input_preflight_v1"]["blockers"]
+    assert (
+        "krx_integrated_event_venue_unproven"
+        not in snapshot["ai_input_preflight_v1"]["blockers"]
+    )
+
+
 def test_premarket_uses_nxt_route_and_al_requires_equivalence_proof(monkeypatch):
     _enable(monkeypatch)
     now = datetime(2026, 7, 23, 8, 20, 30, tzinfo=KST)
@@ -969,6 +1038,37 @@ def test_runtime_fetch_request_code_matches_actual_holding_venue(monkeypatch):
             now_ts=regular,
         )
         == "000660"
+    )
+    assert (
+        state_handlers._resolve_holding_context_request_code(
+            "000660",
+            ws_data={
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+            },
+            position_ctx={"entry_execution_broker_route": "SOR"},
+            decision_kind="holding_score",
+            now_ts=regular,
+        )
+        == "000660_AL"
+    )
+    assert (
+        state_handlers._resolve_holding_context_request_code(
+            "000660",
+            ws_data={
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+            },
+            position_ctx={
+                "simulation_book": "scalp_ai_buy_all",
+                "simulated_order": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            decision_kind="holding_flow",
+            now_ts=regular,
+        )
+        == "000660_AL"
     )
 
 

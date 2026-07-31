@@ -12,12 +12,15 @@ fi
 
 LOCK_FILE="${RISING_MISSED_INTRADAY_FEEDBACK_LOCK_FILE:-$PROJECT_DIR/tmp/run_rising_missed_intraday_feedback.lock}"
 COOLDOWN_STATE_FILE="${RISING_MISSED_INTRADAY_FEEDBACK_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp/run_rising_missed_intraday_feedback_success.state}"
-COOLDOWN_SEC="${RISING_MISSED_INTRADAY_FEEDBACK_COOLDOWN_SEC:-300}"
+COOLDOWN_SEC="${RISING_MISSED_INTRADAY_FEEDBACK_COOLDOWN_SEC:-1500}"
 LOG_FILE="${RISING_MISSED_INTRADAY_FEEDBACK_LOG_FILE:-$PROJECT_DIR/logs/run_rising_missed_intraday_feedback.log}"
 IONICE_CLASS="${RISING_MISSED_INTRADAY_FEEDBACK_IONICE_CLASS:-2}"
 IONICE_LEVEL="${RISING_MISSED_INTRADAY_FEEDBACK_IONICE_LEVEL:-7}"
 NICE_LEVEL="${RISING_MISSED_INTRADAY_FEEDBACK_NICE_LEVEL:-12}"
 NICE_COMMAND="${RISING_MISSED_INTRADAY_FEEDBACK_NICE_COMMAND:-nice}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
+CPU_AFFINITY="${RISING_MISSED_INTRADAY_FEEDBACK_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity monitor)}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -62,6 +65,9 @@ fi
 
 if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
   cmd=("$NICE_COMMAND" -n "$NICE_LEVEL" "${cmd[@]}")
+fi
+if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]]; then
+  cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
 
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"

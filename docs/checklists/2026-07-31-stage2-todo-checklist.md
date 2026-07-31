@@ -71,6 +71,13 @@
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
 
+- [x] `[IntradayWsIncrementalResourceVerify0731] WS freshness 증분 상태 재사용 및 CPU/RSS 절감 확인` (`Due: 2026-07-31`, `Slot: INTRADAY`, `TimeWindow: 12:45~13:15`, `Track: RuntimeStability`)
+  - Source: [intraday_ws_freshness_monitor.py](/home/ubuntu/KORStockScan/src/engine/monitoring/intraday_ws_freshness_monitor.py), [run_intraday_ws_freshness_monitor.sh](/home/ubuntu/KORStockScan/deploy/run_intraday_ws_freshness_monitor.sh), [intraday_ws_freshness_monitor_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/intraday_ws_freshness_monitor/intraday_ws_freshness_monitor_2026-07-31.json)
+  - 판정 기준: 최초 `full_streaming_rebuild` 이후 다음 자연 실행이 `input_processing.mode=incremental_streaming_aggregation`, `incremental_state_reason=state_reused`, `appended_event_count < aggregated_event_count`로 닫히고 실행시간·RSS가 full rebuild보다 감소하는지 확인한다.
+  - 금지: 검증을 위해 cooldown을 우회해 장중 full rebuild를 강제하지 않는다. 결과로 stale submit/broker/order/threshold/provider/bot 동작을 변경하지 않는다.
+  - 다음 액션: `incremental_reuse_effect_confirmed`, `state_rebuild_expected_first_run`, `unexpected_state_invalidation`, `resource_reduction_not_confirmed` 중 하나로 닫는다.
+  - 판정: `incremental_reuse_effect_confirmed`. 12:45 최초 상태 생성 실행은 약 33초, 13:05·13:20 자연 증분 실행은 각각 약 4초였다. 13:20 report는 `mode=incremental_streaming_aggregation`, `incremental_state_reason=state_reused`, `aggregated_event_count=201773`, `appended_event_count=11001`, `memory_bounded_streaming=true`, `full_event_list_materialized=false`를 기록했다.
+
 ## 장후 체크리스트 (20:05~21:55)
 
 - [ ] `[PostcloseSourceQualityGateReview0731] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-07-31`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)

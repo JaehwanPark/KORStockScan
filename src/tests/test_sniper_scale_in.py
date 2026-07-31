@@ -5452,6 +5452,116 @@ def test_rising_missed_watch_not_rising_candidate_consumes_without_watching_budg
     assert entry_logs[-1][1]["actual_order_submitted"] is False
 
 
+def test_prev_close_gainer_below_rising_threshold_hands_off_to_entry_ai(
+    monkeypatch,
+):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.TRADING_RULES = CONFIG
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    entry_logs = []
+
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source handoff must precede the scout reentry guard")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 4,
+        "name": "MARKET_GAINER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "OPEN_TOP,PREV_CLOSE_GAINER",
+        "price_delta_since_first_seen_pct": 0.1,
+        "rising_missed_buy": True,
+        "last_watching_ai_action": "not_evaluated",
+    }
+
+    consumed = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        stock,
+        "123456",
+        {"curr": 10000, "v_pw": 100.0},
+        admin_id=1,
+        runtime={
+            "now_ts": 1000.0,
+            "current_ai_score": 50.0,
+            "ai_engine": SimpleNamespace(),
+            "scout_upgrade_entry": False,
+        },
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert consumed is False
+    assert entry_logs[-1][0] == "prev_close_gainer_entry_ai_handoff"
+    assert (
+        entry_logs[-1][1]["decision_authority"]
+        == "source_routing_to_existing_exact_v2_entry_ai"
+    )
+    assert entry_logs[-1][1]["actual_order_submitted"] is False
+    assert entry_logs[-1][1]["broker_order_forbidden"] is False
+
+
+def test_prev_close_gainer_upper_limit_collects_ai_before_generic_submit_veto(
+    monkeypatch,
+):
+    entry_logs = []
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_one_share_entry",
+        lambda *args, **kwargs: SimpleNamespace(
+            allowed=False,
+            reason=BLOCK_UPPER_LIMIT_PROXIMITY,
+            log_fields={"rising_missed_class": "continuation"},
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_rising_missed_same_day_reentry_guard",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source handoff must precede the scout reentry guard")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    consumed = state_handlers._maybe_submit_rising_missed_one_share_entry(
+        {
+            "source_signature": "PREV_CLOSE_GAINER",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+        },
+        "123456",
+        {"curr": 10000},
+        admin_id=1,
+        runtime={"now_ts": 1000.0},
+        strategy="SCALPING",
+        pos_tag="SCANNER",
+        curr_price=10000,
+    )
+
+    assert consumed is False
+    assert entry_logs[-1][0] == "prev_close_gainer_entry_ai_handoff"
+    assert (
+        entry_logs[-1][1]["handoff_reason"]
+        == "collect_entry_ai_before_existing_upper_limit_submit_veto"
+    )
+    assert entry_logs[-1][1]["actual_order_submitted"] is False
+
+
 def test_rising_missed_fast_gate_refreshes_live_delta_before_classification(
     monkeypatch,
 ):

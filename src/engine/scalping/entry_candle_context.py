@@ -214,6 +214,44 @@ def resolve_entry_candle_request_code(
     return base
 
 
+def resolve_session_candle_request_code(
+    code: str,
+    *,
+    ws_data: dict[str, Any] | None,
+    venue: str | None = None,
+    session: str | None = None,
+    now_ts: Any = None,
+    broker_route: str | None = None,
+    allow_integrated_sor_execution_view: bool = False,
+) -> str:
+    """Resolve one candle request code from the shared session/route owner."""
+
+    now = _now_kst(now_ts)
+    session_value = resolve_entry_candle_session(now, session)
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    venue_value = resolve_entry_candle_venue(ws, venue, session_value)
+    if venue_value == "NXT" and session_value == "krx_regular":
+        session_value = "nxt_regular_overlap"
+    ws_suffix, ws_route = _ws_route(ws, now_ts=now.timestamp())
+    request_venue = venue_value
+    if (
+        allow_integrated_sor_execution_view
+        and venue_value == "KRX"
+        and session_value == "krx_regular"
+        and str(broker_route or "").strip().upper() == "SOR"
+        and ws_suffix == "_AL"
+        and ws_route == "krx_nxt_integrated"
+    ):
+        request_venue = "SOR"
+    return resolve_entry_candle_request_code(
+        code,
+        venue=request_venue,
+        session=session_value,
+        ws_data=ws,
+        broker_route=broker_route,
+    )
+
+
 def fetch_entry_candles_with_meta(
     token: str | None,
     code: str,
@@ -224,6 +262,7 @@ def fetch_entry_candles_with_meta(
     limit: int = 40,
     now_ts: Any = None,
     broker_route: str | None = None,
+    allow_integrated_sor_execution_view: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch entry candles from the route owned by the effective venue/session."""
 
@@ -236,12 +275,20 @@ def fetch_entry_candles_with_meta(
     planned_broker_route = str(
         broker_route or resolve_order_dmst_stex_tp(now=now)
     ).upper()
-    request_code = resolve_entry_candle_request_code(
+    request_code = resolve_session_candle_request_code(
         code,
+        ws_data=ws,
         venue=venue_value,
         session=session_value,
-        ws_data=ws,
+        now_ts=now,
         broker_route=planned_broker_route,
+        allow_integrated_sor_execution_view=allow_integrated_sor_execution_view,
+    )
+    _, request_suffix = _split_code(request_code)
+    request_venue = (
+        "SOR"
+        if request_suffix == "_AL" and allow_integrated_sor_execution_view
+        else venue_value
     )
     from src.utils import kiwoom_utils
 
@@ -257,7 +304,7 @@ def fetch_entry_candles_with_meta(
             "request_code": request_code,
             "explicit_request_code": True,
             "entry_candle_request_code": request_code,
-            "entry_candle_request_venue": venue_value,
+            "entry_candle_request_venue": request_venue,
             "entry_candle_request_session": session_value,
             "entry_candle_request_broker_route": planned_broker_route,
             "multi_timeframe_auxiliary_fetch": True,
@@ -727,6 +774,7 @@ def build_session_candle_source(
     recent_candles: list[dict[str, Any]] | None = None,
     source_meta: dict[str, Any] | None = None,
     broker_route: str | None = None,
+    allow_integrated_sor_execution_view: bool = False,
 ) -> dict[str, Any]:
     """Build a neutral venue/session candle bundle for bounded consumers."""
 
@@ -737,15 +785,17 @@ def build_session_candle_source(
     venue_value = resolve_entry_candle_venue(ws, venue, session_value)
     if venue_value == "NXT" and session_value == "krx_regular":
         session_value = "nxt_regular_overlap"
-    request_code = resolve_entry_candle_request_code(
+    ws_suffix, ws_route = _ws_route(ws, now_ts=now.timestamp())
+    request_code = resolve_session_candle_request_code(
         code,
+        ws_data=ws,
         venue=venue_value,
         session=session_value,
-        ws_data=ws,
+        now_ts=now,
         broker_route=broker_route,
+        allow_integrated_sor_execution_view=allow_integrated_sor_execution_view,
     )
     _, request_suffix = _split_code(request_code)
-    ws_suffix, ws_route = _ws_route(ws, now_ts=now.timestamp())
     route_proof = _nxt_integrated_closed_krx_session_route_proof(
         now=now,
         venue=venue_value,
@@ -773,6 +823,9 @@ def build_session_candle_source(
                 limit=source_limit,
                 now_ts=now,
                 broker_route=broker_route,
+                allow_integrated_sor_execution_view=(
+                    allow_integrated_sor_execution_view
+                ),
             )
         except Exception as exc:
             recent_candles, source_meta = [], {}

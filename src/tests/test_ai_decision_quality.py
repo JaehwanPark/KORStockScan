@@ -661,6 +661,53 @@ def test_kiwoom_completed_minute_loader_excludes_forming_and_wrong_session_bars(
     assert provenance[0]["target_completed_bar_count"] == 1
 
 
+def test_outcome_price_merge_prefers_kiwoom_for_same_route_minute():
+    primary = [
+        {
+            "timestamp": "2026-07-27T09:01:00+09:00",
+            "stock_code": "005930",
+            "price": 101,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "pass_completed_ka10080_bar",
+        }
+    ]
+    fallback = [
+        {
+            "timestamp": "2026-07-27T09:01:30+09:00",
+            "stock_code": "005930",
+            "price": 999,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "event_observed",
+        },
+        {
+            "timestamp": "2026-07-27T09:02:30+09:00",
+            "stock_code": "005930",
+            "price": 102,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "event_observed",
+        },
+        {
+            "timestamp": "2026-07-27T09:01:30+09:00",
+            "stock_code": "005930",
+            "price": 201,
+            "effective_venue": "NXT",
+            "session_bucket": "NXT_REGULAR_OVERLAP",
+            "source_quality": "event_observed",
+        },
+    ]
+
+    merged, suppressed = quality.merge_preferred_outcome_price_rows(
+        primary,
+        fallback,
+    )
+
+    assert suppressed == 1
+    assert [row["price"] for row in merged] == [101, 102, 201]
+
+
 def test_mature_outcome_uses_bar_high_low_and_marks_same_bar_first_hit_ambiguous():
     labels = quality.mature_outcome_labels(
         pending_labels=[_pending()],

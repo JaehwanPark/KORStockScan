@@ -1764,7 +1764,7 @@ class GPTSniperEngine:
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
         adapter_version = (
-            "decision_quality_v2_7_probe_entry_v2"
+            "decision_quality_v2_7_probe_entry_v3"
             if probe_prompt_selected
             else "decision_quality_v2_7_entry_v2"
         )

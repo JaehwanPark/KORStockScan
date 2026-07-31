@@ -106,6 +106,12 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     )
 
     assert report["metric_contract"]["runtime_effect"] is False
+    assert report["input_processing"]["mode"] == "full_streaming_rebuild"
+    assert report["input_processing"]["memory_bounded_streaming"] is True
+    assert report["input_processing"]["full_event_list_materialized"] is False
+    assert report["input_processing"]["aggregated_event_count"] == 2
+    assert report["input_processing"]["appended_event_count"] == 2
+    assert report["input_processing"]["incremental_state_reason"] == "state_missing"
     assert report["pipeline_counts"]["trade_tick_quiet"] == 1
     assert report["pipeline_counts"]["subscription_stale"] == 1
     assert report["pipeline_counts"]["both_ws_stale"] == 1
@@ -142,6 +148,189 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     assert all(
         item["allowed_runtime_apply"] is False
         for item in report["workorder_directives"]
+    )
+
+
+def test_build_report_incrementally_aggregates_only_appended_rows(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    state_path = tmp_path / "state.json"
+    first_event = _event(
+        "ws_subscription_freshness_snapshot",
+        {
+            "freshness_state": "stale",
+            "repair_reason": "subscription_stale",
+            "ws_last_0b_age_ms": "61000",
+            "ws_last_0d_age_ms": "61000",
+        },
+    )
+    second_event = _event(
+        "scalping_scanner_fast_precheck",
+        {
+            "ws_last_0b_age_ms": "50000",
+            "ws_last_0d_age_ms": "4000",
+            "source_quality_block_reason": "trade_tick_quiet",
+        },
+        code="000002",
+    )
+    _write_jsonl(pipeline_path, [first_event])
+    _write_jsonl(threshold_path, [])
+
+    initial = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+        generated_at="initial",
+    )
+    with pipeline_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(second_event, ensure_ascii=False) + "\n")
+    incremental = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+        generated_at="incremental",
+    )
+
+    assert initial["pipeline_event_count"] == 1
+    assert initial["input_processing"]["mode"] == "full_streaming_rebuild"
+    assert incremental["pipeline_event_count"] == 2
+    assert incremental["pipeline_counts"]["subscription_stale"] == 1
+    assert incremental["pipeline_counts"]["trade_tick_quiet"] == 1
+    assert (
+        incremental["input_processing"]["mode"] == "incremental_streaming_aggregation"
+    )
+    assert incremental["input_processing"]["appended_event_count"] == 1
+    assert incremental["input_processing"]["incremental_state_reason"] == "state_reused"
+    assert (
+        incremental["input_processing"]["source_offsets"]["pipeline_events"][
+            "size_bytes"
+        ]
+        >= incremental["input_processing"]["source_offsets"]["pipeline_events"][
+            "offset"
+        ]
+    )
+    assert (
+        incremental["input_processing"]["source_offsets"]["pipeline_events"][
+            "source_identity_stable_during_scan"
+        ]
+        is True
+    )
+
+
+def test_build_report_rebuilds_incremental_state_after_source_truncation(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    state_path = tmp_path / "state.json"
+    stale_event = _event(
+        "ws_subscription_freshness_snapshot",
+        {
+            "freshness_state": "stale",
+            "repair_reason": "subscription_stale",
+            "ws_last_0b_age_ms": "61000",
+            "ws_last_0d_age_ms": "61000",
+        },
+    )
+    _write_jsonl(pipeline_path, [stale_event, stale_event])
+    _write_jsonl(threshold_path, [])
+    mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+    _write_jsonl(pipeline_path, [stale_event])
+
+    rebuilt = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+
+    assert rebuilt["pipeline_event_count"] == 1
+    assert rebuilt["pipeline_counts"]["subscription_stale"] == 1
+    assert rebuilt["input_processing"]["mode"] == "full_streaming_rebuild"
+    assert (
+        rebuilt["input_processing"]["incremental_state_reason"]
+        == "pipeline_events_truncated"
+    )
+
+
+def test_build_report_does_not_advance_offset_past_partial_jsonl_line(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    state_path = tmp_path / "state.json"
+    event = _event(
+        "ws_subscription_freshness_snapshot",
+        {
+            "freshness_state": "stale",
+            "repair_reason": "subscription_stale",
+            "ws_last_0b_age_ms": "61000",
+            "ws_last_0d_age_ms": "61000",
+        },
+    )
+    pipeline_path.write_text(json.dumps(event), encoding="utf-8")
+    _write_jsonl(threshold_path, [])
+
+    partial = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+    with pipeline_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n")
+    completed = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+
+    assert partial["pipeline_event_count"] == 0
+    assert completed["pipeline_event_count"] == 1
+    assert completed["pipeline_counts"]["subscription_stale"] == 1
+    assert completed["input_processing"]["appended_event_count"] == 1
+
+
+def test_build_report_rebuilds_when_incremental_aggregate_state_is_invalid(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    state_path = tmp_path / "state.json"
+    event = _event(
+        "ws_subscription_freshness_snapshot",
+        {
+            "freshness_state": "stale",
+            "repair_reason": "subscription_stale",
+            "ws_last_0b_age_ms": "61000",
+            "ws_last_0d_age_ms": "61000",
+        },
+    )
+    _write_jsonl(pipeline_path, [event])
+    _write_jsonl(threshold_path, [])
+    mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["counts"]["subscription_stale"] = "invalid"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    rebuilt = mod.build_report(
+        "2026-07-13",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        incremental_state_path=state_path,
+    )
+
+    assert rebuilt["pipeline_event_count"] == 1
+    assert rebuilt["pipeline_counts"]["subscription_stale"] == 1
+    assert rebuilt["input_processing"]["incremental_state_reason"] == (
+        "aggregate_state_invalid"
     )
 
 

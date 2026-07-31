@@ -27,6 +27,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v1"
 
 FORBIDDEN_USES = [
     "EV",
@@ -159,6 +160,138 @@ def _iter_jsonl_rows(path: Path) -> Iterable[dict[str, Any]]:
     if not actual_path.exists():
         return
     yield from iter_jsonl(actual_path)
+
+
+def _source_identity(path: Path) -> dict[str, Any]:
+    actual_path = existing_or_gzip_path(path)
+    if not actual_path.exists():
+        return {
+            "path": str(actual_path),
+            "exists": False,
+            "cacheable": False,
+            "device": None,
+            "inode": None,
+            "size_bytes": 0,
+        }
+    stat = actual_path.stat()
+    return {
+        "path": str(actual_path),
+        "exists": True,
+        "cacheable": actual_path.suffix != ".gz",
+        "device": int(stat.st_dev),
+        "inode": int(stat.st_ino),
+        "size_bytes": int(stat.st_size),
+    }
+
+
+def _iter_plain_jsonl_from_offset(
+    path: Path,
+    *,
+    offset: int,
+) -> tuple[Iterable[dict[str, Any]], dict[str, int]]:
+    progress = {"offset": max(0, int(offset)), "invalid_json_line_count": 0}
+
+    def _rows() -> Iterable[dict[str, Any]]:
+        if not path.exists():
+            return
+        with path.open("rb") as handle:
+            handle.seek(progress["offset"])
+            while True:
+                line_offset = handle.tell()
+                raw_line = handle.readline()
+                if not raw_line:
+                    break
+                if not raw_line.endswith(b"\n"):
+                    handle.seek(line_offset)
+                    break
+                progress["offset"] = handle.tell()
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    progress["invalid_json_line_count"] += 1
+                    continue
+                if isinstance(payload, dict):
+                    yield payload
+
+    return _rows(), progress
+
+
+def _counter_from_mapping(value: Any) -> Counter:
+    if not isinstance(value, dict):
+        return Counter()
+    return Counter({str(key): int(count or 0) for key, count in value.items()})
+
+
+def _nested_counters_from_mapping(value: Any) -> dict[str, Counter]:
+    if not isinstance(value, dict):
+        return defaultdict(Counter)
+    restored: dict[str, Counter] = defaultdict(Counter)
+    for key, counts in value.items():
+        restored[str(key)] = _counter_from_mapping(counts)
+    return restored
+
+
+def _load_incremental_state(
+    state_path: Path | None,
+    *,
+    target_date: str,
+    stale_ms: float,
+    source_identities: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any] | None, str]:
+    if state_path is None or not state_path.exists():
+        return None, "state_missing"
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "state_invalid"
+    if not isinstance(payload, dict):
+        return None, "state_invalid"
+    if payload.get("schema_version") != INCREMENTAL_STATE_SCHEMA_VERSION:
+        return None, "schema_changed"
+    if str(payload.get("target_date") or "") != target_date:
+        return None, "target_date_changed"
+    try:
+        cached_stale_ms = float(payload.get("stale_ms") or -1.0)
+    except (TypeError, ValueError):
+        return None, "state_invalid"
+    if cached_stale_ms != float(stale_ms):
+        return None, "stale_threshold_changed"
+    cached_sources = payload.get("sources")
+    if not isinstance(cached_sources, dict):
+        return None, "source_state_missing"
+    for source_name, identity in source_identities.items():
+        cached = cached_sources.get(source_name)
+        if not isinstance(cached, dict):
+            return None, f"{source_name}_state_missing"
+        if not identity.get("cacheable"):
+            return None, f"{source_name}_not_cacheable"
+        try:
+            source_identity_matches = (
+                str(cached.get("path") or "") == str(identity.get("path") or "")
+                and int(cached.get("device") or -1) == int(identity.get("device") or -2)
+                and int(cached.get("inode") or -1) == int(identity.get("inode") or -2)
+            )
+            cached_offset = int(cached.get("offset") or 0)
+        except (TypeError, ValueError):
+            return None, f"{source_name}_state_invalid"
+        if not source_identity_matches:
+            return None, f"{source_name}_replaced"
+        if int(identity.get("size_bytes") or 0) < cached_offset:
+            return None, f"{source_name}_truncated"
+    return payload, "state_reused"
+
+
+def _write_incremental_state(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
 
 
 def _read_json(path: Path | None) -> dict[str, Any]:
@@ -723,6 +856,7 @@ def build_report(
     subscription_snapshot_path: Path | None = None,
     stale_sec: float = DEFAULT_STALE_SEC,
     generated_at: str | None = None,
+    incremental_state_path: Path | None = None,
 ) -> dict[str, Any]:
     target_date = target_date or date.today().isoformat()
     stale_ms = float(stale_sec) * 1000.0
@@ -733,49 +867,146 @@ def build_report(
         paths["threshold_events"] = threshold_path
 
     source_missing = [name for name, path in paths.items() if not path.exists()]
-    event_classes: list[dict[str, Any]] = []
-    row_count_by_source: Counter = Counter()
+    source_identities = {
+        source_name: _source_identity(path) for source_name, path in paths.items()
+    }
+    cached_state, incremental_state_reason = _load_incremental_state(
+        incremental_state_path,
+        target_date=target_date,
+        stale_ms=stale_ms,
+        source_identities=source_identities,
+    )
+    try:
+        row_count_by_source = _counter_from_mapping(
+            (cached_state or {}).get("row_count_by_source")
+        )
+        counts = _counter_from_mapping((cached_state or {}).get("counts"))
+        stage_counts = _nested_counters_from_mapping(
+            (cached_state or {}).get("stage_counts")
+        )
+        time_bucket_counts = _nested_counters_from_mapping(
+            (cached_state or {}).get("time_bucket_counts")
+        )
+        symbol_counts = _nested_counters_from_mapping(
+            (cached_state or {}).get("symbol_counts")
+        )
+        total_events = int((cached_state or {}).get("total_events") or 0)
+    except (TypeError, ValueError):
+        cached_state = None
+        incremental_state_reason = "aggregate_state_invalid"
+        row_count_by_source = Counter()
+        counts = Counter()
+        stage_counts = defaultdict(Counter)
+        time_bucket_counts = defaultdict(Counter)
+        symbol_counts = defaultdict(Counter)
+        total_events = 0
+    appended_event_count = 0
+    invalid_json_line_count = 0
+    source_offsets: dict[str, dict[str, Any]] = {}
     for source_name, path in paths.items():
-        for raw in _iter_jsonl_rows(path):
+        identity = source_identities[source_name]
+        cached_source = (
+            (cached_state or {}).get("sources", {}).get(source_name, {})
+            if cached_state
+            else {}
+        )
+        start_offset = int(cached_source.get("offset") or 0)
+        actual_path = Path(str(identity.get("path") or path))
+        if identity.get("cacheable"):
+            source_rows, progress = _iter_plain_jsonl_from_offset(
+                actual_path,
+                offset=start_offset,
+            )
+        else:
+            source_rows = _iter_jsonl_rows(path)
+            progress = {"offset": 0, "invalid_json_line_count": 0}
+        source_appended_count = 0
+        for raw in source_rows:
             row_count_by_source[source_name] += 1
-            row = _flatten_event(raw)
-            event_class = _pipeline_event_class(row, stale_ms=stale_ms)
-            event_class["source"] = source_name
-            event_classes.append(event_class)
+            total_events += 1
+            appended_event_count += 1
+            source_appended_count += 1
+            item = _pipeline_event_class(_flatten_event(raw), stale_ms=stale_ms)
+            for key in (
+                "trade_tick_quiet",
+                "subscription_stale",
+                "decision_stage_stale_backoff",
+                "both_ws_stale",
+                "fresh_0d_stale_0b",
+                "provider_none",
+                "submit_related",
+                "scout_related",
+                "ws_age_observed",
+            ):
+                if item.get(key):
+                    counts[key] += 1
+            stage = str(item.get("stage") or "unknown")
+            bucket = str(item.get("time_bucket") or "unknown")
+            code = str(item.get("stock_code") or "")
+            for key in (
+                "trade_tick_quiet",
+                "subscription_stale",
+                "decision_stage_stale_backoff",
+                "both_ws_stale",
+                "provider_none",
+            ):
+                if item.get(key):
+                    stage_counts[key][stage] += 1
+                    time_bucket_counts[key][bucket] += 1
+                    if code:
+                        symbol_counts[key][code] += 1
+        invalid_json_line_count += int(progress["invalid_json_line_count"])
+        end_identity = _source_identity(actual_path)
+        source_identity_stable = bool(
+            identity.get("device") == end_identity.get("device")
+            and identity.get("inode") == end_identity.get("inode")
+        )
+        source_offsets[source_name] = {
+            **(end_identity if source_identity_stable else identity),
+            "offset": int(progress["offset"]),
+            "start_offset": start_offset,
+            "appended_event_count": source_appended_count,
+            "source_identity_stable_during_scan": source_identity_stable,
+        }
 
-    counts: Counter = Counter()
-    stage_counts: dict[str, Counter] = defaultdict(Counter)
-    time_bucket_counts: dict[str, Counter] = defaultdict(Counter)
-    symbol_counts: dict[str, Counter] = defaultdict(Counter)
-    for item in event_classes:
-        for key in (
-            "trade_tick_quiet",
-            "subscription_stale",
-            "decision_stage_stale_backoff",
-            "both_ws_stale",
-            "fresh_0d_stale_0b",
-            "provider_none",
-            "submit_related",
-            "scout_related",
-            "ws_age_observed",
-        ):
-            if item.get(key):
-                counts[key] += 1
-        stage = str(item.get("stage") or "unknown")
-        bucket = str(item.get("time_bucket") or "unknown")
-        code = str(item.get("stock_code") or "")
-        for key in (
-            "trade_tick_quiet",
-            "subscription_stale",
-            "decision_stage_stale_backoff",
-            "both_ws_stale",
-            "provider_none",
-        ):
-            if item.get(key):
-                stage_counts[key][stage] += 1
-                time_bucket_counts[key][bucket] += 1
-                if code:
-                    symbol_counts[key][code] += 1
+    incremental_state_persisted = bool(
+        incremental_state_path is not None
+        and all(identity.get("cacheable") for identity in source_identities.values())
+        and all(
+            source.get("source_identity_stable_during_scan")
+            for source in source_offsets.values()
+        )
+    )
+    if incremental_state_persisted and incremental_state_path is not None:
+        _write_incremental_state(
+            incremental_state_path,
+            {
+                "schema_version": INCREMENTAL_STATE_SCHEMA_VERSION,
+                "target_date": target_date,
+                "stale_ms": stale_ms,
+                "sources": {
+                    source_name: {
+                        "path": source.get("path"),
+                        "device": source.get("device"),
+                        "inode": source.get("inode"),
+                        "offset": source.get("offset"),
+                    }
+                    for source_name, source in source_offsets.items()
+                },
+                "row_count_by_source": dict(row_count_by_source),
+                "counts": dict(counts),
+                "stage_counts": {
+                    key: dict(counter) for key, counter in stage_counts.items()
+                },
+                "time_bucket_counts": {
+                    key: dict(counter) for key, counter in time_bucket_counts.items()
+                },
+                "symbol_counts": {
+                    key: dict(counter) for key, counter in symbol_counts.items()
+                },
+                "total_events": total_events,
+            },
+        )
 
     (
         resolved_snapshot_path,
@@ -785,7 +1016,6 @@ def build_report(
     snapshot_rows = _snapshot_rows(snapshot_payload, stale_ms=stale_ms)
     snapshot = _snapshot_summary(snapshot_rows)
 
-    total_events = len(event_classes)
     summary = {
         "target_date": target_date,
         "generated_at": generated_at or datetime.now(tz=KST).isoformat(),
@@ -796,6 +1026,24 @@ def build_report(
         ),
         "source_paths": {name: str(path) for name, path in paths.items()},
         "source_missing": source_missing,
+        "input_processing": {
+            "mode": (
+                "incremental_streaming_aggregation"
+                if cached_state is not None
+                else "full_streaming_rebuild"
+            ),
+            "memory_bounded_streaming": True,
+            "full_event_list_materialized": False,
+            "aggregated_event_count": total_events,
+            "appended_event_count": appended_event_count,
+            "invalid_json_line_count": invalid_json_line_count,
+            "incremental_state_reason": incremental_state_reason,
+            "incremental_state_path": (
+                str(incremental_state_path) if incremental_state_path else None
+            ),
+            "incremental_state_persisted": incremental_state_persisted,
+            "source_offsets": source_offsets,
+        },
         "subscription_snapshot_path": (
             str(resolved_snapshot_path) if resolved_snapshot_path else None
         ),
@@ -875,6 +1123,7 @@ def _render_monitor_markdown(report: dict[str, Any]) -> str:
             "## Evidence",
             "",
             f"- pipeline_event_count: `{report.get('pipeline_event_count')}`",
+            f"- input_processing: `{report.get('input_processing')}`",
             f"- pipeline_counts: `{report.get('pipeline_counts')}`",
             f"- pipeline_rates: `{report.get('pipeline_rates')}`",
             "- subscription_snapshot_path: "
@@ -1010,6 +1259,9 @@ def _run_once(args: argparse.Namespace) -> dict[str, Any]:
         threshold_path=Path(args.threshold_path) if args.threshold_path else None,
         subscription_snapshot_path=snapshot_path,
         stale_sec=args.stale_sec,
+        incremental_state_path=(
+            Path(args.incremental_state_path) if args.incremental_state_path else None
+        ),
     )
     if args.write:
         monitor_json, monitor_md, workorder_json, workorder_md = write_report(
@@ -1038,6 +1290,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pipeline-path")
     parser.add_argument("--threshold-path")
     parser.add_argument("--subscription-snapshot")
+    parser.add_argument("--incremental-state-path")
     parser.add_argument("--stale-sec", type=float, default=DEFAULT_STALE_SEC)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--monitor-only", action="store_true")

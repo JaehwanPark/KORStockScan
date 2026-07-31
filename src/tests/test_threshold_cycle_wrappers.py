@@ -925,16 +925,55 @@ def test_stage2_ops_cron_extends_ws_freshness_monitor_into_nxt_open():
 
     assert (
         "*/5 16-18 * * 1-5 "
-        "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC=240 "
         "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh" in script
     )
     assert (
         "0,5,10,15,20 19 * * 1-5 "
-        "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC=240 "
         "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh" in script
     )
     assert "!/INTRADAY_WS_FRESHNESS_MONITOR_5MIN/" in script
     assert "!/INTRADAY_WS_FRESHNESS_MONITOR_NXT_5MIN/" in script
+
+
+def test_stage2_ops_cron_uses_light_snapshot_at_noon():
+    script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
+
+    noon_line = next(
+        line
+        for line in script.splitlines()
+        if line.startswith("0 12 ") and "RUN_MONITOR_SNAPSHOT_1200" in line
+    )
+    assert "run_monitor_snapshot_incremental_cron.sh" in noon_line
+    assert "MONITOR_SNAPSHOT_START_JITTER_SEC=0" in noon_line
+    assert "run_monitor_snapshot_cron.sh" not in noon_line
+
+
+def test_growing_pipeline_wrappers_bound_cadence_and_cpu_affinity():
+    expectations = {
+        "deploy/run_rising_missed_intraday_feedback.sh": (
+            "RISING_MISSED_INTRADAY_FEEDBACK_COOLDOWN_SEC:-1500",
+            "RISING_MISSED_INTRADAY_FEEDBACK_CPU_AFFINITY",
+        ),
+        "deploy/run_scalping_pyramid_intraday_feedback.sh": (
+            "SCALPING_PYRAMID_INTRADAY_FEEDBACK_COOLDOWN_SEC:-720",
+            "SCALPING_PYRAMID_INTRADAY_FEEDBACK_CPU_AFFINITY",
+        ),
+        "deploy/run_intraday_ws_freshness_monitor.sh": (
+            "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC:-720",
+            "INTRADAY_WS_FRESHNESS_MONITOR_CPU_AFFINITY",
+        ),
+    }
+    for path, (cooldown_contract, affinity_contract) in expectations.items():
+        script = Path(path).read_text(encoding="utf-8")
+        assert cooldown_contract in script
+        assert "korstockscan_default_cpu_affinity monitor" in script
+        assert affinity_contract in script
+        assert 'taskset -c "$CPU_AFFINITY"' in script
+    ws_script = Path("deploy/run_intraday_ws_freshness_monitor.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "INTRADAY_WS_FRESHNESS_MONITOR_INCREMENTAL_STATE_PATH" in ws_script
+    assert '--incremental-state-path "$INCREMENTAL_STATE_PATH"' in ws_script
 
 
 def test_postclose_wrapper_marks_availability_guard_pause_as_fail():
