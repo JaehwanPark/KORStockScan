@@ -128,6 +128,15 @@ def _source_paths(target_date: str, *, include_swing: bool = True) -> dict[str, 
         "lifecycle_bucket_discovery": REPORT_DIR
         / "lifecycle_bucket_discovery"
         / f"lifecycle_bucket_discovery_{target_date}.json",
+        "lifecycle_bucket_discovery_rolling5d": REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}_rolling5d.json",
+        "lifecycle_bucket_discovery_rolling10d": REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}_rolling10d.json",
+        "lifecycle_bucket_discovery_mtd": REPORT_DIR
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target_date}_mtd.json",
         "swing_lifecycle_decision_matrix": REPORT_DIR
         / "swing_lifecycle_decision_matrix"
         / f"swing_lifecycle_decision_matrix_{target_date}.json",
@@ -173,12 +182,23 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(payload.get("data_quality"), dict)
         else {}
     )
+    lifecycle_flow_attribution = (
+        payload.get("lifecycle_flow_bucket_attribution")
+        if isinstance(payload.get("lifecycle_flow_bucket_attribution"), dict)
+        else {}
+    )
+    lifecycle_flow_summary = (
+        lifecycle_flow_attribution.get("summary")
+        if isinstance(lifecycle_flow_attribution.get("summary"), dict)
+        else {}
+    )
     return {
         "status": payload.get("status") or summary.get("status"),
         "runtime_effect": payload.get("runtime_effect"),
         "allowed_runtime_apply": payload.get("allowed_runtime_apply"),
         "decision_authority": payload.get("decision_authority"),
         "summary": summary,
+        "lifecycle_flow_summary": lifecycle_flow_summary,
         "ev_report_summary": ev_summary,
         "source_quality_contracts": (
             source_quality_contracts
@@ -887,11 +907,92 @@ def _source_maturity_resolution(
 ) -> tuple[str, str, dict[str, Any]] | None:
     """Resolve expected source maturity states without hiding contract gaps."""
 
-    if str(item.get("final_state") or "") != "source_quality_gap":
+    review_id = str(item.get("review_id") or "").strip().lower()
+    diagnosed_source_context_ids = {
+        "lifecycle_bucket_discovery_parent_granularity_too_broad",
+        "lifecycle_bucket_discovery_granularity",
+        "lifecycle_decision_matrix_incomplete_flow_conversion_rate_low",
+        "lifecycle_decision_matrix_flow_rate",
+    }
+    if (
+        str(item.get("final_state") or "") != "source_quality_gap"
+        and review_id not in diagnosed_source_context_ids
+    ):
         return None
     if str(item.get("final_decision") or "") == "keep":
         return None
-    review_id = str(item.get("review_id") or "").strip().lower()
+
+    if review_id in {
+        "lifecycle_bucket_discovery_parent_granularity_too_broad",
+        "lifecycle_bucket_discovery_granularity",
+    }:
+        daily_source = _source_summary(context, "lifecycle_bucket_discovery")
+        rolling10d_source = _source_summary(
+            context, "lifecycle_bucket_discovery_rolling10d"
+        )
+        mtd_source = _source_summary(context, "lifecycle_bucket_discovery_mtd")
+        daily_summary = _nested_report_summary(daily_source)
+        rolling10d_summary = _nested_report_summary(rolling10d_source)
+        mtd_summary = _nested_report_summary(mtd_source)
+        if (
+            daily_source.get("runtime_effect") is False
+            and daily_source.get("allowed_runtime_apply") is not True
+            and daily_summary.get("parent_granularity_status") == "too_broad"
+            and rolling10d_summary.get("parent_granularity_status") == "target_pass"
+            and mtd_summary.get("parent_granularity_status") == "target_pass"
+        ):
+            return (
+                "resolved_by_rolling_parent_confirmation_context",
+                "lifecycle_bucket_parent_granularity_window_contract",
+                {
+                    "daily_status": daily_summary.get("parent_granularity_status"),
+                    "rolling10d_status": rolling10d_summary.get(
+                        "parent_granularity_status"
+                    ),
+                    "mtd_status": mtd_summary.get("parent_granularity_status"),
+                    "required_action": "keep_daily_dimensions_as_source_context",
+                },
+            )
+
+    if review_id in {
+        "lifecycle_decision_matrix_incomplete_flow_conversion_rate_low",
+        "lifecycle_decision_matrix_flow_rate",
+    }:
+        source = _source_summary(context, "lifecycle_decision_matrix")
+        flow_summary = (
+            source.get("lifecycle_flow_summary")
+            if isinstance(source.get("lifecycle_flow_summary"), dict)
+            else {}
+        )
+        if (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is not True
+            and flow_summary.get("join_contract_blocked") is False
+            and _safe_int(flow_summary.get("identity_join_rate")) >= 1
+            and _safe_int(flow_summary.get("adm_bridge_complete_flow_count")) > 0
+            and flow_summary.get("direct_flow_zero_closure_status")
+            == "closed_by_adm_bridge_complete"
+            and flow_summary.get("direct_flow_zero_followup_required") is False
+            and _safe_int(flow_summary.get("workorder_count")) > 0
+        ):
+            return (
+                "resolved_by_existing_flow_diagnostic_and_handoff",
+                "lifecycle_decision_matrix_flow_conversion_diagnostic",
+                {
+                    "complete_flow_conversion_rate": flow_summary.get(
+                        "complete_flow_conversion_rate"
+                    ),
+                    "adm_bridge_complete_flow_count": _safe_int(
+                        flow_summary.get("adm_bridge_complete_flow_count")
+                    ),
+                    "identity_join_rate": flow_summary.get("identity_join_rate"),
+                    "conversion_blocker_reason_counts": flow_summary.get(
+                        "conversion_blocker_reason_counts"
+                    )
+                    or {},
+                    "workorder_count": _safe_int(flow_summary.get("workorder_count")),
+                },
+            )
 
     if review_id in {
         "scalp_entry_adm_sample_floor",

@@ -5103,6 +5103,9 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
                     "krx_integrated_event_venue_unproven",
                     "tape_stale",
                 ],
+                "ai_input_preflight_quality_warnings": [
+                    "broker_position_or_open_orders_stale_advisory"
+                ],
                 "ai_input_preflight_missing_sources": [],
                 "ai_input_preflight_max_source_skew_ms": 1893.281,
             },
@@ -5165,6 +5168,9 @@ def test_rising_missed_async_preflight_block_propagates_exact_blockers(
         "current_price_stale,krx_integrated_event_venue_unproven,tape_stale"
     )
     assert fields["ai_input_preflight_missing_sources"] == ""
+    assert fields["ai_input_preflight_quality_warnings"] == (
+        "broker_position_or_open_orders_stale_advisory"
+    )
     assert fields["ai_input_preflight_max_source_skew_ms"] == "1893.281"
     assert "tick_source_quality_fields_sent" not in fields
     assert entry_logs[-1][1]["ai_input_preflight_blockers"] == (

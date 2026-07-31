@@ -80,6 +80,14 @@ TERMINAL_NON_IMPLEMENT_STATUSES = {
 }
 
 KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
+    "venue",
+    "effective_venue",
+    "market_session_bucket",
+    "scanner_promotion_reanchor_effective_venue",
+    "scanner_stale_backoff_canonical_effective_venue",
+    "opening_rotation_no_pullback_continuation_effective_venue",
+    "entry_order_flow_status",
+    "tier_reason",
     "swing_micro_ws_quote_stale",
     "lifecycle_bucket_entry_bucket_key",
     "lifecycle_bucket_entry_bucket_id",

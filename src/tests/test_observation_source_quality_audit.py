@@ -1,11 +1,39 @@
 import gzip
+import fcntl
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from src.engine import observation_source_quality_audit as audit
+
+
+def test_main_fails_closed_when_heavy_analysis_lock_is_busy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lock_path = tmp_path / "intraday_heavy_analysis.lock"
+    monkeypatch.setenv("KORSTOCKSCAN_INTRADAY_HEAVY_ANALYSIS_LOCK_FILE", str(lock_path))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "observation_source_quality_audit",
+            "--target-date",
+            "2026-07-31",
+            "--write",
+        ],
+    )
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as lock_fp:
+        fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        exit_code = audit.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 75
+    assert payload["status"] == "skipped_heavy_analysis_busy"
+    assert payload["runtime_effect"] is False
 
 
 def test_iter_events_deduplicates_repeated_json_strings_without_changing_values(
@@ -48,6 +76,41 @@ def test_iter_events_deduplicates_repeated_json_strings_without_changing_values(
         loaded[0]["fields"]["venue_resolution"]["source"]
         is loaded[1]["fields"]["venue_resolution"]["source"]
     )
+
+
+def test_build_audit_streams_source_without_materializing_event_list(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir(parents=True)
+    path = pipeline_dir / "pipeline_events_2026-07-31.jsonl"
+    rows = [
+        {
+            "event_type": "pipeline_event",
+            "stage": "streaming_memory_regression_stage",
+            "emitted_at": f"2026-07-31T20:00:{index:02d}",
+            "fields": {
+                "source_quality_gate": "diagnostic_only",
+                "opaque_payload": "x" * 10_000,
+            },
+        }
+        for index in range(50)
+    ]
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        audit,
+        "_iter_events",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("materialized event list must not be used")
+        ),
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-31")
+
+    assert report["summary"]["event_count"] == 50
+    assert report["source"]["read_mode"] == "streaming_contract_aggregate"
+    assert report["source"]["full_source_materialized"] is False
 
 
 def _event(stage: str, fields: dict, *, record_id: int = 1) -> dict:
@@ -559,8 +622,6 @@ def test_partial_fill_reconciled_metric_contract_prevents_high_volume_hard_block
     assert "partial_fill_reconciled" not in gaps
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True
-
-
 def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(
     monkeypatch, tmp_path
 ):
@@ -5603,6 +5664,11 @@ def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(
                     "runtime_effect": False,
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_runtime_event:explicit_target_venue_missing"
+                    ),
                     "forbidden_uses": (
                         "score_threshold_change,provider_route_change,order_price_change,"
                         "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
@@ -5640,6 +5706,106 @@ def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(
     assert contract["status"] == "pass"
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = report["reviewed_unknown_token_findings"]
+    queue_lag = next(
+        item
+        for item in reviewed
+        if item["stage"] == "scalping_scanner_runtime_queue_lag"
+    )
+    assert {field["field"] for field in queue_lag["fields"]} >= {
+        "venue",
+        "effective_venue",
+    }
+    assert {
+        field["reviewed_reason"] for field in queue_lag["fields"]
+    } == {"reviewed_scanner_venue_fail_closed_provenance"}
+
+
+def test_observation_source_quality_reviews_explicit_scanner_derived_venue_gaps(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-19",
+        [
+            _event(
+                "scalping_scanner_fast_precheck",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "scanner_promotion_reanchor_effective_venue": "UNKNOWN",
+                    "scanner_stale_backoff_canonical_effective_venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_runtime_event:explicit_target_venue_missing"
+                    ),
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-19")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = next(
+        item
+        for item in report["reviewed_unknown_token_findings"]
+        if item["stage"] == "scalping_scanner_fast_precheck"
+    )
+    assert {field["field"] for field in reviewed["fields"]} == {
+        "venue",
+        "effective_venue",
+        "scanner_promotion_reanchor_effective_venue",
+        "scanner_stale_backoff_canonical_effective_venue",
+    }
+    assert {
+        field["reviewed_reason"] for field in reviewed["fields"]
+    } == {"reviewed_scanner_venue_fail_closed_provenance"}
+
+
+def test_observation_source_quality_reviews_target_attach_missing_venue_bucket(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-06-19",
+        [
+            _event(
+                "scalping_scanner_runtime_target_attach",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "market_session_bucket": "UNKNOWN",
+                    "venue_resolution": "missing_tradable_explicit_venue",
+                    "decision_authority": (
+                        "real_scalping_scanner_runtime_watchlist_handoff_only"
+                    ),
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            )
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-06-19")
+
+    assert report["summary"]["unknown_token_stage_count"] == 0
+    reviewed = next(
+        item
+        for item in report["reviewed_unknown_token_findings"]
+        if item["stage"] == "scalping_scanner_runtime_target_attach"
+    )
+    assert {field["field"] for field in reviewed["fields"]} == {
+        "venue",
+        "effective_venue",
+        "market_session_bucket",
+    }
 
 
 def test_observation_source_quality_accepts_scanner_fast_precheck_and_heavy_eval_lag(

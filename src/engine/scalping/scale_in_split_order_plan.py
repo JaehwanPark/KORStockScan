@@ -47,6 +47,45 @@ ANCHOR_RECONSTRUCT_WINDOW_SEC = 5
 THREE_LEG_RUNTIME_SAMPLE_FLOOR = 20
 MAX_SCALE_IN_SPLIT_LEGS = 3
 MAX_POLICY_AGE_KRX_TRADING_DAYS = 3
+_INPUT_PROJECTION_KEYS = (
+    "stage",
+    "strategy",
+    "raw_strategy",
+    "add_type",
+    "scale_in_type",
+    "add_reason",
+    "scale_in_trigger",
+    "add_trigger",
+    "reason",
+    "stock_code",
+    "code",
+    "record_id",
+    "recommendation_id",
+    "id",
+    "ord_no",
+    "order_no",
+    "odno",
+    "request_price",
+    "final_price",
+    "resolved_price",
+    "order_price",
+    "fill_price",
+    "assumed_fill_price",
+    "curr_price",
+    "canonical_mark_price",
+    "passive_buy_price",
+    "best_bid",
+    "order_type_code",
+    "order_type",
+    "price_source",
+    "price_policy",
+    "actual_order_submitted",
+    "rising_missed_scout",
+    "emitted_at",
+    "timestamp",
+    "created_at",
+    "event_time",
+)
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -189,24 +228,71 @@ def _source_quality_summary(target_date: str) -> dict[str, Any]:
     }
 
 
+def _contains_rising_missed(value: Any) -> bool:
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, (list, tuple, set)):
+            pending.extend(item)
+        elif "rising_missed" in str(item or "").lower():
+            return True
+    return False
+
+
+def _project_relevant_input_event(
+    event: dict[str, Any], *, source_name: str, event_date: str
+) -> dict[str, Any] | None:
+    fields = _event_fields(event)
+    projected = {key: fields[key] for key in _INPUT_PROJECTION_KEYS if key in fields}
+    stage = str(projected.get("stage") or "")
+    add_type = str(
+        projected.get("add_type") or projected.get("scale_in_type") or ""
+    ).upper()
+    scale_related = (
+        add_type == "AVG_DOWN"
+        or stage.startswith("scale_in_")
+        or stage.endswith("_avg_down_submitted")
+    )
+    observation_related = bool(
+        _stock_code(projected)
+        and _event_time(projected) is not None
+        and (
+            _event_observed_price(projected) > 0 or _is_terminal_after_submit(projected)
+        )
+    )
+    if not scale_related and not observation_related:
+        return None
+    if scale_related and _contains_rising_missed(fields):
+        projected["rising_missed_scout"] = True
+    projected["source_name"] = source_name
+    projected["source_date"] = event_date
+    return projected
+
+
 def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     clean_policy = clean_baseline_policy()
     events: list[dict[str, Any]] = []
     excluded_pre_baseline = 0
+    source_event_count = 0
     source_paths = {
         "pipeline_events": _pipeline_events_path(target_date),
         "threshold_events": _threshold_events_path(target_date),
     }
     for source_name, path in source_paths.items():
         for event in iter_jsonl(path):
+            source_event_count += 1
             fields = _event_fields(event)
             event_date = _event_date(fields) or target_date
             if not is_date_allowed(event_date, clean_policy):
                 excluded_pre_baseline += 1
                 continue
-            fields["source_name"] = source_name
-            fields["source_date"] = event_date
-            events.append(fields)
+            projected = _project_relevant_input_event(
+                event, source_name=source_name, event_date=event_date
+            )
+            if projected is not None:
+                events.append(projected)
     return events, {
         "source_paths": {
             name: (
@@ -215,6 +301,13 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
                 else None
             )
             for name, path in source_paths.items()
+        },
+        "source_read_contract": {
+            "read_mode": "streaming_relevant_field_projection",
+            "full_source_materialized": False,
+            "source_event_count": source_event_count,
+            "retained_event_count": len(events),
+            "retained_scope": "avg_down_identity_anchor_price_and_terminal_events",
         },
         "excluded_pre_baseline_count": excluded_pre_baseline,
         "clean_tuning_baseline": clean_policy,

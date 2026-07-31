@@ -1547,6 +1547,7 @@ class TradingConfig:
     ERROR_DETECTOR_LOG_BURST_THRESHOLD: int = 4
     ERROR_DETECTOR_LOG_SCAN_MAX_LINES: int = 2000
     ERROR_DETECTOR_CPU_BUSY_MAX_PCT: float = 95.0
+    ERROR_DETECTOR_IOWAIT_MAX_PCT: float = 35.0
     ERROR_DETECTOR_MEM_AVAILABLE_MIN_MB: float = 500.0
     ERROR_DETECTOR_DISK_FREE_MIN_MB: float = 2048.0
     ERROR_DETECTOR_SWAP_USED_MAX_PCT: float = 80.0
@@ -6929,6 +6930,7 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC"
     )
     env_ed_cpu_busy_max_pct = _env_float("KORSTOCKSCAN_ERROR_DETECTOR_CPU_BUSY_MAX_PCT")
+    env_ed_iowait_max_pct = _env_float("KORSTOCKSCAN_ERROR_DETECTOR_IOWAIT_MAX_PCT")
     env_ed_resource_max_sample_age = _env_int(
         "KORSTOCKSCAN_ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC"
     )
@@ -6952,6 +6954,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_ed_bot_startup_grace is not None
         or env_ed_postclose_isolation_max_age is not None
         or env_ed_cpu_busy_max_pct is not None
+        or env_ed_iowait_max_pct is not None
         or env_ed_resource_max_sample_age is not None
         or env_ed_stale_lock_cleanup is not None
         or env_ed_stale_lock_max_age is not None
@@ -7008,6 +7011,11 @@ def _build_trading_rules() -> TradingConfig:
                 env_ed_cpu_busy_max_pct
                 if env_ed_cpu_busy_max_pct is not None
                 else config.ERROR_DETECTOR_CPU_BUSY_MAX_PCT
+            ),
+            ERROR_DETECTOR_IOWAIT_MAX_PCT=(
+                env_ed_iowait_max_pct
+                if env_ed_iowait_max_pct is not None
+                else config.ERROR_DETECTOR_IOWAIT_MAX_PCT
             ),
             ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC=(
                 env_ed_resource_max_sample_age

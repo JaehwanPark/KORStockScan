@@ -592,9 +592,16 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(source_quality.get("decision_window"), dict)
                 else {}
             )
+            route_equivalence_proof = (
+                source_quality.get("route_equivalence_proof")
+                if isinstance(source_quality.get("route_equivalence_proof"), dict)
+                else {}
+            )
             canonical_contexts.append(
                 {
                     "schema": schema,
+                    "venue": str(item.get("venue") or "") or None,
+                    "session": str(item.get("session") or "") or None,
                     "input_bundle_version": str(
                         candle.get("input_bundle_version") or ""
                     )
@@ -619,6 +626,19 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
                     "decision_window_missing_bar_count": decision_window.get(
                         "missing_bar_count"
                     ),
+                    "decision_window_max_consecutive_missing_bar_count": (
+                        decision_window.get("max_consecutive_missing_bar_count")
+                    ),
+                    "decision_window_sparse_observed_minutes": decision_window.get(
+                        "sparse_observed_minutes"
+                    ),
+                    "decision_window_minute_bar_policy": decision_window.get(
+                        "minute_bar_policy"
+                    ),
+                    "source_quality_status": (
+                        str(source_quality.get("status") or "") or None
+                    ),
+                    "route_equivalence_proven": route_equivalence_proof.get("proven"),
                 }
             )
         bundle = str(item.get("input_bundle_version") or "")
@@ -768,6 +788,14 @@ def _exact_trace_payload_findings(
         or str(trace.get("position_reconciliation_mode") or "") == "simulation_book"
     ):
         findings.append("simulation_observation_not_natural_cohort")
+    trace_venue = _venue(trace.get("effective_venue"))
+    trace_session = _session(trace.get("session_bucket"))
+    payload_venue = _venue(payload.get("effective_venue"))
+    payload_session = _session(payload.get("session_bucket"))
+    if payload and payload_venue != trace_venue:
+        findings.append("payload_trace_venue_mismatch")
+    if payload and payload_session != trace_session:
+        findings.append("payload_trace_session_mismatch")
     contract = _payload_contract(payload)
     expected_schema = (
         ENTRY_CONTEXT_SCHEMA
@@ -782,13 +810,22 @@ def _exact_trace_payload_findings(
         for context in contract["canonical_contexts"]
         if context["schema"] == expected_schema
     ]
-    if not expected_contexts or not any(
-        context["input_bundle_version"] == INPUT_BUNDLE_VERSION
+    matching_contexts = [
+        context
         for context in expected_contexts
+        if _venue(context.get("venue")) == trace_venue
+        and _session(context.get("session")) == trace_session
+    ]
+    if expected_contexts and not matching_contexts:
+        findings.append("canonical_context_venue_session_mismatch")
+    cohort_contexts = matching_contexts or expected_contexts
+    if not cohort_contexts or not any(
+        context["input_bundle_version"] == INPUT_BUNDLE_VERSION
+        for context in cohort_contexts
     ):
         findings.append("input_bundle_missing")
     contexts_with_raw_bars = [
-        context for context in expected_contexts if context["raw_bar_count"] is not None
+        context for context in cohort_contexts if context["raw_bar_count"] is not None
     ]
     if not contexts_with_raw_bars:
         findings.append("canonical_bars_missing")
@@ -798,14 +835,36 @@ def _exact_trace_payload_findings(
         findings.append("canonical_completed_bars_missing")
     contexts_with_decision_quality = [
         context
-        for context in expected_contexts
+        for context in cohort_contexts
         if context.get("decision_window_status") is not None
     ]
+
+    def decision_window_eligible(context: dict[str, Any]) -> bool:
+        status = context.get("decision_window_status")
+        provider_allowed = context.get("decision_window_provider_call_allowed") is True
+        if not provider_allowed:
+            return False
+        if (
+            status == "fresh_consistent"
+            and (_number(context.get("decision_window_missing_bar_count")) or 0) == 0
+        ):
+            return True
+        # ka10080 omits minutes with no trades.  Those observed-row gaps are
+        # exact input, not reconstructed missing data.  Preserve the sparse
+        # quality dimension while allowing the natural call into the baseline;
+        # individual unavailable lookback features remain null in the payload.
+        return bool(
+            status == "sparse_observed_minutes"
+            and context.get("decision_window_sparse_observed_minutes") is True
+            and context.get("decision_window_minute_bar_policy")
+            == "ka10080_observed_rows_no_synthetic_fill"
+            and context.get("source_quality_status") == "fresh_consistent"
+            and str(context.get("venue") or "").upper() == "NXT"
+            and str(context.get("session") or "").lower() == "nxt_aftermarket"
+        )
+
     if contexts_with_decision_quality and not any(
-        context.get("decision_window_status") == "fresh_consistent"
-        and context.get("decision_window_provider_call_allowed") is True
-        and (_number(context.get("decision_window_missing_bar_count")) or 0) == 0
-        for context in contexts_with_decision_quality
+        decision_window_eligible(context) for context in contexts_with_decision_quality
     ):
         findings.append("canonical_decision_window_source_quality_blocked")
     capture_status = str(trace.get("canonical_context_capture_status") or "")
@@ -4684,7 +4743,7 @@ def _anticipatory_cumulative_learning_summary(
     for path in sorted(DETAILED_PAIRED_REPORT_DIR.glob(pattern)):
         match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
         source_date = match.group(1) if match else ""
-        if not source_date or source_date < "2026-06-04" or source_date >= target_date:
+        if not source_date or source_date < "2026-06-05" or source_date >= target_date:
             continue
         report = _load_json(path)
         if report.get("runtime_effect") is not False:
@@ -4726,7 +4785,7 @@ def _anticipatory_cumulative_learning_summary(
             else "cumulative_learning_no_sample"
         ),
         "candidate_prompt_version": candidate_prompt_version,
-        "clean_tuning_baseline_date": "2026-06-04",
+        "clean_tuning_baseline_date": "2026-06-05",
         "as_of_date": target_date,
         "decision_count": len(cumulative_rows),
         "unique_symbol_count": len(

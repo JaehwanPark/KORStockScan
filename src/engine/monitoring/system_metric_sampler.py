@@ -95,17 +95,35 @@ def _save_state(state: dict) -> None:
 
 def _cpu_pct(curr: dict[str, int], prev: dict[str, int]) -> dict[str, float]:
     if not prev:
-        return {"cpu_busy_pct": 0.0, "iowait_pct": 0.0}
+        return {
+            "cpu_busy_pct": 0.0,
+            "cpu_non_idle_pct": 0.0,
+            "cpu_compute_busy_pct": 0.0,
+            "iowait_pct": 0.0,
+        }
     curr_total = sum(curr.values())
     prev_total = sum(int(prev.get(k, 0)) for k in curr.keys())
     total_delta = curr_total - prev_total
     if total_delta <= 0:
-        return {"cpu_busy_pct": 0.0, "iowait_pct": 0.0}
+        return {
+            "cpu_busy_pct": 0.0,
+            "cpu_non_idle_pct": 0.0,
+            "cpu_compute_busy_pct": 0.0,
+            "iowait_pct": 0.0,
+        }
     idle_delta = curr["idle"] - int(prev.get("idle", 0))
     iowait_delta = curr["iowait"] - int(prev.get("iowait", 0))
     busy_pct = max(0.0, min(100.0, (1.0 - (idle_delta / total_delta)) * 100.0))
     iowait_pct = max(0.0, min(100.0, (iowait_delta / total_delta) * 100.0))
-    return {"cpu_busy_pct": round(busy_pct, 2), "iowait_pct": round(iowait_pct, 2)}
+    compute_busy_pct = max(0.0, min(100.0, busy_pct - iowait_pct))
+    return {
+        # Backward-compatible alias. Historically this was all non-idle time,
+        # including I/O wait, so retain the value for existing consumers.
+        "cpu_busy_pct": round(busy_pct, 2),
+        "cpu_non_idle_pct": round(busy_pct, 2),
+        "cpu_compute_busy_pct": round(compute_busy_pct, 2),
+        "iowait_pct": round(iowait_pct, 2),
+    }
 
 
 def _disk_delta(curr: dict[str, int], prev: dict[str, int]) -> dict[str, float]:

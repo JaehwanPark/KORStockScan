@@ -1697,6 +1697,9 @@ def record_ai_decision_trace(
                 else None
             ),
             "input_blockers": merged.get("ai_input_preflight_blockers", []),
+            "input_quality_warnings": merged.get(
+                "ai_input_preflight_quality_warnings", []
+            ),
             "missing_sources": merged.get("ai_input_preflight_missing_sources", []),
             "venue_consistent": (
                 bool(merged.get("ai_input_preflight_venue_consistent"))
@@ -1778,7 +1781,9 @@ def record_ai_decision_trace(
                 "entry_recent_exit_price_vs_exit_pct"
             ],
             "result_source": trace_row["result_source"],
+            "input_preflight_status": trace_row["input_preflight_status"],
             "input_preflight_mode": trace_row["input_preflight_mode"],
+            "input_quality_warnings": trace_row["input_quality_warnings"],
             "reference_price_type": trace_row["reference_price_type"],
             "reference_price": trace_row["reference_price"],
             "best_bid": trace_row["best_bid"],

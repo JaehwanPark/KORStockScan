@@ -1123,6 +1123,7 @@ def test_record_decision_creates_pending_outcome_idempotently(monkeypatch, tmp_p
         "ai_trace_session_bucket": "KRX_REGULAR",
         "ai_trace_reference_price": 70100,
         "ai_input_preflight_status": "fresh_consistent",
+        "ai_input_preflight_quality_warnings": ["broker_snapshot_stale_advisory"],
         "ai_input_runtime_preflight_mode": "exact_v2",
         "ai_input_preflight_allowed": True,
         "ai_input_preflight_venue_consistent": True,
@@ -1152,6 +1153,7 @@ def test_record_decision_creates_pending_outcome_idempotently(monkeypatch, tmp_p
     assert trace_rows[0]["output_tokens"] == 20
     assert trace_rows[0]["total_tokens"] == 120
     assert trace_rows[0]["input_preflight_mode"] == "exact_v2"
+    assert trace_rows[0]["input_quality_warnings"] == ["broker_snapshot_stale_advisory"]
     assert len(trace_rows[0]["response_sha256"]) == 64
     assert trace_rows[0]["provider_decision_origin"] == "openai"
     assert trace_rows[0]["payload_replay_exact"] is True
@@ -1164,6 +1166,10 @@ def test_record_decision_creates_pending_outcome_idempotently(monkeypatch, tmp_p
     assert outcome_rows[0]["action"] == "WAIT"
     assert outcome_rows[0]["pending_horizons_min"] == [1, 3, 5, 10, 20, 30, 60]
     assert outcome_rows[0]["input_preflight_mode"] == "exact_v2"
+    assert outcome_rows[0]["input_preflight_status"] == "fresh_consistent"
+    assert outcome_rows[0]["input_quality_warnings"] == [
+        "broker_snapshot_stale_advisory"
+    ]
     assert outcome_rows[0]["allowed_runtime_apply"] is False
 
 

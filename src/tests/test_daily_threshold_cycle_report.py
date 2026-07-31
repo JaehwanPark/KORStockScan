@@ -3751,6 +3751,42 @@ def test_position_sizing_runtime_fields_survive_event_compaction():
     }
 
 
+def test_event_compaction_canonicalizes_repeated_keys_and_categorical_values():
+    first = report_mod._compact_threshold_cycle_event(
+        {
+            "event_type": "threshold_cycle_event",
+            "family": "bad_entry_block",
+            "stage": "bad_entry_block_observed",
+            "stock_code": "005930",
+            "record_id": "unique-record-1",
+            "fields": {"strategy": "SCALPING", "reason": "quality_guard"},
+        }
+    )
+    second = report_mod._compact_threshold_cycle_event(
+        {
+            "event_type": "threshold_cycle_event",
+            "family": "bad_entry_block",
+            "stage": "bad_entry_block_observed",
+            "stock_code": "005930",
+            "record_id": "unique-record-2",
+            "fields": {"strategy": "SCALPING", "reason": "quality_guard"},
+        }
+    )
+
+    assert first == {
+        "event_type": "threshold_cycle_event",
+        "family": "bad_entry_block",
+        "stage": "bad_entry_block_observed",
+        "stock_code": "005930",
+        "record_id": "unique-record-1",
+        "fields": {"strategy": "SCALPING", "reason": "quality_guard"},
+    }
+    assert next(iter(first["fields"])) is next(iter(second["fields"]))
+    assert first["stage"] is second["stage"]
+    assert first["fields"]["strategy"] is second["fields"]["strategy"]
+    assert first["record_id"] != second["record_id"]
+
+
 def test_position_sizing_candidate_replays_safety_and_quantity_caps():
     result = report_mod._compute_candidate_qty(
         score=82.0,
@@ -4044,6 +4080,13 @@ def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(
     assert load_result.meta["data_source"] == "partitioned_compact"
     assert load_result.meta["partition_count"] == 1
     assert load_result.meta["checkpoint_completed"] is True
+    assert load_result.meta["source_read_contract"] == {
+        "read_mode": "partitioned_field_projection_canonicalized",
+        "full_source_materialized": False,
+        "canonical_field_keys": True,
+        "interned_categorical_values": True,
+        "runtime_effect": False,
+    }
 
 
 def test_daily_threshold_cycle_report_does_not_reload_same_day_for_rolling_sim_rows():

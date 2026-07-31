@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -182,6 +183,16 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "ws_jitter_ms",
 }
 THRESHOLD_EVENT_MAX_FIELD_JSON_CHARS = 2_000
+THRESHOLD_EVENT_INTERNED_TOP_LEVEL_KEYS = {
+    "event_type",
+    "family",
+    "pipeline",
+    "stage",
+    "stock_name",
+    "stock_code",
+    "emitted_date",
+}
+THRESHOLD_EVENT_MAX_INTERNED_FIELD_VALUE_CHARS = 80
 
 CALIBRATION_SAFETY_GUARDS = [
     "hard/protect/emergency stop delay >= 1",
@@ -1103,18 +1114,30 @@ def _compact_threshold_cycle_field_value(value: Any) -> Any:
 
 
 def _compact_threshold_cycle_event(payload: dict) -> dict:
-    compact = {
-        key: payload.get(key)
-        for key in THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS
-        if key in payload
-    }
+    compact: dict[str, Any] = {}
+    for key in THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if key in THRESHOLD_EVENT_INTERNED_TOP_LEVEL_KEYS and isinstance(value, str):
+            value = sys.intern(value)
+        compact[key] = value
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     if fields:
-        compact["fields"] = {
-            key: _compact_threshold_cycle_field_value(value)
-            for key, value in fields.items()
-            if key in THRESHOLD_EVENT_FIELD_KEEP_KEYS
-        }
+        compact_fields: dict[str, Any] = {}
+        # Iterate the canonical allowlist so retained dictionaries share key
+        # objects instead of keeping one decoded key object per event.
+        for key in THRESHOLD_EVENT_FIELD_KEEP_KEYS:
+            if key not in fields:
+                continue
+            value = _compact_threshold_cycle_field_value(fields[key])
+            if (
+                isinstance(value, str)
+                and len(value) <= THRESHOLD_EVENT_MAX_INTERNED_FIELD_VALUE_CHARS
+            ):
+                value = sys.intern(value)
+            compact_fields[key] = value
+        compact["fields"] = compact_fields
     else:
         compact["fields"] = {}
     return compact
@@ -1180,6 +1203,13 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
             ),
             "paused_reason": checkpoint.get("paused_reason") if checkpoint else None,
             "read_bytes_estimate": read_bytes,
+            "source_read_contract": {
+                "read_mode": "partitioned_field_projection_canonicalized",
+                "full_source_materialized": False,
+                "canonical_field_keys": True,
+                "interned_categorical_values": True,
+                "runtime_effect": False,
+            },
             "warnings": [],
         },
     )

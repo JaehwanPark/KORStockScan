@@ -1602,12 +1602,27 @@ def test_pattern_lab_ai_review_resolves_exact_source_maturity_contracts(
         / "lifecycle_decision_matrix_2026-05-15.json",
         {
             "runtime_effect": False,
+            "allowed_runtime_apply": False,
             "summary": {
                 "total_rows": 168,
                 "joined_rows": 3,
                 "stage_counts": {"entry": 147, "submit": 17},
                 "complete_flow_count": 0,
                 "join_contract_blocked": True,
+            },
+            "lifecycle_flow_bucket_attribution": {
+                "summary": {
+                    "complete_flow_conversion_rate": 0.0294,
+                    "adm_bridge_complete_flow_count": 3,
+                    "identity_join_rate": 1.0,
+                    "join_contract_blocked": False,
+                    "direct_flow_zero_closure_status": (
+                        "closed_by_adm_bridge_complete"
+                    ),
+                    "direct_flow_zero_followup_required": False,
+                    "conversion_blocker_reason_counts": {"missing_holding": 99},
+                    "workorder_count": 20,
+                }
             },
             "warnings": ["all_stage_policy_entries_below_sample_floor"],
         },
@@ -1654,7 +1669,6 @@ def test_pattern_lab_ai_review_resolves_exact_source_maturity_contracts(
     )
     for label in (
         "threshold_cycle_ev",
-        "lifecycle_bucket_discovery",
         "swing_lifecycle_bucket_discovery",
     ):
         _write_json(
@@ -1665,12 +1679,32 @@ def test_pattern_lab_ai_review_resolves_exact_source_maturity_contracts(
                 "allowed_runtime_apply": False,
             },
         )
+    for suffix, status in (
+        ("", "too_broad"),
+        ("_rolling5d", "too_broad"),
+        ("_rolling10d", "target_pass"),
+        ("_mtd", "target_pass"),
+    ):
+        _write_json(
+            report_dir
+            / "lifecycle_bucket_discovery"
+            / f"lifecycle_bucket_discovery_2026-05-15{suffix}.json",
+            {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "summary": {"parent_granularity_status": status},
+            },
+        )
     review_ids = [
         "scalp_entry_adm_sample_floor_gap",
         "lifecycle_decision_matrix_all_stage_below_sample_floor",
         "swing_intraday_live_equiv_probe_missing",
         "swing_strategy_discovery_pending_quotes",
         "swing_clean_tuning_baseline_lookback_filtered",
+        "lifecycle_bucket_discovery_parent_granularity_too_broad",
+        "lifecycle_bucket_discovery_granularity",
+        "lifecycle_decision_matrix_incomplete_flow_conversion_rate_low",
+        "lifecycle_decision_matrix_flow_rate",
     ]
     raw_response = {
         "schema_version": 1,
@@ -1684,7 +1718,15 @@ def test_pattern_lab_ai_review_resolves_exact_source_maturity_contracts(
             {
                 "review_id": review_id,
                 "domain": "swing" if review_id.startswith("swing_") else "scalping",
-                "final_state": "source_quality_gap",
+                "final_state": (
+                    "automation_handoff_gap"
+                    if review_id
+                    in {
+                        "lifecycle_bucket_discovery_granularity",
+                        "lifecycle_decision_matrix_flow_rate",
+                    }
+                    else "source_quality_gap"
+                ),
                 "final_decision": "block_runtime_use",
                 "reason": "source maturity requires follow-up",
             }

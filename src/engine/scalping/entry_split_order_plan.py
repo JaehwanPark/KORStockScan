@@ -1016,7 +1016,7 @@ def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
 def _available_calibration_dates(target_date: str) -> list[str]:
     """Return clean-baseline source dates available through ``target_date``."""
     clean_policy = clean_baseline_policy()
-    baseline_date = str(clean_policy.get("clean_tuning_baseline_date") or "2026-06-04")
+    baseline_date = str(clean_policy.get("clean_tuning_baseline_date") or "2026-06-05")
     dates = {target_date}
     source_specs = (
         (DATA_DIR / "pipeline_events", "pipeline_events_"),

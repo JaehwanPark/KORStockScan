@@ -1765,6 +1765,40 @@ def test_persistent_repair_filter_prioritizes_previous_overflow(monkeypatch):
     assert skipped == ["000002", "000003"]
 
 
+def test_persistent_repair_filter_enforces_global_window_budget(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", "8")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES_PER_WINDOW", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_WINDOW_SEC", "60")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "0")
+    now = {"value": 1000.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
+
+    assert manager._filter_persistent_repair_targets(
+        ["000001", "000002", "000003", "000004"]
+    ) == (["000001", "000002", "000003"], ["000004"])
+    now["value"] = 1030.0
+    assert manager._filter_persistent_repair_targets(["000004"]) == ([], ["000004"])
+    now["value"] = 1061.0
+    assert manager._filter_persistent_repair_targets(["000004"]) == (["000004"], [])
+
+
+def test_persistent_repair_rebuild_cannot_bypass_global_window_budget(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.update({"000001", "000002", "000003"})
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES_PER_WINDOW", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_WINDOW_SEC", "60")
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
+    manager._persistent_repair_window_epochs.append(1000.0)
+
+    rebuild, targets = manager._persistent_repair_rebuild_targets(["000001"])
+
+    assert rebuild is False
+    assert targets == ["000001"]
+    assert list(manager._persistent_repair_window_epochs) == [1000.0]
+
+
 def test_persistent_repair_defaults_refresh_stale_scanner_sources_quickly(monkeypatch):
     manager = KiwoomWSManager("test-token")
     monkeypatch.delenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES", raising=False)

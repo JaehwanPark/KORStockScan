@@ -26,7 +26,7 @@ from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
 KST = timezone(timedelta(hours=9))
-CLEAN_BASELINE = datetime.fromisoformat("2026-06-04T14:29:09+09:00")
+CLEAN_BASELINE = datetime.fromisoformat("2026-06-05T00:00:00+09:00")
 PARTIAL_RATIOS = (0.25, 0.30, 0.35)
 TARGET_NET_PCTS = (0.45, 0.55, 0.65, 0.75)
 TTL_SECS = (90, 150, 210)
@@ -217,7 +217,7 @@ def load_trades_duckdb(
                         WHERE UPPER(strategy) IN ('SCALPING', 'SCALP')
                           AND status = 'COMPLETED'
                           AND profit_rate IS NOT NULL
-                          AND rec_date >= DATE '2026-06-04'
+                          AND rec_date >= DATE '2026-06-05'
                         """)).fetchall()}
     except Exception:
         completed_ids = set()

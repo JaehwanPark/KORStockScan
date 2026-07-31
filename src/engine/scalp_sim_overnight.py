@@ -20,7 +20,7 @@ from src.engine.trade_profit import (
     calculate_net_realized_pnl,
 )
 from src.utils.constants import DATA_DIR, TRADING_RULES
-from src.utils.jsonl_io import read_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
 STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
@@ -843,18 +843,25 @@ def _event_fallback_class(fields: dict[str, Any]) -> str:
     return "none"
 
 
+def _is_overnight_report_event(event: dict[str, Any]) -> bool:
+    stage = str(event.get("stage") or "")
+    if stage.startswith("scalp_sim_overnight_"):
+        return True
+    return (
+        stage == "scalp_sim_sell_order_assumed_filled"
+        and _event_fields(event).get("exit_rule") == "scalp_sim_overnight_sell_today"
+    )
+
+
 def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, Any]:
-    events_path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-    events = read_jsonl(events_path, errors="ignore")
+    requested_events_path = (
+        DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    )
+    events_path = existing_or_gzip_path(requested_events_path)
     overnight_events = [
         event
-        for event in events
-        if str(event.get("stage") or "").startswith("scalp_sim_overnight_")
-        or (
-            str(event.get("stage") or "") == "scalp_sim_sell_order_assumed_filled"
-            and _event_fields(event).get("exit_rule")
-            == "scalp_sim_overnight_sell_today"
-        )
+        for event in iter_jsonl(events_path, errors="ignore")
+        if _is_overnight_report_event(event)
     ]
     stage_counts = Counter(str(event.get("stage") or "-") for event in overnight_events)
     action_counts = Counter(
@@ -993,6 +1000,10 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         "runtime_effect": False,
         "decision_authority": DECISION_AUTHORITY,
         "source_path": str(events_path),
+        "source_requested_path": str(requested_events_path),
+        "source_read_mode": "streaming_stage_filter",
+        "full_source_materialized": False,
+        "projected_event_count": len(overnight_events),
         "state_path": str(state_path),
         "summary": {
             "decision_target": decision_target,

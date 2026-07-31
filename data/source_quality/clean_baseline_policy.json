@@ -1,8 +1,8 @@
 {
   "enabled": true,
-  "clean_tuning_baseline_date": "2026-06-04",
-  "clean_tuning_baseline_ts_kst": "2026-06-04T14:29:09+09:00",
-  "reason": "operator_requested_clean_tuning_restart_after_sim_probe_provenance_patch",
+  "clean_tuning_baseline_date": "2026-06-05",
+  "clean_tuning_baseline_ts_kst": "2026-06-05T00:00:00+09:00",
+  "reason": "operator_requested_oldest_clean_baseline_date_retirement_after_2026-06-05_source_quality_pass",
   "runtime_effect": false,
   "allowed_runtime_apply": false,
   "forbidden_uses": [

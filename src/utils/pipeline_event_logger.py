@@ -15,6 +15,7 @@ from src.utils.logger import log_error, log_info
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 from src.engine.pipeline_event_summary import (
     HIGH_VOLUME_OBSERVATION_STAGES,
+    HIGH_VOLUME_SUMMARY_FIELD_PRIORITY,
     ProducerSummaryCompactor,
 )
 
@@ -132,6 +133,56 @@ _COMPACT_FIELD_PREFIXES = (
     "overbought_guard_",
 )
 _COMPACT_FIELD_LIMIT = 40
+_HIGH_VOLUME_COMPACT_FIELD_PRIORITY = HIGH_VOLUME_SUMMARY_FIELD_PRIORITY + (
+    "threshold_family",
+    "forbidden_uses",
+    "source_stage",
+    "selector_reason",
+    "selector_deferred",
+    "market_session_bucket",
+    "rising_missed_market_session_bucket",
+    "rising_missed_tp1_evaluation_id",
+    "rising_missed_tp1_selector_active",
+    "rising_missed_tp1_candidate_allowed",
+    "rising_missed_tp1_candidate_deferred",
+    "rising_missed_tp1_candidate_lane",
+    "rising_missed_tp1_candidate_reason",
+    "rising_missed_tp1_counterfactual_submit_safety_action",
+    "rising_missed_tp1_counterfactual_submit_safety_risks",
+    "rising_missed_tp1_input_ready",
+    "rising_missed_tp1_input_reason",
+    "rising_missed_tp1_effective_price",
+    "rising_missed_tp1_effective_quote_age_ms",
+    "rising_missed_tp1_actual_watch_delta_pct",
+    "rising_missed_tp1_low_rebound_pct",
+    "rising_missed_tp1_positive_support_count",
+    "rising_missed_tp1_positive_support_families",
+    "rising_missed_tp1_hard_negative_reasons",
+    "rising_missed_tp1_micro_source_state",
+    "rising_missed_tp1_micro_confidence",
+    "rising_missed_tp1_true_ofi_ewma",
+    "rising_missed_tp1_pressure_ewma",
+    "rising_missed_tp1_depth_imbalance_ewma",
+    "rising_missed_tp1_top_depth_ratio",
+    "rising_missed_tp1_tick_acceleration",
+    "rising_missed_tp1_tick_acceleration_fresh",
+    "rising_missed_tp1_ws_fast_tape_sample_count",
+    "rising_missed_tp1_ws_fast_tape_buy_ratio",
+    "rising_missed_tp1_ws_fast_tape_fresh",
+    "rising_missed_tp1_ws_0b_trade_fresh",
+    "rising_missed_tp1_ws_0d_depth_fresh",
+    "market_data_freshness_state",
+    "market_data_orderbook_state",
+    "market_data_tick_context_state",
+    "market_data_effective_price_source",
+    "market_data_effective_best_bid",
+    "market_data_effective_best_ask",
+    "market_data_effective_quote_age_ms",
+    "market_data_signed_tape_state",
+    "market_data_signed_tape_sample_count",
+    "market_data_rest_signed_tape_pressure_usable",
+)
+_HIGH_VOLUME_COMPACT_FIELD_LIMIT = 96
 
 
 def _event_dir() -> Path:
@@ -177,26 +228,26 @@ def _compaction_mode() -> str:
 def _compaction_flush_sec() -> int:
     value = os.getenv(
         "PIPELINE_EVENT_COMPACTION_FLUSH_SEC",
-        str(getattr(TRADING_RULES, "PIPELINE_EVENT_COMPACTION_FLUSH_SEC", 5) or 5),
+        str(getattr(TRADING_RULES, "PIPELINE_EVENT_COMPACTION_FLUSH_SEC", 60) or 60),
     )
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
-        return 5
+        return 60
 
 
 def _compaction_sample_per_bucket() -> int:
     value = os.getenv(
         "PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET",
         str(
-            getattr(TRADING_RULES, "PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET", 6)
-            or 6
+            getattr(TRADING_RULES, "PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET", 2)
+            or 2
         ),
     )
     try:
         return max(1, int(value))
     except (TypeError, ValueError):
-        return 6
+        return 2
 
 
 def _get_producer_compactor() -> ProducerSummaryCompactor | None:
@@ -299,31 +350,41 @@ def _fields_hash(fields: dict[str, str]) -> str:
 def _project_fields_for_compact_stream(
     stage: str, fields: dict[str, str]
 ) -> dict[str, str]:
-    if (
-        stage not in _SUBMIT_STAGE_COMPACT_STREAMS
-        or len(fields) <= _COMPACT_FIELD_LIMIT
-    ):
+    high_volume = stage in HIGH_VOLUME_OBSERVATION_STAGES
+    submit_stage = stage in _SUBMIT_STAGE_COMPACT_STREAMS
+    if not high_volume and not submit_stage:
         return fields
 
+    field_limit = (
+        _HIGH_VOLUME_COMPACT_FIELD_LIMIT if high_volume else _COMPACT_FIELD_LIMIT
+    )
+    if len(fields) <= field_limit:
+        return fields
+    field_priority = (
+        _HIGH_VOLUME_COMPACT_FIELD_PRIORITY if high_volume else _COMPACT_FIELD_PRIORITY
+    )
+
     selected: dict[str, str] = {}
-    for key in _COMPACT_FIELD_PRIORITY:
+    for key in field_priority:
         if key in fields:
             selected[key] = fields[key]
-        if len(selected) >= _COMPACT_FIELD_LIMIT:
+        if len(selected) >= field_limit:
             break
-    if len(selected) < _COMPACT_FIELD_LIMIT:
+    if len(selected) < field_limit:
         for key in sorted(fields):
             if key in selected:
                 continue
             if any(key.startswith(prefix) for prefix in _COMPACT_FIELD_PREFIXES):
                 selected[key] = fields[key]
-            if len(selected) >= _COMPACT_FIELD_LIMIT:
+            if len(selected) >= field_limit:
                 break
     omitted_field_count = max(0, len(fields) - len(selected))
     if omitted_field_count <= 0:
         return fields
     selected = dict(selected)
-    selected["field_projection"] = "submit_compact_v1"
+    selected["field_projection"] = (
+        "high_volume_compact_v1" if high_volume else "submit_compact_v1"
+    )
     selected["full_field_count"] = str(len(fields))
     selected["omitted_field_count"] = str(omitted_field_count)
     selected["full_fields_hash"] = _fields_hash(fields)

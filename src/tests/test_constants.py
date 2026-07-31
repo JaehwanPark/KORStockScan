@@ -1499,6 +1499,7 @@ def test_trading_rules_error_detector_env_override(monkeypatch):
         "KORSTOCKSCAN_ERROR_DETECTOR_POSTCLOSE_BOT_ISOLATION_MAX_AGE_SEC", "30000"
     )
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_CPU_BUSY_MAX_PCT", "95")
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_IOWAIT_MAX_PCT", "40")
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC", "900")
 
     reloaded = importlib.reload(constants)
@@ -1519,6 +1520,7 @@ def test_trading_rules_error_detector_env_override(monkeypatch):
         == 30000
     )
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_CPU_BUSY_MAX_PCT == 95
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_IOWAIT_MAX_PCT == 40
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC == 900
 
 

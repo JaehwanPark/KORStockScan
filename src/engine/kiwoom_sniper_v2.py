@@ -318,9 +318,11 @@ _SCANNER_REST_QUOTE_FALLBACK_DEFER_SEC = 5.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_PRESSURE_WINDOW_SEC = 30.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_BOOST_TTL_SEC = 45.0
 _SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS = 2
+_SCANNER_REST_QUOTE_FALLBACK_HARD_MAX_CALLS = 18
 _SCANNER_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
     {
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW",
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_HARD_MAX_CALLS_PER_WINDOW",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_PER_LOOP",
         "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS",
@@ -6433,22 +6435,27 @@ def _scanner_rest_quote_fallback_rate_limit(now_ts, *, priority=False):
         if priority:
             limit += _scanner_rest_quote_fallback_positive_reserve_calls()
         dynamic_extra = _scanner_rest_quote_dynamic_extra_calls_locked(state, now_ts)
-        limit += dynamic_extra
+        hard_limit = _scanner_rest_quote_fallback_hard_max_calls_per_window()
+        limit = min(limit + dynamic_extra, hard_limit)
         if len(call_epochs) >= limit:
+            if len(call_epochs) >= hard_limit:
+                state["call_epochs"] = call_epochs
+                return False, "rest_quote_hard_rate_limited"
             _scanner_rest_quote_note_dynamic_pressure_locked(state, now_ts)
             boosted_extra = _scanner_rest_quote_dynamic_extra_calls_locked(
                 state,
                 now_ts,
                 force_recalculate=True,
             )
-            boosted_limit = (
+            boosted_limit = min(
                 _scanner_rest_quote_fallback_max_calls_per_window()
                 + (
                     _scanner_rest_quote_fallback_positive_reserve_calls()
                     if priority
                     else 0
                 )
-                + boosted_extra
+                + boosted_extra,
+                hard_limit,
             )
             if boosted_limit > limit and len(call_epochs) < boosted_limit:
                 call_epochs.append(now_ts)
@@ -6527,6 +6534,21 @@ def _scanner_rest_quote_fallback_max_calls_per_window():
     except Exception:
         value = _SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS
     return max(0, min(value, 12))
+
+
+def _scanner_rest_quote_fallback_hard_max_calls_per_window():
+    raw = _scanner_hot_or_env_value(
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_HARD_MAX_CALLS_PER_WINDOW"
+    )
+    try:
+        value = (
+            int(str(raw).strip())
+            if str(raw).strip()
+            else _SCANNER_REST_QUOTE_FALLBACK_HARD_MAX_CALLS
+        )
+    except Exception:
+        value = _SCANNER_REST_QUOTE_FALLBACK_HARD_MAX_CALLS
+    return max(1, min(value, 24))
 
 
 def _scanner_rest_quote_fallback_positive_reserve_calls():

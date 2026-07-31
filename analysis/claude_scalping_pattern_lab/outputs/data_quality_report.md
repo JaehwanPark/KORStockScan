@@ -1,7 +1,7 @@
 # 데이터 품질 보고서
 
-생성일: 2026-07-30 21:23:24
-분석 기간: 2026-06-04 ~ 2026-07-30
+생성일: 2026-08-01 01:16:34
+분석 기간: 2026-06-05 ~ 2026-07-31
 
 ---
 
@@ -9,18 +9,18 @@
 
 | 항목 | 값 |
 |---|---|
-| 총 거래수 | 336 |
-| COMPLETED | 295 |
-| valid_profit_rate | 295 |
-| 제외 건수 | 41 |
+| 총 거래수 | 335 |
+| COMPLETED | 292 |
+| valid_profit_rate | 292 |
+| 제외 건수 | 43 |
 
 **서버별:**
 
-- `local`: 336건
+- `local`: 335건
 
 **코호트별:**
 
-- `full_fill`: 294건
+- `full_fill`: 293건
 - `split-entry`: 42건
 
 
@@ -30,8 +30,8 @@
 
 - 날짜 수: 42
 - 서버: ['local']
-- 기간 합계 latency_block_events: 142082
-- 기간 합계 submitted_events: 547
+- 기간 합계 latency_block_events: 137696
+- 기간 합계 submitted_events: 550
 
 ---
 
@@ -39,7 +39,7 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 3398 |
+| 총 record 수 | 3388 |
 | multi_rebase (split-entry) | 63 |
 | partial_then_expand | 58 |
 | rebase_integrity 이상 | 16 |

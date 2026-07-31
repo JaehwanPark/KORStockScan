@@ -291,7 +291,7 @@ def _clean_baseline_date() -> str:
         payload = json.loads(CLEAN_BASELINE_POLICY_PATH.read_text(encoding="utf-8"))
     except Exception:
         payload = {}
-    return str(payload.get("clean_tuning_baseline_date") or "2026-06-04")
+    return str(payload.get("clean_tuning_baseline_date") or "2026-06-05")
 
 
 def _read_clean_baseline_pipeline_events(target_date: str) -> dict[str, Any]:

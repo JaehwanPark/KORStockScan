@@ -83,6 +83,8 @@ _WS_HOT_RUNTIME_OVERRIDE_KEYS = frozenset(
         "KORSTOCKSCAN_WS_MAX_REG_ITEMS",
         "KORSTOCKSCAN_WS_FRESHNESS_STALE_SEC",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES_PER_WINDOW",
+        "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_WINDOW_SEC",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REMOVE_BEFORE_REG_ENABLED",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED",
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC",
@@ -254,6 +256,7 @@ class KiwoomWSManager:
         self._recent_reg_request_ts = {}
         self._alternate_route_request_ts = {}
         self._persistent_repair_request_ts = {}
+        self._persistent_repair_window_epochs = deque()
         self._persistent_repair_no_tick_attempts = {}
         self._persistent_repair_stuck_until_ts = {}
         self._persistent_repair_overflow_codes = OrderedDict()
@@ -1044,6 +1047,34 @@ class KiwoomWSManager:
         return max(0.0, min(value, 1800.0))
 
     @staticmethod
+    def _persistent_repair_max_codes_per_window():
+        raw = _ws_hot_or_env_value(
+            "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_MAX_CODES_PER_WINDOW"
+        )
+        try:
+            value = int(str(raw).strip()) if str(raw).strip() else 12
+        except Exception:
+            value = 12
+        return max(1, min(value, 64))
+
+    @staticmethod
+    def _persistent_repair_window_sec():
+        raw = _ws_hot_or_env_value("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_WINDOW_SEC")
+        try:
+            value = float(str(raw).strip()) if str(raw).strip() else 60.0
+        except Exception:
+            value = 60.0
+        return max(1.0, min(value, 600.0))
+
+    def _prune_persistent_repair_window_locked(self, now_ts):
+        window_start = float(now_ts) - self._persistent_repair_window_sec()
+        while (
+            self._persistent_repair_window_epochs
+            and float(self._persistent_repair_window_epochs[0]) < window_start
+        ):
+            self._persistent_repair_window_epochs.popleft()
+
+    @staticmethod
     def _persistent_repair_stuck_min_attempts():
         raw = _ws_hot_or_env_value(
             "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_MIN_ATTEMPTS"
@@ -1103,12 +1134,29 @@ class KiwoomWSManager:
                 and now_ts - last_ts < min_interval_sec
             ):
                 return False, normalized_targets
-            self._last_persistent_repair_rebuild_ts = now_ts
             merged_targets = list(
                 OrderedDict.fromkeys(
                     list(sorted(self.subscribed_codes)) + list(normalized_targets)
                 )
             )
+            self._prune_persistent_repair_window_locked(now_ts)
+            additional_targets = [
+                code for code in merged_targets if code not in normalized_targets
+            ]
+            remaining = max(
+                0,
+                self._persistent_repair_max_codes_per_window()
+                - len(self._persistent_repair_window_epochs),
+            )
+            if len(additional_targets) > remaining:
+                # A whole-group rebuild is optional recovery.  Fall back to
+                # the already-budgeted targeted REG rather than letting it
+                # bypass the global repair window.
+                return False, normalized_targets
+            self._persistent_repair_window_epochs.extend(
+                [now_ts] * len(additional_targets)
+            )
+            self._last_persistent_repair_rebuild_ts = now_ts
             # The rebuild REG packet covers every merged target.  Share that
             # send timestamp with the targeted-repair throttle so a code
             # included in the group cannot be re-registered again immediately
@@ -1296,7 +1344,10 @@ class KiwoomWSManager:
         skipped = []
         overflow_skipped = []
         stuck_skipped = []
+        window_skipped = []
         with self.lock:
+            self._prune_persistent_repair_window_locked(now_ts)
+            window_limit = self._persistent_repair_max_codes_per_window()
             requested_set = set(normalized_codes)
             for code in list(self._persistent_repair_stuck_until_ts.keys()):
                 if now_ts >= float(
@@ -1344,7 +1395,13 @@ class KiwoomWSManager:
                     skipped.append(code)
                     overflow_skipped.append(code)
                     continue
+                if len(self._persistent_repair_window_epochs) >= window_limit:
+                    skipped.append(code)
+                    overflow_skipped.append(code)
+                    window_skipped.append(code)
+                    continue
                 self._persistent_repair_request_ts[code] = now_ts
+                self._persistent_repair_window_epochs.append(now_ts)
                 self._note_persistent_repair_attempt_locked(code, now_ts)
                 self._persistent_repair_overflow_codes.pop(code, None)
                 allowed.append(code)
@@ -1357,6 +1414,13 @@ class KiwoomWSManager:
                 "🧯 [WS] persistent repair stuck cooldown: "
                 f"skipped={stuck_skipped} "
                 f"cooldown_sec={self._persistent_repair_stuck_cooldown_sec():.1f}"
+            )
+        if window_skipped:
+            print(
+                "🧯 [WS] persistent repair global window limit: "
+                f"skipped={window_skipped} "
+                f"max_codes={self._persistent_repair_max_codes_per_window()} "
+                f"window_sec={self._persistent_repair_window_sec():.1f}"
             )
         return allowed, skipped
 

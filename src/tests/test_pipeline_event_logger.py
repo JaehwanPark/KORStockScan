@@ -400,6 +400,7 @@ def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
     _reset_logger_state(monkeypatch)
     monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
     monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "60")
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET", "2")
     monkeypatch.setattr(
         logger_mod,
         "TRADING_RULES",
@@ -417,22 +418,18 @@ def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
         "actual_order_submitted": "False",
         **{f"redundant_context_{index}": str(index) for index in range(30)},
     }
-    first = logger_mod.emit_pipeline_event(
-        "ENTRY_PIPELINE",
-        "테스트종목",
-        "123456",
-        "scalping_scanner_fast_precheck",
-        record_id=77,
-        fields=fields,
-    )
-    logger_mod.emit_pipeline_event(
-        "ENTRY_PIPELINE",
-        "테스트종목",
-        "123456",
-        "scalping_scanner_fast_precheck",
-        record_id=77,
-        fields=fields,
-    )
+    emitted = [
+        logger_mod.emit_pipeline_event(
+            "ENTRY_PIPELINE",
+            "테스트종목",
+            "123456",
+            "scalping_scanner_fast_precheck",
+            record_id=77,
+            fields=fields,
+        )
+        for _ in range(4)
+    ]
+    first = emitted[0]
     logger_mod.flush_pipeline_event_producer_summary(first["emitted_date"])
 
     raw_path = (
@@ -443,7 +440,7 @@ def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
         for line in raw_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(raw_rows) == 2
+    assert len(raw_rows) == 4
     assert all(row["fields"] == fields for row in raw_rows)
 
     summary_path = (
@@ -458,7 +455,8 @@ def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
     ]
     assert len(summary_rows) == 1
     assert summary_rows[0]["stage"] == "scalping_scanner_fast_precheck"
-    assert summary_rows[0]["event_count"] == 2
+    assert summary_rows[0]["event_count"] == 4
+    assert summary_rows[0]["sample_raw_offsets"] == [1, 4]
     assert (
         summary_rows[0]["sample_events"][0]["fields"]["summary_field_projection"]
         == "high_volume_diagnostic_v1"
@@ -475,7 +473,7 @@ def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
     assert manifest["mode"] == "shadow"
     assert manifest["raw_suppression_enabled"] is False
     assert manifest["suppressed_count"] == 0
-    assert manifest["lossless_preserved_count"] == 2
+    assert manifest["lossless_preserved_count"] == 4
 
 
 def test_emit_pipeline_event_default_compaction_is_shadow_report_only(
@@ -772,6 +770,89 @@ def test_emit_pipeline_event_compacts_submit_stage_threshold_stream(
         == "signed_tape_sell_dominated"
     )
     assert "extra_field_49" not in compact_fields
+
+
+def test_emit_pipeline_event_compacts_high_volume_threshold_stream_losslessly(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
+    fields = {
+        "threshold_family": "rising_missed_tp1_selector",
+        "decision_authority": "source_only_candidate_to_submit_safety_projection",
+        "actual_order_submitted": "False",
+        "broker_order_forbidden": "True",
+        "rising_missed_tp1_evaluation_id": "eval-1",
+        "rising_missed_tp1_candidate_reason": "rising_missed_tp1_candidate_pass",
+        "rising_missed_tp1_counterfactual_submit_safety_action": "RECHECK_REQUIRED",
+        "rising_missed_tp1_counterfactual_submit_safety_risks": "depth_support_weak",
+        "effective_venue": "NXT",
+        "venue_resolution": "explicit_nxt",
+        **{f"redundant_context_{idx}": str(idx) for idx in range(160)},
+    }
+
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "테스트종목",
+        "123456",
+        "rising_missed_tp1_counterfactual_submit_safety",
+        fields=fields,
+    )
+
+    raw_path = (
+        tmp_path
+        / "pipeline_events"
+        / f"pipeline_events_{payload['emitted_date']}.jsonl"
+    )
+    raw_fields = json.loads(raw_path.read_text(encoding="utf-8"))["fields"]
+    assert raw_fields == fields
+
+    compact_path = (
+        tmp_path
+        / "threshold_cycle"
+        / f"threshold_events_{payload['emitted_date']}.jsonl"
+    )
+    compact_fields = json.loads(compact_path.read_text(encoding="utf-8"))["fields"]
+    assert compact_fields["field_projection"] == "high_volume_compact_v1"
+    assert compact_fields["full_fields_hash"]
+    assert compact_fields["rising_missed_tp1_evaluation_id"] == "eval-1"
+    assert (
+        compact_fields["rising_missed_tp1_counterfactual_submit_safety_action"]
+        == "RECHECK_REQUIRED"
+    )
+    assert compact_fields["effective_venue"] == "NXT"
+    assert "redundant_context_159" not in compact_fields
+
+
+def test_pipeline_event_compaction_defaults_bound_summary_overhead(monkeypatch):
+    monkeypatch.delenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", raising=False)
+    monkeypatch.delenv("PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET", raising=False)
+    monkeypatch.setattr(logger_mod, "TRADING_RULES", SimpleNamespace())
+
+    assert logger_mod._compaction_flush_sec() == 60
+    assert logger_mod._compaction_sample_per_bucket() == 2
+
+
+def test_pipeline_event_compaction_sample_setting_is_bounded(monkeypatch, tmp_path):
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_SAMPLE_PER_BUCKET", "99")
+    compactor = logger_mod.ProducerSummaryCompactor(
+        summary_dir=tmp_path,
+        mode="shadow",
+        sample_per_bucket=logger_mod._compaction_sample_per_bucket(),
+    )
+
+    assert compactor.sample_per_bucket == 6
 
 
 def test_emit_pipeline_event_keeps_id_in_submit_stage_text_payload(

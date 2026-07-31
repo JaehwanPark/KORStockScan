@@ -22,7 +22,7 @@ RISING_MISSED_INTRADAY_FEEDBACK_DIR = REPORT_DIR / "rising_missed_intraday_feedb
 MISSED_ENTRY_COUNTERFACTUAL_DIR = REPORT_DIR / "missed_entry_counterfactual"
 
 KST = timezone(timedelta(hours=9))
-CLEAN_BASELINE_TS_KST = "2026-06-04T14:29:09+09:00"
+CLEAN_BASELINE_TS_KST = "2026-06-05T00:00:00+09:00"
 PREFIX_KEYS = (
     "entry_score_parent",
     "entry_source_parent",
@@ -737,7 +737,7 @@ def build_report(
         "target_date": target_date,
         "generated_at": generated_at or _now_kst_iso(),
         "clean_tuning_baseline": {
-            "clean_tuning_baseline_date": "2026-06-04",
+            "clean_tuning_baseline_date": "2026-06-05",
             "clean_tuning_baseline_ts_kst": CLEAN_BASELINE_TS_KST,
         },
         "metric_contracts": {

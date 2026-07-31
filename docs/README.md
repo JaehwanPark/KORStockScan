@@ -4,7 +4,7 @@
 
 이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, runbook, report traceability, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
 
-튜닝 데이터 의사결정 기준일은 `2026-06-04 KST`다. 세부 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이며, 정책 artifact는 `data/source_quality/clean_baseline_policy.json`이다. 이 기준 이전 raw/report/analytics 데이터와 보고서는 archive-only/audit evidence이고, 현재 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval의 입력으로 쓰지 않는다.
+튜닝 데이터 의사결정 기준일은 `2026-06-05 KST`다. 세부 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이며, 정책 artifact는 `data/source_quality/clean_baseline_policy.json`이다. 이 기준 이전 raw/report/analytics 데이터와 보고서는 archive-only/audit evidence이고, 현재 EV/rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval의 입력으로 쓰지 않는다.
 
 ## 먼저 볼 문서
 

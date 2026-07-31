@@ -45,7 +45,7 @@ def test_tp1_label_projection_keeps_only_candidate_symbol_and_global_watermark(
         "000001",
         "candidate",
         "holding_observation",
-        {"current_price_observed": 10100},
+        {"current_price_observed": 10100, "blob": "x" * 10000},
         emitted_at="2026-07-27T09:05:00+09:00",
     )
     irrelevant = _event(
@@ -64,7 +64,36 @@ def test_tp1_label_projection_keeps_only_candidate_symbol_and_global_watermark(
     projected, watermark = mod._load_tp1_label_event_projection(pipeline_path)
 
     assert [row["stock_code"] for row in projected] == ["000001", "000001"]
+    assert projected[1]["fields"] == {"current_price_observed": 10100}
     assert watermark.isoformat() == "2026-07-27T10:00:00+09:00"
+
+
+def test_tp1_label_projection_preserves_plain_counterfactual_provenance():
+    row = _event(
+        3,
+        "000003",
+        "counterfactual",
+        "rising_missed_tp1_counterfactual_submit_safety",
+        {
+            "selector_reason": "freshness_pass",
+            "selector_deferred": False,
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+            "rising_missed_tp1_evaluation_id": "eval-3",
+            "current_price_observed": 12000,
+            "rising_missed_tp1_unused_diagnostic": "drop-me",
+            "large_unrelated_payload": "x" * 10000,
+        },
+    )
+
+    projected = mod._tp1_label_event_projection(row)
+
+    assert projected["fields"] == {
+        "selector_reason": "freshness_pass",
+        "selector_deferred": False,
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+        "rising_missed_tp1_evaluation_id": "eval-3",
+        "current_price_observed": 12000,
+    }
 
 
 def test_tp1_first_hit_label_prefers_gross_target_and_requires_actual_costs_for_net(

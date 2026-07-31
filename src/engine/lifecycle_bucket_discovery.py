@@ -1723,11 +1723,6 @@ def _classify_conflict_child(
     child_sample = _safe_int(child.get("joined_sample"))
     source_quality = str(child.get("source_quality_gate") or "")
     has_unknown = bool(child.get("unknown_dimension_counts"))
-    dimensions = (
-        child.get("source_dimensions")
-        if isinstance(child.get("source_dimensions"), dict)
-        else {}
-    )
 
     source_quality_non_blocking = (
         source_quality in NON_BLOCKING_CONFLICT_SOURCE_QUALITY_STATES
@@ -4176,7 +4171,7 @@ def _sim_handoff_allowed(bucket: dict[str, Any], grade: dict[str, Any]) -> bool:
         return sample >= 10 and ev is not None and ev > 1.0
     if evidence_grade == EVIDENCE_GRADE_MIXED_SOURCE:
         join_rate = _safe_float(bucket.get("join_rate"), None) or 0.0
-        return joined_sample > 0 and join_rate >= 0.2
+        return joined_sample > 0 and join_rate >= 0.2 and ev is not None and ev > 0
     return False
 
 
@@ -4312,6 +4307,20 @@ def _classify_bucket(
             grade,
         )
     if route in {"candidate_recovery_or_relax", "candidate_tighten_or_exclude"}:
+        if ev is None or ev <= 0.0:
+            return (
+                "source_only_keep_collecting",
+                None,
+                {
+                    **grade,
+                    "transition_target": "source_only_keep_collecting",
+                    "grade_reason": (
+                        "sim_policy_ev_missing_not_approved"
+                        if ev is None
+                        else "sim_policy_nonpositive_ev_not_approved"
+                    ),
+                },
+            )
         if stage == "entry":
             return "entry_only_sim_auto_approved", None, grade
         return "sim_auto_approved", None, grade
@@ -4700,11 +4709,28 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
         policy_key_gap_classification = str(
             entry.get("policy_key_gap_classification") or ""
         )
+        stage_ev = _safe_float(entry.get("stage_ev_composite_pct"), None)
+        source_quality_passed = str(entry.get("source_quality_gate") or "") == "pass"
+        positive_ev = stage_ev is not None and stage_ev > 0.0
         state = (
             "sim_auto_approved"
-            if str(entry.get("source_quality_gate") or "") == "pass"
+            if source_quality_passed and positive_ev
             else "source_only_keep_collecting"
         )
+        if not source_quality_passed:
+            grade_reason = "stage_policy_source_quality_not_passed"
+            sim_auto_block_reason = "stage_policy_source_quality_not_passed"
+        elif stage_ev is None:
+            grade_reason = "stage_policy_ev_missing_source_only"
+            sim_auto_block_reason = "stage_policy_ev_missing_not_sim_auto_approved"
+        elif stage_ev <= 0.0:
+            grade_reason = "stage_policy_nonpositive_ev_source_only"
+            sim_auto_block_reason = (
+                "stage_policy_nonpositive_ev_not_sim_auto_approved"
+            )
+        else:
+            grade_reason = "stage_policy_positive_ev_source_quality_pass"
+            sim_auto_block_reason = None
         source_dimensions = {"policy_key": policy_key}
         missing_dimension_overrides: list[str] = []
         source_dimension_gap_override: str | None = None
@@ -4713,6 +4739,8 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
             source_dimension_gap_override = "unknown_source_dimensions"
             missing_dimension_overrides = ["policy_key"]
             state = "source_only_keep_collecting"
+            grade_reason = "stage_policy_policy_key_required_missing"
+            sim_auto_block_reason = "stage_policy_policy_key_required_missing"
             policy_key_gap_classification = "policy_key_required_missing"
         if not policy_key_gap_classification:
             if policy_key != "-":
@@ -4756,7 +4784,8 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                     if state == "sim_auto_approved"
                     else "source_only_keep_collecting"
                 ),
-                "grade_reason": "stage_policy_source_quality_pass_without_live_bridge",
+                "grade_reason": grade_reason,
+                "sim_auto_block_reason": sim_auto_block_reason,
                 "full_real_conversion_allowed": False,
                 "sim_lifecycle_handoff_allowed": state == "sim_auto_approved",
                 "bounded_live_canary_allowed": False,
@@ -4789,15 +4818,17 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "sample": _safe_int(entry.get("sample")),
                 "joined_sample": _safe_int(entry.get("joined_sample")),
                 "join_rate": _safe_float(entry.get("join_rate"), None),
-                "source_quality_adjusted_ev_pct": _safe_float(
-                    entry.get("stage_ev_composite_pct"), None
-                ),
+                "source_quality_adjusted_ev_pct": stage_ev,
                 "source_quality_gate": entry.get("source_quality_gate"),
                 "recommended_action": str(entry.get("selected_action") or "NO_CHANGE"),
                 "recommended_resolution": (
                     "next_preopen_sim_policy_input"
                     if state == "sim_auto_approved"
-                    else "keep_collecting_until_sample_floor"
+                    else (
+                        "keep_collecting_positive_ev_evidence"
+                        if source_quality_passed and stage_ev is not None
+                        else "keep_collecting_until_sample_floor"
+                    )
                 ),
                 "unknown_dimension_counts": (
                     {"policy_key": 1} if source_dimension_gap_override else {}

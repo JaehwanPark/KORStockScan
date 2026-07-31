@@ -50,6 +50,78 @@ FORBIDDEN_USES = [
     "forced_one_share_success_counting",
     "real_execution_quality_approval",
 ]
+TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
+    {
+        "actual_fee_krw",
+        "actual_tax_krw",
+        "canonical_mark_price",
+        "current_price",
+        "current_price_observed",
+        "effective_venue",
+        "fee_krw",
+        "first_seen_price",
+        "forced_entry_qty",
+        "holding_rest_quote_route_consistent",
+        "holding_ws_recovered_curr",
+        "latest_price",
+        "market_session_bucket",
+        "mark_price_at_submit",
+        "market_data_effective_price_source",
+        "market_data_freshness_state",
+        "market_data_rest_age_basis",
+        "market_data_rest_quote_age_ms",
+        "market_data_ws_age_basis",
+        "market_data_ws_quote_age_ms",
+        "market_data_ws_rest_gap_bps",
+        "pre_submit_ws_snapshot_refresh_latest_price",
+        "quantity",
+        "rising_missed_effective_venue",
+        "rising_missed_market_session_bucket",
+        "rising_missed_nxt_post_block_first_hit_move_pct",
+        "rising_missed_nxt_post_block_first_hit_ts",
+        "rising_missed_nxt_post_block_horizon_sec",
+        "rising_missed_nxt_post_block_max_move_pct",
+        "rising_missed_nxt_post_block_min_move_pct",
+        "rising_missed_nxt_post_block_sampler_outcome_label",
+        "rising_missed_tp1_actual_watch_delta_pct",
+        "rising_missed_tp1_ai_action",
+        "rising_missed_tp1_bid_imbalance_surge",
+        "rising_missed_tp1_candidate_allowed",
+        "rising_missed_tp1_candidate_lane",
+        "rising_missed_tp1_candidate_reason",
+        "rising_missed_tp1_counterfactual_submit_safety_action",
+        "rising_missed_tp1_counterfactual_submit_safety_risks",
+        "rising_missed_tp1_depth_imbalance_ewma",
+        "rising_missed_tp1_effective_price",
+        "rising_missed_tp1_effective_quote_age_ms",
+        "rising_missed_tp1_evaluation_id",
+        "rising_missed_tp1_micro_age_sec",
+        "rising_missed_tp1_micro_confidence",
+        "rising_missed_tp1_micro_source_state",
+        "rising_missed_tp1_micro_vwap_fresh",
+        "rising_missed_tp1_micro_vwap_gap_bps",
+        "rising_missed_tp1_pressure_ewma",
+        "rising_missed_tp1_selector_active",
+        "rising_missed_tp1_source_family_count",
+        "rising_missed_tp1_spread_ratio",
+        "rising_missed_tp1_tick_acceleration",
+        "rising_missed_tp1_tick_acceleration_fresh",
+        "rising_missed_tp1_top_depth_ratio",
+        "rising_missed_tp1_true_ofi_ewma",
+        "rising_missed_tp1_true_ofi_sample_count",
+        "rising_missed_tp1_ws_0b_signed_fid15_present",
+        "rising_missed_tp1_ws_micro_provenance_ready",
+        "selector_deferred",
+        "selector_reason",
+        "stock_code",
+        "stock_name",
+        "submitted_order_price",
+        "tax_krw",
+        "venue",
+        "venue_resolution",
+        "ws_last_0b_age_ms",
+    }
+)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -2108,6 +2180,31 @@ def _tp1_label_candidate_kind(row: dict[str, Any]) -> str:
     return ""
 
 
+def _tp1_label_event_projection(row: dict[str, Any]) -> dict[str, Any]:
+    """Drop unrelated high-volume diagnostics from retained TP1 label rows."""
+
+    fields = _fields(row)
+    projected_fields = {
+        key: value
+        for key, value in fields.items()
+        if key in TP1_LABEL_PROJECTION_FIELD_KEYS
+    }
+    return {
+        key: row[key]
+        for key in (
+            "pipeline",
+            "record_id",
+            "stock_code",
+            "stock_name",
+            "stage",
+            "emitted_at",
+            "timestamp",
+            "ts",
+        )
+        if key in row
+    } | {"fields": projected_fields}
+
+
 def _load_tp1_label_event_projection(
     pipeline_path: Path,
 ) -> tuple[list[dict[str, Any]], datetime | None]:
@@ -2152,7 +2249,7 @@ def _load_tp1_label_event_projection(
             or fee is not None
             or tax is not None
         ):
-            projected.append(row)
+            projected.append(_tp1_label_event_projection(row))
     return projected, observation_watermark
 
 
@@ -3688,6 +3785,9 @@ def build_report(
         "source_quality": {
             "status": source_quality_status,
             "pipeline_events_exists": resolved_pipeline_path.exists(),
+            "tp1_label_projection_mode": "streaming_two_pass_exact_field_allowlist_v3",
+            "tp1_label_projected_event_count": len(tp1_label_events),
+            "tp1_label_full_fields_materialized": False,
             **first_touch_source_quality_counts,
         },
         "summary": {

@@ -3299,6 +3299,7 @@ def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_g
                 "stage": "entry",
                 "policy_key": "",
                 "source_quality_gate": "pass",
+                "stage_ev_composite_pct": 0.4,
                 "confidence": 0.9,
                 "selected_action": "BUY_DEFENSIVE",
             },
@@ -3306,6 +3307,7 @@ def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_g
                 "stage": "submit",
                 "policy_key": "submit:valid_key",
                 "source_quality_gate": "pass",
+                "stage_ev_composite_pct": 0.8,
                 "confidence": 0.8,
                 "selected_action": "ALLOW_SUBMIT",
             },
@@ -3316,11 +3318,19 @@ def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_g
                 "confidence": 0.7,
                 "selected_action": "EXIT",
             },
+            {
+                "stage": "scale_in",
+                "policy_key": "scale_in:nonpositive",
+                "source_quality_gate": "pass",
+                "stage_ev_composite_pct": -0.25,
+                "confidence": 0.9,
+                "selected_action": "NO_CHANGE",
+            },
         ]
     }
 
     candidates = _policy_stage_candidates(payload)
-    assert len(candidates) == 3
+    assert len(candidates) == 4
 
     entry_candidate = [c for c in candidates if c["stage"] == "entry"][0]
     assert entry_candidate["bucket_key"] == "-"
@@ -3350,6 +3360,19 @@ def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_g
     )
     assert exit_candidate["classification_state"] == "source_only_keep_collecting"
 
+    scale_in_candidate = [c for c in candidates if c["stage"] == "scale_in"][0]
+    assert scale_in_candidate["classification_state"] == "source_only_keep_collecting"
+    assert scale_in_candidate["sim_lifecycle_handoff_allowed"] is False
+    assert scale_in_candidate["source_quality_adjusted_ev_pct"] == -0.25
+    assert (
+        scale_in_candidate["sim_auto_block_reason"]
+        == "stage_policy_nonpositive_ev_not_sim_auto_approved"
+    )
+    assert (
+        scale_in_candidate["recommended_resolution"]
+        == "keep_collecting_positive_ev_evidence"
+    )
+
     summary = _source_dimension_gap_summary(candidates)
     assert summary["missing_dimension_key_counts"].get("policy_key", 0) == 2
     assert (
@@ -3358,3 +3381,23 @@ def test_policy_stage_candidates_missing_policy_key_generates_source_dimension_g
         )
         == 2
     )
+
+
+def test_entry_bucket_nonpositive_ev_cannot_enter_sim_auto_handoff():
+    state, live_family, grade = mod._classify_bucket(
+        "entry",
+        {
+            "bucket_type": "liquidity_bucket",
+            "bucket_key": "liquidity_high",
+            "recommended_route": "candidate_recovery_or_relax",
+            "source_quality_gate": "pass",
+            "source_quality_adjusted_ev_pct": -0.1126,
+            "sample": 1618,
+            "joined_sample": 54,
+        },
+    )
+
+    assert state == "source_only_keep_collecting"
+    assert live_family is None
+    assert grade["transition_target"] == "source_only_keep_collecting"
+    assert grade["grade_reason"] == "sim_policy_nonpositive_ev_not_approved"

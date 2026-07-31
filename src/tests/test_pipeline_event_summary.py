@@ -4,6 +4,7 @@ import pytest
 
 from src.engine.pipeline_event_summary import (
     PRODUCER_SUMMARY_STAGES,
+    ProducerSummaryCompactor,
     update_and_load_pipeline_event_summaries,
 )
 
@@ -202,3 +203,55 @@ def test_pipeline_event_summary_rejects_unknown_profile(tmp_path):
             reason_labeler=_labeler,
             summary_profile="../escape",
         )
+
+
+def test_producer_summary_flushes_previous_date_before_new_date_event(tmp_path):
+    compactor = ProducerSummaryCompactor(
+        summary_dir=tmp_path,
+        mode="shadow",
+        flush_sec=3600,
+        sample_per_bucket=2,
+    )
+    first = _event(
+        "2026-07-31",
+        "23:59:59",
+        "scalping_scanner_fast_precheck",
+        record_id=1,
+        fields={
+            "fast_precheck_result": "defer",
+            "fast_precheck_reason": "waiting_heavy_eval",
+        },
+    )
+    second = _event(
+        "2026-08-01",
+        "00:00:01",
+        "scalping_scanner_fast_precheck",
+        record_id=2,
+        fields={
+            "fast_precheck_result": "pass",
+            "fast_precheck_reason": "ready",
+        },
+    )
+
+    compactor.submit(first)
+    compactor.submit(second)
+    compactor.flush(target_date="2026-08-01")
+
+    july_rows = [
+        json.loads(line)
+        for line in (tmp_path / "pipeline_event_producer_summary_2026-07-31.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    august_rows = [
+        json.loads(line)
+        for line in (tmp_path / "pipeline_event_producer_summary_2026-08-01.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert [row["target_date"] for row in july_rows] == ["2026-07-31"]
+    assert [row["target_date"] for row in august_rows] == ["2026-08-01"]
+    assert sum(row["event_count"] for row in july_rows) == 1
+    assert sum(row["event_count"] for row in august_rows) == 1

@@ -301,27 +301,34 @@ def test_write_outputs(tmp_path):
 
 
 def test_build_report_reads_gzip_pipeline_and_filters_clean_baseline(tmp_path):
-    pipeline_path = tmp_path / "pipeline_events_2026-06-04.jsonl.gz"
-    post_sell_path = tmp_path / "post_sell_candidates_2026-06-04.jsonl"
+    old_pipeline_path = tmp_path / "pipeline_events_2026-06-04.jsonl.gz"
+    pipeline_path = tmp_path / "pipeline_events_2026-06-05.jsonl.gz"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-06-05.jsonl"
+    with gzip.open(old_pipeline_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                _event(
+                    "old",
+                    "rising_missed_one_share_entry",
+                    {"forced_entry_reason": "rising_missed_one_share_entry"},
+                    emitted_at="2026-06-04T14:30:00+09:00",
+                )
+            )
+            + "\n"
+        )
     with gzip.open(pipeline_path, "wt", encoding="utf-8") as handle:
         for row in [
-            _event(
-                "old",
-                "rising_missed_one_share_entry",
-                {"forced_entry_reason": "rising_missed_one_share_entry"},
-                emitted_at="2026-06-04T14:20:00+09:00",
-            ),
             _event(
                 "new",
                 "blocked_ai_score",
                 {"reason": "blocked_ai_score_below_buy_score_threshold"},
-                emitted_at="2026-06-04T14:30:00+09:00",
+                emitted_at="2026-06-05T09:00:00+09:00",
             ),
             _event(
                 "new",
                 "rising_missed_one_share_entry",
                 {"forced_entry_reason": "rising_missed_one_share_entry"},
-                emitted_at="2026-06-04T14:31:00+09:00",
+                emitted_at="2026-06-05T09:01:00+09:00",
             ),
         ]:
             handle.write(json.dumps(row) + "\n")
@@ -336,9 +343,9 @@ def test_build_report_reads_gzip_pipeline_and_filters_clean_baseline(tmp_path):
     )
 
     report = mod.build_report(
-        "2026-06-04",
+        "2026-06-05",
         since_date="2026-06-04",
-        pipeline_paths=[pipeline_path],
+        pipeline_paths=[old_pipeline_path, pipeline_path],
         post_sell_paths=[post_sell_path],
         generated_at="fixed",
         ai_provider="none",
@@ -346,8 +353,8 @@ def test_build_report_reads_gzip_pipeline_and_filters_clean_baseline(tmp_path):
 
     assert report["summary"]["forced_record_count"] == 1
     assert report["joined_examples"][0]["record_id"] == "new"
-    assert report["source_coverage_manifest"]["pipeline_gzip_path_count"] == 1
-    assert report["window"]["clean_baseline_ts_kst"] == "2026-06-04T14:29:09+09:00"
+    assert report["source_coverage_manifest"]["pipeline_gzip_path_count"] == 2
+    assert report["window"]["clean_baseline_ts_kst"] == "2026-06-05T00:00:00+09:00"
 
 
 def test_source_coverage_gap_fails_closed_for_code_orders(tmp_path):

@@ -3895,6 +3895,12 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
         "scanner_promotion_reason": "price_jump_start_acceleration",
         "source_signature": "PRICE_JUMP_START",
         "price_delta_since_first_seen_pct": "1.20",
+        "_scanner_fast_precheck_fields": {
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "venue_resolution": "scanner_session_clock:krx_regular",
+            "market_session_bucket": "krx_regular",
+        },
     }
 
     emitted_result = handlers.emit_scanner_watching_runtime_skip(
@@ -3922,6 +3928,14 @@ def test_emit_scanner_watching_runtime_skip_fills_contract_fields(monkeypatch):
     assert fields["runtime_effect"] is False
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue"] == "KRX"
+    assert fields["venue_source_quality_status"] == "pass"
+    assert fields["venue_unknown_reviewed_reason"] == "not_applicable"
+    assert fields["venue_resolution"] == (
+        "scanner_runtime_event:scanner_fast_precheck:"
+        "scanner_session_clock:krx_regular"
+    )
     assert fields["skip_reason"] == "ws_snapshot_missing_or_zero"
     assert fields["scanner_promotion_id"] == "SCANPROM-000037-1000000"
     assert fields["target_status"] == "WATCHING"
@@ -4346,6 +4360,12 @@ def test_emit_scanner_runtime_queue_lag_fills_contract_fields(monkeypatch):
         "scanner_promotion_emitted_epoch": "1000.000",
         "scanner_promotion_reason": "price_jump_start_acceleration",
         "source_signature": "PRICE_JUMP_START",
+        "_scanner_fast_precheck_fields": {
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "venue_resolution": "scanner_session_clock:krx_regular",
+            "market_session_bucket": "krx_regular",
+        },
     }
 
     emitted_result = handlers.emit_scanner_runtime_queue_lag(
@@ -4379,6 +4399,8 @@ def test_emit_scanner_runtime_queue_lag_fills_contract_fields(monkeypatch):
     assert fields["runtime_effect"] is False
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
+    assert fields["effective_venue"] == "KRX"
+    assert fields["venue_source_quality_status"] == "pass"
     assert fields["queue_rank"] == 2
     assert fields["scanner_queue_rank"] == 1
     assert fields["watching_count"] == 72
@@ -4510,6 +4532,16 @@ def test_scanner_runtime_event_venue_fields_fail_closed_without_inference():
     missing = handlers._scanner_runtime_event_venue_fields(
         {"broker_route": "SOR", "ws_item": "005930_AL"}
     )
+    fast_precheck = handlers._scanner_runtime_event_venue_fields(
+        {
+            "_scanner_fast_precheck_fields": {
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "venue": "PREMARKET_KRX_LIKE",
+                "venue_resolution": "scanner_session_clock:krx_like_premarket",
+                "market_session_bucket": "krx_like_premarket",
+            }
+        }
+    )
     session_mismatch = handlers._scanner_runtime_event_venue_fields(
         {
             "effective_venue": "KRX",
@@ -4528,14 +4560,34 @@ def test_scanner_runtime_event_venue_fields_fail_closed_without_inference():
         "venue": "UNKNOWN",
         "effective_venue": "UNKNOWN",
         "venue_resolution": "scanner_runtime_event:explicit_target_venue_missing",
+        "venue_source_quality_status": "reviewed_fail_closed",
+        "venue_unknown_reviewed_reason": (
+            "scanner_runtime_event:explicit_target_venue_missing"
+        ),
         "market_session_bucket": (
             "scanner_runtime_event:market_session_bucket_missing"
         ),
+    }
+    assert fast_precheck == {
+        "venue": "PREMARKET_KRX_LIKE",
+        "effective_venue": "PREMARKET_KRX_LIKE",
+        "venue_resolution": (
+            "scanner_runtime_event:scanner_fast_precheck:"
+            "scanner_session_clock:krx_like_premarket"
+        ),
+        "venue_source_quality_status": "pass",
+        "venue_unknown_reviewed_reason": "not_applicable",
+        "market_session_bucket": "krx_like_premarket",
     }
     assert session_mismatch == {
         "venue": "UNKNOWN",
         "effective_venue": "UNKNOWN",
         "venue_resolution": (
+            "scanner_runtime_event:market_session_bucket_venue_mismatch:"
+            "effective_venue=KRX,market_session_bucket=nxt"
+        ),
+        "venue_source_quality_status": "reviewed_fail_closed",
+        "venue_unknown_reviewed_reason": (
             "scanner_runtime_event:market_session_bucket_venue_mismatch:"
             "effective_venue=KRX,market_session_bucket=nxt"
         ),

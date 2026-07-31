@@ -709,6 +709,66 @@ def test_holding_submit_authority_requires_fresh_broker_reconciliation(
     assert context["source_quality"]["hold_defer_allowed"] is False
 
 
+def test_holding_score_preserves_stale_broker_snapshot_as_partial_warning(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 31, 16, 10, 30, tzinfo=KST)
+    stock = {
+        **_stock(),
+        "broker_snapshot_at": now.timestamp() - 61.0,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+    }
+    ws = _ws(now, suffix="_AL", route="krx_nxt_integrated")
+    ws.update(
+        {
+            "last_realtime_type_ts": {
+                "0B": now.timestamp() - 0.1,
+                "0D": now.timestamp() - 0.2,
+            },
+            "last_realtime_type_item": {
+                "0B": "066570_AL",
+                "0D": "066570_AL",
+            },
+            "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+            "last_realtime_type_market_route": {
+                "0B": "krx_nxt_integrated",
+                "0D": "krx_nxt_integrated",
+            },
+        }
+    )
+
+    context = build_holding_decision_context(
+        None,
+        "066570",
+        ws,
+        stock,
+        "NXT",
+        "nxt_aftermarket",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 31, 15, 30, tzinfo=KST),
+        ),
+        candle_meta={"api_id": "ka10080", "received_count": 60},
+    )
+
+    preflight = context["ai_market_snapshot_v1"]["ai_input_preflight_v1"]
+    assert preflight["allowed"] is True
+    assert preflight["status"] == "partial"
+    assert context["source_quality"]["status"] == "partial"
+    assert context["source_quality"]["hold_defer_allowed"] is True
+    assert context["source_quality"]["warnings"] == [
+        "broker_position_or_open_orders_stale_advisory"
+    ]
+    payload = holding_decision_context_model_payload(context)
+    assert payload["source_quality"]["warnings"] == [
+        "broker_position_or_open_orders_stale_advisory"
+    ]
+
+
 def test_nxt_current_session_view_honors_authoritative_zero_broker_quantity(
     monkeypatch,
 ):

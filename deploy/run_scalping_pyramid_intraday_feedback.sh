@@ -11,6 +11,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 LOCK_FILE="${SCALPING_PYRAMID_INTRADAY_FEEDBACK_LOCK_FILE:-$PROJECT_DIR/tmp/run_scalping_pyramid_intraday_feedback.lock}"
+HEAVY_ANALYSIS_LOCK_FILE="${KORSTOCKSCAN_INTRADAY_HEAVY_ANALYSIS_LOCK_FILE:-$PROJECT_DIR/tmp/intraday_heavy_analysis.lock}"
 COOLDOWN_STATE_FILE="${SCALPING_PYRAMID_INTRADAY_FEEDBACK_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp/run_scalping_pyramid_intraday_feedback_success.state}"
 COOLDOWN_SEC="${SCALPING_PYRAMID_INTRADAY_FEEDBACK_COOLDOWN_SEC:-720}"
 LOG_FILE="${SCALPING_PYRAMID_INTRADAY_FEEDBACK_LOG_FILE:-$PROJECT_DIR/logs/run_scalping_pyramid_intraday_feedback.log}"
@@ -54,6 +55,12 @@ fi
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "[SKIP] scalping pyramid intraday feedback already running target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+  exit 0
+fi
+
+exec 8>"$HEAVY_ANALYSIS_LOCK_FILE"
+if ! flock -n 8; then
+  echo "[SKIP] scalping pyramid intraday feedback heavy analysis busy target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
   exit 0
 fi
 

@@ -5,8 +5,6 @@ import os
 import subprocess
 import time
 from datetime import datetime
-from pathlib import Path
-
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
 from src.utils.market_day import is_krx_trading_day
 
@@ -33,6 +31,9 @@ class ResourceUsageDetector(BaseDetector):
 
         cpu_busy_max = float(
             getattr(TRADING_RULES, "ERROR_DETECTOR_CPU_BUSY_MAX_PCT", 95.0)
+        )
+        iowait_max = float(
+            getattr(TRADING_RULES, "ERROR_DETECTOR_IOWAIT_MAX_PCT", 35.0)
         )
         mem_avail_min = float(
             getattr(TRADING_RULES, "ERROR_DETECTOR_MEM_AVAILABLE_MIN_MB", 500.0)
@@ -68,14 +69,28 @@ class ResourceUsageDetector(BaseDetector):
                     f"Sampler data aging ({sampler_age_sec:.0f}s > {max_sample_age}s)"
                 )
 
-            cpu_pct = latest_sample.get("cpu", {}).get("cpu_busy_pct", 0)
+            cpu = latest_sample.get("cpu", {})
+            cpu_non_idle_pct = float(
+                cpu.get("cpu_non_idle_pct", cpu.get("cpu_busy_pct", 0)) or 0
+            )
+            iowait_pct = float(cpu.get("iowait_pct", 0) or 0)
+            cpu_compute_pct = float(
+                cpu.get(
+                    "cpu_compute_busy_pct",
+                    max(0.0, cpu_non_idle_pct - iowait_pct),
+                )
+                or 0
+            )
             mem = latest_sample.get("memory", {})
             mem_avail_mb = mem.get("mem_available_mb", 0)
             swap_free_mb = mem.get("swap_free_mb", 0)
             swap_total_mb = mem.get("swap_total_mb", 0)
             load15 = latest_sample.get("loadavg", {}).get("15m", 0)
 
-            details["cpu_busy_pct"] = cpu_pct
+            details["cpu_busy_pct"] = cpu_non_idle_pct
+            details["cpu_non_idle_pct"] = cpu_non_idle_pct
+            details["cpu_compute_busy_pct"] = cpu_compute_pct
+            details["iowait_pct"] = iowait_pct
             details["mem_available_mb"] = mem_avail_mb
             details["swap_total_mb"] = swap_total_mb
             details["swap_free_mb"] = swap_free_mb
@@ -86,11 +101,20 @@ class ResourceUsageDetector(BaseDetector):
                 swap_used_pct = ((swap_total_mb - swap_free_mb) / swap_total_mb) * 100
                 details["swap_used_pct"] = round(swap_used_pct, 1)
 
-            if cpu_pct >= cpu_busy_max * 0.9:
-                if cpu_pct >= cpu_busy_max:
-                    issues.append(f"CPU busy {cpu_pct}% >= {cpu_busy_max}%")
+            if cpu_compute_pct >= cpu_busy_max * 0.9:
+                if cpu_compute_pct >= cpu_busy_max:
+                    issues.append(
+                        f"CPU compute busy {cpu_compute_pct}% >= {cpu_busy_max}%"
+                    )
                 else:
-                    warnings.append(f"CPU busy {cpu_pct}% approaching {cpu_busy_max}%")
+                    warnings.append(
+                        f"CPU compute busy {cpu_compute_pct}% approaching {cpu_busy_max}%"
+                    )
+            if iowait_pct >= iowait_max * 0.9:
+                if iowait_pct >= iowait_max:
+                    issues.append(f"I/O wait {iowait_pct}% >= {iowait_max}%")
+                else:
+                    warnings.append(f"I/O wait {iowait_pct}% approaching {iowait_max}%")
             if mem_avail_mb < mem_avail_min * 2:
                 if mem_avail_mb < mem_avail_min:
                     issues.append(

@@ -1,6 +1,7 @@
 import json
 import threading
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -729,3 +730,36 @@ def test_postclose_report_ignores_non_finite_metric_values():
     assert limit_down_watch_report._safe_float("nan") is None
     assert limit_down_watch_report._safe_float("inf") is None
     assert limit_down_watch_report._safe_float("-inf") is None
+
+
+def test_postclose_event_loader_streams_and_filters_source(tmp_path, monkeypatch):
+    event_path = tmp_path / "events.jsonl"
+    matching = {
+        "pipeline": "LIMIT_DOWN_WATCH",
+        "stage": "limit_down_watch_registered",
+        "stock_code": "000001",
+        "fields": _observation_event_fields(),
+    }
+    event_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"pipeline": "OTHER", "stage": "ignored"}),
+                json.dumps(matching),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def forbid_full_read(*_args, **_kwargs):
+        raise AssertionError("event loader must not materialize the full source")
+
+    monkeypatch.setattr(Path, "read_text", forbid_full_read)
+    rows, status = limit_down_watch_report._load_events(event_path)
+
+    assert rows == [matching]
+    assert status["readable"] is True
+    assert status["read_mode"] == "streaming_filtered"
+    assert status["full_source_materialized"] is False
+    assert status["line_count"] == 2
+    assert status["matching_event_count"] == 1
+    assert status["valid"] is True

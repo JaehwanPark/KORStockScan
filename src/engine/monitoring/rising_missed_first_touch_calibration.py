@@ -15,7 +15,7 @@ STAGE = "scale_in"
 REPORT_TYPE = "rising_missed_first_touch_calibration"
 INPUT_REPORT_DIR = DATA_DIR / "report" / "rising_missed_intraday_feedback"
 OUTPUT_REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
-CLEAN_BASELINE_DATE = "2026-06-04"
+CLEAN_BASELINE_DATE = "2026-06-05"
 CLOSED_LABELS = {"first_touch_recovered_profit", "first_touch_loss_or_flat"}
 FORBIDDEN_USES = [
     "intraday_threshold_mutation",

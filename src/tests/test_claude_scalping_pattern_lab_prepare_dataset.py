@@ -123,18 +123,19 @@ def test_claude_payload_feedback_selector_uses_daily_clean_baseline_artifacts(
     report_dir = tmp_path / "data" / "report"
     ev_dir = report_dir / "threshold_cycle_ev"
     ev_dir.mkdir(parents=True)
-    (ev_dir / "threshold_cycle_ev_2026-06-05_rolling5d.json").write_text(
+    (ev_dir / "threshold_cycle_ev_2026-06-06_rolling5d.json").write_text(
         "{}", encoding="utf-8"
     )
     (ev_dir / "threshold_cycle_ev_2026-06-03.json").write_text("{}", encoding="utf-8")
     (ev_dir / "threshold_cycle_ev_2026-06-04.json").write_text("{}", encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-06-05.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(payload, "REPORT_DIR", report_dir)
 
     path, source_date = payload._latest_feedback_artifact_path(
         "threshold_cycle_ev",
         "threshold_cycle_ev",
-        "2026-06-05",
+        "2026-06-06",
     )
 
-    assert path == ev_dir / "threshold_cycle_ev_2026-06-04.json"
-    assert source_date == "2026-06-04"
+    assert path == ev_dir / "threshold_cycle_ev_2026-06-05.json"
+    assert source_date == "2026-06-05"

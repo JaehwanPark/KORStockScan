@@ -66,7 +66,7 @@ SCALPING_FEEDBACK_SOURCES = {
         "runtime_approval_summary",
     ),
 }
-CLEAN_TUNING_BASELINE_DATE = "2026-06-04"
+CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
 
 
 def _latest_feedback_artifact_path(

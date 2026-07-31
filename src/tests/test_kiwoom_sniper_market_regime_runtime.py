@@ -7469,6 +7469,41 @@ def test_scanner_rest_quote_rate_limit_dynamic_boosts_on_pressure(
     kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
 
 
+def test_scanner_rest_quote_rate_limit_hard_ceiling_bounds_priority_and_boost(
+    tmp_path, monkeypatch
+):
+    kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_MAX_CALLS_PER_WINDOW", "4"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_POSITIVE_RESERVE_CALLS", "2"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_DYNAMIC_MAX_EXTRA_CALLS", "2"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_REST_QUOTE_FALLBACK_HARD_MAX_CALLS_PER_WINDOW", "5"
+    )
+
+    outcomes = [
+        kiwoom_sniper_v2._scanner_rest_quote_fallback_rate_limit(
+            1000.0 + idx, priority=True
+        )
+        for idx in range(6)
+    ]
+
+    assert outcomes[:5] == [(True, "rest_quote_allowed")] * 5
+    assert outcomes[5] == (False, "rest_quote_hard_rate_limited")
+    kiwoom_sniper_v2._reset_scanner_rest_quote_fallback_rate_limit_for_tests()
+
+
 def test_scanner_rest_quote_loop_limit_allows_bounded_intraday_recovery_override(
     tmp_path, monkeypatch
 ):

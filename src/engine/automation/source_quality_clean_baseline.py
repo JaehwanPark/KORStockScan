@@ -14,11 +14,9 @@ REPORT_TYPE = "source_quality_clean_baseline"
 POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
 REPORT_QUARANTINE_DIR = DATA_DIR / "source_quality" / "report_quarantine"
 ANALYTICS_QUARANTINE_DIR = DATA_DIR / "source_quality" / "analytics_quarantine"
-DEFAULT_START_DATE = "2026-06-04"
-DEFAULT_START_TS_KST = "2026-06-04T14:29:09+09:00"
-DEFAULT_REASON = (
-    "operator_requested_clean_tuning_restart_after_sim_probe_provenance_patch"
-)
+DEFAULT_START_DATE = "2026-06-05"
+DEFAULT_START_TS_KST = "2026-06-05T00:00:00+09:00"
+DEFAULT_REASON = "operator_requested_oldest_clean_baseline_date_retirement_after_2026-06-05_source_quality_pass"
 DATE_TOKEN_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 FORBIDDEN_USES = [
     "runtime_threshold_apply",

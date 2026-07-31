@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import json
 
-import src.engine.scalp_sim_ai_deferred_review as deferred_review
+from src.engine import scalp_sim_ai_deferred_review as mod
 
 
 def test_deferred_review_preserves_ai_budget_critical_attribution(
@@ -31,9 +33,9 @@ def test_deferred_review_preserves_ai_budget_critical_attribution(
         },
     }
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-    monkeypatch.setattr(deferred_review, "DATA_DIR", data_dir)
+    monkeypatch.setattr(mod, "DATA_DIR", data_dir)
 
-    report = deferred_review.build_report(target_date)
+    report = mod.build_report(target_date)
 
     assert report["summary"]["deferred_count"] == 1
     assert report["summary"]["critical_class_counts"] == {"soft_critical": 1}
@@ -43,3 +45,46 @@ def test_deferred_review_preserves_ai_budget_critical_attribution(
     }
     assert report["rows"][0]["critical_class"] == "soft_critical"
     assert report["rows"][0]["loss_bucket"] == "(-0.20,0)"
+
+
+def test_build_report_streams_and_retains_only_deferred_rows(monkeypatch):
+    events = iter(
+        [
+            {"stage": "unrelated", "fields": {"large": "ignored"}},
+            {
+                "stage": "scalp_sim_ai_holding_deferred",
+                "stock_code": "005930",
+                "fields": {
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": False,
+                    "defer_reason": "budget_exhausted",
+                    "source_stage": "holding",
+                    "critical_class": "soft",
+                    "critical_reason": "drawdown,stale_feature",
+                },
+            },
+            {
+                "stage": "scalp_sim_ai_holding_deferred",
+                "fields": {
+                    "simulation_book": "other",
+                    "actual_order_submitted": False,
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(mod, "_iter_events", lambda _target_date: events)
+
+    report = mod.build_report("2026-07-31")
+
+    assert report["summary"]["deferred_count"] == 1
+    assert report["summary"]["defer_reason_counts"] == {"budget_exhausted": 1}
+    assert report["summary"]["critical_reason_counts"] == {
+        "drawdown": 1,
+        "stale_feature": 1,
+    }
+    assert [row["stock_code"] for row in report["rows"]] == ["005930"]
+    assert report["source_read_contract"] == {
+        "read_mode": "streaming_stage_filter",
+        "full_source_materialized": False,
+        "retained_scope": "scalp_sim_ai_holding_deferred_rows_only",
+    }

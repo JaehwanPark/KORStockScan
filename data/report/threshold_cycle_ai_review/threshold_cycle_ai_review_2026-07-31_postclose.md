@@ -1,0 +1,33 @@
+# Threshold Cycle AI Correction - 2026-07-31 postclose
+
+- AI status: `parsed`
+- Authority: proposal-only; deterministic calibration guard is the source of truth.
+- Runtime change: `false`
+- Input context chars: `88185`
+- Input context hash: `2b61e72f7aa151d92710013db13a29986ccdf32b2b277b69d68c5d20fe3ef460`
+- Provider status: `openai / reused_valid_artifact`
+- Usage: input_tokens=`34443`, output_tokens=`6860`, total_tokens=`41303`, elapsed_ms=`83922`
+- Cost: estimated_cost_usd=`None`, status=`missing_price_contract`
+
+| family | ai_state | route | proposal | guard | reason |
+| --- | --- | --- | --- | --- | --- |
+| soft_stop_whipsaw_confirmation | caution | threshold_candidate | state=adjust_up, value=60, window=rolling_10d | accepted=True, effective_state=adjust_up, effective_value=60, runtime_change=False | Whipsaw evidence is strong, but post-sell realized soft-stop evidence is absent; keep as bounded candidate only. |
+| holding_flow_ofi_smoothing | agree | instrumentation_gap | state=hold_sample, value=90, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=90, runtime_change=False | Sample floor is not met, so holding the current smoothing value is appropriate. |
+| protect_trailing_smoothing | agree | normal_drift | state=hold, value=20, window=rolling_10d | accepted=True, effective_state=hold, effective_value=20, runtime_change=False | Current and recommended values match, and live review is not eligible. |
+| trailing_continuation | agree | incident | state=freeze, value=0.4, window=rolling_10d | accepted=True, effective_state=freeze, effective_value=0.4, runtime_change=False | Freeze is appropriate because GOOD_EXIT harm risk is explicitly flagged and live review is not eligible. |
+| market_regime_continuous_thresholds | agree | instrumentation_gap | state=hold_sample, value=65, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=65, runtime_change=False | Context-only market regime source is short one valid rolling day and has no runtime apply authority. |
+| pre_submit_price_guard | agree | normal_drift | state=hold, value=True, window=daily_intraday | accepted=True, effective_state=hold, effective_value=True, runtime_change=False | Broker pre-submit price guard is hard safety/source-quality audit only and should remain held. |
+| dynamic_entry_price_resolver | agree | instrumentation_gap | state=hold_sample, value=1, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=1, runtime_change=False | Instrumentation exists, but counterfactual join coverage is incomplete and no bounded runtime value is available. |
+| entry_split_order_plan | caution | threshold_candidate | state=adjust_up, value=True, window=rolling_10d | accepted=True, effective_state=adjust_up, effective_value=True, runtime_change=False | Qty-preserving split policy has enough real/sim shape evidence, but source_quality_status is warning and EV fields are null. |
+| scale_in_split_order_plan | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Do not infer live enable from a single seed case when real_sample_count and sim_sample_count are both zero. |
+| entry_price_execution_quality | agree | normal_drift | state=hold, value=report_only, window=daily_intraday | accepted=False, effective_state=hold_sample, effective_value=report_only, runtime_change=False | proposed_value_not_numeric_or_bool |
+| score65_74_recovery_probe | correction_proposed | incident | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold, effective_value=False, runtime_change=False | adjust_up is inconsistent with recommended_value=false and threshold_relaxation_approved=false under SUBMIT_DROUGHT_CRITICAL. |
+| strength_momentum_soft_gate_p1 | agree | normal_drift | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold, effective_value=False, runtime_change=False | Report-only pre-AI gate redesign should remain held until an approval artifact exists. |
+| overbought_pullback_guard_p1 | agree | instrumentation_gap | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | Hold is appropriate because evaluated_candidates is zero and runtime apply is not allowed. |
+| liquidity_pre_submit_guard_p1 | agree | normal_drift | state=hold, value=False, window=rolling_5d | accepted=True, effective_state=hold, effective_value=False, runtime_change=False | Observed tradeoff is diagnostic only; allowed_runtime_apply=false supports holding the candidate. |
+| bad_entry_refined_canary | caution | threshold_candidate | state=adjust_up, value=True, window=rolling_10d | accepted=True, effective_state=adjust_up, effective_value=True, runtime_change=False | Rolling sample is broad enough for a bounded canary, but lifecycle attribution still shows false positive risk and no preventable_candidate evidence. |
+| holding_exit_decision_matrix_advisory | agree | instrumentation_gap | state=hold, value=False, window=daily_intraday | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | All matrix entries are no_clear_edge and counterfactual readiness is zero, so hold is appropriate. |
+| lifecycle_decision_matrix_runtime | correction_proposed | instrumentation_gap | state=hold_sample, value=False, window=rolling_5d | accepted=True, effective_state=hold_sample, effective_value=False, runtime_change=False | adjust_up is not supported because policy_pass_count is only one, promote_ready_count is zero, and runtime approval candidates are empty. |
+| scale_in_price_guard | agree | instrumentation_gap | state=hold_sample, value=60, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=60, runtime_change=False | No resolved or executed scale-in cohort exists, so price guard should hold_sample. |
+| position_sizing_dynamic_formula | agree | instrumentation_gap | state=hold_sample, value=entry_type_5stage_cap25_v1, window=rolling_10d | accepted=True, effective_state=hold_sample, effective_value=entry_type_5stage_cap25_v1, runtime_change=False | Candidate grid is not generated and source_sample_count is zero, so keep the existing formula. |
+| scalping_avg_down_recovery_quality_gate | correction_proposed | incident | state=freeze, value=-, window=cumulative | accepted=True, effective_state=freeze, effective_value=-, runtime_change=False | AVG_DOWN recovery quality shows negative final EV and failed downside/final EV guards; freeze further promotion rather than treating hold_no_edge as benign. |

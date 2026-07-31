@@ -1037,6 +1037,13 @@ def build_ai_market_snapshot(
     )
     explicit_position_ctx = position if isinstance(position, dict) else {}
     stage_value = str(decision_stage or "").strip().lower()
+    require_position_reconciliation = bool(
+        require_position_reconciliation
+        or any(
+            token in stage_value
+            for token in ("holding_flow", "overnight", "submit_authority")
+        )
+    )
     explicit_position_status = (
         str(explicit_position_ctx.get("status") or "").strip().upper()
     )
@@ -1388,6 +1395,19 @@ def build_ai_market_snapshot(
     position_authority_reconciled = bool(
         simulation_position_reconciled or position_reconciled
     )
+    quality_warnings: list[str] = []
+    optional_holding_reconciliation_advisory = bool(
+        not require_position_reconciliation
+        and not simulation_position_reconciled
+        and explicit_position_is_active
+        and stage_value in {"holding_score", "scalping_holding_score"}
+    )
+    if optional_holding_reconciliation_advisory and not position_reconciled:
+        # A plain holding-score observation may remain provider-call eligible,
+        # but it must not claim a fully fresh input when the attached broker
+        # inventory/open-order snapshot is missing or older than its contract.
+        # Submit-authority callers still use the hard blocker below.
+        quality_warnings.append("broker_position_or_open_orders_stale_advisory")
     venue_value = normalized_venue
     broker_route_value = str(broker_route or "").strip().upper()
     broker_route_matches = _broker_route_matches_cohort(
@@ -1395,6 +1415,15 @@ def build_ai_market_snapshot(
         venue_cohort=venue_value,
         session=session_bucket,
     )
+    if (
+        optional_holding_reconciliation_advisory
+        and broker_qty_value is not None
+        and memory_qty_value is not None
+        and broker_qty_value != memory_qty_value
+    ):
+        quality_warnings.append("broker_position_quantity_mismatch_advisory")
+    if optional_holding_reconciliation_advisory and not broker_route_matches:
+        quality_warnings.append("broker_route_venue_mismatch_or_missing_advisory")
     if require_position_reconciliation and not position_authority_reconciled:
         blockers.append("broker_position_or_open_orders_unreconciled")
     if (
@@ -1445,7 +1474,7 @@ def build_ai_market_snapshot(
     status = (
         "blocked"
         if blockers
-        else ("partial" if missing_sources else "fresh_consistent")
+        else ("partial" if missing_sources or quality_warnings else "fresh_consistent")
     )
     preflight = {
         "schema": PREFLIGHT_SCHEMA,
@@ -1454,6 +1483,7 @@ def build_ai_market_snapshot(
         "status": status,
         "blockers": blockers,
         "source_blockers": source_blockers,
+        "quality_warnings": quality_warnings,
         "missing_sources": missing_sources,
         "venue_consistent": venue_consistent,
         "position_reconciled": position_reconciled,
@@ -1660,6 +1690,7 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_input_preflight_status": preflight.get("status"),
         "ai_input_preflight_blockers": preflight.get("blockers", []),
+        "ai_input_preflight_quality_warnings": preflight.get("quality_warnings", []),
         "ai_input_preflight_missing_sources": preflight.get("missing_sources", []),
         "ai_input_preflight_venue_consistent": bool(
             preflight.get("venue_consistent", False)

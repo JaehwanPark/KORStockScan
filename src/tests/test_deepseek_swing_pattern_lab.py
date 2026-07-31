@@ -1624,7 +1624,7 @@ def test_deepseek_payload_feedback_selector_uses_daily_clean_baseline_artifacts(
     report_dir = tmp_path / "data" / "report"
     ldm_dir = report_dir / "swing_lifecycle_decision_matrix"
     ldm_dir.mkdir(parents=True)
-    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-05_mtd.json").write_text(
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-06_mtd.json").write_text(
         "{}", encoding="utf-8"
     )
     (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-03.json").write_text(
@@ -1633,13 +1633,16 @@ def test_deepseek_payload_feedback_selector_uses_daily_clean_baseline_artifacts(
     (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-04.json").write_text(
         "{}", encoding="utf-8"
     )
+    (ldm_dir / "swing_lifecycle_decision_matrix_2026-06-05.json").write_text(
+        "{}", encoding="utf-8"
+    )
     monkeypatch.setattr(payload_mod, "REPORT_DIR", report_dir)
 
     path, source_date = payload_mod._latest_feedback_artifact_path(
         "swing_lifecycle_decision_matrix",
         "swing_lifecycle_decision_matrix",
-        "2026-06-05",
+        "2026-06-06",
     )
 
-    assert path == ldm_dir / "swing_lifecycle_decision_matrix_2026-06-04.json"
-    assert source_date == "2026-06-04"
+    assert path == ldm_dir / "swing_lifecycle_decision_matrix_2026-06-05.json"
+    assert source_date == "2026-06-05"

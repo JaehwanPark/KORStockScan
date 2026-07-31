@@ -396,6 +396,7 @@ class _SummaryAggregate:
         market: str,
         reason_label: str,
         actual_order_submitted: str,
+        sample_per_bucket: int = 6,
     ) -> None:
         self.bucket_start = bucket_start
         self.bucket_end = bucket_end
@@ -407,6 +408,7 @@ class _SummaryAggregate:
         self.market = market
         self.reason_label = reason_label
         self.actual_order_submitted = actual_order_submitted
+        self.sample_per_bucket = max(1, min(int(sample_per_bucket or 1), 6))
         self.event_count = 0
         self.first_seen: datetime | None = None
         self.last_seen: datetime | None = None
@@ -482,7 +484,16 @@ class _SummaryAggregate:
         for sample in ordered_samples:
             offset = int(sample.get("raw_offset") or 0)
             by_offset.setdefault(offset, sample)
-        return [by_offset[offset] for offset in sorted(by_offset)]
+        ordered = [by_offset[offset] for offset in sorted(by_offset)]
+        if len(ordered) <= self.sample_per_bucket:
+            return ordered
+        if self.sample_per_bucket == 1:
+            return ordered[:1]
+        # Keep both temporal boundaries.  A plain prefix slice made small
+        # sample limits lose the final state that explains how the bucket
+        # closed.
+        middle_limit = self.sample_per_bucket - 2
+        return ordered[:1] + ordered[1:-1][:middle_limit] + ordered[-1:]
 
     def to_row(self, *, target_date: str) -> dict[str, Any]:
         numeric_stats = {}
@@ -666,7 +677,9 @@ def _aggregate_key(event: SummaryEvent) -> tuple[str, ...]:
     )
 
 
-def _new_aggregate(event: SummaryEvent) -> _SummaryAggregate:
+def _new_aggregate(
+    event: SummaryEvent, *, sample_per_bucket: int = 6
+) -> _SummaryAggregate:
     bucket_start = event.emitted_at.replace(second=0, microsecond=0)
     bucket_end = bucket_start + timedelta(minutes=1)
     return _SummaryAggregate(
@@ -680,6 +693,7 @@ def _new_aggregate(event: SummaryEvent) -> _SummaryAggregate:
         market=event.market,
         reason_label=event.reason_label,
         actual_order_submitted=event.actual_order_submitted,
+        sample_per_bucket=sample_per_bucket,
     )
 
 
@@ -878,14 +892,14 @@ class ProducerSummaryCompactor:
         *,
         summary_dir: Path,
         mode: str = "off",
-        flush_sec: int = 5,
-        sample_per_bucket: int = 6,
+        flush_sec: int = 60,
+        sample_per_bucket: int = 2,
         reason_labeler: ReasonLabeler = default_reason_label,
     ) -> None:
         self.summary_dir = summary_dir
         self.mode = mode if mode in {"off", "shadow", "suppress"} else "off"
         self.flush_sec = max(0, int(flush_sec or 0))
-        self.sample_per_bucket = max(1, int(sample_per_bucket or 6))
+        self.sample_per_bucket = max(1, min(int(sample_per_bucket or 2), 6))
         self.reason_labeler = reason_labeler
         self._groups: dict[tuple[str, ...], _SummaryAggregate] = {}
         self._last_flush_monotonic = time.monotonic()
@@ -932,8 +946,22 @@ class ProducerSummaryCompactor:
                 "lossless": lossless,
             }
 
+        event_date = event.emitted_at.strftime("%Y-%m-%d")
+        pending_dates = {
+            aggregate.bucket_start.strftime("%Y-%m-%d")
+            for aggregate in self._groups.values()
+        }
+        if pending_dates and pending_dates != {event_date}:
+            # Keep producer-summary provenance on the event's actual date when
+            # a long-running bot crosses midnight.  Flush before adding the
+            # new-day event so counters and rows cannot leak into its manifest.
+            self.flush(target_date=min(pending_dates))
+
         key = _aggregate_key(event)
-        self._groups.setdefault(key, _new_aggregate(event)).add(event)
+        self._groups.setdefault(
+            key,
+            _new_aggregate(event, sample_per_bucket=self.sample_per_bucket),
+        ).add(event)
         self._event_count += 1
         suppress_raw = bool(self.mode == "suppress" and not lossless)
         if suppress_raw:
@@ -944,7 +972,7 @@ class ProducerSummaryCompactor:
             self.flush_sec == 0
             or (time.monotonic() - self._last_flush_monotonic) >= self.flush_sec
         ):
-            self.flush(target_date=_safe_str(payload.get("emitted_date")))
+            self.flush(target_date=event_date)
         return {
             "mode": self.mode,
             "summary_recorded": True,

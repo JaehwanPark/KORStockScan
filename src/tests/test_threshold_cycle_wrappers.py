@@ -18,7 +18,7 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
         in script
     )
     assert (
-        'PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}}"'
+        'PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-05}}"'
         in script
     )
     assert "analysis/gemini_scalping_pattern_lab/run.sh" not in script
@@ -969,6 +969,9 @@ def test_growing_pipeline_wrappers_bound_cadence_and_cpu_affinity():
         assert "korstockscan_default_cpu_affinity monitor" in script
         assert affinity_contract in script
         assert 'taskset -c "$CPU_AFFINITY"' in script
+        if "intraday_feedback.sh" in path:
+            assert "KORSTOCKSCAN_INTRADAY_HEAVY_ANALYSIS_LOCK_FILE" in script
+            assert "flock -n 8" in script
     ws_script = Path("deploy/run_intraday_ws_freshness_monitor.sh").read_text(
         encoding="utf-8"
     )
@@ -979,6 +982,7 @@ def test_growing_pipeline_wrappers_bound_cadence_and_cpu_affinity():
 def test_postclose_wrapper_marks_availability_guard_pause_as_fail():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
+    assert 'MAX_ITERATIONS="${THRESHOLD_CYCLE_MAX_ITERATIONS:-320}"' in script
     assert "[PAUSED] threshold-cycle postclose" in script
     assert "[FAIL] threshold-cycle postclose" in script
     assert "paused_by_availability_guard" in script
@@ -987,6 +991,8 @@ def test_postclose_wrapper_marks_availability_guard_pause_as_fail():
     assert 'completed="$(printf \'%s\' "$summary_json"' in script
     assert 'if [ "${completed:-false}" != "true" ]; then' in script
     assert "compact collection incomplete" in script
+    assert 'failure_reason="compact_collection_incomplete:${status:-unknown}"' in script
+    assert 'write_postclose_status failed "$failure_reason" 2 1' in script
 
 
 def test_postclose_wrapper_reuses_existing_snapshot_when_checkpoint_exists():
@@ -1005,6 +1011,18 @@ def test_postclose_wrapper_reuses_existing_snapshot_when_checkpoint_exists():
         in script
     )
     assert '[ "${REUSE_EXISTING_SNAPSHOT:-false}" != "true" ]' in script
+    assert (
+        'SNAPSHOT_PATH="$SNAPSHOT_DIR/pipeline_events_${TARGET_DATE}_${SNAPSHOT_TS}.jsonl.gz"'
+        in script
+    )
+    assert (
+        'run_postclose_cmd gzip -1 -c -- "$RAW_SOURCE" > "$SNAPSHOT_TEMP_PATH"'
+        in script
+    )
+    assert 'mv -- "$SNAPSHOT_TEMP_PATH" "$SNAPSHOT_PATH"' in script
+    assert 'cp --reflink=auto "$RAW_SOURCE" "$SNAPSHOT_PATH"' not in script
+    assert "cleanup_threshold_cycle_snapshot_temp()" in script
+    assert "removing orphan snapshot without checkpoint" in script
 
 
 def test_postclose_wrapper_resource_guards_heavy_steps():
@@ -1046,6 +1064,19 @@ def test_postclose_wrapper_resource_guards_heavy_steps():
     assert "starting bot after postclose" in script
     assert "reason=restart_action_requested" in script
     assert "wait_for_postclose_resources()" in script
+    assert "refresh_postclose_resource_sample_if_stale()" in script
+    assert (
+        'POSTCLOSE_RESOURCE_AUTO_REFRESH_SAMPLER="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_AUTO_REFRESH_SAMPLER:-true}"'
+        in script
+    )
+    assert (
+        'POSTCLOSE_RESOURCE_SAMPLER_CMD="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_SAMPLER_CMD:-$PROJECT_DIR/deploy/run_system_metric_sampler_cron.sh}"'
+        in script
+    )
+    assert 'item.startswith("sample_age_sec=")' in script
+    assert 'item in {"sampler_missing", "sampler_empty"}' in script
+    assert "resource sampler refreshed" in script
+    assert "resource sampler refresh failed" in script
     assert "sample_age_sec=" in script
     assert "swap_free_mb=" in script
     assert "cpu_busy_pct=" in script

@@ -106,7 +106,7 @@ def test_scalping_avg_down_recovery_calibration_builds_post_add_candidate(
     assert candidate["source_metrics"]["deep_primary"]["sample_count"] == 5
     assert candidate["source_metrics"]["daily_shallow_primary"]["sample_count"] == 10
     assert candidate["source_metrics"]["daily_deep_primary"]["sample_count"] == 5
-    assert report["source_quality"]["clean_baseline_date"] == "2026-06-04"
+    assert report["source_quality"]["clean_baseline_date"] == "2026-06-05"
     assert candidate["target_env_keys"] == []
     assert candidate["recommended_values"]["shallow_max_per_position"] == 2
     assert candidate["recommended_values"]["deep_pnl_min"] == -4.0

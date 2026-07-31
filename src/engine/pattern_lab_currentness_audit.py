@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_currentness_audit"
 REPORT_SCHEMA_VERSION = 1
 REPORT_DIRNAME = REPORT_TYPE
-CLEAN_TUNING_BASELINE_DATE = "2026-06-04"
+CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
 FORBIDDEN_USES = [
     "threshold mutation",
     "order guard mutation",

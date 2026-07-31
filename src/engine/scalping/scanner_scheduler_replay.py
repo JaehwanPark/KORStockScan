@@ -23,7 +23,7 @@ ATTACH_STAGE = "scalping_scanner_runtime_target_attach"
 PRECHECK_STAGE = "scalping_scanner_fast_precheck"
 SCHEDULER_DISPATCH_STAGE = "scalping_scanner_scheduler_work_dispatched"
 HEAVY_EVAL_STAGE = "scalping_scanner_heavy_eval_lag"
-DEFAULT_BASELINE = datetime.fromisoformat("2026-06-04T14:29:09+09:00")
+DEFAULT_BASELINE = datetime.fromisoformat("2026-06-05T00:00:00+09:00")
 
 
 @dataclass(frozen=True, slots=True)

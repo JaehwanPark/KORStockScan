@@ -15,8 +15,8 @@ from src.engine.ai.postclose_review_config import resolve_postclose_ai_review_co
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 KST = timezone(timedelta(hours=9))
-CLEAN_BASELINE_DATE = "2026-06-04"
-CLEAN_BASELINE_TS_KST = "2026-06-04T14:29:09+09:00"
+CLEAN_BASELINE_DATE = "2026-06-05"
+CLEAN_BASELINE_TS_KST = "2026-06-05T00:00:00+09:00"
 REPORT_TYPE = "one_share_threshold_opportunity"
 AI_REVIEW_SCHEMA_NAME = "one_share_threshold_opportunity_ai_review_v1"
 AI_REVIEWER_NAME = "one_share_threshold_opportunity_ai_review"

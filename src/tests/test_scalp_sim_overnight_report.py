@@ -1,6 +1,36 @@
+import gzip
 import json
 
 from src.engine import scalp_sim_overnight as overnight
+
+
+def test_build_report_records_resolved_gzip_source(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    events_dir = data_dir / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    target_date = "2026-05-19"
+    raw_path = events_dir / f"pipeline_events_{target_date}.jsonl"
+    with gzip.open(
+        raw_path.with_name(raw_path.name + ".gz"), "wt", encoding="utf-8"
+    ) as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "stage": "scalp_sim_overnight_decision",
+                    "fields": {"sim_record_id": "SIM-GZ", "ai_action": "SELL_TODAY"},
+                }
+            )
+            + "\n"
+        )
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"active_positions": []}), encoding="utf-8")
+    monkeypatch.setattr(overnight, "DATA_DIR", data_dir)
+
+    report = overnight.build_report(target_date, state_path)
+
+    assert report["source_requested_path"] == str(raw_path)
+    assert report["source_path"] == str(raw_path) + ".gz"
+    assert report["projected_event_count"] == 1
 
 
 def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
@@ -93,6 +123,12 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
                     },
                     ensure_ascii=False,
                 ),
+                json.dumps(
+                    {
+                        "stage": "unrelated_full_source_event",
+                        "fields": {"blob": "x" * 100_000},
+                    }
+                ),
             ]
         )
         + "\n",
@@ -119,6 +155,9 @@ def test_build_report_counts_overnight_events(tmp_path, monkeypatch):
 
     assert report["runtime_effect"] is False
     assert report["decision_authority"] == "sim_observation_only"
+    assert report["source_read_mode"] == "streaming_stage_filter"
+    assert report["full_source_materialized"] is False
+    assert report["projected_event_count"] == 4
     assert report["summary"]["decision_target"] == 2
     assert report["summary"]["hold_overnight"] == 1
     assert report["summary"]["sell_assumed_filled"] == 1

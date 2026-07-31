@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import gzip
 import json
+import os
 import shutil
 import subprocess
 from collections import Counter, defaultdict
@@ -18,11 +20,12 @@ from src.engine.ai_response_contracts import (
     normalize_gatekeeper_action_key,
 )
 from src.engine.monitoring.market_halt_windows import load_market_halt_windows
-from src.utils.constants import DATA_DIR
+from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 REPORT_DIRNAME = "observation_source_quality_audit"
 BACKFILL_REPORT_STEM = "observation_source_quality_backfill_audit"
+DEFAULT_HEAVY_ANALYSIS_LOCK_PATH = PROJECT_ROOT / "tmp" / "intraday_heavy_analysis.lock"
 
 
 SOURCE_LIKE_TOKENS = (
@@ -2856,7 +2859,15 @@ def _reviewed_unknown_reason_for_stage_field(
 
     def _is_reviewed_scanner_venue_not_available() -> bool:
         field = str(key or "")
-        if field not in {"scanner_observed_venue", "venue", "effective_venue"}:
+        if field not in {
+            "scanner_observed_venue",
+            "venue",
+            "effective_venue",
+            "scanner_promotion_reanchor_effective_venue",
+            "scanner_stale_backoff_canonical_effective_venue",
+            "opening_rotation_no_pullback_continuation_effective_venue",
+            "market_session_bucket",
+        }:
             return False
         if str(value or "").strip().upper() != "UNKNOWN":
             return False
@@ -2865,6 +2876,29 @@ def _reviewed_unknown_reason_for_stage_field(
         ):
             return False
         venue_resolution = _field_text("venue_resolution")
+        runtime_event_fail_closed = (
+            venue_resolution
+            == "scanner_runtime_event:explicit_target_venue_missing"
+            or venue_resolution.startswith(
+                "scanner_runtime_event:conflicting_explicit_target_venue:"
+            )
+            or venue_resolution.startswith(
+                "scanner_runtime_event:market_session_bucket_venue_mismatch:"
+            )
+        )
+        if (
+            field
+            in {
+                "venue",
+                "effective_venue",
+                "scanner_promotion_reanchor_effective_venue",
+                "scanner_stale_backoff_canonical_effective_venue",
+                "opening_rotation_no_pullback_continuation_effective_venue",
+            }
+            and runtime_event_fail_closed
+            and _is_falseish("runtime_effect")
+        ):
+            return True
         if stage == "scalping_scanner_watching_runtime_skip":
             observed_resolution = _field_text("scanner_observed_venue_resolution")
             return (
@@ -4656,7 +4690,10 @@ def _evaluate_contracts(
                     ),
                 }
             )
-        example_keys.setdefault(stage, list(fields.keys())[:30])
+        example_keys.setdefault(
+            stage,
+            list(row.get("_audit_example_fields") or list(fields.keys())[:30]),
+        )
         for key, value in normalized.items():
             if _source_like_field(key) and _is_present(value):
                 field_presence[stage][key] += 1
@@ -4915,13 +4952,457 @@ def _hard_gate_summary(contract_result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _streaming_contract_audit(
+    path: Path,
+) -> tuple[int, Counter[str], dict[str, Any], list[dict[str, Any]]]:
+    """Evaluate source-quality contracts without retaining source event rows."""
+    stage_counts: Counter[str] = Counter()
+    stage_first: dict[str, str] = {}
+    stage_last: dict[str, str] = {}
+    example_keys: dict[str, list[str]] = {}
+    field_presence: dict[str, Counter[str]] = defaultdict(Counter)
+    unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    reviewed_unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    unknown_examples: dict[tuple[str, str], list[str]] = defaultdict(list)
+    reviewed_unknown_examples: dict[tuple[str, str], list[str]] = defaultdict(list)
+    invalid_label_findings: dict[str, dict[str, Any]] = {}
+    numeric_counts: Counter[str] = Counter()
+    numeric_examples: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    contract_stats: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "missing": Counter(),
+            "zero": Counter(),
+            "invalid": Counter(),
+            "conditional_fields": set(),
+        }
+    )
+    row_candidates: list[dict[str, Any]] = []
+    event_count = 0
+    resolved_path = existing_or_gzip_path(path)
+    if not resolved_path.exists():
+        resolved_path = path
+
+    for payload in iter_jsonl(resolved_path):
+        if payload.get("event_type") not in (None, "", "pipeline_event"):
+            continue
+        event_count += 1
+        stage = _stage_name(payload)
+        stage_counts[stage] += 1
+        timestamp = _row_ts(payload)
+        if timestamp:
+            stage_first[stage] = min(stage_first.get(stage, timestamp), timestamp)
+            stage_last[stage] = max(stage_last.get(stage, timestamp), timestamp)
+        fields = payload.get("fields")
+        fields = fields if isinstance(fields, dict) else {}
+        example_keys.setdefault(stage, list(fields.keys())[:30])
+        normalized = _normalized_fields_for_contract(stage, fields)
+
+        contract = STAGE_CONTRACTS.get(stage)
+        if contract is not None:
+            violations = _row_contract_violations(stage, payload, contract)
+            stats = contract_stats[stage]
+            stats["missing"].update(violations["missing_fields"])
+            stats["zero"].update(violations["zero_fields"])
+            stats["invalid"].update(
+                "action" if field == "gatekeeper_action" else field
+                for field in violations["invalid_fields"]
+            )
+            stats["conditional_fields"].update(
+                _conditional_required_fields(stage, normalized)
+            )
+            if any(violations.values()):
+                all_reasons = set(
+                    _raw_row_exclusion_reasons(payload, violations, contract)
+                )
+                all_reasons.difference_update(
+                    {
+                        "required_field_missing",
+                        "invalid_label",
+                        "zero_context_sensitive",
+                        "provenance_missing",
+                    }
+                )
+                row_candidates.append(
+                    {
+                        "identity": _row_identity(payload, line_no=event_count),
+                        "violations": violations,
+                        "context_reasons": sorted(all_reasons),
+                        "producer_hint": _producer_hint_for_row(payload),
+                    }
+                )
+
+        for label_field, normalized_field in (
+            ("flow_state", "invalid_flow_state_label"),
+            ("gatekeeper_action", "invalid_gatekeeper_action_label"),
+        ):
+            if not _is_present(normalized.get(normalized_field)):
+                continue
+            key = f"{stage}:{label_field}"
+            finding = invalid_label_findings.setdefault(
+                key,
+                {
+                    "stage": stage,
+                    "field": label_field,
+                    "count": 0,
+                    "examples": [],
+                    "routing": "source_quality_blocker",
+                },
+            )
+            finding["count"] += 1
+            if len(finding["examples"]) < 5:
+                finding["examples"].append(str(normalized.get(normalized_field)))
+
+        if normalized.get("ai_reason_numeric_inconsistency") is True:
+            numeric_counts[stage] += 1
+            if len(numeric_examples[stage]) < 5:
+                numeric_examples[stage].append(
+                    {
+                        "field": str(
+                            normalized.get("ai_reason_numeric_inconsistency_field")
+                            or "tick_acceleration_ratio"
+                        ),
+                        "reason": str(
+                            normalized.get("ai_reason_numeric_inconsistency_reason")
+                            or "-"
+                        ),
+                        "excerpt": str(
+                            normalized.get("ai_reason_numeric_inconsistency_excerpt")
+                            or ""
+                        )[:240],
+                        "detected_value": normalized.get(
+                            "ai_reason_numeric_inconsistency_detected_value"
+                        ),
+                    }
+                )
+        for key, value in normalized.items():
+            if _source_like_field(key) and _is_present(value):
+                field_presence[stage][key] += 1
+        for key, value in _unknown_scan_values(payload, normalized).items():
+            if not _unknown_token_present(value):
+                continue
+            reviewed_reason = _reviewed_unknown_reason_for_field(
+                key,
+                value,
+                emitted_date=str(
+                    payload.get("emitted_date") or payload.get("date") or ""
+                ),
+            )
+            if not reviewed_reason:
+                reviewed_reason = _reviewed_unknown_reason_for_stage_field(
+                    stage, key, value, normalized
+                )
+            if (
+                not reviewed_reason
+                and stage == "scalp_sim_panic_context_warning"
+                and str(key)
+                in {
+                    "panic_epoch_id",
+                    "market_risk_state",
+                    "liquidity_state",
+                    "risk_regime_epoch_id",
+                }
+            ):
+                reviewed_reason = "reviewed_missing_risk_regime_context"
+            if reviewed_reason:
+                compound_key = f"{key}:{reviewed_reason}"
+                reviewed_unknown_counts[stage][compound_key] += 1
+                samples = reviewed_unknown_examples[(stage, compound_key)]
+            else:
+                compound_key = key
+                unknown_counts[stage][compound_key] += 1
+                samples = unknown_examples[(stage, compound_key)]
+            if len(samples) < 5:
+                samples.append(str(value)[:240])
+
+    results: dict[str, Any] = {}
+    warnings: list[str] = []
+    for stage, contract in STAGE_CONTRACTS.items():
+        total = stage_counts.get(stage, 0)
+        bounds = {
+            "first_timestamp": stage_first.get(stage),
+            "last_timestamp": stage_last.get(stage),
+        }
+        if total < contract.min_sample:
+            results[stage] = {
+                "sample_count": total,
+                "status": "sample_below_floor",
+                **bounds,
+                "required_fields": list(contract.required_fields),
+                "metric_role": "source_quality_gate",
+                "decision_authority": contract.decision_authority,
+                "runtime_effect": False,
+                "forbidden_uses": contract.forbidden_uses,
+            }
+            continue
+        stats = contract_stats[stage]
+        missing_counts = {
+            field: int(stats["missing"].get(field, 0))
+            for field in contract.required_fields
+        }
+        conditional_fields = sorted(stats["conditional_fields"])
+        missing_counts.update(
+            {field: int(stats["missing"].get(field, 0)) for field in conditional_fields}
+        )
+        zero_counts = {
+            field: int(stats["zero"].get(field, 0))
+            for field in contract.zero_sensitive_fields
+        }
+        invalid_label_counts = dict(stats["invalid"])
+        expected_invalid_fields: set[str] = set()
+        if stage == "soft_stop_whipsaw_confirmation":
+            expected_invalid_fields.add("flow_state")
+        if "gatekeeper" in stage:
+            expected_invalid_fields.add("action")
+        if stage in SIM_SUBMIT_GUARD_STAGE_ACTIONS:
+            expected_invalid_fields.update(
+                {
+                    "sim_submit_guard_action_contract",
+                    "sim_submit_guard_authority_contract",
+                    "sim_submit_guard_actual_order_contract",
+                    "sim_submit_guard_broker_forbidden_contract",
+                    "sim_submit_guard_runtime_effect_contract",
+                }
+            )
+        if stage in SCANNER_RANK_CHANGE_SIGN_STAGES:
+            expected_invalid_fields.update(
+                {
+                    "rank_change_sign_consistency_unknown",
+                    "rank_change_sign_consistency_mismatch",
+                }
+            )
+        if stage == "shallow_source_gap_recheck":
+            expected_invalid_fields.update(
+                {
+                    "shallow_recheck_state_contract",
+                    "shallow_recheck_quote_contract",
+                    "shallow_recheck_ws_micro_contract",
+                    "shallow_recheck_authority_contract",
+                }
+            )
+        if _stage_requires_tick_pressure_provenance(stage):
+            expected_invalid_fields.add("tick_aggressor_pressure_usable_contract")
+        if _stage_requires_minute_candle_provenance(stage):
+            expected_invalid_fields.add("minute_candle_window_fresh_contract")
+        if set(PRE_AI_RISK_CONTEXT_FIELDS).issubset(set(contract.required_fields)):
+            expected_invalid_fields.update(
+                {
+                    "pre_ai_actual_order_submitted_contract",
+                    "pre_ai_broker_order_forbidden_contract",
+                    "pre_ai_allowed_runtime_apply_contract",
+                }
+            )
+        for field in expected_invalid_fields:
+            invalid_label_counts.setdefault(field, 0)
+        missing_rates = {
+            field: round(count / total, 4) for field, count in missing_counts.items()
+        }
+        zero_rates = {
+            field: round(count / total, 4) for field, count in zero_counts.items()
+        }
+        invalid_label_rates = {
+            field: round(count / total, 4)
+            for field, count in invalid_label_counts.items()
+        }
+        missing_violations = {
+            field: rate
+            for field, rate in missing_rates.items()
+            if rate > contract.max_missing_rate
+        }
+        zero_violations = {
+            field: rate
+            for field, rate in zero_rates.items()
+            if rate > contract.max_zero_rate
+        }
+        invalid_label_violations = {
+            field: rate for field, rate in invalid_label_rates.items() if rate > 0
+        }
+        status = (
+            "fail"
+            if invalid_label_violations
+            else "pass" if not missing_violations and not zero_violations else "warning"
+        )
+        if status != "pass":
+            warnings.append(stage)
+        results[stage] = {
+            "sample_count": total,
+            "status": status,
+            **bounds,
+            "required_fields": list(contract.required_fields),
+            "conditional_required_fields": conditional_fields,
+            "missing_counts": missing_counts,
+            "missing_rates": missing_rates,
+            "zero_sensitive_fields": list(contract.zero_sensitive_fields),
+            "zero_counts": zero_counts,
+            "zero_rates": zero_rates,
+            "invalid_label_counts": invalid_label_counts,
+            "invalid_label_rates": invalid_label_rates,
+            "missing_violations": missing_violations,
+            "zero_violations": zero_violations,
+            "invalid_label_violations": invalid_label_violations,
+            "metric_role": "source_quality_gate",
+            "decision_authority": contract.decision_authority,
+            "runtime_effect": False,
+            "forbidden_uses": contract.forbidden_uses,
+        }
+
+    high_volume_no_source_fields = [
+        {
+            "stage": stage,
+            "event_count": count,
+            "first_timestamp": stage_first.get(stage),
+            "last_timestamp": stage_last.get(stage),
+            "example_fields": example_keys.get(stage, []),
+            "routing": "instrumentation_gap_or_diagnostic_contract_needed",
+        }
+        for stage, count in stage_counts.most_common()
+        if count >= 50
+        and not field_presence.get(stage)
+        and stage not in STAGE_CONTRACTS
+    ]
+    unknown_token_findings = []
+    for stage, counter in sorted(
+        unknown_counts.items(), key=lambda item: (-stage_counts[item[0]], item[0])
+    ):
+        total = max(1, stage_counts.get(stage, 0))
+        fields = [
+            {
+                "field": field,
+                "count": count,
+                "rate": round(count / total, 4),
+                "examples": unknown_examples.get((stage, field), []),
+            }
+            for field, count in counter.most_common()
+        ]
+        if fields:
+            unknown_token_findings.append(
+                {
+                    "stage": stage,
+                    "event_count": stage_counts.get(stage, 0),
+                    "fields": fields,
+                    "routing": "source_quality_blocker_or_provenance_backfill",
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                }
+            )
+    reviewed_unknown_token_findings = []
+    for stage, counter in sorted(
+        reviewed_unknown_counts.items(),
+        key=lambda item: (-stage_counts[item[0]], item[0]),
+    ):
+        total = max(1, stage_counts.get(stage, 0))
+        fields = []
+        for compound_key, count in counter.most_common():
+            field, _, reason = compound_key.partition(":")
+            fields.append(
+                {
+                    "field": field,
+                    "count": count,
+                    "rate": round(count / total, 4),
+                    "reviewed_reason": reason or "reviewed_unknown",
+                    "examples": reviewed_unknown_examples.get(
+                        (stage, compound_key), []
+                    ),
+                }
+            )
+        if fields:
+            reviewed_unknown_token_findings.append(
+                {
+                    "stage": stage,
+                    "event_count": stage_counts.get(stage, 0),
+                    "fields": fields,
+                    "routing": "reviewed_unknown_token_provenance",
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                }
+            )
+    numeric_consistency_findings = [
+        {
+            "stage": stage,
+            "event_count": stage_counts.get(stage, 0),
+            "finding_count": count,
+            "rate": round(count / max(1, stage_counts.get(stage, 0)), 4),
+            "routing": "source_quality_review_numeric_consistency",
+            "decision_authority": "source_quality_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": "EV/live-auto/runtime-apply/threshold mutation/order guard mutation/provider_route_change/bot_restart",
+            "examples": numeric_examples.get(stage, []),
+        }
+        for stage, count in sorted(
+            numeric_counts.items(), key=lambda item: (-stage_counts[item[0]], item[0])
+        )
+        if count
+    ]
+    contract_result = {
+        "stage_contracts": results,
+        "warning_stages": warnings,
+        "invalid_label_findings": list(invalid_label_findings.values()),
+        "high_volume_no_source_fields": high_volume_no_source_fields,
+        "unknown_token_findings": unknown_token_findings,
+        "reviewed_unknown_token_findings": reviewed_unknown_token_findings,
+        "numeric_consistency_findings": numeric_consistency_findings,
+        "field_presence_top": {
+            stage: dict(counter.most_common(20))
+            for stage, counter in sorted(
+                field_presence.items(),
+                key=lambda item: (-stage_counts[item[0]], item[0]),
+            )
+        },
+    }
+    hard_fields_by_stage = _hard_violation_fields_by_stage(contract_result)
+    exclusions: list[dict[str, Any]] = []
+    for candidate in row_candidates:
+        identity = candidate["identity"]
+        hard_fields = hard_fields_by_stage.get(str(identity.get("stage") or ""))
+        if not hard_fields:
+            continue
+        violations = {
+            key: [
+                field
+                for field in value
+                if field in hard_fields.get(key, set())
+                or (
+                    key == "invalid_fields"
+                    and field == "gatekeeper_action"
+                    and "action" in hard_fields.get(key, set())
+                )
+            ]
+            for key, value in candidate["violations"].items()
+        }
+        if not any(violations.values()):
+            continue
+        reasons = set(candidate["context_reasons"])
+        if violations["missing_fields"]:
+            reasons.add("required_field_missing")
+        if violations["invalid_fields"]:
+            reasons.add("invalid_label")
+        if violations["zero_fields"]:
+            reasons.add("zero_context_sensitive")
+        if any(_source_like_field(field) for field in violations["missing_fields"]):
+            reasons.add("provenance_missing")
+        exclusions.append(
+            {
+                **identity,
+                **violations,
+                "reason": "row_contract_gap",
+                "exclusion_reasons": sorted(reasons) or ["row_contract_gap"],
+                "producer_hint": candidate["producer_hint"],
+                "tuning_input_allowed": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+        )
+    return event_count, stage_counts, contract_result, exclusions
+
+
 def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
-    rows = _iter_events(raw_path)
-    stage_counts = _stage_counts(rows)
-    contract_result = _evaluate_contracts(rows, stage_counts)
+    event_count, stage_counts, contract_result, row_exclusions = (
+        _streaming_contract_audit(raw_path)
+    )
     hard_gate = _hard_gate_summary(contract_result)
-    row_exclusions = _hard_blocking_row_exclusions(rows, contract_result)
     status = (
         "fail"
         if any(
@@ -4959,9 +5440,14 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
                 "real_execution_quality_approval",
             ],
         },
-        "source": {"pipeline_events": str(raw_path), "exists": raw_path.exists()},
+        "source": {
+            "pipeline_events": str(raw_path),
+            "exists": raw_path.exists(),
+            "read_mode": "streaming_contract_aggregate",
+            "full_source_materialized": False,
+        },
         "summary": {
-            "event_count": len(rows),
+            "event_count": event_count,
             "stage_count": len(stage_counts),
             "top_stages": dict(stage_counts.most_common(20)),
             "warning_stage_count": len(contract_result["warning_stages"]),
@@ -5568,26 +6054,49 @@ def main() -> int:
         help="Print only report identity and summary instead of the full audit payload.",
     )
     args = parser.parse_args()
-    if args.backfill:
-        report = (
-            write_backfill_report(args.target_date, start_date=args.start_date)
-            if args.write
-            else build_observation_source_quality_backfill_audit(
-                args.target_date, start_date=args.start_date
-            )
+    lock_path = Path(
+        os.getenv(
+            "KORSTOCKSCAN_INTRADAY_HEAVY_ANALYSIS_LOCK_FILE",
+            str(DEFAULT_HEAVY_ANALYSIS_LOCK_PATH),
         )
-    else:
-        report = (
-            write_report(args.target_date)
-            if args.write
-            else build_observation_source_quality_audit(args.target_date)
-        )
-    stdout_payload = _stdout_report_payload(
-        report,
-        summary_only=args.print_summary,
     )
-    print(json.dumps(stdout_payload, ensure_ascii=False, indent=2))
-    return 0
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as lock_fp:
+        try:
+            fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(
+                json.dumps(
+                    {
+                        "report_type": REPORT_DIRNAME,
+                        "target_date": args.target_date,
+                        "status": "skipped_heavy_analysis_busy",
+                        "runtime_effect": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 75
+        if args.backfill:
+            report = (
+                write_backfill_report(args.target_date, start_date=args.start_date)
+                if args.write
+                else build_observation_source_quality_backfill_audit(
+                    args.target_date, start_date=args.start_date
+                )
+            )
+        else:
+            report = (
+                write_report(args.target_date)
+                if args.write
+                else build_observation_source_quality_audit(args.target_date)
+            )
+        stdout_payload = _stdout_report_payload(
+            report,
+            summary_only=args.print_summary,
+        )
+        print(json.dumps(stdout_payload, ensure_ascii=False, indent=2))
+        return 0
 
 
 if __name__ == "__main__":

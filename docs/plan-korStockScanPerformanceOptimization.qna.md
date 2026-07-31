@@ -4,7 +4,7 @@
 
 이 문서는 Plan Rebase 본문에 길게 두기에는 크지만 반복적으로 참조해야 하는 운영 판단 기준을 모아둔 문서다. 현재 역할은 과거 latency/composite 세부 판단 FAQ가 아니라, 자동화체인에서 `승률/EV`, `daily/rolling`, `real/sim/probe`, `proposal/apply`를 혼동해 오판하지 않도록 막는 반복 Q&A다.
 
-튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 이 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보존하며 현재 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 사용하지 않는다.
+튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 이 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 보존하며 현재 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 사용하지 않는다.
 
 2026-05-13 자동화체인 리뉴얼 전 원문은 [qna pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.qna.pre-automation-renewal-2026-05-13.md)에 보존했다.
 

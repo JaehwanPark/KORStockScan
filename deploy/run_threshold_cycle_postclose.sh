@@ -7,7 +7,11 @@ VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 # shellcheck source=cpu_affinity_profile.sh
 . "$SCRIPT_DIR/cpu_affinity_profile.sh"
-MAX_ITERATIONS="${THRESHOLD_CYCLE_MAX_ITERATIONS:-80}"
+# Compressed snapshots are intentionally capped at 5k input lines per collector
+# invocation (one quarter of the default 20k uncompressed chunk).  Keep the
+# default total input-line budget equivalent so a healthy, progressing gzip
+# collection is not stopped before EOF solely because it needs more invocations.
+MAX_ITERATIONS="${THRESHOLD_CYCLE_MAX_ITERATIONS:-320}"
 MAX_INPUT_LINES="${THRESHOLD_CYCLE_MAX_INPUT_LINES_PER_CHUNK:-20000}"
 MAX_OUTPUT_LINES="${THRESHOLD_CYCLE_MAX_OUTPUT_LINES_PER_PARTITION:-25000}"
 MAX_CPU_BUSY_PCT="${THRESHOLD_CYCLE_MAX_CPU_BUSY_PCT:-95}"
@@ -24,6 +28,8 @@ POSTCLOSE_MAX_SAMPLE_AGE_SEC="${THRESHOLD_CYCLE_POSTCLOSE_MAX_SAMPLE_AGE_SEC:-18
 POSTCLOSE_MAX_LOAD1="${THRESHOLD_CYCLE_POSTCLOSE_MAX_LOAD1:-64}"
 POSTCLOSE_RESOURCE_WAIT_SEC="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_SEC:-300}"
 POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC:-10}"
+POSTCLOSE_RESOURCE_AUTO_REFRESH_SAMPLER="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_AUTO_REFRESH_SAMPLER:-true}"
+POSTCLOSE_RESOURCE_SAMPLER_CMD="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_SAMPLER_CMD:-$PROJECT_DIR/deploy/run_system_metric_sampler_cron.sh}"
 POSTCLOSE_BOT_ACTION="${THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION:-none}"
 POSTCLOSE_BOT_SESSION="${THRESHOLD_CYCLE_POSTCLOSE_BOT_SESSION:-bot}"
 POSTCLOSE_BOT_RESTART_WAIT_SEC="${THRESHOLD_CYCLE_POSTCLOSE_BOT_RESTART_WAIT_SEC:-5}"
@@ -37,7 +43,7 @@ AI_CORRECTION_MAX_ATTEMPTS="${THRESHOLD_CYCLE_AI_CORRECTION_MAX_ATTEMPTS:-2}"
 AI_CORRECTION_RETRY_DELAY_SEC="${THRESHOLD_CYCLE_AI_CORRECTION_RETRY_DELAY_SEC:-20}"
 AI_CORRECTION_REUSE_IF_VALID="${THRESHOLD_CYCLE_REUSE_AI_REVIEW_IF_VALID:-true}"
 RUN_PATTERN_LABS="${THRESHOLD_CYCLE_RUN_PATTERN_LABS:-true}"
-PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}}"
+PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-05}}"
 RUN_SWING_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE:-false}"
 if [[ "$RUN_SWING_POSTCLOSE" == "true" || "$RUN_SWING_POSTCLOSE" == "1" ]]; then
   RUN_SWING_LIFECYCLE_AUDIT="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_AUDIT:-true}"
@@ -126,6 +132,7 @@ FORCE_LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS
 FORCE_DEEP_AUDITS="${THRESHOLD_CYCLE_FORCE_DEEP_AUDITS:-false}"
 FORCE_WORKORDER_BRANCH="${THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH:-false}"
 SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"
+SNAPSHOT_TEMP_PATH=""
 ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
 STATUS_DIR="$PROJECT_DIR/data/report/threshold_cycle_postclose_status"
@@ -307,9 +314,16 @@ mark_postclose_failed() {
   emit_postclose_marker "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE reason=$reason failed_at=$failed_at"
 }
 
+cleanup_threshold_cycle_snapshot_temp() {
+  if [ -n "${SNAPSHOT_TEMP_PATH:-}" ] && [ -f "$SNAPSHOT_TEMP_PATH" ]; then
+    rm -f -- "$SNAPSHOT_TEMP_PATH"
+  fi
+}
+
 trap 'rc=$?; mark_postclose_failed command_failed "$rc"; restart_postclose_bot_if_requested; exit "$rc"' ERR
 trap 'mark_postclose_failed interrupted 130; restart_postclose_bot_if_requested; exit 130' INT
 trap 'mark_postclose_failed terminated 143; restart_postclose_bot_if_requested; exit 143' TERM
+trap 'cleanup_threshold_cycle_snapshot_temp' EXIT
 
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status running started 0 0
@@ -418,6 +432,34 @@ print(json.dumps({
 PY
 }
 
+refresh_postclose_resource_sample_if_stale() {
+  local label="$1"
+  local waited="$2"
+  local status="$3"
+  local stale
+  if [ "$POSTCLOSE_RESOURCE_AUTO_REFRESH_SAMPLER" != "true" ] && [ "$POSTCLOSE_RESOURCE_AUTO_REFRESH_SAMPLER" != "1" ]; then
+    return 1
+  fi
+  if [ "$waited" -ne 0 ] && [ $((waited % 60)) -ne 0 ]; then
+    return 1
+  fi
+  stale="$(printf '%s' "$status" | "$VENV_PY" -c '
+import json, sys
+payload = json.load(sys.stdin)
+issues = [str(item) for item in payload.get("issues") or []]
+print(str(any(item.startswith("sample_age_sec=") or item in {"sampler_missing", "sampler_empty"} for item in issues)).lower())
+')"
+  if [ "$stale" != "true" ] || [ ! -x "$POSTCLOSE_RESOURCE_SAMPLER_CMD" ]; then
+    return 1
+  fi
+  if "$POSTCLOSE_RESOURCE_SAMPLER_CMD" >/dev/null 2>&1; then
+    echo "[threshold-cycle] resource sampler refreshed label=$label waited=${waited}s command=$POSTCLOSE_RESOURCE_SAMPLER_CMD" >&2
+    return 0
+  fi
+  echo "[threshold-cycle] resource sampler refresh failed label=$label waited=${waited}s command=$POSTCLOSE_RESOURCE_SAMPLER_CMD" >&2
+  return 1
+}
+
 wait_for_postclose_resources() {
   local label="$1"
   local waited=0
@@ -436,6 +478,7 @@ wait_for_postclose_resources() {
       echo "[threshold-cycle] resource guard timeout label=$label waited=${waited}s status=$status" >&2
       return 1
     fi
+    refresh_postclose_resource_sample_if_stale "$label" "$waited" "$status" || true
     echo "[threshold-cycle] resource guard wait label=$label waited=${waited}s status=$status" >&2
     sleep "$POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC"
     waited=$((waited + POSTCLOSE_RESOURCE_WAIT_INTERVAL_SEC))
@@ -774,13 +817,24 @@ if [ "$USE_SNAPSHOT" = "true" ]; then
   EXISTING_SNAPSHOT_PATH="$(
     find "$SNAPSHOT_DIR" -maxdepth 1 -type f \( -name "pipeline_events_${TARGET_DATE}_*.jsonl" -o -name "pipeline_events_${TARGET_DATE}_*.jsonl.gz" \) | sort | tail -n 1
   )"
-  SNAPSHOT_PATH="$SNAPSHOT_DIR/pipeline_events_${TARGET_DATE}_${SNAPSHOT_TS}.jsonl"
+  SNAPSHOT_PATH="$SNAPSHOT_DIR/pipeline_events_${TARGET_DATE}_${SNAPSHOT_TS}.jsonl.gz"
   if [ -f "$CHECKPOINT_PATH" ] && [ -n "$EXISTING_SNAPSHOT_PATH" ] && [ -f "$EXISTING_SNAPSHOT_PATH" ]; then
     SOURCE_ARGS=(--source-path "$EXISTING_SNAPSHOT_PATH")
     REUSE_EXISTING_SNAPSHOT="true"
     echo "[threshold-cycle] reusing immutable snapshot source=$EXISTING_SNAPSHOT_PATH checkpoint=$CHECKPOINT_PATH"
   elif [ -f "$RAW_SOURCE" ]; then
-    cp --reflink=auto "$RAW_SOURCE" "$SNAPSHOT_PATH"
+    if [ -n "$EXISTING_SNAPSHOT_PATH" ] && [ -f "$EXISTING_SNAPSHOT_PATH" ]; then
+      echo "[threshold-cycle] removing orphan snapshot without checkpoint source=$EXISTING_SNAPSHOT_PATH"
+      rm -f -- "$EXISTING_SNAPSHOT_PATH"
+    fi
+    SNAPSHOT_TEMP_PATH="${SNAPSHOT_PATH}.tmp.$$"
+    run_postclose_cmd gzip -1 -c -- "$RAW_SOURCE" > "$SNAPSHOT_TEMP_PATH"
+    if [ ! -s "$SNAPSHOT_TEMP_PATH" ]; then
+      echo "[threshold-cycle] compressed snapshot is empty source=$RAW_SOURCE" >&2
+      false
+    fi
+    mv -- "$SNAPSHOT_TEMP_PATH" "$SNAPSHOT_PATH"
+    SNAPSHOT_TEMP_PATH=""
     SOURCE_ARGS=(--source-path "$SNAPSHOT_PATH")
     REUSE_EXISTING_SNAPSHOT="false"
     echo "[threshold-cycle] using immutable snapshot source=$SNAPSHOT_PATH"
@@ -847,6 +901,11 @@ done
 if [ "${completed:-false}" != "true" ]; then
   echo "[threshold-cycle] compact collection incomplete target_date=$TARGET_DATE status=${status:-unknown} paused_reason=${paused_reason:-}" >&2
   failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+  failure_reason="compact_collection_incomplete:${status:-unknown}"
+  if [ -n "${paused_reason:-}" ]; then
+    failure_reason="${failure_reason}:${paused_reason}"
+  fi
+  write_postclose_status failed "$failure_reason" 2 1
   if [ "${status:-}" = "paused_by_availability_guard" ]; then
     emit_postclose_marker "[PAUSED] threshold-cycle postclose target_date=$TARGET_DATE status=${status:-unknown} paused_reason=${paused_reason:-} failed_at=$failed_at"
   fi
@@ -960,7 +1019,7 @@ if [ "$RUN_ENTRY_AI_GATE_BACKTEST" = "true" ] || [ "$RUN_ENTRY_AI_GATE_BACKTEST"
   wait_for_postclose_resources "entry_ai_gate_backtest"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_ai_gate_backtest \
     --target-date "$TARGET_DATE" \
-    --start-date "${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}" \
+    --start-date "${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-05}" \
     --end-date "$TARGET_DATE" \
     --write
   wait_for_report_artifact \
@@ -972,7 +1031,7 @@ if [ "$RUN_TIGHT_STOP_ENTRY_COMPANION_REPORT" = "true" ] || [ "$RUN_TIGHT_STOP_E
   wait_for_postclose_resources "tight_stop_entry_companion_report"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.tight_stop_entry_companion_report \
     --target-date "$TARGET_DATE" \
-    --start-date "${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}" \
+    --start-date "${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-05}" \
     --end-date "$TARGET_DATE" \
     --write
   wait_for_report_artifact \
@@ -984,7 +1043,7 @@ if [ "$RUN_AI_SCORE_OPTIMIZATION_BACKTEST" = "true" ] || [ "$RUN_AI_SCORE_OPTIMI
   wait_for_postclose_resources "ai_score_optimization_backtest"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_score_optimization_backtest \
     --target-date "$TARGET_DATE" \
-    --start-date "${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-04}" \
+    --start-date "${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-05}" \
     --end-date "$TARGET_DATE" \
     --write
   wait_for_report_artifact \

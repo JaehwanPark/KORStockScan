@@ -470,6 +470,144 @@ def test_shared_positive_inventory_is_used_for_active_holding_reconciliation():
     )
 
 
+def test_optional_holding_score_marks_stale_broker_snapshot_partial_advisory():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    mod.publish_broker_account_snapshot(
+        inventory=[{"code": "005930", "qty": 1}],
+        successful_exchanges={"KRX"},
+        open_orders=[],
+        open_orders_request_succeeded=True,
+        captured_at=now - 61,
+    )
+    try:
+        snapshot = mod.build_ai_market_snapshot(
+            stock_code="005930",
+            decision_stage="holding_score",
+            ws_data=_ws(now),
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="SOR",
+            candle_context=_candle(),
+            position={
+                "status": "HOLDING",
+                "buy_qty": 1,
+                "remaining_qty": 1,
+                "buy_price": 10_000,
+            },
+            now_ts=now,
+            require_position_reconciliation=False,
+        )
+    finally:
+        mod._clear_broker_account_snapshot_for_tests()
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["allowed"] is True
+    assert preflight["status"] == "partial"
+    assert preflight["blockers"] == []
+    assert preflight["quality_warnings"] == [
+        "broker_position_or_open_orders_stale_advisory"
+    ]
+    assert mod.ai_market_snapshot_log_fields(snapshot)[
+        "ai_input_preflight_quality_warnings"
+    ] == ["broker_position_or_open_orders_stale_advisory"]
+
+
+def test_submit_authority_stage_enforces_reconciliation_without_caller_flag():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="holding_score_submit_authority",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        candle_context=_candle(),
+        position={
+            "status": "HOLDING",
+            "buy_qty": 1,
+            "remaining_qty": 1,
+            "buy_price": 10_000,
+        },
+        now_ts=now,
+        require_position_reconciliation=False,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["allowed"] is False
+    assert preflight["position_reconciliation_mode"] == "broker_account"
+    assert "broker_position_or_open_orders_unreconciled" in preflight["blockers"]
+    assert preflight["quality_warnings"] == []
+
+
+def test_optional_holding_score_marks_quantity_mismatch_partial_advisory():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    mod.publish_broker_account_snapshot(
+        inventory=[{"code": "005930", "qty": 2}],
+        successful_exchanges={"KRX"},
+        open_orders=[],
+        open_orders_request_succeeded=True,
+        captured_at=now - 1,
+    )
+    try:
+        snapshot = mod.build_ai_market_snapshot(
+            stock_code="005930",
+            decision_stage="holding_score",
+            ws_data=_ws(now),
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            broker_route="SOR",
+            candle_context=_candle(),
+            position={
+                "status": "HOLDING",
+                "buy_qty": 1,
+                "remaining_qty": 1,
+                "buy_price": 10_000,
+            },
+            now_ts=now,
+        )
+    finally:
+        mod._clear_broker_account_snapshot_for_tests()
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["allowed"] is True
+    assert preflight["position_reconciled"] is True
+    assert preflight["status"] == "partial"
+    assert preflight["quality_warnings"] == [
+        "broker_position_quantity_mismatch_advisory"
+    ]
+
+
+def test_optional_holding_score_marks_broker_route_mismatch_partial_advisory():
+    now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="scalping_holding_score",
+        ws_data=_ws(now),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="NXT",
+        candle_context=_candle(),
+        position={
+            "status": "HOLDING",
+            "buy_qty": 1,
+            "remaining_qty": 1,
+            "broker_holding_qty": 1,
+            "broker_snapshot_at": now - 1,
+            "open_buy_qty": 0,
+            "open_sell_qty": 0,
+        },
+        now_ts=now,
+    )
+
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["allowed"] is True
+    assert preflight["position_reconciled"] is True
+    assert preflight["status"] == "partial"
+    assert preflight["quality_warnings"] == [
+        "broker_route_venue_mismatch_or_missing_advisory"
+    ]
+
+
 def test_shared_positive_inventory_quantity_mismatch_blocks_holding_preflight():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     mod.publish_broker_account_snapshot(

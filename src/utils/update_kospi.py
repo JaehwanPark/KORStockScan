@@ -765,6 +765,13 @@ def _resolve_latest_report_date() -> str:
     return latest_report_date
 
 
+def _swing_postclose_reports_enabled() -> bool:
+    """Return whether the operator explicitly enabled Swing postclose work."""
+    return str(
+        os.getenv("KORSTOCKSCAN_SWING_POSTCLOSE_OPERATOR_OVERRIDE", "false")
+    ).strip().lower() in {"1", "true", "on", "yes"}
+
+
 def _run_bottom_rebound_sim_auto_loop(report_date: str) -> dict:
     if str(
         os.getenv("KORSTOCKSCAN_RUN_BOTTOM_REBOUND_SIM_AUTO_LOOP", "true")
@@ -859,65 +866,90 @@ def run_update_kospi_chain() -> dict:
         )
 
     latest_report_date = _resolve_latest_report_date()
-    logger.info("📈 스윙 일일 시뮬레이션 및 선정 funnel 리포트 생성 시작...")
-    try:
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "src.engine.swing_daily_simulation_report",
-                "--date",
-                latest_report_date,
-            ],
-            check=True,
-        )
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "src.engine.swing_selection_funnel_report",
-                latest_report_date,
-            ],
-            check=True,
-        )
-        logger.info(f"✅ 스윙 일일 리포트 생성 완료: {latest_report_date}")
-        steps.append(
-            _step("swing_daily_reports", "completed", report_date=latest_report_date)
-        )
-    except subprocess.CalledProcessError as e:
-        logger.error(f"❌ 스윙 일일 리포트 생성 실패 (무시하고 진행): {e}")
+    if _swing_postclose_reports_enabled():
+        logger.info("📈 스윙 일일 시뮬레이션 및 선정 funnel 리포트 생성 시작...")
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.engine.swing_daily_simulation_report",
+                    "--date",
+                    latest_report_date,
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.engine.swing_selection_funnel_report",
+                    latest_report_date,
+                ],
+                check=True,
+            )
+            logger.info(f"✅ 스윙 일일 리포트 생성 완료: {latest_report_date}")
+            steps.append(
+                _step(
+                    "swing_daily_reports", "completed", report_date=latest_report_date
+                )
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"❌ 스윙 일일 리포트 생성 실패 (무시하고 진행): {e}")
+            steps.append(
+                _step(
+                    "swing_daily_reports",
+                    "failed",
+                    report_date=latest_report_date,
+                    returncode=e.returncode,
+                    error=str(e),
+                )
+            )
+
+        logger.info("🧪 바닥 반등 스윙 sim-only 자동승인 루프 실행 시작...")
+        try:
+            loop_summary = _run_bottom_rebound_sim_auto_loop(latest_report_date)
+            logger.info(
+                f"✅ 바닥 반등 sim-only 자동승인 루프 완료: {loop_summary.get('status')}"
+            )
+            steps.append(
+                _step(
+                    "bottom_rebound_sim_auto_loop",
+                    str(loop_summary.get("status", "completed")),
+                    details=loop_summary,
+                )
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(
+                f"❌ 바닥 반등 sim-only 자동승인 루프 실패 (무시하고 진행): {e}"
+            )
+            steps.append(
+                _step(
+                    "bottom_rebound_sim_auto_loop",
+                    "failed",
+                    report_date=latest_report_date,
+                    returncode=e.returncode,
+                    error=str(e),
+                )
+            )
+    else:
+        logger.info("⏭️ Swing postclose reports skipped: operator override is disabled")
         steps.append(
             _step(
                 "swing_daily_reports",
-                "failed",
+                "skipped_disabled",
                 report_date=latest_report_date,
-                returncode=e.returncode,
-                error=str(e),
+                operator_override="KORSTOCKSCAN_SWING_POSTCLOSE_OPERATOR_OVERRIDE",
+                runtime_effect=False,
             )
-        )
-
-    logger.info("🧪 바닥 반등 스윙 sim-only 자동승인 루프 실행 시작...")
-    try:
-        loop_summary = _run_bottom_rebound_sim_auto_loop(latest_report_date)
-        logger.info(
-            f"✅ 바닥 반등 sim-only 자동승인 루프 완료: {loop_summary.get('status')}"
         )
         steps.append(
             _step(
                 "bottom_rebound_sim_auto_loop",
-                str(loop_summary.get("status", "completed")),
-                details=loop_summary,
-            )
-        )
-    except subprocess.CalledProcessError as e:
-        logger.error(f"❌ 바닥 반등 sim-only 자동승인 루프 실패 (무시하고 진행): {e}")
-        steps.append(
-            _step(
-                "bottom_rebound_sim_auto_loop",
-                "failed",
+                "skipped_disabled",
                 report_date=latest_report_date,
-                returncode=e.returncode,
-                error=str(e),
+                operator_override="KORSTOCKSCAN_SWING_POSTCLOSE_OPERATOR_OVERRIDE",
+                runtime_effect=False,
             )
         )
 

@@ -170,6 +170,59 @@ def test_update_kospi_bottom_rebound_sim_auto_loop_can_be_disabled(monkeypatch):
     assert result == {"status": "skipped_disabled"}
 
 
+def test_update_kospi_swing_postclose_reports_require_operator_override(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_SWING_POSTCLOSE_OPERATOR_OVERRIDE", raising=False)
+    assert update_kospi._swing_postclose_reports_enabled() is False
+
+    monkeypatch.setenv("KORSTOCKSCAN_SWING_POSTCLOSE_OPERATOR_OVERRIDE", "true")
+    assert update_kospi._swing_postclose_reports_enabled() is True
+
+
+def test_update_kospi_chain_skips_all_swing_postclose_work_without_override(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    monkeypatch.delenv("KORSTOCKSCAN_SWING_POSTCLOSE_OPERATOR_OVERRIDE", raising=False)
+    monkeypatch.setattr(
+        update_kospi, "update_kospi_data", lambda: {"status": "completed"}
+    )
+    monkeypatch.setattr(
+        update_kospi.subprocess,
+        "run",
+        lambda command, **kwargs: calls.append(command),
+    )
+    monkeypatch.setattr(
+        update_kospi, "_resolve_latest_report_date", lambda: "2026-07-31"
+    )
+    monkeypatch.setattr(
+        update_kospi,
+        "_run_bottom_rebound_sim_auto_loop",
+        lambda _date: (_ for _ in ()).throw(AssertionError("swing loop called")),
+    )
+    monkeypatch.setattr(
+        update_kospi,
+        "_load_latest_quote_state",
+        lambda: {"db_state_status": "available"},
+    )
+    monkeypatch.setattr(
+        update_kospi,
+        "_write_update_kospi_status",
+        lambda _payload: tmp_path / "status.json",
+    )
+
+    result = update_kospi.run_update_kospi_chain()
+
+    assert len(calls) == 1
+    assert calls[0][1].endswith("src/model/recommend_daily_v2.py")
+    steps = {row["name"]: row for row in result["steps"]}
+    assert steps["swing_daily_reports"]["status"] == "skipped_disabled"
+    assert steps["swing_daily_reports"]["runtime_effect"] is False
+    assert steps["bottom_rebound_sim_auto_loop"]["status"] == "skipped_disabled"
+    assert steps["bottom_rebound_sim_auto_loop"]["runtime_effect"] is False
+    assert result["status"] == "completed"
+
+
 def test_update_kospi_bottom_rebound_sim_auto_loop_command_order(monkeypatch):
     calls = []
 

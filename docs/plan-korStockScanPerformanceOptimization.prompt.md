@@ -5,7 +5,7 @@
 
 이 문서는 세션 시작용 포인터만 남긴다. 현재 판단의 source of truth는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 작업은 날짜별 `stage2 todo checklist`, 자동화 산출물/consumer 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다. 2026-05-13 이전 prompt 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md)에 보존했다. 기준 문서 갱신은 사용자의 명시 작업지시가 있을 때만 수행하고 runtime/order/provider/bot/threshold 변경과 분리한다.
 
-튜닝 데이터 의사결정 기준은 `clean_tuning_baseline_date=2026-06-04`, `clean_tuning_baseline_ts_kst=2026-06-04T14:29:09+09:00`이다. 정책 source는 `data/source_quality/clean_baseline_policy.json`이며, pre-baseline raw/report/analytics artifact는 archive/audit evidence로만 남기고 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval에 사용하지 않는다.
+튜닝 데이터 의사결정 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 정책 source는 `data/source_quality/clean_baseline_policy.json`이며, pre-baseline raw/report/analytics artifact는 archive/audit evidence로만 남기고 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval에 사용하지 않는다.
 
 ## 현재 Source of Truth
 

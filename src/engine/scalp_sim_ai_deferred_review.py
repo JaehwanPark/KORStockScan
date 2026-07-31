@@ -5,18 +5,19 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import read_jsonl
+from src.utils.jsonl_io import iter_jsonl
 
 REPORT_DIR = DATA_DIR / "report" / "scalp_sim_ai_deferred_review"
 
 
-def _load_events(target_date: str) -> list[dict]:
+def _iter_events(target_date: str) -> Iterator[dict]:
     path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-    return read_jsonl(path, errors="ignore")
+    yield from iter_jsonl(path, errors="ignore")
 
 
 def _event_fields(event: dict) -> dict:
@@ -39,22 +40,18 @@ def _is_deferred_event(event: dict) -> bool:
 
 
 def build_report(target_date: str) -> dict:
-    events = _load_events(target_date)
-    deferred = [event for event in events if _is_deferred_event(event)]
-    reason_counts = Counter(
-        str(_event_fields(event).get("defer_reason") or "-") for event in deferred
-    )
-    source_counts = Counter(
-        str(_event_fields(event).get("source_stage") or "-") for event in deferred
-    )
-    critical_class_counts = Counter(
-        str(_event_fields(event).get("critical_class") or "unknown")
-        for event in deferred
-    )
+    reason_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
+    critical_class_counts: Counter[str] = Counter()
     critical_reason_counts = Counter()
     rows = []
-    for event in deferred:
+    for event in _iter_events(target_date):
+        if not _is_deferred_event(event):
+            continue
         fields = _event_fields(event)
+        reason_counts[str(fields.get("defer_reason") or "-")] += 1
+        source_counts[str(fields.get("source_stage") or "-")] += 1
+        critical_class_counts[str(fields.get("critical_class") or "unknown")] += 1
         for reason in str(fields.get("critical_reason") or "unknown").split(","):
             critical_reason_counts[reason.strip() or "unknown"] += 1
         rows.append(
@@ -86,6 +83,11 @@ def build_report(target_date: str) -> dict:
         "source_path": str(
             DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
         ),
+        "source_read_contract": {
+            "read_mode": "streaming_stage_filter",
+            "full_source_materialized": False,
+            "retained_scope": "scalp_sim_ai_holding_deferred_rows_only",
+        },
         "artifact_role": "postclose_source_packet_for_sim_ai_quality_review",
         "runtime_effect": False,
         "decision_authority": "sim_observation_only",

@@ -12834,16 +12834,33 @@ def _scanner_runtime_event_venue_fields(stock) -> dict[str, str]:
     stock = stock if isinstance(stock, dict) else {}
     supported_venues = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
     explicit_values = []
+    venue_source = "runtime_target"
     for key in ("effective_venue", "venue"):
         value = str(stock.get(key) or "").strip().upper()
         if value in supported_venues:
             explicit_values.append((key, value))
+    fast_precheck_fields = stock.get("_scanner_fast_precheck_fields")
+    fast_precheck_fields = (
+        fast_precheck_fields if isinstance(fast_precheck_fields, dict) else {}
+    )
+    if not explicit_values:
+        for key in ("effective_venue", "venue"):
+            value = str(fast_precheck_fields.get(key) or "").strip().upper()
+            if value in supported_venues:
+                explicit_values.append((f"fast_precheck.{key}", value))
+        if explicit_values:
+            venue_source = "scanner_fast_precheck"
     unique_venues = {value for _, value in explicit_values}
     if len(unique_venues) == 1:
         canonical_venue = next(iter(unique_venues))
-        venue_resolution = str(stock.get("venue_resolution") or "").strip()
+        resolution_source = (
+            fast_precheck_fields if venue_source == "scanner_fast_precheck" else stock
+        )
+        venue_resolution = str(resolution_source.get("venue_resolution") or "").strip()
         if not venue_resolution:
             venue_resolution = "scanner_runtime_event:explicit_venue_resolution_missing"
+        elif venue_source == "scanner_fast_precheck":
+            venue_resolution = f"scanner_runtime_event:scanner_fast_precheck:{venue_resolution}"
     elif unique_venues:
         canonical_venue = "UNKNOWN"
         venue_resolution = (
@@ -12854,6 +12871,10 @@ def _scanner_runtime_event_venue_fields(stock) -> dict[str, str]:
         canonical_venue = "UNKNOWN"
         venue_resolution = "scanner_runtime_event:explicit_target_venue_missing"
     market_session_bucket = str(stock.get("market_session_bucket") or "").strip()
+    if not market_session_bucket and venue_source == "scanner_fast_precheck":
+        market_session_bucket = str(
+            fast_precheck_fields.get("market_session_bucket") or ""
+        ).strip()
     expected_bucket_by_venue = {
         "KRX": "krx_regular",
         "PREMARKET_KRX_LIKE": "krx_like_premarket",
@@ -12876,6 +12897,14 @@ def _scanner_runtime_event_venue_fields(stock) -> dict[str, str]:
         "venue": canonical_venue,
         "effective_venue": canonical_venue,
         "venue_resolution": venue_resolution,
+        "venue_source_quality_status": (
+            "pass" if canonical_venue in supported_venues else "reviewed_fail_closed"
+        ),
+        "venue_unknown_reviewed_reason": (
+            "not_applicable"
+            if canonical_venue in supported_venues
+            else venue_resolution
+        ),
         "market_session_bucket": (
             market_session_bucket
             or "scanner_runtime_event:market_session_bucket_missing"
@@ -43168,6 +43197,7 @@ def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
             )
     for field_name in (
         "ai_input_preflight_blockers",
+        "ai_input_preflight_quality_warnings",
         "ai_input_preflight_missing_sources",
     ):
         if field_name not in payload:

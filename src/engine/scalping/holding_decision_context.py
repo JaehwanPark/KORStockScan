@@ -1318,6 +1318,14 @@ def build_holding_decision_context(
     context["source_quality"]["simulation_position_reconciled"] = bool(
         preflight.get("simulation_position_reconciled", False)
     )
+    context["source_quality"]["warnings"] = list(
+        preflight.get("quality_warnings") or []
+    )
+    if (
+        context["source_quality"].get("status") == "fresh_consistent"
+        and preflight.get("status") == "partial"
+    ):
+        context["source_quality"]["status"] = "partial"
     context["source_quality"]["scale_in_support_allowed"] = bool(
         preflight.get("allowed", False)
         and preflight.get("position_reconciled", False)
@@ -1523,6 +1531,7 @@ def holding_decision_context_model_payload(
                     "position_reconciliation_mode",
                     "simulation_position_reconciled",
                     "scale_in_support_allowed",
+                    "warnings",
                 ),
             ),
             "ai_market_snapshot_v1": source.get("ai_market_snapshot_v1"),

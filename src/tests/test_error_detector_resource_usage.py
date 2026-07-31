@@ -7,10 +7,38 @@ from unittest.mock import patch
 
 import pytest
 
-from src.engine.error_detectors.resource_usage import (
-    ResourceUsageDetector,
-    SAMPLER_JSONL,
-)
+from src.engine.error_detectors.resource_usage import ResourceUsageDetector
+from src.engine.monitoring.system_metric_sampler import _cpu_pct
+
+
+def test_cpu_pct_separates_compute_from_iowait():
+    prev = {
+        "user": 100,
+        "nice": 0,
+        "system": 100,
+        "idle": 100,
+        "iowait": 100,
+        "irq": 0,
+        "softirq": 0,
+        "steal": 0,
+    }
+    curr = {
+        "user": 120,
+        "nice": 0,
+        "system": 110,
+        "idle": 102,
+        "iowait": 158,
+        "irq": 0,
+        "softirq": 0,
+        "steal": 0,
+    }
+
+    assert _cpu_pct(curr, prev) == {
+        "cpu_busy_pct": 97.78,
+        "cpu_non_idle_pct": 97.78,
+        "cpu_compute_busy_pct": 33.33,
+        "iowait_pct": 64.44,
+    }
 
 
 class TestResourceUsageDetector:
@@ -120,6 +148,75 @@ class TestResourceUsageDetector:
                 detector = ResourceUsageDetector()
                 result = detector.check()
             assert result.severity == "fail"
+
+    def test_iowait_is_reported_separately_from_compute_cpu(self):
+        import time
+
+        sample = {
+            "ts": "2026-07-31T14:52:10+09:00",
+            "epoch": int(time.time()),
+            "cpu": {
+                "cpu_busy_pct": 97.96,
+                "cpu_non_idle_pct": 97.96,
+                "cpu_compute_busy_pct": 46.2,
+                "iowait_pct": 51.76,
+            },
+            "memory": {
+                "mem_available_mb": 4096.0,
+                "swap_total_mb": 8192.0,
+                "swap_free_mb": 7000.0,
+            },
+            "loadavg": {"15m": 1.5},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = Path(tmpdir) / "samples.jsonl"
+            sample_file.write_text(json.dumps(sample), encoding="utf-8")
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
+            ):
+                result = ResourceUsageDetector().check()
+
+        assert result.severity == "fail"
+        assert "I/O wait 51.76%" in result.summary
+        assert "CPU compute busy" not in result.summary
+        assert result.details["cpu_non_idle_pct"] == 97.96
+        assert result.details["cpu_compute_busy_pct"] == 46.2
+
+    def test_legacy_cpu_sample_derives_compute_busy_from_iowait(self):
+        import time
+
+        sample = {
+            "ts": "2026-07-31T14:52:10+09:00",
+            "epoch": int(time.time()),
+            "cpu": {"cpu_busy_pct": 97.96, "iowait_pct": 51.76},
+            "memory": {
+                "mem_available_mb": 4096.0,
+                "swap_total_mb": 8192.0,
+                "swap_free_mb": 7000.0,
+            },
+            "loadavg": {"15m": 1.5},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = Path(tmpdir) / "samples.jsonl"
+            sample_file.write_text(json.dumps(sample), encoding="utf-8")
+            with (
+                patch(
+                    "src.engine.error_detectors.resource_usage.SAMPLER_JSONL",
+                    sample_file,
+                ),
+                patch.object(
+                    ResourceUsageDetector, "_check_disk_free", return_value=8192.0
+                ),
+            ):
+                result = ResourceUsageDetector().check()
+
+        assert result.details["cpu_compute_busy_pct"] == pytest.approx(46.2)
 
     def test_cpu_above_old_threshold_warns_under_95_fail_threshold(self):
         import time

@@ -815,3 +815,49 @@ def test_report_falls_back_when_anchor_price_reconstruction_fails(
         == "counterfactual_sample_or_price_observation_missing"
     )
     assert report["input_summary"]["base_price_reconstruction_gap_count"] == 1
+
+
+def test_report_streams_projected_events_without_retaining_large_payload(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-07"
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    _write_source_quality_pass(data_dir, target_date)
+    _write_pipeline_events(
+        data_dir,
+        target_date,
+        [
+            {
+                "stage": "unrelated",
+                "emitted_at": "2026-07-07T08:59:00+09:00",
+                "fields": {"large_payload": "x" * 100_000},
+            },
+            {
+                "stage": "late_loss_avg_down_retry_submitted",
+                "emitted_at": "2026-07-07T09:00:00+09:00",
+                "stock_code": "123456",
+                "add_type": "AVG_DOWN",
+                "reason": "late_loss_avg_down_retry",
+                "actual_order_submitted": True,
+                "request_price": 10000,
+                "order_type": "00",
+                "fields": {"large_payload": "y" * 100_000},
+            },
+            {
+                "stage": "stat_action_decision_snapshot",
+                "emitted_at": "2026-07-07T09:00:10+09:00",
+                "stock_code": "123456",
+                "curr_price": 9990,
+                "fields": {"large_payload": "z" * 100_000},
+            },
+        ],
+    )
+
+    report = split_plan.build_report(target_date)
+
+    contract = report["input_summary"]["source_read_contract"]
+    assert contract["read_mode"] == "streaming_relevant_field_projection"
+    assert contract["full_source_materialized"] is False
+    assert contract["source_event_count"] == 3
+    assert contract["retained_event_count"] == 2
+    assert "large_payload" not in json.dumps(report)

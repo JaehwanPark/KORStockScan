@@ -68,37 +68,40 @@ def _event_contract_valid(row: dict[str, Any]) -> bool:
 
 def _load_events(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    status = {
+    initial_status = {
         "path": str(path),
         "exists": path.exists(),
         "readable": False,
+        "read_mode": "streaming_filtered",
+        "full_source_materialized": False,
         "line_count": 0,
         "invalid_json_line_count": 0,
         "invalid_schema_line_count": 0,
         "matching_event_count": 0,
         "contract_violation_count": 0,
     }
+    status = dict(initial_status)
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                status["line_count"] += 1
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    status["invalid_json_line_count"] += 1
+                    continue
+                if not isinstance(row, dict):
+                    status["invalid_schema_line_count"] += 1
+                    continue
+                if row.get("pipeline") == "LIMIT_DOWN_WATCH":
+                    rows.append(row)
+                    if not _event_contract_valid(row):
+                        status["contract_violation_count"] += 1
     except (OSError, UnicodeError):
-        return rows, status
+        return [], initial_status
     status["readable"] = True
-    for line in lines:
-        if not line.strip():
-            continue
-        status["line_count"] += 1
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            status["invalid_json_line_count"] += 1
-            continue
-        if not isinstance(row, dict):
-            status["invalid_schema_line_count"] += 1
-            continue
-        if row.get("pipeline") == "LIMIT_DOWN_WATCH":
-            rows.append(row)
-            if not _event_contract_valid(row):
-                status["contract_violation_count"] += 1
     status["matching_event_count"] = len(rows)
     status["valid"] = bool(
         status["exists"]

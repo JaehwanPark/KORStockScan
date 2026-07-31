@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 KST = ZoneInfo("Asia/Seoul")
-CLEAN_BASELINE_DATE = "2026-06-04"
+CLEAN_BASELINE_DATE = "2026-06-05"
 SCHEMA = "ai_decision_action_outcome_calibration_v1"
 POLICY_VERSION = "exact_decision_trace_cumulative_action_outcome_v1"
 REPORT_SUBDIR = "ai_decision_action_outcome_calibration"

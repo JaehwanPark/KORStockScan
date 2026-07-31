@@ -627,7 +627,7 @@ def test_build_report_uses_prior_cumulative_state_for_daily_increment(
     )
     assert report["input_summary"]["source_dates"] == [source_date, target_date]
     assert report["cumulative_state"]["through_date"] == target_date
-    assert report["cumulative_state"]["clean_tuning_baseline_date"] == "2026-06-04"
+    assert report["cumulative_state"]["clean_tuning_baseline_date"] == "2026-06-05"
     assert balanced["real_sample_count"] == 2
     assert balanced["cumulative_judgment_quality"]["learning_sample_count"] == 2
     assert balanced["cumulative_judgment_quality"]["equal_weight_avg_profit_pct"] == 1.5
@@ -647,7 +647,7 @@ def test_prior_cumulative_state_is_rejected_after_source_quality_refresh(
                 "cumulative_state": {
                     "window_policy": ("clean_baseline_cumulative_through_target_date"),
                     "through_date": source_date,
-                    "clean_tuning_baseline_date": "2026-06-04",
+                    "clean_tuning_baseline_date": "2026-06-05",
                     "source_dates": [source_date],
                 },
             }

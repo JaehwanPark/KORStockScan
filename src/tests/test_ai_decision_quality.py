@@ -21,9 +21,13 @@ def _payload():
     return {
         "payload_sha256": "payload-1",
         "replay_exact": True,
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
         "sanitized_user_input": {
             "entry_candle_context": {
                 "schema": quality.ENTRY_CONTEXT_SCHEMA,
+                "venue": "KRX",
+                "session": "krx_regular",
                 "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
                 "bars": [
                     {
@@ -391,6 +395,131 @@ def test_control_manifest_rejects_explicit_sparse_canonical_decision_window():
     )
 
 
+def test_control_manifest_accepts_exact_sparse_no_trade_minute_contract():
+    payload = _payload()
+    payload.update(
+        {"effective_venue": "NXT", "session_bucket": "NXT_AFTERMARKET"}
+    )
+    payload["sanitized_user_input"]["entry_candle_context"].update(
+        {"venue": "NXT", "session": "nxt_aftermarket"}
+    )
+    payload["sanitized_user_input"]["entry_candle_context"]["source_quality"] = {
+        "status": "fresh_consistent",
+        "decision_window": {
+            "status": "sparse_observed_minutes",
+            "provider_call_allowed": True,
+            "missing_bar_count": 2,
+            "max_consecutive_missing_bar_count": 1,
+            "sparse_observed_minutes": True,
+            "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
+        },
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[
+            {
+                **_trace(),
+                "effective_venue": "NXT",
+                "session_bucket": "NXT_AFTERMARKET",
+            }
+        ],
+        payloads=[payload],
+    )
+
+    assert report["status"] == "control_manifest_frozen_collect_exact_samples"
+    assert (
+        report["excluded_counts"].get(
+            "canonical_decision_window_source_quality_blocked", 0
+        )
+        == 0
+    )
+    context = quality._payload_contract(payload)["canonical_contexts"][0]
+    assert context["decision_window_status"] == "sparse_observed_minutes"
+    assert context["decision_window_sparse_observed_minutes"] is True
+    assert (
+        context["decision_window_minute_bar_policy"]
+        == "ka10080_observed_rows_no_synthetic_fill"
+    )
+
+
+def test_control_manifest_rejects_sparse_context_spoofed_across_trace_venue():
+    payload = _payload()
+    payload.update(
+        {"effective_venue": "NXT", "session_bucket": "NXT_AFTERMARKET"}
+    )
+    payload["sanitized_user_input"]["entry_candle_context"].update(
+        {"venue": "NXT", "session": "nxt_aftermarket"}
+    )
+    payload["sanitized_user_input"]["entry_candle_context"]["source_quality"] = {
+        "status": "fresh_consistent",
+        "decision_window": {
+            "status": "sparse_observed_minutes",
+            "provider_call_allowed": True,
+            "missing_bar_count": 2,
+            "sparse_observed_minutes": True,
+            "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
+        },
+    }
+
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[_trace()],
+        payloads=[payload],
+    )
+
+    assert report["status"] == "control_manifest_gap_fix_required"
+    assert report["excluded_counts"]["payload_trace_venue_mismatch"] == 1
+    assert report["excluded_counts"]["payload_trace_session_mismatch"] == 1
+    assert report["excluded_counts"]["canonical_context_venue_session_mismatch"] == 1
+
+
+def test_control_manifest_keeps_krx_sparse_window_out_of_primary_cohort():
+    payload = _payload()
+    payload["sanitized_user_input"]["entry_candle_context"].update(
+        {"venue": "KRX", "session": "krx_regular"}
+    )
+    payload["sanitized_user_input"]["entry_candle_context"]["source_quality"] = {
+        "status": "fresh_consistent",
+        "decision_window": {
+            "status": "sparse_observed_minutes",
+            "provider_call_allowed": True,
+            "missing_bar_count": 1,
+            "max_consecutive_missing_bar_count": 1,
+            "sparse_observed_minutes": True,
+            "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
+        },
+    }
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[_trace()],
+        payloads=[payload],
+    )
+
+    assert report["status"] == "control_manifest_gap_fix_required"
+    assert (
+        report["excluded_counts"]["canonical_decision_window_source_quality_blocked"]
+        == 1
+    )
+
+
 def test_holding_context_contract_reads_nested_candle_bundle_and_bars():
     trace = {
         **_trace(),
@@ -400,9 +529,13 @@ def test_holding_context_contract_reads_nested_candle_bundle_and_bars():
     payload = {
         "payload_sha256": "payload-1",
         "replay_exact": True,
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
         "sanitized_user_input": {
             "holding_decision_context": {
                 "schema": quality.HOLDING_CONTEXT_SCHEMA,
+                "venue": "KRX",
+                "session": "krx_regular",
                 "candle": {
                     "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
                     "bars": [{"minute": "09:00", "close": 100, "is_forming": False}],
