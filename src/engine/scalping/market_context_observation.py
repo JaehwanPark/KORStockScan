@@ -141,6 +141,7 @@ def normalize_completed_bars(
     venue: str,
     session: str,
     as_of: datetime | None = None,
+    sparse_observed_minutes_are_no_trade: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     by_minute: dict[datetime, dict[str, Any]] = {}
     duplicate_count = 0
@@ -150,6 +151,7 @@ def normalize_completed_bars(
     excluded_other_date_count = 0
     excluded_other_session_count = 0
     forming_rows: list[dict[str, Any]] = []
+    max_consecutive_missing_minutes = 0
     expected_venue = str(venue or "").strip().upper()
     try:
         expected_date = (
@@ -230,17 +232,23 @@ def normalize_completed_bars(
         ):
             scheduled_gap_count += 1
             continue
+        max_consecutive_missing_minutes = max(
+            max_consecutive_missing_minutes, delta - 1
+        )
         for offset in range(1, delta):
             missing_minutes.append(
                 (previous["minute"] + timedelta(minutes=offset)).strftime("%H:%M")
             )
 
+    bounded_no_trade_gap = bool(
+        sparse_observed_minutes_are_no_trade and max_consecutive_missing_minutes <= 3
+    )
     blockers = []
     if not completed:
         blockers.append("no_completed_bars")
     if duplicate_conflict_count:
         blockers.append("duplicate_price_or_volume_conflict")
-    if missing_minutes:
+    if missing_minutes and not bounded_no_trade_gap:
         blockers.append("missing_completed_minutes")
     if invalid_count:
         blockers.append("invalid_minute_rows")
@@ -259,6 +267,26 @@ def normalize_completed_bars(
         "excluded_other_session_count": excluded_other_session_count,
         "missing_minute_count": len(missing_minutes),
         "missing_minutes": missing_minutes[:60],
+        "observed_no_trade_minute_count": (
+            len(missing_minutes) if bounded_no_trade_gap else 0
+        ),
+        "observed_no_trade_minutes": (
+            missing_minutes[:60] if bounded_no_trade_gap else []
+        ),
+        "missing_source_minute_count": (
+            0 if bounded_no_trade_gap else len(missing_minutes)
+        ),
+        "max_consecutive_missing_minute_count": max_consecutive_missing_minutes,
+        "no_trade_gap_acceptance_max_consecutive_minutes": 3,
+        "minute_gap_interpretation": (
+            (
+                "ka10080_no_trade_interval_no_synthetic_fill"
+                if bounded_no_trade_gap
+                else "ka10080_extended_gap_source_quality_blocked"
+            )
+            if sparse_observed_minutes_are_no_trade
+            else "strict_missing_source_interval"
+        ),
         "scheduled_call_auction_gap_count": scheduled_gap_count,
     }
     return completed, forming_rows, quality
@@ -269,7 +297,12 @@ def _public_bar(bar: dict[str, Any]) -> dict[str, Any]:
 
 
 def resample_completed_bars(
-    bars: list[dict[str, Any]], *, interval_min: int, session: str
+    bars: list[dict[str, Any]],
+    *,
+    interval_min: int,
+    session: str,
+    as_of: datetime | None = None,
+    sparse_observed_minutes_are_no_trade: bool = False,
 ) -> list[dict[str, Any]]:
     interval = max(1, int(interval_min))
     anchor = _session_anchor(session)
@@ -295,7 +328,15 @@ def resample_completed_bars(
             bucket_start + timedelta(minutes=index) for index in range(interval)
         ]
         observed = {row["minute"] for row in rows}
-        complete = all(item in observed for item in expected)
+        wall_clock_complete = bool(
+            as_of is not None and bucket_start + timedelta(minutes=interval) <= as_of
+        )
+        complete = all(item in observed for item in expected) or (
+            sparse_observed_minutes_are_no_trade and wall_clock_complete and bool(rows)
+        )
+        omitted_minutes = [
+            item.strftime("%H:%M") for item in expected if item not in observed
+        ]
         output.append(
             {
                 "interval_min": interval,
@@ -309,16 +350,29 @@ def resample_completed_bars(
                 "source_bar_count": len(rows),
                 "expected_bar_count": interval,
                 "source_quality": "pass" if complete else "source_quality_blocked",
-                "missing_minutes": [
-                    item.strftime("%H:%M") for item in expected if item not in observed
-                ],
+                "missing_minutes": (
+                    [] if sparse_observed_minutes_are_no_trade else omitted_minutes
+                ),
+                "observed_no_trade_minutes": (
+                    omitted_minutes if sparse_observed_minutes_are_no_trade else []
+                ),
+                "minute_gap_interpretation": (
+                    "no_trade_interval_no_synthetic_fill"
+                    if sparse_observed_minutes_are_no_trade
+                    else "strict_expected_minute"
+                ),
             }
         )
     return output
 
 
 def _opening_range(
-    bars: list[dict[str, Any]], *, minutes: int, session: str
+    bars: list[dict[str, Any]],
+    *,
+    minutes: int,
+    session: str,
+    as_of: datetime | None = None,
+    sparse_observed_minutes_are_no_trade: bool = False,
 ) -> dict[str, Any]:
     if not bars:
         return {"status": "source_quality_blocked", "reason": "no_completed_bars"}
@@ -328,13 +382,18 @@ def _opening_range(
     expected = [anchor + timedelta(minutes=index) for index in range(minutes)]
     by_minute = {bar["minute"]: bar for bar in bars}
     missing = [item for item in expected if item not in by_minute]
-    if missing:
+    selected = [by_minute[item] for item in expected if item in by_minute]
+    window_complete = bool(
+        as_of is not None and anchor + timedelta(minutes=minutes) <= as_of
+    )
+    if missing and not (
+        sparse_observed_minutes_are_no_trade and window_complete and selected
+    ):
         return {
             "status": "source_quality_blocked",
             "reason": "opening_range_missing_minutes",
             "missing_minutes": [item.strftime("%H:%M") for item in missing],
         }
-    selected = [by_minute[item] for item in expected]
     return {
         "status": "pass",
         "minutes": minutes,
@@ -342,6 +401,12 @@ def _opening_range(
         "low": min(row["l"] for row in selected),
         "open": selected[0]["o"],
         "close": selected[-1]["c"],
+        "source_bar_count": len(selected),
+        "observed_no_trade_minutes": (
+            [item.strftime("%H:%M") for item in missing]
+            if sparse_observed_minutes_are_no_trade
+            else []
+        ),
         "range_pct": (
             round(
                 (
@@ -358,7 +423,12 @@ def _opening_range(
     }
 
 
-def _session_bar_vwap(bars: list[dict[str, Any]], *, session: str) -> dict[str, Any]:
+def _session_bar_vwap(
+    bars: list[dict[str, Any]],
+    *,
+    session: str,
+    sparse_observed_minutes_are_no_trade: bool = False,
+) -> dict[str, Any]:
     if not bars:
         return {
             "status": "source_quality_blocked",
@@ -368,7 +438,7 @@ def _session_bar_vwap(bars: list[dict[str, Any]], *, session: str) -> dict[str, 
     expected_start = datetime.combine(
         bars[0]["minute"].date(), _session_anchor(session), tzinfo=KST
     )
-    if bars[0]["minute"] != expected_start:
+    if bars[0]["minute"] != expected_start and not sparse_observed_minutes_are_no_trade:
         return {
             "status": "source_quality_blocked",
             "reason": "session_start_bar_missing",
@@ -394,6 +464,7 @@ def _session_bar_vwap(bars: list[dict[str, Any]], *, session: str) -> dict[str, 
         "completed_volume": total_volume,
         "source_bar_count": len(usable),
         "forming_bar_excluded": True,
+        "zero_trade_minutes_synthetic_fill": False,
     }
 
 
@@ -448,6 +519,7 @@ def derive_scalping_market_features(
     previous_day: dict[str, Any] | None = None,
     market_context: dict[str, Any] | None = None,
     sector_context: dict[str, Any] | None = None,
+    minute_bar_source_api_id: str | None = None,
 ) -> dict[str, Any]:
     """Derive source-neutral features for observation or stage input wrappers."""
     capture_moment = None
@@ -460,12 +532,20 @@ def derive_scalping_market_features(
             capture_moment = None
     if capture_moment is None:
         capture_moment = datetime.now(KST)
+    sparse_observed_minutes_are_no_trade = (
+        str(minute_bar_source_api_id or "").strip().lower() == "ka10080"
+    )
     completed, forming, quality = normalize_completed_bars(
         rows,
         target_date=target_date,
         venue=venue,
         session=session,
         as_of=capture_moment,
+        sparse_observed_minutes_are_no_trade=sparse_observed_minutes_are_no_trade,
+    )
+    accepted_sparse_observed_minutes = (
+        quality.get("minute_gap_interpretation")
+        == "ka10080_no_trade_interval_no_synthetic_fill"
     )
     call_auction = [
         row
@@ -479,7 +559,11 @@ def derive_scalping_market_features(
     resampled = {
         f"{interval}m": (
             resample_completed_bars(
-                continuous_completed, interval_min=interval, session=session
+                continuous_completed,
+                interval_min=interval,
+                session=session,
+                as_of=capture_moment,
+                sparse_observed_minutes_are_no_trade=(accepted_sparse_observed_minutes),
             )
             if derived_allowed
             else []
@@ -534,7 +618,11 @@ def derive_scalping_market_features(
         "multi_timeframe_bars": multi,
         "incomplete_multi_timeframe_bars": incomplete_multi,
         "session_bar_vwap": (
-            _session_bar_vwap(continuous_completed, session=session)
+            _session_bar_vwap(
+                continuous_completed,
+                session=session,
+                sparse_observed_minutes_are_no_trade=(accepted_sparse_observed_minutes),
+            )
             if derived_allowed
             else {
                 "status": "source_quality_blocked",
@@ -543,7 +631,13 @@ def derive_scalping_market_features(
             }
         ),
         "opening_range_5m": (
-            _opening_range(continuous_completed, minutes=5, session=session)
+            _opening_range(
+                continuous_completed,
+                minutes=5,
+                session=session,
+                as_of=capture_moment,
+                sparse_observed_minutes_are_no_trade=(accepted_sparse_observed_minutes),
+            )
             if derived_allowed
             else {
                 "status": "source_quality_blocked",
@@ -551,7 +645,13 @@ def derive_scalping_market_features(
             }
         ),
         "opening_range_15m": (
-            _opening_range(continuous_completed, minutes=15, session=session)
+            _opening_range(
+                continuous_completed,
+                minutes=15,
+                session=session,
+                as_of=capture_moment,
+                sparse_observed_minutes_are_no_trade=(accepted_sparse_observed_minutes),
+            )
             if derived_allowed
             else {
                 "status": "source_quality_blocked",

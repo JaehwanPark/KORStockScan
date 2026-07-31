@@ -68,6 +68,59 @@ def test_ka10027_forwards_official_venue_and_filter_contract(monkeypatch):
     ]
 
 
+def test_ka10027_applies_pure_equity_filter_before_output_limit(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "pred_pre_flu_rt_upper": [
+                    {
+                        "stk_cd": "069500",
+                        "stk_nm": "KODEX 200",
+                        "cur_prc": "30000",
+                    },
+                    {
+                        "stk_cd": "0182R0_AL",
+                        "stk_nm": "1Q K반도체TOP2+",
+                        "cur_prc": "9000",
+                    },
+                    {
+                        "stk_cd": "005930",
+                        "stk_nm": "삼성전자",
+                        "cur_prc": "70000",
+                        "flu_rt": "3.0",
+                    },
+                ]
+            }
+        ],
+    )
+
+    rows = kiwoom_utils.get_top_fluctuation_ka10027(
+        "token", limit=1, pure_equity_only=True
+    )
+
+    assert [row["Code"] for row in rows] == ["005930"]
+    assert rows[0]["SourceRank"] == 3
+    assert rows[0]["PureEquityFilterApplied"] is True
+
+
+def test_ka10027_zero_limit_returns_no_rows(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "pred_pre_flu_rt_upper": [
+                    {"stk_cd": "005930", "stk_nm": "삼성전자", "cur_prc": "70000"}
+                ]
+            }
+        ],
+    )
+
+    assert kiwoom_utils.get_top_fluctuation_ka10027("token", limit=0) == []
+
+
 def test_capture_is_sanitized_source_only_and_separates_venues():
     calls = []
 

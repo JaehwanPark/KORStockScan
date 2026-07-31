@@ -1,3 +1,4 @@
+import hashlib
 import json
 import threading
 from dataclasses import replace
@@ -2663,6 +2664,47 @@ def test_openai_scalping_entry_hot_input_reduces_prompt_payload(monkeypatch):
     assert len(hot_payload) < int(len(compact_payload) * 0.6)
 
 
+def test_entry_hot_payload_refreshes_nested_hash_after_compaction(monkeypatch):
+    engine = _build_engine()
+    candle_context = _allowed_entry_candle_context()
+    candle_context.update(
+        {
+            "enabled": True,
+            "multi_timeframe_ai_input_enabled": True,
+            "input_bundle_version": "scalping_multi_timeframe_context_v1",
+            "multi_timeframe_context": {
+                "schema": "scalping_multi_timeframe_context_v1",
+                "multi_timeframe_bars": [],
+                "incomplete_multi_timeframe_bars": [],
+                "session_bar_vwap": {"status": "pass", "value": 10050.0},
+                "payload_hash": "a" * 64,
+            },
+        }
+    )
+
+    parsed = json.loads(
+        engine._format_entry_screen_hot_data(
+            _sample_ws_data(),
+            _sample_ticks(),
+            _sample_candles(),
+            candle_context=candle_context,
+        )
+    )
+    context = parsed["entry_candle_context"]["multi_timeframe_context"]
+    expected = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in context.items() if key != "payload_hash"},
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert context["source_payload_hash"] == "a" * 64
+    assert context["payload_hash"] == expected
+    assert "multi_timeframe_bars" not in context
+
+
 def test_analyze_target_watching_uses_hot_prompt_and_input_schema(monkeypatch):
     engine = _build_engine()
     captured = {}
@@ -2827,7 +2869,7 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
     assert result["entry_probe_intent_actual_order_submitted"] is False
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v1"
+        == "decision_quality_v2_7_probe_entry_v2"
     )
 
 
@@ -3092,6 +3134,133 @@ def test_decision_quality_v2_7_repairs_non_buy_exact_ledger_classification():
     assert "no_positive_edge" not in result["reason_codes"]
     assert result["decision_quality_model_edge_state"] == "NO_EDGE"
     assert result["decision_quality_model_evidence"]["positive_edge"] == "none"
+
+
+def test_decision_quality_probe_repairs_positive_downside_structural_drop():
+    engine = _build_engine()
+    exact_payload = {
+        "features": {
+            "tick_aggressor_trusted_count": 10,
+            "tick_context_quality": "fresh_computed",
+        },
+        "entry_candle_context": {
+            "structure": {
+                "returns_pct": {
+                    "1": 1.06,
+                    "3": 1.42,
+                    "5": 1.06,
+                    "10": 1.24,
+                    "20": 0.53,
+                    "60": -0.2,
+                },
+                "slopes_pct_per_bar": {
+                    "5": 0.1,
+                    "10": 0.1,
+                    "20": 0.1,
+                    "60": -0.1,
+                },
+            }
+        },
+    }
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 1.0,
+            "expected_downside_pct": 1.2,
+            "confidence": 70,
+            "reason_codes": ["edge_absent", "risk_reward_unfavorable"],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "pullback_recovery",
+                "positive_edge": "moderate",
+                "adverse_risk": "blocking",
+                "trigger": "failed",
+            },
+        },
+        exact_payload=exact_payload,
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["edge_state"] == "EDGE"
+    assert result["expected_downside_pct"] == -1.2
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["entry_probe_intent"] is False
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_downside_sign_normalized",
+        "non_buy_deterministic_edge_classification_aligned",
+    ]
+
+
+def test_decision_quality_probe_aligns_bounded_reversal_to_wait_probe():
+    engine = _build_engine()
+    exact_payload = {
+        "current": {"fluctuation_pct": -18.27},
+        "features": {
+            "entry_momentum_status": "accelerating",
+            "tick_acceleration_ratio": 14.333,
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "tick_aggressor_trusted_count": 10,
+            "tick_context_quality": "fresh_computed",
+        },
+        "entry_candle_context": {
+            "structure": {
+                "returns_pct": {
+                    "1": -0.97,
+                    "3": 0.49,
+                    "5": 1.16,
+                    "10": 2.17,
+                    "20": -8.38,
+                    "60": -10.0,
+                },
+                "slopes_pct_per_bar": {
+                    "5": 0.1,
+                    "10": 0.2,
+                    "20": -0.3,
+                    "60": -0.2,
+                },
+            }
+        },
+    }
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 1.2,
+            "expected_downside_pct": -1.0,
+            "confidence": 79,
+            "reason_codes": ["edge_absent", "tape_adverse"],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "adverse",
+                "tape": "adverse",
+                "risk": "high",
+                "uncertainty": "high",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "failed",
+            },
+        },
+        exact_payload=exact_payload,
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["edge_state"] == "EDGE"
+    assert result["evidence"]["setup"] == "reversal"
+    assert result["evidence"]["trigger"] == "recovery_required"
+    assert result["entry_probe_intent"] is True
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_bounded_reversal_probe_aligned"
+    ]
 
 
 def test_decision_quality_v2_7_repairs_known_tape_trigger_reason_alias():

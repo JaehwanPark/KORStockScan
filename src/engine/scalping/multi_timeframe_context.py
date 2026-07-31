@@ -528,6 +528,7 @@ def build_multi_timeframe_context(
     ws_data: dict[str, Any] | None,
     captured_at: datetime,
     fetch_external_sources: bool = False,
+    minute_bar_source_api_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the shared feature bundle from exact completed source windows."""
 
@@ -574,6 +575,7 @@ def build_multi_timeframe_context(
         previous_day=previous_day,
         market_context=market_context,
         sector_context=sector_context,
+        minute_bar_source_api_id=minute_bar_source_api_id,
     )
     activation = promotion_activation_state(captured_at)
     bundle = {

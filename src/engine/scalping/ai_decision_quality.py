@@ -2037,6 +2037,7 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     tape_status = str(features.get("entry_order_flow_status") or "").lower()
     tape_source = str(features.get("order_flow_pressure_source") or "").lower()
     momentum_status = str(features.get("entry_momentum_status") or "").lower()
+    tick_acceleration = _number(features.get("tick_acceleration_ratio"))
     buy_pressure = _number(features.get("buy_pressure_10t"))
     net_aggressive_delta = _number(features.get("net_aggressive_delta_10t"))
     trusted_tick_count = _number(features.get("tick_aggressor_trusted_count"))
@@ -2098,8 +2099,27 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and regime not in {"failed_breakout", "breakdown"}
         and alignment != "adverse"
     )
+    return_3m = _window_value(returns, 3)
     return_5m = _window_value(returns, 5)
     return_10m = _window_value(returns, 10)
+    return_20m = _window_value(returns, 20)
+    bounded_reversal_probe_candidate = bool(
+        not structural_edge_floor
+        and not blocking_overextension
+        and return_3m is not None
+        and return_3m > 0
+        and return_5m is not None
+        and return_5m > 0
+        and return_10m is not None
+        and return_10m > 0
+        and return_20m is not None
+        and return_20m < 0
+        and momentum_status == "accelerating"
+        and tick_acceleration is not None
+        and tick_acceleration >= 1.5
+        and quote_fresh
+        and tick_fresh
+    )
     peak_drawdown = _number(structure.get("peak_drawdown_pct"))
     high_direction = str(structure.get("high_direction") or "").lower()
     volume_ratio = _number(structure.get("volume_ratio"))
@@ -2133,6 +2153,7 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         "structural_edge_floor": structural_edge_floor,
         "blocking_overextension": blocking_overextension,
         "orderly_pullback_recovery": orderly_pullback_recovery,
+        "bounded_reversal_probe_candidate": bounded_reversal_probe_candidate,
         "trusted_supportive_trigger": trusted_supportive_trigger,
         "thin_tape_sample": thin_tape_sample,
         "adverse_distribution_no_edge": adverse_distribution_no_edge,
@@ -2935,6 +2956,16 @@ def validate_candidate_response(
                     or adverse_risk in {"blocking", "insufficient"}
                 ):
                     errors.append("entry_orderly_pullback_recovery_misclassified")
+            if contract_facts["bounded_reversal_probe_candidate"]:
+                if (
+                    edge_state != "EDGE"
+                    or positive_edge not in {"moderate", "strong"}
+                    or setup != "reversal"
+                    or trigger != "recovery_required"
+                    or action != "WAIT"
+                    or adverse_risk not in {"low", "moderate", "high"}
+                ):
+                    errors.append("entry_bounded_reversal_probe_misclassified")
             if contract_facts["trusted_supportive_trigger"]:
                 if (
                     edge_state != "EDGE"
@@ -3570,6 +3601,15 @@ def execute_openai_prompt_v2_candidate(
                 "The exact payload meets the orderly pullback-recovery contract; "
                 "return EDGE/WAIT with pullback_recovery, recovery_required, and "
                 "non-blocking adverse risk"
+            )
+        if "entry_bounded_reversal_probe_misclassified" in correction_errors:
+            correction_rules.append(
+                "The exact payload has a bounded early reversal: positive completed "
+                "3m/5m/10m returns after a negative 20m return, accelerating "
+                "momentum, tick acceleration >=1.5, and fresh quote/tick inputs. "
+                "Return EDGE/WAIT with reversal, recovery_required, moderate/strong "
+                "positive edge, and low/moderate/high adverse risk. Do not return "
+                "BUY; downstream submit guards retain all execution authority"
             )
         if "entry_trusted_supportive_trigger_misclassified" in correction_errors:
             correction_rules.append(

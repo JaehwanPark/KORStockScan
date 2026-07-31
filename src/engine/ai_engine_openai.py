@@ -104,6 +104,33 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_7_probe_system_prompt,
 )
 
+
+def _refresh_transmitted_multi_timeframe_hash(payload):
+    """Make the nested hash describe the exact compact payload sent to AI."""
+
+    target = payload if isinstance(payload, dict) else {}
+    candle = target.get("entry_candle_context")
+    if not isinstance(candle, dict):
+        return target
+    context = candle.get("multi_timeframe_context")
+    if not isinstance(context, dict):
+        return target
+    source_hash = str(context.get("payload_hash") or "").strip()
+    if source_hash:
+        context.setdefault("source_payload_hash", source_hash)
+    hash_input = {key: value for key, value in context.items() if key != "payload_hash"}
+    context["payload_hash"] = hashlib.sha256(
+        json.dumps(
+            hash_input,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return target
+
+
 DUAL_PERSONA_AGGRESSIVE_PROMPT = """
 You are an opportunity-side quantitative reviewer for shadow calibration.
 Use only the provided context to judge whether opportunity cost is high enough to act before momentum fades.
@@ -1737,7 +1764,7 @@ class GPTSniperEngine:
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
         adapter_version = (
-            "decision_quality_v2_7_probe_entry_v1"
+            "decision_quality_v2_7_probe_entry_v2"
             if probe_prompt_selected
             else "decision_quality_v2_7_entry_v2"
         )
@@ -1787,6 +1814,16 @@ class GPTSniperEngine:
                 else:
                     invalid_reason_codes.append(code)
             repair_codes = []
+            if "expected_downside_pct_positive" in contract_errors and str(
+                repaired.get("action") or ""
+            ).strip().upper() in {"WAIT", "DROP"}:
+                try:
+                    positive_downside = float(repaired.get("expected_downside_pct"))
+                except (TypeError, ValueError):
+                    positive_downside = 0.0
+                if positive_downside > 0:
+                    repaired["expected_downside_pct"] = -positive_downside
+                    repair_codes.append("non_buy_downside_sign_normalized")
             evidence_for_reason_repair = (
                 repaired.get("evidence")
                 if isinstance(repaired.get("evidence"), dict)
@@ -1932,6 +1969,8 @@ class GPTSniperEngine:
                 exact_payload=exact_payload,
             )
             deterministic_fact_errors = {
+                "entry_no_edge_strength_invalid",
+                "entry_no_edge_setup_invalid",
                 "entry_structural_edge_floor_misclassified",
                 "entry_trusted_supportive_trigger_misclassified",
             }
@@ -1988,6 +2027,59 @@ class GPTSniperEngine:
                     repair_codes.append(
                         "non_buy_deterministic_edge_classification_aligned"
                     )
+
+            interim_errors = validate_candidate_response(
+                repaired,
+                stage="entry",
+                exact_payload=exact_payload,
+            )
+            if "entry_bounded_reversal_probe_misclassified" in interim_errors and str(
+                repaired.get("action") or ""
+            ).strip().upper() in {"WAIT", "DROP"}:
+                evidence = (
+                    dict(repaired.get("evidence") or {})
+                    if isinstance(repaired.get("evidence"), dict)
+                    else {}
+                )
+                repaired["edge_state"] = "EDGE"
+                repaired["action"] = "WAIT"
+                evidence.update(
+                    {
+                        "trend": "mixed",
+                        "setup": "reversal",
+                        "positive_edge": "moderate",
+                        "adverse_risk": "high",
+                        "trigger": "recovery_required",
+                    }
+                )
+                if str(evidence.get("risk") or "").lower() not in {
+                    "low",
+                    "medium",
+                    "high",
+                }:
+                    evidence["risk"] = "high"
+                repaired["evidence"] = evidence
+                repaired_reason_codes = [
+                    code
+                    for code in repaired.get("reason_codes") or []
+                    if code
+                    not in {
+                        "edge_absent",
+                        "no_positive_edge",
+                        "recovery_trigger_confirmed",
+                        "recovery_trigger_failed",
+                        "setup_invalidated",
+                    }
+                ]
+                for code in (
+                    "edge_positive",
+                    "reversal_candidate",
+                    "recovery_trigger_required",
+                ):
+                    if code not in repaired_reason_codes:
+                        repaired_reason_codes.append(code)
+                repaired["reason_codes"] = repaired_reason_codes
+                repair_codes.append("non_buy_bounded_reversal_probe_aligned")
 
             repaired_errors = validate_candidate_response(
                 repaired,
@@ -4537,7 +4629,8 @@ class GPTSniperEngine:
             },
         }
         self._attach_entry_candle_inputs(payload, candle_context)
-        return self._clean_hot_entry_payload(payload)
+        cleaned = self._clean_hot_entry_payload(payload)
+        return _refresh_transmitted_multi_timeframe_hash(cleaned)
 
     def _format_entry_screen_hot_data(
         self,
@@ -6357,9 +6450,7 @@ class GPTSniperEngine:
                 or ""
             ).strip()
             if parent_trace_id:
-                parent_lineage_fields["ai_decision_parent_trace_id"] = (
-                    parent_trace_id
-                )
+                parent_lineage_fields["ai_decision_parent_trace_id"] = parent_trace_id
             if parent_snapshot_id:
                 parent_lineage_fields["ai_input_parent_snapshot_id"] = (
                     parent_snapshot_id

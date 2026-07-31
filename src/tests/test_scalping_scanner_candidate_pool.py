@@ -5589,6 +5589,7 @@ def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
         "updown_incls": "1",
         "pric_cnd": "8",
         "trde_prica_cnd": "10",
+        "pure_equity_only": True,
     }
     payload = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]
     assert payload["source_signature"] == "PREV_CLOSE_GAINER"

@@ -1904,6 +1904,7 @@ def get_top_fluctuation_ka10027(
     updown_incls="1",
     pric_cnd="0",
     trde_prica_cnd="0",
+    pure_equity_only=False,
 ):
     """
     [ka10027] 전일대비등락률상위요청
@@ -1933,34 +1934,54 @@ def get_top_fluctuation_ka10027(
     )
 
     cleaned_list = []
+    output_limit = max(0, int(limit))
+    if output_limit == 0:
+        return cleaned_list
 
     if results:
         data = results[0]
         items = data.get("pred_pre_flu_rt_upper", [])
 
-        for item in items[:limit]:
-            code = str(item.get("stk_cd", "")).strip()[:6]
-            name = item.get("stk_nm")
+        for source_rank, item in enumerate(items, start=1):
+            if pure_equity_only:
+                code_fields = _scanner_equity_code_fields(item.get("stk_cd"), "ka10027")
+                if not code_fields:
+                    continue
+                code = code_fields["Code"]
+            else:
+                code_fields = None
+                code = str(item.get("stk_cd", "")).strip()[:6]
+            name = str(item.get("stk_nm") or "").strip()
 
             price = _scanner_to_int(item.get("cur_prc"))
+            if pure_equity_only and not is_valid_stock(code, name, current_price=price):
+                continue
             change_rate = _scanner_to_signed_float(item.get("flu_rt"))
             volume = _scanner_to_int(item.get("now_trde_qty"))
             cntr_str = _scanner_to_signed_float(item.get("cntr_str"))
 
-            cleaned_list.append(
-                {
-                    "Code": code,
-                    "Name": name,
-                    "Price": price,
-                    "ChangeRate": change_rate,
-                    "PreSig": item.get("pred_pre_sig", ""),
-                    "PreSigDirection": _pred_pre_signal_direction(
-                        item.get("pred_pre_sig")
-                    ),
-                    "Volume": volume,
-                    "CntrStr": cntr_str,
-                }
-            )
+            row = {
+                "Code": code,
+                "Name": name,
+                "Price": price,
+                "ChangeRate": change_rate,
+                "PreSig": item.get("pred_pre_sig", ""),
+                "PreSigDirection": _pred_pre_signal_direction(item.get("pred_pre_sig")),
+                "Volume": volume,
+                "CntrStr": cntr_str,
+            }
+            if pure_equity_only:
+                row.update(
+                    {
+                        "RawInstrumentCode": code_fields["RawInstrumentCode"],
+                        "SourceRank": source_rank,
+                        "SourceUniverseSize": len(items),
+                        "PureEquityFilterApplied": True,
+                    }
+                )
+            cleaned_list.append(row)
+            if len(cleaned_list) >= output_limit:
+                break
 
     return cleaned_list
 

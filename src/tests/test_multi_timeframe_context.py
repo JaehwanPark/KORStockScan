@@ -95,7 +95,33 @@ def test_shared_bundle_contains_completed_multi_timeframe_and_macro_context():
     assert len(bundle["payload_hash"]) == 64
 
 
-def test_shared_bundle_blocks_derivatives_on_completed_minute_gap():
+def test_shared_bundle_treats_ka10080_sparse_minutes_as_no_trade_without_fill():
+    rows = _rows(base=10_000, step=10)
+    del rows[7]
+
+    bundle = build_multi_timeframe_context(
+        rows,
+        token=None,
+        symbol="005930",
+        venue="KRX",
+        session="krx_regular",
+        ws_data={},
+        captured_at=datetime(2026, 7, 27, 9, 20, 30, tzinfo=KST),
+        minute_bar_source_api_id="ka10080",
+    )
+
+    assert bundle["source_quality"]["status"] == "pass"
+    assert "missing_completed_minutes" not in bundle["source_quality"]["blockers"]
+    assert bundle["source_quality"]["observed_no_trade_minutes"] == ["09:07"]
+    assert bundle["source_quality"]["missing_source_minute_count"] == 0
+    assert bundle["multi_timeframe_bars"]["3m"]
+    assert bundle["multi_timeframe_bars"]["5m"]
+    assert bundle["multi_timeframe_bars"]["15m"]
+    assert bundle["session_bar_vwap"]["value"] is not None
+    assert bundle["session_bar_vwap"]["zero_trade_minutes_synthetic_fill"] is False
+
+
+def test_shared_bundle_keeps_unknown_sparse_source_fail_closed():
     rows = _rows(base=10_000, step=10)
     del rows[7]
 
@@ -111,8 +137,6 @@ def test_shared_bundle_blocks_derivatives_on_completed_minute_gap():
 
     assert bundle["source_quality"]["status"] == "source_quality_blocked"
     assert "missing_completed_minutes" in bundle["source_quality"]["blockers"]
-    assert bundle["multi_timeframe_bars"] == {"3m": [], "5m": [], "15m": []}
-    assert bundle["session_bar_vwap"]["value"] is None
 
 
 def test_shared_bundle_rejects_invalid_ohlc_instead_of_zero_filling():

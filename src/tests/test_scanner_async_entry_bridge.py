@@ -398,7 +398,7 @@ def test_async_entry_expired_result_is_discarded_and_schedules_fresh_recheck(
     ),
     (
         ("KRX", "", "", "KRX", "005930"),
-        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930_AL"),
+        ("KRX", "_AL", "krx_nxt_integrated", "SOR", "005930"),
         ("KRX", "_AL", "krx_nxt_integrated", "KRX", "005930"),
         ("PREMARKET_KRX_LIKE", "", "", "KRX", "005930_NX"),
         ("NXT", "", "", "KRX", "005930_NX"),

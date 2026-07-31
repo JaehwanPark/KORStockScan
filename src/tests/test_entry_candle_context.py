@@ -512,7 +512,7 @@ def test_venue_request_code_contract_and_dated_activation(monkeypatch):
             },
             broker_route="SOR",
         )
-        == "000660_AL"
+        == "000660"
     )
     assert (
         resolve_entry_candle_request_code(
@@ -704,6 +704,7 @@ def test_krx_regular_accepts_sor_integrated_execution_view_without_event_attribu
     ws = _ws(10000)
     ws["market_suffix"] = "_AL"
     ws["market_route"] = "krx_nxt_integrated"
+    ws["recent_trade_ticks_by_route"] = {"KRX|krx_regular": []}
 
     context = build_entry_candle_context(
         "token",
@@ -718,8 +719,8 @@ def test_krx_regular_accepts_sor_integrated_execution_view_without_event_attribu
     )
 
     assert context["venue"] == "KRX"
-    assert context["request_code"] == "000660_AL"
-    assert context["rest_route"] == "_AL"
+    assert context["request_code"] == "000660"
+    assert context["rest_route"] == "KRX"
     assert context["ws_route"] == "krx_nxt_integrated"
     assert context["source_quality"]["status"] == "fresh_consistent"
     assert "venue_conflict" not in context["source_quality"]["blockers"]

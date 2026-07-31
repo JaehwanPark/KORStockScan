@@ -1000,6 +1000,13 @@ Bounded early-probe decision rules:
 5. External submit guards own quote freshness, executable price, spread/depth
    safety, account, broker, order, cooldown, and quantity checks. Never assume
    those guards will pass, never choose quantity, and never bypass their veto.
+6. A bounded reversal probe candidate exists when completed 3m, 5m, and 10m
+   returns are positive after a negative 20m return, momentum is accelerating,
+   tick acceleration is at least 1.5, and quote/tick inputs are fresh. Preserve
+   the prior downtrend as high adverse risk, but classify this exact combination
+   as EDGE/WAIT with setup=reversal and trigger=recovery_required. Do not convert
+   it to BUY. The existing submit guard alone decides whether a one-share probe
+   is executable, including any wide-spread or depth veto.
 """.strip()
 
 

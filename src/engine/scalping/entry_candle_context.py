@@ -207,18 +207,9 @@ def resolve_entry_candle_request_code(
     if venue_upper in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
         return f"{base}_AL"
     if venue_upper == "KRX":
-        # The planned order route must not silently change the candle venue:
-        # Kiwoom defines the base code as KRX and ``_AL`` as SOR.  Use the SOR
-        # series only when both the order plan and the observed market-data
-        # route identify the integrated execution view.
-        ws_suffix, ws_route = _ws_route(ws_data or {})
-        if (
-            str(session or "").strip().lower() == "krx_regular"
-            and str(broker_route or "").strip().upper() == "SOR"
-            and ws_suffix == "_AL"
-            and ws_route == "krx_nxt_integrated"
-        ):
-            return f"{base}_AL"
+        # Kiwoom defines the plain code as KRX-only and ``_AL`` as SOR.
+        # The order route is not candle provenance: a KRX decision therefore
+        # always uses the KRX-only chart even when the broker plans SOR.
         return base
     return base
 
@@ -425,10 +416,13 @@ def select_route_trade_ticks(
         tick for tick in (ws.get("recent_trade_ticks") or []) if isinstance(tick, dict)
     ]
     partitions = ws.get("recent_trade_ticks_by_route")
+    # An empty request suffix explicitly means the KRX-only contract. Do not
+    # substitute an integrated WS suffix when selecting the canonical tick
+    # partition for a KRX candle request.
     expected_suffix = (
         "_AL"
         if allow_nxt_integrated_closed_krx_session
-        else str(request_suffix or ws_suffix or "").upper()
+        else str(request_suffix or "").upper()
     )
     if expected_suffix == "_AL":
         expected_route = "krx_nxt_integrated"
@@ -1054,6 +1048,7 @@ def build_session_candle_source(
         ws_data=ws,
         captured_at=now,
         fetch_external_sources=fetch_auxiliary_sources,
+        minute_bar_source_api_id=source_api_id,
     )
     build_ms = int((time.perf_counter() - started) * 1000)
     return {

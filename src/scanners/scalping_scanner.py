@@ -4313,7 +4313,8 @@ def _annotate_market_gainer_targets(raw_targets, *, stex_tp):
             {
                 "FluRate": flu_rate,
                 "MarketGainerFluRate": flu_rate,
-                "MarketGainerRank": index,
+                "MarketGainerRank": _safe_positive_int(target.get("SourceRank"))
+                or index,
                 "MarketGainerVolume": _safe_positive_int(target.get("Volume")),
                 "MarketGainerStExTp": str(stex_tp),
                 "MarketGainerVenue": venue,
@@ -4850,6 +4851,7 @@ def run_scalper_iteration(
                 updown_incls="1",
                 pric_cnd="8",
                 trde_prica_cnd="10",
+                pure_equity_only=True,
             )
             market_gainer_targets = _annotate_market_gainer_targets(
                 market_gainer_targets,
