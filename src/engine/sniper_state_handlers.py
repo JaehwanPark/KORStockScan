@@ -17733,6 +17733,7 @@ def _scanner_fast_precheck_fields_impl(
         stock,
         ws_data,
     )
+    prev_close_gainer_source = _has_prev_close_gainer_source_marker(stock)
     candidate_gate_backoff_fields = _rising_missed_candidate_gate_backoff_fields(
         stock,
         code,
@@ -17838,7 +17839,10 @@ def _scanner_fast_precheck_fields_impl(
         )
         result = "budget_reallocated"
         reason = "signed_tape_sell_dominated"
-    elif rising_missed_fast_reject.get("scanner_rising_missed_fast_reject_candidate"):
+    elif (
+        rising_missed_fast_reject.get("scanner_rising_missed_fast_reject_candidate")
+        and not prev_close_gainer_source
+    ):
         result = "budget_reallocated"
         reason = "rising_missed_not_rising_without_recovery_signal"
     elif rest_quote_promotion_conflict:
@@ -17863,18 +17867,27 @@ def _scanner_fast_precheck_fields_impl(
     else:
         result = "eligible_for_heavy_entry_eval"
         reason = (
-            "rising_realtime_type_fresh_quote_timestamp_stale"
-            if rising_realtime_relief
+            "prev_close_gainer_source_heavy_eval_handoff"
+            if (
+                prev_close_gainer_source
+                and rising_missed_fast_reject.get(
+                    "scanner_rising_missed_fast_reject_candidate"
+                )
+            )
             else (
-                "rising_subscription_recheck_fresh_realtime_evidence"
-                if rising_subscription_recheck_relief
+                "rising_realtime_type_fresh_quote_timestamp_stale"
+                if rising_realtime_relief
                 else (
-                    "rising_rest_quote_recovery_without_realtime_strength"
-                    if rising_rest_quote_relief
+                    "rising_subscription_recheck_fresh_realtime_evidence"
+                    if rising_subscription_recheck_relief
                     else (
-                        "rising_stale_ws_snapshot_full_eval_relief"
-                        if rising_stale_ws_relief
-                        else "fast_precheck_pass"
+                        "rising_rest_quote_recovery_without_realtime_strength"
+                        if rising_rest_quote_relief
+                        else (
+                            "rising_stale_ws_snapshot_full_eval_relief"
+                            if rising_stale_ws_relief
+                            else "fast_precheck_pass"
+                        )
                     )
                 )
             )
@@ -17921,6 +17934,13 @@ def _scanner_fast_precheck_fields_impl(
             else "not_applicable_rest_quote_relief_min_delta_pct"
         ),
         "fast_precheck_positive_delta_pct": round(scanner_positive_delta_pct, 4),
+        "fast_precheck_prev_close_gainer_source": prev_close_gainer_source,
+        "fast_precheck_prev_close_gainer_rising_classifier_bypassed": bool(
+            prev_close_gainer_source
+            and rising_missed_fast_reject.get(
+                "scanner_rising_missed_fast_reject_candidate"
+            )
+        ),
         "fast_precheck_attach_anchor_price": (
             fast_precheck_attach_anchor_price
             if fast_precheck_attach_anchor_price > 0
@@ -18763,7 +18783,102 @@ def _emit_scalp_entry_adm_snapshot(
     )
 
 
+def _probe_residual_scale_in_causal_fields(
+    stock: dict | None,
+    *,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Expose the terminal residual decision without granting scale-in authority."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    abort_reason = str(
+        stock.get("entry_split_probe_terminal_abort_reason")
+        or stock.get("entry_split_probe_abort_reason")
+        or ""
+    ).strip()
+    terminal_at = _safe_float(stock.get("entry_split_probe_terminal_at"), 0.0)
+    if not abort_reason and terminal_at <= 0:
+        return {}
+    observed_at = float(time.time() if now_ts is None else now_ts)
+    age_ms = max(0.0, (observed_at - terminal_at) * 1000.0) if terminal_at > 0 else None
+    return {
+        "prior_probe_residual_bundle_id": (
+            stock.get("entry_split_probe_bundle_id") or "-"
+        ),
+        "prior_probe_residual_outcome": (
+            stock.get("entry_split_probe_terminal_outcome") or "residual_not_submitted"
+        ),
+        "prior_probe_residual_abort_reason": abort_reason or "-",
+        "prior_probe_residual_direction_state": (
+            stock.get("entry_split_probe_terminal_direction_state") or "UNKNOWN"
+        ),
+        "prior_probe_residual_direction_reason": (
+            stock.get("entry_split_probe_terminal_direction_reason") or "-"
+        ),
+        "prior_probe_residual_continuation_action": (
+            stock.get("entry_split_probe_terminal_continuation_action") or "BLOCK"
+        ),
+        "prior_probe_residual_positive_groups": (
+            stock.get("entry_split_probe_terminal_positive_groups") or "-"
+        ),
+        "prior_probe_residual_negative_groups": (
+            stock.get("entry_split_probe_terminal_negative_groups") or "-"
+        ),
+        "prior_probe_residual_confirmation_count": max(
+            0,
+            _safe_int(
+                stock.get("entry_split_probe_terminal_confirmation_count"),
+                _safe_int(stock.get("probe_confirmation_count"), 0),
+            ),
+        ),
+        "prior_probe_residual_confirmation_required_count": 2,
+        "prior_probe_residual_observed_at": terminal_at or "-",
+        "prior_probe_residual_age_ms": "-" if age_ms is None else round(age_ms, 3),
+        "prior_probe_residual_failure_signature": (
+            stock.get("entry_split_probe_terminal_failure_signature") or "-"
+        ),
+        "prior_probe_residual_scale_in_recheck_allowed": bool(
+            stock.get("entry_split_probe_scale_in_recheck_allowed", False)
+        ),
+        "prior_probe_residual_scale_in_recheck_origin": (
+            stock.get("entry_split_probe_scale_in_recheck_origin") or "-"
+        ),
+        "prior_probe_residual_scale_in_recheck_authority": (
+            "evaluation_only_full_scale_in_guards_required"
+        ),
+        "prior_probe_residual_metric_role": "causal_attribution_dimension",
+        "prior_probe_residual_decision_authority": "causal_attribution_only",
+        "prior_probe_residual_window_policy": (
+            "same_position_cycle_probe_terminal_to_scale_in"
+        ),
+        "prior_probe_residual_sample_floor": (
+            "one_terminal_residual_decision_and_one_scale_in_evaluation"
+        ),
+        "prior_probe_residual_primary_decision_metric": (
+            "source_quality_adjusted_ev_pct"
+        ),
+        "prior_probe_residual_source_quality_gate": (
+            "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+        ),
+        "prior_probe_residual_forbidden_uses": (
+            "standalone_scale_in_submit|residual_guard_bypass|ai_guard_bypass|"
+            "source_quality_bypass|account_order_quantity_cooldown_bypass"
+        ),
+    }
+
+
+def _holding_stage_needs_probe_residual_causality(stage: str) -> bool:
+    normalized = str(stage or "").strip().lower()
+    return normalized == "stat_action_decision_snapshot" or any(
+        token in normalized
+        for token in ("scale_in", "reversal_add", "shallow_source_gap")
+    )
+
+
 def _log_holding_pipeline(stock, code, stage, **fields):
+    if _holding_stage_needs_probe_residual_causality(stage):
+        for key, value in _probe_residual_scale_in_causal_fields(stock).items():
+            fields.setdefault(key, value)
     record_id = stock.get("id")
     emit_pipeline_event(
         "HOLDING_PIPELINE",
@@ -26241,6 +26356,87 @@ def _holding_ai_refresh_rest_orderbook_snapshot(
     return refreshed, fields
 
 
+def _holding_submit_authority_position_context(
+    stock: dict | None,
+    ws_data: dict | None,
+    *,
+    current_ai_score: float,
+    now_ts: float,
+    source_event_stage: str,
+) -> dict[str, Any]:
+    """Build a complete position context for a holding submit-authority retry.
+
+    The regular holding loop owns live PnL and elapsed-time variables. The
+    scale-in retry runs outside that local scope, so reading optional cached
+    ``stock["profit_rate"]`` and omitting ``held_sec`` produced zero-valued
+    exact payloads. Recompute the mark PnL from the current retry snapshot and
+    use the shared position clock instead.
+    """
+
+    position = stock if isinstance(stock, dict) else {}
+    market = ws_data if isinstance(ws_data, dict) else {}
+    buy_price = _safe_float(
+        position.get("buy_price", position.get("avg_price")),
+        0.0,
+    )
+    current_price = abs(
+        _safe_int(
+            market.get("curr", market.get("current_price")),
+            _safe_int(position.get("curr_price"), 0),
+        )
+    )
+    mark_profit_rate = (
+        calculate_net_profit_rate(buy_price, current_price)
+        if buy_price > 0 and current_price > 0
+        else _safe_float(position.get("profit_rate"), 0.0)
+    )
+    peak_profit = _safe_float(position.get("peak_profit"), None)
+    if peak_profit is None:
+        peak_profit = _safe_float(position.get("mfe_pct"), mark_profit_rate)
+    peak_profit = max(mark_profit_rate, float(peak_profit))
+    held_sec = _resolve_holding_elapsed_sec(position, now_ts=now_ts)
+    return {
+        "record_id": position.get("id"),
+        "buy_price": buy_price,
+        "curr_price": current_price,
+        "profit_rate": mark_profit_rate,
+        "peak_profit": peak_profit,
+        "drawdown_from_peak_pct": max(0.0, peak_profit - mark_profit_rate),
+        "held_sec": held_sec,
+        "buy_qty": position.get("buy_qty"),
+        "position_tag": position.get("position_tag"),
+        "entry_source": position.get("entry_source")
+        or position.get("source_event_stage")
+        or "-",
+        "entry_time_context": _build_entry_time_context_from_stock(position),
+        "avg_down_count": position.get("avg_down_count", 0),
+        "pyramid_count": position.get("pyramid_count", 0),
+        "prior_score": position.get("holding_score_raw", current_ai_score),
+        "prior_effective_score": position.get(
+            "holding_score_effective",
+            current_ai_score,
+        ),
+        "prior_score_source": position.get("holding_score_source")
+        or position.get("holding_ai_score_source")
+        or "-",
+        "prior_data_quality": position.get(
+            "holding_score_data_quality",
+            "insufficient",
+        ),
+        "prior_score_age_sec": position.get("holding_score_age_sec"),
+        "prior_effective_usable": bool(
+            position.get("holding_score_effective_usable", False)
+        ),
+        "source_event_stage": source_event_stage,
+        "position_context_profit_rate_source": (
+            "derived_net_mark_from_retry_snapshot"
+            if buy_price > 0 and current_price > 0
+            else "cached_position_fallback"
+        ),
+        "position_context_held_sec_source": "shared_position_clock",
+    }
+
+
 def _retry_holding_ai_submit_authority_before_block(
     *,
     stock,
@@ -26405,29 +26601,18 @@ def _retry_holding_ai_submit_authority_before_block(
         fields[f"{field_prefix}_after_retry_block_reason"] = "symbol_budget_deferred"
         return fields
 
-    holding_score_position_ctx = {
-        "record_id": (stock or {}).get("id"),
-        "buy_price": (stock or {}).get("buy_price"),
-        "curr_price": retry_ws_data.get("curr"),
-        "profit_rate": (stock or {}).get("profit_rate"),
-        "peak_profit": (stock or {}).get("peak_profit"),
-        "buy_qty": (stock or {}).get("buy_qty"),
-        "position_tag": (stock or {}).get("position_tag"),
-        "entry_time_context": _build_entry_time_context_from_stock(stock),
-        "prior_score": (stock or {}).get("holding_score_raw", current_ai_score),
-        "prior_effective_score": (stock or {}).get(
-            "holding_score_effective", current_ai_score
-        ),
-        "prior_score_source": (stock or {}).get("holding_score_source")
-        or (stock or {}).get("holding_ai_score_source")
-        or "-",
-        "source_event_stage": source_event_stage,
-    }
     # The REST/tick/candle calls above may take seconds while the shallow WS
     # snapshot's nested provenance maps continue to receive updates.  Compare
     # those observations against a post-I/O clock, not the loop timestamp from
     # before the calls, or healthy data is mislabeled as future.
     context_now_ts = time.time()
+    holding_score_position_ctx = _holding_submit_authority_position_context(
+        stock,
+        retry_ws_data,
+        current_ai_score=_safe_float(current_ai_score, 50.0),
+        now_ts=context_now_ts,
+        source_event_stage=source_event_stage,
+    )
     holding_context_source = _build_holding_ai_decision_context(
         stock=stock,
         code=code,
@@ -33818,6 +34003,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 retry_ws_data,
                 limit=40,
                 now_ts=now_ts,
+                allow_integrated_sor_execution_view=True,
             )
             try:
                 _update_ai_quote_freshness_fields(retry_ws_data)
@@ -36251,6 +36437,10 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_direction_state",
     "entry_split_probe_direction_reason",
     "entry_split_probe_continuation_action",
+    "entry_split_probe_direction_positive_groups",
+    "entry_split_probe_direction_negative_groups",
+    "entry_split_probe_direction_evaluated_at",
+    "entry_split_probe_direction_evidence_signature",
     "entry_split_probe_offset_profile",
     "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg",
     "entry_split_probe_bounded_partial_submission",
@@ -36283,6 +36473,16 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "post_probe_leg_revalidation_reason",
     "post_probe_leg_revalidation_direction_state",
     "post_probe_leg_revalidation_negative_groups",
+    "entry_split_probe_terminal_at",
+    "entry_split_probe_terminal_outcome",
+    "entry_split_probe_terminal_abort_reason",
+    "entry_split_probe_terminal_direction_state",
+    "entry_split_probe_terminal_direction_reason",
+    "entry_split_probe_terminal_continuation_action",
+    "entry_split_probe_terminal_positive_groups",
+    "entry_split_probe_terminal_negative_groups",
+    "entry_split_probe_terminal_confirmation_count",
+    "entry_split_probe_terminal_failure_signature",
     "probe_expand_forbidden",
     "entry_split_probe_residual_expand_forbidden",
 )
@@ -37549,13 +37749,68 @@ def _abort_entry_split_probe_residual(
         reason in hard_negative_reasons
         or reason.startswith("probe_residual_account_guard_")
     )
+    terminal_direction_state = (
+        str(stock.get("entry_split_probe_direction_state") or "UNKNOWN").strip().upper()
+    )
+    terminal_direction_reason = last_direction_reason or "-"
+    terminal_continuation_action = (
+        str(stock.get("entry_split_probe_continuation_action") or "BLOCK")
+        .strip()
+        .upper()
+    )
+    terminal_positive_groups = str(
+        stock.get("entry_split_probe_direction_positive_groups") or "-"
+    ).strip()
+    terminal_negative_groups = str(
+        stock.get("entry_split_probe_direction_negative_groups") or "-"
+    ).strip()
+    terminal_confirmation_count = max(
+        0, _safe_int(stock.get("probe_confirmation_count"), 0)
+    )
     if hard_negative:
+        terminal_direction_state = "HARD_NEGATIVE"
+        terminal_continuation_action = "HARD_NEGATIVE"
         set_fields.update(
             {
                 "entry_split_probe_direction_state": "HARD_NEGATIVE",
                 "entry_split_probe_continuation_action": "HARD_NEGATIVE",
             }
         )
+    terminal_failure_signature = "|".join(
+        (
+            str(reason or "-"),
+            terminal_direction_state or "UNKNOWN",
+            terminal_direction_reason,
+            terminal_negative_groups or "-",
+            f"{terminal_confirmation_count}/2",
+        )
+    )
+    set_fields.update(
+        {
+            "entry_split_probe_terminal_at": observed_at,
+            "entry_split_probe_terminal_outcome": "residual_not_submitted",
+            "entry_split_probe_terminal_abort_reason": reason,
+            "entry_split_probe_terminal_direction_state": (
+                terminal_direction_state or "UNKNOWN"
+            ),
+            "entry_split_probe_terminal_direction_reason": terminal_direction_reason,
+            "entry_split_probe_terminal_continuation_action": (
+                terminal_continuation_action or "BLOCK"
+            ),
+            "entry_split_probe_terminal_positive_groups": (
+                terminal_positive_groups or "-"
+            ),
+            "entry_split_probe_terminal_negative_groups": (
+                terminal_negative_groups or "-"
+            ),
+            "entry_split_probe_terminal_confirmation_count": (
+                terminal_confirmation_count
+            ),
+            "entry_split_probe_terminal_failure_signature": (
+                terminal_failure_signature
+            ),
+        }
+    )
     if preserve_position and filled_qty > 0:
         set_fields.update(
             {
@@ -37621,6 +37876,16 @@ def _abort_entry_split_probe_residual(
             post_probe_confirmation_grant_consumed_at=_safe_float(
                 stock.get("post_probe_confirmation_grant_consumed_at"), 0.0
             ),
+            terminal_at=observed_at,
+            terminal_outcome="residual_not_submitted",
+            terminal_abort_reason=reason,
+            terminal_direction_state=terminal_direction_state or "UNKNOWN",
+            terminal_direction_reason=terminal_direction_reason,
+            terminal_continuation_action=terminal_continuation_action or "BLOCK",
+            terminal_positive_groups=terminal_positive_groups or "-",
+            terminal_negative_groups=terminal_negative_groups or "-",
+            terminal_confirmation_count=terminal_confirmation_count,
+            terminal_failure_signature=terminal_failure_signature,
         )
     _log_entry_pipeline(
         stock,
@@ -37645,8 +37910,11 @@ def _abort_entry_split_probe_residual(
         entry_split_probe_source_quality_recheck_reason=(
             last_direction_reason if source_quality_timeout else "-"
         ),
-        post_probe_direction_state=("HARD_NEGATIVE" if hard_negative else "-"),
-        post_probe_continuation_action=("HARD_NEGATIVE" if hard_negative else "BLOCK"),
+        post_probe_direction_state=terminal_direction_state or "UNKNOWN",
+        post_probe_direction_reason=terminal_direction_reason,
+        post_probe_direction_positive_groups=terminal_positive_groups or "-",
+        post_probe_direction_negative_groups=terminal_negative_groups or "-",
+        post_probe_continuation_action=terminal_continuation_action or "BLOCK",
         active_sell_pending_fields=(
             ",".join(_active_sell_order_pending_fields(stock)) or "-"
         ),
@@ -37654,6 +37922,7 @@ def _abort_entry_split_probe_residual(
             ",".join(_entry_exit_authority_conflict_fields(stock)) or "-"
         ),
         **_entry_split_probe_observation_contract_fields(stock),
+        **_probe_residual_scale_in_causal_fields(stock, now_ts=observed_at),
     )
 
 
@@ -38320,6 +38589,7 @@ def _apply_entry_ai_price_canary(
             venue=candle_venue,
             session=candle_session,
             limit=fetch_candle_limit,
+            allow_integrated_sor_execution_view=True,
         )
     except Exception as exc:
         _log_entry_pipeline(
@@ -47747,9 +48017,7 @@ def _score65_74_recovery_probe_decision(
         .lower()
     )
     decision_evaluation_status = (
-        str((ai_decision or {}).get("decision_evaluation_status") or "")
-        .strip()
-        .lower()
+        str((ai_decision or {}).get("decision_evaluation_status") or "").strip().lower()
     )
     decision_result_source = (
         str(
@@ -47761,9 +48029,7 @@ def _score65_74_recovery_probe_decision(
         .lower()
     )
     input_preflight_status = (
-        str((ai_decision or {}).get("input_preflight_status") or "")
-        .strip()
-        .lower()
+        str((ai_decision or {}).get("input_preflight_status") or "").strip().lower()
     )
     input_preflight_allowed = (ai_decision or {}).get("input_preflight_allowed")
     if decision_evaluation_status.startswith("not_evaluated"):
@@ -50835,6 +51101,7 @@ def _resolve_scanner_async_entry_ai(
             venue=generation.venue,
             limit=40,
             now_ts=time.time(),
+            allow_integrated_sor_execution_view=True,
         )
         if not prepared_ws.get("orderbook") or not recent_ticks:
             return {
@@ -52109,6 +52376,7 @@ def _handle_watching_strategy_branch(
                                     ws_data,
                                     limit=40,
                                     now_ts=now_ts,
+                                    allow_integrated_sor_execution_view=True,
                                 )
                             )
                         if ws_data.get("orderbook") and recent_ticks:
@@ -54358,6 +54626,7 @@ def _handle_watching_strategy_branch(
                                     ws_data,
                                     limit=40,
                                     now_ts=now_ts,
+                                    allow_integrated_sor_execution_view=True,
                                 )
                             )
                             gatekeeper_context_now_ts = time.time()
@@ -57523,6 +57792,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "broker_order_forbidden",
             "threshold_family",
             "runtime_effect",
+            "block_reason",
         )
         _log_entry_pipeline(
             stock,
@@ -63751,7 +64021,13 @@ def _maybe_submit_rising_missed_one_share_entry(
                 forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
                 **_merge_entry_pipeline_field_groups(
                     decision.log_fields or {},
-                    _rising_missed_scanner_filter_fields(action="budget_reallocated"),
+                    _rising_missed_scanner_filter_fields(
+                        action=(
+                            "entry_ai_handoff"
+                            if prev_close_gainer_source
+                            else "budget_reallocated"
+                        )
+                    ),
                     watch_delta_refresh_fields,
                     _rising_missed_initial_block_venue_fields(
                         stock,
@@ -69934,6 +70210,41 @@ def _submit_entry_split_probe_residual_locked(
             code=code,
             now_ts=now_ts,
             max_context_age_sec=timeout_sec,
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_split_probe_direction_state": direction_fields.get(
+                    "post_probe_direction_state"
+                )
+                or "UNKNOWN",
+                "entry_split_probe_direction_reason": direction_fields.get(
+                    "post_probe_direction_reason"
+                )
+                or "-",
+                "entry_split_probe_continuation_action": direction_fields.get(
+                    "post_probe_continuation_action"
+                )
+                or "DEFER",
+                "entry_split_probe_direction_positive_groups": direction_fields.get(
+                    "post_probe_direction_positive_groups"
+                )
+                or "-",
+                "entry_split_probe_direction_negative_groups": direction_fields.get(
+                    "post_probe_direction_negative_groups"
+                )
+                or "-",
+                "entry_split_probe_direction_evaluated_at": now_ts,
+                "entry_split_probe_direction_evidence_signature": (
+                    direction_fields.get(
+                        "post_probe_confirmation_source_version_signature"
+                    )
+                    or direction_fields.get(
+                        "post_probe_confirmation_evidence_signature"
+                    )
+                    or "-"
+                ),
+            },
         )
         continuation_action = str(
             direction_fields.get("post_probe_continuation_action") or "DEFER"

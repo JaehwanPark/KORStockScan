@@ -2026,7 +2026,11 @@ def test_probe_residual_directional_weak_timeout_remains_terminal_with_action_gu
         "entry_filled_qty": 1,
         "entry_split_probe_bundle_id": "123456-probe-directional-weak",
         "entry_split_probe_requested_qty": 41,
+        "entry_split_probe_direction_state": "WEAK",
         "entry_split_probe_direction_reason": "post_probe_multi_group_weak",
+        "entry_split_probe_continuation_action": "DEFER",
+        "entry_split_probe_direction_positive_groups": "-",
+        "entry_split_probe_direction_negative_groups": "price_tick,orderbook",
         "probe_confirmation_count": 1,
         "probe_confirmation_last_at": 99.75,
         "probe_confirmation_last_state": "STRONG",
@@ -2053,6 +2057,9 @@ def test_probe_residual_directional_weak_timeout_remains_terminal_with_action_gu
     assert persisted["probe_expand_forbidden"] is True
     assert persisted["probe_confirmation_count"] == 1
     assert persisted["probe_confirmation_last_state"] == "STRONG"
+    assert persisted["terminal_direction_state"] == "WEAK"
+    assert persisted["terminal_negative_groups"] == "price_tick,orderbook"
+    assert persisted["terminal_confirmation_count"] == 1
     stage, event = events[-1]
     assert stage == "residual_blocked"
     assert event["entry_split_probe_phase"] == "aborted"
@@ -2060,6 +2067,13 @@ def test_probe_residual_directional_weak_timeout_remains_terminal_with_action_gu
     assert event["probe_confirmation_required_count"] == 2
     assert event["probe_expand_forbidden"] is True
     assert event["entry_split_probe_scale_in_forbidden"] is True
+    assert event["post_probe_direction_state"] == "WEAK"
+    assert event["post_probe_direction_negative_groups"] == "price_tick,orderbook"
+    assert event["prior_probe_residual_confirmation_count"] == 1
+    assert (
+        event["prior_probe_residual_scale_in_recheck_authority"]
+        == "evaluation_only_full_scale_in_guards_required"
+    )
 
 
 def test_probe_restart_recovery_emits_structured_guard_state(monkeypatch):

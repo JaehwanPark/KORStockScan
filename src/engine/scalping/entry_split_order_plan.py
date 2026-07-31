@@ -271,6 +271,7 @@ def recover_probe_runtime_bundle_for_stock(
         persisted_fill_qty = _safe_int(bundle.get("fill_qty"), 0)
         if phase == "probe_recheck_pending" and actual_qty == 1:
             close_reason = "post_probe_recheck_cleared_on_restart"
+            recovered_at = datetime.now(timezone.utc)
             source_quality_recheck = _safe_bool(
                 bundle.get("source_quality_recheck_pending")
             )
@@ -279,6 +280,34 @@ def recover_probe_runtime_bundle_for_stock(
             )
             scale_in_forbidden = not source_quality_recheck
             probe_expand_forbidden = not source_quality_recheck
+            terminal_direction_state = (
+                str(bundle.get("post_probe_direction_state") or "UNKNOWN")
+                .strip()
+                .upper()
+            )
+            terminal_direction_reason = str(
+                bundle.get("post_probe_direction_reason") or close_reason
+            ).strip()
+            terminal_continuation_action = (
+                str(bundle.get("post_probe_continuation_action") or "BLOCK")
+                .strip()
+                .upper()
+            )
+            terminal_positive_groups = str(
+                bundle.get("post_probe_direction_positive_groups") or "-"
+            ).strip()
+            terminal_negative_groups = str(
+                bundle.get("post_probe_direction_negative_groups") or "-"
+            ).strip()
+            terminal_failure_signature = "|".join(
+                (
+                    close_reason,
+                    terminal_direction_state,
+                    terminal_direction_reason,
+                    terminal_negative_groups,
+                    f"{confirmation_count}/2",
+                )
+            )
             bundle.update(
                 {
                     "phase": "aborted",
@@ -286,6 +315,9 @@ def recover_probe_runtime_bundle_for_stock(
                     "soft_abort": source_quality_recheck,
                     "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
                     "probe_expand_forbidden": probe_expand_forbidden,
+                    "entry_split_probe_residual_expand_forbidden": (
+                        probe_expand_forbidden
+                    ),
                     "probe_confirmation_count": confirmation_count,
                     "probe_confirmation_last_at": bundle.get(
                         "probe_confirmation_last_at", 0.0
@@ -297,6 +329,11 @@ def recover_probe_runtime_bundle_for_stock(
                         "probe_confirmation_last_signature", ""
                     ),
                     "scale_in_recheck_allowed": source_quality_recheck,
+                    "scale_in_recheck_origin": (
+                        "source_quality_restart_recovery"
+                        if source_quality_recheck
+                        else "-"
+                    ),
                     "scale_in_recheck_reason": (
                         f"{close_reason}:source_quality_recovery"
                         if source_quality_recheck
@@ -309,8 +346,18 @@ def recover_probe_runtime_bundle_for_stock(
                         else 0
                     ),
                     "recovered_actual_qty": actual_qty,
-                    "restart_recovered_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "terminal_at": recovered_at.timestamp(),
+                    "terminal_outcome": "residual_not_submitted",
+                    "terminal_abort_reason": close_reason,
+                    "terminal_direction_state": terminal_direction_state,
+                    "terminal_direction_reason": terminal_direction_reason,
+                    "terminal_continuation_action": terminal_continuation_action,
+                    "terminal_positive_groups": terminal_positive_groups,
+                    "terminal_negative_groups": terminal_negative_groups,
+                    "terminal_confirmation_count": confirmation_count,
+                    "terminal_failure_signature": terminal_failure_signature,
+                    "restart_recovered_at": recovered_at.isoformat(),
+                    "updated_at": recovered_at.isoformat(),
                 }
             )
             payload.setdefault("bundles", {})[bundle_id] = bundle
@@ -322,6 +369,9 @@ def recover_probe_runtime_bundle_for_stock(
                     "entry_split_probe_abort_reason": close_reason,
                     "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
                     "probe_expand_forbidden": probe_expand_forbidden,
+                    "entry_split_probe_residual_expand_forbidden": (
+                        probe_expand_forbidden
+                    ),
                     "probe_confirmation_count": confirmation_count,
                     "probe_confirmation_last_at": bundle["probe_confirmation_last_at"],
                     "probe_confirmation_last_state": bundle[
@@ -334,6 +384,9 @@ def recover_probe_runtime_bundle_for_stock(
                     "entry_split_probe_scale_in_recheck_allowed": (
                         source_quality_recheck
                     ),
+                    "entry_split_probe_scale_in_recheck_origin": bundle[
+                        "scale_in_recheck_origin"
+                    ],
                     "entry_split_probe_scale_in_recheck_reason": bundle[
                         "scale_in_recheck_reason"
                     ],
@@ -344,6 +397,32 @@ def recover_probe_runtime_bundle_for_stock(
                         "source_quality_recheck_unfilled_qty"
                     ],
                     "entry_split_probe_source_quality_recheck_pending": False,
+                    "entry_split_probe_terminal_at": bundle["terminal_at"],
+                    "entry_split_probe_terminal_outcome": bundle["terminal_outcome"],
+                    "entry_split_probe_terminal_abort_reason": bundle[
+                        "terminal_abort_reason"
+                    ],
+                    "entry_split_probe_terminal_direction_state": bundle[
+                        "terminal_direction_state"
+                    ],
+                    "entry_split_probe_terminal_direction_reason": bundle[
+                        "terminal_direction_reason"
+                    ],
+                    "entry_split_probe_terminal_continuation_action": bundle[
+                        "terminal_continuation_action"
+                    ],
+                    "entry_split_probe_terminal_positive_groups": bundle[
+                        "terminal_positive_groups"
+                    ],
+                    "entry_split_probe_terminal_negative_groups": bundle[
+                        "terminal_negative_groups"
+                    ],
+                    "entry_split_probe_terminal_confirmation_count": bundle[
+                        "terminal_confirmation_count"
+                    ],
+                    "entry_split_probe_terminal_failure_signature": bundle[
+                        "terminal_failure_signature"
+                    ],
                     "entry_requested_qty": actual_qty,
                     "requested_buy_qty": actual_qty,
                 }
@@ -410,12 +489,47 @@ def recover_probe_runtime_bundle_for_stock(
             if "probe_expand_forbidden" in bundle
             else bool(phase == "aborted" and not soft_abort)
         )
+        residual_expand_forbidden = (
+            _safe_bool(bundle.get("entry_split_probe_residual_expand_forbidden"))
+            if "entry_split_probe_residual_expand_forbidden" in bundle
+            else probe_expand_forbidden
+        )
         confirmation_count = max(
             0, _safe_int(bundle.get("probe_confirmation_count"), 0)
         )
+        terminal_abort_reason = None
+        terminal_direction_state = None
+        terminal_direction_reason = None
+        terminal_continuation_action = None
+        terminal_positive_groups = None
+        terminal_negative_groups = None
+        if phase == "aborted":
+            terminal_abort_reason = (
+                bundle.get("terminal_abort_reason")
+                or bundle.get("reason")
+                or "restart_recovered_aborted_bundle"
+            )
+            terminal_direction_state = bundle.get(
+                "terminal_direction_state"
+            ) or bundle.get("post_probe_direction_state")
+            terminal_direction_reason = bundle.get(
+                "terminal_direction_reason"
+            ) or bundle.get("post_probe_direction_reason")
+            terminal_continuation_action = bundle.get(
+                "terminal_continuation_action"
+            ) or bundle.get("post_probe_continuation_action")
+            terminal_positive_groups = bundle.get(
+                "terminal_positive_groups"
+            ) or bundle.get("post_probe_direction_positive_groups")
+            terminal_negative_groups = bundle.get(
+                "terminal_negative_groups"
+            ) or bundle.get("post_probe_direction_negative_groups")
         recovery_fields = {
             "entry_split_probe_phase": phase,
             "entry_split_probe_bundle_id": bundle_id,
+            "entry_split_probe_abort_reason": (
+                bundle.get("reason") if phase == "aborted" else None
+            ),
             "entry_split_probe_requested_qty": requested_qty,
             "entry_split_probe_continuation": bundle.get("continuation"),
             "entry_split_probe_submit_best_ask": bundle.get("probe_submit_best_ask"),
@@ -436,6 +550,7 @@ def recover_probe_runtime_bundle_for_stock(
             },
             "entry_split_probe_scale_in_forbidden": scale_in_forbidden,
             "probe_expand_forbidden": probe_expand_forbidden,
+            "entry_split_probe_residual_expand_forbidden": (residual_expand_forbidden),
             "probe_confirmation_count": confirmation_count,
             "probe_confirmation_last_at": bundle.get("probe_confirmation_last_at", 0.0),
             "probe_confirmation_last_state": bundle.get(
@@ -447,6 +562,9 @@ def recover_probe_runtime_bundle_for_stock(
             "entry_split_probe_soft_abort": soft_abort,
             "entry_split_probe_scale_in_recheck_allowed": _safe_bool(
                 bundle.get("scale_in_recheck_allowed")
+            ),
+            "entry_split_probe_scale_in_recheck_origin": bundle.get(
+                "scale_in_recheck_origin"
             ),
             "entry_split_probe_scale_in_recheck_reason": bundle.get(
                 "scale_in_recheck_reason"
@@ -474,6 +592,27 @@ def recover_probe_runtime_bundle_for_stock(
             "entry_split_probe_ai_action_source_at_submit": bundle.get(
                 "ai_action_source_at_submit"
             ),
+            "entry_split_probe_terminal_at": bundle.get("terminal_at"),
+            "entry_split_probe_terminal_outcome": (
+                bundle.get("terminal_outcome")
+                or ("residual_not_submitted" if phase == "aborted" else None)
+            ),
+            "entry_split_probe_terminal_abort_reason": terminal_abort_reason,
+            "entry_split_probe_terminal_direction_state": terminal_direction_state,
+            "entry_split_probe_terminal_direction_reason": terminal_direction_reason,
+            "entry_split_probe_terminal_continuation_action": (
+                terminal_continuation_action
+            ),
+            "entry_split_probe_terminal_positive_groups": terminal_positive_groups,
+            "entry_split_probe_terminal_negative_groups": terminal_negative_groups,
+            "entry_split_probe_terminal_confirmation_count": (
+                bundle.get("terminal_confirmation_count", confirmation_count)
+                if phase == "aborted"
+                else None
+            ),
+            "entry_split_probe_terminal_failure_signature": bundle.get(
+                "terminal_failure_signature"
+            ),
             "entry_requested_qty": actual_qty if soft_abort else requested_qty,
             "requested_buy_qty": actual_qty if soft_abort else requested_qty,
         }
@@ -491,6 +630,9 @@ def recover_probe_runtime_bundle_for_stock(
         bundle["recovered_actual_qty"] = actual_qty
         bundle["entry_split_probe_scale_in_forbidden"] = scale_in_forbidden
         bundle["probe_expand_forbidden"] = probe_expand_forbidden
+        bundle["entry_split_probe_residual_expand_forbidden"] = (
+            residual_expand_forbidden
+        )
         bundle["probe_confirmation_count"] = confirmation_count
         bundle.setdefault("probe_confirmation_last_at", 0.0)
         bundle.setdefault("probe_confirmation_last_state", "UNKNOWN")

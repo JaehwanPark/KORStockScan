@@ -67,6 +67,7 @@ from src.engine.scalping.ai_decision_trace import (  # noqa: E402
 )
 from src.engine.scalping.ai_decision_quality import (  # noqa: E402
     build_exact_payload_analysis_v1,
+    resolve_candidate_reason_code_conflicts,
     validate_candidate_response,
 )
 from src.engine.scalping.entry_candle_context import (
@@ -1764,9 +1765,9 @@ class GPTSniperEngine:
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
         adapter_version = (
-            "decision_quality_v2_7_probe_entry_v3"
+            "decision_quality_v2_7_probe_entry_v5"
             if probe_prompt_selected
-            else "decision_quality_v2_7_entry_v2"
+            else "decision_quality_v2_7_entry_v4"
         )
         model_action = str(payload.get("action") or "").strip().upper() or None
         model_edge_state = str(payload.get("edge_state") or "").strip().upper() or None
@@ -1805,6 +1806,31 @@ class GPTSniperEngine:
         }
         if contract_errors and model_action != "BUY":
             repaired = dict(payload)
+            repair_codes = []
+            if model_action == "STAGE_WAIT":
+                repaired["action"] = "WAIT"
+                repair_codes.append("non_buy_stage_wait_action_alias_normalized")
+                stage_wait_evidence = (
+                    dict(repaired.get("evidence") or {})
+                    if isinstance(repaired.get("evidence"), dict)
+                    else {}
+                )
+                if (
+                    str(repaired.get("edge_state") or "").strip().upper() == "EDGE"
+                    and str(
+                        stage_wait_evidence.get("positive_edge") or ""
+                    ).strip().lower()
+                    == "weak"
+                    and str(
+                        stage_wait_evidence.get("trigger") or ""
+                    ).strip().lower()
+                    == "recovery_required"
+                ):
+                    stage_wait_evidence["positive_edge"] = "moderate"
+                    repaired["evidence"] = stage_wait_evidence
+                    repair_codes.append(
+                        "non_buy_stage_wait_edge_strength_aligned"
+                    )
             valid_reason_codes = []
             invalid_reason_codes = []
             non_buy_reason_code_aliases = {
@@ -1823,7 +1849,6 @@ class GPTSniperEngine:
                         valid_reason_codes.append(normalized_code)
                 else:
                     invalid_reason_codes.append(code)
-            repair_codes = []
             aliased_reason_codes = [
                 code
                 for code in model_reason_codes
@@ -1934,6 +1959,13 @@ class GPTSniperEngine:
             ):
                 repaired["reason_codes"] = valid_reason_codes
                 repair_codes.append("non_buy_redundant_tape_mixed_reason_removed")
+            if "reason_codes_conflict" in contract_errors:
+                resolved_reason_codes, conflicts_resolved = (
+                    resolve_candidate_reason_code_conflicts(repaired)
+                )
+                if conflicts_resolved:
+                    repaired["reason_codes"] = resolved_reason_codes
+                    repair_codes.append("non_buy_reason_code_conflicts_resolved")
 
             evidence = (
                 dict(repaired.get("evidence") or {})

@@ -1918,9 +1918,15 @@ def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(
     assert stock["entry_requested_qty"] == 1
     assert stock["entry_split_probe_scale_in_forbidden"] is True
     assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
     assert stock["probe_confirmation_count"] == 0
     assert stock["probe_confirmation_last_state"] == "UNKNOWN"
     assert "entry_split_probe_direction_state" not in stock
+    assert stock["entry_split_probe_terminal_outcome"] == "residual_not_submitted"
+    assert (
+        stock["entry_split_probe_terminal_abort_reason"]
+        == "post_probe_recheck_cleared_on_restart"
+    )
     state = split_plan._load_json(state_path)
     assert state["circuit_open"] is False
     persisted = state["bundles"]["123456-probe-recheck-restart"]
@@ -1963,6 +1969,10 @@ def test_probe_runtime_restart_releases_source_quality_recheck_for_scale_in(
     assert stock["entry_split_probe_scale_in_forbidden"] is False
     assert stock["probe_expand_forbidden"] is False
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert (
+        stock["entry_split_probe_scale_in_recheck_origin"]
+        == "source_quality_restart_recovery"
+    )
     assert stock["entry_split_probe_source_quality_recheck_released"] is True
     assert stock["entry_split_probe_source_quality_recheck_unfilled_qty"] == 1012
 
@@ -2031,6 +2041,19 @@ def test_probe_runtime_restart_restores_terminal_abort_guards_and_confirmation(
         probe_confirmation_last_at=100.25,
         probe_confirmation_last_state="STRONG",
         probe_confirmation_last_signature="price+tape",
+        terminal_at=100.5,
+        terminal_outcome="residual_not_submitted",
+        terminal_abort_reason="residual_revalidation_timeout",
+        terminal_direction_state="WEAK",
+        terminal_direction_reason="post_probe_wait_negative_group",
+        terminal_continuation_action="DEFER",
+        terminal_positive_groups="-",
+        terminal_negative_groups="orderbook",
+        terminal_confirmation_count=1,
+        terminal_failure_signature=(
+            "residual_revalidation_timeout|WEAK|"
+            "post_probe_wait_negative_group|orderbook|1/2"
+        ),
     )
     stock = {
         "id": 23735,
@@ -2052,9 +2075,70 @@ def test_probe_runtime_restart_restores_terminal_abort_guards_and_confirmation(
     assert stock["probe_confirmation_last_at"] == 100.25
     assert stock["probe_confirmation_last_state"] == "STRONG"
     assert stock["probe_confirmation_last_signature"] == "price+tape"
+    assert stock["entry_split_probe_terminal_at"] == 100.5
+    assert stock["entry_split_probe_terminal_direction_state"] == "WEAK"
+    assert stock["entry_split_probe_terminal_negative_groups"] == "orderbook"
+    assert stock["entry_split_probe_terminal_confirmation_count"] == 1
     persisted = split_plan._load_json(state_path)["bundles"]["096770-probe-hard-abort"]
     assert persisted["entry_split_probe_scale_in_forbidden"] is True
     assert persisted["probe_expand_forbidden"] is True
+
+
+def test_probe_runtime_restart_restores_residual_terminal_scale_in_recheck_lane(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", state_path)
+    now = datetime(2026, 7, 31, 15, 20, tzinfo=timezone(timedelta(hours=9)))
+    split_plan.update_probe_runtime_bundle(
+        "066570-probe-recheck",
+        phase="aborted",
+        now=now,
+        code="066570",
+        target_id=25602,
+        requested_qty=2,
+        fill_qty=1,
+        reason="residual_revalidation_timeout",
+        soft_abort=False,
+        scale_in_recheck_allowed=True,
+        scale_in_recheck_origin="normal_winner_recovery",
+        scale_in_recheck_reason="residual_revalidation_timeout",
+        entry_split_probe_scale_in_forbidden=False,
+        probe_expand_forbidden=True,
+        entry_split_probe_residual_expand_forbidden=True,
+        terminal_at=1_785_486_344.269,
+        terminal_outcome="residual_not_submitted",
+        terminal_abort_reason="residual_revalidation_timeout",
+        terminal_direction_state="WEAK",
+        terminal_direction_reason="post_probe_wait_negative_group",
+        terminal_continuation_action="DEFER",
+        terminal_positive_groups="-",
+        terminal_negative_groups="price_tick,orderbook",
+        terminal_confirmation_count=0,
+        terminal_failure_signature=(
+            "residual_revalidation_timeout|WEAK|"
+            "post_probe_wait_negative_group|price_tick,orderbook|0/2"
+        ),
+    )
+    stock = {
+        "id": 25602,
+        "code": "066570",
+        "buy_qty": 1,
+        "status": "HOLDING",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result["phase"] == "aborted"
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is False
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
+    assert (
+        stock["entry_split_probe_scale_in_recheck_origin"] == "normal_winner_recovery"
+    )
+    assert stock["entry_split_probe_terminal_direction_state"] == "WEAK"
+    assert stock["entry_split_probe_terminal_negative_groups"] == "price_tick,orderbook"
 
 
 def test_probe_runtime_restart_ignores_partial_complete_bundle(monkeypatch, tmp_path):

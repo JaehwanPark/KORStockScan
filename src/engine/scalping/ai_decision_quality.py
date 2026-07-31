@@ -274,6 +274,92 @@ MUTUALLY_EXCLUSIVE_REASON_CODE_GROUPS = (
 )
 
 
+def resolve_candidate_reason_code_conflicts(
+    response: dict[str, Any],
+) -> tuple[list[str], bool]:
+    """Resolve duplicate semantic labels without changing the model action.
+
+    The model occasionally emits two labels from the same mutually-exclusive
+    family even though its structured evidence is internally consistent.  This
+    helper keeps the label aligned with that evidence.  A conflict without one
+    evidence-supported label remains unresolved so the caller can fail closed.
+    It must not be used to repair BUY results.
+    """
+
+    codes = response.get("reason_codes")
+    if not isinstance(codes, list):
+        return [], False
+    normalized = [str(code) for code in codes]
+    if str(response.get("action") or "").strip().upper() == "BUY":
+        return normalized, False
+    evidence = response.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    edge_state = str(response.get("edge_state") or "").strip().upper()
+    positive_edge = str(evidence.get("positive_edge") or "").strip().lower()
+    trigger = str(evidence.get("trigger") or "").strip().lower()
+    edge_preferred = None
+    if edge_state == "EDGE" and positive_edge in {"moderate", "strong"}:
+        edge_preferred = "edge_positive"
+    elif edge_state == "NO_EDGE" and positive_edge == "none":
+        edge_preferred = "no_positive_edge"
+    elif edge_state == "NO_EDGE" and positive_edge == "weak":
+        edge_preferred = "edge_absent"
+    preferred_by_group = {
+        frozenset({"edge_positive", "edge_absent", "no_positive_edge"}): edge_preferred,
+        frozenset({"risk_reward_favorable", "risk_reward_unfavorable"}): None,
+        frozenset(
+            {
+                "recovery_trigger_confirmed",
+                "recovery_trigger_required",
+                "recovery_trigger_failed",
+            }
+        ): {
+            "confirmed": "recovery_trigger_confirmed",
+            "recovery_required": "recovery_trigger_required",
+            "failed": "recovery_trigger_failed",
+        }.get(
+            trigger
+        ),
+    }
+    try:
+        upside = float(response.get("expected_upside_pct"))
+        downside = float(response.get("expected_downside_pct"))
+    except (TypeError, ValueError):
+        upside = None
+        downside = None
+    if upside is not None and downside is not None and downside < 0:
+        preferred_by_group[
+            frozenset({"risk_reward_favorable", "risk_reward_unfavorable"})
+        ] = (
+            "risk_reward_favorable"
+            if upside / abs(downside) >= 1.25
+            else "risk_reward_unfavorable"
+        )
+
+    resolved = list(normalized)
+    changed = False
+    for group in MUTUALLY_EXCLUSIVE_REASON_CODE_GROUPS:
+        indexes = [index for index, code in enumerate(resolved) if code in group]
+        if len(indexes) <= 1:
+            continue
+        preferred = preferred_by_group.get(frozenset(group))
+        candidates = {resolved[index] for index in indexes}
+        if preferred is None or preferred not in candidates:
+            continue
+        keep = preferred
+        kept = False
+        next_codes: list[str] = []
+        for code in resolved:
+            if code not in group:
+                next_codes.append(code)
+            elif code == keep and not kept:
+                next_codes.append(code)
+                kept = True
+        resolved = next_codes
+        changed = True
+    return resolved, changed
+
+
 def control_path(target_date: str) -> Path:
     return RUNTIME_DIR / f"ai_decision_quality_control_{target_date}.json"
 
@@ -969,17 +1055,11 @@ def load_pipeline_price_and_lifecycle_rows(
     window_start: datetime | None = None,
     window_end: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    prices: list[dict[str, Any]] = []
+    price_buckets: dict[
+        tuple[str, str, str, datetime], dict[str, Any]
+    ] = {}
     lifecycle: list[dict[str, Any]] = []
-    price_keys = (
-        "current_price",
-        "curr",
-        "price",
-        "observed_price",
-        "current_price_observed",
-        "trade_price",
-        "fill_price",
-    )
+    lifecycle_seen: set[tuple[Any, ...]] = set()
     for row in rows:
         fields = row.get("fields")
         fields = fields if isinstance(fields, dict) else {}
@@ -995,14 +1075,7 @@ def load_pipeline_price_and_lifecycle_rows(
             continue
         if timestamp is not None and window_end is not None and timestamp > window_end:
             continue
-        price = next(
-            (
-                parsed
-                for key in price_keys
-                if (parsed := _number(fields.get(key))) is not None and parsed > 0
-            ),
-            None,
-        )
+        price = _pipeline_event_observed_price(fields)
         venue = str(
             fields.get("effective_venue")
             or fields.get("ai_market_snapshot_effective_venue")
@@ -1012,23 +1085,49 @@ def load_pipeline_price_and_lifecycle_rows(
         session = str(
             fields.get("session_bucket")
             or fields.get("ai_market_snapshot_session_bucket")
+            or fields.get("market_session_bucket")
+            or fields.get("rising_missed_market_session_bucket")
             or ""
         ).upper()
-        if timestamp and code and price:
-            prices.append(
-                {
-                    "timestamp": timestamp.isoformat(),
-                    "stock_code": code,
-                    "price": price,
-                    "effective_venue": venue or None,
-                    "session_bucket": session or None,
-                    "source_quality": str(
-                        fields.get("source_quality_status")
-                        or fields.get("source_quality")
-                        or "not_recorded"
-                    ),
-                }
+        if timestamp and code and price and venue and session:
+            explicit_source_quality = str(
+                fields.get("source_quality_status")
+                or fields.get("source_quality")
+                or "not_recorded"
             )
+            source_quality = _pipeline_event_price_source_quality(
+                fields,
+                explicit_source_quality=explicit_source_quality,
+            )
+            candidate_price = {
+                "timestamp": timestamp.isoformat(),
+                "stock_code": code,
+                "price": price,
+                "effective_venue": venue,
+                "session_bucket": session,
+                "source_quality": source_quality,
+            }
+            # Rows without an explicit usable source-quality contract are
+            # rejected later by ``_same_route``. Do not retain millions of
+            # unusable event observations in memory merely to discard them
+            # during maturity calculation.
+            if _price_source_usable(candidate_price):
+                second = timestamp.replace(microsecond=0)
+                key = (code, venue, session, second)
+                bucket = price_buckets.get(key)
+                if bucket is None:
+                    price_buckets[key] = {
+                        **candidate_price,
+                        "timestamp": second.isoformat(),
+                        "high": price,
+                        "low": price,
+                        "close": price,
+                    }
+                else:
+                    bucket["price"] = price
+                    bucket["high"] = max(float(bucket["high"]), price)
+                    bucket["low"] = min(float(bucket["low"]), price)
+                    bucket["close"] = price
         lifecycle_identifiers = {
             "decision_trace_id": fields.get("ai_decision_trace_id"),
             "entry_price_decision_trace_id": fields.get(
@@ -1040,27 +1139,78 @@ def load_pipeline_price_and_lifecycle_rows(
             "position_cycle_id": fields.get("position_cycle_id"),
             "broker_order_no": fields.get("broker_order_no") or fields.get("order_no"),
         }
-        if any(
-            value not in (None, "", "-") for value in lifecycle_identifiers.values()
+        stage = str(row.get("stage") or "")
+        stage_lower = stage.lower()
+        actual_order_submitted = _bool(fields.get("actual_order_submitted"))
+        filled = "fill" in stage_lower or _bool(fields.get("filled"))
+        realized_stage = any(
+            token in stage_lower
+            for token in (
+                "sell_fill",
+                "sell_filled",
+                "exit_fill",
+                "trade_completed",
+                "position_completed",
+            )
+        )
+        realized_profit_pct = (
+            _number(
+                fields.get("realized_profit_pct")
+                if fields.get("realized_profit_pct") is not None
+                else fields.get("profit_rate")
+            )
+            if realized_stage
+            else None
+        )
+        correlation_identifier_present = any(
+            lifecycle_identifiers.get(key) not in (None, "", "-")
+            for key in (
+                "decision_trace_id",
+                "entry_price_decision_trace_id",
+                "broker_order_no",
+            )
+        )
+        if (
+            correlation_identifier_present
+            or actual_order_submitted
+            or filled
+            or realized_profit_pct is not None
         ):
+            lifecycle_key = (
+                timestamp.isoformat() if timestamp else None,
+                stage,
+                code,
+                *(
+                    lifecycle_identifiers.get(key)
+                    for key in lifecycle_identifiers
+                ),
+                actual_order_submitted,
+                filled,
+                realized_profit_pct,
+            )
+            if lifecycle_key in lifecycle_seen:
+                continue
+            lifecycle_seen.add(lifecycle_key)
             lifecycle.append(
                 {
                     "timestamp": timestamp.isoformat() if timestamp else None,
-                    "stage": row.get("stage"),
+                    "stage": stage,
                     "stock_code": code,
                     **lifecycle_identifiers,
-                    "actual_order_submitted": _bool(
-                        fields.get("actual_order_submitted")
-                    ),
-                    "filled": "fill" in str(row.get("stage") or "").lower()
-                    or _bool(fields.get("filled")),
-                    "realized_profit_pct": _number(
-                        fields.get("realized_profit_pct")
-                        if fields.get("realized_profit_pct") is not None
-                        else fields.get("profit_rate")
-                    ),
+                    "actual_order_submitted": actual_order_submitted,
+                    "filled": filled,
+                    "realized_profit_pct": realized_profit_pct,
                 }
             )
+    prices = sorted(
+        price_buckets.values(),
+        key=lambda row: (
+            row["timestamp"],
+            row["stock_code"],
+            row["effective_venue"],
+            row["session_bucket"],
+        ),
+    )
     return prices, lifecycle
 
 
@@ -1309,8 +1459,104 @@ def _session(value: Any) -> str:
         "REGULAR": "KRX_REGULAR",
         "AFTERMARKET": "NXT_AFTERMARKET",
         "PREMARKET": "PREMARKET_KRX_LIKE",
+        "KRX_LIKE_PREMARKET": "PREMARKET_KRX_LIKE",
+        "NXT_OPEN_OBSERVE": "NXT_AFTERMARKET",
     }
     return aliases.get(text, text)
+
+
+def _pipeline_event_price_source_quality(
+    fields: dict[str, Any],
+    *,
+    explicit_source_quality: str,
+) -> str:
+    """Qualify an observed pipeline price from explicit freshness provenance.
+
+    Most live pipeline producers declare their source-quality *contract* and
+    freshness facts separately instead of emitting ``source_quality_status``.
+    Treating those rows as ``not_recorded`` made the pipeline outcome source
+    permanently empty.  This adapter accepts only affirmative, symbol-local
+    freshness evidence and keeps stale/conflicted observations fail-closed.
+    """
+
+    candidate = {"source_quality": explicit_source_quality}
+    if _price_source_usable(candidate):
+        return explicit_source_quality
+    if not str(fields.get("source_quality_gate") or "").strip():
+        return explicit_source_quality
+    venue_resolution = str(fields.get("venue_resolution") or "").strip().lower()
+    if any(token in venue_resolution for token in ("conflict", "missing")):
+        return "source_quality_blocked"
+    if _bool(fields.get("scanner_promotion_price_conflict")) or _bool(
+        fields.get("quote_stale")
+    ):
+        return "source_quality_blocked"
+
+    refresh_reason = str(
+        fields.get("pre_ai_ws_snapshot_refresh_reason") or ""
+    ).strip().lower()
+    rising_refresh_reason = str(
+        fields.get("rising_missed_watch_delta_refresh_reason") or ""
+    ).strip().lower()
+    affirmative_freshness = any(
+        (
+            _bool(fields.get("scanner_promotion_price_ws_fresh")),
+            _bool(fields.get("scanner_promotion_reanchor_source_fresh")),
+            _bool(fields.get("rising_missed_nxt_post_block_fresh_sample")),
+            (
+                _bool(fields.get("rising_missed_watch_delta_refresh_applied"))
+                and rising_refresh_reason == "same_symbol_current_price_observed"
+            ),
+            refresh_reason in {"input_snapshot_fresh", "latest_ws_snapshot_fresh"},
+        )
+    )
+    return "event_observed" if affirmative_freshness else explicit_source_quality
+
+
+def _pipeline_event_observed_price(fields: dict[str, Any]) -> float | None:
+    """Select the price owned by the same freshness fact used for qualification."""
+
+    selected_keys: tuple[str, ...]
+    refresh_reason = str(
+        fields.get("pre_ai_ws_snapshot_refresh_reason") or ""
+    ).strip().lower()
+    rising_refresh_reason = str(
+        fields.get("rising_missed_watch_delta_refresh_reason") or ""
+    ).strip().lower()
+    if _bool(fields.get("scanner_promotion_price_ws_fresh")) and not _bool(
+        fields.get("scanner_promotion_price_conflict")
+    ):
+        selected_keys = (
+            "scanner_promotion_price_effective_curr",
+            "scanner_promotion_price_ws_curr",
+        )
+    elif _bool(fields.get("rising_missed_nxt_post_block_fresh_sample")):
+        selected_keys = ("current_price_observed",)
+    elif (
+        _bool(fields.get("rising_missed_watch_delta_refresh_applied"))
+        and rising_refresh_reason == "same_symbol_current_price_observed"
+    ):
+        selected_keys = ("current_price_observed",)
+    elif refresh_reason in {"input_snapshot_fresh", "latest_ws_snapshot_fresh"}:
+        selected_keys = ("current_price", "curr", "current_price_observed")
+    else:
+        selected_keys = (
+            "current_price",
+            "curr",
+            "price",
+            "observed_price",
+            "current_price_observed",
+            "trade_price",
+            "fill_price",
+        )
+    return next(
+        (
+            parsed
+            for key in selected_keys
+            if (parsed := _number(fields.get(key))) is not None and parsed > 0
+        ),
+        None,
+    )
 
 
 def _price_source_usable(price: dict[str, Any]) -> bool:

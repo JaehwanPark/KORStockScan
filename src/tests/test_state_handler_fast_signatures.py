@@ -219,6 +219,30 @@ def test_entry_ai_snapshots_use_post_fetch_clocks():
     assert "now_ts=gatekeeper_context_now_ts" in gatekeeper_block
 
 
+def test_entry_context_prefetches_share_integrated_sor_execution_view_contract():
+    watching_source = inspect.getsource(handlers._handle_watching_strategy_branch)
+    async_source = inspect.getsource(handlers._resolve_scanner_async_entry_ai)
+    retry_source = inspect.getsource(
+        handlers._retry_entry_ai_submit_authority_before_block
+    )
+    canary_source = inspect.getsource(handlers._apply_entry_ai_price_canary)
+
+    assert watching_source.count("allow_integrated_sor_execution_view=True") == 2
+    assert "allow_integrated_sor_execution_view=True" in async_source
+    assert "allow_integrated_sor_execution_view=True" in retry_source
+    assert "allow_integrated_sor_execution_view=True" in canary_source
+
+
+def test_caution_micro_block_log_deduplicates_explicit_block_reason():
+    source = inspect.getsource(handlers._submit_watching_triggered_entry)
+    start = source.index("block_log_fields = _without_entry_pipeline_fields(")
+    end = source.index("_emit_scalp_entry_adm_snapshot(", start)
+    block_source = source[start:end]
+
+    assert '"block_reason",' in block_source
+    assert "block_reason=block_reason" in block_source
+
+
 def _fresh_spread_latency_gate(**overrides):
     gate = {
         "allowed": False,

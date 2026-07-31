@@ -71,6 +71,7 @@ _KNOWN_OFI_STATES = {
     "bearish",
 }
 _REST_TAPE_TTL_SEC = 3.0
+_BROKER_POSITION_FRESH_SEC = 60.0
 _REST_TAPE_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _REST_TAPE_CACHE_LOCK = threading.Lock()
 
@@ -622,6 +623,82 @@ def _holding_execution_route(
     return None, "missing", "broker_execution_provenance_required"
 
 
+def _nxt_current_session_execution_view(
+    candle: dict[str, Any],
+    position: dict[str, Any],
+    *,
+    now: datetime,
+) -> tuple[str | None, str, str]:
+    """Resolve a current NXT execution view without claiming a historic fill.
+
+    Kiwoom account balance rows do not carry the order exchange.  For a real,
+    positive holding in NXT aftermarket, exact `_NX` REST plus fresh NXT or
+    proven `_AL` integrated candle provenance is sufficient for AI input route
+    consistency.  This observation-only view never becomes order authority.
+    """
+
+    broker_quantity = next(
+        (
+            _safe_int(position.get(key), 0)
+            for key in (
+                "broker_holding_qty",
+                "verified_holding_qty",
+                "broker_qty",
+            )
+            if position.get(key) not in (None, "")
+        ),
+        None,
+    )
+    memory_quantity = next(
+        (
+            _safe_int(position.get(key), 0)
+            for key in ("remaining_qty", "buy_qty", "qty")
+            if position.get(key) not in (None, "")
+        ),
+        0,
+    )
+    # A reconciled broker zero is authoritative.  Falling back to an older
+    # runtime buy quantity would attach NXT provenance to a closed position.
+    quantity = broker_quantity if broker_quantity is not None else memory_quantity
+    if quantity <= 0:
+        return None, "missing", "broker_execution_provenance_required"
+    if (
+        str(candle.get("venue") or "").strip().upper() != "NXT"
+        or str(candle.get("session") or "").strip().lower() != "nxt_aftermarket"
+        or not (dt_time(16, 0) <= now.time() <= dt_time(20, 0))
+        or str(candle.get("rest_route") or "").strip().upper() != "_NX"
+    ):
+        return None, "missing", "broker_execution_provenance_required"
+    quality = (
+        candle.get("source_quality")
+        if isinstance(candle.get("source_quality"), dict)
+        else {}
+    )
+    if quality.get("status") != "fresh_consistent":
+        return None, "missing", "broker_execution_provenance_required"
+    ws_route = str(candle.get("ws_route") or "").strip().lower()
+    ws_suffix = str(candle.get("ws_suffix") or "").strip().upper()
+    exact_nxt = ws_route == "nxt_only" and ws_suffix == "_NX"
+    integrated_nxt = (
+        ws_route == "krx_nxt_integrated"
+        and ws_suffix == "_AL"
+        and bool(candle.get("route_equivalence_proven", False))
+        and str(candle.get("route_equivalence") or "").strip()
+        == "nxt_aftermarket_integrated_ws_to_nx_rest"
+    )
+    if not (exact_nxt or integrated_nxt):
+        return None, "missing", "broker_execution_provenance_required"
+    return (
+        "NXT",
+        (
+            "current_session_exact_nxt_candle_route"
+            if exact_nxt
+            else "current_session_nxt_candle_route_equivalence"
+        ),
+        "current_session_execution_view_only_no_fill_claim",
+    )
+
+
 def resolve_holding_context_request_code(
     code: str,
     *,
@@ -731,6 +808,12 @@ def build_holding_decision_context(
         broker_route=str(execution_broker_route or ""),
         allow_integrated_sor_execution_view=True,
     )
+    if execution_broker_route is None:
+        (
+            execution_broker_route,
+            execution_broker_route_source,
+            execution_broker_route_authority,
+        ) = _nxt_current_session_execution_view(candle, position, now=now)
     enabled = holding_decision_context_enabled(
         venue=str(candle.get("venue") or ""),
         session=str(candle.get("session") or ""),
@@ -905,6 +988,23 @@ def build_holding_decision_context(
         or position.get("cancel_fill_conflict")
     )
     position_valid = bool(avg_price > 0 and memory_qty > 0)
+    normalized_decision_kind = str(decision_kind or "").lower()
+    submit_authority_requires_reconciliation = (
+        "submit_authority" in normalized_decision_kind
+    )
+    requires_reconciliation = any(
+        token in normalized_decision_kind
+        for token in ("flow", "overnight", "submit_authority")
+    )
+    broker_position_reconciled = bool(
+        broker_qty_present
+        and broker_snapshot_age_sec is not None
+        and 0.0
+        <= broker_snapshot_age_sec
+        <= _BROKER_POSITION_FRESH_SEC
+        and position.get("open_buy_qty") is not None
+        and position.get("open_sell_qty") is not None
+    )
     signed_tape_fresh = bool(
         tape.get("source") == "ws_trusted_aggressor"
         and tape.get("state") not in _UNUSABLE_TAPE_STATES
@@ -933,6 +1033,8 @@ def build_holding_decision_context(
         blockers.append("active_exit_token")
     if order_conflict:
         blockers.append("order_or_quantity_conflict")
+    if submit_authority_requires_reconciliation and not broker_position_reconciled:
+        blockers.append("broker_position_or_open_orders_unreconciled")
     hold_defer_allowed = bool(enabled and not blockers)
     quality_status = (
         "fresh_consistent"
@@ -1148,10 +1250,6 @@ def build_holding_decision_context(
         },
         "observation_contract": OBSERVATION_CONTRACT,
     }
-    requires_reconciliation = (
-        "flow" in str(decision_kind or "").lower()
-        or "overnight" in str(decision_kind or "").lower()
-    )
     snapshot_ws_base = dict(ws)
     for key in (
         "program_context",

@@ -5509,6 +5509,7 @@ def test_prev_close_gainer_below_rising_threshold_hands_off_to_entry_ai(
     )
     assert entry_logs[-1][1]["actual_order_submitted"] is False
     assert entry_logs[-1][1]["broker_order_forbidden"] is False
+    assert entry_logs[-1][1]["rising_missed_filter_action"] == "entry_ai_handoff"
 
 
 def test_prev_close_gainer_upper_limit_collects_ai_before_generic_submit_veto(
@@ -5719,6 +5720,43 @@ def test_scanner_fast_precheck_reallocates_not_rising_missed_without_recovery(
     assert fields["rising_missed_filter_owner"] == "scanner_fast_precheck"
     assert fields["rising_missed_filter_action"] == "budget_reallocated"
     assert fields["rising_missed_opportunity_cost_policy"] == "balanced"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+
+
+def test_scanner_fast_precheck_routes_prev_close_gainer_to_heavy_entry_eval(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_RISING_FULL_EVAL_MIN_DELTA_PCT", "1.0")
+    stock = {
+        "id": 12,
+        "name": "MARKET_GAINER",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "status": "WATCHING",
+        "rising_missed_class": "not_rising_missed",
+        "rising_missed_buy": True,
+        "scanner_promotion_reason": "new_prev_close_gainer_source",
+        "source_signature": "PREV_CLOSE_GAINER,PRICE_JUMP_START",
+        "first_seen_price": 10000,
+        "current_price": 9950,
+        "price_delta_since_first_seen_pct": -0.5,
+    }
+
+    fields = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        ws_data={"curr": 9950},
+        now_ts=1000.0,
+    )
+
+    assert fields["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert (
+        fields["fast_precheck_reason"] == "prev_close_gainer_source_heavy_eval_handoff"
+    )
+    assert fields["scanner_rising_missed_fast_reject_candidate"] is True
+    assert fields["fast_precheck_prev_close_gainer_source"] is True
+    assert fields["fast_precheck_prev_close_gainer_rising_classifier_bypassed"] is True
+    assert fields["rising_missed_filter_action"] == "observe_only"
     assert fields["actual_order_submitted"] is False
     assert fields["broker_order_forbidden"] is True
 
@@ -16213,6 +16251,60 @@ def test_reversal_add_probe_append_preserves_pressure_provenance():
     assert fields["tick_aggressor_pressure_usable"] is True
 
 
+@pytest.mark.parametrize(
+    "stage",
+    ["reversal_add_blocked_reason", "stat_action_decision_snapshot"],
+)
+def test_scale_in_observation_carries_terminal_probe_residual_causality(
+    monkeypatch, stage
+):
+    events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+    stock = {
+        "id": 7,
+        "name": "TEST",
+        "entry_split_probe_bundle_id": "123456-probe-causal",
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_scale_in_recheck_origin": "normal_winner_recovery",
+        "entry_split_probe_terminal_at": time.time() - 60.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_terminal_abort_reason": "residual_revalidation_timeout",
+        "entry_split_probe_terminal_direction_state": "WEAK",
+        "entry_split_probe_terminal_direction_reason": "post_probe_wait_negative_group",
+        "entry_split_probe_terminal_continuation_action": "DEFER",
+        "entry_split_probe_terminal_positive_groups": "-",
+        "entry_split_probe_terminal_negative_groups": "price_tick,orderbook",
+        "entry_split_probe_terminal_confirmation_count": 0,
+        "entry_split_probe_terminal_failure_signature": (
+            "residual_revalidation_timeout|WEAK|"
+            "post_probe_wait_negative_group|price_tick,orderbook|0/2"
+        ),
+    }
+
+    state_handlers._log_holding_pipeline(
+        stock,
+        "123456",
+        stage,
+        metric_role="funnel_count",
+        decision_authority="scale_in_attribution_source_only",
+    )
+
+    assert len(events) == 1
+    fields = events[0][1]["fields"]
+    assert fields["prior_probe_residual_direction_state"] == "WEAK"
+    assert fields["prior_probe_residual_negative_groups"] == "price_tick,orderbook"
+    assert fields["prior_probe_residual_confirmation_count"] == 0
+    assert fields["decision_authority"] == "scale_in_attribution_source_only"
+    assert (
+        fields["prior_probe_residual_scale_in_recheck_authority"]
+        == "evaluation_only_full_scale_in_guards_required"
+    )
+
+
 def test_add_count_increment_once_on_partial_fills(monkeypatch):
     # Prepare execution receipts environment
     receipts.ACTIVE_TARGETS = []
@@ -16281,6 +16373,7 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
     receipts._get_fast_state = lambda code: None
+    holding_events = []
 
     class DummyThread:
         def __init__(self, target=None, args=(), daemon=None):
@@ -16293,6 +16386,13 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(
 
     monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
     monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: holding_events.append(
+            (stage, fields)
+        ),
+    )
 
     target_stock = {
         "id": 1,
@@ -16309,6 +16409,20 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(
         "add_count": 0,
         "avg_down_count": 0,
         "reversal_add_state": "ADD_ARMED",
+        "entry_split_probe_bundle_id": "123456-probe-causal",
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_terminal_at": time.time() - 60.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_terminal_abort_reason": "residual_revalidation_timeout",
+        "entry_split_probe_terminal_direction_state": "WEAK",
+        "entry_split_probe_terminal_direction_reason": "post_probe_wait_negative_group",
+        "entry_split_probe_terminal_positive_groups": "-",
+        "entry_split_probe_terminal_negative_groups": "orderbook",
+        "entry_split_probe_terminal_confirmation_count": 0,
+        "entry_split_probe_terminal_failure_signature": (
+            "residual_revalidation_timeout|WEAK|"
+            "post_probe_wait_negative_group|orderbook|0/2"
+        ),
     }
     receipts.ACTIVE_TARGETS.append(target_stock)
 
@@ -16319,6 +16433,16 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(
     assert target_stock["reversal_add_state"] == "POST_ADD_EVAL"
     assert target_stock["reversal_add_executed_at"] > 0
     assert target_stock["last_add_reason"] == pending_add_reason
+    assert holding_events[-1][0] == "scale_in_executed"
+    assert (
+        holding_events[-1][1]["prior_probe_residual_abort_reason"]
+        == "residual_revalidation_timeout"
+    )
+    assert holding_events[-1][1]["prior_probe_residual_negative_groups"] == "orderbook"
+    assert (
+        holding_events[-1][1]["prior_probe_residual_scale_in_recheck_authority"]
+        == "evaluation_only_full_scale_in_guards_required"
+    )
     if pending_add_reason == "shallow_volatility_avg_down":
         assert target_stock["shallow_volatility_avg_down_count"] == 1
         assert target_stock["shallow_volatility_avg_down_last_at"] > 0
@@ -19086,6 +19210,7 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
         lambda *args, **kwargs: False,
     )
     context_call = {}
+    ai_position_context = {}
 
     def capture_holding_context(**kwargs):
         context_call.update(kwargs)
@@ -19104,6 +19229,7 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
 
     class FakeEngine:
         def evaluate_scalping_holding_score(self, *args, **kwargs):
+            ai_position_context.update(args[5])
             return {
                 "action": "HOLD",
                 "score": 72,
@@ -19119,6 +19245,8 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
         "strategy": "SCALPING",
         "buy_price": 30_100,
         "buy_qty": 1,
+        "holding_started_at": 900.0,
+        "mfe_pct": 1.2,
         "holding_ai_score_source": "holding_ai_not_called",
         "holding_score_data_quality": "stale",
         "holding_score_effective_usable": False,
@@ -19153,6 +19281,22 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
     assert retry_fields["scale_in_ai_authority_input_retry_success"] is True
     assert context_call["now_ts"] == 1_002.0
     assert context_call["include_disabled_forensics"] is True
+    assert ai_position_context["curr_price"] == 30_650
+    assert ai_position_context["profit_rate"] > 0
+    assert (
+        ai_position_context["peak_profit"]
+        >= ai_position_context["profit_rate"]
+    )
+    assert ai_position_context["drawdown_from_peak_pct"] >= 0
+    assert ai_position_context["held_sec"] == 102
+    assert (
+        ai_position_context["position_context_profit_rate_source"]
+        == "derived_net_mark_from_retry_snapshot"
+    )
+    assert (
+        ai_position_context["position_context_held_sec_source"]
+        == "shared_position_clock"
+    )
     assert "decision_authority" not in retry_fields
     assert (
         retry_fields["holding_context_decision_authority"]

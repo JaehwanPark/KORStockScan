@@ -450,10 +450,24 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_source_quality_recheck_pending",
     "entry_split_probe_abort_reason",
     "entry_split_probe_ai_action_at_submit",
+    "entry_split_probe_direction_positive_groups",
+    "entry_split_probe_direction_negative_groups",
+    "entry_split_probe_direction_evaluated_at",
+    "entry_split_probe_direction_evidence_signature",
     "probe_confirmation_count",
     "probe_confirmation_last_at",
     "probe_confirmation_last_state",
     "probe_confirmation_last_signature",
+    "entry_split_probe_terminal_at",
+    "entry_split_probe_terminal_outcome",
+    "entry_split_probe_terminal_abort_reason",
+    "entry_split_probe_terminal_direction_state",
+    "entry_split_probe_terminal_direction_reason",
+    "entry_split_probe_terminal_continuation_action",
+    "entry_split_probe_terminal_positive_groups",
+    "entry_split_probe_terminal_negative_groups",
+    "entry_split_probe_terminal_confirmation_count",
+    "entry_split_probe_terminal_failure_signature",
     "probe_expand_forbidden",
     "entry_split_probe_residual_expand_forbidden",
     "peak_rebaseline_pending",
@@ -546,10 +560,24 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_source_quality_recheck_pending",
     "entry_split_probe_abort_reason",
     "entry_split_probe_ai_action_at_submit",
+    "entry_split_probe_direction_positive_groups",
+    "entry_split_probe_direction_negative_groups",
+    "entry_split_probe_direction_evaluated_at",
+    "entry_split_probe_direction_evidence_signature",
     "probe_confirmation_count",
     "probe_confirmation_last_at",
     "probe_confirmation_last_state",
     "probe_confirmation_last_signature",
+    "entry_split_probe_terminal_at",
+    "entry_split_probe_terminal_outcome",
+    "entry_split_probe_terminal_abort_reason",
+    "entry_split_probe_terminal_direction_state",
+    "entry_split_probe_terminal_direction_reason",
+    "entry_split_probe_terminal_continuation_action",
+    "entry_split_probe_terminal_positive_groups",
+    "entry_split_probe_terminal_negative_groups",
+    "entry_split_probe_terminal_confirmation_count",
+    "entry_split_probe_terminal_failure_signature",
     "probe_expand_forbidden",
     "entry_split_probe_residual_expand_forbidden",
     "peak_rebaseline_pending",
@@ -677,6 +705,86 @@ def _receipt_snapshot(
     target_stock: dict[str, Any], keys: tuple[str, ...]
 ) -> dict[str, Any]:
     return {key: target_stock.get(key) for key in keys}
+
+
+def _probe_residual_scale_in_receipt_fields(
+    target_stock: dict[str, Any],
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Join a later scale-in fill to the terminal probe-residual decision."""
+
+    abort_reason = str(
+        target_stock.get("entry_split_probe_terminal_abort_reason")
+        or target_stock.get("entry_split_probe_abort_reason")
+        or ""
+    ).strip()
+    terminal_at = _safe_float(target_stock.get("entry_split_probe_terminal_at"), 0.0)
+    if not abort_reason and terminal_at <= 0:
+        return {}
+    return {
+        "prior_probe_residual_bundle_id": (
+            target_stock.get("entry_split_probe_bundle_id") or "-"
+        ),
+        "prior_probe_residual_outcome": (
+            target_stock.get("entry_split_probe_terminal_outcome")
+            or "residual_not_submitted"
+        ),
+        "prior_probe_residual_abort_reason": abort_reason or "-",
+        "prior_probe_residual_direction_state": (
+            target_stock.get("entry_split_probe_terminal_direction_state") or "UNKNOWN"
+        ),
+        "prior_probe_residual_direction_reason": (
+            target_stock.get("entry_split_probe_terminal_direction_reason") or "-"
+        ),
+        "prior_probe_residual_positive_groups": (
+            target_stock.get("entry_split_probe_terminal_positive_groups") or "-"
+        ),
+        "prior_probe_residual_negative_groups": (
+            target_stock.get("entry_split_probe_terminal_negative_groups") or "-"
+        ),
+        "prior_probe_residual_confirmation_count": max(
+            0,
+            _safe_int(
+                target_stock.get("entry_split_probe_terminal_confirmation_count"),
+                _safe_int(target_stock.get("probe_confirmation_count"), 0),
+            ),
+        ),
+        "prior_probe_residual_confirmation_required_count": 2,
+        "prior_probe_residual_observed_at": terminal_at or "-",
+        "prior_probe_residual_age_ms": (
+            round(max(0.0, (float(now_ts) - terminal_at) * 1000.0), 3)
+            if terminal_at > 0
+            else "-"
+        ),
+        "prior_probe_residual_failure_signature": (
+            target_stock.get("entry_split_probe_terminal_failure_signature") or "-"
+        ),
+        "prior_probe_residual_scale_in_recheck_allowed": bool(
+            target_stock.get("entry_split_probe_scale_in_recheck_allowed", False)
+        ),
+        "prior_probe_residual_scale_in_recheck_authority": (
+            "evaluation_only_full_scale_in_guards_required"
+        ),
+        "prior_probe_residual_metric_role": "causal_attribution_dimension",
+        "prior_probe_residual_decision_authority": "causal_attribution_only",
+        "prior_probe_residual_window_policy": (
+            "same_position_cycle_probe_terminal_to_scale_in"
+        ),
+        "prior_probe_residual_sample_floor": (
+            "one_terminal_residual_decision_and_one_scale_in_evaluation"
+        ),
+        "prior_probe_residual_primary_decision_metric": (
+            "source_quality_adjusted_ev_pct"
+        ),
+        "prior_probe_residual_source_quality_gate": (
+            "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+        ),
+        "prior_probe_residual_forbidden_uses": (
+            "standalone_scale_in_submit|residual_guard_bypass|ai_guard_bypass|"
+            "source_quality_bypass|account_order_quantity_cooldown_bypass"
+        ),
+    }
 
 
 def _sell_completion_contract_fields(position_tag: str) -> dict[str, Any]:
@@ -3157,6 +3265,10 @@ def _handle_add_buy_execution(
         ),
         reversal_add_state=target_stock.get("reversal_add_state", "-"),
         reversal_add_executed_at=target_stock.get("reversal_add_executed_at", "-"),
+        **_probe_residual_scale_in_receipt_fields(
+            target_stock,
+            now_ts=fill_event_ts,
+        ),
     )
 
 

@@ -903,6 +903,159 @@ def test_pipeline_lifecycle_preserves_entry_price_trace_for_order_correlation():
     assert entry_parent["actual_order_submitted"] is True
 
 
+def test_pipeline_loader_compacts_usable_prices_and_drops_unusable_event_noise():
+    prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+        [
+            {
+                "emitted_at": "2026-07-27T09:00:03.100000+09:00",
+                "stock_code": "005930",
+                "record_id": "record-1",
+                "stage": "holding_observation",
+                "fields": {
+                    "current_price": 100,
+                    "effective_venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                    "source_quality_status": "event_observed",
+                    "profit_rate": 1.5,
+                },
+            },
+            {
+                "emitted_at": "2026-07-27T09:00:03.900000+09:00",
+                "stock_code": "005930",
+                "record_id": "record-1",
+                "stage": "holding_observation",
+                "fields": {
+                    "current_price": 102,
+                    "effective_venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                    "source_quality_status": "event_observed",
+                    "profit_rate": 2.0,
+                },
+            },
+            {
+                "emitted_at": "2026-07-27T09:00:04+09:00",
+                "stock_code": "005930",
+                "record_id": "record-1",
+                "stage": "holding_observation",
+                "fields": {
+                    "current_price": 999,
+                    "effective_venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                },
+            },
+        ]
+    )
+
+    assert prices == [
+        {
+            "timestamp": "2026-07-27T09:00:03+09:00",
+            "stock_code": "005930",
+            "price": 102.0,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "event_observed",
+            "high": 102.0,
+            "low": 100.0,
+            "close": 102.0,
+        }
+    ]
+    assert lifecycle == []
+
+
+def test_pipeline_loader_qualifies_fresh_contract_price_and_normalizes_session():
+    prices, _lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+        [
+            {
+                "emitted_at": "2026-07-31T09:00:01+09:00",
+                "stock_code": "005930",
+                "stage": "scalping_scanner_fast_precheck",
+                "fields": {
+                    "current_price_observed": 110,
+                    "scanner_promotion_price_effective_curr": 100,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "krx_regular",
+                    "source_quality_gate": "scalping_scanner_fast_precheck_contract",
+                    "scanner_promotion_price_ws_fresh": True,
+                    "scanner_promotion_price_conflict": False,
+                },
+            },
+            {
+                "emitted_at": "2026-07-31T16:00:25.100000+09:00",
+                "stock_code": "005930",
+                "stage": "rising_missed_nxt_post_block_price_sample",
+                "fields": {
+                    "current_price_observed": 101,
+                    "effective_venue": "NXT",
+                    "rising_missed_market_session_bucket": "nxt_open_observe",
+                    "source_quality_gate": (
+                        "fresh_absolute_nxt_ws_route_or_bounded_receive_observation"
+                    ),
+                    "rising_missed_nxt_post_block_fresh_sample": True,
+                },
+            },
+            {
+                "emitted_at": "2026-07-31T16:00:26+09:00",
+                "stock_code": "005930",
+                "stage": "rising_missed_nxt_post_block_price_sample",
+                "fields": {
+                    "current_price_observed": 999,
+                    "effective_venue": "NXT",
+                    "rising_missed_market_session_bucket": "nxt_open_observe",
+                    "source_quality_gate": (
+                        "fresh_absolute_nxt_ws_route_or_bounded_receive_observation"
+                    ),
+                    "rising_missed_nxt_post_block_fresh_sample": True,
+                    "quote_stale": True,
+                },
+            },
+        ]
+    )
+
+    assert len(prices) == 2
+    assert prices[0]["price"] == 100.0
+    assert prices[0]["session_bucket"] == "KRX_REGULAR"
+    assert prices[0]["source_quality"] == "event_observed"
+    assert prices[1]["price"] == 101.0
+    assert prices[1]["session_bucket"] == "NXT_OPEN_OBSERVE"
+    assert prices[1]["source_quality"] == "event_observed"
+    assert quality._same_route(
+        {
+            "effective_venue": "NXT",
+            "session_bucket": "nxt_aftermarket",
+        },
+        prices[1],
+    )
+
+
+def test_pipeline_loader_never_treats_unrealized_holding_pnl_as_realized():
+    _prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+        [
+            {
+                "emitted_at": "2026-07-27T09:00:03+09:00",
+                "stock_code": "005930",
+                "record_id": "record-1",
+                "stage": "holding_observation",
+                "fields": {"profit_rate": 1.5},
+            },
+            {
+                "emitted_at": "2026-07-27T09:02:03+09:00",
+                "stock_code": "005930",
+                "record_id": "record-1",
+                "stage": "sell_filled",
+                "fields": {
+                    "broker_order_no": "1234567",
+                    "profit_rate": 1.2,
+                    "filled": True,
+                },
+            },
+        ]
+    )
+
+    assert len(lifecycle) == 1
+    assert lifecycle[0]["stage"] == "sell_filled"
+    assert lifecycle[0]["realized_profit_pct"] == 1.2
+
+
 def test_kiwoom_completed_minute_loader_blocks_ambiguous_or_conflicting_route():
     calls = []
 
