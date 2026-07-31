@@ -35,6 +35,110 @@ def _generation(venue="KRX"):
     )
 
 
+def test_clean_profit_rising_missed_exit_records_short_confirmation_window(
+    monkeypatch,
+):
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_CLEAN_PROFIT_REENTRY_CONFIRM_SEC", "60"
+    )
+    stock = {
+        "name": "SK innovation",
+        "strategy": "SCALPING",
+        "rising_missed_one_share_scout": True,
+        "forced_entry_reason": handlers.RISING_MISSED_FORCED_ENTRY_REASON,
+        "avg_down_count": 0,
+    }
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *_a, **_k: None)
+
+    marked = handlers._record_rising_missed_same_day_reentry_risk(
+        "096770",
+        stock=stock,
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=0.5,
+        exit_price=109600,
+        now_ts=1000.0,
+        source_stage="sell_order_sent",
+    )
+
+    assert marked["marked"] is True
+    assert marked["reentry_action"] == "confirm"
+    assert marked["reason"] == (
+        "prior_rising_missed_exit_clean_profit_requires_confirmation"
+    )
+    assert marked["exit_price"] == 109600
+    assert marked["expires_at"] == 1060.0
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+
+def test_clean_profit_reentry_confirmation_blocks_wait_above_exit():
+    guard = {
+        "allowed": False,
+        "reentry_action": "confirm",
+        "last_exit_at": 1000.0,
+        "last_exit_price": 109600,
+        "last_exit_profit_rate": 0.5,
+        "last_exit_rule": "scalp_trailing_take_profit",
+        "risk_remaining_sec": 50,
+    }
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": 1010.0,
+        "last_watching_ai_snapshot_id": "aims-new",
+        "last_watching_ai_decision_trace_id": "analyze-target-new",
+        "last_watching_ai_decision_price": 109900,
+        "last_watching_ai_probe_intent": True,
+    }
+
+    decision = handlers._evaluate_rising_missed_clean_profit_reentry_confirmation(
+        guard,
+        stock,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "recent_clean_profit_wait_probe_above_exit"
+    assert decision["reentry_confirmation_status"] == "deferred_no_new_entry_edge"
+    assert decision["reentry_confirmation_price_vs_exit_pct"] == pytest.approx(0.273723)
+
+
+@pytest.mark.parametrize(
+    ("action", "decision_price", "probe_intent", "expected_reason"),
+    [
+        ("BUY", 110000, False, "recent_clean_profit_fresh_buy_confirmed"),
+        ("WAIT", 109500, True, "recent_clean_profit_wait_probe_below_exit"),
+    ],
+)
+def test_clean_profit_reentry_confirmation_allows_new_edge_or_better_price_probe(
+    action,
+    decision_price,
+    probe_intent,
+    expected_reason,
+):
+    decision = handlers._evaluate_rising_missed_clean_profit_reentry_confirmation(
+        {
+            "allowed": False,
+            "reentry_action": "confirm",
+            "last_exit_at": 1000.0,
+            "last_exit_price": 109600,
+            "last_exit_profit_rate": 0.5,
+            "risk_remaining_sec": 50,
+        },
+        {
+            "last_watching_ai_action": action,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": 1010.0,
+            "last_watching_ai_snapshot_id": "aims-new",
+            "last_watching_ai_decision_trace_id": "analyze-target-new",
+            "last_watching_ai_decision_price": decision_price,
+            "last_watching_ai_probe_intent": probe_intent,
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert decision["reason"] == expected_reason
+
+
 def test_scanner_entry_ai_attempt_preserves_latest_trusted_decision_on_preflight_block():
     generation = _generation("KRX")
     stock = {

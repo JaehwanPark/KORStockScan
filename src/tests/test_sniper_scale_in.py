@@ -6350,6 +6350,53 @@ def test_rising_missed_candidate_gate_backoff_recovery_allows_heavy_eval():
     assert "rising_missed_candidate_gate_backoff_until" not in stock
 
 
+def test_rising_missed_candidate_gate_backoff_tp1_ai_drop_reallocates_until_ai_changes(
+    monkeypatch,
+):
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_TP1_AI_SEC", raising=False
+    )
+    state_handlers._RISING_MISSED_CANDIDATE_GATE_BACKOFFS.clear()
+    stock = _rising_missed_backoff_stock(
+        ai_action="BUY",
+        last_watching_ai_action="DROP",
+        last_watching_ai_result_source="live",
+    )
+
+    backoff_fields = state_handlers._record_rising_missed_candidate_gate_backoff(
+        stock,
+        "477850",
+        "rising_missed_tp1_ai_state_blocked",
+        now_ts=1000.0,
+        source_stage="rising_missed_tp1_candidate_blocked",
+    )
+    blocked = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1001.0,
+    )
+
+    assert backoff_fields["rising_missed_candidate_gate_backoff_sec"] == 15
+    assert blocked["fast_precheck_reason"] == "candidate_gate_backoff_active"
+    assert (
+        blocked["rising_missed_candidate_gate_backoff_reason"]
+        == "rising_missed_tp1_ai_state_blocked"
+    )
+
+    stock["last_watching_ai_action"] = "WAIT"
+    recovered = state_handlers._scanner_fast_precheck_fields(
+        stock,
+        code="477850",
+        ws_data={"curr": 10120},
+        now_ts=1002.0,
+    )
+
+    assert recovered["fast_precheck_result"] == "eligible_for_heavy_entry_eval"
+    assert recovered["fast_precheck_reason"] == "fast_precheck_pass"
+    assert "rising_missed_candidate_gate_backoff_until" not in stock
+
+
 def test_rising_missed_candidate_gate_backoff_excludes_dynamic_candidate_reason():
     state_handlers._RISING_MISSED_CANDIDATE_GATE_BACKOFFS.clear()
     stock = _rising_missed_backoff_stock()
@@ -11003,6 +11050,53 @@ def test_rising_missed_same_day_reentry_guard_invalidates_clean_realized_profit(
     assert "777778" not in state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK
 
 
+def test_clean_profit_reentry_confirmation_window_reanchors_to_sell_completion(
+    monkeypatch,
+):
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_same_day_reentry_guard_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_rising_missed_clean_profit_reentry_confirm_sec",
+        lambda: 60,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_reconcile_rising_missed_reentry_risk_with_sell_completed",
+        lambda *args, **kwargs: {
+            "action": "refresh_confirmation",
+            "realized_profit_rate": 0.42,
+            "realized_exit_rule": "scalp_trailing_take_profit",
+            "realized_exit_price": 108800,
+            "sell_completed_at": 1020.0,
+        },
+    )
+    state_handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK["096770"] = {
+        "code": "096770",
+        "marked_at": 1000.0,
+        "expires_at": 1060.0,
+        "profit_rate": 0.30,
+        "exit_price": 108700,
+        "reentry_action": "confirm",
+        "reason": "prior_rising_missed_exit_clean_profit_requires_confirmation",
+    }
+
+    decision = state_handlers.evaluate_rising_missed_same_day_reentry_guard(
+        "096770", now_ts=1030.0
+    )
+
+    assert decision["allowed"] is False
+    assert decision["risk_marked_at"] == 1020.0
+    assert decision["risk_expires_at"] == 1080.0
+    assert decision["risk_remaining_sec"] == 50
+    assert decision["last_exit_price"] == 108800
+    assert decision["reentry_confirmation_status"] == "pending_fresh_ai"
+
+
 def test_rising_missed_same_day_reentry_guard_downgrades_realized_avgdown_profit(
     monkeypatch, tmp_path
 ):
@@ -12758,6 +12852,66 @@ def test_rising_missed_one_share_submit_rechecks_pending_before_deposit(monkeypa
         )
         is False
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sell_odno", "SELL-PRIMARY"),
+        ("sell_ord_no", "SELL-ALIAS"),
+        ("pending_sell_msg", "sell pending"),
+        ("exit_requested", True),
+        ("exit_token", "exit-token"),
+        ("sell_order_time", 1000.0),
+    ],
+)
+def test_watching_entry_submit_blocks_unresolved_exit_authority_before_deposit(
+    monkeypatch,
+    field,
+    value,
+):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("deposit should not be queried")
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 1,
+        "name": "EXIT_CONFLICT",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        field: value,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.0,
+        "curr_price": 10000,
+        "liquidity_value": None,
+        "msg": "entry",
+        "now_ts": 1001.0,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+    }
+
+    assert (
+        state_handlers._submit_watching_triggered_entry(
+            stock, "123456", {"curr": 10000}, 1, runtime
+        )
+        is False
+    )
+    assert logs[-1][0] == "entry_submit_blocked_exit_authority_conflict"
+    assert field in logs[-1][1]["exit_authority_conflict_fields"]
+    assert logs[-1][1]["unresolved_exit_authority_field_count"] >= 1
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
 
 
 def test_rising_missed_one_share_submit_respects_runtime_cooldown_before_deposit(
@@ -31441,6 +31595,44 @@ def test_split_entry_partial_fill_waits_for_submit_notice_then_flushes(monkeypat
     assert "잔여:" in message
     assert stock["entry_partial_fill_notified_qty"] == 5
     assert "entry_partial_fill_deferred_notice" not in stock
+
+
+def test_aborted_probe_notice_distinguishes_fill_from_unsubmitted_residual(monkeypatch):
+    telegram_events = []
+
+    class DummyEventBus:
+        def publish(self, event_name, payload):
+            telegram_events.append((event_name, payload))
+
+    monkeypatch.setattr(receipts, "event_bus", DummyEventBus())
+    stock = {
+        "code": "096770",
+        "name": "SK이노베이션",
+        "pending_buy_msg": "✅ **SK이노베이션 rising missed scout 진입 주문 전송!**",
+        "entry_split_probe_phase": "aborted",
+        "entry_split_probe_order_no": "PROBE-1",
+        "entry_split_probe_abort_reason": "residual_revalidation_timeout",
+    }
+
+    assert (
+        receipts._publish_entry_partial_fill_message(
+            stock,
+            avg_buy_price=109900,
+            cum_filled_qty=1,
+            requested_entry_qty=5,
+            remaining_qty=4,
+            allow_defer=False,
+        )
+        is True
+    )
+
+    message = telegram_events[0][1]["message"]
+    assert "probe 체결:" in message
+    assert "`1/1주`" in message
+    assert "계획 잔여:" in message
+    assert "`4주 미제출`" in message
+    assert "residual_revalidation_timeout" in message
+    assert "부분 체결:" not in message
 
 
 def test_split_entry_full_leg_partial_bundle_sends_partial_not_completion(monkeypatch):

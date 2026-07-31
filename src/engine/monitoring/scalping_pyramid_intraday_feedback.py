@@ -407,6 +407,17 @@ def _update_real_entry_lifecycle(item: dict[str, Any], row: dict[str, Any]) -> N
 
 def _canonical_expansion_outcome_label(item: dict[str, Any]) -> str:
     post_probe_label = str(item.get("post_probe_real_outcome_label") or "")
+    confirmation_alignment = str(
+        item.get("post_probe_confirmation_contract_alignment") or ""
+    )
+    if confirmation_alignment == "runtime_confirmed_source_quality_disputed":
+        if post_probe_label == "profitable_zero_fill_no_confirmation":
+            return "expansion_missed_upside_runtime_confirmed_source_quality_disputed"
+        if post_probe_label == "loss_or_flat_zero_fill_no_confirmation":
+            return (
+                "expansion_confirmation_false_positive_"
+                "runtime_confirmed_source_quality_disputed"
+            )
     post_probe_mapping = {
         "profitable_zero_fill_confirmation_ready": (
             "expansion_missed_upside_confirmation_ready"
@@ -932,6 +943,10 @@ def _update_probe_residual_observation(
         return
     if row_bundle_id and not item_bundle_id:
         item["probe_bundle_id"] = row_bundle_id
+    item["probe_confirmation_max_count"] = max(
+        int(item.get("probe_confirmation_max_count") or 0),
+        int(_safe_float(fields.get("probe_confirmation_count"), 0) or 0),
+    )
     if stage in _PROBE_DIRECTION_STAGES:
         state = str(fields.get("post_probe_direction_state") or "").strip().upper()
         action = str(fields.get("post_probe_continuation_action") or "").strip().upper()
@@ -961,10 +976,6 @@ def _update_probe_residual_observation(
             }
             and len(positive_groups) >= 2
             and not negative_groups
-        )
-        item["probe_confirmation_max_count"] = max(
-            int(item.get("probe_confirmation_max_count") or 0),
-            int(_safe_float(fields.get("probe_confirmation_count"), 0) or 0),
         )
         previous_consecutive = int(
             item.get("probe_direction_current_consecutive_strong_count") or 0
@@ -1009,6 +1020,17 @@ def _update_probe_residual_observation(
             or fields.get("post_probe_confirmation_evidence_signature")
             or ""
         ).strip()
+        confirmation_source_quality_blockers = []
+        if not _boolish(fields.get("post_probe_direction_tick_context_fresh")):
+            confirmation_source_quality_blockers.append("tick_context_not_fresh")
+        if not _boolish(fields.get("post_probe_confirmation_evidence_version_proven")):
+            confirmation_source_quality_blockers.append("evidence_version_not_proven")
+        if not evidence_signature:
+            confirmation_source_quality_blockers.append("evidence_signature_missing")
+        if ai_action not in {"BUY", "WAIT"}:
+            confirmation_source_quality_blockers.append(
+                "ai_action_not_confirmation_eligible"
+            )
         counterfactual_confirmation = bool(
             mark_price is not None
             and probe_fill_price is not None
@@ -1028,6 +1050,7 @@ def _update_probe_residual_observation(
                 "observed_epoch": observed_epoch,
                 "eligible": counterfactual_confirmation,
                 "evidence_signature": evidence_signature,
+                "source_quality_blockers": confirmation_source_quality_blockers,
             }
         )
         reason_counts = item.setdefault("probe_direction_reason_counts", {})
@@ -1257,6 +1280,7 @@ def _finalize_post_probe_real_confirmation(item: dict[str, Any]) -> None:
     ready_at = None
     ready_signature = None
     excluded_count = 0
+    source_quality_blockers: set[str] = set()
     for observation in observations:
         observed_epoch = float(observation["observed_epoch"])
         if (probe_filled_epoch is not None and observed_epoch < probe_filled_epoch) or (
@@ -1264,6 +1288,11 @@ def _finalize_post_probe_real_confirmation(item: dict[str, Any]) -> None:
         ):
             excluded_count += 1
             continue
+        source_quality_blockers.update(
+            str(blocker)
+            for blocker in observation.get("source_quality_blockers") or []
+            if str(blocker)
+        )
         if not bool(observation.get("eligible")):
             confirmation_count = 0
             last_accepted_epoch = None
@@ -1291,6 +1320,9 @@ def _finalize_post_probe_real_confirmation(item: dict[str, Any]) -> None:
     item["post_probe_real_confirmation_ready_at"] = ready_at
     item["post_probe_real_confirmation_ready_signature"] = ready_signature
     item["post_probe_real_confirmation_excluded_observation_count"] = excluded_count
+    item["post_probe_real_confirmation_source_quality_blockers"] = sorted(
+        source_quality_blockers
+    )
     item.pop("post_probe_real_confirmation_observations", None)
 
 
@@ -1302,9 +1334,22 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
     confirmation_ready = bool(
         int(item.get("post_probe_real_confirmation_max_count") or 0) >= 2
     )
+    runtime_confirmation_count = int(item.get("probe_confirmation_max_count") or 0)
+    runtime_confirmation_ready = bool(runtime_confirmation_count >= 2)
     item["post_probe_real_confirmation_ready"] = confirmation_ready
     item["post_probe_real_confirmation_required_count"] = 2
     item["post_probe_real_confirmation_min_spacing_ms"] = 250
+    item["post_probe_runtime_confirmation_max_count"] = runtime_confirmation_count
+    item["post_probe_runtime_confirmation_ready"] = runtime_confirmation_ready
+    item["post_probe_confirmation_contract_alignment"] = (
+        "runtime_and_source_quality_confirmed"
+        if runtime_confirmation_ready and confirmation_ready
+        else (
+            "runtime_confirmed_source_quality_disputed"
+            if runtime_confirmation_ready
+            else "not_runtime_confirmed"
+        )
+    )
     item["post_probe_real_outcome_profit_pct"] = final_profit
     item["post_probe_probe_actual_order_submitted"] = bool(
         int(item.get("probe_fill_qty") or 0) > 0
@@ -1409,8 +1454,26 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
             else "loss_or_flat_zero_fill_no_confirmation"
         )
     item["post_probe_real_outcome_label"] = label
+    if label in {"source_quality_blocked", "open_unresolved", "not_zero_fill"}:
+        runtime_label = label
+    elif final_profit is not None and final_profit > 0:
+        runtime_label = (
+            "profitable_zero_fill_runtime_confirmation_ready"
+            if runtime_confirmation_ready
+            else "profitable_zero_fill_runtime_confirmation_absent"
+        )
+    else:
+        runtime_label = (
+            "loss_or_flat_zero_fill_runtime_confirmation_ready"
+            if runtime_confirmation_ready
+            else "loss_or_flat_zero_fill_runtime_confirmation_absent"
+        )
+    item["post_probe_runtime_outcome_label"] = runtime_label
     item["residual_missed_upside_candidate"] = bool(
         label == "profitable_zero_fill_confirmation_ready"
+    )
+    item["runtime_confirmation_missed_upside_candidate"] = bool(
+        label == "profitable_zero_fill_no_confirmation" and runtime_confirmation_ready
     )
 
     first_leg_qty = _probe_first_residual_leg_qty(item)
@@ -1993,7 +2056,20 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "canonical_expansion_missed_upside_count": canonical_label_counts.get(
             "expansion_missed_upside_confirmation_ready", 0
         )
-        + canonical_label_counts.get("expansion_missed_upside_threshold_crossed", 0),
+        + canonical_label_counts.get("expansion_missed_upside_threshold_crossed", 0)
+        + canonical_label_counts.get(
+            "expansion_missed_upside_runtime_confirmed_source_quality_disputed", 0
+        ),
+        "canonical_expansion_source_quality_valid_missed_upside_count": (
+            canonical_label_counts.get("expansion_missed_upside_confirmation_ready", 0)
+            + canonical_label_counts.get("expansion_missed_upside_threshold_crossed", 0)
+        ),
+        "post_probe_runtime_confirmation_source_quality_disputed_count": sum(
+            1
+            for item in rows
+            if item.get("post_probe_confirmation_contract_alignment")
+            == "runtime_confirmed_source_quality_disputed"
+        ),
         "post_probe_legacy_label_conflict_count": sum(
             1 for item in rows if item.get("post_probe_legacy_label_conflict")
         ),
@@ -2535,6 +2611,7 @@ def build_report(
             in {
                 "expansion_missed_upside_confirmation_ready",
                 "expansion_missed_upside_threshold_crossed",
+                "expansion_missed_upside_runtime_confirmed_source_quality_disputed",
             }
         )
         item["actual_order_submitted"] = bool(item.get("pyramid_submit_seen"))
@@ -2853,6 +2930,8 @@ def write_outputs(
         f"- probe_residual_realized_winner_confirmation_ready_count: {summary.get('probe_residual_realized_winner_confirmation_ready_count')}",
         f"- probe_residual_realized_loss_or_flat_confirmation_ready_count: {summary.get('probe_residual_realized_loss_or_flat_confirmation_ready_count')}",
         f"- canonical_expansion_missed_upside_count: {summary.get('canonical_expansion_missed_upside_count')}",
+        f"- canonical_expansion_source_quality_valid_missed_upside_count: {summary.get('canonical_expansion_source_quality_valid_missed_upside_count')}",
+        f"- post_probe_runtime_confirmation_source_quality_disputed_count: {summary.get('post_probe_runtime_confirmation_source_quality_disputed_count')}",
         f"- post_probe_legacy_label_conflict_count: {summary.get('post_probe_legacy_label_conflict_count')}",
         f"- post_probe_confirmation_false_positive_loss_or_flat_count: {summary.get('post_probe_confirmation_false_positive_loss_or_flat_count')}",
         f"- probe_residual_confirmation_ready_equal_weight_avg_profit_pct: {_safe_float(summary.get('probe_residual_confirmation_ready_equal_weight_avg_profit_pct'), 0.0):.4f}",
@@ -2895,6 +2974,9 @@ def write_outputs(
             "residual_soft_abort={residual_soft_abort} residual_missed_candidate={residual_missed_upside_candidate} "
             "post_probe_real_outcome={post_probe_real_outcome_label} "
             "confirmation_ready={post_probe_real_confirmation_ready} "
+            "runtime_confirmation_ready={post_probe_runtime_confirmation_ready} "
+            "confirmation_alignment={post_probe_confirmation_contract_alignment} "
+            "confirmation_source_quality_blockers={post_probe_real_confirmation_source_quality_blockers} "
             "first_leg_qty={post_probe_counterfactual_first_leg_qty} "
             "first_leg_profit_proxy_krw={post_probe_counterfactual_first_leg_profit_proxy_krw}".format(
                 **{
@@ -2920,6 +3002,21 @@ def write_outputs(
                     ),
                     "post_probe_real_confirmation_ready": bool(
                         item.get("post_probe_real_confirmation_ready")
+                    ),
+                    "post_probe_runtime_confirmation_ready": bool(
+                        item.get("post_probe_runtime_confirmation_ready")
+                    ),
+                    "post_probe_confirmation_contract_alignment": item.get(
+                        "post_probe_confirmation_contract_alignment"
+                    ),
+                    "post_probe_real_confirmation_source_quality_blockers": (
+                        ",".join(
+                            item.get(
+                                "post_probe_real_confirmation_source_quality_blockers"
+                            )
+                            or []
+                        )
+                        or "-"
                     ),
                     "post_probe_counterfactual_first_leg_qty": item.get(
                         "post_probe_counterfactual_first_leg_qty"

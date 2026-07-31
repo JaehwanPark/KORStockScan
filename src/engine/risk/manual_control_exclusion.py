@@ -30,6 +30,7 @@ _AUTO_EXCLUSION_SOURCES = frozenset(
         "auto_hard_stop_handoff",
     }
 )
+_MANUAL_OPERATOR_EXCLUSION_SOURCES = frozenset({"manual_operator"})
 _FILE_CACHE = {
     "path": None,
     "mtime_ns": None,
@@ -138,6 +139,16 @@ def _auto_exclusion_source_from_comment(comment: object) -> str:
         text = text[2:].strip()
     source = text.split(maxsplit=1)[0].lower() if text else ""
     return source if source in _AUTO_EXCLUSION_SOURCES else ""
+
+
+def _manual_operator_exclusion_source_from_comment(comment: object) -> str:
+    text = str(comment or "").strip()
+    if text.startswith("#"):
+        text = text[1:].strip()
+    elif text.startswith("//"):
+        text = text[2:].strip()
+    source = text.split(maxsplit=1)[0].lower() if text else ""
+    return source if source in _MANUAL_OPERATOR_EXCLUSION_SOURCES else ""
 
 
 def _load_file_codes(path: Path) -> frozenset[str]:
@@ -295,11 +306,17 @@ def remove_manual_control_exclusion_code(
             )
 
         removed = False
+        manual_operator_protected = False
         output_lines: list[str] = []
         for line in original_text.splitlines():
             uncommented, comment = _split_line_comment(line)
             codes = list(_split_codes(uncommented))
             if norm_code not in codes:
+                output_lines.append(line)
+                continue
+
+            if _manual_operator_exclusion_source_from_comment(comment):
+                manual_operator_protected = True
                 output_lines.append(line)
                 continue
 
@@ -310,6 +327,14 @@ def remove_manual_control_exclusion_code(
                 if comment:
                     rebuilt = f"{rebuilt} {comment.strip()}"
                 output_lines.append(rebuilt)
+
+        if manual_operator_protected:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                "manual_control_exclusion_manual_operator_protected",
+                str(path),
+            )
 
         if not removed:
             return ManualControlExclusionRemoval(

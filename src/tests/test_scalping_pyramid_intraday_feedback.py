@@ -1357,6 +1357,155 @@ def test_post_probe_confirmation_reconstructs_event_time_and_excludes_after_term
     )
 
 
+def test_runtime_two_of_two_confirmation_is_not_hidden_when_strict_tick_quality_rejects(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-31.jsonl"
+    rows = [
+        _event(
+            25678,
+            "000250",
+            "삼천당제약",
+            "entry_split_order_plan_applied",
+            {
+                "rising_missed_one_share_scout": True,
+                "entry_split_order_probe_first_applied": True,
+                "effective_qty": 3,
+                "forced_entry_qty": 3,
+                "entry_split_order_probe_qty": 1,
+                "entry_split_order_leg_count": 3,
+                "entry_split_order_qty_weight_min": 0.5,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-07-31T10:12:34.499000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            25678,
+            "000250",
+            "삼천당제약",
+            "probe_filled",
+            {
+                "probe_bundle_id": "000250-probe-83b1f1fb0dee",
+                "fill_qty": 1,
+                "fill_price": 146600,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-07-31T10:12:34.655000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            25678,
+            "000250",
+            "삼천당제약",
+            "probe_continuation_deferred",
+            {
+                "probe_bundle_id": "000250-probe-83b1f1fb0dee",
+                "probe_confirmation_count": 1,
+                "post_probe_direction_state": "STRONG",
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_positive_groups": "price_tick,orderbook",
+                "post_probe_direction_negative_groups": "-",
+                "post_probe_direction_mark_price": 146700,
+                "post_probe_direction_probe_fill_price": 146600,
+                "post_probe_direction_ai_action": "WAIT",
+                "post_probe_hard_veto": False,
+                "post_probe_confirmation_evidence_version_proven": True,
+                "post_probe_confirmation_source_version_signature": "source-a",
+                "post_probe_direction_tick_context_fresh": False,
+            },
+            emitted_at="2026-07-31T10:12:35.687000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            25678,
+            "000250",
+            "삼천당제약",
+            "residual_planned",
+            {
+                "probe_bundle_id": "000250-probe-83b1f1fb0dee",
+                "probe_confirmation_count": 2,
+                "post_probe_confirmation_grant_active": True,
+                "post_probe_direction_state": "STRONG",
+                "post_probe_continuation_action": "ALLOW_RECOVERED_WIDE",
+                "post_probe_direction_positive_groups": "price_tick,orderbook",
+                "post_probe_direction_negative_groups": "-",
+                "post_probe_direction_mark_price": 146700,
+                "post_probe_direction_probe_fill_price": 146600,
+                "post_probe_direction_ai_action": "WAIT",
+                "post_probe_hard_veto": False,
+                "post_probe_confirmation_evidence_version_proven": True,
+                "post_probe_confirmation_source_version_signature": "source-b",
+                "post_probe_direction_tick_context_fresh": False,
+            },
+            emitted_at="2026-07-31T10:12:36.198000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            25678,
+            "000250",
+            "삼천당제약",
+            "residual_blocked",
+            {
+                "probe_bundle_id": "000250-probe-83b1f1fb0dee",
+                "reason": "residual_leg_direction_deferred",
+                "probe_confirmation_count": 2,
+                "entry_split_probe_scale_in_recheck_allowed": False,
+            },
+            emitted_at="2026-07-31T10:12:36.282000+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            25678,
+            "000250",
+            "삼천당제약",
+            "sell_completed",
+            {"profit_rate": 0.38, "peak_profit": 1.06},
+            emitted_at="2026-07-31T10:14:11.539000+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-31", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+    summary = report["summary"]
+
+    assert item["post_probe_runtime_confirmation_max_count"] == 2
+    assert item["post_probe_runtime_confirmation_ready"] is True
+    assert item["post_probe_real_confirmation_max_count"] == 0
+    assert item["post_probe_real_confirmation_ready"] is False
+    assert item["post_probe_confirmation_contract_alignment"] == (
+        "runtime_confirmed_source_quality_disputed"
+    )
+    assert item["post_probe_real_confirmation_source_quality_blockers"] == [
+        "tick_context_not_fresh"
+    ]
+    assert item["post_probe_real_outcome_label"] == (
+        "profitable_zero_fill_no_confirmation"
+    )
+    assert item["post_probe_runtime_outcome_label"] == (
+        "profitable_zero_fill_runtime_confirmation_ready"
+    )
+    assert item["canonical_expansion_outcome_label"] == (
+        "expansion_missed_upside_runtime_confirmed_source_quality_disputed"
+    )
+    assert item["canonical_expansion_missed_upside_candidate"] is True
+    assert summary["canonical_expansion_missed_upside_count"] == 1
+    assert summary["canonical_expansion_source_quality_valid_missed_upside_count"] == 0
+    assert summary["post_probe_runtime_confirmation_source_quality_disputed_count"] == 1
+    assert (
+        summary["probe_residual_confirmation_ready_counterfactual_ev_eligible_count"]
+        == 0
+    )
+
+
 def test_partial_submitted_direction_defer_is_not_soft_abort():
     item = {}
     row = _event(

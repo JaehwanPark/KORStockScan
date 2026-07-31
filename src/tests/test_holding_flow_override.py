@@ -108,6 +108,32 @@ def _enable_high_peak_trailing_continuation_recheck(monkeypatch):
     )
 
 
+def test_trailing_continuation_pyramid_handoff_defaults_on_with_explicit_rollback(
+    monkeypatch,
+):
+    _enable_trailing_continuation_recheck(monkeypatch)
+    key = "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_" "PYRAMID_HANDOFF_ENABLED"
+    monkeypatch.delenv(key, raising=False)
+    now_ts = datetime(
+        2026, 7, 15, 10, 24, 27, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+
+    assert (
+        handlers._scalp_trailing_continuation_recheck_config(now_ts)[
+            "pyramid_handoff_enabled"
+        ]
+        is True
+    )
+
+    monkeypatch.setenv(key, "false")
+    assert (
+        handlers._scalp_trailing_continuation_recheck_config(now_ts)[
+            "pyramid_handoff_enabled"
+        ]
+        is False
+    )
+
+
 def _fresh_reversal_features():
     return {
         "tick_context_quality": "fresh_computed",
@@ -1538,6 +1564,215 @@ def test_trailing_continuation_recheck_uses_bounded_rest_quote_recovery(
     assert expired is False
     assert fetches == [("002990", 300)]
     assert logs[-1][1]["recheck_state"] == "ttl_expired"
+
+
+def test_trailing_continuation_recheck_handoffs_recent_blocked_pyramid_to_fresh_bbo(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_ENABLED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_ENABLED",
+        "true",
+    )
+    fetches = []
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: fetches.append((code, timeout_ms))
+        or ({"best_bid": 109_600, "best_ask": 109_700}, "ok", 11.0),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *args, **kwargs: (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_rest_age_ms": 11.0,
+                "price_source": "rest_mid",
+            },
+            109_650,
+            109_700,
+            109_600,
+        ),
+    )
+    now_ts = datetime(
+        2026, 7, 15, 10, 24, 27, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    stock = {
+        **_stock(),
+        "last_reversal_features": _fresh_reversal_features(),
+        "last_scale_in_submit_block_stage": "scale_in_price_guard_block",
+        "last_scale_in_submit_block_reason": "micro_vwap_bp>60.0",
+        "last_scale_in_submit_block_add_reason": (
+            "rising_missed_scout_pyramid_bridge_ok"
+        ),
+        "last_scale_in_submit_block_add_type": "PYRAMID",
+        "last_scale_in_submit_block_at": now_ts - 10.0,
+    }
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="096770",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.50,
+        peak_profit=1.10,
+        trailing_peak_worsen=0.60,
+        current_ai_score=50,
+        now_ts=now_ts,
+    )
+
+    assert deferred is True
+    assert fetches == [("096770", 300)]
+    assert stock["scalp_trailing_continuation_recheck_lane"] == "scale_in_handoff"
+    event = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+    )
+    assert event["recheck_state"] == "armed"
+    assert event["recheck_lane"] == "scale_in_handoff"
+    assert event["pyramid_handoff_candidate"] is True
+    assert event["quote_recovery_trigger"] == "pyramid_price_guard_handoff"
+    assert event["quote_recovery_eligible"] is True
+
+    deferred_again = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="096770",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts + 1.9},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.48,
+        peak_profit=1.10,
+        trailing_peak_worsen=0.62,
+        current_ai_score=50,
+        now_ts=now_ts + 2.0,
+    )
+
+    assert deferred_again is True
+    assert fetches == [("096770", 300)]
+    assert logs[-1][1]["recheck_state"] == "deferred"
+    assert logs[-1][1]["pyramid_handoff_active_eligible"] is True
+
+
+def test_trailing_continuation_recheck_pyramid_handoff_is_independently_off_by_default(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_ENABLED",
+        "false",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_QUOTE_RECOVERY_ENABLED",
+        "false",
+    )
+    fetches = []
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: fetches.append((code, timeout_ms))
+        or ({"best_bid": 109_600, "best_ask": 109_700}, "ok", 11.0),
+    )
+    now_ts = datetime(
+        2026, 7, 15, 10, 24, 27, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    stock = {
+        **_stock(),
+        "last_reversal_features": _fresh_reversal_features(),
+        "last_scale_in_submit_block_stage": "scale_in_price_guard_block",
+        "last_scale_in_submit_block_reason": "micro_vwap_bp>60.0",
+        "last_scale_in_submit_block_add_reason": (
+            "rising_missed_scout_pyramid_bridge_ok"
+        ),
+        "last_scale_in_submit_block_add_type": "PYRAMID",
+        "last_scale_in_submit_block_at": now_ts - 10.0,
+    }
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="096770",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.50,
+        peak_profit=1.10,
+        trailing_peak_worsen=0.60,
+        current_ai_score=50,
+        now_ts=now_ts,
+    )
+
+    assert deferred is False
+    assert fetches == []
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+
+
+def test_trailing_continuation_recheck_does_not_handoff_stale_pyramid_block(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_ENABLED",
+        "true",
+    )
+    fetches = []
+    monkeypatch.setattr(
+        handlers,
+        "_fetch_rest_orderbook_snapshot_bounded",
+        lambda code, timeout_ms: fetches.append((code, timeout_ms))
+        or ({}, "timeout", float(timeout_ms)),
+    )
+    now_ts = datetime(
+        2026, 7, 15, 10, 24, 27, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    stock = {
+        **_stock(),
+        "last_reversal_features": _fresh_reversal_features(),
+        "last_scale_in_submit_block_stage": "scale_in_price_guard_block",
+        "last_scale_in_submit_block_reason": "micro_vwap_bp>60.0",
+        "last_scale_in_submit_block_add_reason": (
+            "rising_missed_scout_pyramid_bridge_ok"
+        ),
+        "last_scale_in_submit_block_add_type": "PYRAMID",
+        "last_scale_in_submit_block_at": now_ts - 26.0,
+    }
+
+    deferred = handlers._evaluate_scalp_trailing_continuation_recheck(
+        stock=stock,
+        code="096770",
+        ws_data={**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        micro_fields={
+            **_trailing_continuation_micro_fields(),
+            "holding_flow_micro_estimator_source_state": "smoothed_probe_estimate",
+        },
+        profit_rate=0.50,
+        peak_profit=1.10,
+        trailing_peak_worsen=0.60,
+        current_ai_score=50,
+        now_ts=now_ts,
+    )
+
+    assert deferred is False
+    assert fetches == []
+    assert "scalp_trailing_continuation_recheck_started_at" not in stock
+    assert not any(stage == "scalp_trailing_continuation_recheck" for stage, _ in logs)
 
 
 def test_trailing_continuation_recheck_quote_recovery_fails_open(

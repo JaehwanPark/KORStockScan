@@ -4,6 +4,8 @@ import threading
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 from src.engine import ai_engine_openai as openai_module
 from src.engine.ai_engine_openai import (
     GPTSniperEngine,
@@ -2871,6 +2873,75 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
         result["decision_quality_live_adapter"]
         == "decision_quality_v2_7_probe_entry_v2"
     )
+
+
+def test_decision_quality_v2_7_probe_blocks_wait_reentry_above_recent_exit():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "EDGE",
+            "action": "WAIT",
+            "expected_upside_pct": 1.0,
+            "expected_downside_pct": -0.9,
+            "confidence": 62,
+            "reason_codes": [
+                "edge_positive",
+                "recovery_trigger_required",
+                "liquidity_adverse",
+            ],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "medium",
+                "uncertainty": "medium",
+                "setup": "pullback_recovery",
+                "positive_edge": "moderate",
+                "adverse_risk": "moderate",
+                "trigger": "recovery_required",
+            },
+        },
+        exact_payload={
+            "current": {"price": 109900},
+            "recent_exit_context": {
+                "schema": "recent_scalp_exit_context_v1",
+                "exit_price": 109600,
+                "reentry_policy": "fresh_post_exit_confirmation_required",
+            },
+        },
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["action"] == "WAIT"
+    assert result["entry_probe_intent"] is False
+    assert (
+        result["entry_probe_intent_status"]
+        == "recent_clean_profit_reentry_not_confirmed"
+    )
+    assert result["entry_recent_exit_context_status"] == "active"
+    assert result["entry_recent_exit_probe_blocked"] is True
+    assert result["entry_recent_exit_price_vs_exit_pct"] == pytest.approx(0.273723)
+
+
+def test_hot_entry_payload_preserves_recent_exit_context():
+    engine = _build_engine()
+    recent_exit = {
+        "schema": "recent_scalp_exit_context_v1",
+        "age_sec": 10.5,
+        "exit_price": 109600,
+        "realized_profit_pct": 0.5,
+        "reentry_policy": "fresh_post_exit_confirmation_required",
+    }
+
+    payload = engine._build_entry_screen_hot_payload(
+        {"curr": 109900, "recent_exit_context": recent_exit},
+        [],
+        [],
+        feature_packet={},
+    )
+
+    assert payload["recent_exit_context"] == recent_exit
 
 
 def test_analyze_target_probe_prompt_keeps_exact_schema_and_version(monkeypatch):

@@ -383,6 +383,12 @@ def _post_probe_real_outcome_observation(
         if _boolish(row.get("post_probe_real_confirmation_ready"))
         and not _boolish(row.get("post_probe_counterfactual_source_quality_valid"))
     )
+    runtime_confirmation_source_quality_disputed_count = sum(
+        1
+        for row in rows
+        if str(row.get("post_probe_confirmation_contract_alignment") or "")
+        == "runtime_confirmed_source_quality_disputed"
+    )
     weighted = [
         (
             _safe_float(row.get("post_probe_real_outcome_profit_pct"), 0.0),
@@ -504,6 +510,9 @@ def _post_probe_real_outcome_observation(
         "sample_floor_met": sample_floor_met,
         "provenance_rejected_count": provenance_rejected_count,
         "source_quality_rejected_count": source_quality_rejected_count,
+        "runtime_confirmation_source_quality_disputed_count": (
+            runtime_confirmation_source_quality_disputed_count
+        ),
         "realized_winner_zero_fill_count": winner_count,
         "realized_loss_or_flat_zero_fill_count": len(rows) - winner_count,
         "confirmation_ready_winner_count": ready_winner_count,
