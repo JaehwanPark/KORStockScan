@@ -252,6 +252,49 @@ def _publish_ranked_prewarm_candidates(
         code = str(target.get("Code") or "").replace("A", "").strip()[:6]
         name = str(target.get("Name") or "").strip()
         price = _safe_positive_int(target.get("Price"))
+        max_prev_close_gain_pct, max_prev_close_gain_source_field = (
+            _scanner_max_prev_close_gain_pct(target)
+        )
+        if max_prev_close_gain_pct >= SCANNER_MAX_PREV_CLOSE_GAIN_PCT:
+            emit_pipeline_event(
+                "ENTRY_PIPELINE",
+                name or "-",
+                code or "-",
+                "scalping_scanner_ws_prewarm_filtered",
+                fields={
+                    **venue_fields,
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": (
+                        "scanner_ws_prewarm_source_filter_no_entry_authority"
+                    ),
+                    "window_policy": "three_minutes_before_each_scalping_buy_window",
+                    "sample_floor": "not_applicable_runtime_guard",
+                    "primary_decision_metric": "funnel_count",
+                    "source_quality_gate": "prev_close_gain_below_scanner_cap",
+                    "forbidden_uses": (
+                        "standalone_buy,broker_submit,threshold_mutation,"
+                        "provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_bypass,"
+                        "stale_quote_bypass,hard_safety_bypass"
+                    ),
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "prewarm_source_signature": _source_signature(target),
+                    "prewarm_observed_price": price,
+                    "scanner_filter_reason": (
+                        "prev_close_gain_at_or_above_scanner_cap"
+                    ),
+                    "scanner_prev_close_gain_pct": max_prev_close_gain_pct,
+                    "scanner_prev_close_gain_source_field": (
+                        max_prev_close_gain_source_field
+                    ),
+                    "scanner_prev_close_gain_cap_pct": (
+                        SCANNER_MAX_PREV_CLOSE_GAIN_PCT
+                    ),
+                },
+            )
+            continue
         if (
             not code
             or code in prewarm_codes
@@ -2480,8 +2523,8 @@ def _scanner_candidate_pre_filter_reason(target):
     price = _safe_positive_int(target.get("Price"))
     if price <= 0:
         return "invalid_or_stale_price"
-    max_prev_close_gain_pct, _gain_source_field = (
-        _scanner_max_prev_close_gain_pct(target)
+    max_prev_close_gain_pct, _gain_source_field = _scanner_max_prev_close_gain_pct(
+        target
     )
     if max_prev_close_gain_pct >= SCANNER_MAX_PREV_CLOSE_GAIN_PCT:
         return "prev_close_gain_at_or_above_scanner_cap"

@@ -3904,9 +3904,7 @@ def test_decision_quality_v2_7_removes_only_redundant_tape_mixed_reason():
     assert result["decision_quality_contract_repair_codes"] == [
         "non_buy_redundant_tape_mixed_reason_removed"
     ]
-    assert result["decision_quality_contract_invalid_reason_codes"] == [
-        "tape_mixed"
-    ]
+    assert result["decision_quality_contract_invalid_reason_codes"] == ["tape_mixed"]
 
 
 def test_decision_quality_v2_7_requires_exact_preflight_even_if_global_gate_off(

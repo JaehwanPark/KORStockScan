@@ -1929,9 +1929,7 @@ class GPTSniperEngine:
                 and valid_reason_codes
                 and invalid_reason_codes == ["tape_mixed"]
                 and evidence_trigger
-                and str(evidence_for_reason_repair.get("tape") or "")
-                .strip()
-                .lower()
+                and str(evidence_for_reason_repair.get("tape") or "").strip().lower()
                 == "mixed"
             ):
                 repaired["reason_codes"] = valid_reason_codes
