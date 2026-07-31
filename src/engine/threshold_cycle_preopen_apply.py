@@ -3845,7 +3845,9 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
     {
         "family": "rising_missed_tp1_source_gap_relief",
         "enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED",
-        "active_date_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE",
+        "active_date_key": (
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE"
+        ),
         "dependency_enabled_key": "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
     },
     {

@@ -52,6 +52,7 @@ def test_timeout_exception_trace_normalizes_transport_provenance(monkeypatch, tm
     row = _rows(trace._trace_path(trace._date_text()))[0]
     assert row["timeout"] is True
     assert row["result_source"] == "timeout"
+    assert row["decision_evaluation_status"] == "not_evaluated_transport_timeout"
     assert row["provider_called"] is True
     assert row["provider_actual"] == "openai"
 
@@ -79,7 +80,34 @@ def test_non_timeout_transport_failure_is_not_labeled_timeout(monkeypatch, tmp_p
     row = _rows(trace._trace_path(trace._date_text()))[0]
     assert row["timeout"] is False
     assert row["result_source"] == "exception"
+    assert row["decision_evaluation_status"] == "not_evaluated_provider_or_preflight"
     assert row["provider_called"] is True
+
+
+def test_trace_preserves_parent_entry_price_lineage(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "action": "WAIT",
+            "score": 72,
+            "reason": "fresh exact context retry",
+            "ai_decision_parent_trace_id": "trace-entry-price",
+            "ai_input_parent_snapshot_id": "snapshot-entry-price",
+            "ai_parent_source_event_stage": "pre_submit_entry_ai_authority_retry",
+            "ai_parse_ok": True,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_7",
+        result_source="live",
+        stock_code="005930",
+        provider_called=True,
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["parent_decision_trace_id"] == "trace-entry-price"
+    assert row["parent_snapshot_id"] == "snapshot-entry-price"
+    assert row["parent_source_event_stage"] == "pre_submit_entry_ai_authority_retry"
 
 
 def test_capture_ai_request_persists_exact_payload_once(monkeypatch, tmp_path):

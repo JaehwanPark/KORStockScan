@@ -9792,6 +9792,77 @@ def test_scanner_queue_lag_eviction_reallocates_after_repeated_lag(monkeypatch):
     assert event_fields["queue_lag_anchor_field"] == "entry_armed_at_epoch"
 
 
+def test_market_gainer_reserved_watch_retains_until_first_heavy_eval(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
+    )
+    target = _scanner_watch_stock(
+        code="005930",
+        source_signature="PREV_CLOSE_GAINER,VALUE_TOP",
+        scanner_promotion_emitted_epoch=1000.0,
+        _scanner_fast_precheck_result="budget_reallocated",
+        _scanner_fast_precheck_reason="candidate_gate_backoff_active",
+    )
+
+    queue_decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_queue_lag(
+        target,
+        now_ts=1065.0,
+        queue_lag_fields={"queue_lag_sec": 65.0},
+    )
+    budget_decision = (
+        kiwoom_sniper_v2._scanner_watch_eviction_decision_from_fast_precheck_budget(
+            target,
+            now_ts=1065.0,
+        )
+    )
+    no_trade_decision = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_no_trade(
+        target,
+        {"received_types": {"0D"}, "last_realtime_type_ts": {"0D": 1065.0}},
+        now_ts=1065.0,
+    )
+
+    for decision in (queue_decision, budget_decision, no_trade_decision):
+        assert decision["should_evict"] is False
+        assert decision["retention_active"] is True
+        assert (
+            decision["market_gainer_first_eval_retention_reason"]
+            == "awaiting_first_heavy_eval_or_ai_terminal"
+        )
+        assert decision["actual_order_submitted"] is False
+        assert decision["broker_order_forbidden"] is True
+
+    target["_scanner_last_heavy_eval_attempt_epoch"] = 1066.0
+    released = kiwoom_sniper_v2._market_gainer_first_eval_retention(
+        target,
+        now_ts=1067.0,
+    )
+    assert released["retention_active"] is False
+    assert released["market_gainer_first_eval_retention_reason"] == (
+        "first_heavy_eval_observed"
+    )
+
+
+def test_market_gainer_reserved_watch_retention_is_bounded(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "60"
+    )
+    target = _scanner_watch_stock(
+        source_signature="PREV_CLOSE_GAINER",
+        scanner_promotion_emitted_epoch=1000.0,
+    )
+
+    decision = kiwoom_sniper_v2._market_gainer_first_eval_retention(
+        target,
+        now_ts=1061.0,
+    )
+
+    assert decision["retention_active"] is False
+    assert (
+        decision["market_gainer_first_eval_retention_reason"]
+        == "bounded_retention_expired"
+    )
+
+
 def test_scanner_fast_precheck_signed_tape_retention_skips_budget_eviction():
     target = _scanner_watch_stock(
         code="005930",

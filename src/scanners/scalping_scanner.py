@@ -4182,6 +4182,14 @@ def promote_candidates(
         elif used_open_slot:
             open_slot_promotions_remaining = max(0, open_slot_promotions_remaining - 1)
 
+        if is_market_gainer_target:
+            active_market_gainer_codes.add(code)
+            source_guard["scanner_market_gainer_active_count"] = len(
+                active_market_gainer_codes
+            )
+            runtime_target_payload["scanner_market_gainer_active_count"] = len(
+                active_market_gainer_codes
+            )
         if bool(
             getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
         ):

@@ -111,9 +111,70 @@ def test_scanner_entry_ai_attempt_does_not_promote_semantic_reject_live_result()
     assert stock["last_watching_ai_attempt_snapshot_id"] == "aims-rejected"
 
 
+def test_scanner_entry_ai_timeout_is_not_stored_as_drop_authority():
+    generation = _generation("KRX")
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 63.0,
+        "last_watching_ai_result_source": "live",
+    }
+
+    trusted = handlers._record_scanner_entry_ai_attempt(
+        stock,
+        ai_decision={
+            "action": "DROP",
+            "score": 0,
+            "reason": "request timed out",
+            "openai_http_timeout_budget_exhausted": True,
+            "parse_ok": False,
+        },
+        action="DROP",
+        score=0.0,
+        result_source="timeout",
+        completed_epoch=1002.0,
+        generation=generation,
+        decision_price=1005,
+        state_signature={"available_axes": ["quote_freshness"]},
+        source_quality_fields={"ai_result_source": "timeout"},
+        trigger_reason="rising_missed_entry_ai_not_evaluated_async_v1",
+    )
+
+    assert trusted is False
+    assert stock["last_watching_ai_action"] == "WAIT"
+    assert stock["last_watching_ai_score"] == 63.0
+    assert stock["last_watching_ai_attempt_action"] == "NOT_EVALUATED"
+    assert stock["last_watching_ai_attempt_model_action"] == "DROP"
+    assert (
+        stock["last_watching_ai_attempt_evaluation_status"]
+        == "not_evaluated_transport_timeout"
+    )
+    assert stock["_scanner_entry_ai_transport_retry_after_epoch"] == 1004.0
+    before = handlers._resolve_watching_state_change_refresh(
+        stock,
+        {},
+        now_ts=1003.0,
+        last_ai_time=1002.0,
+        cooldown_sec=300,
+    )
+    due = handlers._resolve_watching_state_change_refresh(
+        stock,
+        {},
+        now_ts=1004.0,
+        last_ai_time=1002.0,
+        cooldown_sec=300,
+    )
+    assert before["allowed"] is False
+    assert before["reason"] == "transport_timeout_retry_backoff"
+    assert due["allowed"] is True
+    assert due["reason"] == "transport_timeout_fresh_loop_retry"
+
+
 def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
     generation = _generation("KRX")
-    stock = {}
+    stock = {
+        "_scanner_entry_ai_transport_retry_after_epoch": 1000.0,
+        "_scanner_entry_ai_transport_retry_until_epoch": 1030.0,
+    }
 
     trusted = handlers._record_scanner_entry_ai_attempt(
         stock,
@@ -152,6 +213,8 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
         == "decision_quality_v2_7_probe_v1"
     )
     assert stock["last_watching_ai_probe_intent_submit_guard_required"] is True
+    assert "_scanner_entry_ai_transport_retry_after_epoch" not in stock
+    assert "_scanner_entry_ai_transport_retry_until_epoch" not in stock
 
 
 def test_scanner_entry_ai_contract_valid_zero_score_drop_clears_prior_probe_intent():

@@ -43,6 +43,159 @@ from src.engine.scalping.rising_missed_one_share_entry import (
 )
 
 
+def _exact_entry_context():
+    return {
+        "schema": "entry_candle_context_v1",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "completed_bar_count": 3,
+        "bars": [{"t": "2026-07-31T09:00:00+09:00", "forming": False}],
+        "source_quality": {"status": "fresh_consistent", "blockers": []},
+    }
+
+
+def test_entry_price_exact_context_handoff_is_single_use_and_bounded(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    stock = {}
+    recorded = state_handlers._record_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        captured_at=1000.0,
+        ws_data={"curr": 70000, "best_bid": 69900, "best_ask": 70000},
+        recent_ticks=[{"price": 70000}],
+        recent_candles=[{"t": "20260731090000", "close": 70000}],
+        candle_context=_exact_entry_context(),
+        preflight={"allowed": True},
+        result={
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "ai_input_snapshot_id": "snapshot-entry-price",
+            "ai_decision_trace_id": "trace-entry-price",
+        },
+    )
+
+    handoff, fields = state_handlers._consume_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        now_ts=1001.0,
+    )
+    second, second_fields = state_handlers._consume_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        now_ts=1001.1,
+    )
+
+    assert recorded["entry_price_exact_context_handoff_recorded"] is True
+    assert handoff["snapshot_id"] == "snapshot-entry-price"
+    assert fields["pre_submit_entry_ai_exact_context_handoff_used"] is True
+    assert second is None
+    assert (
+        second_fields["pre_submit_entry_ai_exact_context_handoff_reason"]
+        == "not_available"
+    )
+
+
+def test_entry_price_exact_context_handoff_expires_without_use(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    stock = {}
+    state_handlers._record_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        captured_at=1000.0,
+        ws_data={"curr": 70000},
+        recent_ticks=[],
+        recent_candles=[],
+        candle_context=_exact_entry_context(),
+        preflight={"allowed": True},
+        result={"ai_result_source": "live", "ai_parse_ok": True},
+    )
+
+    handoff, fields = state_handlers._consume_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        now_ts=1002.1,
+    )
+
+    assert handoff is None
+    assert fields["pre_submit_entry_ai_exact_context_handoff_reason"] == "expired"
+    assert "_entry_price_exact_context_handoff" not in stock
+
+
+def test_entry_price_exact_context_handoff_rejects_venue_change(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_entry_candle_session",
+        lambda *_args, **_kwargs: "nxt_aftermarket",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_entry_candle_venue",
+        lambda *_args, **_kwargs: "NXT",
+    )
+    stock = {}
+    state_handlers._record_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        captured_at=1000.0,
+        ws_data={"curr": 70000},
+        recent_ticks=[],
+        recent_candles=[],
+        candle_context=_exact_entry_context(),
+        preflight={"allowed": True},
+        result={"ai_result_source": "live", "ai_parse_ok": True},
+    )
+
+    handoff, fields = state_handlers._consume_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        now_ts=1001.0,
+        current_ws_data={"effective_venue": "NXT"},
+    )
+
+    assert handoff is None
+    assert (
+        fields["pre_submit_entry_ai_exact_context_handoff_reason"]
+        == "venue_or_session_mismatch"
+    )
+    assert "_entry_price_exact_context_handoff" not in stock
+
+
+def test_entry_price_exact_context_handoff_rejects_changed_market_snapshot(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    stock = {}
+    state_handlers._record_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        captured_at=1000.0,
+        ws_data={"curr": 70000, "best_bid": 69900, "best_ask": 70000},
+        recent_ticks=[],
+        recent_candles=[],
+        candle_context=_exact_entry_context(),
+        preflight={"allowed": True},
+        result={"ai_result_source": "live", "ai_parse_ok": True},
+    )
+
+    handoff, fields = state_handlers._consume_entry_price_exact_context_handoff(
+        stock,
+        code="005930",
+        now_ts=1001.0,
+        current_ws_data={"curr": 70100, "best_bid": 70000, "best_ask": 70100},
+    )
+
+    assert handoff is None
+    assert (
+        fields["pre_submit_entry_ai_exact_context_handoff_reason"]
+        == "market_snapshot_changed"
+    )
+    assert set(
+        fields["pre_submit_entry_ai_exact_context_handoff_changed_fields"].split(",")
+    ) == {"current_price", "best_bid", "best_ask"}
+    assert "_entry_price_exact_context_handoff" not in stock
+
+
 def test_holding_elapsed_prefers_first_fill_over_residual_order_time():
     held_sec = scale_in.resolve_holding_elapsed_sec(
         {
@@ -3084,6 +3237,10 @@ def test_real_weak_ai_micro_entry_block_relaxes_legacy_gap_for_fresh_tp1_support
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14"
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "2026-07-14",
+    )
     now_ts = datetime(2026, 7, 14, 13, 40, tzinfo=state_handlers._KST).timestamp()
     stock = {
         "last_watching_ai_action": "WAIT",
@@ -3132,6 +3289,10 @@ def test_real_weak_ai_micro_entry_block_relaxes_acceleration_lane_with_same_tp1_
     )
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "2026-07-14",
     )
     now_ts = datetime(2026, 7, 14, 14, 13, tzinfo=state_handlers._KST).timestamp()
     stock = {
@@ -3185,6 +3346,10 @@ def test_real_weak_ai_micro_entry_block_relaxes_missing_legacy_pressure_for_stro
     )
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-20"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "2026-07-20",
     )
     now_ts = datetime(2026, 7, 20, 9, 38, tzinfo=state_handlers._KST).timestamp()
     stock = {
@@ -3271,6 +3436,10 @@ def test_real_weak_ai_micro_entry_block_keeps_gap_block_for_weak_tp1_pressure(
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-20"
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "2026-07-20",
+    )
     now_ts = datetime(2026, 7, 20, 9, 38, tzinfo=state_handlers._KST).timestamp()
     stock = {
         "rising_missed_tp1_submit_context_at": now_ts - 2.0,
@@ -3327,6 +3496,10 @@ def test_real_weak_ai_micro_entry_block_does_not_relax_bearish_submit_orderbook(
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-20"
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "2026-07-20",
+    )
     now_ts = datetime(2026, 7, 20, 9, 38, tzinfo=state_handlers._KST).timestamp()
     stock = {
         "rising_missed_tp1_submit_context_at": now_ts - 2.0,
@@ -3377,6 +3550,10 @@ def test_real_weak_ai_micro_entry_block_keeps_gap_block_without_fresh_tp1_moment
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14"
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "2026-07-14",
+    )
     now_ts = datetime(2026, 7, 14, 13, 40, tzinfo=state_handlers._KST).timestamp()
     stock = {
         "last_watching_ai_action": "WAIT",
@@ -3416,6 +3593,10 @@ def test_real_weak_ai_micro_entry_block_does_not_relax_measured_weak_context(
     )
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE", "2026-07-14"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "2026-07-14",
     )
     now_ts = datetime(2026, 7, 14, 13, 40, tzinfo=state_handlers._KST).timestamp()
     stock = {
@@ -45938,6 +46119,10 @@ def test_real_weak_ai_micro_entry_block_uses_live_clock_for_refreshed_tp1_contex
     )
     monkeypatch.setenv(
         "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE",
+        "1970-01-01",
     )
 
     decision = state_handlers._evaluate_real_weak_ai_micro_entry_block(

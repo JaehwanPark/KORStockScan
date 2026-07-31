@@ -4,6 +4,7 @@ import fcntl
 import gzip
 import hashlib
 import json
+import copy
 import os
 import queue
 import re
@@ -33300,45 +33301,60 @@ def _retry_entry_ai_submit_authority_before_block(
         },
     )
     try:
-        retry_ws_data = dict(ws_data or {})
-        recent_ticks = (
-            kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10) or []
+        handoff, handoff_fields = _consume_entry_price_exact_context_handoff(
+            stock,
+            code=code,
+            now_ts=time.time(),
+            current_ws_data=ws_data,
         )
-        recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
-            KIWOOM_TOKEN,
-            code,
-            retry_ws_data,
-            limit=40,
-            now_ts=now_ts,
-        )
-        try:
-            _update_ai_quote_freshness_fields(retry_ws_data)
-        except Exception as exc:
-            retry_ws_data.setdefault(
-                "quote_age_source", "pre_submit_retry_quote_freshness_unavailable"
+        fields.update(handoff_fields)
+        if handoff is not None:
+            retry_ws_data = copy.deepcopy(dict(handoff.get("ws_data") or {}))
+            recent_ticks = copy.deepcopy(list(handoff.get("recent_ticks") or []))
+            recent_candles = copy.deepcopy(list(handoff.get("recent_candles") or []))
+            candle_context = copy.deepcopy(dict(handoff.get("candle_context") or {}))
+        else:
+            retry_ws_data = dict(ws_data or {})
+            recent_ticks = (
+                kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+                or []
             )
-            retry_ws_data.setdefault("quote_stale", False)
-            retry_ws_data.setdefault(
-                "quote_freshness_source_quality",
-                f"retry_freshness_error:{type(exc).__name__}",
+            recent_candles, candle_source_meta = fetch_entry_candles_with_meta(
+                KIWOOM_TOKEN,
+                code,
+                retry_ws_data,
+                limit=40,
+                now_ts=now_ts,
+            )
+            try:
+                _update_ai_quote_freshness_fields(retry_ws_data)
+            except Exception as exc:
+                retry_ws_data.setdefault(
+                    "quote_age_source",
+                    "pre_submit_retry_quote_freshness_unavailable",
+                )
+                retry_ws_data.setdefault("quote_stale", False)
+                retry_ws_data.setdefault(
+                    "quote_freshness_source_quality",
+                    f"retry_freshness_error:{type(exc).__name__}",
+                )
+            retry_context_now_ts = time.time()
+            candle_context = build_entry_candle_context(
+                KIWOOM_TOKEN,
+                code,
+                retry_ws_data,
+                venue=None,
+                session=None,
+                limit=40,
+                model_bar_limit=20,
+                now_ts=retry_context_now_ts,
+                recent_candles=recent_candles,
+                source_meta=candle_source_meta,
+                include_investor_source=True,
             )
         retry_ws_data.setdefault("current_ai_score", _safe_float(current_ai_score, 0.0))
         retry_ws_data.setdefault(
             "ai_score_baseline_source", "pre_submit_entry_ai_authority_retry"
-        )
-        retry_context_now_ts = time.time()
-        candle_context = build_entry_candle_context(
-            KIWOOM_TOKEN,
-            code,
-            retry_ws_data,
-            venue=None,
-            session=None,
-            limit=40,
-            model_bar_limit=20,
-            now_ts=retry_context_now_ts,
-            recent_candles=recent_candles,
-            source_meta=candle_source_meta,
-            include_investor_source=True,
         )
         try:
             overlap_snapshot = _extract_ai_overlap_snapshot(
@@ -33363,22 +33379,70 @@ def _retry_entry_ai_submit_authority_before_block(
                 "sim_parent_record_id": (stock or {}).get("sim_parent_record_id"),
                 "entry_adm_candidate_id": (stock or {}).get("entry_adm_candidate_id"),
                 "source_event_stage": "pre_submit_entry_ai_authority_retry",
+                "ai_input_parent_snapshot_id": (
+                    handoff.get("snapshot_id") if handoff is not None else None
+                ),
+                "ai_decision_parent_trace_id": (
+                    handoff.get("decision_trace_id") if handoff is not None else None
+                ),
+                "ai_parent_source_event_stage": (
+                    "entry_price" if handoff is not None else None
+                ),
             },
             candle_context=candle_context,
         )
         ai_response_completed_at = time.time()
         ai_decision = dict(ai_decision or {})
         action = str(ai_decision.get("action") or "not_evaluated").upper()
+        model_action = action
         score = _safe_float(ai_decision.get("score"), 0.0)
         result_source = (
             str(ai_decision.get("ai_result_source") or "live").strip().lower()
         )
+        transport_timeout = result_source == "timeout" or bool(
+            ai_decision.get("openai_timeout_like")
+            or ai_decision.get("openai_http_timeout_budget_exhausted")
+        )
+        decision_evaluation_status = (
+            "not_evaluated_transport_timeout"
+            if transport_timeout
+            else (
+                "evaluated"
+                if result_source in {"live", "prior_valid"}
+                else "not_evaluated_provider_or_preflight"
+            )
+        )
+        if transport_timeout:
+            action = "NOT_EVALUATED"
         reason = str(ai_decision.get("reason") or "")[:240]
         source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
         source_quality_fields["ai_result_source"] = result_source
-        _mutate_stock_state(
-            stock,
-            set_fields={
+        source_quality_fields["ai_decision_evaluation_status"] = (
+            decision_evaluation_status
+        )
+        source_quality_fields["ai_decision_model_action"] = model_action
+        trusted_result = bool(
+            result_source in {"live", "prior_valid"}
+            and not transport_timeout
+            and bool(ai_decision.get("ai_parse_ok", True))
+            and str(ai_decision.get("decision_quality_contract_status") or "")
+            .strip()
+            .lower()
+            not in {"semantic_rejected", "schema_semantic_rejected"}
+            and action in {"BUY", "WAIT", "DROP"}
+            and score > 0.0
+        )
+        attempt_state_fields = {
+            "last_watching_ai_attempt_action": action,
+            "last_watching_ai_attempt_model_action": model_action,
+            "last_watching_ai_attempt_score": float(score or 0.0),
+            "last_watching_ai_attempt_completed_at": ai_response_completed_at,
+            "last_watching_ai_attempt_result_source": result_source,
+            "last_watching_ai_attempt_evaluation_status": (decision_evaluation_status),
+            "last_watching_ai_attempt_trusted": trusted_result,
+        }
+        trusted_state_fields = (
+            {
                 "last_watching_ai_action": action,
                 "last_watching_ai_score": float(score or 0.0),
                 "last_watching_ai_score_raw": float(score or 0.0),
@@ -33394,7 +33458,18 @@ def _retry_entry_ai_submit_authority_before_block(
                     ai_decision.get("ai_decision_trace_id") or ""
                 ),
                 "last_watching_ai_source_quality_fields": source_quality_fields,
-                "last_watching_ai_call_trigger_reason": "pre_submit_entry_ai_authority_retry",
+                "last_watching_ai_call_trigger_reason": (
+                    "pre_submit_entry_ai_authority_retry"
+                ),
+            }
+            if trusted_result
+            else {}
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                **attempt_state_fields,
+                **trusted_state_fields,
             },
         )
         if isinstance(LAST_AI_CALL_TIMES, dict):
@@ -33475,9 +33550,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 "ai_call_trigger_reason": "pre_submit_entry_ai_authority_retry"
             },
         )
-        retry_authority_success = bool(
-            result_source in {"live", "prior_valid"} and score > 0.0
-        )
+        retry_authority_success = bool(trusted_result)
         fields.update(
             {
                 "pre_submit_entry_ai_authority_retry_success": retry_authority_success,
@@ -33486,14 +33559,22 @@ def _retry_entry_ai_submit_authority_before_block(
                     if retry_authority_success
                     else (
                         "ai_score_unavailable"
-                        if score <= 0.0
-                        else "ai_result_source_untrusted"
+                        if score <= 0.0 and not transport_timeout
+                        else (
+                            "not_evaluated_transport_timeout"
+                            if transport_timeout
+                            else "ai_result_source_untrusted"
+                        )
                     )
                 ),
                 "pre_submit_entry_ai_authority_retry_result_source": result_source
                 or "-",
                 "pre_submit_entry_ai_authority_retry_score": f"{score:.1f}",
                 "pre_submit_entry_ai_authority_retry_action": action or "not_evaluated",
+                "pre_submit_entry_ai_authority_retry_model_action": model_action,
+                "pre_submit_entry_ai_authority_retry_evaluation_status": (
+                    decision_evaluation_status
+                ),
             }
         )
         return fields
@@ -34731,6 +34812,250 @@ def _entry_price_ai_trace_fields(source: dict | None) -> dict:
         if value not in (None, "", "-"):
             fields[target] = value
     return fields
+
+
+def _record_entry_price_exact_context_handoff(
+    stock: dict,
+    *,
+    code: str,
+    captured_at: float,
+    ws_data: dict | None,
+    recent_ticks: list | None,
+    recent_candles: list | None,
+    candle_context: dict | None,
+    preflight: dict | None,
+    result: dict | None,
+) -> dict:
+    """Keep one short-lived exact context in memory for entry-action correlation."""
+
+    fields = {
+        "entry_price_exact_context_handoff_recorded": False,
+        "entry_price_exact_context_handoff_reason": "not_eligible",
+    }
+    context = candle_context if isinstance(candle_context, dict) else {}
+    preflight = preflight if isinstance(preflight, dict) else {}
+    result = result if isinstance(result, dict) else {}
+    result_source = (
+        str(result.get("ai_result_source") or result.get("result_source") or "")
+        .strip()
+        .lower()
+    )
+    completed_bar_count = _safe_int(context.get("completed_bar_count"), 0)
+    if (
+        result_source not in {"live", "prior_valid"}
+        or not bool(result.get("ai_parse_ok", True))
+        or not bool(preflight.get("allowed", False))
+        or completed_bar_count <= 0
+    ):
+        fields["entry_price_exact_context_handoff_reason"] = (
+            "result_or_exact_context_not_trusted"
+        )
+        return fields
+    ttl_sec = max(
+        1.0,
+        min(
+            15.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC"),
+                2.0,
+            ),
+        ),
+    )
+    try:
+        frozen = {
+            "schema": "entry_price_to_entry_action_exact_context_handoff_v1",
+            "stock_code": str(code or "").strip()[:6],
+            "captured_at": float(captured_at),
+            "expires_at": float(captured_at) + ttl_sec,
+            "effective_venue": str(context.get("venue") or ""),
+            "session_bucket": str(context.get("session") or ""),
+            "snapshot_id": str(
+                result.get("ai_input_snapshot_id")
+                or result.get("ai_market_snapshot_id")
+                or result.get("ai_decision_snapshot_id")
+                or ""
+            ),
+            "decision_trace_id": str(result.get("ai_decision_trace_id") or ""),
+            "ws_data": copy.deepcopy(dict(ws_data or {})),
+            "recent_ticks": copy.deepcopy(list(recent_ticks or [])),
+            "recent_candles": copy.deepcopy(list(recent_candles or [])),
+            "candle_context": copy.deepcopy(context),
+        }
+    except Exception as exc:
+        fields["entry_price_exact_context_handoff_reason"] = (
+            f"freeze_failed:{type(exc).__name__}"
+        )
+        return fields
+    _mutate_stock_state(
+        stock,
+        set_fields={"_entry_price_exact_context_handoff": frozen},
+    )
+    fields.update(
+        {
+            "entry_price_exact_context_handoff_recorded": True,
+            "entry_price_exact_context_handoff_reason": "fresh_exact_context_recorded",
+            "entry_price_exact_context_handoff_ttl_sec": round(ttl_sec, 3),
+            "entry_price_exact_context_handoff_snapshot_id": (
+                frozen["snapshot_id"] or "-"
+            ),
+            "entry_price_exact_context_handoff_decision_trace_id": (
+                frozen["decision_trace_id"] or "-"
+            ),
+            "entry_price_exact_context_handoff_completed_bar_count": (
+                completed_bar_count
+            ),
+        }
+    )
+    return fields
+
+
+def _consume_entry_price_exact_context_handoff(
+    stock: dict,
+    *,
+    code: str,
+    now_ts: float,
+    current_ws_data: dict | None = None,
+) -> tuple[dict | None, dict]:
+    fields = {
+        "pre_submit_entry_ai_exact_context_handoff_used": False,
+        "pre_submit_entry_ai_exact_context_handoff_reason": "not_available",
+    }
+    handoff = (
+        stock.get("_entry_price_exact_context_handoff")
+        if isinstance(stock, dict)
+        else None
+    )
+    if not isinstance(handoff, dict):
+        return None, fields
+    if str(handoff.get("stock_code") or "") != str(code or "").strip()[:6]:
+        fields["pre_submit_entry_ai_exact_context_handoff_reason"] = "symbol_mismatch"
+        return None, fields
+    captured_at = _safe_float(handoff.get("captured_at"), 0.0)
+    expires_at = _safe_float(handoff.get("expires_at"), 0.0)
+    age_sec = max(0.0, float(now_ts) - captured_at) if captured_at > 0 else None
+    fields["pre_submit_entry_ai_exact_context_handoff_age_sec"] = (
+        round(age_sec, 3) if age_sec is not None else "not_available"
+    )
+    if captured_at <= 0 or expires_at <= float(now_ts):
+        _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
+        fields["pre_submit_entry_ai_exact_context_handoff_reason"] = "expired"
+        return None, fields
+    current_session = resolve_entry_candle_session(float(now_ts))
+    current_venue = resolve_entry_candle_venue(
+        current_ws_data or {},
+        session=current_session,
+    )
+    stored_session = str(handoff.get("session_bucket") or "").strip()
+    stored_venue = str(handoff.get("effective_venue") or "").strip()
+    if (stored_session and current_session and stored_session != current_session) or (
+        stored_venue and current_venue and stored_venue != current_venue
+    ):
+        _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
+        fields.update(
+            {
+                "pre_submit_entry_ai_exact_context_handoff_reason": (
+                    "venue_or_session_mismatch"
+                ),
+                "pre_submit_entry_ai_exact_context_handoff_stored_venue": (
+                    stored_venue or "-"
+                ),
+                "pre_submit_entry_ai_exact_context_handoff_current_venue": (
+                    current_venue or "-"
+                ),
+                "pre_submit_entry_ai_exact_context_handoff_stored_session": (
+                    stored_session or "-"
+                ),
+                "pre_submit_entry_ai_exact_context_handoff_current_session": (
+                    current_session or "-"
+                ),
+            }
+        )
+        return None, fields
+    stored_ws_data = (
+        handoff.get("ws_data") if isinstance(handoff.get("ws_data"), dict) else {}
+    )
+    current_ws_data = current_ws_data if isinstance(current_ws_data, dict) else {}
+    changed_fields = []
+    for field_name, aliases in (
+        ("current_price", ("curr", "current_price")),
+        ("best_bid", ("best_bid", "bid_price")),
+        ("best_ask", ("best_ask", "ask_price")),
+    ):
+        stored_value = next(
+            (
+                _coerce_int_value(stored_ws_data.get(alias))
+                for alias in aliases
+                if _coerce_int_value(stored_ws_data.get(alias)) > 0
+            ),
+            0,
+        )
+        current_value = next(
+            (
+                _coerce_int_value(current_ws_data.get(alias))
+                for alias in aliases
+                if _coerce_int_value(current_ws_data.get(alias)) > 0
+            ),
+            0,
+        )
+        if stored_value > 0 and current_value > 0 and stored_value != current_value:
+            changed_fields.append(field_name)
+    if changed_fields:
+        _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
+        fields.update(
+            {
+                "pre_submit_entry_ai_exact_context_handoff_reason": (
+                    "market_snapshot_changed"
+                ),
+                "pre_submit_entry_ai_exact_context_handoff_changed_fields": (
+                    ",".join(changed_fields)
+                ),
+            }
+        )
+        return None, fields
+    context = (
+        handoff.get("candle_context")
+        if isinstance(handoff.get("candle_context"), dict)
+        else {}
+    )
+    source_quality = (
+        context.get("source_quality")
+        if isinstance(context.get("source_quality"), dict)
+        else {}
+    )
+    if (
+        _safe_int(context.get("completed_bar_count"), 0) <= 0
+        or str(source_quality.get("status") or "").strip().lower()
+        not in {"fresh_consistent", "sparse_observed_minutes"}
+        or not str(context.get("venue") or "").strip()
+        or not str(context.get("session") or "").strip()
+    ):
+        _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
+        fields["pre_submit_entry_ai_exact_context_handoff_reason"] = (
+            "stored_context_contract_rejected"
+        )
+        return None, fields
+    _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
+    fields.update(
+        {
+            "pre_submit_entry_ai_exact_context_handoff_used": True,
+            "pre_submit_entry_ai_exact_context_handoff_reason": (
+                "same_symbol_fresh_exact_context"
+            ),
+            "pre_submit_entry_ai_exact_context_handoff_snapshot_id": (
+                handoff.get("snapshot_id") or "-"
+            ),
+            "pre_submit_entry_ai_exact_context_handoff_parent_trace_id": (
+                handoff.get("decision_trace_id") or "-"
+            ),
+            "pre_submit_entry_ai_exact_context_handoff_venue": (
+                handoff.get("effective_venue") or "-"
+            ),
+            "pre_submit_entry_ai_exact_context_handoff_session": (
+                handoff.get("session_bucket") or "-"
+            ),
+        }
+    )
+    return handoff, fields
 
 
 def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=None):
@@ -37374,6 +37699,7 @@ def _apply_entry_ai_price_canary(
         return planned_orders, False
 
     candle_context = None
+    entry_price_preflight = {}
     if candle_axis_active:
         candle_context = build_entry_candle_context(
             KIWOOM_TOKEN,
@@ -37651,6 +37977,30 @@ def _apply_entry_ai_price_canary(
         **_build_ai_ops_log_fields(result),
         **entry_price_input_audit,
     }
+    handoff_ws_data = dict(ws_data or {})
+    handoff_ws_data.update(
+        {
+            "curr": _coerce_int_value(price_ctx.get("current_price")),
+            "current_price": _coerce_int_value(price_ctx.get("current_price")),
+            "best_bid": _coerce_int_value(price_ctx.get("best_bid")),
+            "best_ask": _coerce_int_value(price_ctx.get("best_ask")),
+            "quote_stale": bool(price_ctx.get("quote_stale")),
+            "quote_age_ms": _coerce_int_value(price_ctx.get("ws_age_ms")),
+        }
+    )
+    handoff_fields = _record_entry_price_exact_context_handoff(
+        stock,
+        code=code,
+        captured_at=decision_ts,
+        ws_data=handoff_ws_data,
+        recent_ticks=recent_ticks,
+        recent_candles=recent_candles,
+        candle_context=candle_context,
+        preflight=entry_price_preflight,
+        result=result,
+    )
+    openai_transport_fields.update(handoff_fields)
+    latency_gate.update(handoff_fields)
     entry_price_ai_trace_fields = _entry_price_ai_trace_fields(openai_transport_fields)
     latency_gate.update(entry_price_ai_trace_fields)
     if entry_price_ai_trace_fields:
@@ -39817,6 +40167,37 @@ def _build_watching_refresh_signature(ws_data, feature_packet=None) -> dict:
 def _resolve_watching_state_change_refresh(
     stock, ws_data, *, now_ts, last_ai_time, cooldown_sec
 ) -> dict:
+    timeout_retry_after = _safe_float(
+        (stock or {}).get("_scanner_entry_ai_transport_retry_after_epoch"), 0.0
+    )
+    timeout_retry_until = _safe_float(
+        (stock or {}).get("_scanner_entry_ai_transport_retry_until_epoch"), 0.0
+    )
+    if timeout_retry_after > 0:
+        if timeout_retry_until > 0 and now_ts > timeout_retry_until:
+            _mutate_stock_state(
+                stock,
+                pop_fields=[
+                    "_scanner_entry_ai_transport_retry_after_epoch",
+                    "_scanner_entry_ai_transport_retry_until_epoch",
+                ],
+            )
+        elif now_ts >= timeout_retry_after:
+            return {
+                "allowed": True,
+                "reason": "transport_timeout_fresh_loop_retry",
+                "signature": _build_watching_refresh_signature(ws_data),
+                "decision_authority": "entry_ai_transport_retry_only",
+                "runtime_effect": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        else:
+            return {
+                "allowed": False,
+                "reason": "transport_timeout_retry_backoff",
+                "signature": {},
+            }
     if not bool(_rule("AI_WATCHING_STATE_CHANGE_REFRESH_ENABLED", False)):
         return {"allowed": False, "reason": "disabled", "signature": {}}
     if last_ai_time <= 0:
@@ -41193,6 +41574,18 @@ def _build_ai_ops_log_fields(
         "ai_model_tier": str(payload.get("ai_model_tier", "-") or "-"),
         "cache_mode": str(payload.get("cache_mode", "-") or "-"),
     }
+    normalized_result_source = (
+        str(payload.get("ai_result_source") or "").strip().lower()
+    )
+    out["ai_decision_evaluation_status"] = (
+        "not_evaluated_transport_timeout"
+        if normalized_result_source == "timeout"
+        else (
+            "evaluated"
+            if normalized_result_source in {"live", "prior_valid"}
+            else "not_evaluated_provider_or_preflight"
+        )
+    )
     for field_name in (
         "ai_decision_trace_schema",
         "ai_decision_trace_id",
@@ -50976,12 +51369,103 @@ def _handle_watching_strategy_branch(
                             ai_decision.update(smoothing_fields)
                             ai_decision["score"] = ai_score
                             reason = ai_decision.get("reason", "사유 없음")
+                            result_source = str(
+                                ai_decision.get("ai_result_source") or "live"
+                            ).lower()
+                            transport_timeout = result_source == "timeout" or bool(
+                                ai_decision.get("openai_timeout_like")
+                                or ai_decision.get(
+                                    "openai_http_timeout_budget_exhausted"
+                                )
+                            )
+                            model_action = str(action or "WAIT").upper()
+                            if transport_timeout:
+                                action = "NOT_EVALUATED"
+                                ai_score = 0.0
+                                ai_decision["score"] = 0.0
+                            decision_evaluation_status = (
+                                "not_evaluated_transport_timeout"
+                                if transport_timeout
+                                else (
+                                    "evaluated"
+                                    if result_source in {"live", "prior_valid"}
+                                    else "not_evaluated_provider_or_preflight"
+                                )
+                            )
+                            trusted_result = bool(
+                                result_source in {"live", "prior_valid"}
+                                and not transport_timeout
+                                and bool(ai_decision.get("ai_parse_ok", True))
+                                and str(
+                                    ai_decision.get("decision_quality_contract_status")
+                                    or ""
+                                )
+                                .strip()
+                                .lower()
+                                not in {
+                                    "semantic_rejected",
+                                    "schema_semantic_rejected",
+                                }
+                                and str(action or "").upper() in {"BUY", "WAIT", "DROP"}
+                                and ai_score > 0.0
+                            )
                             ai_source_quality_fields = (
                                 _build_tick_source_quality_log_fields(ai_decision)
                             )
-                            _mutate_stock_state(
-                                stock,
-                                set_fields={
+                            ai_source_quality_fields.update(
+                                {
+                                    "ai_result_source": result_source,
+                                    "ai_decision_evaluation_status": (
+                                        decision_evaluation_status
+                                    ),
+                                    "ai_decision_model_action": model_action,
+                                }
+                            )
+                            attempt_state_fields = {
+                                "last_watching_ai_attempt_action": str(
+                                    action or "NOT_EVALUATED"
+                                ).upper(),
+                                "last_watching_ai_attempt_model_action": model_action,
+                                "last_watching_ai_attempt_score": float(
+                                    ai_score or 0.0
+                                ),
+                                "last_watching_ai_attempt_completed_at": (
+                                    ai_call_completed_at
+                                ),
+                                "last_watching_ai_attempt_result_source": (
+                                    result_source
+                                ),
+                                "last_watching_ai_attempt_evaluation_status": (
+                                    decision_evaluation_status
+                                ),
+                                "last_watching_ai_attempt_trusted": trusted_result,
+                            }
+                            if transport_timeout:
+                                retry_delay_sec = max(
+                                    1.0,
+                                    min(
+                                        30.0,
+                                        _safe_float(
+                                            os.getenv(
+                                                "KORSTOCKSCAN_ENTRY_AI_TRANSPORT_RETRY_DELAY_SEC"
+                                            ),
+                                            2.0,
+                                        ),
+                                    ),
+                                )
+                                attempt_state_fields.update(
+                                    {
+                                        "_scanner_entry_ai_transport_retry_after_epoch": (
+                                            ai_call_completed_at + retry_delay_sec
+                                        ),
+                                        "_scanner_entry_ai_transport_retry_until_epoch": (
+                                            ai_call_completed_at
+                                            + max(30.0, retry_delay_sec * 5.0)
+                                        ),
+                                    }
+                                )
+                            trusted_state_fields = (
+                                {
                                     "last_watching_ai_action": str(
                                         action or "WAIT"
                                     ).upper(),
@@ -50990,10 +51474,10 @@ def _handle_watching_strategy_branch(
                                         raw_ai_score or 0.0
                                     ),
                                     "last_watching_ai_reason": str(reason or "")[:240],
-                                    "last_watching_ai_confirmed_at": ai_call_completed_at,
-                                    "last_watching_ai_result_source": str(
-                                        ai_decision.get("ai_result_source") or "live"
-                                    ).lower(),
+                                    "last_watching_ai_confirmed_at": (
+                                        ai_call_completed_at
+                                    ),
+                                    "last_watching_ai_result_source": result_source,
                                     "last_watching_ai_snapshot_id": (
                                         ai_decision.get("ai_decision_snapshot_id")
                                         or ai_decision.get("ai_input_snapshot_id")
@@ -51002,8 +51486,27 @@ def _handle_watching_strategy_branch(
                                     "last_watching_ai_decision_trace_id": (
                                         ai_decision.get("ai_decision_trace_id") or ""
                                     ),
-                                    "last_watching_ai_source_quality_fields": ai_source_quality_fields,
+                                    "last_watching_ai_source_quality_fields": (
+                                        ai_source_quality_fields
+                                    ),
+                                }
+                                if trusted_result
+                                else {}
+                            )
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    **attempt_state_fields,
+                                    **trusted_state_fields,
                                 },
+                                pop_fields=(
+                                    [
+                                        "_scanner_entry_ai_transport_retry_after_epoch",
+                                        "_scanner_entry_ai_transport_retry_until_epoch",
+                                    ]
+                                    if trusted_result
+                                    else []
+                                ),
                             )
                             feature_probe = _extract_buy_recovery_probe_features(
                                 ai_engine,
@@ -59300,6 +59803,14 @@ def _rising_missed_tp1_source_gap_relief_enabled() -> bool:
     return _env_bool("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED", False)
 
 
+def _rising_missed_tp1_source_gap_relief_active_date() -> str:
+    """Return the relief's own dated authority."""
+
+    return str(
+        os.getenv("KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE") or ""
+    ).strip()
+
+
 def _rising_missed_tp1_source_gap_relief_context_ttl_sec() -> float:
     return max(
         1.0,
@@ -60117,7 +60628,7 @@ def _evaluate_rising_missed_tp1_source_gap_relief(
     ttl_sec = _rising_missed_tp1_source_gap_relief_context_ttl_sec()
     context_at = _safe_float(stock.get("rising_missed_tp1_submit_context_at"), 0.0)
     context_age_sec = float(now_ts) - context_at if context_at > 0 else None
-    active_date = _rising_missed_tp1_selector_active_date()
+    active_date = _rising_missed_tp1_source_gap_relief_active_date()
     current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).strftime("%Y-%m-%d")
     support_count = _safe_int(
         stock.get("rising_missed_tp1_submit_context_support_count"), 0
@@ -60777,6 +61288,20 @@ def _record_scanner_entry_ai_attempt(
 
     normalized_action = str(action or "not_evaluated").strip().upper()
     normalized_source = str(result_source or "").strip().lower()
+    transport_timeout = normalized_source == "timeout" or bool(
+        ai_decision.get("openai_timeout_like")
+        or ai_decision.get("openai_http_timeout_budget_exhausted")
+    )
+    stored_action = "NOT_EVALUATED" if transport_timeout else normalized_action
+    evaluation_status = (
+        "not_evaluated_transport_timeout"
+        if transport_timeout
+        else (
+            "evaluated"
+            if normalized_source in {"live", "prior_valid"}
+            else "not_evaluated_provider_or_preflight"
+        )
+    )
     contract_status = (
         str(ai_decision.get("decision_quality_contract_status") or "").strip().lower()
     )
@@ -60788,6 +61313,7 @@ def _record_scanner_entry_ai_attempt(
     )
     trusted = bool(
         normalized_source in {"live", "prior_valid"}
+        and not transport_timeout
         and normalized_action in {"BUY", "WAIT", "DROP"}
         and (float(score) > 0.0 or contract_valid_zero_score_drop)
         and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
@@ -60806,7 +61332,8 @@ def _record_scanner_entry_ai_attempt(
         and _boolish_true(ai_decision.get("entry_probe_intent"))
     )
     attempt_fields = {
-        "last_watching_ai_attempt_action": normalized_action,
+        "last_watching_ai_attempt_action": stored_action,
+        "last_watching_ai_attempt_model_action": normalized_action,
         "last_watching_ai_attempt_score": float(score),
         "last_watching_ai_attempt_reason": str(ai_decision.get("reason") or "")[:240],
         "last_watching_ai_attempt_completed_at": float(completed_epoch),
@@ -60816,6 +61343,7 @@ def _record_scanner_entry_ai_attempt(
         "last_watching_ai_attempt_snapshot_id": snapshot_id,
         "last_watching_ai_attempt_decision_trace_id": decision_trace_id,
         "last_watching_ai_attempt_trusted": trusted,
+        "last_watching_ai_attempt_evaluation_status": evaluation_status,
         "last_watching_ai_attempt_contract_status": contract_status or "unreported",
         "last_watching_ai_attempt_zero_score_drop_trusted": (
             contract_valid_zero_score_drop
@@ -60829,6 +61357,27 @@ def _record_scanner_entry_ai_attempt(
             source_quality_fields or {}
         ),
     }
+    if transport_timeout:
+        retry_delay_sec = max(
+            1.0,
+            min(
+                30.0,
+                _safe_float(
+                    os.getenv("KORSTOCKSCAN_ENTRY_AI_TRANSPORT_RETRY_DELAY_SEC"),
+                    2.0,
+                ),
+            ),
+        )
+        attempt_fields.update(
+            {
+                "_scanner_entry_ai_transport_retry_after_epoch": (
+                    float(completed_epoch) + retry_delay_sec
+                ),
+                "_scanner_entry_ai_transport_retry_until_epoch": (
+                    float(completed_epoch) + max(30.0, retry_delay_sec * 5.0)
+                ),
+            }
+        )
     if not trusted:
         _mutate_stock_state(stock, set_fields=attempt_fields)
         return False
@@ -60859,6 +61408,10 @@ def _record_scanner_entry_ai_attempt(
             ),
             "last_watching_ai_probe_intent_submit_guard_required": True,
         },
+        pop_fields=[
+            "_scanner_entry_ai_transport_retry_after_epoch",
+            "_scanner_entry_ai_transport_retry_until_epoch",
+        ],
     )
     return True
 
@@ -61045,6 +61598,16 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
             result_source = (
                 str(ai_decision.get("ai_result_source") or "live").strip().lower()
             )
+            decision_evaluation_status = (
+                "not_evaluated_transport_timeout"
+                if result_source == "timeout"
+                else (
+                    "evaluated"
+                    if result_source in {"live", "prior_valid"}
+                    else "not_evaluated_provider_or_preflight"
+                )
+            )
+            effective_action = "NOT_EVALUATED" if result_source == "timeout" else action
             provider_called = _boolish_true(ai_decision.get("provider_called"))
             budget_refund_eligible = bool(
                 not provider_called
@@ -61094,12 +61657,20 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                         "ok"
                         if retry_success
                         else (
-                            "ai_score_unavailable"
-                            if score <= 0
-                            else "ai_result_source_untrusted"
+                            "not_evaluated_transport_timeout"
+                            if result_source == "timeout"
+                            else (
+                                "ai_score_unavailable"
+                                if score <= 0
+                                else "ai_result_source_untrusted"
+                            )
                         )
                     ),
-                    "rising_missed_entry_ai_retry_action": action,
+                    "rising_missed_entry_ai_retry_action": effective_action,
+                    "rising_missed_entry_ai_retry_model_action": action,
+                    "rising_missed_entry_ai_retry_evaluation_status": (
+                        decision_evaluation_status
+                    ),
                     "rising_missed_entry_ai_retry_score": f"{score:.1f}",
                     "rising_missed_entry_ai_retry_result_source": (
                         result_source or "-"

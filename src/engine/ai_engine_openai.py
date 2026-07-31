@@ -6338,6 +6338,37 @@ class GPTSniperEngine:
                 ),
                 "ai_input_build_fallback": "not_built",
             }
+        parent_lineage_fields = {}
+        if isinstance(metadata_extra, dict):
+            parent_trace_id = str(
+                metadata_extra.get("ai_decision_parent_trace_id")
+                or metadata_extra.get("parent_decision_trace_id")
+                or ""
+            ).strip()
+            parent_snapshot_id = str(
+                metadata_extra.get("ai_input_parent_snapshot_id")
+                or metadata_extra.get("parent_snapshot_id")
+                or ""
+            ).strip()
+            parent_source_stage = str(
+                metadata_extra.get("ai_parent_source_event_stage")
+                or metadata_extra.get("parent_source_event_stage")
+                or metadata_extra.get("source_event_stage")
+                or ""
+            ).strip()
+            if parent_trace_id:
+                parent_lineage_fields["ai_decision_parent_trace_id"] = (
+                    parent_trace_id
+                )
+            if parent_snapshot_id:
+                parent_lineage_fields["ai_input_parent_snapshot_id"] = (
+                    parent_snapshot_id
+                )
+            if parent_source_stage:
+                parent_lineage_fields["ai_parent_source_event_stage"] = (
+                    parent_source_stage
+                )
+        input_contract_fields.update(parent_lineage_fields)
         if isinstance(candle_context, dict) and candle_context:
             input_contract_fields.update(
                 entry_candle_context_log_fields(candle_context)
@@ -6538,6 +6569,7 @@ class GPTSniperEngine:
                     default_schema="swing_market_text_v1",
                     default_mode="plain_text",
                 )
+                input_contract_fields.update(parent_lineage_fields)
                 if isinstance(candle_context, dict) and candle_context:
                     input_contract_fields.update(
                         entry_candle_context_log_fields(candle_context)
@@ -6709,6 +6741,7 @@ class GPTSniperEngine:
                         else "plain_text"
                     ),
                 )
+                input_contract_fields.update(parent_lineage_fields)
                 if isinstance(candle_context, dict) and candle_context:
                     input_contract_fields.update(
                         entry_candle_context_log_fields(candle_context)

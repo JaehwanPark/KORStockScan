@@ -850,7 +850,10 @@ class KiwoomWSManager:
         raw = _ws_hot_or_env_value(
             "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REMOVE_BEFORE_REG_ENABLED"
         )
-        return KiwoomWSManager._flag_enabled(raw, default=True)
+        # Kiwoom REG refresh=1 retains existing registrations.  A targeted
+        # persistent repair therefore defaults to additive re-registration;
+        # REMOVE-before-REG remains an explicit operator recovery option.
+        return KiwoomWSManager._flag_enabled(raw, default=False)
 
     def _registered_item_count_locked(self):
         return sum(
@@ -1106,6 +1109,13 @@ class KiwoomWSManager:
                     list(sorted(self.subscribed_codes)) + list(normalized_targets)
                 )
             )
+            # The rebuild REG packet covers every merged target.  Share that
+            # send timestamp with the targeted-repair throttle so a code
+            # included in the group cannot be re-registered again immediately
+            # by the per-code recovery path.  Only the original gap targets
+            # increment no-tick attempts in _filter_persistent_repair_targets.
+            for code in merged_targets:
+                self._persistent_repair_request_ts[code] = now_ts
         return True, merged_targets
 
     def get_subscription_freshness_snapshot(self, codes=None, *, now_ts=None):
@@ -1360,11 +1370,14 @@ class KiwoomWSManager:
             self._persistent_repair_no_tick_attempts.pop(code, None)
             self._persistent_repair_stuck_until_ts.pop(code, None)
             return
-        # A quote-only receipt proves the websocket is connected but does not
-        # satisfy a scanner's 0B contract.  Let the scanner's bounded
-        # required-realtime recovery own that state instead of incorrectly
-        # entering the generic no-tick cooldown.
-        if self._has_any_realtime_receipt(target):
+        # A receipt clears the generic no-tick counter only when this
+        # subscription has no stricter required-type contract.  Scanner
+        # subscriptions require 0B: repeatedly receiving quote-only packets
+        # must still converge to the bounded stuck cooldown, otherwise each
+        # quote receipt resets the counter and REMOVE/REG repair can run
+        # forever.
+        required_types = tuple(self._required_realtime_types_by_code.get(code) or ())
+        if not required_types and self._has_any_realtime_receipt(target):
             self._persistent_repair_no_tick_attempts.pop(code, None)
             self._persistent_repair_stuck_until_ts.pop(code, None)
             return

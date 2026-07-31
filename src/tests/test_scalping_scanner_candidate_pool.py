@@ -5594,15 +5594,22 @@ def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
     assert payload["source_signature"] == "PREV_CLOSE_GAINER"
     assert payload["scanner_market_gainer_reserved_slots"] == 6
     assert payload["scanner_market_gainer_reserved_promotion"] is True
+    assert payload["scanner_market_gainer_active_count"] == 1
     assert db.records[0].scanner_watch_budget_owner == "rising_missed"
 
 
 def test_market_gainer_reservation_replaces_only_six_non_holding_rising_slots(
     monkeypatch,
 ):
+    promoted_event_fields = []
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "16")
     monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "6")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "TRADING_RULES",
+        SimpleNamespace(SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED=True),
+    )
     monkeypatch.setattr(
         scalping_scanner, "_scanner_watch_budget_reallocation_enabled", lambda: True
     )
@@ -5611,6 +5618,18 @@ def test_market_gainer_reservation_replaces_only_six_non_holding_rising_slots(
         scalping_scanner,
         "_scanner_real_source_guard_decision",
         lambda *args, **kwargs: {"blocked": False, "reason": "market_gainer_seed"},
+    )
+    original_log_candidate_event = scalping_scanner._log_scanner_candidate_event
+
+    def capture_candidate_event(stage, target, source_guard, **kwargs):
+        if stage == "scalping_scanner_candidate_promoted":
+            promoted_event_fields.append(dict(source_guard))
+        return original_log_candidate_event(stage, target, source_guard, **kwargs)
+
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_log_scanner_candidate_event",
+        capture_candidate_event,
     )
     db = _DB()
     for index in range(12):
@@ -5699,6 +5718,13 @@ def test_market_gainer_reservation_replaces_only_six_non_holding_rising_slots(
     assert len(active) == 16
     assert len(active_market) == 6
     assert len(expired_regular) == 6
+    assert [
+        fields["scanner_market_gainer_active_count"] for fields in promoted_event_fields
+    ] == [1, 2, 3, 4, 5, 6]
+    assert [
+        payload["scanner_market_gainer_active_count"]
+        for payload in _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")
+    ] == [1, 2, 3, 4, 5, 6]
     assert any(
         name == "COMMAND_WS_UNREG"
         and payload["source"] == "scalping_scanner_market_gainer_reserve_replace"

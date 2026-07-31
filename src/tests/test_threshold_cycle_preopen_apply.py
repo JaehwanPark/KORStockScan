@@ -8555,6 +8555,7 @@ def test_dated_runtime_override_audits_require_current_date_and_dependency():
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "false",
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED": "true",
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED": "true",
@@ -8584,6 +8585,29 @@ def test_dated_runtime_override_audits_require_current_date_and_dependency():
     )
     assert by_family["latency_true_ofi_nxt_probability_band"]["reason"] == (
         "runtime_inactive_date"
+    )
+
+
+def test_dated_source_gap_relief_requires_its_own_active_date():
+    target_date = "2026-07-31"
+    audits = mod._dated_runtime_override_audits(
+        target_date,
+        {
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": target_date,
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED": "true",
+        },
+    )
+    finding = next(
+        item
+        for item in audits
+        if item["family"] == "rising_missed_tp1_source_gap_relief"
+    )
+
+    assert finding["status"] == "fail"
+    assert finding["reason"] == "active_date_missing"
+    assert finding["active_date_key"] == (
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE"
     )
 
 
@@ -8628,6 +8652,7 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED": "true",
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED": "true",

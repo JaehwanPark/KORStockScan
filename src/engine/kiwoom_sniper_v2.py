@@ -66,6 +66,7 @@ from src.engine.scalping.rising_missed_selection_prior import (
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
     LIMIT_DOWN_ROTATION,
+    MARKET_GAINER_SOURCE,
     OPENING_ROTATION,
     RISING_MISSED,
     classify_owner as classify_watch_budget_owner,
@@ -2850,6 +2851,14 @@ def _scanner_watch_eviction_decision_from_no_trade(target, ws_data, *, now_ts):
         return {"should_evict": False, "eviction_attempt_count": 0}
     if not _is_scanner_watch_eviction_candidate(target):
         return {"should_evict": False, "eviction_attempt_count": 0}
+    market_gainer_retention = _market_gainer_first_eval_retention(target, now_ts=now_ts)
+    if market_gainer_retention.get("retention_active"):
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "market_gainer_first_eval_retention_active",
+            **market_gainer_retention,
+        }
 
     received = (ws_data or {}).get("received_types") or []
     try:
@@ -2960,7 +2969,6 @@ def _scanner_watch_eviction_decision_from_queue_lag(
         return {"should_evict": False, "eviction_attempt_count": 0}
     if not _is_scanner_watch_eviction_candidate(target):
         return {"should_evict": False, "eviction_attempt_count": 0}
-
     queue_lag_fields = queue_lag_fields if isinstance(queue_lag_fields, dict) else {}
     fast_precheck_result = str(
         queue_lag_fields.get("fast_precheck_result")
@@ -2981,6 +2989,15 @@ def _scanner_watch_eviction_decision_from_queue_lag(
             "fresh_input_confirmed": True,
             "fast_precheck_result": fast_precheck_result,
             "fast_precheck_reason": fast_precheck_reason,
+        }
+    market_gainer_retention = _market_gainer_first_eval_retention(target, now_ts=now_ts)
+    if market_gainer_retention.get("retention_active"):
+        _scanner_watch_reset_queue_lag_eviction_state(target)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "market_gainer_first_eval_retention_active",
+            **market_gainer_retention,
         }
 
     queue_lag_sec = _safe_float(queue_lag_fields.get("queue_lag_sec"), 0.0)
@@ -3705,6 +3722,101 @@ def _reset_scanner_ws_backoff_watch_retention(target) -> None:
         target.pop(key, None)
 
 
+def _market_gainer_first_eval_retention(target, *, now_ts) -> dict:
+    """Protect a reserved market-gainer slot until first evaluation, bounded by TTL.
+
+    This is observation-capacity ownership only. It never makes stale data
+    eligible, calls a provider, or bypasses submit and broker safety.
+    """
+
+    target = target if isinstance(target, dict) else {}
+    source_tokens = {
+        token.strip().upper()
+        for token in str(
+            target.get("source_signature")
+            or target.get("scanner_source_signature")
+            or ""
+        )
+        .replace("|", ",")
+        .split(",")
+        if token.strip()
+    }
+    if MARKET_GAINER_SOURCE not in source_tokens:
+        return {
+            "market_gainer_first_eval_retention_applicable": False,
+            "retention_active": False,
+        }
+    anchor_epoch = _safe_float(
+        target.get("scanner_promotion_emitted_epoch")
+        or target.get("entry_armed_at_epoch"),
+        0.0,
+    )
+    if anchor_epoch <= 0:
+        return {
+            "market_gainer_first_eval_retention_applicable": True,
+            "retention_active": False,
+            "market_gainer_first_eval_retention_reason": "promotion_anchor_missing",
+        }
+    max_sec = max(
+        1.0,
+        min(
+            600.0,
+            _safe_float(
+                os.getenv(
+                    "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC"
+                ),
+                180.0,
+            ),
+        ),
+    )
+    heavy_eval_epoch = _safe_float(
+        target.get("_scanner_last_heavy_eval_attempt_epoch"), 0.0
+    )
+    ai_attempt_epoch = max(
+        _safe_float(target.get("last_watching_ai_attempt_completed_at"), 0.0),
+        _safe_float(target.get("last_watching_ai_confirmed_at"), 0.0),
+    )
+    heavy_eval_observed = heavy_eval_epoch >= anchor_epoch
+    ai_terminal_observed = ai_attempt_epoch >= anchor_epoch
+    age_sec = max(0.0, float(now_ts) - anchor_epoch)
+    retention_active = bool(
+        age_sec < max_sec and not heavy_eval_observed and not ai_terminal_observed
+    )
+    if heavy_eval_observed:
+        reason = "first_heavy_eval_observed"
+    elif ai_terminal_observed:
+        reason = "first_ai_terminal_observed"
+    elif age_sec >= max_sec:
+        reason = "bounded_retention_expired"
+    else:
+        reason = "awaiting_first_heavy_eval_or_ai_terminal"
+    return {
+        "market_gainer_first_eval_retention_applicable": True,
+        "retention_active": retention_active,
+        "retention_reason": reason,
+        "market_gainer_first_eval_retention_reason": reason,
+        "market_gainer_first_eval_retention_age_sec": round(age_sec, 3),
+        "market_gainer_first_eval_retention_max_sec": round(max_sec, 3),
+        "market_gainer_first_eval_retention_anchor_epoch": f"{anchor_epoch:.3f}",
+        "market_gainer_first_eval_retention_heavy_eval_observed": heavy_eval_observed,
+        "market_gainer_first_eval_retention_ai_terminal_observed": ai_terminal_observed,
+        "metric_role": "scanner_observation_capacity",
+        "decision_authority": "market_gainer_reserved_watch_retention_only",
+        "window_policy": "promotion_to_first_heavy_eval_or_ai_terminal_bounded",
+        "sample_floor": "one_reserved_market_gainer_promotion",
+        "primary_decision_metric": "first_ai_reach_rate",
+        "source_quality_gate": "existing_runtime_source_quality_guards_unchanged",
+        "forbidden_uses": (
+            "stale_submit_bypass,heavy_eval_eligibility_bypass,provider_route_change,"
+            "score_or_threshold_change,order_price_or_quantity_change,"
+            "broker_guard_bypass,position_cap_release"
+        ),
+        "runtime_effect": retention_active,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _scanner_queue_lag_eviction_allowed_before_recovery(
     fast_precheck_reason,
 ) -> bool:
@@ -3725,6 +3837,16 @@ def _scanner_watch_eviction_decision_from_fast_precheck_budget(
         fast_precheck_fields.get("fast_precheck_reason")
         or "rising_missed_not_rising_without_recovery_signal"
     )
+    market_gainer_retention = _market_gainer_first_eval_retention(target, now_ts=now_ts)
+    if market_gainer_retention.get("retention_active"):
+        _reset_scanner_ws_backoff_watch_retention(target)
+        target["_scanner_market_gainer_first_eval_retained_at"] = float(now_ts)
+        return {
+            "should_evict": False,
+            "eviction_attempt_count": 0,
+            "eviction_reason": "market_gainer_first_eval_retention_active",
+            **market_gainer_retention,
+        }
     retention_reason = str(
         fast_precheck_fields.get("rising_missed_signed_tape_watch_retention_reason")
         or ""

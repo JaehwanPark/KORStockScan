@@ -1777,6 +1777,7 @@ def test_persistent_repair_defaults_refresh_stale_scanner_sources_quickly(monkey
 
     assert manager._persistent_repair_max_codes() == 8
     assert manager._persistent_repair_ttl_sec() == 30.0
+    assert manager._persistent_repair_remove_before_reg_enabled() is False
     assert manager._persistent_repair_rebuild_group_enabled() is False
     assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
     assert manager._filter_persistent_repair_targets(["000001"]) == ([], ["000001"])
@@ -1802,6 +1803,7 @@ def test_persistent_repair_rebuild_targets_merges_subscribed_when_enabled(monkey
     manager = KiwoomWSManager("test-token")
     manager.subscribed_codes.update({"000001", "000002"})
     monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_ENABLED", "1")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "20")
     monkeypatch.setenv(
         "KORSTOCKSCAN_WS_PERSISTENT_REPAIR_REBUILD_GROUP_MIN_INTERVAL_SEC", "30"
     )
@@ -1812,8 +1814,17 @@ def test_persistent_repair_rebuild_targets_merges_subscribed_when_enabled(monkey
 
     assert rebuild is True
     assert targets == ["000001", "000002", "000003"]
+    assert manager._persistent_repair_request_ts == {
+        "000001": 1000.0,
+        "000002": 1000.0,
+        "000003": 1000.0,
+    }
 
     now["value"] = 1010.0
+    assert manager._filter_persistent_repair_targets(["000002"]) == (
+        [],
+        ["000002"],
+    )
     rebuild, targets = manager._persistent_repair_rebuild_targets(["000004"])
     assert rebuild is False
     assert targets == ["000004"]
@@ -1970,6 +1981,48 @@ def test_persistent_repair_attempts_clear_after_first_realtime(monkeypatch):
     assert manager._persistent_repair_no_tick_attempts.get("000001") is None
     now["value"] = 1001.0
     assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+
+
+def test_persistent_repair_quote_only_converges_to_required_0b_cooldown(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_MIN_ATTEMPTS", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_COOLDOWN_SEC", "120")
+    now = {"value": 1000.0}
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now["value"])
+    manager.subscribed_codes.add("000001")
+    manager._required_realtime_types_by_code["000001"] = ("0B",)
+    manager.realtime_data["000001"] = {
+        "last_realtime_type_ts": {"0D": 999.0},
+        "received_types": {"0D"},
+    }
+
+    assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+    now["value"] = 1001.0
+    assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+    now["value"] = 1002.0
+
+    assert manager._filter_persistent_repair_targets(["000001"]) == ([], ["000001"])
+
+
+def test_persistent_repair_any_receipt_clears_counter_without_required_type_contract(
+    monkeypatch,
+):
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_TTL_SEC", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_MIN_ATTEMPTS", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PERSISTENT_REPAIR_STUCK_COOLDOWN_SEC", "120")
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: 1000.0)
+    manager.subscribed_codes.add("000001")
+    manager._persistent_repair_no_tick_attempts["000001"] = 1
+    manager.realtime_data["000001"] = {
+        "last_realtime_type_ts": {"0D": 999.0},
+        "received_types": {"0D"},
+    }
+
+    assert manager._filter_persistent_repair_targets(["000001"]) == (["000001"], [])
+    assert manager._persistent_repair_no_tick_attempts.get("000001") is None
+    assert manager._persistent_repair_stuck_until_ts.get("000001") is None
 
 
 def test_command_ws_reg_scanner_defaults_to_required_0b(monkeypatch):

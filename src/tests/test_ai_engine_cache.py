@@ -281,6 +281,72 @@ def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
     )
 
 
+def test_analyze_target_maps_parent_handoff_metadata_into_trace_contract(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    captured = {}
+
+    def _record(_payload, **kwargs):
+        captured.update(dict(kwargs.get("input_contract_fields") or {}))
+        return {"ai_decision_trace_id": "trace-retry"}
+
+    monkeypatch.setattr(ai_engine_openai_module, "record_ai_decision_trace", _record)
+
+    result = engine.analyze_target(
+        "테스트",
+        {},
+        [],
+        [],
+        strategy="SCALPING",
+        candle_context=_blocked_ai_context(),
+        metadata_extra={
+            "parent_decision_trace_id": "trace-entry-price",
+            "parent_snapshot_id": "snapshot-entry-price",
+            "source_event_stage": "pre_submit_entry_ai_authority_retry",
+        },
+    )
+
+    assert result["ai_decision_trace_id"] == "trace-retry"
+    assert captured["ai_decision_parent_trace_id"] == "trace-entry-price"
+    assert captured["ai_input_parent_snapshot_id"] == "snapshot-entry-price"
+    assert (
+        captured["ai_parent_source_event_stage"]
+        == "pre_submit_entry_ai_authority_retry"
+    )
+
+
+def test_analyze_target_preserves_standardized_parent_handoff_metadata(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    captured = {}
+
+    def _record(_payload, **kwargs):
+        captured.update(dict(kwargs.get("input_contract_fields") or {}))
+        return {"ai_decision_trace_id": "trace-retry"}
+
+    monkeypatch.setattr(ai_engine_openai_module, "record_ai_decision_trace", _record)
+
+    result = engine.analyze_target(
+        "테스트",
+        {},
+        [],
+        [],
+        strategy="SCALPING",
+        candle_context=_blocked_ai_context(),
+        metadata_extra={
+            "source_event_stage": "pre_submit_entry_ai_authority_retry",
+            "ai_decision_parent_trace_id": "trace-entry-price",
+            "ai_input_parent_snapshot_id": "snapshot-entry-price",
+            "ai_parent_source_event_stage": "entry_price",
+        },
+    )
+
+    assert result["ai_decision_trace_id"] == "trace-retry"
+    assert captured["ai_decision_parent_trace_id"] == "trace-entry-price"
+    assert captured["ai_input_parent_snapshot_id"] == "snapshot-entry-price"
+    assert captured["ai_parent_source_event_stage"] == "entry_price"
+
+
 def test_disabled_entry_context_capture_receives_exact_natural_call_inputs(
     monkeypatch,
 ):

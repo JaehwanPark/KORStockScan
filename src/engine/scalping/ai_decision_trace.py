@@ -1332,6 +1332,16 @@ def record_ai_decision_trace(
             or trace_id,
             "decision_ts": now.isoformat(),
             "decision_stage": stage,
+            "decision_evaluation_status": (
+                "not_evaluated_transport_timeout"
+                if timeout_like
+                else (
+                    "evaluated"
+                    if str(normalized_result_source).strip().lower()
+                    in {"live", "prior_valid"}
+                    else "not_evaluated_provider_or_preflight"
+                )
+            ),
             "stock_code": _normalize_stock_code(stock_identifier),
             "stock_identifier": stock_identifier[:40],
             "effective_venue": _optional(
@@ -1623,6 +1633,12 @@ def record_ai_decision_trace(
             "decision_result_sha256": decision_result_sha256,
             "parent_decision_trace_id": _optional(
                 merged, "ai_decision_parent_trace_id"
+            ),
+            "parent_snapshot_id": _optional(
+                merged, "ai_input_parent_snapshot_id", "parent_snapshot_id"
+            ),
+            "parent_source_event_stage": _optional(
+                merged, "ai_parent_source_event_stage"
             ),
             "input_preflight_status": _optional(merged, "ai_input_preflight_status"),
             "input_preflight_mode": _optional(
