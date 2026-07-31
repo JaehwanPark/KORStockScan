@@ -435,6 +435,66 @@ def test_capture_marks_canonical_completed_bars_as_exact_candidate(
     assert fields["ai_trace_canonical_context_forming_bar_present"] is True
 
 
+def test_capture_finds_holding_context_embedded_after_known_plain_text_marker(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    holding_context = {
+        "schema": "holding_decision_context_v1",
+        "candle": {
+            "input_bundle_version": "scalping_multi_timeframe_context_v1",
+            "bars": [
+                {"t": "09:00", "c": 100, "is_forming": False},
+                {"t": "09:01", "c": 101, "is_forming": True},
+            ],
+        },
+    }
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input=(
+            "[POSITION_CONTEXT]\ncurrent_price: 101\n\n"
+            "[HOLDING_DECISION_CONTEXT]\n"
+            + json.dumps(holding_context, separators=(",", ":"))
+            + "\n\n[DECISION_REQUEST]\nChoose HOLD, TRIM, or EXIT."
+        ),
+        endpoint_name="holding_flow",
+        symbol="005930",
+        request_id="holding-plain-text-canonical",
+        model="gpt-test",
+        schema_name="holding_flow_v1",
+        require_json=True,
+    )
+
+    assert fields["ai_trace_canonical_context_capture_status"] == (
+        "exact_completed_bars_captured"
+    )
+    assert fields["ai_trace_canonical_context_schema"] == (
+        "holding_decision_context_v1"
+    )
+    assert fields["ai_trace_canonical_context_completed_bar_count"] == 1
+    assert fields["ai_trace_canonical_context_forming_bar_present"] is True
+
+
+def test_capture_does_not_accept_malformed_marked_holding_context(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input="[HOLDING_DECISION_CONTEXT]\n{malformed-json}",
+        endpoint_name="holding_flow",
+        symbol="005930",
+        request_id="holding-plain-text-malformed",
+        model="gpt-test",
+        schema_name="holding_flow_v1",
+        require_json=True,
+    )
+
+    assert fields["ai_trace_canonical_context_capture_status"] == (
+        "canonical_context_missing"
+    )
+
+
 def test_capture_uses_request_metadata_for_venue_when_payload_is_compact(
     monkeypatch, tmp_path
 ):

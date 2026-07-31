@@ -47746,6 +47746,42 @@ def _score65_74_recovery_probe_decision(
         .strip()
         .lower()
     )
+    decision_evaluation_status = (
+        str((ai_decision or {}).get("decision_evaluation_status") or "")
+        .strip()
+        .lower()
+    )
+    decision_result_source = (
+        str(
+            (ai_decision or {}).get("ai_result_source")
+            or (ai_decision or {}).get("result_source")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    input_preflight_status = (
+        str((ai_decision or {}).get("input_preflight_status") or "")
+        .strip()
+        .lower()
+    )
+    input_preflight_allowed = (ai_decision or {}).get("input_preflight_allowed")
+    if decision_evaluation_status.startswith("not_evaluated"):
+        return {
+            "allowed": False,
+            "evaluated": False,
+            "score65_74_recovery_probe_skip_reason": "ai_decision_not_evaluated",
+        }
+    if (
+        decision_result_source == "input_preflight_blocked"
+        or input_preflight_status == "blocked"
+        or input_preflight_allowed is False
+    ):
+        return {
+            "allowed": False,
+            "evaluated": False,
+            "score65_74_recovery_probe_skip_reason": "ai_input_preflight_blocked",
+        }
     if (
         decision_contract_status == "semantic_rejected"
         or decision_reason == "decision_quality_v2_7_semantic_rejected"
@@ -47790,6 +47826,12 @@ def _score65_74_recovery_probe_decision(
             "evaluated": False,
             "score65_74_recovery_probe_skip_reason": "invalid_score",
         }
+    if not math.isfinite(score):
+        return {
+            "allowed": False,
+            "evaluated": False,
+            "score65_74_recovery_probe_skip_reason": "invalid_score",
+        }
     min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60)
     max_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74)
     score_prior_fields = {
@@ -47805,6 +47847,15 @@ def _score65_74_recovery_probe_decision(
         ),
         "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
     }
+    # Score remains a prior for evaluated model decisions, but neutral/fail-closed
+    # scores must never acquire BUY authority from microstructure alone.
+    if score <= 50.0:
+        return {
+            "allowed": False,
+            "evaluated": False,
+            "score65_74_recovery_probe_skip_reason": "neutral_or_fail_closed_score",
+            **score_prior_fields,
+        }
 
     latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
     if latency_state == "DANGER":
@@ -47920,11 +47971,21 @@ def _resolve_wait6579_probe_entry_unlock(stock) -> dict:
         return {"unlocked": False, "source": "", "event_stage": ""}
     source = str((stock or {}).get("wait6579_probe_canary_source") or "")
     if source == "score65_74_recovery_probe":
+        armed_score = _safe_float(
+            (stock or {}).get("wait6579_probe_canary_score"),
+            None,
+        )
+        score_is_eligible = armed_score is not None and armed_score > 50.0
         return {
-            "unlocked": _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False),
+            "unlocked": (
+                _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False)
+                and score_is_eligible
+            ),
             "source": source,
             "event_stage": "score65_74_recovery_probe_entry_unlocked",
             "decision_source": "BUY_SCORE65_74_RECOVERY_PROBE",
+            "armed_score": armed_score,
+            "score_is_eligible": score_is_eligible,
         }
     return {"unlocked": False, "source": source, "event_stage": ""}
 

@@ -6839,6 +6839,7 @@ def test_score65_74_recovery_probe_entry_unlock_requires_armed_source(monkeypatc
             {
                 "wait6579_probe_canary_armed": True,
                 "wait6579_probe_canary_source": "score65_74_recovery_probe",
+                "wait6579_probe_canary_score": "68.0",
             }
         )
         is True
@@ -6854,6 +6855,7 @@ def test_wait6579_probe_entry_unlock_allows_only_enabled_sources(monkeypatch):
         {
             "wait6579_probe_canary_armed": True,
             "wait6579_probe_canary_source": "score65_74_recovery_probe",
+            "wait6579_probe_canary_score": "68.0",
         }
     )
     assert score65["unlocked"] is True
@@ -6867,6 +6869,84 @@ def test_wait6579_probe_entry_unlock_allows_only_enabled_sources(monkeypatch):
             }
         )["unlocked"]
         is False
+    )
+
+
+def test_score65_74_recovery_probe_blocks_preflight_and_neutral_results(
+    monkeypatch,
+):
+    rules = replace(TRADING_RULES, AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True)
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    feature_probe = _trusted_pressure(
+        {
+            "buy_pressure": 90.0,
+            "tick_accel": 2.0,
+            "micro_vwap_bp": 20.0,
+            "large_sell_print": False,
+        }
+    )
+
+    preflight = _score65_74_recovery_probe_decision(
+        {
+            "action": "DROP",
+            "score": 0,
+            "reason": "ai_input_preflight_blocked",
+            "decision_evaluation_status": "not_evaluated_provider_or_preflight",
+            "ai_result_source": "input_preflight_blocked",
+        },
+        0,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+    )
+    assert preflight["allowed"] is False
+    assert preflight["evaluated"] is False
+    assert (
+        preflight["score65_74_recovery_probe_skip_reason"]
+        == "ai_decision_not_evaluated"
+    )
+
+    neutral = _score65_74_recovery_probe_decision(
+        {"action": "WAIT", "score": 50},
+        50,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+    )
+    assert neutral["allowed"] is False
+    assert neutral["evaluated"] is False
+    assert (
+        neutral["score65_74_recovery_probe_skip_reason"]
+        == "neutral_or_fail_closed_score"
+    )
+
+
+def test_score65_74_recovery_probe_unlock_rejects_missing_or_neutral_score(
+    monkeypatch,
+):
+    rules = replace(TRADING_RULES, AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True)
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    base = {
+        "wait6579_probe_canary_armed": True,
+        "wait6579_probe_canary_source": "score65_74_recovery_probe",
+    }
+
+    assert _resolve_wait6579_probe_entry_unlock(base)["unlocked"] is False
+    assert (
+        _resolve_wait6579_probe_entry_unlock(
+            {**base, "wait6579_probe_canary_score": "50.0"}
+        )["unlocked"]
+        is False
+    )
+    assert (
+        _resolve_wait6579_probe_entry_unlock(
+            {**base, "wait6579_probe_canary_score": "68.0"}
+        )["unlocked"]
+        is True
     )
 
 
