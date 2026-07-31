@@ -1807,13 +1807,41 @@ class GPTSniperEngine:
             repaired = dict(payload)
             valid_reason_codes = []
             invalid_reason_codes = []
+            non_buy_reason_code_aliases = {
+                "blocking_current_entry_risk": "adverse_risk_high",
+                "structural_edge_floor": "structural_edge_without_trigger",
+            }
+            model_invalid_reason_codes = [
+                code
+                for code in model_reason_codes
+                if code not in DECISION_QUALITY_V2_REASON_CODES
+            ]
             for code in model_reason_codes:
-                if code in DECISION_QUALITY_V2_REASON_CODES:
-                    if code not in valid_reason_codes:
-                        valid_reason_codes.append(code)
+                normalized_code = non_buy_reason_code_aliases.get(code, code)
+                if normalized_code in DECISION_QUALITY_V2_REASON_CODES:
+                    if normalized_code not in valid_reason_codes:
+                        valid_reason_codes.append(normalized_code)
                 else:
                     invalid_reason_codes.append(code)
             repair_codes = []
+            aliased_reason_codes = [
+                code
+                for code in model_reason_codes
+                if code in non_buy_reason_code_aliases
+            ]
+            if aliased_reason_codes:
+                repaired["reason_codes"] = valid_reason_codes + invalid_reason_codes
+                repair_codes.append("non_buy_reason_code_aliases_normalized")
+            if "expected_upside_pct_negative" in contract_errors and str(
+                repaired.get("action") or ""
+            ).strip().upper() in {"WAIT", "DROP"}:
+                try:
+                    negative_upside = float(repaired.get("expected_upside_pct"))
+                except (TypeError, ValueError):
+                    negative_upside = 0.0
+                if negative_upside < 0:
+                    repaired["expected_upside_pct"] = 0.0
+                    repair_codes.append("non_buy_upside_sign_normalized")
             if "expected_downside_pct_positive" in contract_errors and str(
                 repaired.get("action") or ""
             ).strip().upper() in {"WAIT", "DROP"}:
@@ -1896,6 +1924,16 @@ class GPTSniperEngine:
             ):
                 repaired["reason_codes"] = valid_reason_codes
                 repair_codes.append("non_buy_invalid_reason_codes_removed")
+            if (
+                "reason_codes_invalid" in contract_errors
+                and valid_reason_codes
+                and invalid_reason_codes == ["tape_mixed"]
+                and evidence_trigger
+                and str(evidence_for_reason_repair.get("tape") or "").strip().lower()
+                == "mixed"
+            ):
+                repaired["reason_codes"] = valid_reason_codes
+                repair_codes.append("non_buy_redundant_tape_mixed_reason_removed")
 
             evidence = (
                 dict(repaired.get("evidence") or {})
@@ -2096,12 +2134,12 @@ class GPTSniperEngine:
                         repair_fields["decision_quality_contract_original_errors"]
                     ),
                     "decision_quality_contract_invalid_reason_codes": (
-                        invalid_reason_codes
+                        model_invalid_reason_codes
                     ),
                 }
             else:
                 repair_fields["decision_quality_contract_invalid_reason_codes"] = (
-                    invalid_reason_codes
+                    model_invalid_reason_codes
                 )
         if contract_errors:
             return {

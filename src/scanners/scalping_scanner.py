@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import time
 from datetime import datetime, timedelta
-from math import ceil, log10
+from math import ceil, isfinite, log10
 
 # 💡 Level 1 & 2 공통 모듈 임포트
 from src.utils import kiwoom_utils
@@ -51,6 +51,20 @@ LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
 LOW_REBOUND_RISING_MISSED_LINEAGE = "low_rebound_from_intraday_low"
 MARKET_GAINER_SOURCE_FAMILY = "ka10027_market_gainer_candidate_v1"
 MARKET_GAINER_SOURCE_ROLE = "market_wide_prev_close_gainer_candidate"
+SCANNER_MAX_PREV_CLOSE_GAIN_PCT = 25.0
+SCANNER_PREV_CLOSE_GAIN_FIELDS = (
+    "MarketGainerFluRate",
+    "RealtimeRankFluRate",
+    "PriceJumpFluRate",
+    "VolumeSurgeFluRate",
+    "BidImbalanceFluRate",
+    "NewHighFluRate",
+    "HighProximityFluRate",
+    "LowReboundDisplayChangeRate",
+    "ValueFluRate",
+    "SupernovaFluRate",
+    "DayFluRate",
+)
 HIGH_PROXIMITY_CONFIRMATION_SOURCE = "HIGH_PROXIMITY_CONFIRMATION"
 NEW_HIGH_CONFIRMATION_SOURCE = "NEW_HIGH_CONFIRMATION"
 BREAKOUT_CONFIRMATION_SOURCES = {
@@ -238,6 +252,49 @@ def _publish_ranked_prewarm_candidates(
         code = str(target.get("Code") or "").replace("A", "").strip()[:6]
         name = str(target.get("Name") or "").strip()
         price = _safe_positive_int(target.get("Price"))
+        max_prev_close_gain_pct, max_prev_close_gain_source_field = (
+            _scanner_max_prev_close_gain_pct(target)
+        )
+        if max_prev_close_gain_pct >= SCANNER_MAX_PREV_CLOSE_GAIN_PCT:
+            emit_pipeline_event(
+                "ENTRY_PIPELINE",
+                name or "-",
+                code or "-",
+                "scalping_scanner_ws_prewarm_filtered",
+                fields={
+                    **venue_fields,
+                    "metric_role": "source_quality_gate",
+                    "decision_authority": (
+                        "scanner_ws_prewarm_source_filter_no_entry_authority"
+                    ),
+                    "window_policy": "three_minutes_before_each_scalping_buy_window",
+                    "sample_floor": "not_applicable_runtime_guard",
+                    "primary_decision_metric": "funnel_count",
+                    "source_quality_gate": "prev_close_gain_below_scanner_cap",
+                    "forbidden_uses": (
+                        "standalone_buy,broker_submit,threshold_mutation,"
+                        "provider_route_change,order_price_change,"
+                        "quantity_or_cap_change,broker_guard_bypass,"
+                        "stale_quote_bypass,hard_safety_bypass"
+                    ),
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "prewarm_source_signature": _source_signature(target),
+                    "prewarm_observed_price": price,
+                    "scanner_filter_reason": (
+                        "prev_close_gain_at_or_above_scanner_cap"
+                    ),
+                    "scanner_prev_close_gain_pct": max_prev_close_gain_pct,
+                    "scanner_prev_close_gain_source_field": (
+                        max_prev_close_gain_source_field
+                    ),
+                    "scanner_prev_close_gain_cap_pct": (
+                        SCANNER_MAX_PREV_CLOSE_GAIN_PCT
+                    ),
+                },
+            )
+            continue
         if (
             not code
             or code in prewarm_codes
@@ -1593,6 +1650,21 @@ def _scanner_flu_metric(target):
     return legacy_rate, "legacy_flu_rate", str(target.get("Source") or "UNKNOWN")
 
 
+def _scanner_max_prev_close_gain_pct(target):
+    observed = []
+    for field in SCANNER_PREV_CLOSE_GAIN_FIELDS:
+        raw_value = (target or {}).get(field)
+        if raw_value in (None, ""):
+            continue
+        gain_pct = _safe_float(raw_value)
+        if isfinite(gain_pct):
+            observed.append((field, gain_pct))
+    if not observed:
+        return 0.0, ""
+    source_field, gain_pct = max(observed, key=lambda item: item[1])
+    return gain_pct, source_field
+
+
 def _rank_jump(target):
     rank_now = _safe_int(target.get("RankNow"))
     rank_prev = _safe_int(target.get("RankPrev"))
@@ -2451,6 +2523,11 @@ def _scanner_candidate_pre_filter_reason(target):
     price = _safe_positive_int(target.get("Price"))
     if price <= 0:
         return "invalid_or_stale_price"
+    max_prev_close_gain_pct, _gain_source_field = _scanner_max_prev_close_gain_pct(
+        target
+    )
+    if max_prev_close_gain_pct >= SCANNER_MAX_PREV_CLOSE_GAIN_PCT:
+        return "prev_close_gain_at_or_above_scanner_cap"
     source_set = set(_source_signature(target))
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         low_rebound_pct = _safe_float(target.get("LowReboundPct"))
@@ -3136,6 +3213,9 @@ def _scanner_event_fields(target, source_guard=None):
     current_flu_value, current_flu_metric, current_flu_source = _scanner_flu_metric(
         target
     )
+    max_prev_close_gain_pct, max_prev_close_gain_source_field = (
+        _scanner_max_prev_close_gain_pct(target)
+    )
     current_flu = source_guard.get("current_flu_rate") or f"{current_flu_value:.2f}"
     priority_profile = _scanner_priority_profile(target)
     guard_reason = str(source_guard.get("reason") or "")
@@ -3205,6 +3285,9 @@ def _scanner_event_fields(target, source_guard=None):
         "scanner_filter_reason": (
             source_guard.get("reason") if source_guard.get("blocked") else ""
         ),
+        "scanner_prev_close_gain_pct": max_prev_close_gain_pct,
+        "scanner_prev_close_gain_source_field": max_prev_close_gain_source_field,
+        "scanner_prev_close_gain_cap_pct": SCANNER_MAX_PREV_CLOSE_GAIN_PCT,
         "scanner_candidate_role": source_guard.get("candidate_role")
         or _scanner_candidate_role(target),
         "scanner_watch_budget_owner": target.get("ScannerWatchBudgetOwner")
@@ -4308,6 +4391,15 @@ def _annotate_market_gainer_targets(raw_targets, *, stex_tp):
         target = dict(raw_target or {})
         flu_rate = _safe_float(target.get("ChangeRate", target.get("FluRate")))
         if flu_rate <= 0:
+            continue
+        if flu_rate >= SCANNER_MAX_PREV_CLOSE_GAIN_PCT:
+            log_info(
+                "[SCALPING_SCANNER_MARKET_GAINER_SOURCE_FILTER] "
+                f"code={str(target.get('Code') or '').strip()[:6] or '-'} "
+                f"prev_close_gain_pct={flu_rate:.2f} "
+                f"cap_pct={SCANNER_MAX_PREV_CLOSE_GAIN_PCT:.2f} "
+                "reason=prev_close_gain_at_or_above_source_cap"
+            )
             continue
         target.update(
             {

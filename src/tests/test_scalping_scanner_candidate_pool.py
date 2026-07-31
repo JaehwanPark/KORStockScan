@@ -89,6 +89,94 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 60
 
 
+def test_market_gainer_source_filters_prev_close_gain_at_or_above_25_pct(
+    monkeypatch,
+):
+    logs = []
+    monkeypatch.setattr(scalping_scanner, "log_info", logs.append)
+
+    targets = scalping_scanner._annotate_market_gainer_targets(
+        [
+            {
+                "Code": "111111",
+                "Name": "KEEP",
+                "Price": 10000,
+                "ChangeRate": "24.99",
+            },
+            {
+                "Code": "222222",
+                "Name": "FILTER_AT_CAP",
+                "Price": 10000,
+                "ChangeRate": "25.00",
+            },
+            {
+                "Code": "333333",
+                "Name": "FILTER_ABOVE_CAP",
+                "Price": 10000,
+                "ChangeRate": "29.80",
+            },
+        ],
+        stex_tp="1",
+    )
+
+    assert [target["Code"] for target in targets] == ["111111"]
+    assert targets[0]["MarketGainerFluRate"] == 24.99
+    assert len(logs) == 2
+    assert all(
+        "reason=prev_close_gain_at_or_above_source_cap" in message for message in logs
+    )
+
+
+def test_scanner_pre_filter_blocks_25_pct_gain_from_non_market_gainer_source():
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(
+            {
+                "Code": "005930",
+                "Price": 249500,
+                "Source": "REALTIME_RANK_START",
+                "RealtimeRankFluRate": 25.0,
+            }
+        )
+        == "prev_close_gain_at_or_above_scanner_cap"
+    )
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(
+            {
+                "Code": "005930",
+                "Price": 249500,
+                "Source": "REALTIME_RANK_START",
+                "RealtimeRankFluRate": 24.99,
+            }
+        )
+        == ""
+    )
+
+
+def test_scanner_pre_filter_uses_max_prev_close_gain_across_merged_sources():
+    target = {
+        "Code": "005930",
+        "Price": 249500,
+        "Source": ("LOW_REBOUND_RISING_MISSED,REALTIME_RANK_START," "PRICE_JUMP_START"),
+        "LowReboundDisplayChangeRate": "nan",
+        "RealtimeRankFluRate": 26.09,
+        "PriceJumpFluRate": 1.2,
+        "LowReboundPct": 1.0,
+        "IntradayLowPrice": 240000,
+        "IntradayHighPrice": 250000,
+        "DistanceFromIntradayHighPct": 0.2,
+        "LowReboundBaseSourceSignature": "REALTIME_RANK_START",
+    }
+
+    assert scalping_scanner._scanner_max_prev_close_gain_pct(target) == (
+        26.09,
+        "RealtimeRankFluRate",
+    )
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(target)
+        == "prev_close_gain_at_or_above_scanner_cap"
+    )
+
+
 def test_scanner_sleep_targets_prewarm_boundary_instead_of_coarse_minute():
     assert (
         scalping_scanner._seconds_until_next_scalping_prewarm(
@@ -164,6 +252,61 @@ def test_ranked_prewarm_registers_ws_without_promotion_or_order_authority(
     assert emitted[0]["stage"] == "scalping_scanner_ws_prewarm_selected"
     assert emitted[0]["fields"]["decision_authority"].endswith("no_entry_authority")
     assert emitted[0]["fields"]["broker_order_forbidden"] is True
+
+
+def test_ranked_prewarm_filters_25_pct_gainer_before_ws_registration(
+    monkeypatch,
+):
+    emitted = []
+    event_bus = _EventBus()
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, fields=None, **kwargs: emitted.append(
+            {"code": code, "stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    codes = scalping_scanner._publish_ranked_prewarm_candidates(
+        event_bus,
+        [
+            {
+                "Code": "005930",
+                "Name": "FILTER",
+                "Price": 100_000,
+                "Source": "REALTIME_RANK_START",
+                "RealtimeRankFluRate": 25.0,
+            },
+            {
+                "Code": "000660",
+                "Name": "KEEP",
+                "Price": 200_000,
+                "Source": "REALTIME_RANK_START",
+                "RealtimeRankFluRate": 24.99,
+            },
+        ],
+        max_codes=1,
+        now_ts=datetime(2026, 7, 29, 9, 0, tzinfo=timezone.utc).timestamp(),
+    )
+
+    assert codes == ["000660"]
+    assert _event_payloads(event_bus, "COMMAND_WS_REG")[0]["codes"] == ["000660"]
+    assert [row["stage"] for row in emitted] == [
+        "scalping_scanner_ws_prewarm_filtered",
+        "scalping_scanner_ws_prewarm_selected",
+    ]
+    blocked_fields = emitted[0]["fields"]
+    assert (
+        blocked_fields["scanner_filter_reason"]
+        == "prev_close_gain_at_or_above_scanner_cap"
+    )
+    assert blocked_fields["scanner_prev_close_gain_pct"] == 25.0
+    assert (
+        blocked_fields["scanner_prev_close_gain_source_field"] == "RealtimeRankFluRate"
+    )
+    assert blocked_fields["actual_order_submitted"] is False
+    assert blocked_fields["broker_order_forbidden"] is True
 
 
 def test_prewarm_release_only_unsubscribes_codes_without_runtime_owner():

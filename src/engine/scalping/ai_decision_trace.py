@@ -486,6 +486,30 @@ def _parse_user_input(user_input: Any) -> tuple[str, Any]:
     return "plain_text", user_input
 
 
+def _extract_marked_json_objects(user_input: Any) -> list[Any]:
+    """Extract exact canonical JSON embedded after a known prompt marker."""
+
+    if not isinstance(user_input, str):
+        return []
+    decoder = json.JSONDecoder()
+    extracted: list[Any] = []
+    for marker in ("[HOLDING_DECISION_CONTEXT]",):
+        search_from = 0
+        while True:
+            marker_index = user_input.find(marker, search_from)
+            if marker_index < 0:
+                break
+            json_text = user_input[marker_index + len(marker) :].lstrip()
+            try:
+                value, _end = decoder.raw_decode(json_text)
+            except (TypeError, ValueError):
+                search_from = marker_index + len(marker)
+                continue
+            extracted.append(value)
+            search_from = marker_index + len(marker)
+    return extracted
+
+
 def _walk(value: Any):
     if isinstance(value, dict):
         yield value
@@ -652,39 +676,43 @@ def _canonical_context_capture(
     for the exact-v2 decision-quality cohort.
     """
 
-    _, parsed = _parse_user_input(user_input)
+    input_kind, parsed = _parse_user_input(user_input)
     endpoint = str(endpoint_name or "").strip().lower()
     expected_schema = _EXPECTED_CONTEXT_SCHEMA_BY_ENDPOINT.get(endpoint)
     candidates: list[dict[str, Any]] = []
-    for row in _walk(parsed):
-        schema = str(row.get("schema") or "")
-        if schema not in {_ENTRY_CONTEXT_SCHEMA, _HOLDING_CONTEXT_SCHEMA}:
-            continue
-        candle = row.get("candle") if schema == _HOLDING_CONTEXT_SCHEMA else row
-        candle = candle if isinstance(candle, dict) else {}
-        bars = candle.get("bars") if isinstance(candle.get("bars"), list) else None
-        input_bundle_version = str(candle.get("input_bundle_version") or "")
-        if schema == _ENTRY_CONTEXT_SCHEMA:
-            forming_key = "forming"
-        else:
-            forming_key = "is_forming"
-        completed_bar_count = sum(
-            1
-            for bar in (bars or [])
-            if isinstance(bar, dict) and not bool(bar.get(forming_key, False))
-        )
-        candidates.append(
-            {
-                "schema": schema,
-                "input_bundle_version": input_bundle_version or None,
-                "raw_bar_count": len(bars) if bars is not None else None,
-                "completed_bar_count": completed_bar_count,
-                "forming_bar_present": any(
-                    isinstance(bar, dict) and bool(bar.get(forming_key, False))
-                    for bar in (bars or [])
-                ),
-            }
-        )
+    capture_roots = [parsed]
+    if input_kind == "plain_text":
+        capture_roots.extend(_extract_marked_json_objects(user_input))
+    for capture_root in capture_roots:
+        for row in _walk(capture_root):
+            schema = str(row.get("schema") or "")
+            if schema not in {_ENTRY_CONTEXT_SCHEMA, _HOLDING_CONTEXT_SCHEMA}:
+                continue
+            candle = row.get("candle") if schema == _HOLDING_CONTEXT_SCHEMA else row
+            candle = candle if isinstance(candle, dict) else {}
+            bars = candle.get("bars") if isinstance(candle.get("bars"), list) else None
+            input_bundle_version = str(candle.get("input_bundle_version") or "")
+            if schema == _ENTRY_CONTEXT_SCHEMA:
+                forming_key = "forming"
+            else:
+                forming_key = "is_forming"
+            completed_bar_count = sum(
+                1
+                for bar in (bars or [])
+                if isinstance(bar, dict) and not bool(bar.get(forming_key, False))
+            )
+            candidates.append(
+                {
+                    "schema": schema,
+                    "input_bundle_version": input_bundle_version or None,
+                    "raw_bar_count": len(bars) if bars is not None else None,
+                    "completed_bar_count": completed_bar_count,
+                    "forming_bar_present": any(
+                        isinstance(bar, dict) and bool(bar.get(forming_key, False))
+                        for bar in (bars or [])
+                    ),
+                }
+            )
 
     matching = [row for row in candidates if row["schema"] == expected_schema]
     selected = max(
