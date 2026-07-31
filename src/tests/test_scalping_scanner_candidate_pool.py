@@ -89,6 +89,45 @@ def test_resolve_scan_interval_matches_intraday_schedule():
     assert scalping_scanner._resolve_scan_interval_sec(time(15, 0)) == 60
 
 
+def test_market_gainer_source_filters_prev_close_gain_at_or_above_25_pct(
+    monkeypatch,
+):
+    logs = []
+    monkeypatch.setattr(scalping_scanner, "log_info", logs.append)
+
+    targets = scalping_scanner._annotate_market_gainer_targets(
+        [
+            {
+                "Code": "111111",
+                "Name": "KEEP",
+                "Price": 10000,
+                "ChangeRate": "24.99",
+            },
+            {
+                "Code": "222222",
+                "Name": "FILTER_AT_CAP",
+                "Price": 10000,
+                "ChangeRate": "25.00",
+            },
+            {
+                "Code": "333333",
+                "Name": "FILTER_ABOVE_CAP",
+                "Price": 10000,
+                "ChangeRate": "29.80",
+            },
+        ],
+        stex_tp="1",
+    )
+
+    assert [target["Code"] for target in targets] == ["111111"]
+    assert targets[0]["MarketGainerFluRate"] == 24.99
+    assert len(logs) == 2
+    assert all(
+        "reason=prev_close_gain_at_or_above_source_cap" in message
+        for message in logs
+    )
+
+
 def test_scanner_sleep_targets_prewarm_boundary_instead_of_coarse_minute():
     assert (
         scalping_scanner._seconds_until_next_scalping_prewarm(

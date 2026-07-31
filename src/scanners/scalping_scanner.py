@@ -51,6 +51,7 @@ LOW_REBOUND_RISING_MISSED_ROLE = "rising_missed_low_rebound_candidate"
 LOW_REBOUND_RISING_MISSED_LINEAGE = "low_rebound_from_intraday_low"
 MARKET_GAINER_SOURCE_FAMILY = "ka10027_market_gainer_candidate_v1"
 MARKET_GAINER_SOURCE_ROLE = "market_wide_prev_close_gainer_candidate"
+MARKET_GAINER_MAX_PREV_CLOSE_GAIN_PCT = 25.0
 HIGH_PROXIMITY_CONFIRMATION_SOURCE = "HIGH_PROXIMITY_CONFIRMATION"
 NEW_HIGH_CONFIRMATION_SOURCE = "NEW_HIGH_CONFIRMATION"
 BREAKOUT_CONFIRMATION_SOURCES = {
@@ -4308,6 +4309,15 @@ def _annotate_market_gainer_targets(raw_targets, *, stex_tp):
         target = dict(raw_target or {})
         flu_rate = _safe_float(target.get("ChangeRate", target.get("FluRate")))
         if flu_rate <= 0:
+            continue
+        if flu_rate >= MARKET_GAINER_MAX_PREV_CLOSE_GAIN_PCT:
+            log_info(
+                "[SCALPING_SCANNER_MARKET_GAINER_SOURCE_FILTER] "
+                f"code={str(target.get('Code') or '').strip()[:6] or '-'} "
+                f"prev_close_gain_pct={flu_rate:.2f} "
+                f"cap_pct={MARKET_GAINER_MAX_PREV_CLOSE_GAIN_PCT:.2f} "
+                "reason=prev_close_gain_at_or_above_source_cap"
+            )
             continue
         target.update(
             {
