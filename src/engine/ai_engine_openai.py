@@ -2152,6 +2152,41 @@ class GPTSniperEngine:
             and str(evidence.get("trigger") or "").strip().lower()
             == "recovery_required"
         )
+        entry_probe_intent_eligible_before_recent_exit = entry_probe_intent
+        recent_exit_context = (
+            exact_payload.get("recent_exit_context")
+            if isinstance(exact_payload, dict)
+            and isinstance(exact_payload.get("recent_exit_context"), dict)
+            else {}
+        )
+        recent_exit_policy = str(
+            recent_exit_context.get("reentry_policy") or ""
+        ).strip()
+        recent_exit_probe_blocked = False
+        recent_exit_price_vs_exit_pct = None
+        if (
+            entry_probe_intent
+            and recent_exit_policy == "fresh_post_exit_confirmation_required"
+        ):
+            try:
+                exit_price = float(recent_exit_context.get("exit_price") or 0.0)
+                current_price = float(
+                    (exact_payload.get("current") or {}).get("price") or 0.0
+                )
+            except (TypeError, ValueError):
+                exit_price = 0.0
+                current_price = 0.0
+            if exit_price > 0.0 and current_price > 0.0:
+                recent_exit_price_vs_exit_pct = (
+                    (current_price - exit_price) / exit_price * 100.0
+                )
+            recent_exit_probe_blocked = bool(
+                exit_price <= 0.0
+                or current_price <= 0.0
+                or current_price > exit_price
+            )
+            if recent_exit_probe_blocked:
+                entry_probe_intent = False
         return {
             **payload,
             **model_fields,
@@ -2169,8 +2204,12 @@ class GPTSniperEngine:
             ),
             "entry_probe_intent": entry_probe_intent,
             "entry_probe_intent_status": (
-                "eligible_wait_probe"
-                if entry_probe_intent
+                (
+                    "recent_clean_profit_reentry_not_confirmed"
+                    if recent_exit_probe_blocked
+                    else "eligible_wait_probe"
+                )
+                if entry_probe_intent_eligible_before_recent_exit
                 else (
                     "not_selected_prompt"
                     if not probe_prompt_selected
@@ -2183,6 +2222,17 @@ class GPTSniperEngine:
             ),
             "entry_probe_intent_submit_guard_required": True,
             "entry_probe_intent_actual_order_submitted": False,
+            "entry_recent_exit_context_status": (
+                "active"
+                if recent_exit_policy == "fresh_post_exit_confirmation_required"
+                else "not_applicable"
+            ),
+            "entry_recent_exit_probe_blocked": recent_exit_probe_blocked,
+            "entry_recent_exit_price_vs_exit_pct": (
+                round(recent_exit_price_vs_exit_pct, 6)
+                if recent_exit_price_vs_exit_pct is not None
+                else None
+            ),
         }
 
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
@@ -4621,6 +4671,11 @@ class GPTSniperEngine:
                 entry_adm_runtime=entry_adm_runtime,
                 lifecycle_ai_runtime=lifecycle_ai_runtime,
             ),
+            "recent_exit_context": (
+                dict(ws.get("recent_exit_context") or {})
+                if isinstance(ws.get("recent_exit_context"), dict)
+                else {}
+            ),
             "source_quality": {
                 "tick_count": len(ticks),
                 "candle_count": len(candles),
@@ -5968,6 +6023,11 @@ class GPTSniperEngine:
                 recent_ticks,
                 recent_candles,
                 price_ctx=price_ctx,
+            ),
+            "recent_exit_context": (
+                dict((ws_data or {}).get("recent_exit_context") or {})
+                if isinstance((ws_data or {}).get("recent_exit_context"), dict)
+                else {}
             ),
         }
         if self._attach_entry_candle_inputs(payload, candle_context):

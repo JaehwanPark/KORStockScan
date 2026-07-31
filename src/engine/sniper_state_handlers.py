@@ -127,6 +127,7 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     MAX_ONE_SHARE_ENTRY_PRICE_KRW as RISING_MISSED_MAX_ONE_SHARE_ENTRY_PRICE_KRW,
     RISING_MISSED_CLASS_RAW,
     RisingMissedTP1CandidateDecision,
+    TP1_SELECTOR_BLOCK_AI as RISING_MISSED_TP1_BLOCK_AI,
     TP1_SELECTOR_BLOCK_HARD_NEGATIVE,
     RISING_MISSED_CLASS_NOT_RISING,
     evaluate_rising_missed_normal_buy_bridge,
@@ -5510,6 +5511,7 @@ def _last_scale_in_submit_block_fields(stock: dict | None) -> dict:
         "reason": str(stock.get("last_scale_in_submit_block_reason") or ""),
         "add_reason": str(stock.get("last_scale_in_submit_block_add_reason") or ""),
         "add_type": str(stock.get("last_scale_in_submit_block_add_type") or ""),
+        "at": _safe_float(stock.get("last_scale_in_submit_block_at"), 0.0),
     }
 
 
@@ -15658,6 +15660,8 @@ def _rising_missed_candidate_gate_backoff_reason_group(reason: str | None) -> st
         return RISING_MISSED_BLOCK_OPEN_PENDING
     if RISING_MISSED_BLOCK_ALREADY_HOLDING in reason_text:
         return RISING_MISSED_BLOCK_ALREADY_HOLDING
+    if RISING_MISSED_TP1_BLOCK_AI in reason_text:
+        return RISING_MISSED_TP1_BLOCK_AI
     return ""
 
 
@@ -15695,6 +15699,14 @@ def _rising_missed_candidate_gate_backoff_base_sec(
     if group == RISING_MISSED_BLOCK_ALREADY_HOLDING:
         return max(
             0, _env_int("KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_HOLDING_SEC", 180)
+        )
+    if group == RISING_MISSED_TP1_BLOCK_AI:
+        return max(
+            0,
+            _env_int(
+                "KORSTOCKSCAN_RISING_MISSED_CANDIDATE_BACKOFF_TP1_AI_SEC",
+                15,
+            ),
         )
     return 0
 
@@ -15793,6 +15805,25 @@ def _rising_missed_candidate_gate_backoff_recovered(
         return not _has_open_pending_entry_orders(stock)
     if group == RISING_MISSED_BLOCK_ALREADY_HOLDING:
         return not _already_holding_entry_position(stock)
+    if group == RISING_MISSED_TP1_BLOCK_AI:
+        explicit_action = ""
+        for key in ("rising_missed_entry_ai_action", "entry_ai_action"):
+            explicit_action = str(stock.get(key) or "").strip().upper()
+            if explicit_action:
+                break
+        if not explicit_action:
+            result_source = (
+                str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+            )
+            if result_source in {"live", "prior_valid"}:
+                explicit_action = (
+                    str(stock.get("last_watching_ai_action") or "").strip().upper()
+                )
+        return bool(
+            explicit_action
+            and explicit_action
+            not in {"DROP", "NOT_EVALUATED", "FAIL_CLOSED", "UNAVAILABLE"}
+        )
     return False
 
 
@@ -20097,6 +20128,16 @@ def _rising_missed_same_day_reentry_expires_at(now_ts: float) -> tuple[float, in
     return expires_at, max(0, int(expires_at - float(now_ts)))
 
 
+def _rising_missed_clean_profit_reentry_confirm_sec() -> int:
+    return max(
+        1,
+        _env_int(
+            "KORSTOCKSCAN_RISING_MISSED_CLEAN_PROFIT_REENTRY_CONFIRM_SEC",
+            60,
+        ),
+    )
+
+
 def _is_rising_missed_scout_exit_context(stock: dict | None) -> bool:
     if not isinstance(stock, dict):
         return False
@@ -20137,7 +20178,7 @@ def _rising_missed_exit_reentry_action(
         return "block", "prior_rising_missed_exit_avgdown_ge2"
     if avg_down_count >= 1 or first_touch_blocked or stop_touch_used:
         return "low_priority", "prior_rising_missed_exit_recovered_with_avgdown"
-    return "", "prior_rising_missed_exit_clean_profit"
+    return "confirm", "prior_rising_missed_exit_clean_profit_requires_confirmation"
 
 
 def _prune_rising_missed_same_day_reentry_risk(now_ts: float | None = None) -> None:
@@ -20164,7 +20205,24 @@ def _rising_missed_same_day_reentry_log_fields(decision: dict | None) -> dict:
         "risk_remaining_sec": decision.get("risk_remaining_sec", 0),
         "last_exit_rule": decision.get("last_exit_rule", "-"),
         "last_exit_profit_rate": decision.get("last_exit_profit_rate", "-"),
+        "last_exit_price": decision.get("last_exit_price", "-"),
+        "last_exit_at": decision.get("last_exit_at", "-"),
         "last_exit_avg_down_count": decision.get("last_exit_avg_down_count", 0),
+        "last_exit_source_stage": decision.get("last_exit_source_stage", "-"),
+        "last_exit_receipt_reconciled": _boolish_true(
+            decision.get("last_exit_receipt_reconciled")
+        ),
+        "reentry_confirmation_status": decision.get("reentry_confirmation_status", "-"),
+        "reentry_confirmation_ai_action": decision.get(
+            "reentry_confirmation_ai_action", "-"
+        ),
+        "reentry_confirmation_ai_snapshot_id": decision.get(
+            "reentry_confirmation_ai_snapshot_id", "-"
+        ),
+        "reentry_confirmation_price": decision.get("reentry_confirmation_price", "-"),
+        "reentry_confirmation_price_vs_exit_pct": decision.get(
+            "reentry_confirmation_price_vs_exit_pct", "-"
+        ),
     }
 
 
@@ -20174,6 +20232,7 @@ def _record_rising_missed_same_day_reentry_risk(
     stock: dict | None,
     exit_rule: str | None,
     profit_rate,
+    exit_price=None,
     now_ts: float | None,
     source_stage: str,
 ) -> dict:
@@ -20184,7 +20243,11 @@ def _record_rising_missed_same_day_reentry_risk(
     reentry_action, reason = _rising_missed_exit_reentry_action(stock, profit_rate)
     if not norm_code or not reentry_action:
         return {"marked": False, "reason": reason}
-    expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(now_value)
+    if reentry_action == "confirm":
+        ttl_sec = _rising_missed_clean_profit_reentry_confirm_sec()
+        expires_at = now_value + ttl_sec
+    else:
+        expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(now_value)
     row = {
         "code": norm_code,
         "stock_name": (stock or {}).get("name")
@@ -20195,6 +20258,7 @@ def _record_rising_missed_same_day_reentry_risk(
         "ttl_sec": ttl_sec,
         "exit_rule": str(exit_rule or "-"),
         "profit_rate": _safe_float(profit_rate, 0.0),
+        "exit_price": max(0, _safe_int(exit_price, 0)),
         "avg_down_count": _rising_missed_exit_avg_down_count(stock),
         "reentry_action": reentry_action,
         "reason": reason,
@@ -20220,15 +20284,111 @@ def _record_rising_missed_same_day_reentry_risk(
         source_stage=source_stage,
         guard_family="rising_missed_same_day_reentry_guard",
         reentry_action=reentry_action,
-        watching_budget_priority="blocked" if reentry_action == "block" else "low",
+        watching_budget_priority=("blocked" if reentry_action == "block" else "low"),
         risk_reason=reason,
         exit_rule=exit_rule or "-",
         profit_rate=f"{_safe_float(profit_rate, 0.0):+.2f}",
+        exit_price=row["exit_price"] or "-",
         avg_down_count=row["avg_down_count"],
         ttl_sec=ttl_sec,
         risk_expires_at=expires_at,
     )
     return {"marked": True, **row}
+
+
+def reconcile_rising_missed_reentry_after_sell_completed(
+    code: str,
+    *,
+    profit_rate,
+    exit_price,
+    exit_rule: str | None,
+    completed_at: float | None = None,
+) -> dict:
+    """Replace submit-time re-entry context with realized broker receipt truth."""
+
+    norm_code = str(code or "").strip()[:6]
+    completed_at_value = float(completed_at or time.time())
+    realized_profit = _safe_float(profit_rate, 0.0)
+    realized_exit_price = max(0, _safe_int(exit_price, 0))
+    if not ENTRY_LOCK.acquire(timeout=0.25):
+        return {
+            "reconciled": False,
+            "reason": "entry_lock_busy_sell_completed_fallback_required",
+        }
+    try:
+        row = dict(_RISING_MISSED_SAME_DAY_REENTRY_RISK.get(norm_code) or {})
+        if not norm_code or not row:
+            return {"reconciled": False, "reason": "active_reentry_context_missing"}
+        avg_down_count = _safe_int(row.get("avg_down_count"), 0)
+        if realized_profit <= 0.0:
+            action = "block"
+            reason = "prior_rising_missed_exit_non_positive"
+            expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(
+                completed_at_value
+            )
+        elif avg_down_count >= 2:
+            action = "block"
+            reason = "prior_rising_missed_exit_avgdown_ge2"
+            expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(
+                completed_at_value
+            )
+        elif avg_down_count >= 1:
+            action = "low_priority"
+            reason = "prior_rising_missed_exit_recovered_with_avgdown"
+            expires_at, ttl_sec = _rising_missed_same_day_reentry_expires_at(
+                completed_at_value
+            )
+        else:
+            action = "confirm"
+            reason = (
+                "prior_rising_missed_exit_clean_profit_requires_confirmation"
+            )
+            ttl_sec = _rising_missed_clean_profit_reentry_confirm_sec()
+            expires_at = completed_at_value + ttl_sec
+        row.update(
+            {
+                "marked_at": completed_at_value,
+                "expires_at": expires_at,
+                "ttl_sec": ttl_sec,
+                "exit_rule": str(exit_rule or row.get("exit_rule") or "-"),
+                "profit_rate": realized_profit,
+                "exit_price": realized_exit_price,
+                "reentry_action": action,
+                "reason": reason,
+                "source_stage": "sell_completed",
+                "exit_receipt_reconciled": True,
+            }
+        )
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+    finally:
+        ENTRY_LOCK.release()
+    _log_entry_pipeline(
+        {"name": row.get("stock_name") or "-"},
+        norm_code,
+        "rising_missed_reentry_exit_receipt_reconciled",
+        metric_role="execution_quality_real_only",
+        decision_authority="rising_missed_same_day_reentry_guard",
+        window_policy="same_real_sell_receipt_short_reentry_window",
+        sample_floor="one_completed_rising_missed_sell_receipt",
+        primary_decision_metric="realized_profit_rate_and_exit_price",
+        source_quality_gate="broker_sell_completed_receipt",
+        runtime_effect=True,
+        allowed_runtime_apply=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+        reentry_action=action,
+        risk_reason=reason,
+        profit_rate=f"{realized_profit:+.2f}",
+        exit_price=realized_exit_price or "-",
+        exit_rule=row["exit_rule"],
+        avg_down_count=row["avg_down_count"],
+        ttl_sec=ttl_sec,
+        risk_expires_at=expires_at,
+        source_stage="sell_completed",
+        exit_receipt_reconciled=True,
+    )
+    return {"reconciled": True, **row}
 
 
 def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[dict]]:
@@ -20277,14 +20437,17 @@ def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[
     )
     payloads, next_offset = _read_pipeline_events_for_stages(
         path,
-        {"rising_missed_same_day_reentry_risk_marked"},
+        {
+            "rising_missed_same_day_reentry_risk_marked",
+            "rising_missed_reentry_exit_receipt_reconciled",
+        },
         start_offset=start_offset,
     )
     for payload in payloads:
-        if (
-            str(payload.get("stage") or "")
-            != "rising_missed_same_day_reentry_risk_marked"
-        ):
+        if str(payload.get("stage") or "") not in {
+            "rising_missed_same_day_reentry_risk_marked",
+            "rising_missed_reentry_exit_receipt_reconciled",
+        }:
             continue
         fields = (
             payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
@@ -20312,10 +20475,14 @@ def _load_rising_missed_reentry_risk_events(target_date: str) -> dict[str, list[
                 "ttl_sec": ttl_sec,
                 "exit_rule": str(fields.get("exit_rule") or "-"),
                 "profit_rate": _safe_float(fields.get("profit_rate"), 0.0),
+                "exit_price": _safe_int(fields.get("exit_price"), 0),
                 "avg_down_count": _safe_int(fields.get("avg_down_count"), 0),
                 "reentry_action": str(fields.get("reentry_action") or "block"),
                 "reason": str(fields.get("risk_reason") or "-"),
                 "source_stage": str(fields.get("source_stage") or "-"),
+                "exit_receipt_reconciled": _boolish_true(
+                    fields.get("exit_receipt_reconciled")
+                ),
             }
         )
     for rows in rows_by_code.values():
@@ -20386,6 +20553,7 @@ def _reconcile_rising_missed_reentry_risk_with_sell_completed(
         latest_completed = {
             "completed_at": completed_at,
             "profit_rate": _safe_float(fields.get("profit_rate"), 0.0),
+            "sell_price": _safe_int(fields.get("sell_price"), 0),
             "exit_rule": str(
                 fields.get("exit_rule") or (row or {}).get("exit_rule") or "-"
             ),
@@ -20395,6 +20563,24 @@ def _reconcile_rising_missed_reentry_risk_with_sell_completed(
 
     realized_profit = _safe_float(latest_completed.get("profit_rate"), 0.0)
     avg_down_count = _safe_int((row or {}).get("avg_down_count"), 0)
+    if str((row or {}).get("reentry_action") or "") == "confirm":
+        if realized_profit <= 0.0:
+            return {
+                "action": "block_realized_non_positive",
+                "reason": "sell_completed_realized_non_positive",
+                "realized_profit_rate": realized_profit,
+                "realized_exit_rule": latest_completed.get("exit_rule"),
+                "realized_exit_price": latest_completed.get("sell_price"),
+                "sell_completed_at": latest_completed.get("completed_at"),
+            }
+        return {
+            "action": "refresh_confirmation",
+            "reason": "sell_completed_clean_profit_confirmation_retained",
+            "realized_profit_rate": realized_profit,
+            "realized_exit_rule": latest_completed.get("exit_rule"),
+            "realized_exit_price": latest_completed.get("sell_price"),
+            "sell_completed_at": latest_completed.get("completed_at"),
+        }
     if realized_profit <= 0.0:
         return {
             "action": "keep",
@@ -20471,8 +20657,16 @@ def _snapshot_rising_missed_same_day_reentry_guard(
     if not row or expires_at <= now_value:
         return base
 
-    reconciliation = _reconcile_rising_missed_reentry_risk_with_sell_completed(
-        norm_code, row, now_value
+    reconciliation = (
+        {
+            "action": "keep",
+            "reason": "bounded_clean_profit_submit_context",
+        }
+        if str(row.get("reentry_action") or "") == "confirm"
+        and _safe_int(row.get("exit_price"), 0) > 0
+        else _reconcile_rising_missed_reentry_risk_with_sell_completed(
+            norm_code, row, now_value
+        )
     )
     action = str(reconciliation.get("action") or "keep")
     if action == "invalidate":
@@ -20494,8 +20688,68 @@ def _snapshot_rising_missed_same_day_reentry_guard(
                 ),
             }
         )
+    if action == "block_realized_non_positive":
+        block_marked_at = _safe_float(
+            reconciliation.get("sell_completed_at"),
+            _safe_float(row.get("marked_at"), 0.0),
+        )
+        block_expires_at, block_ttl_sec = (
+            _rising_missed_same_day_reentry_expires_at(block_marked_at)
+        )
+        row.update(
+            {
+                "reentry_action": "block",
+                "reason": "prior_rising_missed_exit_non_positive",
+                "profit_rate": reconciliation.get(
+                    "realized_profit_rate", row.get("profit_rate")
+                ),
+                "exit_rule": reconciliation.get(
+                    "realized_exit_rule", row.get("exit_rule")
+                ),
+                "exit_price": _safe_int(
+                    reconciliation.get("realized_exit_price"),
+                    _safe_int(row.get("exit_price"), 0),
+                ),
+                "marked_at": block_marked_at,
+                "expires_at": block_expires_at,
+                "ttl_sec": block_ttl_sec,
+                "source_stage": "sell_completed_fallback_reconciliation",
+                "exit_receipt_reconciled": True,
+            }
+        )
+        expires_at = block_expires_at
+    if action == "refresh_confirmation":
+        confirmation_marked_at = _safe_float(
+            reconciliation.get("sell_completed_at"),
+            _safe_float(row.get("marked_at"), 0.0),
+        )
+        row.update(
+            {
+                "profit_rate": reconciliation.get(
+                    "realized_profit_rate", row.get("profit_rate")
+                ),
+                "exit_rule": reconciliation.get(
+                    "realized_exit_rule", row.get("exit_rule")
+                ),
+                "exit_price": _safe_int(
+                    reconciliation.get("realized_exit_price"),
+                    _safe_int(row.get("exit_price"), 0),
+                ),
+                "marked_at": confirmation_marked_at,
+                "expires_at": (
+                    confirmation_marked_at
+                    + _rising_missed_clean_profit_reentry_confirm_sec()
+                ),
+            }
+        )
+        expires_at = _safe_float(row.get("expires_at"), 0.0)
+        if expires_at <= now_value:
+            return {
+                **base,
+                "reason": "clean_profit_confirmation_window_elapsed",
+            }
     reentry_action = str(row.get("reentry_action") or "block")
-    if reentry_action not in {"block", "low_priority"}:
+    if reentry_action not in {"block", "low_priority", "confirm"}:
         reentry_action = "block"
     return {
         **base,
@@ -20506,9 +20760,18 @@ def _snapshot_rising_missed_same_day_reentry_guard(
         "risk_expires_at": expires_at,
         "last_exit_rule": row.get("exit_rule") or "-",
         "last_exit_profit_rate": row.get("profit_rate"),
+        "last_exit_price": row.get("exit_price") or "-",
+        "last_exit_at": row.get("marked_at") or "-",
         "last_exit_avg_down_count": row.get("avg_down_count", 0),
+        "last_exit_source_stage": row.get("source_stage") or "-",
+        "last_exit_receipt_reconciled": _boolish_true(
+            row.get("exit_receipt_reconciled")
+        ),
         "reentry_action": reentry_action,
         "watching_budget_priority": ("blocked" if reentry_action == "block" else "low"),
+        "reentry_confirmation_status": (
+            "pending_fresh_ai" if reentry_action == "confirm" else "-"
+        ),
     }
 
 
@@ -20565,8 +20828,65 @@ def evaluate_rising_missed_same_day_reentry_guard(
             "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
         }
         _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+    elif reconciliation_action == "block_realized_non_positive":
+        block_marked_at = _safe_float(
+            reconciliation.get("sell_completed_at"),
+            _safe_float(row.get("marked_at"), 0.0),
+        )
+        block_expires_at, block_ttl_sec = (
+            _rising_missed_same_day_reentry_expires_at(block_marked_at)
+        )
+        row = {
+            **row,
+            "reentry_action": "block",
+            "reason": "prior_rising_missed_exit_non_positive",
+            "profit_rate": reconciliation.get(
+                "realized_profit_rate", row.get("profit_rate")
+            ),
+            "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
+            "exit_price": _safe_int(
+                reconciliation.get("realized_exit_price"),
+                _safe_int(row.get("exit_price"), 0),
+            ),
+            "marked_at": block_marked_at,
+            "expires_at": block_expires_at,
+            "ttl_sec": block_ttl_sec,
+            "source_stage": "sell_completed_fallback_reconciliation",
+            "exit_receipt_reconciled": True,
+        }
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+        expires_at = block_expires_at
+    elif reconciliation_action == "refresh_confirmation":
+        confirmation_marked_at = _safe_float(
+            reconciliation.get("sell_completed_at"),
+            _safe_float(row.get("marked_at"), 0.0),
+        )
+        row = {
+            **row,
+            "profit_rate": reconciliation.get(
+                "realized_profit_rate", row.get("profit_rate")
+            ),
+            "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
+            "exit_price": _safe_int(
+                reconciliation.get("realized_exit_price"),
+                _safe_int(row.get("exit_price"), 0),
+            ),
+            "marked_at": confirmation_marked_at,
+            "expires_at": (
+                confirmation_marked_at
+                + _rising_missed_clean_profit_reentry_confirm_sec()
+            ),
+        }
+        _RISING_MISSED_SAME_DAY_REENTRY_RISK[norm_code] = row
+        expires_at = _safe_float(row.get("expires_at"), 0.0)
+        if expires_at <= now_value:
+            _RISING_MISSED_SAME_DAY_REENTRY_RISK.pop(norm_code, None)
+            return {
+                **base,
+                "reason": "clean_profit_confirmation_window_elapsed",
+            }
     action = str(row.get("reentry_action") or "block")
-    if action not in {"block", "low_priority"}:
+    if action not in {"block", "low_priority", "confirm"}:
         action = "block"
     remaining = max(1, int(expires_at - now_value))
     base.update(
@@ -20578,12 +20898,165 @@ def evaluate_rising_missed_same_day_reentry_guard(
             "risk_expires_at": expires_at,
             "last_exit_rule": row.get("exit_rule") or "-",
             "last_exit_profit_rate": row.get("profit_rate"),
+            "last_exit_price": row.get("exit_price") or "-",
+            "last_exit_at": row.get("marked_at") or "-",
             "last_exit_avg_down_count": row.get("avg_down_count", 0),
+            "last_exit_source_stage": row.get("source_stage") or "-",
+            "last_exit_receipt_reconciled": _boolish_true(
+                row.get("exit_receipt_reconciled")
+            ),
             "reentry_action": action,
             "watching_budget_priority": "blocked" if action == "block" else "low",
+            "reentry_confirmation_status": (
+                "pending_fresh_ai" if action == "confirm" else "-"
+            ),
         }
     )
     return base
+
+
+def _rising_missed_recent_exit_ai_context(
+    stock: dict | None,
+    guard: dict | None,
+    *,
+    now_ts: float,
+) -> dict:
+    """Expose a bounded, non-secret recent-exit context to exact entry AI."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    guard = guard if isinstance(guard, dict) else {}
+    if str(guard.get("reentry_action") or "") != "confirm":
+        return {}
+    exit_at = _safe_float(guard.get("last_exit_at"), 0.0)
+    exit_price = _safe_int(guard.get("last_exit_price"), 0)
+    remaining_sec = max(0, _safe_int(guard.get("risk_remaining_sec"), 0))
+    if exit_at <= 0.0 or exit_price <= 0 or remaining_sec <= 0:
+        return {}
+    receipt_reconciled = _boolish_true(
+        guard.get("last_exit_receipt_reconciled")
+    )
+    exit_price_source = (
+        "broker_sell_completed_receipt"
+        if receipt_reconciled
+        else "sell_submit_executable_price_or_revalidated_mark"
+    )
+    return {
+        "schema": "recent_scalp_exit_context_v1",
+        "symbol": str(stock.get("stock_code") or stock.get("code") or "")[:6],
+        "exit_at_epoch": round(exit_at, 6),
+        "age_sec": round(max(0.0, float(now_ts) - exit_at), 3),
+        "confirmation_window_remaining_sec": remaining_sec,
+        "exit_price": exit_price,
+        "realized_profit_pct": round(
+            _safe_float(guard.get("last_exit_profit_rate"), 0.0), 4
+        ),
+        "exit_rule": str(guard.get("last_exit_rule") or "-"),
+        "exit_source_stage": str(guard.get("last_exit_source_stage") or "-"),
+        "exit_receipt_reconciled": receipt_reconciled,
+        "reentry_policy": "fresh_post_exit_confirmation_required",
+        "metric_role": "recent_exit_entry_context",
+        "decision_authority": "ai_input_and_bounded_reentry_confirmation",
+        "window_policy": "same_symbol_short_post_exit_window",
+        "sample_floor": "not_applicable_runtime_context",
+        "primary_decision_metric": "reentry_price_vs_exit_pct",
+        "source_quality_gate": (
+            "broker_sell_completed_receipt"
+            if receipt_reconciled
+            else "recorded_exit_submit_executable_price_or_revalidated_mark_time_and_profit"
+        ),
+        "exit_price_source": exit_price_source,
+        "forbidden_uses": (
+            "standalone_buy,broker_guard_bypass,stale_quote_bypass,"
+            "provider_route_change,quantity_or_cap_change"
+        ),
+    }
+
+
+def _evaluate_rising_missed_clean_profit_reentry_confirmation(
+    guard: dict | None,
+    stock: dict | None,
+) -> dict:
+    """Allow a short-window clean-profit re-entry only on genuinely new evidence."""
+
+    guard = dict(guard or {})
+    stock = stock if isinstance(stock, dict) else {}
+    if str(guard.get("reentry_action") or "") != "confirm":
+        return guard
+    exit_at = _safe_float(guard.get("last_exit_at"), 0.0)
+    exit_price = _safe_int(guard.get("last_exit_price"), 0)
+    ai_confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
+    ai_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
+    ai_source = str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+    ai_snapshot_id = str(stock.get("last_watching_ai_snapshot_id") or "").strip()
+    ai_trace_id = str(stock.get("last_watching_ai_decision_trace_id") or "").strip()
+    decision_price = _safe_int(stock.get("last_watching_ai_decision_price"), 0)
+    probe_intent = bool(stock.get("last_watching_ai_probe_intent"))
+    fresh_ai = bool(
+        exit_at > 0.0
+        and ai_confirmed_at >= exit_at
+        and ai_source in {"live", "prior_valid"}
+        and ai_snapshot_id
+        and ai_trace_id
+        and decision_price > 0
+    )
+    price_vs_exit_pct = (
+        (float(decision_price) - float(exit_price)) / float(exit_price) * 100.0
+        if exit_price > 0 and decision_price > 0
+        else None
+    )
+    common = {
+        **guard,
+        "reentry_confirmation_ai_action": ai_action or "-",
+        "reentry_confirmation_ai_source": ai_source or "-",
+        "reentry_confirmation_ai_confirmed_at": ai_confirmed_at or "-",
+        "reentry_confirmation_ai_snapshot_id": ai_snapshot_id or "-",
+        "reentry_confirmation_ai_decision_trace_id": ai_trace_id or "-",
+        "reentry_confirmation_price": decision_price or "-",
+        "reentry_confirmation_price_vs_exit_pct": (
+            round(price_vs_exit_pct, 6) if price_vs_exit_pct is not None else "-"
+        ),
+        "reentry_confirmation_probe_intent": probe_intent,
+    }
+    if not fresh_ai:
+        return {
+            **common,
+            "allowed": False,
+            "reason": "recent_clean_profit_fresh_ai_confirmation_missing",
+            "reentry_confirmation_status": "deferred_fresh_ai_missing",
+            "watching_budget_priority": "low",
+        }
+    if ai_action == "BUY":
+        return {
+            **common,
+            "allowed": True,
+            "reason": "recent_clean_profit_fresh_buy_confirmed",
+            "reentry_confirmation_status": "confirmed_fresh_buy",
+            "watching_budget_priority": "normal",
+        }
+    if (
+        ai_action == "WAIT"
+        and probe_intent
+        and exit_price > 0
+        and decision_price <= exit_price
+    ):
+        return {
+            **common,
+            "allowed": True,
+            "reason": "recent_clean_profit_wait_probe_below_exit",
+            "reentry_confirmation_status": "confirmed_better_price_wait_probe",
+            "watching_budget_priority": "normal",
+        }
+    return {
+        **common,
+        "allowed": False,
+        "reason": (
+            "recent_clean_profit_wait_probe_above_exit"
+            if ai_action == "WAIT" and probe_intent and price_vs_exit_pct is not None
+            else "recent_clean_profit_ai_action_not_confirmed"
+        ),
+        "reentry_confirmation_status": "deferred_no_new_entry_edge",
+        "watching_budget_priority": "low",
+    }
 
 
 def _rising_missed_weak_micro_reentry_block_enabled() -> bool:
@@ -22217,13 +22690,36 @@ def _normalize_soft_stop_expert_features(stock: dict) -> tuple[dict, bool]:
     return features, True
 
 
+def _active_sell_order_pending_fields(stock: dict | None) -> tuple[str, ...]:
+    if not isinstance(stock, dict):
+        return ()
+    active_fields = []
+    if str(stock.get("status", "") or "").strip().upper() == "SELL_ORDERED":
+        active_fields.append("status")
+    for key in ("sell_odno", "sell_ord_no", "pending_sell_msg"):
+        if bool(str(stock.get(key, "") or "").strip()):
+            active_fields.append(key)
+    return tuple(active_fields)
+
+
 def _has_active_sell_order_pending(stock: dict) -> bool:
-    return (
-        str(stock.get("status", "") or "").upper() == "SELL_ORDERED"
-        or bool(str(stock.get("sell_odno", "") or "").strip())
-        or bool(str(stock.get("sell_ord_no", "") or "").strip())
-        or bool(str(stock.get("pending_sell_msg", "") or "").strip())
-    )
+    return bool(_active_sell_order_pending_fields(stock))
+
+
+def _entry_exit_authority_conflict_fields(stock: dict | None) -> tuple[str, ...]:
+    if not isinstance(stock, dict):
+        return ()
+    conflict_fields = list(_active_sell_order_pending_fields(stock))
+    for key in (
+        "sell_order_time",
+        "exit_requested",
+        "exit_token",
+        "fast_exit_token",
+        "entry_lifecycle_conflict",
+    ):
+        if stock.get(key) not in (None, "", False) and key not in conflict_fields:
+            conflict_fields.append(key)
+    return tuple(conflict_fields)
 
 
 def _safe_percent_float(value, default=0.0):
@@ -22554,6 +23050,9 @@ def _emit_bad_entry_refined_candidate(
         would_exit=bool(decision.get("would_exit")),
         observe_only=not bool(decision.get("enabled")),
         exclusion_reason=decision.get("exclusion_reason", "-"),
+        active_sell_pending_fields=(
+            ",".join(_active_sell_order_pending_fields(stock)) or "-"
+        ),
         classifier="never_green_ai_fade_refined",
         profit_rate=f"{profit_rate:+.2f}",
         peak_profit=f"{peak_profit:+.2f}",
@@ -35646,6 +36145,41 @@ def _entry_split_probe_observation_contract_fields(
             "probe_confirmation_last_state": (
                 stock.get("probe_confirmation_last_state") or "UNKNOWN"
             ),
+            "post_probe_confirmation_grant_active": bool(
+                stock.get("post_probe_confirmation_grant_active", False)
+            ),
+            "post_probe_confirmation_granted_at": _safe_float(
+                stock.get("post_probe_confirmation_granted_at"), 0.0
+            ),
+            "post_probe_confirmation_grant_ttl_ms": max(
+                0,
+                _safe_int(stock.get("post_probe_confirmation_grant_ttl_ms"), 0),
+            ),
+            "post_probe_confirmation_grant_count": max(
+                0,
+                _safe_int(stock.get("post_probe_confirmation_grant_count"), 0),
+            ),
+            "post_probe_confirmation_grant_signature": (
+                stock.get("post_probe_confirmation_grant_signature") or "-"
+            ),
+            "post_probe_confirmation_grant_consumed": bool(
+                stock.get("post_probe_confirmation_grant_consumed", False)
+            ),
+            "post_probe_confirmation_grant_consumed_at": _safe_float(
+                stock.get("post_probe_confirmation_grant_consumed_at"), 0.0
+            ),
+            "post_probe_leg_revalidation_outcome": (
+                stock.get("post_probe_leg_revalidation_outcome") or "-"
+            ),
+            "post_probe_leg_revalidation_reason": (
+                stock.get("post_probe_leg_revalidation_reason") or "-"
+            ),
+            "post_probe_leg_revalidation_direction_state": (
+                stock.get("post_probe_leg_revalidation_direction_state") or "-"
+            ),
+            "post_probe_leg_revalidation_negative_groups": (
+                stock.get("post_probe_leg_revalidation_negative_groups") or "-"
+            ),
             "probe_expand_forbidden": bool(stock.get("probe_expand_forbidden", False)),
             "entry_split_probe_residual_expand_forbidden": bool(
                 stock.get(
@@ -35744,6 +36278,17 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "probe_confirmation_last_at",
     "probe_confirmation_last_state",
     "probe_confirmation_last_signature",
+    "post_probe_confirmation_grant_active",
+    "post_probe_confirmation_granted_at",
+    "post_probe_confirmation_grant_ttl_ms",
+    "post_probe_confirmation_grant_count",
+    "post_probe_confirmation_grant_signature",
+    "post_probe_confirmation_grant_consumed",
+    "post_probe_confirmation_grant_consumed_at",
+    "post_probe_leg_revalidation_outcome",
+    "post_probe_leg_revalidation_reason",
+    "post_probe_leg_revalidation_direction_state",
+    "post_probe_leg_revalidation_negative_groups",
     "probe_expand_forbidden",
     "entry_split_probe_residual_expand_forbidden",
 )
@@ -35837,6 +36382,83 @@ def _advance_wait_probe_confirmation(
         bool(direction_state == "STRONG" and confirmation_count >= 2),
         confirmation_count,
     )
+
+
+def _revalidate_wait_probe_confirmation_grant(
+    leg_direction_fields: dict[str, Any],
+    *,
+    confirmation_ready: bool,
+    confirmation_grant_deadline_monotonic: float,
+    granted_action: str,
+    now_monotonic: float | None = None,
+) -> tuple[str, str, str]:
+    """Preserve a bounded 2/2 WAIT grant unless fresh negative evidence revokes it."""
+
+    leg_action = str(
+        leg_direction_fields.get("post_probe_continuation_action") or "DEFER"
+    ).upper()
+    negative_groups = {
+        token.strip()
+        for token in str(
+            leg_direction_fields.get("post_probe_direction_negative_groups") or ""
+        ).split(",")
+        if token.strip() and token.strip() != "-"
+    }
+    if not confirmation_ready:
+        return (
+            leg_action,
+            (
+                "direction_deferred_without_grant"
+                if leg_action == "DEFER"
+                else "direction_maintained_without_grant"
+            ),
+            "residual_leg_direction_deferred" if leg_action == "DEFER" else "",
+        )
+    observed_monotonic = (
+        time.monotonic() if now_monotonic is None else float(now_monotonic)
+    )
+    if _truthy_field(leg_direction_fields.get("post_probe_hard_veto")):
+        return leg_action, "grant_revoked_fresh_ai_drop", "fresh_ai_drop_veto"
+    if (
+        str(leg_direction_fields.get("post_probe_direction_ai_authority") or "")
+        .strip()
+        .lower()
+        == "stale_or_unverified_negative_fail_closed"
+    ):
+        return (
+            leg_action,
+            "grant_revoked_ai_authority_fail_closed",
+            "residual_leg_ai_authority_fail_closed",
+        )
+    if negative_groups:
+        return (
+            leg_action,
+            "grant_revoked_negative_group",
+            "residual_leg_negative_reversal",
+        )
+    if (
+        str(leg_direction_fields.get("post_probe_direction_state") or "")
+        .strip()
+        .upper()
+        == "WEAK"
+    ):
+        return leg_action, "grant_revoked_weak_state", "residual_leg_weak_reversal"
+    if (
+        confirmation_grant_deadline_monotonic <= 0
+        or observed_monotonic > confirmation_grant_deadline_monotonic
+    ):
+        return (
+            leg_action,
+            "grant_expired",
+            "residual_leg_confirmation_grant_expired",
+        )
+    if leg_action == "DEFER":
+        return (
+            str(granted_action or "ALLOW_NARROW").upper(),
+            "grant_preserved_neutral_defer",
+            "",
+        )
+    return leg_action, "grant_direction_maintained", ""
 
 
 def _post_probe_chase_guard_fields(
@@ -36912,6 +37534,7 @@ def _abort_entry_split_probe_residual(
             last_direction_reason if source_quality_timeout else "-"
         ),
         "entry_split_probe_source_quality_recheck_pending": False,
+        "post_probe_confirmation_grant_active": False,
     }
     hard_negative_reasons = {
         "buy_authority_not_available",
@@ -36922,6 +37545,10 @@ def _abort_entry_split_probe_residual(
         "fresh_bbo_unavailable",
         "probe_fill_slippage_above_cap",
         "residual_leg_stale_or_conflicted_quote",
+        "residual_leg_negative_reversal",
+        "residual_leg_weak_reversal",
+        "residual_leg_confirmation_grant_expired",
+        "residual_leg_ai_authority_fail_closed",
         "fresh_ai_drop_veto",
     }
     hard_negative = bool(
@@ -36993,6 +37620,13 @@ def _abort_entry_split_probe_residual(
             post_probe_continuation_action=stock.get(
                 "entry_split_probe_continuation_action"
             ),
+            post_probe_confirmation_grant_active=False,
+            post_probe_confirmation_grant_consumed=bool(
+                stock.get("post_probe_confirmation_grant_consumed", False)
+            ),
+            post_probe_confirmation_grant_consumed_at=_safe_float(
+                stock.get("post_probe_confirmation_grant_consumed_at"), 0.0
+            ),
         )
     _log_entry_pipeline(
         stock,
@@ -37019,6 +37653,12 @@ def _abort_entry_split_probe_residual(
         ),
         post_probe_direction_state=("HARD_NEGATIVE" if hard_negative else "-"),
         post_probe_continuation_action=("HARD_NEGATIVE" if hard_negative else "BLOCK"),
+        active_sell_pending_fields=(
+            ",".join(_active_sell_order_pending_fields(stock)) or "-"
+        ),
+        exit_authority_conflict_fields=(
+            ",".join(_entry_exit_authority_conflict_fields(stock)) or "-"
+        ),
         **_entry_split_probe_observation_contract_fields(stock),
     )
 
@@ -44142,6 +44782,20 @@ def _scalp_trailing_continuation_recheck_config(now_ts: float) -> dict[str, Any]
                 150.0,
             ),
         ),
+        "pyramid_handoff_enabled": _env_bool(
+            "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_ENABLED",
+            True,
+        ),
+        "pyramid_handoff_max_age_sec": max(
+            1.0,
+            min(
+                30.0,
+                _env_float(
+                    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_MAX_AGE_SEC",
+                    25.0,
+                ),
+            ),
+        ),
         "high_peak_enabled": _env_bool(
             "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_HIGH_PEAK_ENABLED",
             False,
@@ -44561,7 +45215,10 @@ def _scalp_trailing_continuation_recheck_contract_fields() -> dict[str, Any]:
         "metric_role": "bounded_tunable",
         "decision_authority": "operator_runtime_override_scalp_trailing_continuation_recheck",
         "window_policy": "same_trailing_candidate_bounded_recheck",
-        "sample_floor": "positive_profit_with_fresh_trusted_ws_micro_or_single_fresh_rest_quote_recovery",
+        "sample_floor": (
+            "positive_profit_with_fresh_trusted_ws_micro_or_single_fresh_rest_quote_"
+            "recovery_or_recent_rising_missed_pyramid_price_guard_handoff"
+        ),
         "primary_decision_metric": "post_recheck_mfe_before_trailing_exit",
         "source_quality_gate": "fresh_trusted_ws_composite_micro_or_bounded_ka10004_executable_quote",
         "runtime_effect": True,
@@ -44676,13 +45333,74 @@ def _evaluate_scalp_trailing_continuation_recheck(
         "large_sell_clear": not large_sell_print,
     }
     high_peak_eligible = all(high_peak_checks.values())
+    scale_in_block = _last_scale_in_submit_block_fields(stock)
+    scale_in_block_at = _safe_float(scale_in_block.get("at"), 0.0)
+    scale_in_block_age_sec = (
+        max(0.0, float(now_ts) - scale_in_block_at)
+        if scale_in_block_at > 0
+        else float("inf")
+    )
+    pyramid_handoff_checks = {
+        "enabled": bool(config["pyramid_handoff_enabled"]),
+        "fresh_block": (
+            scale_in_block_age_sec <= config["pyramid_handoff_max_age_sec"]
+        ),
+        "price_guard_stage": (
+            scale_in_block.get("stage") == "scale_in_price_guard_block"
+        ),
+        "pyramid_type": scale_in_block.get("add_type") == "PYRAMID",
+        "rising_missed_bridge": (
+            scale_in_block.get("add_reason") == "rising_missed_scout_pyramid_bridge_ok"
+        ),
+        "micro_vwap_only": str(scale_in_block.get("reason") or "").startswith(
+            "micro_vwap_bp>"
+        ),
+        "peak_band": bool(
+            config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
+        ),
+        "profit_floor": float(profit_rate) >= config["min_profit_pct"],
+        "worsen_cap": (float(trailing_peak_worsen) <= config["max_worsen_pct"]),
+        "feature_context": feature_context_usable,
+        "quote_fresh": quote_fresh,
+        "trusted_ticks": trusted_tick_count >= config["high_peak_min_trusted_ticks"],
+        "large_sell_clear": not large_sell_print,
+    }
+    pyramid_handoff_candidate = all(pyramid_handoff_checks.values())
+    pyramid_handoff_armed = bool(
+        started_at > 0
+        and not recheck_already_expired
+        and str(stock.get("scalp_trailing_continuation_recheck_lane") or "").strip()
+        == "scale_in_handoff"
+    )
+    pyramid_handoff_active_checks = {
+        "peak_band": bool(
+            config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
+        ),
+        "profit_floor": float(profit_rate) >= config["min_profit_pct"],
+        "worsen_cap": (float(trailing_peak_worsen) <= config["max_worsen_pct"]),
+        "feature_context": feature_context_usable,
+        "quote_fresh": quote_fresh,
+        "trusted_ticks": trusted_tick_count >= config["high_peak_min_trusted_ticks"],
+        "large_sell_clear": not large_sell_print,
+    }
+    pyramid_handoff_active_eligible = bool(
+        pyramid_handoff_armed and all(pyramid_handoff_active_checks.values())
+    )
     quote_recovery_band_candidate = bool(
-        config["quote_recovery_enabled"]
-        and config["min_peak_pct"] <= float(peak_profit) <= config["max_peak_pct"]
-        and float(profit_rate) >= config["min_profit_pct"]
-        and float(trailing_peak_worsen) <= config["max_worsen_pct"]
-        and not large_sell_print
-        and not shallow_eligible
+        (
+            (
+                config["quote_recovery_enabled"]
+                and config["min_peak_pct"]
+                <= float(peak_profit)
+                <= config["max_peak_pct"]
+                and float(profit_rate) >= config["min_profit_pct"]
+                and float(trailing_peak_worsen) <= config["max_worsen_pct"]
+                and not large_sell_print
+                and not shallow_eligible
+                and not pyramid_handoff_armed
+            )
+            or (pyramid_handoff_candidate and not pyramid_handoff_armed)
+        )
         and not recheck_already_expired
     )
     quote_recovery_fields = {
@@ -44702,6 +45420,15 @@ def _evaluate_scalp_trailing_continuation_recheck(
             f"{config['quote_recovery_max_spread_bps']:.1f}"
         ),
         "quote_recovery_large_sell_state": large_sell_state,
+        "quote_recovery_trigger": (
+            "pyramid_price_guard_handoff"
+            if pyramid_handoff_candidate
+            else (
+                "pyramid_price_guard_handoff_active"
+                if pyramid_handoff_armed
+                else "generic_quote_recovery"
+            )
+        ),
     }
     quote_recovery_eligible = False
     if quote_recovery_band_candidate:
@@ -44820,11 +45547,20 @@ def _evaluate_scalp_trailing_continuation_recheck(
             }
         )
 
-    eligible = bool(shallow_eligible or high_peak_eligible or quote_recovery_eligible)
+    eligible = bool(
+        shallow_eligible
+        or high_peak_eligible
+        or quote_recovery_eligible
+        or pyramid_handoff_active_eligible
+    )
     if high_peak_eligible:
         recheck_lane = "high_peak"
     elif shallow_eligible:
         recheck_lane = "shallow"
+    elif (
+        pyramid_handoff_candidate and quote_recovery_eligible
+    ) or pyramid_handoff_active_eligible:
+        recheck_lane = "scale_in_handoff"
     else:
         recheck_lane = "quote_recovery"
     recheck_ttl_sec = (
@@ -44864,6 +45600,33 @@ def _evaluate_scalp_trailing_continuation_recheck(
         "high_peak_quote_fresh": quote_fresh,
         "high_peak_min_trusted_ticks": config["high_peak_min_trusted_ticks"],
         "high_peak_trusted_tick_count": trusted_tick_count,
+        "pyramid_handoff_enabled": bool(config["pyramid_handoff_enabled"]),
+        "pyramid_handoff_candidate": bool(pyramid_handoff_candidate),
+        "pyramid_handoff_armed": bool(pyramid_handoff_armed),
+        "pyramid_handoff_active_eligible": bool(pyramid_handoff_active_eligible),
+        "pyramid_handoff_active_failed_checks": (
+            ",".join(
+                name
+                for name, passed in pyramid_handoff_active_checks.items()
+                if not passed
+            )
+            or "-"
+        ),
+        "pyramid_handoff_failed_checks": (
+            ",".join(
+                name for name, passed in pyramid_handoff_checks.items() if not passed
+            )
+            or "-"
+        ),
+        "pyramid_handoff_max_age_sec": (f"{config['pyramid_handoff_max_age_sec']:.3f}"),
+        "pyramid_handoff_block_age_sec": (
+            f"{scale_in_block_age_sec:.3f}"
+            if scale_in_block_age_sec != float("inf")
+            else "-"
+        ),
+        "pyramid_handoff_block_stage": scale_in_block.get("stage") or "-",
+        "pyramid_handoff_block_reason": scale_in_block.get("reason") or "-",
+        "pyramid_handoff_add_reason": scale_in_block.get("add_reason") or "-",
         "profit_rate": f"{float(profit_rate):+.2f}",
         "peak_profit": f"{float(peak_profit):+.2f}",
         "trailing_peak_worsen": f"{float(trailing_peak_worsen):.2f}",
@@ -49975,7 +50738,24 @@ def _resolve_scanner_async_entry_ai(
     def prepare(
         async_context: ScannerAsyncEvalContext,
     ) -> dict:
+        stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
         prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        prepared_reentry = stock_snapshot.get(
+            "_rising_missed_async_reentry_guard_context"
+        )
+        prepared_guard = (
+            prepared_reentry.get("guard")
+            if isinstance(prepared_reentry, dict)
+            and isinstance(prepared_reentry.get("guard"), dict)
+            else {}
+        )
+        recent_exit_context = _rising_missed_recent_exit_ai_context(
+            stock_snapshot,
+            prepared_guard,
+            now_ts=time.time(),
+        )
+        if recent_exit_context:
+            prepared_ws["recent_exit_context"] = recent_exit_context
         entry_request_code = resolve_entry_candle_request_code(
             code,
             venue=generation.venue,
@@ -54114,6 +54894,33 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if forced_rising_missed_one_share
         else 0
     )
+    exit_authority_conflicts = _entry_exit_authority_conflict_fields(stock)
+    if exit_authority_conflicts:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_submit_blocked_exit_authority_conflict",
+            block_reason="unresolved_exit_authority",
+            exit_authority_conflict_fields=",".join(exit_authority_conflicts),
+            unresolved_exit_authority_field_count=len(exit_authority_conflicts),
+            metric_role="safety_veto",
+            decision_authority="position_cycle_exit_authority_pre_submit_guard",
+            window_policy="same_symbol_position_cycle_until_sell_state_reconciled",
+            sample_floor="not_applicable_lifecycle_safety_veto",
+            primary_decision_metric="unresolved_exit_authority_field_count",
+            source_quality_gate=(
+                "no_unresolved_sell_order_or_exit_authority_before_new_buy"
+            ),
+            runtime_effect=True,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            forbidden_uses=(
+                "active_sell_state_clear|broker_guard_bypass|hard_stop_bypass|"
+                "provider_route_change|order_price_or_quantity_change"
+            ),
+        )
+        return False
 
     cooldown_until = (
         _safe_float(cooldowns.get(code), 0.0) if isinstance(cooldowns, dict) else 0.0
@@ -63002,12 +63809,20 @@ def _maybe_submit_rising_missed_one_share_entry(
             code,
             _runtime_action_now_ts(runtime),
         )
+    reentry_guard = _evaluate_rising_missed_clean_profit_reentry_confirmation(
+        reentry_guard,
+        stock,
+    )
     if not reentry_guard.get("allowed", True):
         action = str(reentry_guard.get("reentry_action") or "block")
         stage = (
             "rising_missed_one_share_entry_low_priority_deferred"
             if action == "low_priority"
-            else "rising_missed_one_share_entry_blocked"
+            else (
+                "rising_missed_clean_profit_reentry_confirmation_deferred"
+                if action == "confirm"
+                else "rising_missed_one_share_entry_blocked"
+            )
         )
         _log_entry_pipeline(
             stock,
@@ -68967,6 +69782,18 @@ def _submit_entry_split_probe_residual_locked(
     direction_fields: dict[str, Any] = {}
     continuation_action = "ALLOW_NORMAL"
     nxt_wait_fast_tape_bounded_single_leg = False
+    wait_probe_confirmation_ready = False
+    wait_probe_confirmation_count = 0
+    confirmation_grant_deadline_monotonic = 0.0
+    confirmation_grant_runtime_keys = (
+        "post_probe_confirmation_grant_active",
+        "post_probe_confirmation_granted_at",
+        "post_probe_confirmation_grant_ttl_ms",
+        "post_probe_confirmation_grant_count",
+        "post_probe_confirmation_grant_signature",
+        "post_probe_confirmation_grant_consumed",
+        "post_probe_confirmation_grant_consumed_at",
+    )
     wait_probe_bounded_single_leg = bool(
         _rising_missed_ai_action_guard_active(now_ts=now_ts)
         and str(stock.get("entry_split_probe_ai_action_at_submit") or "")
@@ -68998,12 +69825,15 @@ def _submit_entry_split_probe_residual_locked(
             )
             return False
         if wait_probe_bounded_single_leg:
-            confirmation_ready, _ = _advance_wait_probe_confirmation(
+            (
+                wait_probe_confirmation_ready,
+                wait_probe_confirmation_count,
+            ) = _advance_wait_probe_confirmation(
                 stock,
                 direction_fields,
                 now_ts=now_ts,
             )
-            if not confirmation_ready:
+            if not wait_probe_confirmation_ready:
                 continuation_action = "DEFER"
                 direction_fields.update(
                     {
@@ -69226,6 +70056,24 @@ def _submit_entry_split_probe_residual_locked(
             preserve_position=True,
         )
         return False
+    if wait_probe_confirmation_ready:
+        grant_ttl_sec = max(0.0, filled_at + timeout_sec - now_ts)
+        confirmation_grant_deadline_monotonic = time.monotonic() + grant_ttl_sec
+        confirmation_grant_fields = {
+            "post_probe_confirmation_grant_active": True,
+            "post_probe_confirmation_granted_at": now_ts,
+            "post_probe_confirmation_grant_ttl_ms": int(round(grant_ttl_sec * 1000.0)),
+            "post_probe_confirmation_grant_count": wait_probe_confirmation_count,
+            "post_probe_confirmation_grant_signature": (
+                direction_fields.get("post_probe_confirmation_source_version_signature")
+                or direction_fields.get("post_probe_confirmation_evidence_signature")
+                or "-"
+            ),
+            "post_probe_confirmation_grant_consumed": False,
+            "post_probe_confirmation_grant_consumed_at": 0.0,
+        }
+        direction_fields.update(confirmation_grant_fields)
+        _mutate_stock_state(stock, set_fields=confirmation_grant_fields)
     if post_probe_resolver_enabled and resolver_fields:
         first_resolution = resolver_fields[0]
         plan_fields.update(
@@ -69298,8 +70146,15 @@ def _submit_entry_split_probe_residual_locked(
         fresh_best_ask=best_ask,
         probe_fill_slippage_bps=round(slippage_bps, 4),
         residual_orders=residual_orders,
-        **plan_fields,
-        **account_guard_fields,
+        **_merge_entry_pipeline_field_groups(
+            plan_fields,
+            account_guard_fields,
+            {
+                key: stock.get(key)
+                for key in confirmation_grant_runtime_keys
+                if key in stock
+            },
+        ),
     )
     _log_entry_pipeline(
         stock,
@@ -69392,11 +70247,44 @@ def _submit_entry_split_probe_residual_locked(
                 now_ts=time.time(),
                 max_context_age_sec=timeout_sec,
             )
-            leg_action = str(
-                leg_direction_fields.get("post_probe_continuation_action") or "DEFER"
-            ).upper()
-            if leg_action == "DEFER":
-                failure_reason = "residual_leg_direction_deferred"
+            leg_negative_groups = {
+                token.strip()
+                for token in str(
+                    leg_direction_fields.get("post_probe_direction_negative_groups")
+                    or ""
+                ).split(",")
+                if token.strip() and token.strip() != "-"
+            }
+            # The two distinct, 250ms-spaced STRONG evaluations are the bounded
+            # WAIT expansion authority. A third immediate neutral sample must
+            # not erase it; fresh DROP, an explicit negative group, quote/chase
+            # failure, or grant expiry still revokes the first-leg submission.
+            (
+                leg_action,
+                leg_revalidation_outcome,
+                failure_reason,
+            ) = _revalidate_wait_probe_confirmation_grant(
+                leg_direction_fields,
+                confirmation_ready=wait_probe_confirmation_ready,
+                confirmation_grant_deadline_monotonic=(
+                    confirmation_grant_deadline_monotonic
+                ),
+                granted_action=continuation_action,
+            )
+            leg_revalidation_fields = {
+                "post_probe_leg_revalidation_outcome": leg_revalidation_outcome,
+                "post_probe_leg_revalidation_reason": (
+                    leg_direction_fields.get("post_probe_direction_reason") or "-"
+                ),
+                "post_probe_leg_revalidation_direction_state": (
+                    leg_direction_fields.get("post_probe_direction_state") or "-"
+                ),
+                "post_probe_leg_revalidation_negative_groups": (
+                    ",".join(sorted(leg_negative_groups)) or "-"
+                ),
+            }
+            _mutate_stock_state(stock, set_fields=leg_revalidation_fields)
+            if failure_reason:
                 break
             stale_wait_recovery = bool(
                 leg_direction_fields.get("post_probe_direction_ai_authority")
@@ -69460,6 +70348,7 @@ def _submit_entry_split_probe_residual_locked(
                     "post_probe_direction_reason": leg_direction_fields.get(
                         "post_probe_direction_reason"
                     ),
+                    **leg_revalidation_fields,
                 }
             )
             best_bid = leg_bid
@@ -69522,6 +70411,15 @@ def _submit_entry_split_probe_residual_locked(
             trip_probe_runtime_circuit(failure_reason)
             break
         sent_at = time.time()
+        if wait_probe_confirmation_ready:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "post_probe_confirmation_grant_active": False,
+                    "post_probe_confirmation_grant_consumed": True,
+                    "post_probe_confirmation_grant_consumed_at": sent_at,
+                },
+            )
         residual_broker_route = (
             str(
                 response.get("broker_route")
@@ -69703,6 +70601,11 @@ def _submit_entry_split_probe_residual_locked(
                 probe_confirmation_last_signature=(
                     stock.get("probe_confirmation_last_signature") or ""
                 ),
+                **{
+                    key: stock.get(key)
+                    for key in confirmation_grant_runtime_keys
+                    if key in stock
+                },
             )
             _log_entry_pipeline(
                 stock,
@@ -69749,7 +70652,14 @@ def _submit_entry_split_probe_residual_locked(
         phase="residual_submitted",
         residual_order_nos=[order.get("ord_no") for order in successful_orders],
         residual_orders=successful_orders,
-        **plan_fields,
+        **_merge_entry_pipeline_field_groups(
+            plan_fields,
+            {
+                key: stock.get(key)
+                for key in confirmation_grant_runtime_keys
+                if key in stock
+            },
+        ),
     )
     return True
 
@@ -75087,6 +75997,7 @@ def handle_holding_state(
                     stock=stock,
                     exit_rule=exit_rule or stock.get("last_exit_rule"),
                     profit_rate=profit_rate,
+                    exit_price=sell_order_price or curr_p,
                     now_ts=now_ts,
                     source_stage="sell_order_sent",
                 )

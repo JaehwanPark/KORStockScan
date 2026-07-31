@@ -52,6 +52,7 @@ _get_fast_state = None
 _weighted_avg = None
 _now_ts = None
 _probe_fill_continuation_callback = None
+_scalp_exit_completed_callback = None
 
 # Receipt module의 임시/DB 작업은 독립 락으로 직렬화하고,
 # ACTIVE_TARGETS 같은 shared runtime truth는 주입된 _STATE_LOCK(실운영에서는 ENTRY_LOCK)으로만 만집니다.
@@ -381,8 +382,14 @@ _SELL_REVIVE_RESET_KEYS = (
     "pending_buy_msg",
     "pending_sell_msg",
     "sell_odno",
+    "sell_ord_no",
     "sell_order_time",
     "sell_target_price",
+    "exit_requested",
+    "exit_order_type",
+    "exit_order_time",
+    "entry_lifecycle_conflict",
+    "entry_lifecycle_conflict_fields",
     "pending_entry_orders",
     "entry_mode",
     "entry_requested_qty",
@@ -469,6 +476,14 @@ _SELL_REVIVE_RESET_KEYS = (
     "rising_missed_scout_upgraded",
 )
 _SELL_COMPLETE_RESET_KEYS = (
+    "pending_sell_msg",
+    "sell_odno",
+    "sell_ord_no",
+    "sell_order_time",
+    "sell_target_price",
+    "exit_requested",
+    "exit_order_type",
+    "exit_order_time",
     "pending_entry_orders",
     "entry_mode",
     "entry_requested_qty",
@@ -489,6 +504,8 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_submit_notice_pending",
     "entry_submit_notice_enqueued",
     "buy_execution_notified",
+    "entry_lifecycle_conflict",
+    "entry_lifecycle_conflict_fields",
     "trailing_stop_price",
     "hard_stop_price",
     "protect_profit_pct",
@@ -576,6 +593,7 @@ def bind_execution_dependencies(
     now_ts=None,
     state_lock=None,
     probe_fill_continuation_callback=None,
+    scalp_exit_completed_callback=None,
     state_machine=None,
     **_unused_kwargs,
 ):
@@ -587,7 +605,7 @@ def bind_execution_dependencies(
     """
     global KIWOOM_TOKEN, DB, event_bus, ACTIVE_TARGETS, highest_prices
     global _get_fast_state, _weighted_avg, _now_ts, _STATE_LOCK
-    global _probe_fill_continuation_callback
+    global _probe_fill_continuation_callback, _scalp_exit_completed_callback
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -609,6 +627,8 @@ def bind_execution_dependencies(
         _STATE_LOCK = state_lock
     if probe_fill_continuation_callback is not None:
         _probe_fill_continuation_callback = probe_fill_continuation_callback
+    if scalp_exit_completed_callback is not None:
+        _scalp_exit_completed_callback = scalp_exit_completed_callback
 
 
 def _log_holding_pipeline(name, code, target_id, stage, **fields):
@@ -1709,6 +1729,79 @@ def _clear_split_entry_shadow_state(target_stock: dict[str, Any]) -> None:
         target_stock.pop(key, None)
 
 
+def _prepare_new_position_exit_authority(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    target_id: int,
+    order_no: str,
+) -> None:
+    """Fail closed when a fresh BUY fill races unresolved exit authority."""
+    active_fields = (
+        "exit_requested",
+        "exit_order_type",
+        "exit_order_time",
+        "exit_token",
+        "exit_decided_at",
+        "exit_order_sent_at",
+        "sell_odno",
+        "sell_ord_no",
+        "sell_order_time",
+        "pending_sell_msg",
+        "fast_exit_retry_pending",
+        "fast_exit_retry_reason",
+        "fast_exit_retry_at",
+        "fast_exit_last_error",
+        "fast_exit_trigger_kind",
+        "fast_exit_rest_retry_after",
+        *_FAST_EXIT_DECISION_RESET_KEYS,
+        *_EXIT_DECISION_RESET_KEYS,
+    )
+    conflict_fields = [
+        key for key in active_fields if target_stock.get(key) not in (None, "", False)
+    ]
+    if not conflict_fields:
+        target_stock.pop("entry_lifecycle_conflict", None)
+        target_stock.pop("entry_lifecycle_conflict_fields", None)
+        target_stock["exit_requested"] = False
+        return
+
+    previous_status = str(target_stock.get("status") or "").strip().upper()
+    target_stock.update(
+        {
+            "entry_lifecycle_conflict": True,
+            "entry_lifecycle_conflict_fields": ",".join(conflict_fields),
+            "probe_expand_forbidden": True,
+            "entry_split_probe_residual_expand_forbidden": True,
+            "entry_split_probe_scale_in_forbidden": True,
+        }
+    )
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_id,
+        "entry_position_cycle_exit_authority_conflict",
+        previous_status=previous_status or "-",
+        previous_exit_token=str(target_stock.get("exit_token") or "-"),
+        conflict_fields=",".join(conflict_fields),
+        unresolved_exit_authority_field_count=len(conflict_fields),
+        entry_order_no=order_no or "-",
+        metric_role="safety_veto",
+        decision_authority="broker_buy_fill_position_cycle_integrity_fail_closed",
+        window_policy="before_probe_residual_callback",
+        sample_floor="confirmed_fresh_buy_fill_with_zero_pre_fill_qty",
+        primary_decision_metric="unresolved_exit_authority_field_count",
+        source_quality_gate="broker_buy_execution_receipt_and_unresolved_exit_state",
+        runtime_effect=True,
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        forbidden_uses=(
+            "active_sell_state_clear|residual_or_scale_in_submit|hard_stop_bypass|"
+            "broker_guard_bypass|provider_route_change|quantity_or_cap_change"
+        ),
+    )
+
+
 def _emit_split_entry_followup_shadows(
     *,
     target_stock: dict[str, Any],
@@ -2316,11 +2409,40 @@ def _publish_entry_partial_fill_message(
         partial_msg = pending_msg
     else:
         partial_msg = f"🛒 **[{target_stock.get('name') or '-'}]** 매수 부분 체결"
-    partial_msg += (
-        f"\n⏳ **부분 체결:** `{cum_filled_qty}/{requested_entry_qty}주`"
-        f" / **평균 체결가:** `{avg_buy_price:,.0f}원`"
-        f" / **잔여:** `{remaining_qty}주`"
+    probe_phase = str(target_stock.get("entry_split_probe_phase") or "").strip()
+    probe_abort_reason = str(
+        target_stock.get("entry_split_probe_abort_reason") or ""
+    ).strip()
+    probe_order_no = str(target_stock.get("entry_split_probe_order_no") or "").strip()
+    probe_first_fill_with_planned_residual = bool(
+        probe_order_no and cum_filled_qty == 1 and remaining_qty > 0
     )
+    if probe_first_fill_with_planned_residual:
+        partial_msg += (
+            f"\n✅ **probe 체결:** `1/1주`"
+            f" / **평균 체결가:** `{avg_buy_price:,.0f}원`"
+        )
+        if probe_phase == "aborted" and probe_abort_reason:
+            partial_msg += (
+                f"\n⏸ **계획 잔여:** `{remaining_qty}주 미제출`"
+                f" (`{probe_abort_reason}`)"
+            )
+        elif probe_phase in {
+            "residual_submitting",
+            "residual_submitted",
+            "residual_partial_submitted",
+        }:
+            partial_msg += f"\n⏳ **residual:** `{remaining_qty}주 제출·체결 확인 중`"
+        else:
+            partial_msg += (
+                f"\n⏳ **계획 잔여:** `{remaining_qty}주 방향·가격 재검증 중`"
+            )
+    else:
+        partial_msg += (
+            f"\n⏳ **부분 체결:** `{cum_filled_qty}/{requested_entry_qty}주`"
+            f" / **평균 체결가:** `{avg_buy_price:,.0f}원`"
+            f" / **잔여:** `{remaining_qty}주`"
+        )
     if event_bus is None:
         log_info(
             f"[ENTRY_PARTIAL_FILL_NOTICE_SKIPPED] {target_stock.get('name')}({target_stock.get('code')}) "
@@ -2650,6 +2772,31 @@ def _update_db_for_sell(
                 f"실매도가: {exec_price:,}원 / 수익률: {profit_rate}%"
             )
 
+            if strategy == "SCALPING" and callable(_scalp_exit_completed_callback):
+                try:
+                    callback_result = _scalp_exit_completed_callback(
+                        str(receipt_snapshot.get("code", "")).strip()[:6],
+                        profit_rate=profit_rate,
+                        exit_price=exec_price,
+                        exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
+                        completed_at=now.timestamp(),
+                    )
+                    if (
+                        isinstance(callback_result, dict)
+                        and callback_result.get("reconciled") is False
+                        and callback_result.get("reason")
+                        != "active_reentry_context_missing"
+                    ):
+                        log_error(
+                            "[RISING_MISSED_REENTRY] sell receipt reconciliation "
+                            f"deferred to sell_completed fallback (id={target_id}, "
+                            f"reason={callback_result.get('reason')})"
+                        )
+                except Exception as exc:
+                    log_error(
+                        "[RISING_MISSED_REENTRY] sell receipt reconciliation "
+                        f"failed (id={target_id}): {exc}"
+                    )
             _publish_sell_execution_message(
                 name=receipt_snapshot.get("name") or "-",
                 pending_msg=receipt_snapshot.get("pending_sell_msg") or "",
@@ -3018,6 +3165,12 @@ def _handle_entry_buy_execution(
     old_qty = int(target_stock.get("buy_qty") or 0)
     old_price = float(target_stock.get("buy_price") or 0)
     if old_qty <= 0:
+        _prepare_new_position_exit_authority(
+            target_stock,
+            code=code,
+            target_id=target_id,
+            order_no=order_no,
+        )
         _clear_split_entry_shadow_state(target_stock)
     new_qty = old_qty + effective_exec_qty
     if old_qty > 0:
@@ -3110,7 +3263,9 @@ def _handle_entry_buy_execution(
             target_stock["entry_split_probe_fill_price"] = exec_price
             target_stock["entry_split_probe_filled_at"] = filled_at_ts
             target_stock["entry_split_probe_scale_in_forbidden"] = True
-            target_stock["probe_expand_forbidden"] = False
+            target_stock["probe_expand_forbidden"] = bool(
+                target_stock.get("entry_lifecycle_conflict")
+            )
             update_probe_runtime_bundle(
                 bundle_id,
                 phase="probe_filled",
@@ -3119,7 +3274,15 @@ def _handle_entry_buy_execution(
                 filled_at=filled_at_ts,
                 fill_qty=effective_exec_qty,
                 entry_split_probe_scale_in_forbidden=True,
-                probe_expand_forbidden=False,
+                probe_expand_forbidden=bool(
+                    target_stock.get("entry_lifecycle_conflict")
+                ),
+                entry_lifecycle_conflict=bool(
+                    target_stock.get("entry_lifecycle_conflict")
+                ),
+                entry_lifecycle_conflict_fields=(
+                    target_stock.get("entry_lifecycle_conflict_fields") or "-"
+                ),
             )
             submit_best_ask = _safe_int(
                 target_stock.get("entry_split_probe_submit_best_ask"), 0
@@ -3362,9 +3525,10 @@ def _handle_entry_buy_execution(
         target_stock["ai_review_score"] = None
         target_stock["ai_review_action"] = None
         target_stock["last_ai_reviewed_at"] = None
-        target_stock["exit_requested"] = False
-        target_stock["exit_order_type"] = None
-        target_stock["exit_order_time"] = None
+        if not target_stock.get("entry_lifecycle_conflict"):
+            target_stock["exit_requested"] = False
+            target_stock["exit_order_type"] = None
+            target_stock["exit_order_time"] = None
 
         sell_qty = int(target_stock.get("buy_qty") or exec_qty or 0)
         refreshed = _refresh_scalp_preset_exit_order(target_stock, code, sell_qty)

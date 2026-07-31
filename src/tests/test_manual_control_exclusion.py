@@ -99,6 +99,54 @@ def test_manual_control_exclusion_remove_deletes_file_code(monkeypatch, tmp_path
     assert "005930" not in path.read_text(encoding="utf-8")
 
 
+def test_manual_control_exclusion_remove_preserves_manual_operator_row(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    original = (
+        "005930 # manual_operator samsung_electronics\n"
+        "000660 # auto_open_loss KRX_OPEN\n"
+    )
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code(
+        "005930",
+        reason="periodic_sync_completed_no_broker_holding",
+    )
+
+    assert result.removed is False
+    assert result.reason == "manual_control_exclusion_manual_operator_protected"
+    assert path.read_text(encoding="utf-8") == original
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
+        is True
+    )
+
+
+def test_manual_control_exclusion_manual_operator_vetoes_duplicate_auto_row_removal(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    original = (
+        "005930 # auto_open_loss KRX_OPEN\n"
+        "005930 # manual_operator samsung_electronics\n"
+    )
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code(
+        "005930",
+        reason="periodic_sync_completed_no_broker_holding",
+    )
+
+    assert result.removed is False
+    assert result.reason == "manual_control_exclusion_manual_operator_protected"
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_manual_control_exclusion_remove_preserves_other_codes_on_same_line(
     monkeypatch, tmp_path
 ):

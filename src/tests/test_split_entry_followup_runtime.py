@@ -156,6 +156,16 @@ def test_completed_sell_closes_persisted_probe_bundle(monkeypatch, tmp_path):
         "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg": True,
         "entry_split_probe_bounded_partial_submission": True,
         "rising_missed_scout_upgraded": True,
+        "sell_odno": "SELL-PRIMARY",
+        "sell_ord_no": "SELL-ALIAS",
+        "sell_order_time": 123.0,
+        "sell_target_price": 9900,
+        "pending_sell_msg": "sell pending",
+        "exit_requested": True,
+        "exit_order_type": "FAST_EXIT",
+        "exit_order_time": 123.0,
+        "entry_lifecycle_conflict": True,
+        "entry_lifecycle_conflict_fields": "sell_odno",
     }
 
     receipts._finalize_standard_sell_execution(
@@ -179,6 +189,19 @@ def test_completed_sell_closes_persisted_probe_bundle(monkeypatch, tmp_path):
     assert "entry_split_probe_nxt_wait_fast_tape_bounded_single_leg" not in stock
     assert "entry_split_probe_bounded_partial_submission" not in stock
     assert "rising_missed_scout_upgraded" not in stock
+    for key in (
+        "sell_odno",
+        "sell_ord_no",
+        "sell_order_time",
+        "sell_target_price",
+        "pending_sell_msg",
+        "exit_requested",
+        "exit_order_type",
+        "exit_order_time",
+        "entry_lifecycle_conflict",
+        "entry_lifecycle_conflict_fields",
+    ):
+        assert key not in stock
 
 
 def test_probe_hard_guard_abort_records_hard_negative(monkeypatch):
@@ -253,7 +276,15 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
     monkeypatch.setattr(
         receipts,
         "_probe_fill_continuation_callback",
-        lambda stock, code: scheduled.append((stock, code)),
+        lambda stock, code: scheduled.append(
+            (
+                stock,
+                code,
+                stock.get("exit_requested"),
+                stock.get("exit_token"),
+                stock.get("sell_ord_no"),
+            )
+        ),
     )
     monkeypatch.setattr(
         receipts,
@@ -333,12 +364,55 @@ def test_probe_receipt_marks_fill_once_and_schedules_residual(monkeypatch, tmp_p
         probe_fields["decision_authority"]
         == "dynamic_entry_price_resolver_p1_post_probe"
     )
-    assert scheduled == [(stock, "123456")]
+    assert scheduled == [(stock, "123456", False, None, None)]
+    assert "entry_lifecycle_conflict" not in stock
+    assert stock["probe_expand_forbidden"] is False
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
     runtime_state = split_plan._load_json(split_plan.PROBE_RUNTIME_STATE_PATH)
     persisted = runtime_state["bundles"]["123456-probe-test"]
     assert persisted["phase"] == "probe_filled"
     assert persisted["entry_split_probe_scale_in_forbidden"] is True
     assert persisted["probe_expand_forbidden"] is False
+
+
+@pytest.mark.parametrize("status", ["BUY_ORDERED", "SELL_ORDERED"])
+def test_fresh_buy_fill_keeps_active_sell_cycle_conflict_fail_closed(
+    monkeypatch, status
+):
+    events = []
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: events.append((stage, fields)),
+    )
+    stock = {
+        "name": "CONFLICT",
+        "status": status,
+        "exit_requested": True,
+        "exit_token": "active-exit-token",
+        "sell_ord_no": "ACTIVE-SELL",
+    }
+
+    receipts._prepare_new_position_exit_authority(
+        stock,
+        code="123456",
+        target_id=1,
+        order_no="LATE-BUY",
+    )
+
+    assert stock["exit_requested"] is True
+    assert stock["exit_token"] == "active-exit-token"
+    assert stock["sell_ord_no"] == "ACTIVE-SELL"
+    assert stock["entry_lifecycle_conflict"] is True
+    assert stock["probe_expand_forbidden"] is True
+    event = next(
+        fields
+        for stage, fields in events
+        if stage == "entry_position_cycle_exit_authority_conflict"
+    )
+    assert event["previous_status"] == status
+    assert "sell_ord_no" in event["conflict_fields"]
+    assert event["unresolved_exit_authority_field_count"] == 3
 
 
 def test_probe_bundle_completion_rebaselines_peak_before_fast_monitor(monkeypatch):
@@ -1389,6 +1463,13 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
     def _direction_fields(*_args, **_kwargs):
         if direction["state"] == "STRONG":
             direction["recovery_calls"] += 1
+            if wait_probe_single_leg and direction["recovery_calls"] >= 2:
+                return {
+                    "post_probe_direction_state": "NEUTRAL",
+                    "post_probe_continuation_action": "DEFER",
+                    "post_probe_direction_reason": ("post_probe_wait_mixed_or_neutral"),
+                    "post_probe_direction_negative_groups": "-",
+                }
             if second_leg_weak and direction["recovery_calls"] >= 3:
                 return {
                     "post_probe_direction_state": "WEAK",
@@ -1546,6 +1627,100 @@ def test_post_probe_unknown_defers_then_recovery_reprices_each_p1_leg(
             else "post_probe_wait_single_residual_leg_cap"
         )
         assert stock["entry_split_probe_bounded_partial_submission"] is True
+    if wait_probe_single_leg:
+        assert stock["post_probe_confirmation_grant_consumed"] is True
+        assert stock["post_probe_confirmation_grant_active"] is False
+        assert (
+            stock["post_probe_leg_revalidation_outcome"]
+            == "grant_preserved_neutral_defer"
+        )
+
+
+@pytest.mark.parametrize(
+    ("fields", "deadline", "expected"),
+    [
+        (
+            {
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_negative_groups": "-",
+            },
+            10.25,
+            ("ALLOW_RECOVERED_WIDE", "grant_preserved_neutral_defer", ""),
+        ),
+        (
+            {
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_negative_groups": "orderbook",
+            },
+            10.25,
+            (
+                "DEFER",
+                "grant_revoked_negative_group",
+                "residual_leg_negative_reversal",
+            ),
+        ),
+        (
+            {
+                "post_probe_direction_state": "WEAK",
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_negative_groups": "-",
+            },
+            10.25,
+            ("DEFER", "grant_revoked_weak_state", "residual_leg_weak_reversal"),
+        ),
+        (
+            {
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_negative_groups": "-",
+                "post_probe_hard_veto": True,
+            },
+            10.25,
+            ("DEFER", "grant_revoked_fresh_ai_drop", "fresh_ai_drop_veto"),
+        ),
+        (
+            {
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_negative_groups": "-",
+                "post_probe_direction_ai_authority": (
+                    "stale_or_unverified_negative_fail_closed"
+                ),
+            },
+            10.25,
+            (
+                "DEFER",
+                "grant_revoked_ai_authority_fail_closed",
+                "residual_leg_ai_authority_fail_closed",
+            ),
+        ),
+        (
+            {
+                "post_probe_continuation_action": "DEFER",
+                "post_probe_direction_negative_groups": "-",
+            },
+            9.99,
+            (
+                "DEFER",
+                "grant_expired",
+                "residual_leg_confirmation_grant_expired",
+            ),
+        ),
+    ],
+)
+def test_wait_probe_confirmation_grant_only_survives_bounded_neutral_recheck(
+    fields,
+    deadline,
+    expected,
+):
+    assert (
+        state_handlers._revalidate_wait_probe_confirmation_grant(
+            fields,
+            confirmation_ready=True,
+            confirmation_grant_deadline_monotonic=deadline,
+            granted_action="ALLOW_RECOVERED_WIDE",
+            now_monotonic=10.0,
+        )
+        == expected
+    )
 
 
 def test_probe_residual_timeout_keeps_one_share_and_releases_pyramid_recheck(
@@ -1656,8 +1831,7 @@ def test_nxt_fast_tape_timeout_closes_residual_but_releases_scale_in_recheck(
     assert stock["entry_split_probe_scale_in_forbidden"] is False
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
     assert (
-        stock["entry_split_probe_scale_in_recheck_origin"]
-        == "normal_winner_recovery"
+        stock["entry_split_probe_scale_in_recheck_origin"] == "normal_winner_recovery"
     )
     scale_in = state_handlers.can_consider_scale_in(
         stock,

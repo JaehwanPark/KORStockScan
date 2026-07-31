@@ -449,6 +449,50 @@ def test_pyramid_quality_calibration_consumes_post_probe_real_outcomes_source_on
     )
 
 
+def test_runtime_confirmation_quality_dispute_is_observed_but_excluded_from_ev(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", tmp_path / "input")
+    mod.INPUT_REPORT_DIR.mkdir(parents=True)
+    disputed = {
+        **_row(1, "pyramid_correctly_blocked", final_profit_rate=0.38),
+        "post_probe_real_outcome_label": "profitable_zero_fill_no_confirmation",
+        "post_probe_real_outcome_source_quality_valid": True,
+        "post_probe_real_outcome_profit_pct": 0.38,
+        "post_probe_real_confirmation_ready": False,
+        "post_probe_runtime_confirmation_ready": True,
+        "post_probe_confirmation_contract_alignment": (
+            "runtime_confirmed_source_quality_disputed"
+        ),
+        "post_probe_counterfactual_source_quality_valid": True,
+        "post_probe_probe_actual_order_submitted": True,
+        "post_probe_residual_actual_order_submitted": False,
+        "post_probe_counterfactual_first_leg_notional_krw": 146_600,
+        "effective_venue": "KRX",
+        "venue_source_quality_valid": True,
+        "market_session_bucket": "krx_regular",
+        "allowed_runtime_apply": False,
+        "decision_authority": (
+            "source_only_one_share_pyramid_opportunity_backtest_no_runtime_mutation"
+        ),
+    }
+    path = _feedback(
+        mod.INPUT_REPORT_DIR / "scalping_pyramid_intraday_feedback_2026-07-31.json",
+        [],
+        one_share_rows=[disputed],
+        post_probe_real_outcome_contract=True,
+    )
+
+    report = mod.build_report("2026-07-31", input_paths=[path], generated_at="fixed")
+    observation = report["post_probe_real_outcome_observation"]
+
+    assert observation["closed_real_outcome_count"] == 1
+    assert observation["confirmation_ready_count"] == 0
+    assert observation["runtime_confirmation_source_quality_disputed_count"] == 1
+    assert observation["cumulative_judgment_quality"]["learning_sample_count"] == 0
+    assert observation["notional_weighted_ev_pct"] == 0.0
+
+
 def test_pyramid_quality_calibration_profit_grid_sets_one_step_min_profit(
     tmp_path, monkeypatch
 ):

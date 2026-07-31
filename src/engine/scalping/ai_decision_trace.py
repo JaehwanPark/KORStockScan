@@ -1623,6 +1623,17 @@ def record_ai_decision_trace(
                 if "entry_probe_intent_actual_order_submitted" in merged
                 else None
             ),
+            "entry_recent_exit_context_status": _optional(
+                merged, "entry_recent_exit_context_status"
+            ),
+            "entry_recent_exit_probe_blocked": (
+                bool(merged.get("entry_recent_exit_probe_blocked"))
+                if "entry_recent_exit_probe_blocked" in merged
+                else None
+            ),
+            "entry_recent_exit_price_vs_exit_pct": _safe_number(
+                _optional(merged, "entry_recent_exit_price_vs_exit_pct")
+            ),
             "action": _optional(
                 merged, "action_v2", "action", "action_key", "action_label"
             ),
@@ -1728,6 +1739,15 @@ def record_ai_decision_trace(
             ],
             "entry_probe_intent_actual_order_submitted": trace_row[
                 "entry_probe_intent_actual_order_submitted"
+            ],
+            "entry_recent_exit_context_status": trace_row[
+                "entry_recent_exit_context_status"
+            ],
+            "entry_recent_exit_probe_blocked": trace_row[
+                "entry_recent_exit_probe_blocked"
+            ],
+            "entry_recent_exit_price_vs_exit_pct": trace_row[
+                "entry_recent_exit_price_vs_exit_pct"
             ],
             "result_source": trace_row["result_source"],
             "input_preflight_mode": trace_row["input_preflight_mode"],

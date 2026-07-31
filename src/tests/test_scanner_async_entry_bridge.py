@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import replace
@@ -33,6 +34,376 @@ def _generation(venue="KRX"):
         observed_price=1000,
         source_signature="VALUE_TOP",
     )
+
+
+def test_clean_profit_rising_missed_exit_records_short_confirmation_window(
+    monkeypatch,
+):
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_CLEAN_PROFIT_REENTRY_CONFIRM_SEC", "60"
+    )
+    stock = {
+        "name": "SK innovation",
+        "strategy": "SCALPING",
+        "rising_missed_one_share_scout": True,
+        "forced_entry_reason": handlers.RISING_MISSED_FORCED_ENTRY_REASON,
+        "avg_down_count": 0,
+    }
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *_a, **_k: None)
+
+    marked = handlers._record_rising_missed_same_day_reentry_risk(
+        "096770",
+        stock=stock,
+        exit_rule="scalp_trailing_take_profit",
+        profit_rate=0.5,
+        exit_price=109600,
+        now_ts=1000.0,
+        source_stage="sell_order_sent",
+    )
+
+    assert marked["marked"] is True
+    assert marked["reentry_action"] == "confirm"
+    assert marked["reason"] == (
+        "prior_rising_missed_exit_clean_profit_requires_confirmation"
+    )
+    assert marked["exit_price"] == 109600
+    assert marked["expires_at"] == 1060.0
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+
+@pytest.mark.parametrize(
+    ("realized_profit", "expected_action", "expected_reason", "expected_expires_at"),
+    [
+        (
+            -0.10,
+            "block",
+            "prior_rising_missed_exit_non_positive",
+            None,
+        ),
+        (
+            0.42,
+            "confirm",
+            "prior_rising_missed_exit_clean_profit_requires_confirmation",
+            1080.0,
+        ),
+    ],
+)
+def test_sell_receipt_reconciles_submit_time_reentry_context(
+    monkeypatch,
+    realized_profit,
+    expected_action,
+    expected_reason,
+    expected_expires_at,
+):
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK["096770"] = {
+        "code": "096770",
+        "stock_name": "SK innovation",
+        "marked_at": 1000.0,
+        "expires_at": 1060.0,
+        "ttl_sec": 60,
+        "exit_rule": "sell_submit_rule",
+        "profit_rate": 0.30,
+        "exit_price": 109600,
+        "avg_down_count": 0,
+        "reentry_action": "confirm",
+        "reason": "prior_rising_missed_exit_clean_profit_requires_confirmation",
+        "source_stage": "sell_order_sent",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_rising_missed_clean_profit_reentry_confirm_sec",
+        lambda: 60,
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *_a, **_k: None)
+
+    reconciled = handlers.reconcile_rising_missed_reentry_after_sell_completed(
+        "096770",
+        profit_rate=realized_profit,
+        exit_price=109450,
+        exit_rule="broker_fill_rule",
+        completed_at=1020.0,
+    )
+
+    assert reconciled["reconciled"] is True
+    assert reconciled["reentry_action"] == expected_action
+    assert reconciled["reason"] == expected_reason
+    assert reconciled["exit_price"] == 109450
+    assert reconciled["profit_rate"] == realized_profit
+    assert reconciled["source_stage"] == "sell_completed"
+    assert reconciled["exit_receipt_reconciled"] is True
+    if expected_expires_at is None:
+        assert reconciled["expires_at"] > 1020.0
+    else:
+        assert reconciled["expires_at"] == expected_expires_at
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+
+def test_sell_completed_fallback_escalates_negative_receipt_to_day_block(
+    monkeypatch,
+):
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK["096770"] = {
+        "code": "096770",
+        "marked_at": 1000.0,
+        "expires_at": 1060.0,
+        "ttl_sec": 60,
+        "exit_rule": "sell_submit_rule",
+        "profit_rate": 0.30,
+        "exit_price": 109600,
+        "avg_down_count": 0,
+        "reentry_action": "confirm",
+        "reason": "prior_rising_missed_exit_clean_profit_requires_confirmation",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_rising_missed_same_day_reentry_guard_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_reconcile_rising_missed_reentry_risk_with_sell_completed",
+        lambda *_a, **_k: {
+            "action": "block_realized_non_positive",
+            "realized_profit_rate": -0.10,
+            "realized_exit_rule": "broker_fill_rule",
+            "realized_exit_price": 109450,
+            "sell_completed_at": 1020.0,
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_rising_missed_same_day_reentry_expires_at",
+        lambda marked_at: (2000.0, int(2000.0 - marked_at)),
+    )
+
+    decision = handlers.evaluate_rising_missed_same_day_reentry_guard(
+        "096770",
+        now_ts=1030.0,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["reentry_action"] == "block"
+    assert decision["reason"] == "prior_rising_missed_exit_non_positive"
+    assert decision["last_exit_profit_rate"] == -0.10
+    assert decision["last_exit_price"] == 109450
+    assert decision["risk_expires_at"] == 2000.0
+    handlers._RISING_MISSED_SAME_DAY_REENTRY_RISK.clear()
+
+
+def test_clean_profit_reentry_confirmation_blocks_wait_above_exit():
+    guard = {
+        "allowed": False,
+        "reentry_action": "confirm",
+        "last_exit_at": 1000.0,
+        "last_exit_price": 109600,
+        "last_exit_profit_rate": 0.5,
+        "last_exit_rule": "scalp_trailing_take_profit",
+        "risk_remaining_sec": 50,
+    }
+    stock = {
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": 1010.0,
+        "last_watching_ai_snapshot_id": "aims-new",
+        "last_watching_ai_decision_trace_id": "analyze-target-new",
+        "last_watching_ai_decision_price": 109900,
+        "last_watching_ai_probe_intent": True,
+    }
+
+    decision = handlers._evaluate_rising_missed_clean_profit_reentry_confirmation(
+        guard,
+        stock,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "recent_clean_profit_wait_probe_above_exit"
+    assert decision["reentry_confirmation_status"] == "deferred_no_new_entry_edge"
+    assert decision["reentry_confirmation_price_vs_exit_pct"] == pytest.approx(0.273723)
+
+
+def test_recent_exit_ai_context_declares_executable_price_provenance():
+    context = handlers._rising_missed_recent_exit_ai_context(
+        {"code": "096770"},
+        {
+            "reentry_action": "confirm",
+            "last_exit_at": 1000.0,
+            "last_exit_price": 109600,
+            "last_exit_profit_rate": 0.5,
+            "last_exit_rule": "scalp_trailing_take_profit",
+            "risk_remaining_sec": 50,
+        },
+        now_ts=1010.0,
+    )
+
+    assert context["exit_price"] == 109600
+    assert (
+        context["exit_price_source"]
+        == "sell_submit_executable_price_or_revalidated_mark"
+    )
+    assert "executable_price_or_revalidated_mark" in context["source_quality_gate"]
+
+
+def test_recent_exit_ai_context_prefers_reconciled_broker_receipt_provenance():
+    context = handlers._rising_missed_recent_exit_ai_context(
+        {"code": "096770"},
+        {
+            "reentry_action": "confirm",
+            "last_exit_at": 1000.0,
+            "last_exit_price": 109450,
+            "last_exit_profit_rate": 0.42,
+            "last_exit_rule": "scalp_trailing_take_profit",
+            "last_exit_source_stage": "sell_completed",
+            "last_exit_receipt_reconciled": True,
+            "risk_remaining_sec": 50,
+        },
+        now_ts=1010.0,
+    )
+
+    assert context["exit_price_source"] == "broker_sell_completed_receipt"
+    assert context["source_quality_gate"] == "broker_sell_completed_receipt"
+    assert context["exit_source_stage"] == "sell_completed"
+    assert context["exit_receipt_reconciled"] is True
+
+
+def test_recent_exit_ai_context_does_not_treat_false_string_as_receipt():
+    context = handlers._rising_missed_recent_exit_ai_context(
+        {"code": "096770"},
+        {
+            "reentry_action": "confirm",
+            "last_exit_at": 1000.0,
+            "last_exit_price": 109600,
+            "last_exit_profit_rate": 0.30,
+            "last_exit_rule": "sell_submit_rule",
+            "last_exit_source_stage": "sell_order_sent",
+            "last_exit_receipt_reconciled": "false",
+            "risk_remaining_sec": 50,
+        },
+        now_ts=1010.0,
+    )
+
+    assert context["exit_receipt_reconciled"] is False
+    assert (
+        context["exit_price_source"]
+        == "sell_submit_executable_price_or_revalidated_mark"
+    )
+
+
+def test_reentry_context_restart_hydration_prefers_latest_sell_receipt(
+    monkeypatch,
+    tmp_path,
+):
+    data_dir = tmp_path / "data"
+    event_dir = data_dir / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    target_date = "2026-07-31"
+    rows = [
+        {
+            "pipeline": "ENTRY_PIPELINE",
+            "stage": "rising_missed_same_day_reentry_risk_marked",
+            "stock_code": "096770",
+            "stock_name": "SK innovation",
+            "emitted_at": "2026-07-31T10:24:30+09:00",
+            "fields": {
+                "risk_expires_at": 1785461130.0,
+                "ttl_sec": 60,
+                "exit_rule": "sell_submit_rule",
+                "profit_rate": "+0.30",
+                "exit_price": 109600,
+                "avg_down_count": 0,
+                "reentry_action": "confirm",
+                "risk_reason": (
+                    "prior_rising_missed_exit_clean_profit_requires_confirmation"
+                ),
+                "source_stage": "sell_order_sent",
+            },
+        },
+        {
+            "pipeline": "ENTRY_PIPELINE",
+            "stage": "rising_missed_reentry_exit_receipt_reconciled",
+            "stock_code": "096770",
+            "stock_name": "SK innovation",
+            "emitted_at": "2026-07-31T10:24:32+09:00",
+            "fields": {
+                "risk_expires_at": 1785461132.0,
+                "ttl_sec": 60,
+                "exit_rule": "broker_fill_rule",
+                "profit_rate": "+0.42",
+                "exit_price": 109450,
+                "avg_down_count": 0,
+                "reentry_action": "confirm",
+                "risk_reason": (
+                    "prior_rising_missed_exit_clean_profit_requires_confirmation"
+                ),
+                "source_stage": "sell_completed",
+                "exit_receipt_reconciled": True,
+            },
+        },
+    ]
+    path = event_dir / f"pipeline_events_{target_date}.jsonl"
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(handlers, "DATA_DIR", data_dir)
+    handlers._RISING_MISSED_REENTRY_RISK_EVENT_CACHE.update(
+        {
+            "date": "",
+            "path": "",
+            "device": 0,
+            "inode": 0,
+            "mtime_ns": 0,
+            "size": 0,
+            "offset": 0,
+            "rows_by_code": {},
+        }
+    )
+
+    loaded = handlers._load_rising_missed_reentry_risk_events(target_date)
+
+    latest = loaded["096770"][-1]
+    assert latest["exit_price"] == 109450
+    assert latest["profit_rate"] == 0.42
+    assert latest["source_stage"] == "sell_completed"
+    assert latest["exit_receipt_reconciled"] is True
+
+
+@pytest.mark.parametrize(
+    ("action", "decision_price", "probe_intent", "expected_reason"),
+    [
+        ("BUY", 110000, False, "recent_clean_profit_fresh_buy_confirmed"),
+        ("WAIT", 109500, True, "recent_clean_profit_wait_probe_below_exit"),
+    ],
+)
+def test_clean_profit_reentry_confirmation_allows_new_edge_or_better_price_probe(
+    action,
+    decision_price,
+    probe_intent,
+    expected_reason,
+):
+    decision = handlers._evaluate_rising_missed_clean_profit_reentry_confirmation(
+        {
+            "allowed": False,
+            "reentry_action": "confirm",
+            "last_exit_at": 1000.0,
+            "last_exit_price": 109600,
+            "last_exit_profit_rate": 0.5,
+            "risk_remaining_sec": 50,
+        },
+        {
+            "last_watching_ai_action": action,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": 1010.0,
+            "last_watching_ai_snapshot_id": "aims-new",
+            "last_watching_ai_decision_trace_id": "analyze-target-new",
+            "last_watching_ai_decision_price": decision_price,
+            "last_watching_ai_probe_intent": probe_intent,
+        },
+    )
+
+    assert decision["allowed"] is True
+    assert decision["reason"] == expected_reason
 
 
 def test_scanner_entry_ai_attempt_preserves_latest_trusted_decision_on_preflight_block():

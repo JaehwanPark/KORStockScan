@@ -811,6 +811,9 @@ bind_execution_dependencies(
     probe_fill_continuation_callback=(
         sniper_state_handlers.submit_entry_split_probe_residual_after_fill
     ),
+    scalp_exit_completed_callback=(
+        sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
+    ),
 )
 
 _STATE_HANDLER_DEPS = {}
@@ -932,6 +935,9 @@ def _ensure_execution_deps():
         "now_ts": _now_ts,
         "probe_fill_continuation_callback": (
             sniper_state_handlers.submit_entry_split_probe_residual_after_fill
+        ),
+        "scalp_exit_completed_callback": (
+            sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
         ),
     }
     if any(_EXECUTION_DEPS.get(k) is not v for k, v in snapshot.items()):
