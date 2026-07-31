@@ -2940,8 +2940,19 @@ def test_hot_entry_payload_preserves_recent_exit_context():
         [],
         feature_packet={},
     )
+    entry_price_payload = json.loads(
+        engine._build_scalping_entry_price_user_input(
+            stock_name="SK innovation",
+            stock_code="096770",
+            ws_data={"curr": 109900, "recent_exit_context": recent_exit},
+            recent_ticks=[],
+            recent_candles=[],
+            price_ctx={"resolved_order_price": 109600},
+        )
+    )
 
     assert payload["recent_exit_context"] == recent_exit
+    assert entry_price_payload["recent_exit_context"] == recent_exit
 
 
 def test_analyze_target_probe_prompt_keeps_exact_schema_and_version(monkeypatch):

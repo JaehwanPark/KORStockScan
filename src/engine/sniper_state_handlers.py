@@ -20208,18 +20208,14 @@ def _rising_missed_same_day_reentry_log_fields(decision: dict | None) -> dict:
         "last_exit_price": decision.get("last_exit_price", "-"),
         "last_exit_at": decision.get("last_exit_at", "-"),
         "last_exit_avg_down_count": decision.get("last_exit_avg_down_count", 0),
-        "reentry_confirmation_status": decision.get(
-            "reentry_confirmation_status", "-"
-        ),
+        "reentry_confirmation_status": decision.get("reentry_confirmation_status", "-"),
         "reentry_confirmation_ai_action": decision.get(
             "reentry_confirmation_ai_action", "-"
         ),
         "reentry_confirmation_ai_snapshot_id": decision.get(
             "reentry_confirmation_ai_snapshot_id", "-"
         ),
-        "reentry_confirmation_price": decision.get(
-            "reentry_confirmation_price", "-"
-        ),
+        "reentry_confirmation_price": decision.get("reentry_confirmation_price", "-"),
         "reentry_confirmation_price_vs_exit_pct": decision.get(
             "reentry_confirmation_price_vs_exit_pct", "-"
         ),
@@ -20284,9 +20280,7 @@ def _record_rising_missed_same_day_reentry_risk(
         source_stage=source_stage,
         guard_family="rising_missed_same_day_reentry_guard",
         reentry_action=reentry_action,
-        watching_budget_priority=(
-            "blocked" if reentry_action == "block" else "low"
-        ),
+        watching_budget_priority=("blocked" if reentry_action == "block" else "low"),
         risk_reason=reason,
         exit_rule=exit_rule or "-",
         profit_rate=f"{_safe_float(profit_rate, 0.0):+.2f}",
@@ -20712,9 +20706,7 @@ def evaluate_rising_missed_same_day_reentry_guard(
             "profit_rate": reconciliation.get(
                 "realized_profit_rate", row.get("profit_rate")
             ),
-            "exit_rule": reconciliation.get(
-                "realized_exit_rule", row.get("exit_rule")
-            ),
+            "exit_rule": reconciliation.get("realized_exit_rule", row.get("exit_rule")),
             "exit_price": _safe_int(
                 reconciliation.get("realized_exit_price"),
                 _safe_int(row.get("exit_price"), 0),
@@ -20816,15 +20808,9 @@ def _evaluate_rising_missed_clean_profit_reentry_confirmation(
     exit_price = _safe_int(guard.get("last_exit_price"), 0)
     ai_confirmed_at = _safe_float(stock.get("last_watching_ai_confirmed_at"), 0.0)
     ai_action = str(stock.get("last_watching_ai_action") or "").strip().upper()
-    ai_source = str(
-        stock.get("last_watching_ai_result_source") or ""
-    ).strip().lower()
-    ai_snapshot_id = str(
-        stock.get("last_watching_ai_snapshot_id") or ""
-    ).strip()
-    ai_trace_id = str(
-        stock.get("last_watching_ai_decision_trace_id") or ""
-    ).strip()
+    ai_source = str(stock.get("last_watching_ai_result_source") or "").strip().lower()
+    ai_snapshot_id = str(stock.get("last_watching_ai_snapshot_id") or "").strip()
+    ai_trace_id = str(stock.get("last_watching_ai_decision_trace_id") or "").strip()
     decision_price = _safe_int(stock.get("last_watching_ai_decision_price"), 0)
     probe_intent = bool(stock.get("last_watching_ai_probe_intent"))
     fresh_ai = bool(

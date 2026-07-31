@@ -6024,6 +6024,11 @@ class GPTSniperEngine:
                 recent_candles,
                 price_ctx=price_ctx,
             ),
+            "recent_exit_context": (
+                dict((ws_data or {}).get("recent_exit_context") or {})
+                if isinstance((ws_data or {}).get("recent_exit_context"), dict)
+                else {}
+            ),
         }
         if self._attach_entry_candle_inputs(payload, candle_context):
             payload.pop("recent_candles", None)
