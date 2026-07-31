@@ -13,7 +13,10 @@ from pathlib import Path
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error, log_info
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
-from src.engine.pipeline_event_summary import ProducerSummaryCompactor
+from src.engine.pipeline_event_summary import (
+    HIGH_VOLUME_OBSERVATION_STAGES,
+    ProducerSummaryCompactor,
+)
 
 _WRITE_LOCK = threading.RLock()
 _PRODUCER_COMPACTOR: ProducerSummaryCompactor | None = None
@@ -46,14 +49,7 @@ _SUBMIT_STAGE_COMPACT_STREAMS = frozenset(
         "swing_sim_order_bundle_assumed_filled",
     }
 )
-_TEXT_COMPACT_STAGES = _SUBMIT_STAGE_COMPACT_STREAMS | frozenset(
-    {
-        # Complete structured fields remain in the event. Repeating these large
-        # scanner maps in text_payload adds no decision evidence.
-        "scalping_scanner_runtime_target_attach",
-        "scalping_scanner_watching_runtime_skip",
-    }
-)
+_TEXT_COMPACT_STAGES = _SUBMIT_STAGE_COMPACT_STREAMS | HIGH_VOLUME_OBSERVATION_STAGES
 _COMPACT_FIELD_PRIORITY = (
     "threshold_family",
     "actual_order_submitted",
@@ -345,7 +341,16 @@ def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, st
             selected[key] = fields[key]
         if len(selected) >= 18:
             break
-    return selected or fields
+    if not selected:
+        return fields
+    omitted_field_count = max(0, len(fields) - len(selected))
+    if omitted_field_count <= 0:
+        return fields
+    selected = dict(selected)
+    selected["text_field_projection"] = "diagnostic_compact_v1"
+    selected["full_field_count"] = str(len(fields))
+    selected["omitted_field_count"] = str(omitted_field_count)
+    return selected
 
 
 def _append_jsonl(path: Path, line: str) -> None:

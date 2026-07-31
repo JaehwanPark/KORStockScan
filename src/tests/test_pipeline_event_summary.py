@@ -1,6 +1,11 @@
 import json
 
-from src.engine.pipeline_event_summary import update_and_load_pipeline_event_summaries
+import pytest
+
+from src.engine.pipeline_event_summary import (
+    PRODUCER_SUMMARY_STAGES,
+    update_and_load_pipeline_event_summaries,
+)
 
 
 def _event(
@@ -136,3 +141,64 @@ def test_pipeline_event_summary_records_samples_and_actual_order_authority(tmp_p
     assert row["second_counts"]["2026-05-06T10:00:07"] == 1
     assert row["decision_authority"] == "diagnostic_aggregation"
     assert row["runtime_effect"] is False
+
+
+def test_pipeline_event_summary_profile_isolates_producer_parity_artifacts(tmp_path):
+    target_date = "2026-05-06"
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir()
+    raw_path = raw_dir / f"pipeline_events_{target_date}.jsonl"
+    raw_path.write_text(
+        json.dumps(
+            _event(
+                target_date,
+                "10:00:01",
+                "scalping_scanner_fast_precheck",
+                record_id=1,
+                fields={
+                    "fast_precheck_result": "defer",
+                    "fast_precheck_reason": "waiting_heavy_eval",
+                },
+            ),
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary_dir = tmp_path / "pipeline_event_summaries"
+
+    default_rows, default_meta = update_and_load_pipeline_event_summaries(
+        raw_path=raw_path,
+        summary_dir=summary_dir,
+        target_date=target_date,
+        reason_labeler=_labeler,
+    )
+    producer_rows, producer_meta = update_and_load_pipeline_event_summaries(
+        raw_path=raw_path,
+        summary_dir=summary_dir,
+        target_date=target_date,
+        reason_labeler=_labeler,
+        summary_stages=PRODUCER_SUMMARY_STAGES,
+        summary_profile="producer_parity",
+    )
+
+    assert default_rows == []
+    assert len(producer_rows) == 1
+    assert default_meta["summary_profile"] == "default"
+    assert producer_meta["summary_profile"] == "producer_parity"
+    assert default_meta["summary_path"] != producer_meta["summary_path"]
+    assert default_meta["manifest_path"] != producer_meta["manifest_path"]
+
+
+def test_pipeline_event_summary_rejects_unknown_profile(tmp_path):
+    raw_path = tmp_path / "pipeline_events_2026-05-06.jsonl"
+    raw_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsupported pipeline event summary profile"):
+        update_and_load_pipeline_event_summaries(
+            raw_path=raw_path,
+            summary_dir=tmp_path / "pipeline_event_summaries",
+            target_date="2026-05-06",
+            reason_labeler=_labeler,
+            summary_profile="../escape",
+        )

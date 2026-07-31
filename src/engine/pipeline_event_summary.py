@@ -18,6 +18,69 @@ IgnorePredicate = Callable[[dict[str, Any]], bool]
 
 SUMMARY_SCHEMA_VERSION = 2
 PRODUCER_SUMMARY_SCHEMA_VERSION = 1
+HIGH_VOLUME_OBSERVATION_STAGES = frozenset(
+    {
+        "rising_missed_nxt_post_block_price_sample",
+        "rising_missed_tp1_candidate_blocked",
+        "rising_missed_tp1_candidate_deferred",
+        "rising_missed_tp1_counterfactual_submit_safety",
+        "rising_missed_watch_not_rising_skipped",
+        "scalping_scanner_fast_precheck",
+        "scalping_scanner_heavy_eval_lag",
+        "scalping_scanner_promotion_latency_trace",
+        "scalping_scanner_runtime_queue_lag",
+        "scalping_scanner_runtime_target_attach",
+        "scalping_scanner_watching_runtime_skip",
+    }
+)
+HIGH_VOLUME_SUMMARY_FIELD_PRIORITY = (
+    "metric_role",
+    "decision_authority",
+    "window_policy",
+    "sample_floor",
+    "primary_decision_metric",
+    "source_quality_gate",
+    "source_quality_route",
+    "runtime_effect",
+    "allowed_runtime_apply",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+    "reason",
+    "block_reason",
+    "decision",
+    "action",
+    "strategy",
+    "market",
+    "market_type",
+    "effective_venue",
+    "venue_resolution",
+    "source_signature",
+    "runtime_record_id",
+    "scanner_promotion_id",
+    "scanner_promotion_reason",
+    "scanner_promotion_emitted_epoch",
+    "fast_precheck_result",
+    "fast_precheck_reason",
+    "fast_precheck_lag_sec",
+    "skip_reason",
+    "trace_phase",
+    "queue_rank",
+    "scanner_queue_rank",
+    "queue_lag_sec",
+    "heavy_queue_wait_sec",
+    "promotion_to_trace_sec",
+    "promotion_to_last_0b_sec",
+    "last_0b_to_trace_sec",
+    "rising_missed_tp1_evaluation_id",
+    "rising_missed_nxt_post_block_price_observation_state",
+    "rising_missed_nxt_post_block_price_source",
+    "rising_missed_nxt_post_block_price_source_reason",
+    "rising_missed_nxt_post_block_fresh_sample",
+    "rising_missed_nxt_post_block_elapsed_sec",
+    "rising_missed_nxt_post_block_sample_attempt_count",
+    "current_price",
+    "ws_curr",
+)
 SUMMARY_STAGES = frozenset(
     {
         "strength_momentum_observed",
@@ -27,6 +90,7 @@ SUMMARY_STAGES = frozenset(
         "blocked_swing_gap",
     }
 )
+PRODUCER_SUMMARY_STAGES = SUMMARY_STAGES | HIGH_VOLUME_OBSERVATION_STAGES
 
 NUMERIC_FIELD_LIMIT = 64
 SAMPLE_HASH_LIMIT = 2
@@ -121,10 +185,16 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def _summary_paths(summary_dir: Path, target_date: str) -> tuple[Path, Path]:
+def _summary_paths(
+    summary_dir: Path, target_date: str, *, profile: str = "default"
+) -> tuple[Path, Path]:
+    safe_profile = _safe_str(profile) or "default"
+    if safe_profile not in {"default", "producer_parity"}:
+        raise ValueError(f"unsupported pipeline event summary profile: {safe_profile}")
+    suffix = "" if safe_profile == "default" else f"_{safe_profile}"
     return (
-        summary_dir / f"pipeline_event_summary_{target_date}.jsonl",
-        summary_dir / f"pipeline_event_summary_manifest_{target_date}.json",
+        summary_dir / f"pipeline_event_summary{suffix}_{target_date}.jsonl",
+        summary_dir / f"pipeline_event_summary{suffix}_manifest_{target_date}.json",
     )
 
 
@@ -215,6 +285,21 @@ def _actual_order_text(payload: dict[str, Any], fields: dict[str, str]) -> str:
         if name in payload:
             return _boolish_text(payload.get(name))
     return "unknown"
+
+
+def _project_summary_fields(stage: str, fields: dict[str, str]) -> dict[str, str]:
+    if stage not in HIGH_VOLUME_OBSERVATION_STAGES:
+        return fields
+    projected = {
+        key: fields[key] for key in HIGH_VOLUME_SUMMARY_FIELD_PRIORITY if key in fields
+    }
+    omitted_field_count = max(0, len(fields) - len(projected))
+    if omitted_field_count <= 0:
+        return fields
+    projected["summary_field_projection"] = "high_volume_diagnostic_v1"
+    projected["full_field_count"] = str(len(fields))
+    projected["omitted_field_count"] = str(omitted_field_count)
+    return projected
 
 
 def _boolish_text(value: Any) -> str:
@@ -504,28 +589,32 @@ def _summary_event_from_payload(
     ignore_payload: IgnorePredicate | None,
     line_start: int,
     line_end: int,
+    summary_stages: frozenset[str] = SUMMARY_STAGES,
 ) -> SummaryEvent | None:
     if ignore_payload is not None and ignore_payload(payload):
         return None
     if _safe_str(payload.get("event_type")) != "pipeline_event":
         return None
     stage = _safe_str(payload.get("stage"))
-    if stage not in SUMMARY_STAGES:
+    if stage not in summary_stages:
         return None
     emitted_at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
     if emitted_at is None:
         return None
     raw_fields = payload.get("fields") or {}
-    fields = (
+    full_fields = (
         {str(k): _safe_str(v) for k, v in raw_fields.items()}
         if isinstance(raw_fields, dict)
         else {}
     )
     record_id = payload.get("record_id")
     if record_id in (None, "", 0):
-        record_id = fields.get("id") or ""
-    strategy = _first_field(fields, KEY_FIELD_CANDIDATES["strategy"])
-    market = _first_field(fields, KEY_FIELD_CANDIDATES["market"])
+        record_id = full_fields.get("id") or ""
+    strategy = _first_field(full_fields, KEY_FIELD_CANDIDATES["strategy"])
+    market = _first_field(full_fields, KEY_FIELD_CANDIDATES["market"])
+    reason_label = reason_labeler(stage, full_fields)
+    actual_order_submitted = _actual_order_text(payload, full_fields)
+    fields = _project_summary_fields(stage, full_fields)
     return SummaryEvent(
         emitted_at=emitted_at,
         pipeline=_safe_str(payload.get("pipeline")),
@@ -534,10 +623,10 @@ def _summary_event_from_payload(
         stock_code=_safe_str(payload.get("stock_code"))[:6],
         record_id=_safe_str(record_id),
         fields=fields,
-        reason_label=reason_labeler(stage, fields),
+        reason_label=reason_label,
         strategy=strategy,
         market=market,
-        actual_order_submitted=_actual_order_text(payload, fields),
+        actual_order_submitted=actual_order_submitted,
         raw_offset_start=line_start,
         raw_offset_end=line_end,
     )
@@ -550,6 +639,7 @@ def summary_event_from_payload(
     ignore_payload: IgnorePredicate | None = None,
     line_start: int = 0,
     line_end: int = 0,
+    summary_stages: frozenset[str] = SUMMARY_STAGES,
 ) -> SummaryEvent | None:
     return _summary_event_from_payload(
         payload,
@@ -557,6 +647,7 @@ def summary_event_from_payload(
         ignore_payload=ignore_payload,
         line_start=line_start,
         line_end=line_end,
+        summary_stages=summary_stages,
     )
 
 
@@ -657,6 +748,8 @@ def update_and_load_pipeline_event_summaries(
     reason_labeler: ReasonLabeler,
     ignore_payload: IgnorePredicate | None = None,
     include_samples: bool = True,
+    summary_stages: frozenset[str] = SUMMARY_STAGES,
+    summary_profile: str = "default",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     raw_path = existing_or_gzip_path(raw_path)
     if not raw_path.exists():
@@ -668,7 +761,9 @@ def update_and_load_pipeline_event_summaries(
         }
 
     summary_dir.mkdir(parents=True, exist_ok=True)
-    summary_path, manifest_path = _summary_paths(summary_dir, target_date)
+    summary_path, manifest_path = _summary_paths(
+        summary_dir, target_date, profile=summary_profile
+    )
     stat = raw_path.stat()
     is_gzip_raw = raw_path.suffix == ".gz"
     raw_inode = getattr(stat, "st_ino", None)
@@ -679,6 +774,7 @@ def update_and_load_pipeline_event_summaries(
         int(manifest.get("schema_version") or 0) != SUMMARY_SCHEMA_VERSION
         or str(manifest.get("raw_path") or "") != str(raw_path)
         or int(manifest.get("raw_inode") or -1) != int(raw_inode or -1)
+        or set(manifest.get("summary_stages") or ()) != set(summary_stages)
         or raw_offset > raw_size
         or not summary_path.exists()
     )
@@ -719,6 +815,7 @@ def update_and_load_pipeline_event_summaries(
                     ignore_payload=ignore_payload,
                     line_start=line_start,
                     line_end=line_end,
+                    summary_stages=summary_stages,
                 )
                 if event is not None:
                     key = _aggregate_key(event)
@@ -751,6 +848,8 @@ def update_and_load_pipeline_event_summaries(
         "raw_offset": last_good_offset,
         "raw_size": final_raw_size,
         "summary_path": str(summary_path),
+        "manifest_path": str(manifest_path),
+        "summary_profile": _safe_str(summary_profile) or "default",
         "summary_row_count": len(rows),
         "appended_raw_lines": appended_raw_lines,
         "appended_source_events": appended_source_events,
@@ -759,7 +858,7 @@ def update_and_load_pipeline_event_summaries(
         "rebuilt": stale_summary,
         "complete_through_raw_offset": last_good_offset,
         "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "summary_stages": sorted(SUMMARY_STAGES),
+        "summary_stages": sorted(summary_stages),
         "metric_role": "ops_volume_diagnostic",
         "decision_authority": "diagnostic_aggregation",
         "runtime_effect": False,
@@ -809,7 +908,7 @@ class ProducerSummaryCompactor:
         lossless = payload_has_lossless_authority(
             payload, threshold_family=threshold_family
         )
-        if stage not in SUMMARY_STAGES:
+        if stage not in PRODUCER_SUMMARY_STAGES:
             return {
                 "mode": self.mode,
                 "summary_recorded": False,
@@ -823,6 +922,7 @@ class ProducerSummaryCompactor:
             reason_labeler=self.reason_labeler,
             line_start=self._sequence,
             line_end=self._sequence,
+            summary_stages=PRODUCER_SUMMARY_STAGES,
         )
         if event is None:
             return {
@@ -898,7 +998,7 @@ class ProducerSummaryCompactor:
             "last_flush_events": flushed_events,
             "mode": self.mode,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "summary_stages": sorted(SUMMARY_STAGES),
+            "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),
             "sample_per_bucket": self.sample_per_bucket,
             "suppressed_count": int(existing.get("suppressed_count") or 0)
             + self._suppressed_count,

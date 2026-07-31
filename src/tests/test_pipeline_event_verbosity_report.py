@@ -123,6 +123,17 @@ def test_pipeline_event_verbosity_report_parity_pass(monkeypatch, tmp_path):
             record_id=2,
             fields={"reason": "near_day_high"},
         ),
+        _event(
+            "2026-05-06",
+            "10:00:02",
+            "scalping_scanner_fast_precheck",
+            record_id=3,
+            fields={
+                "fast_precheck_result": "defer",
+                "fast_precheck_reason": "waiting_heavy_eval",
+                "source_quality_gate": "pass",
+            },
+        ),
     ]
     _write_raw(tmp_path, "2026-05-06", rows)
     _write_producer_summary(tmp_path, "2026-05-06", rows)
@@ -134,6 +145,10 @@ def test_pipeline_event_verbosity_report_parity_pass(monkeypatch, tmp_path):
     assert report["parity"]["stage_diff"] == {}
     assert report["parity"]["blocker_diff"] == {}
     assert report["producer_summary"]["manifest_mode"] == "shadow"
+    assert (
+        report["producer_summary"]["stage_counts"]["scalping_scanner_fast_precheck"]
+        == 1
+    )
 
 
 def test_pipeline_event_verbosity_report_parity_pass_with_gzip_sources(

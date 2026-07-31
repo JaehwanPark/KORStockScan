@@ -10,7 +10,7 @@ from typing import Any
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.engine.pipeline_event_summary import (
-    SUMMARY_STAGES,
+    PRODUCER_SUMMARY_STAGES,
     default_reason_label,
     load_summary_rows,
     producer_summary_paths,
@@ -87,7 +87,7 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
                 latest_emitted_at, _safe_str(payload.get("emitted_at"))
             )
             stage = _safe_str(payload.get("stage"))
-            if stage not in SUMMARY_STAGES:
+            if stage not in PRODUCER_SUMMARY_STAGES:
                 continue
             line_bytes = len(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
@@ -129,7 +129,7 @@ def _summary_counts(
     total = 0
     for row in rows:
         stage = _safe_str(row.get("stage"))
-        if stage not in SUMMARY_STAGES:
+        if stage not in PRODUCER_SUMMARY_STAGES:
             continue
         count = int(row.get("event_count") or 0)
         if count <= 0:
@@ -182,6 +182,8 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         target_date=target_date,
         reason_labeler=default_reason_label,
         include_samples=False,
+        summary_stages=PRODUCER_SUMMARY_STAGES,
+        summary_profile="producer_parity",
     )
     producer_path, producer_manifest_path = producer_summary_paths(
         _summary_dir(), target_date
@@ -261,9 +263,7 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         },
         "raw_derived_summary": {
             "path": raw_summary_meta.get("summary_path"),
-            "manifest": str(
-                _summary_dir() / f"pipeline_event_summary_manifest_{target_date}.json"
-            ),
+            "manifest": raw_summary_meta.get("manifest_path"),
             "status": raw_summary_meta.get("status"),
             "row_count": raw_summary_meta.get("summary_row_count"),
             "event_count": raw_total,

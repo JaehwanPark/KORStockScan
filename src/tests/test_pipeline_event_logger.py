@@ -147,13 +147,27 @@ def test_scanner_high_volume_text_payload_is_compact_but_fields_are_lossless(
         "ENTRY_PIPELINE",
         "테스트종목",
         "123456",
-        "scalping_scanner_watching_runtime_skip",
+        "scalping_scanner_fast_precheck",
         fields=fields,
     )
 
     assert payload["fields"] == fields
     assert "reason=same_state" in payload["text_payload"]
     assert "diagnostic_29=value_29" not in payload["text_payload"]
+    assert "text_field_projection=diagnostic_compact_v1" in payload["text_payload"]
+    assert "full_field_count=32" in payload["text_payload"]
+    assert "omitted_field_count=30" in payload["text_payload"]
+
+    out_path = (
+        tmp_path
+        / "pipeline_events"
+        / f"pipeline_events_{payload['emitted_date']}.jsonl"
+    )
+    raw_row = json.loads(out_path.read_text(encoding="utf-8").strip())
+    assert raw_row["fields"] == fields
+    assert len(raw_row["text_payload"]) < len(
+        " ".join(f"{key}={value}" for key, value in fields.items())
+    )
 
 
 def test_emit_pipeline_event_allowlist_keeps_operational_text_info(
@@ -379,6 +393,91 @@ def test_emit_pipeline_event_shadow_compaction_keeps_raw_and_writes_producer_sum
     assert manifest["sample_per_bucket"] == 6
 
 
+def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "60")
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
+    fields = {
+        "fast_precheck_result": "defer",
+        "fast_precheck_reason": "waiting_heavy_eval",
+        "source_quality_gate": "pass",
+        "actual_order_submitted": "False",
+        **{f"redundant_context_{index}": str(index) for index in range(30)},
+    }
+    first = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "테스트종목",
+        "123456",
+        "scalping_scanner_fast_precheck",
+        record_id=77,
+        fields=fields,
+    )
+    logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "테스트종목",
+        "123456",
+        "scalping_scanner_fast_precheck",
+        record_id=77,
+        fields=fields,
+    )
+    logger_mod.flush_pipeline_event_producer_summary(first["emitted_date"])
+
+    raw_path = (
+        tmp_path / "pipeline_events" / f"pipeline_events_{first['emitted_date']}.jsonl"
+    )
+    raw_rows = [
+        json.loads(line)
+        for line in raw_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(raw_rows) == 2
+    assert all(row["fields"] == fields for row in raw_rows)
+
+    summary_path = (
+        tmp_path
+        / "pipeline_event_summaries"
+        / f"pipeline_event_producer_summary_{first['emitted_date']}.jsonl"
+    )
+    summary_rows = [
+        json.loads(line)
+        for line in summary_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(summary_rows) == 1
+    assert summary_rows[0]["stage"] == "scalping_scanner_fast_precheck"
+    assert summary_rows[0]["event_count"] == 2
+    assert (
+        summary_rows[0]["sample_events"][0]["fields"]["summary_field_projection"]
+        == "high_volume_diagnostic_v1"
+    )
+    assert "fast_precheck_result" in summary_rows[0]["field_presence_counts"]
+    assert "source_quality_gate" in summary_rows[0]["field_presence_counts"]
+
+    manifest_path = (
+        tmp_path
+        / "pipeline_event_summaries"
+        / f"pipeline_event_producer_summary_manifest_{first['emitted_date']}.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["mode"] == "shadow"
+    assert manifest["raw_suppression_enabled"] is False
+    assert manifest["suppressed_count"] == 0
+    assert manifest["lossless_preserved_count"] == 2
+
+
 def test_emit_pipeline_event_default_compaction_is_shadow_report_only(
     monkeypatch, tmp_path
 ):
@@ -499,6 +598,60 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["raw_suppression_enabled"] is True
     assert manifest["suppressed_count"] == 1
+    assert manifest["lossless_preserved_count"] == 1
+
+
+def test_suppress_mode_preserves_high_volume_source_quality_observation(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "suppress")
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "0")
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "테스트종목",
+        "123456",
+        "rising_missed_nxt_post_block_price_sample",
+        fields={
+            "source_quality_gate": "pass",
+            "actual_order_submitted": "False",
+            "broker_order_forbidden": "True",
+        },
+    )
+    logger_mod.flush_pipeline_event_producer_summary(payload["emitted_date"])
+
+    raw_path = (
+        tmp_path
+        / "pipeline_events"
+        / f"pipeline_events_{payload['emitted_date']}.jsonl"
+    )
+    raw_rows = [
+        json.loads(line)
+        for line in raw_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(raw_rows) == 1
+    assert raw_rows[0]["fields"]["source_quality_gate"] == "pass"
+
+    manifest_path = (
+        tmp_path
+        / "pipeline_event_summaries"
+        / f"pipeline_event_producer_summary_manifest_{payload['emitted_date']}.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["raw_suppression_enabled"] is True
+    assert manifest["suppressed_count"] == 0
     assert manifest["lossless_preserved_count"] == 1
 
 
