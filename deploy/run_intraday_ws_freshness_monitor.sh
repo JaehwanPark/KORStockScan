@@ -12,13 +12,17 @@ fi
 
 LOCK_FILE="${INTRADAY_WS_FRESHNESS_MONITOR_LOCK_FILE:-$PROJECT_DIR/tmp/run_intraday_ws_freshness_monitor.lock}"
 COOLDOWN_STATE_FILE="${INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp/run_intraday_ws_freshness_monitor_success.state}"
-COOLDOWN_SEC="${INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC:-300}"
+COOLDOWN_SEC="${INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC:-720}"
 LOG_FILE="${INTRADAY_WS_FRESHNESS_MONITOR_LOG_FILE:-$PROJECT_DIR/logs/run_intraday_ws_freshness_monitor.log}"
+INCREMENTAL_STATE_PATH="${INTRADAY_WS_FRESHNESS_MONITOR_INCREMENTAL_STATE_PATH:-$PROJECT_DIR/data/runtime/intraday_ws_freshness_monitor/intraday_ws_freshness_monitor_${TARGET_DATE}.json}"
 IONICE_CLASS="${INTRADAY_WS_FRESHNESS_MONITOR_IONICE_CLASS:-2}"
 IONICE_LEVEL="${INTRADAY_WS_FRESHNESS_MONITOR_IONICE_LEVEL:-7}"
 NICE_LEVEL="${INTRADAY_WS_FRESHNESS_MONITOR_NICE_LEVEL:-12}"
 NICE_COMMAND="${INTRADAY_WS_FRESHNESS_MONITOR_NICE_COMMAND:-nice}"
 MONITOR_ONLY="${INTRADAY_WS_FRESHNESS_MONITOR_ONLY:-true}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
+CPU_AFFINITY="${INTRADAY_WS_FRESHNESS_MONITOR_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity monitor)}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -55,7 +59,7 @@ if ! flock -n 9; then
   exit 0
 fi
 
-cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.intraday_ws_freshness_monitor --target-date "$TARGET_DATE" --write "$@")
+cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.intraday_ws_freshness_monitor --target-date "$TARGET_DATE" --incremental-state-path "$INCREMENTAL_STATE_PATH" --write "$@")
 if [[ "$MONITOR_ONLY" == "1" || "$MONITOR_ONLY" == "true" || "$MONITOR_ONLY" == "yes" || "$MONITOR_ONLY" == "on" ]]; then
   cmd+=(--monitor-only)
 fi
@@ -66,6 +70,9 @@ fi
 
 if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
   cmd=("$NICE_COMMAND" -n "$NICE_LEVEL" "${cmd[@]}")
+fi
+if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]]; then
+  cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
 
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
