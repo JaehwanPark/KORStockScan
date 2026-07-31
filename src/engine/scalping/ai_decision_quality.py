@@ -1253,6 +1253,45 @@ def load_kiwoom_completed_minute_price_rows(
     return prices, provenance
 
 
+def merge_preferred_outcome_price_rows(
+    primary_rows: Iterable[dict[str, Any]],
+    fallback_rows: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Merge outcome prices while keeping one route/minute source owner.
+
+    Completed Kiwoom OHLC bars own their covered route/minute. Pipeline rows
+    remain available only outside that coverage so lifecycle correlation can
+    be retained without duplicating or contaminating MFE/MAE observations.
+    """
+
+    primary = list(primary_rows)
+    covered_minutes: set[tuple[str, str, str, datetime]] = set()
+    for row in primary:
+        timestamp = _parse_ts(row.get("timestamp"))
+        code = _normalize_stock_code(row.get("stock_code"))
+        venue = _venue(row.get("effective_venue"))
+        session = _session(row.get("session_bucket"))
+        if timestamp and code and venue and session:
+            covered_minutes.add(
+                (code, venue, session, timestamp.replace(second=0, microsecond=0))
+            )
+    retained_fallback: list[dict[str, Any]] = []
+    suppressed_count = 0
+    for row in fallback_rows:
+        timestamp = _parse_ts(row.get("timestamp"))
+        key = (
+            _normalize_stock_code(row.get("stock_code")),
+            _venue(row.get("effective_venue")),
+            _session(row.get("session_bucket")),
+            timestamp.replace(second=0, microsecond=0) if timestamp else None,
+        )
+        if timestamp and key in covered_minutes:
+            suppressed_count += 1
+            continue
+        retained_fallback.append(row)
+    return primary + retained_fallback, suppressed_count
+
+
 def _venue(value: Any) -> str:
     text = str(value or "").strip().upper()
     if text in {"PREMARKET", "PREMARKET_KRX_LIKE"}:
@@ -7380,11 +7419,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--as-of")
     parser.add_argument(
         "--outcome-price-source",
-        choices=("pipeline", "kiwoom_completed_1m"),
-        default="pipeline",
+        choices=("auto", "pipeline", "kiwoom_completed_1m"),
+        default="auto",
         help=(
-            "Offline forward-price source. kiwoom_completed_1m reuses only "
-            "the valid shared token and never issues a new token."
+            "Offline forward-price source (default: auto). Auto prefers "
+            "route-qualified Kiwoom completed 1m rows and retains contracted "
+            "pipeline rows as a fallback. Kiwoom reuses only the valid shared "
+            "token and never issues a new token."
         ),
     )
     parser.add_argument(
@@ -7460,9 +7501,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     sources = _default_sources(
         args.date,
-        include_pipeline=(
-            args.mode != "control" and args.outcome_price_source == "pipeline"
-        ),
+        # Pipeline lifecycle rows own decision-to-order/fill correlation even
+        # when forward prices come from route-qualified completed candles.
+        include_pipeline=args.mode != "control",
     )
     promotion, promotion_artifact_path, promotion_source_date = (
         load_promotion_for_target_date(args.date)
@@ -7513,14 +7554,16 @@ def main(argv: list[str] | None = None) -> int:
         pipeline_rows = (
             row for path in sources["pipeline_paths"] for row in _iter_jsonl(path)
         )
-        prices, lifecycle = load_pipeline_price_and_lifecycle_rows(
+        pipeline_prices, lifecycle = load_pipeline_price_and_lifecycle_rows(
             pipeline_rows,
             stock_codes=pipeline_stock_codes,
             window_start=pipeline_window_start,
             window_end=pipeline_window_end,
         )
+        prices = list(pipeline_prices)
+        effective_outcome_price_source = "pipeline"
         price_source_provenance: list[dict[str, Any]] = []
-        if args.outcome_price_source == "kiwoom_completed_1m":
+        if args.outcome_price_source in {"auto", "kiwoom_completed_1m"}:
             from src.utils import kiwoom_utils
 
             token = kiwoom_utils.get_cached_kiwoom_token()
@@ -7549,12 +7592,40 @@ def main(argv: list[str] | None = None) -> int:
                     base_dt=args.date.replace("-", ""),
                 )
 
-            prices, price_source_provenance = load_kiwoom_completed_minute_price_rows(
+            (
+                kiwoom_prices,
+                price_source_provenance,
+            ) = load_kiwoom_completed_minute_price_rows(
                 target_date=args.date,
                 labels=source_route_labels,
                 as_of=as_of,
                 fetcher=fetch_kiwoom_completed,
             )
+            if args.outcome_price_source == "kiwoom_completed_1m":
+                prices = kiwoom_prices
+                effective_outcome_price_source = "kiwoom_completed_1m"
+            elif kiwoom_prices:
+                prices, pipeline_price_rows_suppressed = (
+                    merge_preferred_outcome_price_rows(
+                        kiwoom_prices,
+                        pipeline_prices,
+                    )
+                )
+                price_source_provenance.append(
+                    {
+                        "source": "pipeline_fallback_merge",
+                        "retained_count": len(prices) - len(kiwoom_prices),
+                        "suppressed_same_route_minute_count": (
+                            pipeline_price_rows_suppressed
+                        ),
+                        "source_quality_status": "pass_primary_precedence_applied",
+                    }
+                )
+                effective_outcome_price_source = (
+                    "kiwoom_completed_1m_with_pipeline_fallback"
+                )
+            else:
+                effective_outcome_price_source = "pipeline_fallback"
         labels = mature_outcome_labels(
             pending_labels=sources["pending"],
             price_rows=prices,
@@ -7577,7 +7648,8 @@ def main(argv: list[str] | None = None) -> int:
                 else "partial_horizons_keep_maturing"
             ),
             "summary": dict(Counter(row["label_status"] for row in labels)),
-            "outcome_price_source": args.outcome_price_source,
+            "outcome_price_source": effective_outcome_price_source,
+            "outcome_price_source_requested": args.outcome_price_source,
             "price_source_provenance": price_source_provenance,
             "labels": labels,
             **OFFLINE_CONTRACT,
@@ -7587,7 +7659,8 @@ def main(argv: list[str] | None = None) -> int:
             path = label_report_path(args.date)
         elif args.mode == "baseline":
             report = build_quality_baseline(target_date=args.date, labels=labels)
-            report["outcome_price_source"] = args.outcome_price_source
+            report["outcome_price_source"] = effective_outcome_price_source
+            report["outcome_price_source_requested"] = args.outcome_price_source
             report["price_source_provenance"] = price_source_provenance
             path = baseline_path(args.date)
         elif args.mode == "correlation":
@@ -7596,7 +7669,8 @@ def main(argv: list[str] | None = None) -> int:
                 labels=labels,
                 price_source_provenance=price_source_provenance,
             )
-            report["outcome_price_source"] = args.outcome_price_source
+            report["outcome_price_source"] = effective_outcome_price_source
+            report["outcome_price_source_requested"] = args.outcome_price_source
             path = score_correlation_path(args.date)
         elif args.mode == "recovery":
             report = build_recovery_trigger_report(
@@ -7607,7 +7681,8 @@ def main(argv: list[str] | None = None) -> int:
                 price_rows=prices,
                 price_source_provenance=price_source_provenance,
             )
-            report["outcome_price_source"] = args.outcome_price_source
+            report["outcome_price_source"] = effective_outcome_price_source
+            report["outcome_price_source_requested"] = args.outcome_price_source
             path = recovery_trigger_path(args.date)
         elif args.mode == "reversal_sequence":
             stored_label_path = label_report_path(args.date)
@@ -7637,7 +7712,7 @@ def main(argv: list[str] | None = None) -> int:
                     "outcome_price_source": (
                         stored_label_report.get("outcome_price_source")
                         if stored_labels_reused
-                        else args.outcome_price_source
+                        else effective_outcome_price_source
                     ),
                     "paired_report_path": str(sequence_paired_path),
                 },
@@ -7881,7 +7956,8 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 for key, value in sorted(floor_groups.items())
             ]
-            report["outcome_price_source"] = args.outcome_price_source
+            report["outcome_price_source"] = effective_outcome_price_source
+            report["outcome_price_source_requested"] = args.outcome_price_source
             report["price_source_provenance"] = price_source_provenance
             path = (
                 detailed_paired_path(

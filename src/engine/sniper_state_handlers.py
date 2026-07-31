@@ -89,6 +89,7 @@ from src.engine.scalping.holding_decision_context import (
     count_holding_context_changes,
     holding_decision_context_enabled,
     holding_decision_context_log_fields,
+    resolve_holding_context_request_code,
 )
 from src.engine.scalping.multi_timeframe_context import SOURCE_BAR_LIMIT
 from src.engine.scalping.opening_rotation import (
@@ -21997,24 +21998,17 @@ def _resolve_holding_context_request_code(
     code: str,
     *,
     ws_data: dict | None = None,
+    position_ctx: dict | None = None,
     decision_kind: str,
     now_ts: float,
 ) -> str:
-    session = resolve_entry_candle_session(now_ts=now_ts)
-    venue = resolve_entry_candle_venue(ws_data or {}, session=session)
-    if holding_decision_context_enabled(
-        venue=venue,
-        session=session,
+    return resolve_holding_context_request_code(
+        code,
+        ws_data=ws_data,
+        position=position_ctx,
         decision_kind=decision_kind,
         now_ts=now_ts,
-    ):
-        return resolve_entry_candle_request_code(
-            code,
-            venue=venue,
-            session=session,
-            ws_data=ws_data or {},
-        )
-    return code
+    )
 
 
 def _get_holding_minute_candles_with_meta(
@@ -22023,6 +22017,7 @@ def _get_holding_minute_candles_with_meta(
     limit: int,
     legacy_limit: int | None = None,
     ws_data: dict | None = None,
+    position_ctx: dict | None = None,
     decision_kind: str,
     now_ts: float,
 ) -> tuple[list, dict]:
@@ -22047,6 +22042,7 @@ def _get_holding_minute_candles_with_meta(
     request_code = _resolve_holding_context_request_code(
         code,
         ws_data=ws_data,
+        position_ctx=position_ctx,
         decision_kind=decision_kind,
         now_ts=now_ts,
     )
@@ -26356,6 +26352,7 @@ def _retry_holding_ai_submit_authority_before_block(
         holding_request_code = _resolve_holding_context_request_code(
             code,
             ws_data=retry_ws_data,
+            position_ctx=stock,
             decision_kind="holding_score_submit_authority",
             now_ts=fetch_now_ts,
         )
@@ -26370,6 +26367,7 @@ def _retry_holding_ai_submit_authority_before_block(
             limit=60,
             legacy_limit=40,
             ws_data=retry_ws_data,
+            position_ctx=stock,
             decision_kind="holding_score_submit_authority",
             now_ts=fetch_now_ts,
         )
@@ -46476,6 +46474,7 @@ def _evaluate_holding_flow_override(
         holding_request_code = _resolve_holding_context_request_code(
             code,
             ws_data=ws_data,
+            position_ctx=stock,
             decision_kind="holding_flow",
             now_ts=now_ts,
         )
@@ -46487,6 +46486,7 @@ def _evaluate_holding_flow_override(
             limit=max(60, candle_limit),
             legacy_limit=candle_limit,
             ws_data=ws_data,
+            position_ctx=stock,
             decision_kind="holding_flow",
             now_ts=now_ts,
         )
@@ -61707,6 +61707,19 @@ def _has_rising_missed_watch_source_marker(
     )
 
 
+def _has_prev_close_gainer_source_marker(stock: dict | None) -> bool:
+    """Identify the independent market-gainer source without granting BUY."""
+
+    source = stock if isinstance(stock, dict) else {}
+    tokens: set[str] = set()
+    for key in ("source_signature", "scanner_source_signature"):
+        raw = str(source.get(key) or "").replace("|", ",")
+        tokens.update(
+            token.strip().upper() for token in raw.split(",") if token.strip()
+        )
+    return "PREV_CLOSE_GAINER" in tokens
+
+
 def _evaluate_caution_weak_liquidity_entry_block(
     *,
     stock: dict | None,
@@ -63634,6 +63647,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         upper_limit_exclude_enabled=_rising_missed_upper_limit_exclude_enabled(),
         upper_limit_exclude_pct=_rising_missed_upper_limit_exclude_pct(),
     )
+    prev_close_gainer_source = _has_prev_close_gainer_source_marker(stock)
     if (
         decision.allowed is False
         and decision.reason == RISING_MISSED_BLOCK_NOT_CANDIDATE
@@ -63648,19 +63662,31 @@ def _maybe_submit_rising_missed_one_share_entry(
             _log_entry_pipeline(
                 stock,
                 code,
-                "rising_missed_watch_not_rising_skipped",
+                (
+                    "prev_close_gainer_entry_ai_handoff"
+                    if prev_close_gainer_source
+                    else "rising_missed_watch_not_rising_skipped"
+                ),
                 block_reason=decision.reason,
                 forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
                 actual_order_submitted=False,
-                broker_order_forbidden=True,
+                broker_order_forbidden=not prev_close_gainer_source,
                 runtime_effect=False,
                 allowed_runtime_apply=False,
-                decision_authority="rising_missed_watch_budget_fast_reject",
+                decision_authority=(
+                    "source_routing_to_existing_exact_v2_entry_ai"
+                    if prev_close_gainer_source
+                    else "rising_missed_watch_budget_fast_reject"
+                ),
                 metric_role="funnel_count",
                 window_policy="same_day_intraday_runtime_state",
                 sample_floor="not_applicable_fast_reject",
                 primary_decision_metric="rising_missed_class",
-                source_quality_gate="rising_missed_watch_source_marker_present",
+                source_quality_gate=(
+                    "prev_close_gainer_source_and_existing_entry_preflight_required"
+                    if prev_close_gainer_source
+                    else "rising_missed_watch_source_marker_present"
+                ),
                 forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
                 **_merge_entry_pipeline_field_groups(
                     decision.log_fields or {},
@@ -63675,7 +63701,46 @@ def _maybe_submit_rising_missed_one_share_entry(
                     ),
                 ),
             )
+            if prev_close_gainer_source:
+                # The market-wide gainer source owns candidate discovery, not
+                # the rising-missed +1% classifier. Continue through the normal
+                # exact_v2 Entry AI and its existing submit guards.
+                return False
             return True
+        return False
+    if (
+        decision.allowed is False
+        and decision.reason == RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY
+        and prev_close_gainer_source
+    ):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "prev_close_gainer_entry_ai_handoff",
+            block_reason=decision.reason,
+            handoff_reason="collect_entry_ai_before_existing_upper_limit_submit_veto",
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            decision_authority="source_routing_to_existing_exact_v2_entry_ai",
+            metric_role="funnel_count",
+            window_policy="same_day_intraday_runtime_state",
+            sample_floor="not_applicable_source_handoff",
+            primary_decision_metric="entry_ai_evaluation_reached",
+            source_quality_gate=(
+                "prev_close_gainer_source_and_existing_entry_preflight_required"
+            ),
+            forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
+            **_merge_entry_pipeline_field_groups(
+                decision.log_fields or {},
+                _rising_missed_scanner_filter_fields(action="entry_ai_handoff"),
+                watch_delta_refresh_fields,
+            ),
+        )
+        # Generic submit retains its independent upper-limit hard guard. This
+        # handoff only prevents the source-specific fast gate from suppressing
+        # the exact_v2 AI observation.
         return False
     # A qualified Rising Missed candidate needs a REST freshness envelope, but
     # that preparation must not monopolize the scanner main thread.  Defer it
@@ -71820,6 +71885,7 @@ def handle_holding_state(
                             _resolve_holding_context_request_code(
                                 code,
                                 ws_data=ws_data,
+                                position_ctx=stock,
                                 decision_kind="holding_score",
                                 now_ts=now_ts,
                             ),
@@ -71835,6 +71901,7 @@ def handle_holding_state(
                                 limit=60,
                                 legacy_limit=40,
                                 ws_data=ws_data,
+                                position_ctx=stock,
                                 decision_kind="holding_score",
                                 now_ts=now_ts,
                             )

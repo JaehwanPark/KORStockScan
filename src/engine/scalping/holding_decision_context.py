@@ -27,6 +27,9 @@ from src.engine.scalping.ai_market_snapshot import (
 )
 from src.engine.scalping.entry_candle_context import (
     build_session_candle_source,
+    resolve_entry_candle_session,
+    resolve_entry_candle_venue,
+    resolve_session_candle_request_code,
     select_route_trade_ticks,
 )
 from src.engine.scalping.market_data_enrichment import (
@@ -619,6 +622,41 @@ def _holding_execution_route(
     return None, "missing", "broker_execution_provenance_required"
 
 
+def resolve_holding_context_request_code(
+    code: str,
+    *,
+    ws_data: dict[str, Any] | None,
+    position: dict[str, Any] | None,
+    decision_kind: str,
+    now_ts: Any,
+) -> str:
+    """Resolve REST symbol from the same holding execution-view owner."""
+
+    now = _now_kst(now_ts)
+    session = resolve_entry_candle_session(now_ts=now)
+    venue = resolve_entry_candle_venue(ws_data or {}, session=session)
+    if not holding_decision_context_enabled(
+        venue=venue,
+        session=session,
+        decision_kind=decision_kind,
+        now_ts=now,
+    ):
+        return code
+    broker_route, _source, _authority = _holding_execution_route(
+        position if isinstance(position, dict) else {},
+        now=now,
+    )
+    return resolve_session_candle_request_code(
+        code,
+        ws_data=ws_data,
+        venue=venue,
+        session=session,
+        now_ts=now,
+        broker_route=broker_route,
+        allow_integrated_sor_execution_view=True,
+    )
+
+
 def build_holding_decision_context(
     token: str | None,
     code: str,
@@ -691,6 +729,7 @@ def build_holding_decision_context(
         recent_candles=recent_candles,
         source_meta=candle_meta,
         broker_route=str(execution_broker_route or ""),
+        allow_integrated_sor_execution_view=True,
     )
     enabled = holding_decision_context_enabled(
         venue=str(candle.get("venue") or ""),

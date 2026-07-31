@@ -584,6 +584,48 @@ def test_fetch_entry_candles_uses_effective_route_and_records_provenance(monkeyp
     assert metadata["multi_timeframe_auxiliary_fetch"] is True
 
 
+def test_holding_fetch_prefers_fresh_realtime_integrated_route(monkeypatch):
+    _enable(monkeypatch)
+    requested = []
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+
+    def _fetch(_token, code, limit, *, explicit_request_code=False):
+        requested.append((code, limit, explicit_request_code))
+        return _candles(3), {"api_id": "ka10080"}
+
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_minute_candles_ka10080_with_meta",
+        _fetch,
+    )
+    candles, metadata = fetch_entry_candles_with_meta(
+        "token",
+        "000660",
+        {
+            **_ws(),
+            "last_realtime_type_ts": {
+                "0B": now.timestamp() - 0.1,
+                "0D": now.timestamp() - 0.2,
+            },
+            "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+            "last_realtime_type_market_route": {
+                "0B": "krx_nxt_integrated",
+                "0D": "krx_nxt_integrated",
+            },
+        },
+        venue="KRX",
+        session="krx_regular",
+        limit=40,
+        now_ts=now,
+        broker_route="SOR",
+        allow_integrated_sor_execution_view=True,
+    )
+
+    assert requested == [("000660_AL", 430, True)]
+    assert len(candles) == 3
+    assert metadata["entry_candle_request_code"] == "000660_AL"
+    assert metadata["entry_candle_request_venue"] == "SOR"
+
+
 def test_runtime_builder_fetches_full_session_window_and_auxiliary_context(
     monkeypatch,
 ):

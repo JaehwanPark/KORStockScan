@@ -1007,6 +1007,15 @@ Bounded early-probe decision rules:
    as EDGE/WAIT with setup=reversal and trigger=recovery_required. Do not convert
    it to BUY. The existing submit guard alone decides whether a one-share probe
    is executable, including any wide-spread or depth veto.
+7. A completed-bar continuation remains a structural edge when 3m, 5m, 10m,
+   and 20m returns are positive, recent highs and lows are up or flat, and
+   completed-bar volume alignment is bullish. One adverse instantaneous tape,
+   depth, or liquidity snapshot may set trigger=recovery_required and adverse
+   risk=high, but must not by itself erase that edge or produce NO_EDGE/DROP.
+   Use EDGE/WAIT unless completed bars show structural invalidation, explicit
+   distribution/reversal evidence is present, overextension is blocking, or
+   expected reward/risk is unfavorable after execution cost. A wide spread is
+   execution risk only and is never positive evidence.
 """.strip()
 
 

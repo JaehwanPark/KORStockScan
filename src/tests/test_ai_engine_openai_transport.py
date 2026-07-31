@@ -2835,6 +2835,9 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
     )
     assert prompt == decision_quality_v2_7_probe_system_prompt("entry")
     assert "one-share probe intent" in prompt
+    assert "completed-bar continuation remains a structural edge" in prompt
+    assert "must not by itself erase that edge or produce NO_EDGE/DROP" in prompt
+    assert "execution risk only and is never positive evidence" in prompt
     assert prompt_type == "scalping_entry"
     assert prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
     assert profile == "watching"
@@ -2871,7 +2874,7 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
     assert result["entry_probe_intent_actual_order_submitted"] is False
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v2"
+        == "decision_quality_v2_7_probe_entry_v3"
     )
 
 
