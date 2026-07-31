@@ -127,6 +127,56 @@ def test_market_gainer_source_filters_prev_close_gain_at_or_above_25_pct(
     )
 
 
+def test_market_gainer_fetch_depth_candidate_limit_and_promotion_quota_are_independent(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_FETCH_DEPTH", "60")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_LIMIT", "2")
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "1")
+
+    assert scalping_scanner._market_gainer_fetch_depth() == 60
+    assert scalping_scanner._market_gainer_candidate_limit() == 6
+    assert scalping_scanner._market_gainer_reserved_slots(16) == 1
+
+    raw_targets = [
+        {
+            "Code": f"{index:06d}",
+            "Name": f"OVER_CAP_{index}",
+            "Price": 10000,
+            "ChangeRate": 30.0 - index * 0.1,
+            "SourceRank": index + 1,
+        }
+        for index in range(20)
+    ]
+    raw_targets.extend(
+        {
+            "Code": f"8{index:05d}",
+            "Name": f"ELIGIBLE_{index}",
+            "Price": 10000,
+            "ChangeRate": 24.9 - index * 0.1,
+            "SourceRank": index + 21,
+        }
+        for index in range(10)
+    )
+
+    targets = scalping_scanner._annotate_market_gainer_targets(
+        raw_targets,
+        stex_tp="1",
+        candidate_limit=6,
+    )
+
+    assert [target["Code"] for target in targets] == [
+        "800000",
+        "800001",
+        "800002",
+        "800003",
+        "800004",
+        "800005",
+    ]
+    assert [target["MarketGainerRank"] for target in targets] == list(range(21, 27))
+    assert all(target["MarketGainerFluRate"] < 25.0 for target in targets)
+
+
 def test_scanner_pre_filter_blocks_25_pct_gain_from_non_market_gainer_source():
     assert (
         scalping_scanner._scanner_candidate_pre_filter_reason(
@@ -5663,7 +5713,9 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
 
 def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
     captured = {}
+    logs = []
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_ENABLED", "true")
+    monkeypatch.setattr(scalping_scanner, "log_info", logs.append)
     monkeypatch.setattr(
         scalping_scanner,
         "_market_gainer_stex_tp",
@@ -5724,7 +5776,7 @@ def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
     assert captured == {
         "mrkt_tp": "000",
         "trde_qty_cnd": "0010",
-        "limit": 20,
+        "limit": 60,
         "stex_tp": "1",
         "sort_tp": "1",
         "stk_cnd": "4",
@@ -5740,6 +5792,16 @@ def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
     assert payload["scanner_market_gainer_reserved_promotion"] is True
     assert payload["scanner_market_gainer_active_count"] == 1
     assert db.records[0].scanner_watch_budget_owner == "rising_missed"
+    fetch_logs = [
+        message
+        for message in logs
+        if "[SCALPING_SCANNER_MARKET_GAINER_FETCH]" in message
+    ]
+    assert len(fetch_logs) == 1
+    assert "source_universe_size=unknown" in fetch_logs[0]
+    assert "normalized_count=1" in fetch_logs[0]
+    assert "candidate_limit=20" in fetch_logs[0]
+    assert "promotion_quota=6" in fetch_logs[0]
 
 
 def test_market_gainer_reservation_replaces_only_six_non_holding_rising_slots(

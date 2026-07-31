@@ -214,7 +214,16 @@ def _market_gainer_reserved_slots(max_active):
     )
 
 
-def _market_gainer_fetch_limit():
+def _market_gainer_fetch_depth():
+    raw_value = os.getenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_FETCH_DEPTH", "60")
+    try:
+        depth = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        depth = 60
+    return max(21, min(depth, 200))
+
+
+def _market_gainer_candidate_limit():
     raw_value = os.getenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_LIMIT", "20")
     try:
         limit = int(str(raw_value).strip())
@@ -4384,9 +4393,14 @@ def _annotate_source_rank(raw_targets, *, prefix, sort_type):
     return annotated
 
 
-def _annotate_market_gainer_targets(raw_targets, *, stex_tp):
+def _annotate_market_gainer_targets(raw_targets, *, stex_tp, candidate_limit=None):
     venue = "NXT" if str(stex_tp) == "2" else "KRX"
     targets = []
+    if candidate_limit is None:
+        candidate_limit = _market_gainer_candidate_limit()
+    candidate_limit = max(0, int(candidate_limit or 0))
+    if candidate_limit == 0:
+        return targets
     for index, raw_target in enumerate(raw_targets or [], start=1):
         target = dict(raw_target or {})
         flu_rate = _safe_float(target.get("ChangeRate", target.get("FluRate")))
@@ -4415,6 +4429,8 @@ def _annotate_market_gainer_targets(raw_targets, *, stex_tp):
             }
         )
         targets.append(target)
+        if len(targets) >= candidate_limit:
+            break
     return targets
 
 
@@ -4929,13 +4945,15 @@ def run_scalper_iteration(
     if _market_gainer_source_enabled():
         market_gainer_stex_tp = _market_gainer_stex_tp()
         if market_gainer_stex_tp in {"1", "2"}:
-            market_gainer_targets = _fetch_scan_source(
+            market_gainer_fetch_depth = _market_gainer_fetch_depth()
+            market_gainer_candidate_limit = _market_gainer_candidate_limit()
+            raw_market_gainer_targets = _fetch_scan_source(
                 "ka10027 전일대비등락률상위",
                 kiwoom_utils.get_top_fluctuation_ka10027,
                 token,
                 mrkt_tp="000",
                 trde_qty_cnd="0010",
-                limit=_market_gainer_fetch_limit(),
+                limit=market_gainer_fetch_depth,
                 stex_tp=market_gainer_stex_tp,
                 sort_tp="1",
                 stk_cnd="4",
@@ -4946,8 +4964,26 @@ def run_scalper_iteration(
                 pure_equity_only=True,
             )
             market_gainer_targets = _annotate_market_gainer_targets(
-                market_gainer_targets,
+                raw_market_gainer_targets,
                 stex_tp=market_gainer_stex_tp,
+                candidate_limit=market_gainer_candidate_limit,
+            )
+            market_gainer_source_universe_size = max(
+                (
+                    _safe_positive_int(target.get("SourceUniverseSize"))
+                    for target in raw_market_gainer_targets
+                ),
+                default=0,
+            )
+            log_info(
+                "[SCALPING_SCANNER_MARKET_GAINER_FETCH] "
+                f"fetch_depth={market_gainer_fetch_depth} "
+                f"source_universe_size={market_gainer_source_universe_size or 'unknown'} "
+                f"normalized_count={len(raw_market_gainer_targets)} "
+                f"candidate_limit={market_gainer_candidate_limit} "
+                f"eligible_count={len(market_gainer_targets)} "
+                f"promotion_quota={_market_gainer_reserved_slots(_scalping_watching_max_active())} "
+                f"stex_tp={market_gainer_stex_tp}"
             )
         else:
             log_info(

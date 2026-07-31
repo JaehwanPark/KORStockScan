@@ -54,6 +54,8 @@ def test_ka10027_forwards_official_venue_and_filter_contract(monkeypatch):
     assert captured["payload"]["stk_cnd"] == "4"
     assert captured["payload"]["pric_cnd"] == "8"
     assert captured["payload"]["trde_prica_cnd"] == "10"
+    assert captured["use_continuous"] is True
+    assert captured["max_pages"] == 1
     assert rows == [
         {
             "Code": "005930",
@@ -103,6 +105,63 @@ def test_ka10027_applies_pure_equity_filter_before_output_limit(monkeypatch):
     assert [row["Code"] for row in rows] == ["005930"]
     assert rows[0]["SourceRank"] == 3
     assert rows[0]["PureEquityFilterApplied"] is True
+
+
+def test_ka10027_flattens_continuous_pages_until_requested_raw_depth(monkeypatch):
+    captured = {}
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "pred_pre_flu_rt_upper": [
+                    {
+                        "stk_cd": f"{index * 10:06d}",
+                        "stk_nm": f"PAGE1_{index}",
+                        "cur_prc": "10000",
+                        "flu_rt": f"{30.0 - index * 0.1:.2f}",
+                    }
+                    for index in range(20)
+                ]
+            },
+            {
+                "pred_pre_flu_rt_upper": [
+                    {
+                        "stk_cd": f"{800000 + index * 10:06d}",
+                        "stk_nm": f"PAGE2_{index}",
+                        "cur_prc": "10000",
+                        "flu_rt": f"{24.9 - index * 0.1:.2f}",
+                    }
+                    for index in range(20)
+                ]
+            },
+            {
+                "pred_pre_flu_rt_upper": [
+                    {
+                        "stk_cd": f"{900000 + index * 10:06d}",
+                        "stk_nm": f"PAGE3_{index}",
+                        "cur_prc": "10000",
+                        "flu_rt": f"{22.9 - index * 0.1:.2f}",
+                    }
+                    for index in range(20)
+                ]
+            },
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows = kiwoom_utils.get_top_fluctuation_ka10027(
+        "token",
+        limit=60,
+        pure_equity_only=True,
+    )
+
+    assert captured["use_continuous"] is True
+    assert captured["max_pages"] == 3
+    assert len(rows) == 60
+    assert rows[20]["Code"] == "800000"
+    assert rows[20]["SourceRank"] == 21
+    assert rows[20]["SourceUniverseSize"] == 60
 
 
 def test_ka10027_zero_limit_returns_no_rows(monkeypatch):

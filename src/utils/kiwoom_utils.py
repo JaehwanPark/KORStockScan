@@ -1913,6 +1913,10 @@ def get_top_fluctuation_ka10027(
     - stex_tp: "1"(KRX), "2"(NXT), "3"(통합)
     - 나머지 조건은 키움 ka10027 공식 요청 계약 값을 그대로 전달한다.
     """
+    output_limit = max(0, int(limit))
+    if output_limit == 0:
+        return []
+
     url = get_api_url("/api/dostk/rkinfo")
     payload = {
         "mrkt_tp": mrkt_tp,
@@ -1928,19 +1932,27 @@ def get_top_fluctuation_ka10027(
         "stex_tp": str(stex_tp),
     }
 
-    # 💡 [핵심] 1회성 스캐너 조회 (429 에러 방어 탑재)
+    # ka10027 is an officially documented continuous-query endpoint. Fetch enough
+    # pages to let scanner-side source caps inspect beyond the first top-20 page.
+    # The official example caps continuous retrieval at 10 pages.
+    max_pages = max(1, min(10, (output_limit + 19) // 20))
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id="ka10027", payload=payload, use_continuous=False
+        url=url,
+        token=token,
+        api_id="ka10027",
+        payload=payload,
+        use_continuous=True,
+        max_pages=max_pages,
     )
 
     cleaned_list = []
-    output_limit = max(0, int(limit))
-    if output_limit == 0:
-        return cleaned_list
-
     if results:
-        data = results[0]
-        items = data.get("pred_pre_flu_rt_upper", [])
+        items = [
+            item
+            for data in results
+            for item in (data.get("pred_pre_flu_rt_upper", []) or [])
+            if isinstance(item, dict)
+        ]
 
         for source_rank, item in enumerate(items, start=1):
             if pure_equity_only:
