@@ -1765,9 +1765,9 @@ class GPTSniperEngine:
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
         adapter_version = (
-            "decision_quality_v2_7_probe_entry_v5"
+            "decision_quality_v2_7_probe_entry_v6"
             if probe_prompt_selected
-            else "decision_quality_v2_7_entry_v4"
+            else "decision_quality_v2_7_entry_v5"
         )
         model_action = str(payload.get("action") or "").strip().upper() or None
         model_edge_state = str(payload.get("edge_state") or "").strip().upper() or None
@@ -1972,6 +1972,55 @@ class GPTSniperEngine:
                 if isinstance(repaired.get("evidence"), dict)
                 else {}
             )
+            if (
+                "entry_adverse_distribution_misclassified" in contract_errors
+                and str(repaired.get("action") or "").strip().upper() == "DROP"
+                and str(repaired.get("edge_state") or "").strip().upper() == "NO_EDGE"
+                and str(evidence.get("trend") or "").strip().lower() == "adverse"
+                and str(evidence.get("setup") or "").strip().lower() == "no_setup"
+                and str(evidence.get("trigger") or "").strip().lower()
+                in {"failed", "not_applicable"}
+            ):
+                repaired_reason_codes = [
+                    str(code) for code in repaired.get("reason_codes") or []
+                ]
+                original_reason_codes = list(repaired_reason_codes)
+                for required_reason in (
+                    "distribution_adverse",
+                    "volume_confirmation_missing",
+                ):
+                    if required_reason not in repaired_reason_codes:
+                        repaired_reason_codes.append(required_reason)
+                mandatory_adverse_reasons = {
+                    "distribution_adverse",
+                    "volume_confirmation_missing",
+                }
+                for liquidity_reason in (
+                    "ask_wall_adverse",
+                    "liquidity_adverse",
+                ):
+                    if liquidity_reason in repaired_reason_codes:
+                        mandatory_adverse_reasons.add(liquidity_reason)
+                        break
+                while len(repaired_reason_codes) > 8:
+                    removable_index = next(
+                        (
+                            index
+                            for index in range(len(repaired_reason_codes) - 1, -1, -1)
+                            if repaired_reason_codes[index]
+                            not in mandatory_adverse_reasons
+                        ),
+                        None,
+                    )
+                    if removable_index is None:
+                        break
+                    repaired_reason_codes.pop(removable_index)
+                if (
+                    repaired_reason_codes != original_reason_codes
+                    and len(repaired_reason_codes) <= 8
+                ):
+                    repaired["reason_codes"] = repaired_reason_codes
+                    repair_codes.append("non_buy_adverse_distribution_reason_completed")
             if (
                 "entry_trigger_reason_evidence_conflict" in contract_errors
                 and str(repaired.get("action") or "").strip().upper() == "DROP"

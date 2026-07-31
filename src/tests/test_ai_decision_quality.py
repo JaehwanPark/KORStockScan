@@ -2266,6 +2266,77 @@ def test_v2_9_1_semantic_repair_aligns_trigger_reason_without_promoting_buy():
     )
 
 
+def test_v2_9_1_semantic_repair_completes_adverse_distribution_reasons():
+    exact_payload = {
+        "entry_candle_context": {
+            "structure": {
+                "returns_pct": {
+                    "5": -0.6,
+                    "10": -1.2,
+                    "20": -1.8,
+                    "60": -2.4,
+                },
+                "slopes_pct_per_bar": {
+                    "5": -0.1,
+                    "10": -0.1,
+                    "20": -0.1,
+                    "60": -0.1,
+                },
+                "peak_drawdown_pct": -2.5,
+                "high_direction": "down",
+                "volume_ratio": 0.4,
+            }
+        }
+    }
+    request = {
+        "stage": "entry",
+        "exact_payload": exact_payload,
+        "candidate": {
+            "semantic_repair_version": quality.ANTICIPATORY_SEMANTIC_REPAIR_VERSION,
+        },
+    }
+    response = {
+        "edge_state": "NO_EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.0,
+        "expected_downside_pct": -1.2,
+        "confidence": 84,
+        "reason_codes": [
+            "edge_absent",
+            "distribution_adverse",
+            "liquidity_adverse",
+        ],
+        "evidence": {
+            "trend": "adverse",
+            "liquidity": "adverse",
+            "tape": "mixed",
+            "risk": "high",
+            "uncertainty": "medium",
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "blocking",
+            "trigger": "failed",
+        },
+    }
+
+    repaired, repairs = quality.repair_anticipatory_candidate_response(
+        request, response
+    )
+
+    assert repaired["action"] == "DROP"
+    assert "distribution_adverse" in repaired["reason_codes"]
+    assert "volume_confirmation_missing" in repaired["reason_codes"]
+    assert "reason_code_evidence_alignment" in repairs
+    assert (
+        quality.validate_candidate_response(
+            repaired,
+            stage="entry",
+            exact_payload=exact_payload,
+        )
+        == []
+    )
+
+
 def test_three_way_comparison_uses_only_common_comparable_rows():
     one_pass = {
         "requests": [{"candidate": {"prompt_version": "decision_quality_v2_6_entry"}}],

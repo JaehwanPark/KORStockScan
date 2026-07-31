@@ -327,9 +327,9 @@ def test_report_splits_forward_exact_from_noncausal_retrospective(tmp_path):
     any_retrospective = views["same_day_any_venue_retrospective_noncausal"]
     assert forward["episode_count"] == 2
     assert forward["stage_counts"]["scanner_promoted"] == 0
-    assert forward["stage_counts"]["fast_precheck"] == 1
-    assert forward["stage_counts"]["entry_ai_trace"] == 2
-    assert forward["stage_counts"]["entry_ai_provider_called"] == 1
+    assert forward["stage_counts"]["fast_precheck"] == 0
+    assert forward["stage_counts"]["entry_ai_trace"] == 0
+    assert forward["stage_counts"]["entry_ai_provider_called"] == 0
     assert venue_retrospective["stage_counts"]["scanner_promoted"] == 1
     assert venue_retrospective["stage_counts"]["entry_ai_trace"] == 2
     assert (
@@ -345,6 +345,109 @@ def test_report_splits_forward_exact_from_noncausal_retrospective(tmp_path):
     assert any_retrospective["stage_counts"]["entry_ai_trace"] == 2
     assert report["source_quality"]["foreign_target_date_snapshot_count"] == 1
     assert report["source_quality"]["invalid_contract_snapshot_count"] == 1
+
+
+def test_report_forward_exact_joins_pipeline_and_ai_by_scanner_lineage(tmp_path):
+    snapshot_path = tmp_path / "snapshots.jsonl"
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    _write_jsonl(
+        snapshot_path,
+        [
+            {
+                "schema_version": census.SCHEMA_VERSION,
+                "target_date": "2026-07-30",
+                "captured_at": "2026-07-30T10:00:00+09:00",
+                "venue": "KRX",
+                "panel": "liquid_common",
+                "source_quality_status": "ok",
+                "rows": [
+                    {
+                        "rank": 1,
+                        "stock_code": "005930",
+                        "stock_name": "삼성전자",
+                        "current_price": 100000,
+                        "change_rate_pct": 5.0,
+                    }
+                ],
+            }
+        ],
+    )
+    _write_jsonl(
+        pipeline_path,
+        [
+            {
+                "stage": "scalping_scanner_candidate_promoted",
+                "stock_code": "005930",
+                "emitted_at": "2026-07-30T10:00:01+09:00",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": "SCANPROM-005930-1",
+                    "source_signature": "PREV_CLOSE_GAINER,PRICE_JUMP_START",
+                },
+            },
+            {
+                "stage": "scalping_scanner_fast_precheck",
+                "record_id": 42,
+                "stock_code": "005930",
+                "emitted_at": "2026-07-30T10:00:02+09:00",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": "SCANPROM-005930-1",
+                },
+            },
+            {
+                "stage": "scanner_async_eval_dispatched",
+                "record_id": 42,
+                "stock_code": "005930",
+                "emitted_at": "2026-07-30T10:00:03+09:00",
+                "fields": {
+                    "effective_venue": "KRX_REGULAR",
+                    "scanner_promotion_id": "SCANPROM-005930-1",
+                },
+            },
+        ],
+    )
+    _write_jsonl(
+        ai_path,
+        [
+            {
+                "endpoint": "analyze_target",
+                "record_id": "42",
+                "request_id": "analyze_target:005930:1",
+                "stock_code": "005930",
+                "decision_ts": "2026-07-30T10:00:05+09:00",
+                "effective_venue": "KRX_REGULAR",
+                "action": "WAIT",
+                "provider_called": True,
+                "provider_actual": "openai",
+            }
+        ],
+    )
+
+    report = census.build_report(
+        "2026-07-30",
+        snapshot_path=snapshot_path,
+        pipeline_path=pipeline_path,
+        ai_trace_path=ai_path,
+    )
+    summary = report["coverage"]["liquid_common"]["top_10"]["forward_exact"]
+    detail = report["opportunity_details"]["liquid_common"]["top_10"]["forward_exact"][
+        0
+    ]
+
+    assert summary["stage_counts"]["scanner_promoted"] == 1
+    assert summary["stage_counts"]["heavy_eval"] == 1
+    assert summary["stage_counts"]["entry_ai_provider_called"] == 1
+    assert summary["prev_close_gainer_source_promotion_count"] == 1
+    assert (
+        summary["stage_latency_from_scanner_promoted_sec"]["entry_ai_provider_called"][
+            "p50_sec"
+        ]
+        == 4.0
+    )
+    assert detail["scanner_lineage"]["record_ids"] == ["42"]
+    assert detail["entry_ai_actions"] == ["WAIT"]
 
 
 def test_guard_block_remains_first_terminal_gap():
@@ -375,6 +478,134 @@ def test_guard_block_remains_first_terminal_gap():
         row["terminal_coverage_reason"]
         == "scanner_source_guard_blocked_before_promotion"
     )
+
+
+def test_coverage_records_scanner_to_ai_latency_and_terminal_owner():
+    promoted_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
+    row = census._coverage_row(
+        {
+            "venue": "NXT",
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "first_census_at": promoted_at,
+        },
+        {
+            "005930": {
+                "scanner_promoted": [
+                    {
+                        "ts": promoted_at,
+                        "venue": "NXT",
+                        "reason": "promoted",
+                        "scanner_promotion_id": "SCANPROM-005930-1",
+                        "source_signature": "PREV_CLOSE_GAINER",
+                    }
+                ],
+                "fast_precheck": [
+                    {
+                        "ts": datetime.fromisoformat("2026-07-30T10:00:01+09:00"),
+                        "venue": "NXT",
+                        "record_id": "42",
+                        "scanner_promotion_id": "SCANPROM-005930-1",
+                    }
+                ],
+                "entry_ai_provider_called": [
+                    {
+                        "ts": datetime.fromisoformat(
+                            "2026-07-30T10:00:03.500000+09:00"
+                        ),
+                        "venue": "NXT",
+                        "record_id": "42",
+                        "provider_called": True,
+                    }
+                ],
+            }
+        },
+        after=promoted_at,
+        require_venue=True,
+        require_lineage=True,
+    )
+
+    assert row["terminal_coverage_reason"] == "post_ai_or_submit_gap"
+    assert row["stage_latency_from_scanner_promoted_sec"]["fast_precheck"] == 1.0
+    assert (
+        row["stage_latency_from_scanner_promoted_sec"]["entry_ai_provider_called"]
+        == 3.5
+    )
+    summary = census._summarize_rows_base([row])
+    assert summary["terminal_coverage_reason_counts"] == {"post_ai_or_submit_gap": 1}
+    assert summary["scanner_lineage_status_counts"] == {
+        "scanner_promotion_lineage_proven": 1
+    }
+    assert summary["prev_close_gainer_source_promotion_count"] == 1
+    assert summary["stage_latency_from_scanner_promoted_sec"][
+        "entry_ai_provider_called"
+    ] == {
+        "sample_count": 1,
+        "p50_sec": 3.5,
+        "p95_sec": 3.5,
+        "max_sec": 3.5,
+    }
+    assert row["scanner_lineage"] == {
+        "required": True,
+        "status": "scanner_promotion_lineage_proven",
+        "scanner_promotion_id": "SCANPROM-005930-1",
+        "record_ids": ["42"],
+        "source_signature": "PREV_CLOSE_GAINER",
+        "prev_close_gainer_source": True,
+    }
+
+
+def test_forward_lineage_does_not_join_next_promotion_ai_result():
+    first_promotion_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
+    second_promotion_at = datetime.fromisoformat("2026-07-30T10:05:00+09:00")
+    row = census._coverage_row(
+        {
+            "venue": "KRX",
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "first_census_at": first_promotion_at,
+        },
+        {
+            "005930": {
+                "scanner_promoted": [
+                    {
+                        "ts": first_promotion_at,
+                        "venue": "KRX",
+                        "scanner_promotion_id": "SCANPROM-005930-1",
+                    },
+                    {
+                        "ts": second_promotion_at,
+                        "venue": "KRX",
+                        "scanner_promotion_id": "SCANPROM-005930-2",
+                    },
+                ],
+                "fast_precheck": [
+                    {
+                        "ts": datetime.fromisoformat("2026-07-30T10:00:01+09:00"),
+                        "venue": "KRX",
+                        "record_id": "42",
+                        "scanner_promotion_id": "SCANPROM-005930-1",
+                    }
+                ],
+                "entry_ai_provider_called": [
+                    {
+                        "ts": datetime.fromisoformat("2026-07-30T10:05:03+09:00"),
+                        "venue": "KRX",
+                        "record_id": "42",
+                        "provider_called": True,
+                    }
+                ],
+            }
+        },
+        after=first_promotion_at,
+        require_venue=True,
+        require_lineage=True,
+    )
+
+    assert row["stage_reached"]["scanner_promoted"] is True
+    assert row["stage_reached"]["fast_precheck"] is True
+    assert row["stage_reached"]["entry_ai_provider_called"] is False
+    assert row["terminal_coverage_reason"] == "scanner_heavy_eval_gap"
 
 
 def test_empty_fetch_preserves_source_unavailable_evidence():

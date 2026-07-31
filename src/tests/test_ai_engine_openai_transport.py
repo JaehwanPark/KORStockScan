@@ -2874,7 +2874,7 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
     assert result["entry_probe_intent_actual_order_submitted"] is False
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v5"
+        == "decision_quality_v2_7_probe_entry_v6"
     )
 
 
@@ -3869,6 +3869,80 @@ def test_decision_quality_v2_7_keeps_orderly_pullback_blocking_conflict_rejected
     ]
 
 
+def test_decision_quality_v2_7_completes_adverse_distribution_non_buy_reason():
+    engine = _build_engine()
+    exact_payload = {
+        "entry_candle_context": {
+            "structure": {
+                "returns_pct": {
+                    "5": -0.6,
+                    "10": -1.2,
+                    "20": -1.8,
+                    "60": -2.4,
+                },
+                "slopes_pct_per_bar": {
+                    "5": -0.1,
+                    "10": -0.1,
+                    "20": -0.1,
+                    "60": -0.1,
+                },
+                "peak_drawdown_pct": -2.5,
+                "high_direction": "down",
+                "volume_ratio": 0.4,
+            }
+        }
+    }
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.0,
+            "expected_downside_pct": -1.2,
+            "confidence": 84,
+            "reason_codes": [
+                "edge_absent",
+                "distribution_adverse",
+                "liquidity_adverse",
+                "tape_sample_insufficient",
+                "overextension_chase_risk",
+                "adverse_risk_high",
+                "optional_source_missing",
+                "forming_bar_ignored",
+            ],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "blocking",
+                "trigger": "failed",
+            },
+        },
+        exact_payload=exact_payload,
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert "volume_confirmation_missing" in result["reason_codes"]
+    assert "edge_absent" in result["reason_codes"]
+    assert "forming_bar_ignored" not in result["reason_codes"]
+    assert result["decision_quality_contract_repair_applied"] is True
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_adverse_distribution_reason_completed"
+    ]
+    assert result["decision_quality_contract_original_errors"] == [
+        "entry_adverse_distribution_misclassified"
+    ]
+    assert (
+        result["decision_quality_live_adapter"]
+        == "decision_quality_v2_7_probe_entry_v6"
+    )
+
+
 def test_decision_quality_v2_7_removes_only_redundant_tape_mixed_reason():
     engine = _build_engine()
     result = engine._normalize_decision_quality_entry_result(
@@ -3952,7 +4026,7 @@ def test_decision_quality_v2_7_repairs_non_buy_reason_code_conflict():
     ]
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v5"
+        == "decision_quality_v2_7_probe_entry_v6"
     )
 
 
@@ -3997,7 +4071,7 @@ def test_decision_quality_v2_7_repairs_stage_wait_alias_without_buy_authority():
         "non_buy_stage_wait_edge_strength_aligned",
     ]
     assert result["decision_quality_live_adapter"] == (
-        "decision_quality_v2_7_probe_entry_v5"
+        "decision_quality_v2_7_probe_entry_v6"
     )
 
 

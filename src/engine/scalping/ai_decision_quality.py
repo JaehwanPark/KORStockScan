@@ -3591,11 +3591,30 @@ def repair_anticipatory_candidate_response(
     reason_codes.append(
         "risk_reward_favorable" if favorable else "risk_reward_unfavorable"
     )
+    mandatory_reason_codes = [
+        trigger_code,
+        "edge_positive" if edge_state == "EDGE" else "edge_absent",
+        "risk_reward_favorable" if favorable else "risk_reward_unfavorable",
+    ]
     if facts["ask_wall_wide_spread"]:
         reason_codes.extend(("ask_wall_adverse", "liquidity_adverse"))
+        mandatory_reason_codes.extend(("ask_wall_adverse", "liquidity_adverse"))
     if facts["adverse_distribution_no_edge"]:
-        reason_codes.append("distribution_adverse")
-    normalized_codes = list(dict.fromkeys(reason_codes))[:8]
+        reason_codes.extend(("distribution_adverse", "volume_confirmation_missing"))
+        mandatory_reason_codes.extend(
+            ("distribution_adverse", "volume_confirmation_missing")
+        )
+    unique_codes = list(dict.fromkeys(reason_codes))
+    mandatory_codes = [
+        code
+        for code in dict.fromkeys(mandatory_reason_codes)
+        if code is not None and code in unique_codes
+    ]
+    optional_codes = [code for code in unique_codes if code not in mandatory_codes]
+    normalized_codes = [
+        *mandatory_codes,
+        *optional_codes[: max(0, 8 - len(mandatory_codes))],
+    ]
     if repaired.get("reason_codes") != normalized_codes:
         repaired["reason_codes"] = normalized_codes
         repairs.append("reason_code_evidence_alignment")

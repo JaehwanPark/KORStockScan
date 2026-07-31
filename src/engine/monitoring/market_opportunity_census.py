@@ -10,7 +10,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from collections import defaultdict
+import math
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -51,7 +52,18 @@ METRIC_CONTRACT = {
     "window_policy": "exact_capture_timestamp_venue_panel_then_forward_pipeline",
     "sample_floor": "one_valid_ka10027_row_per_venue_panel",
     "primary_decision_metric": "top_n_entry_ai_provider_reach_rate_pct",
-    "source_quality_gate": "kiwoom_ka10027_success_same_venue_timestamp",
+    "secondary_diagnostic_metrics": {
+        "scanner_to_entry_ai_decision_latency_sec": (
+            "first same-promotion-lineage provider-backed decision timestamp "
+            "minus scanner promotion"
+        ),
+        "terminal_coverage_reason_counts": (
+            "first missing funnel owner or post-AI/submit terminal state"
+        ),
+    },
+    "source_quality_gate": (
+        "kiwoom_ka10027_success_same_venue_timestamp_and_scanner_lineage"
+    ),
     "forbidden_uses": FORBIDDEN_USES,
     "runtime_effect": False,
     "allowed_runtime_apply": False,
@@ -120,6 +132,13 @@ def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _lineage_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text == "-" or text.lower().startswith("not_applicable"):
+        return ""
+    return text
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -334,6 +353,13 @@ def _load_stage_index(
             {
                 "ts": ts,
                 "venue": _event_venue(row),
+                "record_id": _lineage_value(
+                    row.get("record_id") or fields.get("runtime_record_id")
+                ),
+                "scanner_promotion_id": _lineage_value(
+                    fields.get("scanner_promotion_id")
+                ),
+                "source_signature": str(fields.get("source_signature") or ""),
                 "reason": str(
                     fields.get("reason")
                     or fields.get("block_reason")
@@ -357,6 +383,8 @@ def _load_stage_index(
             "provider_called": _boolish(row.get("provider_called")),
             "provider_actual": str(row.get("provider_actual") or ""),
             "result_source": str(row.get("result_source") or ""),
+            "record_id": _lineage_value(row.get("record_id")),
+            "request_id": str(row.get("request_id") or ""),
         }
         index[code]["entry_ai_trace"].append(ai_row)
         provider_actual = ai_row["provider_actual"].strip().lower()
@@ -372,11 +400,14 @@ def _matching_stage_rows(
     stage: str,
     venue: str,
     after: datetime | None,
+    before: datetime | None = None,
     require_venue: bool,
 ) -> list[dict[str, Any]]:
     matched = []
     for row in stage_index.get(code, {}).get(stage, []):
         if after is not None and row["ts"] < after:
+            continue
+        if before is not None and row["ts"] >= before:
             continue
         if require_venue and row.get("venue") != venue:
             continue
@@ -443,25 +474,137 @@ def _coverage_row(
     *,
     after: datetime | None,
     require_venue: bool,
+    require_lineage: bool = False,
 ) -> dict[str, Any]:
-    flags: dict[str, bool] = {}
-    first_times: dict[str, str | None] = {}
-    actions: list[str] = []
-    for stage in STAGE_ORDER:
-        rows = _matching_stage_rows(
+    code = episode["stock_code"]
+    venue = episode["venue"]
+    candidate_rows = {
+        stage: _matching_stage_rows(
             stage_index,
-            code=episode["stock_code"],
+            code=code,
             stage=stage,
-            venue=episode["venue"],
+            venue=venue,
             after=after,
             require_venue=require_venue,
         )
+        for stage in STAGE_ORDER
+    }
+    lineage_status = "not_requested_noncausal"
+    lineage_promotion_id = ""
+    lineage_source_signature = ""
+    lineage_record_ids: set[str] = set()
+    promotions = sorted(candidate_rows["scanner_promoted"], key=lambda row: row["ts"])
+    if not require_lineage and promotions:
+        lineage_promotion_id = _lineage_value(promotions[0].get("scanner_promotion_id"))
+        lineage_source_signature = str(promotions[0].get("source_signature") or "")
+    if require_lineage:
+        selected_promotion = promotions[0] if promotions else None
+        if selected_promotion is None:
+            lineage_status = "not_applicable_no_scanner_promotion"
+            candidate_rows = {
+                stage: (rows if stage == "scanner_guard_observed" else [])
+                for stage, rows in candidate_rows.items()
+            }
+        else:
+            lineage_promotion_id = _lineage_value(
+                selected_promotion.get("scanner_promotion_id")
+            )
+            lineage_source_signature = str(
+                selected_promotion.get("source_signature") or ""
+            )
+            next_promotion_at = min(
+                (
+                    row["ts"]
+                    for row in promotions[1:]
+                    if row["ts"] > selected_promotion["ts"]
+                ),
+                default=None,
+            )
+            if not lineage_promotion_id:
+                lineage_status = "scanner_promotion_id_missing"
+                candidate_rows = {
+                    stage: (
+                        [selected_promotion]
+                        if stage == "scanner_promoted"
+                        else (rows if stage == "scanner_guard_observed" else [])
+                    )
+                    for stage, rows in candidate_rows.items()
+                }
+            else:
+                lineage_status = "scanner_promotion_lineage_proven"
+                lineaged_pipeline_rows: dict[str, list[dict[str, Any]]] = {}
+                for stage, rows in candidate_rows.items():
+                    if stage == "scanner_guard_observed":
+                        lineaged_pipeline_rows[stage] = rows
+                    elif stage == "scanner_promoted":
+                        lineaged_pipeline_rows[stage] = [selected_promotion]
+                    elif stage in {"entry_ai_trace", "entry_ai_provider_called"}:
+                        lineaged_pipeline_rows[stage] = []
+                    else:
+                        lineaged_pipeline_rows[stage] = [
+                            row
+                            for row in rows
+                            if (
+                                selected_promotion["ts"] <= row["ts"]
+                                and (
+                                    next_promotion_at is None
+                                    or row["ts"] < next_promotion_at
+                                )
+                                and _lineage_value(row.get("scanner_promotion_id"))
+                                == lineage_promotion_id
+                            )
+                        ]
+                        lineage_record_ids.update(
+                            _lineage_value(row.get("record_id"))
+                            for row in lineaged_pipeline_rows[stage]
+                            if _lineage_value(row.get("record_id"))
+                        )
+                for stage in ("entry_ai_trace", "entry_ai_provider_called"):
+                    lineaged_pipeline_rows[stage] = [
+                        row
+                        for row in candidate_rows[stage]
+                        if (
+                            selected_promotion["ts"] <= row["ts"]
+                            and (
+                                next_promotion_at is None
+                                or row["ts"] < next_promotion_at
+                            )
+                            and _lineage_value(row.get("record_id"))
+                            in lineage_record_ids
+                        )
+                    ]
+                if not lineage_record_ids:
+                    lineage_status = "scanner_promotion_record_lineage_pending"
+                candidate_rows = lineaged_pipeline_rows
+
+    flags: dict[str, bool] = {}
+    first_times: dict[str, datetime | None] = {}
+    actions: list[str] = []
+    for stage in STAGE_ORDER:
+        rows = candidate_rows[stage]
         flags[stage] = bool(rows)
         first_times[stage] = min((row["ts"] for row in rows), default=None)
         if stage == "entry_ai_trace":
             actions = sorted(
                 {str(row.get("action") or "") for row in rows if row.get("action")}
             )
+
+    promoted_at = first_times.get("scanner_promoted")
+    stage_latency_from_promotion_sec = (
+        {
+            stage: (
+                round((stage_at - promoted_at).total_seconds(), 6)
+                if promoted_at is not None
+                and stage_at is not None
+                and stage_at >= promoted_at
+                else None
+            )
+            for stage, stage_at in first_times.items()
+            if stage != "scanner_promoted"
+        }
+        if require_lineage and lineage_promotion_id
+        else {}
+    )
 
     if not flags["scanner_promoted"]:
         no_ai_reason = (
@@ -470,16 +613,19 @@ def _coverage_row(
             else "scanner_discovery_gap_or_unobserved"
         )
     else:
-        no_ai_reason = "entry_ai_provider_reached"
-        for stage, reason in (
-            ("fast_precheck", "scanner_fast_precheck_gap"),
-            ("heavy_eval", "scanner_heavy_eval_gap"),
-            ("entry_ai_trace", "entry_ai_trace_gap"),
-            ("entry_ai_provider_called", "entry_ai_preflight_or_transport_block"),
-        ):
-            if not flags[stage]:
-                no_ai_reason = reason
-                break
+        if require_lineage and not lineage_promotion_id:
+            no_ai_reason = "scanner_promotion_lineage_unproven"
+        else:
+            no_ai_reason = "entry_ai_provider_reached"
+            for stage, reason in (
+                ("fast_precheck", "scanner_fast_precheck_gap"),
+                ("heavy_eval", "scanner_heavy_eval_gap"),
+                ("entry_ai_trace", "entry_ai_trace_gap"),
+                ("entry_ai_provider_called", "entry_ai_preflight_or_transport_block"),
+            ):
+                if not flags[stage]:
+                    no_ai_reason = reason
+                    break
 
     return {
         **{
@@ -490,6 +636,22 @@ def _coverage_row(
         "first_stage_at": {
             key: value.isoformat() if value is not None else None
             for key, value in first_times.items()
+        },
+        "stage_latency_from_scanner_promoted_sec": (stage_latency_from_promotion_sec),
+        "scanner_lineage": {
+            "required": require_lineage,
+            "status": lineage_status,
+            "scanner_promotion_id": lineage_promotion_id or None,
+            "record_ids": sorted(lineage_record_ids),
+            "source_signature": lineage_source_signature,
+            "prev_close_gainer_source": (
+                "PREV_CLOSE_GAINER"
+                in {
+                    token.strip().upper()
+                    for token in lineage_source_signature.split(",")
+                    if token.strip()
+                }
+            ),
         },
         "entry_ai_actions": actions,
         "terminal_coverage_reason": (
@@ -504,11 +666,53 @@ def _coverage_row(
     }
 
 
+def _latency_summary(values: list[float]) -> dict[str, Any]:
+    ordered = sorted(float(value) for value in values if value >= 0)
+    if not ordered:
+        return {
+            "sample_count": 0,
+            "p50_sec": None,
+            "p95_sec": None,
+            "max_sec": None,
+        }
+
+    def percentile(fraction: float) -> float:
+        rank = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1))
+        return round(ordered[rank], 6)
+
+    return {
+        "sample_count": len(ordered),
+        "p50_sec": percentile(0.50),
+        "p95_sec": percentile(0.95),
+        "max_sec": round(ordered[-1], 6),
+    }
+
+
 def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(rows)
     counts = {
         stage: sum(bool(row["stage_reached"].get(stage)) for row in rows)
         for stage in STAGE_ORDER
+    }
+    latency_by_stage = {
+        stage: _latency_summary(
+            [
+                float(latency)
+                for row in rows
+                if (
+                    latency := (
+                        row.get("stage_latency_from_scanner_promoted_sec") or {}
+                    ).get(stage)
+                )
+                is not None
+            ]
+        )
+        for stage in (
+            "fast_precheck",
+            "heavy_eval",
+            "entry_ai_provider_called",
+            "submitted",
+        )
     }
     return {
         "episode_count": total,
@@ -517,6 +721,22 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
             stage: round((count / total * 100.0), 2) if total else 0.0
             for stage, count in counts.items()
         },
+        "terminal_coverage_reason_counts": dict(
+            sorted(Counter(row["terminal_coverage_reason"] for row in rows).items())
+        ),
+        "scanner_lineage_status_counts": dict(
+            sorted(
+                Counter(
+                    str((row.get("scanner_lineage") or {}).get("status") or "missing")
+                    for row in rows
+                ).items()
+            )
+        ),
+        "prev_close_gainer_source_promotion_count": sum(
+            bool((row.get("scanner_lineage") or {}).get("prev_close_gainer_source"))
+            for row in rows
+        ),
+        "stage_latency_from_scanner_promoted_sec": latency_by_stage,
     }
 
 
@@ -594,6 +814,7 @@ def build_report(
                     stage_index,
                     after=episode["first_census_at"],
                     require_venue=True,
+                    require_lineage=True,
                 )
                 for episode in episodes
             ]
@@ -676,8 +897,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Coverage",
         "",
-        "| Panel | Window | Venue | View | Episodes | Scanner promoted | Heavy eval | AI trace | Provider call | Submitted |",
-        "|---|---:|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Panel | Window | Venue | View | Episodes | Scanner promoted | PREV_CLOSE_GAINER source | Heavy eval | AI trace | Provider call | Promote→AI decision p50 sec | Submitted |",
+        "|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for panel, panel_rows in report.get("coverage", {}).items():
         for window, views in panel_rows.items():
@@ -685,14 +906,20 @@ def render_markdown(report: dict[str, Any]) -> str:
                 summaries = [("ALL", summary), *summary.get("by_venue", {}).items()]
                 for venue, venue_summary in summaries:
                     counts = venue_summary.get("stage_counts") or {}
+                    latency = (
+                        venue_summary.get("stage_latency_from_scanner_promoted_sec")
+                        or {}
+                    ).get("entry_ai_provider_called") or {}
                     lines.append(
                         "| "
                         f"{panel} | {window.replace('top_', '')} | {venue} | "
                         f"{view} | {venue_summary.get('episode_count', 0)} | "
                         f"{counts.get('scanner_promoted', 0)} | "
+                        f"{venue_summary.get('prev_close_gainer_source_promotion_count', 0)} | "
                         f"{counts.get('heavy_eval', 0)} | "
                         f"{counts.get('entry_ai_trace', 0)} | "
                         f"{counts.get('entry_ai_provider_called', 0)} | "
+                        f"{latency.get('p50_sec')} | "
                         f"{counts.get('submitted', 0)} |"
                     )
     lines.extend(
