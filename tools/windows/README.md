@@ -3,8 +3,9 @@
 `samsung_price_widget.py` is a small always-on-top Windows widget (190 x 170
 pixels) that shows Samsung Electronics (`005930`) current price, the difference
 from the previous successful 10-second query, today's low-price distance, and
-the direction of the three latest completed one-minute closes. It also draws a
-compact 20-minute line chart from completed one-minute closes.
+the completed-close direction over 1-, 3-, and 5-minute horizons on one compact
+line. It also draws a compact 20-minute line chart from completed one-minute
+closes; no additional graph is created for the three trend horizons.
 
 The current-price query and previous-price delta refresh every 10 seconds;
 the trend and chart remain based on completed one-minute candles. During the
@@ -59,7 +60,7 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
 
 ## Official Kiwoom reference gate
 
-- Retrieved: `2026-07-31T08:25:53+09:00`
+- Retrieved: `2026-07-31T11:45:32+09:00`
 - Upstream: `Kiwoom-Securities/Kiwoom-REST-API`
   `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
 - Inspected: `kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`,
@@ -72,8 +73,13 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
   quote value `cur_prc`.
 
 The endpoint uses `ka10001.low_pric` for today's low and `ka10080` with
-`tic_scope: "1"` for the three completed one-minute closes. Both official
-request contracts accept `005930_NX` for NXT, while KRX uses `005930`.
+`tic_scope: "1"` for completed one-minute closes. It derives 1-, 3-, and
+5-minute trends locally from contiguous completed closes, requires the
+net-change and linear slope direction to agree, and treats movement within
+5 basis points as flat. A missing minute makes that horizon unavailable, and
+the trend window cannot cross PRE (`08:00`), KRX (`09:00`), or NXT aftermarket
+(`15:40`) session starts. Both official request contracts accept `005930_NX`
+for NXT, while KRX uses `005930`.
 `08:00~08:50 KST` responses retain `market_venue=NXT` for backward
 compatibility and expose the project cohort as
 `market_cohort=PREMARKET_KRX_LIKE`. The response also exposes

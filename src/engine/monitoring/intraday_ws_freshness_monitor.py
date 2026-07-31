@@ -313,9 +313,7 @@ def _dashboard_snapshot_rows(
             continue
         ages = _dictish(raw.get("last_realtime_type_ages_ms"))
         numeric_ages = [
-            age
-            for value in ages.values()
-            if (age := _to_float(value)) is not None
+            age for value in ages.values() if (age := _to_float(value)) is not None
         ]
         last_receive_age_ms = min(numeric_ages) if numeric_ages else None
         age_0b_ms = _to_float(raw.get("last_0b_age_ms"))
@@ -323,8 +321,7 @@ def _dashboard_snapshot_rows(
             age_0b_ms = _to_float(ages.get("0B"))
         age_0d_ms = _to_float(ages.get("0D"))
         non_trade_fresh = any(
-            (age := _to_float(ages.get(realtime_type))) is not None
-            and age < stale_ms
+            (age := _to_float(ages.get(realtime_type))) is not None and age < stale_ms
             for realtime_type in ("0D", "0w", "0F")
         )
         if last_receive_age_ms is None:
@@ -348,14 +345,10 @@ def _dashboard_snapshot_rows(
                     else None
                 ),
                 "last_0b_age_sec": (
-                    round(age_0b_ms / 1000.0, 3)
-                    if age_0b_ms is not None
-                    else None
+                    round(age_0b_ms / 1000.0, 3) if age_0b_ms is not None else None
                 ),
                 "last_0d_age_sec": (
-                    round(age_0d_ms / 1000.0, 3)
-                    if age_0d_ms is not None
-                    else None
+                    round(age_0d_ms / 1000.0, 3) if age_0d_ms is not None else None
                 ),
                 "last_trade_cum_volume": None,
                 "trade_tick_quiet": trade_tick_quiet,
@@ -364,9 +357,7 @@ def _dashboard_snapshot_rows(
                 "observed_market_route": str(
                     raw.get("last_ws_market_route") or "unknown"
                 ),
-                "observed_market_suffix": str(
-                    raw.get("last_ws_market_suffix") or ""
-                ),
+                "observed_market_suffix": str(raw.get("last_ws_market_suffix") or ""),
                 "snapshot_row_authority": "live_dashboard_observation_only",
                 "subscription_state_available": False,
             }
@@ -531,9 +522,7 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "subscription_stale_like_count": stale_like,
         "subscription_stale_like_rate_pct": _rate_pct(stale_like, total),
         "observed_stale_like_count": len(observed_stale_like_rows),
-        "observed_stale_like_rate_pct": _rate_pct(
-            len(observed_stale_like_rows), total
-        ),
+        "observed_stale_like_rate_pct": _rate_pct(len(observed_stale_like_rows), total),
         "trade_tick_quiet_count": len(quiet_rows),
         "trade_tick_quiet_rate_pct": _rate_pct(len(quiet_rows), total),
         "repair_recommended_count": len(repair_rows),

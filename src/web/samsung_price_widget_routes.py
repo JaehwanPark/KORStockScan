@@ -27,10 +27,12 @@ _WIDGET_ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
 _SAMSUNG_CODE = "005930"
 _SAMSUNG_NAME = "삼성전자"
 _REQUEST_TIMEOUT_SEC = 5
-_MINUTE_TREND_BAR_COUNT = 3
 _MINUTE_CHART_BAR_COUNT = 20
+_MINUTE_TREND_HORIZONS = (1, 3, 5)
+_MINUTE_TREND_FLAT_BAND_RATE = 0.0005
 _NXT_PREMARKET_START = datetime_time(hour=8)
 _NXT_PREMARKET_END = datetime_time(hour=8, minute=50)
+_KRX_SESSION_START = datetime_time(hour=9)
 _NXT_AFTERMARKET_START = datetime_time(hour=15, minute=40)
 _NXT_AFTERMARKET_END = datetime_time(hour=20)
 
@@ -65,7 +67,11 @@ def _quote_route_for_observed_at(observed_at: datetime) -> tuple[str, str, str]:
 
 
 def _completed_minute_closes(
-    rows: object, *, observed_at: datetime, limit: int
+    rows: object,
+    *,
+    observed_at: datetime,
+    limit: int,
+    session_start: datetime_time | None = None,
 ) -> list[tuple[str, int]]:
     """Return current-session completed minute closes, excluding the forming bar."""
     if not isinstance(rows, list):
@@ -73,6 +79,9 @@ def _completed_minute_closes(
 
     current_minute = observed_at.strftime("%Y%m%d%H%M")
     today = observed_at.strftime("%Y%m%d")
+    session_start_minute = (
+        f"{today}{session_start.strftime('%H%M')}" if session_start is not None else ""
+    )
     completed_by_time: dict[str, int] = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -83,6 +92,7 @@ def _completed_minute_closes(
             len(source_time) < 14
             or not source_time[:14].isdigit()
             or not source_time.startswith(today)
+            or (bool(session_start_minute) and source_time[:12] < session_start_minute)
             or source_time[:12] >= current_minute
             or close_price is None
         ):
@@ -92,19 +102,64 @@ def _completed_minute_closes(
     return sorted(completed_by_time.items())[-max(1, int(limit)) :]
 
 
-def _classify_minute_trend(completed: list[tuple[str, int]]) -> tuple[str, str | None]:
-    """Classify the last three completed one-minute closes."""
-    completed = completed[-_MINUTE_TREND_BAR_COUNT:]
-    if len(completed) < _MINUTE_TREND_BAR_COUNT:
+def _classify_horizon_trend(
+    completed: list[tuple[str, int]], *, horizon_minutes: int
+) -> tuple[str, str | None]:
+    """Classify one completed-close horizon without crossing a missing minute."""
+    required_count = max(1, int(horizon_minutes)) + 1
+    window = completed[-required_count:]
+    if len(window) < required_count:
         return "unavailable", None
 
-    closes = [price for _, price in completed]
-    latest_time = completed[-1][0]
-    if closes[0] < closes[1] < closes[2]:
+    try:
+        timestamps = [
+            datetime.strptime(source_time[:14], "%Y%m%d%H%M%S")
+            for source_time, _ in window
+        ]
+    except (TypeError, ValueError):
+        return "unavailable", None
+    if any(
+        int((current - previous).total_seconds()) != 60
+        for previous, current in zip(timestamps, timestamps[1:])
+    ):
+        return "unavailable", None
+
+    closes = [price for _, price in window]
+    latest_time = window[-1][0]
+    net_change = closes[-1] - closes[0]
+    flat_band = max(1, round(closes[-1] * _MINUTE_TREND_FLAT_BAND_RATE))
+    center = (len(closes) - 1) / 2
+    slope_numerator = sum(
+        (index - center) * price for index, price in enumerate(closes)
+    )
+    if abs(net_change) <= flat_band:
+        return "flat", latest_time
+    if net_change > flat_band and slope_numerator > 0:
         return "up", latest_time
-    if closes[0] > closes[1] > closes[2]:
+    if net_change < -flat_band and slope_numerator < 0:
         return "down", latest_time
     return "flat", latest_time
+
+
+def _classify_minute_trends(
+    completed: list[tuple[str, int]],
+) -> tuple[dict[str, str], str | None]:
+    trends: dict[str, str] = {}
+    latest_time: str | None = None
+    for horizon in _MINUTE_TREND_HORIZONS:
+        trend, trend_at = _classify_horizon_trend(
+            completed,
+            horizon_minutes=horizon,
+        )
+        trends[f"{horizon}m"] = trend
+        if trend_at is not None:
+            latest_time = trend_at
+    return trends, latest_time
+
+
+def _classify_minute_trend(completed: list[tuple[str, int]]) -> tuple[str, str | None]:
+    """Backward-compatible one-minute trend classifier."""
+    return _classify_horizon_trend(completed, horizon_minutes=1)
 
 
 def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
@@ -178,6 +233,11 @@ def get_samsung_price():
     request_code, market_venue, market_session = _quote_route_for_observed_at(
         observed_at
     )
+    session_start = {
+        "krx_like_premarket": _NXT_PREMARKET_START,
+        "nxt_aftermarket": _NXT_AFTERMARKET_START,
+        "krx_or_closed": _KRX_SESSION_START,
+    }[market_session]
     quote_payload = _kiwoom_post(
         token,
         path="/api/dostk/stkinfo",
@@ -212,8 +272,10 @@ def get_samsung_price():
         (chart_payload or {}).get("stk_min_pole_chart_qry"),
         observed_at=observed_at,
         limit=_MINUTE_CHART_BAR_COUNT,
+        session_start=session_start,
     )
-    minute_trend, minute_trend_at = _classify_minute_trend(completed_minute_closes)
+    minute_trends, minute_trend_at = _classify_minute_trends(completed_minute_closes)
+    minute_trend = minute_trends["1m"]
 
     result = jsonify(
         {
@@ -225,7 +287,11 @@ def get_samsung_price():
             "day_low_delta": day_low_delta,
             "day_low_delta_pct": day_low_delta_pct,
             "minute_trend": minute_trend,
-            "minute_trend_basis": "3_completed_1m_closes",
+            "minute_trends": minute_trends,
+            "minute_trend_basis": "2_completed_contiguous_1m_closes",
+            "minute_trends_basis": (
+                "1m_3m_5m_completed_contiguous_1m_close_horizons_5bp_flat_band"
+            ),
             "minute_chart_basis": "20_completed_1m_closes",
             "minute_chart": [
                 {
@@ -248,6 +314,7 @@ def get_samsung_price():
                 else market_venue
             ),
             "market_session": market_session,
+            "minute_session_start_kst": session_start.strftime("%H:%M"),
             "quote_request_code": request_code,
             "source": f"kiwoom_ka10001_{market_venue.lower()}",
             "token_mode": "shared_cache_only",

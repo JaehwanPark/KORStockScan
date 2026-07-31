@@ -2181,9 +2181,7 @@ class GPTSniperEngine:
                     (current_price - exit_price) / exit_price * 100.0
                 )
             recent_exit_probe_blocked = bool(
-                exit_price <= 0.0
-                or current_price <= 0.0
-                or current_price > exit_price
+                exit_price <= 0.0 or current_price <= 0.0 or current_price > exit_price
             )
             if recent_exit_probe_blocked:
                 entry_probe_intent = False
