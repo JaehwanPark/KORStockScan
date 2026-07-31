@@ -128,6 +128,59 @@ def test_market_gainer_source_filters_prev_close_gain_at_or_above_25_pct(
     )
 
 
+def test_scanner_pre_filter_blocks_25_pct_gain_from_non_market_gainer_source():
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(
+            {
+                "Code": "005930",
+                "Price": 249500,
+                "Source": "REALTIME_RANK_START",
+                "RealtimeRankFluRate": 25.0,
+            }
+        )
+        == "prev_close_gain_at_or_above_scanner_cap"
+    )
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(
+            {
+                "Code": "005930",
+                "Price": 249500,
+                "Source": "REALTIME_RANK_START",
+                "RealtimeRankFluRate": 24.99,
+            }
+        )
+        == ""
+    )
+
+
+def test_scanner_pre_filter_uses_max_prev_close_gain_across_merged_sources():
+    target = {
+        "Code": "005930",
+        "Price": 249500,
+        "Source": (
+            "LOW_REBOUND_RISING_MISSED,REALTIME_RANK_START,"
+            "PRICE_JUMP_START"
+        ),
+        "LowReboundDisplayChangeRate": "nan",
+        "RealtimeRankFluRate": 26.09,
+        "PriceJumpFluRate": 1.2,
+        "LowReboundPct": 1.0,
+        "IntradayLowPrice": 240000,
+        "IntradayHighPrice": 250000,
+        "DistanceFromIntradayHighPct": 0.2,
+        "LowReboundBaseSourceSignature": "REALTIME_RANK_START",
+    }
+
+    assert scalping_scanner._scanner_max_prev_close_gain_pct(target) == (
+        26.09,
+        "RealtimeRankFluRate",
+    )
+    assert (
+        scalping_scanner._scanner_candidate_pre_filter_reason(target)
+        == "prev_close_gain_at_or_above_scanner_cap"
+    )
+
+
 def test_scanner_sleep_targets_prewarm_boundary_instead_of_coarse_minute():
     assert (
         scalping_scanner._seconds_until_next_scalping_prewarm(
