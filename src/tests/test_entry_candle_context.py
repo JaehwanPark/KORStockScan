@@ -743,9 +743,20 @@ def test_krx_regular_accepts_sor_integrated_execution_view_without_event_attribu
     monkeypatch,
 ):
     _enable(monkeypatch)
+    observed_at = datetime(2026, 7, 23, 10, 0, tzinfo=KST)
+    observed_epoch = observed_at.timestamp()
     ws = _ws(10000)
     ws["market_suffix"] = "_AL"
     ws["market_route"] = "krx_nxt_integrated"
+    ws["last_realtime_type_ts"] = {
+        "0B": observed_epoch - 0.1,
+        "0D": observed_epoch - 0.2,
+    }
+    ws["last_realtime_type_market_suffix"] = {"0B": "_AL", "0D": "_AL"}
+    ws["last_realtime_type_market_route"] = {
+        "0B": "krx_nxt_integrated",
+        "0D": "krx_nxt_integrated",
+    }
     ws["recent_trade_ticks_by_route"] = {"KRX|krx_regular": []}
 
     context = build_entry_candle_context(
@@ -754,15 +765,15 @@ def test_krx_regular_accepts_sor_integrated_execution_view_without_event_attribu
         ws,
         venue="SOR",
         session="krx_regular",
-        now_ts=datetime(2026, 7, 23, 10, 0, tzinfo=KST),
+        now_ts=observed_at,
         recent_candles=_candles(20, start_minute=40),
-        source_meta={},
+        source_meta={"entry_candle_request_code": "000660_AL"},
         broker_route="SOR",
     )
 
     assert context["venue"] == "KRX"
-    assert context["request_code"] == "000660"
-    assert context["rest_route"] == "KRX"
+    assert context["request_code"] == "000660_AL"
+    assert context["rest_route"] == "_AL"
     assert context["ws_route"] == "krx_nxt_integrated"
     assert context["source_quality"]["status"] == "fresh_consistent"
     assert "venue_conflict" not in context["source_quality"]["blockers"]

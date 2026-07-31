@@ -1264,6 +1264,7 @@ def build_entry_candle_context(
         recent_candles=recent_candles,
         source_meta=source_meta,
         broker_route=planned_broker_route,
+        allow_integrated_sor_execution_view=True,
     )
     context.update(
         {
