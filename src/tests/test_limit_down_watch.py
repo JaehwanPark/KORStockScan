@@ -685,6 +685,67 @@ def test_postclose_report_distinguishes_missing_event_source(tmp_path):
     )
 
 
+def test_postclose_report_skips_event_scan_without_candidate_source(
+    tmp_path, monkeypatch
+):
+    event_path = tmp_path / "events.jsonl"
+    event_path.write_text("not-json\n" * 100, encoding="utf-8")
+
+    def fail_if_scanned(_path):
+        raise AssertionError("event source must not be scanned before candidate preflight")
+
+    monkeypatch.setattr(limit_down_watch_report, "_load_events", fail_if_scanned)
+
+    report = limit_down_watch_report.build_report(
+        "2026-07-27",
+        event_path=event_path,
+        candidate_path=tmp_path / "missing-candidates.json",
+    )
+
+    readiness = report["evidence_readiness"]
+    assert report["status"] == "source_blocked"
+    assert readiness["source_quality_status"] == "missing"
+    assert readiness["event_source_required"] is False
+    assert readiness["event_source_valid"] is True
+    assert readiness["event_source"]["read_mode"] == (
+        "not_scanned_candidate_preflight"
+    )
+    assert readiness["event_source"]["scan_skip_reason"] == "missing"
+    assert readiness["event_source"]["line_count"] == 0
+    assert "ordered_intraday_event_source_invalid" not in readiness["blockers"]
+    markdown = limit_down_watch_report._render_markdown(report)
+    assert "- event_source_required: `False`" in markdown
+    assert "- event_source_read_mode: `not_scanned_candidate_preflight`" in markdown
+
+
+def test_postclose_report_skips_event_scan_for_valid_empty_candidate_set(
+    tmp_path, monkeypatch
+):
+    candidate_path = tmp_path / "candidates.json"
+    candidate_path.write_text(
+        json.dumps(_candidate_source_payload()), encoding="utf-8"
+    )
+
+    def fail_if_scanned(_path):
+        raise AssertionError("empty candidate set must not scan the event source")
+
+    monkeypatch.setattr(limit_down_watch_report, "_load_events", fail_if_scanned)
+
+    report = limit_down_watch_report.build_report(
+        "2026-07-27",
+        event_path=tmp_path / "missing-events.jsonl",
+        candidate_path=candidate_path,
+    )
+
+    readiness = report["evidence_readiness"]
+    assert report["status"] == "no_observation"
+    assert readiness["source_quality_status"] == "no_candidate"
+    assert readiness["candidate_source_valid"] is True
+    assert readiness["event_source_required"] is False
+    assert readiness["event_source_valid"] is True
+    assert readiness["event_source"]["scan_skip_reason"] == "no_candidate"
+
+
 def test_postclose_report_blocks_event_contract_violation(tmp_path):
     event_path = tmp_path / "events.jsonl"
     candidate_path = tmp_path / "candidates.json"

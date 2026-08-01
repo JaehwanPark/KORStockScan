@@ -133,14 +133,6 @@ def _step_specs(target_date: str) -> list[StepSpec]:
         )
 
     deep_steps = {
-        "scalp_sim_ai_deferred_review": (
-            _pair(
-                "scalp_sim_ai_deferred_review",
-                "scalp_sim_ai_deferred_review",
-                target_date,
-            ),
-            ("data/threshold_cycle/snapshots",),
-        ),
         "pattern_lab_currentness_audit": (
             _pair(
                 "pattern_lab_currentness_audit",

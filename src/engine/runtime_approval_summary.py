@@ -2490,6 +2490,19 @@ def _microstructure_reaction_context_summary(
             if isinstance(payload.get("source_quality_counts"), dict)
             else {}
         ),
+        "opportunity_exploration_funnel": (
+            payload.get("opportunity_exploration_funnel")
+            if isinstance(payload.get("opportunity_exploration_funnel"), dict)
+            else {}
+        ),
+        "clean_baseline_cumulative_opportunity_exploration": (
+            payload.get("clean_baseline_cumulative_opportunity_exploration")
+            if isinstance(
+                payload.get("clean_baseline_cumulative_opportunity_exploration"),
+                dict,
+            )
+            else {}
+        ),
         "avg_ask_sweep_score": payload.get("avg_ask_sweep_score"),
         "avg_post_sweep_hold_score": payload.get("avg_post_sweep_hold_score"),
         "avg_bid_replenishment_score": payload.get("avg_bid_replenishment_score"),
@@ -2504,7 +2517,12 @@ def _microstructure_reaction_context_summary(
     }
 
 
-def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
+def build_runtime_approval_summary(
+    target_date: str,
+    *,
+    include_swing: bool = True,
+    include_producer_gap: bool = True,
+) -> dict[str, Any]:
     _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
     ev_json, _ = ev_report_paths(target_date)
@@ -2519,7 +2537,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     )
     clean_policy_warning = policy_warning_for_date(target_date, clean_policy)
     source_quality_preflight_gate = load_source_quality_preflight(target_date)
-    swing_report = _load_json(swing_path)
+    swing_report = _load_json(swing_path) if include_swing else {}
     sources = (
         ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     )
@@ -2560,10 +2578,19 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     )
     currentness_audit = _audit_summary(currentness_path)
     pattern_lab_ai_review = _audit_summary(pattern_lab_ai_review_path)
-    producer_gap_discovery = _audit_summary(producer_gap_discovery_path)
+    producer_gap_discovery = (
+        _audit_summary(producer_gap_discovery_path)
+        if include_producer_gap
+        else {
+            "status": "disabled_by_default",
+            "available": False,
+            "artifact": None,
+            "runtime_effect": False,
+        }
+    )
     propagation_audit = _audit_summary(propagation_path)
     scalping_rows = _scalping_rows(ev_report, calibration_report)
-    swing_rows = _swing_rows(swing_report)
+    swing_rows = _swing_rows(swing_report) if include_swing else []
     panic_rows = _panic_rows(calibration_report, target_date)
     scalp_entry_adm_summary = _entry_adm_summary(ev_report, scalp_entry_adm_path)
     lifecycle_matrix_summary = _lifecycle_matrix_summary(
@@ -2575,10 +2602,20 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     lifecycle_bucket_windows_summary = _lifecycle_bucket_windows_summary(
         target_date, ev_report
     )
-    swing_discovery_summary = _swing_strategy_discovery_summary(ev_report)
-    swing_lifecycle_matrix_summary = _swing_lifecycle_matrix_summary(ev_report)
+    swing_discovery_summary = (
+        _swing_strategy_discovery_summary(ev_report)
+        if include_swing
+        else {"available": False, "status": "disabled_by_operator", "runtime_effect": False}
+    )
+    swing_lifecycle_matrix_summary = (
+        _swing_lifecycle_matrix_summary(ev_report)
+        if include_swing
+        else {"available": False, "status": "disabled_by_operator", "runtime_effect": False}
+    )
     swing_lifecycle_bucket_discovery_summary = (
         _swing_lifecycle_bucket_discovery_summary(ev_report)
+        if include_swing
+        else {"available": False, "status": "disabled_by_operator", "runtime_effect": False}
     )
     institutional_flow_summary = _institutional_flow_context_summary(ev_report)
     microstructure_reaction_summary = _microstructure_reaction_context_summary(
@@ -2605,6 +2642,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "report_type": "runtime_approval_summary",
         "purpose": "read_only_summary_only_no_runtime_mutation",
         "runtime_mutation_allowed": False,
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
+        "producer_gap_source_enabled": include_producer_gap,
         "clean_tuning_baseline": clean_policy,
         "source_quality_preflight_gate": source_quality_preflight_gate,
         "sources": {
@@ -2612,7 +2652,9 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "observation_source_quality_audit": source_quality_preflight_gate.get(
                 "artifact"
             ),
-            "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
+            "swing_runtime_approval": (
+                str(swing_path) if include_swing and swing_path.exists() else None
+            ),
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "entry_split_order_plan": (
                 (ev_report.get("sources") or {}).get("entry_split_order_plan")
@@ -2650,7 +2692,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             ),
             "producer_gap_discovery": (
                 str(producer_gap_discovery_path)
-                if producer_gap_discovery_path.exists()
+                if include_producer_gap and producer_gap_discovery_path.exists()
                 else None
             ),
             "pattern_lab_propagation_audit": (
@@ -2849,7 +2891,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             message
             for message in [
                 "threshold_cycle_ev_missing" if not ev_json.exists() else "",
-                "swing_runtime_approval_missing" if not swing_path.exists() else "",
+                (
+                    "swing_runtime_approval_missing"
+                    if include_swing and not swing_path.exists()
+                    else ""
+                ),
                 (
                     "scalp_entry_action_decision_matrix_missing"
                     if not scalp_entry_adm_path
@@ -2867,12 +2913,14 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 ),
                 (
                     "swing_lifecycle_decision_matrix_missing"
-                    if not swing_lifecycle_matrix_summary.get("available")
+                    if include_swing
+                    and not swing_lifecycle_matrix_summary.get("available")
                     else ""
                 ),
                 (
                     "swing_lifecycle_bucket_discovery_missing"
-                    if not swing_lifecycle_bucket_discovery_summary.get("available")
+                    if include_swing
+                    and not swing_lifecycle_bucket_discovery_summary.get("available")
                     else ""
                 ),
                 (
@@ -2892,7 +2940,8 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
                 ),
                 (
                     "producer_gap_discovery_missing"
-                    if not producer_gap_discovery_path.exists()
+                    if include_producer_gap
+                    and not producer_gap_discovery_path.exists()
                     else ""
                 ),
                 (
@@ -3197,8 +3246,14 @@ def main(argv: list[str] | None = None) -> int:
         description="Build read-only runtime approval summary report."
     )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    parser.add_argument("--exclude-swing", action="store_true")
+    parser.add_argument("--producer-gap-disabled", action="store_true")
     args = parser.parse_args(argv)
-    report = build_runtime_approval_summary(args.target_date)
+    report = build_runtime_approval_summary(
+        args.target_date,
+        include_swing=not args.exclude_swing,
+        include_producer_gap=not args.producer_gap_disabled,
+    )
     print(json.dumps(report, ensure_ascii=False))
     return 0
 

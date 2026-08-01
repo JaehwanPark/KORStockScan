@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -74,9 +75,22 @@ def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
 
 
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
+    if not isinstance(payload, dict):
+        raise TypeError("monitor_snapshot_payload_must_be_object")
     path = _snapshot_path(kind, target_date)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    tmp_path = Path(temp_name)
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
     return path
 
 

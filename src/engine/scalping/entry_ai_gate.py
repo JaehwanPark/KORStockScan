@@ -179,6 +179,27 @@ def evaluate_entry_score_role_gate(
     usable = not excluded_reason
     score = _safe_float(ai_score if ai_score is not None else result.get("score"), 0.0)
     action = str(ai_action or result.get("action") or "").strip().upper()
+    evidence = (
+        result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    )
+    contract_status = (
+        str(result.get("decision_quality_contract_status") or "").strip().lower()
+    )
+    edge_state = str(result.get("edge_state") or "").strip().upper()
+    probe_intent = _truthy(result.get("entry_probe_intent"))
+    probe_intent_status = (
+        str(result.get("entry_probe_intent_status") or "").strip().lower()
+    )
+    recovery_trigger = str(evidence.get("trigger") or "").strip().lower()
+    recheck_usable = bool(
+        usable
+        and action in {"WAIT", "WAIT_REQUOTE"}
+        and contract_status == "pass"
+        and edge_state == "EDGE"
+        and probe_intent
+        and probe_intent_status == "eligible_wait_probe"
+        and recovery_trigger == "recovery_required"
+    )
     prior = evaluate_ai_score_prior(action, score, usable=usable)
     return {
         "entry_score_role_gate": "usable" if usable else "excluded",
@@ -187,9 +208,14 @@ def evaluate_entry_score_role_gate(
         "entry_score_action": action or "-",
         "entry_score_value": round(score, 3),
         "entry_score_usable_for_entry_submit": bool(usable),
-        "entry_score_usable_for_recheck": bool(usable),
+        "entry_score_usable_for_recheck": recheck_usable,
         "entry_score_usable_for_state_history": bool(usable),
         "entry_score_excluded_reason": excluded_reason or "-",
+        "entry_recheck_contract_status": contract_status or "unreported",
+        "entry_recheck_edge_state": edge_state or "-",
+        "entry_recheck_probe_intent": probe_intent,
+        "entry_recheck_probe_intent_status": probe_intent_status or "not_reported",
+        "entry_recheck_recovery_trigger": recovery_trigger or "-",
         **prior,
     }
 
@@ -210,6 +236,19 @@ def entry_score_role_log_fields(role_gate: dict[str, Any] | None) -> dict[str, A
             gate.get("entry_score_usable_for_state_history", False)
         ),
         "entry_score_excluded_reason": gate.get("entry_score_excluded_reason", "-"),
+        "entry_recheck_contract_status": gate.get(
+            "entry_recheck_contract_status", "unreported"
+        ),
+        "entry_recheck_edge_state": gate.get("entry_recheck_edge_state", "-"),
+        "entry_recheck_probe_intent": bool(
+            gate.get("entry_recheck_probe_intent", False)
+        ),
+        "entry_recheck_probe_intent_status": gate.get(
+            "entry_recheck_probe_intent_status", "not_reported"
+        ),
+        "entry_recheck_recovery_trigger": gate.get(
+            "entry_recheck_recovery_trigger", "-"
+        ),
         "score_gate_converted_to_prior": bool(
             gate.get("score_gate_converted_to_prior", True)
         ),

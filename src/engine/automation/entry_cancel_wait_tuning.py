@@ -160,10 +160,34 @@ def build_report(target_date: str) -> dict[str, Any]:
             "calibration_state": state,
             "candidate_ev": candidates,
         }
+    if invalid_rows:
+        recommended = dict(previous)
+        for profile, item in profiles.items():
+            item["recommended_threshold_sec"] = previous[profile]
+            item["calibration_state"] = "hold_source_quality"
     source_quality_status = (
         "missing_source_hold"
         if not source_path.exists()
         else "warning" if invalid_rows else "pass"
+    )
+    total_registered = sum(registered.values())
+    total_completed = sum(
+        sum(len(values) for values in profile.values())
+        for profile in completed.values()
+    )
+    threshold_change_supported = any(
+        recommended[profile] != previous[profile] for profile in DEFAULT_THRESHOLDS
+    )
+    evidence_state = (
+        "missing_source_hold"
+        if not source_path.exists()
+        else "invalid_rows_warning"
+        if invalid_rows
+        else "no_observation_hold"
+        if total_registered == 0 and total_completed == 0
+        else "candidate_ready"
+        if threshold_change_supported
+        else "observed_hold"
     )
     return {
         "schema_version": 1,
@@ -185,6 +209,13 @@ def build_report(target_date: str) -> dict[str, Any]:
         ],
         "source_quality_status": source_quality_status,
         "invalid_row_count": invalid_rows,
+        "evidence_summary": {
+            "state": evidence_state,
+            "registered_count": total_registered,
+            "completed_candidate_count": total_completed,
+            "threshold_change_supported": threshold_change_supported,
+            "carry_forward_applied": not threshold_change_supported,
+        },
         "enabled": True,
         "automatic_off_allowed": False,
         "previous_thresholds": previous,
@@ -205,6 +236,10 @@ def write_report(target_date: str) -> dict[str, Any]:
         "",
         f"- family: `{RUNTIME_FAMILY}`",
         f"- source_quality_status: `{payload['source_quality_status']}`",
+        f"- evidence_state: `{payload['evidence_summary']['state']}`",
+        f"- registered_count: `{payload['evidence_summary']['registered_count']}`",
+        f"- completed_candidate_count: `{payload['evidence_summary']['completed_candidate_count']}`",
+        f"- threshold_change_supported: `{payload['evidence_summary']['threshold_change_supported']}`",
         "- enabled: `true` (automatic OFF forbidden)",
         "- excluded_consumers: `ADM, LDM, lifecycle_bucket, threshold_cycle_ev, runtime_apply_bridge`",
         "",

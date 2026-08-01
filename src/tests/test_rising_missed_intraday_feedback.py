@@ -1617,6 +1617,12 @@ def test_build_report_flags_rising_missed_avg_down_ge2_initial_quality_fail(tmp_
     assert report["summary"]["forced_rising_missed_record_count"] == 2
     assert report["summary"]["rising_missed_avg_down_ge2_count"] == 1
     assert report["summary"]["initial_quality_fail_count"] == 1
+    assert report["summary"]["consumer_readiness"] == {
+        "scout_workorder_input_ready": True,
+        "closed_first_touch_outcome_available": False,
+        "code_improvement_order_available": True,
+        "state": "actionable_source_rows",
+    }
     record = report["records"][0]
     assert record["record_id"] == "101"
     assert record["feedback_label"] == "rising_missed_initial_quality_fail"

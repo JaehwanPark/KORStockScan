@@ -64,6 +64,43 @@ def test_run_uses_snapshot_manifest_without_db_fallback(tmp_path, monkeypatch):
     assert stats["skipped_unverified"] == 0
 
 
+def test_run_does_not_compress_manifested_corrupt_snapshot(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True)
+    manifest_dir = snapshot_dir / "manifests"
+    manifest_dir.mkdir(parents=True)
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir(parents=True)
+    snapshot_path = snapshot_dir / "missed_entry_counterfactual_2026-04-22.json"
+    snapshot_path.write_text('{"full_rows":[', encoding="utf-8")
+    (manifest_dir / "monitor_snapshot_manifest_2026-04-22_full.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-04-22",
+                "profile": "full",
+                "snapshot_paths": {
+                    "missed_entry_counterfactual": str(snapshot_path)
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(archive, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_MANIFEST_DIR", manifest_dir)
+
+    stats = archive.run(retention_days=1, today=date(2026, 4, 23), dry_run=False)
+
+    assert stats["snapshots"]["compressed"] == 0
+    assert stats["skipped_unverified"] == 1
+    assert snapshot_path.exists()
+    assert not snapshot_path.with_suffix(".json.gz").exists()
+    assert stats["errors"] == [
+        "snapshot:missed_entry_counterfactual_2026-04-22.json:"
+        "invalid_json_boundary_not_compressed"
+    ]
+
+
 def test_run_compresses_pipeline_events_only_after_parquet_verification(
     tmp_path, monkeypatch
 ):

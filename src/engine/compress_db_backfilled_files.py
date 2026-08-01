@@ -6,7 +6,7 @@ import argparse
 import gzip
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR
@@ -86,6 +86,35 @@ def _threshold_backfill_exists(target_date: date) -> bool:
     return partition_dir.exists() and any(partition_dir.glob("family=*/part-*.jsonl"))
 
 
+def _snapshot_json_boundary_valid(path: Path) -> bool:
+    """Reject visibly truncated object snapshots without materializing them."""
+
+    try:
+        with path.open("rb") as handle:
+            first_non_whitespace = b""
+            while chunk := handle.read(64 * 1024):
+                stripped = chunk.lstrip()
+                if stripped:
+                    first_non_whitespace = stripped[:1]
+                    break
+            if first_non_whitespace != b"{":
+                return False
+            file_size = handle.seek(0, os.SEEK_END)
+            cursor = file_size
+            last_non_whitespace = b""
+            while cursor > 0:
+                chunk_size = min(64 * 1024, cursor)
+                cursor -= chunk_size
+                handle.seek(cursor)
+                stripped = handle.read(chunk_size).rstrip()
+                if stripped:
+                    last_non_whitespace = stripped[-1:]
+                    break
+            return last_non_whitespace == b"}"
+    except OSError:
+        return False
+
+
 def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
     """Return (compressed, saved_bytes_estimate)."""
     if not path.exists() or not path.is_file():
@@ -153,9 +182,15 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
             continue
         stats["snapshots"]["scanned"] += 1
         try:
-            verified = _snapshot_manifest_verifies(kind, target_date)
+            manifest_verified = _snapshot_manifest_verifies(kind, target_date)
+            content_valid = _snapshot_json_boundary_valid(path)
+            verified = manifest_verified and content_valid
             if not verified:
                 stats["skipped_unverified"] += 1
+                if manifest_verified and not content_valid:
+                    stats["errors"].append(
+                        f"snapshot:{path.name}:invalid_json_boundary_not_compressed"
+                    )
                 continue
             stats["snapshots"]["verified"] += 1
             compressed, saved = _gzip_file(path, dry_run=dry_run)

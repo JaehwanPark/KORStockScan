@@ -68,7 +68,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "runtime_approval_summary.py",
     "scalp_entry_action_decision_matrix.py",
     "scalp_entry_adm_runtime.py",
-    "scalp_sim_ai_deferred_review.py",
     "scalp_sim_ev_midcheck.py",
     "scalp_sim_overnight.py",
     "scalp_sim_scale_in_window_approval.py",

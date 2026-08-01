@@ -32,7 +32,7 @@ from src.utils.constants import (
     POSTGRES_URL,
     TRADING_RULES,
 )
-from src.utils.threshold_cycle_registry import TARGET_STAGES, is_threshold_cycle_stage
+from src.utils.threshold_cycle_registry import is_threshold_cycle_stage
 
 REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -3320,6 +3320,30 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 )
                 else {}
             ),
+            "opportunity_exploration_funnel": (
+                microstructure_reaction_summary.get(
+                    "opportunity_exploration_funnel"
+                )
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "opportunity_exploration_funnel"
+                    ),
+                    dict,
+                )
+                else {}
+            ),
+            "clean_baseline_cumulative_opportunity_exploration": (
+                microstructure_reaction_summary.get(
+                    "clean_baseline_cumulative_opportunity_exploration"
+                )
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "clean_baseline_cumulative_opportunity_exploration"
+                    ),
+                    dict,
+                )
+                else {}
+            ),
             "v_pw_source_counts": (
                 microstructure_reaction_summary.get("v_pw_source_counts")
                 if isinstance(
@@ -6483,7 +6507,6 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     ]
     revalidation_blocks = _events_for_stage(events, "entry_submit_revalidation_block")
     guard_blocks = _events_for_stage(events, "pre_submit_price_guard_block")
-    sample_ready = bool(guard_blocks or revalidation_blocks)
     return {
         "family": "pre_submit_price_guard",
         "stage": "entry",
@@ -14751,9 +14774,6 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
         if not isinstance(snapshot, dict):
             continue
         for family, payload in snapshot.items():
-            sample = (
-                payload.get("sample") if isinstance(payload.get("sample"), dict) else {}
-            )
             sample_value = _snapshot_relevant_sample_count(str(family), payload)
             lines.append(
                 "| "

@@ -76,15 +76,17 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(
         state_handlers,
         "emit_pipeline_event",
-        lambda pipeline, name, code, stage, record_id=None, fields=None: captured_pipeline_events.append(
-            {
-                "pipeline": pipeline,
-                "stock_name": name,
-                "stock_code": code,
-                "stage": stage,
-                "record_id": record_id,
-                "fields": fields or {},
-            }
+        lambda pipeline, name, code, stage, record_id=None, fields=None: (
+            captured_pipeline_events.append(
+                {
+                    "pipeline": pipeline,
+                    "stock_name": name,
+                    "stock_code": code,
+                    "stage": stage,
+                    "record_id": record_id,
+                    "fields": fields or {},
+                }
+            )
         ),
     )
     return captured_pipeline_events
@@ -1330,6 +1332,16 @@ def test_scalp_simulator_marks_overbought_not_evaluated_when_context_missing(
 
 def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkeypatch):
     logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "entry_candle_context_enabled",
+        lambda **kwargs: False,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "fetch_entry_candles_with_meta",
+        lambda *args, **kwargs: ([], {"source": "test_fixture"}),
+    )
     monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
@@ -3227,6 +3239,81 @@ def test_scalp_sim_scale_in_window_expansion_returns_sim_only_action(monkeypatch
     assert action["actual_order_submitted"] is False
     assert action["broker_order_forbidden"] is True
     assert action["decision_authority"] == "sim_observation_only"
+    assert "sim_scale_in_attempt_count_pyramid" not in stock
+    assert state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED == {}
+
+
+def test_scalp_sim_scale_in_window_claims_quota_only_at_execution_handoff(
+    monkeypatch,
+):
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=True,
+        SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS="PYRAMID,AVG_DOWN",
+        SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT=-2.5,
+        SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT=2.5,
+        SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION=1,
+        SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY=30,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED.clear()
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers, "execute_scale_in_order", lambda **kwargs: None)
+    stock = {
+        "name": "SIM_SCALE",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "sim_record_id": "SIM-SCALE-1",
+        "actual_order_submitted": False,
+    }
+
+    action = state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
+        stock=stock,
+        strategy="SCALPING",
+        profit_rate=0.4,
+        peak_profit=0.6,
+        current_ai_score=70,
+        held_sec=120,
+    )
+    assert "sim_scale_in_attempt_count_pyramid" not in stock
+
+    assert (
+        state_handlers._process_scale_in_action(
+            stock, "123456", {}, action, admin_id=None
+        )
+        is None
+    )
+
+    assert stock["sim_scale_in_attempt_count_pyramid"] == 1
+    daily_key = f"{action['scale_in_window_day_key']}:PYRAMID"
+    assert state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED[daily_key] == 1
+    funnel_states = [
+        fields["scale_in_candidate_funnel_state"]
+        for stage, fields in logs
+        if stage == "scalp_sim_scale_in_candidate_funnel"
+    ]
+    assert funnel_states == ["eligible", "execution_closed_without_result"]
+
+    second_action = state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
+        stock=stock,
+        strategy="SCALPING",
+        profit_rate=0.5,
+        peak_profit=0.7,
+        current_ai_score=71,
+        held_sec=130,
+    )
+    assert second_action == {}
+    assert logs[-1][1]["scale_in_candidate_funnel_state"] == ("position_quota_blocked")
 
 
 def test_scalp_simulator_preset_tp_touch_flows_to_trailing_without_real_sell(

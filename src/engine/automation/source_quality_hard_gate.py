@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from src.engine.automation.source_quality_clean_baseline import (
@@ -186,6 +187,44 @@ def source_quality_preflight_blocked(preflight: dict[str, Any]) -> bool:
         preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
     )
     return summary.get("tuning_input_allowed") is False
+
+
+def filter_source_dates_by_preflight(
+    source_dates: list[str],
+    *,
+    preflight_loader: Callable[[str], dict[str, Any]] | None = None,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Exclude cumulative tuning dates whose own source-quality gate is blocked.
+
+    A target-date preflight cannot vouch for historical rows from another date.
+    Keep the per-date decision and compact provenance together so cumulative
+    report producers cannot silently admit a missing, invalid, or failed audit.
+    """
+
+    loader = preflight_loader or load_source_quality_preflight
+    allowed: list[str] = []
+    excluded: list[dict[str, Any]] = []
+    for source_date in dict.fromkeys(str(item).strip() for item in source_dates):
+        if not source_date:
+            continue
+        preflight = loader(source_date)
+        if not source_quality_preflight_blocked(preflight):
+            allowed.append(source_date)
+            continue
+        excluded.append(
+            {
+                "source_date": source_date,
+                "status": preflight.get("status"),
+                "source_quality_gate": preflight.get("source_quality_gate"),
+                "blocked_reason": preflight.get("blocked_reason"),
+                "artifact": preflight.get("artifact"),
+                "load_error": preflight.get("load_error"),
+                "hard_blocking_contract_gap_count": int(
+                    preflight.get("hard_blocking_contract_gap_count") or 0
+                ),
+            }
+        )
+    return allowed, excluded
 
 
 def source_quality_blocked_stub(

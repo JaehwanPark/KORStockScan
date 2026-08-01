@@ -3866,6 +3866,19 @@ def build_report(
             **nxt_session_summary,
             **adverse_micro_recovery_summary,
             "code_improvement_order_count": len(code_improvement_orders),
+            "consumer_readiness": {
+                "scout_workorder_input_ready": bool(forced),
+                "closed_first_touch_outcome_available": any(
+                    item.get("final_profit_rate") is not None
+                    for item in first_touch_rows
+                ),
+                "code_improvement_order_available": bool(code_improvement_orders),
+                "state": (
+                    "actionable_source_rows"
+                    if forced or rows or code_improvement_orders
+                    else "no_actionable_source_rows"
+                ),
+            },
         },
         "records": rows[:100],
         "rising_missed_submit_lineage_rows": submit_lineage_rows[:200],
@@ -4034,6 +4047,7 @@ def write_outputs(
         f"- rising_missed_adverse_micro_recovery_outcome_counts: "
         f"{summary.get('rising_missed_adverse_micro_recovery_outcome_counts')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
+        f"- consumer_readiness: {summary.get('consumer_readiness')}",
         "",
     ]
     if report.get("rising_missed_nxt_session_observation_rows"):

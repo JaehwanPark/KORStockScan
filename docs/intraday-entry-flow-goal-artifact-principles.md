@@ -43,9 +43,10 @@ forced scout 수익이 반복되는데 normal BUY/submit이 0이거나 극히 �
 postclose 자동 handoff:
 - `rising_missed_intraday_feedback`
 - `rising_missed_scout_workorder`
-- `rising_missed_first_touch_calibration`
 - `one_share_threshold_opportunity`
 - `code_improvement_workorder`
+
+`rising_missed_first_touch_calibration`은 2026-08-01부터 독립 산출물을 중지했다. first-touch 진단 필드는 feedback에 source-only로 유지하고, 실제 outcome coverage와 후속 workorder는 scout workorder가 소유한다.
 
 위 postclose 산출물은 source-only/code-improvement 후보를 만들 수 있지만, real runtime 반영은 다음 PREOPEN의 `auto_bounded_live` env 선택과 hard safety guard를 통과해야 한다.
 

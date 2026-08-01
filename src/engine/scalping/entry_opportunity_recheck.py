@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
 
 RUNTIME_FAMILY = "entry_opportunity_recheck_runtime"
-POLICY_VERSION = "entry_opportunity_recheck_runtime_v1"
+POLICY_VERSION = "entry_opportunity_recheck_runtime_v2"
 DECISION_AUTHORITY = RUNTIME_FAMILY
 FORBIDDEN_USES = (
     "threshold_mutation,provider_route_change,order_price_change,"
@@ -50,6 +50,12 @@ class EntryOpportunityRecheckConfig:
     forbid_danger: bool = True
     require_fresh_quote: bool = True
     require_explicit_buy_action: bool = True
+    allow_wait_probe_intent: bool = False
+    require_probe_first_contract: bool = True
+    probe_first_enabled: bool = False
+    probe_first_active_date: str = ""
+    probe_qty: int = 1
+    post_probe_resolver_enabled: bool = False
     intraday_escalation_enabled: bool = False
     escalation_step_recheck: int = 10
     escalation_step_buy_recovery: int = 2
@@ -312,6 +318,16 @@ def _env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def config_from_env() -> EntryOpportunityRecheckConfig:
     prefix = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_"
     return EntryOpportunityRecheckConfig(
@@ -326,6 +342,20 @@ def config_from_env() -> EntryOpportunityRecheckConfig:
         require_fresh_quote=_env_bool(f"{prefix}REQUIRE_FRESH_QUOTE", True),
         require_explicit_buy_action=_env_bool(
             f"{prefix}REQUIRE_EXPLICIT_BUY_ACTION", True
+        ),
+        allow_wait_probe_intent=_env_bool(f"{prefix}ALLOW_WAIT_PROBE_INTENT", False),
+        require_probe_first_contract=_env_bool(
+            f"{prefix}REQUIRE_PROBE_FIRST_CONTRACT", True
+        ),
+        probe_first_enabled=_env_bool(
+            "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", False
+        ),
+        probe_first_active_date=str(
+            os.getenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "") or ""
+        ).strip(),
+        probe_qty=_env_int("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", 0),
+        post_probe_resolver_enabled=_env_bool(
+            "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", False
         ),
         intraday_escalation_enabled=_env_bool(
             f"{prefix}INTRADAY_ESCALATION_ENABLED", False
@@ -384,7 +414,10 @@ def _base_fields(config: EntryOpportunityRecheckConfig) -> dict[str, Any]:
         "window_policy": "same_day_intraday_runtime_state",
         "sample_floor": "not_applicable_runtime_guard",
         "primary_decision_metric": "entry_opportunity_recheck_reason",
-        "source_quality_gate": "fresh_ws_and_explicit_ai_buy_when_required",
+        "source_quality_gate": (
+            "trusted_edge_wait_recovery_probe_intent_fresh_ws_strong_micro_"
+            "and_probe_first_post_probe_contract"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -407,6 +440,22 @@ def _base_fields(config: EntryOpportunityRecheckConfig) -> dict[str, Any]:
         ),
         "entry_opportunity_recheck_require_explicit_buy_action": bool(
             config.require_explicit_buy_action
+        ),
+        "entry_opportunity_recheck_allow_wait_probe_intent": bool(
+            config.allow_wait_probe_intent
+        ),
+        "entry_opportunity_recheck_require_probe_first_contract": bool(
+            config.require_probe_first_contract
+        ),
+        "entry_opportunity_recheck_probe_first_enabled": bool(
+            config.probe_first_enabled
+        ),
+        "entry_opportunity_recheck_probe_first_active_date": (
+            config.probe_first_active_date or "-"
+        ),
+        "entry_opportunity_recheck_probe_qty": int(config.probe_qty),
+        "entry_opportunity_recheck_post_probe_resolver_enabled": bool(
+            config.post_probe_resolver_enabled
         ),
         "entry_opportunity_recheck_intraday_escalation_enabled": bool(
             config.intraday_escalation_enabled
@@ -466,6 +515,13 @@ def evaluate_blocked_ai_score_recheck(
     latency_state: Any,
     source_stage: Any = "blocked_ai_score",
     source_reason: Any = "entry_policy_no_buy_score_prior",
+    ai_contract_status: Any = None,
+    ai_edge_state: Any = None,
+    ai_probe_intent: Any = False,
+    ai_probe_intent_status: Any = None,
+    ai_recovery_trigger: Any = None,
+    microstructure_confirmed: Any = False,
+    microstructure_fields: Mapping[str, Any] | None = None,
     state: EntryOpportunityRecheckState | None = None,
     config: EntryOpportunityRecheckConfig | None = None,
     today: str | None = None,
@@ -477,6 +533,12 @@ def evaluate_blocked_ai_score_recheck(
     score = _safe_float(ai_score, -1.0)
     action = str(ai_action or "").strip().upper()
     latency = str(latency_state or "").strip().upper()
+    contract_status = str(ai_contract_status or "").strip().lower()
+    edge_state = str(ai_edge_state or "").strip().upper()
+    probe_intent = _truthy(ai_probe_intent)
+    probe_intent_status = str(ai_probe_intent_status or "").strip().lower()
+    recovery_trigger = str(ai_recovery_trigger or "").strip().lower()
+    micro_confirmed = _truthy(microstructure_confirmed)
     ws_age = _safe_int(ws_age_ms, -1)
     score_prior = evaluate_ai_score_prior(
         action,
@@ -513,7 +575,16 @@ def evaluate_blocked_ai_score_recheck(
             state.daily_buy_recovery_count
         ),
         "entry_opportunity_recheck_symbol_count": int(state.symbol_count(code)),
+        "entry_opportunity_recheck_ai_contract_status": contract_status or "unreported",
+        "entry_opportunity_recheck_ai_edge_state": edge_state or "-",
+        "entry_opportunity_recheck_ai_probe_intent": probe_intent,
+        "entry_opportunity_recheck_ai_probe_intent_status": (
+            probe_intent_status or "not_reported"
+        ),
+        "entry_opportunity_recheck_ai_recovery_trigger": recovery_trigger or "-",
+        "entry_opportunity_recheck_microstructure_confirmed": micro_confirmed,
     }
+    base.update(dict(microstructure_fields or {}))
     base.update(state.escalation_fields(config))
 
     if not config.enabled:
@@ -552,10 +623,92 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
-    if config.require_explicit_buy_action and action != "BUY":
+    if action == "BUY":
         return _decision(
             allowed=False,
-            reason="ai_action_not_buy",
+            reason="normal_buy_does_not_require_recheck",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    if config.require_explicit_buy_action:
+        return _decision(
+            allowed=False,
+            reason="legacy_explicit_buy_contract_incompatible",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    if not config.allow_wait_probe_intent:
+        return _decision(
+            allowed=False,
+            reason="wait_probe_intent_not_enabled",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    if action not in {"WAIT", "WAIT_REQUOTE"}:
+        return _decision(
+            allowed=False,
+            reason="ai_action_not_supported_wait",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    if not (
+        contract_status == "pass"
+        and edge_state == "EDGE"
+        and probe_intent
+        and probe_intent_status == "eligible_wait_probe"
+        and recovery_trigger == "recovery_required"
+    ):
+        return _decision(
+            allowed=False,
+            reason="canonical_wait_probe_contract_not_confirmed",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    probe_date_active = config.probe_first_active_date.upper() in {
+        str(today or date.today().isoformat()),
+        "DAILY",
+    }
+    probe_contract_active = bool(
+        config.probe_first_enabled
+        and probe_date_active
+        and config.probe_qty == 1
+        and config.post_probe_resolver_enabled
+    )
+    base["entry_opportunity_recheck_probe_first_contract_active"] = (
+        probe_contract_active
+    )
+    if not config.require_probe_first_contract:
+        return _decision(
+            allowed=False,
+            reason="probe_first_contract_requirement_disabled",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    if not probe_contract_active:
+        return _decision(
+            allowed=False,
+            reason="probe_first_post_probe_contract_not_active",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    if not micro_confirmed:
+        return _decision(
+            allowed=False,
+            reason="strong_micro_confirmation_missing",
             stage="entry_opportunity_recheck_blocked",
             action="block",
             config=config,
@@ -622,9 +775,9 @@ def evaluate_blocked_ai_score_recheck(
 
     return _decision(
         allowed=True,
-        reason="near_buy_explicit_ai_buy_fresh_quote",
-        stage="entry_opportunity_recheck_normal_buy_reentered",
-        action="allow_normal_buy_reentry",
+        reason="edge_wait_recovery_probe_intent_fresh_strong_micro",
+        stage="entry_opportunity_recheck_probe_armed",
+        action="allow_one_share_probe_entry",
         config=config,
         fields=base,
     )

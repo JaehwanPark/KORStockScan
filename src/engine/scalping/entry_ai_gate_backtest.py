@@ -15,6 +15,7 @@ from src.engine.automation.source_quality_clean_baseline import (
 )
 from src.engine.automation.source_quality_hard_gate import (
     apply_source_quality_preflight_block,
+    filter_source_dates_by_preflight,
     load_source_quality_preflight,
 )
 from src.utils.constants import DATA_DIR
@@ -22,8 +23,19 @@ from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "entry_ai_gate_backtest"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
+ENTRY_OPPORTUNITY_RECHECK_FAMILY = "entry_opportunity_recheck_runtime"
+RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
+ENTRY_RECHECK_TARGET_ENV_KEYS = [
+    "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+    "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
+    "ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
+    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+]
+RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 SCALP_ENTRY_ADM_DIR = DATA_DIR / "report" / "scalp_entry_action_decision_matrix"
 MISSED_ENTRY_DIRS = [
     DATA_DIR / "report" / "monitor_snapshots",
@@ -37,7 +49,54 @@ COUNTERFACTUAL_SAMPLE_FLOOR = 100
 THRESHOLD_RANGE = range(55, 86)
 SUPPORTED_WAIT_MIN_SCORE = 60
 SUPPORTED_WAIT_MAX_SCORE = 74
-SUPPORTED_WAIT_ACTIONS = {"WAIT", "DROP", "NO_BUY_AI", ""}
+SUPPORTED_WAIT_ACTIONS = {"WAIT", "WAIT_REQUOTE"}
+NON_DECISION_ACTION_TOKENS = {
+    "",
+    "-",
+    "NONE",
+    "NULL",
+    "NOT_EVALUATED",
+    "NOT_EVALUATED_PRE_CONTRACT",
+    "UNKNOWN",
+}
+ENTRY_CONTEXT_JOIN_FIELDS = (
+    "ai_action",
+    "action",
+    "chosen_action",
+    "quote_stale",
+    "tick_context_stale",
+    "context_stale",
+    "entry_submit_revalidation_block",
+    "stale_bucket",
+    "blocked_reason",
+    "no_submit_reason",
+    "buy_pressure_10t",
+    "net_aggressive_delta_10t",
+    "tick_acceleration_ratio",
+    "tick_accel",
+    "curr_vs_micro_vwap_bp",
+    "micro_vwap_bp",
+    "large_sell_print_detected",
+    "tick_aggressor_pressure_usable",
+    "tick_aggressor_trusted_count",
+    "tick_context_quality",
+    "tick_accel_source",
+    "tick_latest_age_ms",
+    "quote_age_source",
+    "quote_age_ms",
+    "micro_vwap_available",
+    "minute_candle_window_fresh",
+    "minute_candle_context_quality",
+    "entry_score_excluded_reason",
+    "ai_input_source_quality_reason",
+    "decision_quality_contract_status",
+    "edge_state",
+    "decision_quality_edge_state",
+    "entry_probe_intent",
+    "entry_probe_intent_status",
+    "entry_recheck_recovery_trigger",
+    "evidence_trigger",
+)
 HARD_BLOCK_TOKENS = {
     "broker",
     "cooldown",
@@ -63,6 +122,170 @@ FORBIDDEN_USES = [
     "quantity_or_cap_change",
     "entry_price_reprice",
 ]
+
+
+def _entry_recheck_calibration_candidates(
+    best_apply: dict[str, Any],
+    *,
+    target_date: str,
+    cumulative_quality_window: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Preserve the bounded entry-recheck handoff without an aggregate report."""
+
+    if not isinstance(best_apply, dict) or not best_apply:
+        return []
+    policy = str(best_apply.get("policy") or "")
+    threshold = int(_safe_float(best_apply.get("threshold"), 0.0) or 0)
+    if policy != "supported_wait_recovery" or threshold <= 0:
+        return []
+    realized = (
+        best_apply.get("realized")
+        if isinstance(best_apply.get("realized"), dict)
+        else {}
+    )
+    counterfactual = (
+        best_apply.get("counterfactual")
+        if isinstance(best_apply.get("counterfactual"), dict)
+        else {}
+    )
+    primary_ev_positive = (
+        float(realized.get("source_quality_adjusted_ev_pct") or 0.0) > 0.0
+    )
+    counterfactual_opportunity_positive = bool(
+        float(counterfactual.get("source_quality_adjusted_ev_pct") or 0.0) > 0.0
+        and float(counterfactual.get("mfe_10m_pct") or 0.0) > 0.0
+    )
+    current_values, current_values_provenance = _current_recheck_values(target_date)
+    current_values_complete = bool(
+        current_values_provenance.get("status") == "loaded"
+        and all(value is not None for value in current_values.values())
+    )
+    allowed = bool(
+        _safe_bool(best_apply.get("allowed_runtime_apply"))
+        and _safe_bool(best_apply.get("sample_floor_passed"))
+        and primary_ev_positive
+        and counterfactual_opportunity_positive
+        and current_values_complete
+    )
+    quality_update_id = (
+        f"{ENTRY_OPPORTUNITY_RECHECK_FAMILY}:cumulative:"
+        f"{cumulative_quality_window.get('start_date')}:"
+        f"{cumulative_quality_window.get('end_date')}:{threshold}"
+    )
+    return [
+        {
+            "family": ENTRY_OPPORTUNITY_RECHECK_FAMILY,
+            "stage": "entry",
+            "priority": 42,
+            "threshold_version": (
+                f"entry_opportunity_recheck_runtime:{target_date}:{threshold}"
+            ),
+            "quality_update_id": quality_update_id,
+            "runtime_update_mode": RUNTIME_UPDATE_MODE,
+            "max_runtime_apply_count": 1,
+            "cumulative_quality_window": cumulative_quality_window,
+            "post_apply_attribution_required": True,
+            "calibration_state": "adjust_down" if allowed else "hold_sample",
+            "calibration_reason": (
+                "entry_ai_gate_supported_wait_recovery_positive_ev"
+                if allowed
+                else "entry_ai_gate_candidate_not_apply_ready"
+            ),
+            "target_env_keys": ENTRY_RECHECK_TARGET_ENV_KEYS,
+            "current_values": current_values,
+            "current_values_provenance": current_values_provenance,
+            "recommended_values": {
+                "enabled": True,
+                "min_ai_score": threshold,
+                "max_ai_score": 74,
+                "require_explicit_buy_action": False,
+                "allow_wait_probe_intent": True,
+                "require_probe_first_contract": True,
+            },
+            "source_metrics": {
+                "policy": policy,
+                "realized": realized,
+                "counterfactual": counterfactual,
+            },
+            "sample_floor_passed": _safe_bool(best_apply.get("sample_floor_passed")),
+            "primary_ev_positive": primary_ev_positive,
+            "counterfactual_opportunity_positive": (
+                counterfactual_opportunity_positive
+            ),
+            "source_quality_gate": "pass",
+            "allowed_runtime_apply": allowed,
+            "apply_block_reason": (
+                ""
+                if allowed
+                else (
+                    "current_runtime_values_unavailable"
+                    if not current_values_complete
+                    else str(
+                        best_apply.get("apply_block_reason")
+                        or "upstream_candidate_blocked"
+                    )
+                )
+            ),
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "decision_authority": "entry_ai_gate_backtest_postclose_candidate",
+            "forbidden_uses": [
+                *FORBIDDEN_USES,
+                "broad_buy_score_threshold_relaxation",
+            ],
+        }
+    ]
+
+
+def _current_recheck_values(target_date: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = RUNTIME_ENV_DIR / f"threshold_runtime_env_{target_date}.json"
+    payload, status = _load_json_with_status(path)
+    env = (
+        payload.get("env_overrides")
+        if isinstance(payload.get("env_overrides"), dict)
+        else {}
+    )
+    mapping = {
+        "enabled": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", False),
+        "min_ai_score": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE", 70.0),
+        "max_ai_score": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE", 74.999),
+        "require_explicit_buy_action": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
+            True,
+        ),
+        "allow_wait_probe_intent": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
+            False,
+        ),
+        "require_probe_first_contract": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+            True,
+        ),
+    }
+    values: dict[str, Any] = {}
+    defaulted_env_keys: list[str] = []
+    manifest_loaded = status.get("status") == "loaded"
+    for value_key, (env_key, default) in mapping.items():
+        raw = env.get(env_key)
+        if raw is None and manifest_loaded:
+            raw = default
+            defaulted_env_keys.append(env_key)
+        if value_key in {
+            "enabled",
+            "require_explicit_buy_action",
+            "allow_wait_probe_intent",
+            "require_probe_first_contract",
+        }:
+            values[value_key] = _safe_bool(raw) if raw is not None else None
+        else:
+            values[value_key] = _safe_float(raw, None)
+    return values, {
+        "status": status.get("status"),
+        "path": status.get("path"),
+        "source": "target_date_threshold_runtime_env_manifest_plus_code_defaults",
+        "defaulted_env_keys": defaulted_env_keys,
+    }
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -130,15 +353,37 @@ def _date_range(start_date: str, end_date: str) -> list[str]:
     return dates
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def _load_json_with_status(path: Path) -> tuple[dict[str, Any], dict[str, str]]:
     actual = existing_or_gzip_path(path)
     if not actual.exists():
-        return {}
+        return {}, {"status": "missing", "path": str(actual)}
     try:
         with open_text_auto(actual) as handle:
-            return json.loads(handle.read())
-    except Exception:
-        return {}
+            payload = json.loads(handle.read())
+    except json.JSONDecodeError as exc:
+        return {}, {
+            "status": "invalid_json",
+            "path": str(actual),
+            "error": f"JSONDecodeError:{exc.lineno}:{exc.colno}",
+        }
+    except Exception as exc:
+        return {}, {
+            "status": "read_error",
+            "path": str(actual),
+            "error": type(exc).__name__,
+        }
+    if not isinstance(payload, dict):
+        return {}, {
+            "status": "invalid_root_type",
+            "path": str(actual),
+            "error": type(payload).__name__,
+        }
+    return payload, {"status": "loaded", "path": str(actual)}
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    payload, _ = _load_json_with_status(path)
+    return payload
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -250,38 +495,15 @@ def _micro_context_usable(row: dict[str, Any]) -> bool:
     if _stale(row):
         return False
     tick_quality = str(row.get("tick_context_quality") or "").strip().lower()
-    if tick_quality and tick_quality not in {
-        "-",
-        "unknown",
-        "missing",
-        "not_available",
-        "not_evaluated",
-        "not_evaluated_pre_contract",
-        "stale",
-    }:
-        return True
-    if str(row.get("tick_accel_source") or "").strip().lower() in {
-        "computed_10ticks",
-        "same_second_burst_10ticks",
-        "computed",
-    }:
-        return True
-    if _safe_float(row.get("tick_latest_age_ms"), None) is not None:
-        return True
-    quote_source = str(row.get("quote_age_source") or "").strip().lower()
-    if quote_source and quote_source not in {
-        "-",
-        "unknown",
-        "missing",
-        "not_available",
-        "not_evaluated",
-        "not_evaluated_pre_contract",
-        "stale",
-    }:
-        return True
-    if _safe_float(row.get("quote_age_ms"), None) is not None:
-        return True
-    return False
+    tick_source = str(row.get("tick_accel_source") or "").strip().lower()
+    return bool(
+        tick_quality == "fresh_computed"
+        and tick_source
+        in {
+            "computed_10ticks",
+            "same_second_burst_10ticks",
+        }
+    )
 
 
 def _has_present_value(value: Any) -> bool:
@@ -312,7 +534,6 @@ def _micro_vwap_usable(row: dict[str, Any]) -> bool:
 
 def _micro_support(row: dict[str, Any]) -> bool:
     buy_pressure = _safe_float(row.get("buy_pressure_10t"), None)
-    net_delta = _safe_float(row.get("net_aggressive_delta_10t"), None)
     tick_accel = _safe_float(
         row.get("tick_acceleration_ratio") or row.get("tick_accel"), None
     )
@@ -322,21 +543,18 @@ def _micro_support(row: dict[str, Any]) -> bool:
     large_sell = _safe_bool(row.get("large_sell_print_detected"))
     pressure_usable = _tick_aggressor_pressure_usable(row)
     micro_context_usable = _micro_context_usable(row)
-    pressure_support = pressure_usable and (
-        (buy_pressure is not None and buy_pressure >= 68.0)
-        or (net_delta is not None and net_delta > 0.0)
+    return bool(
+        pressure_usable
+        and micro_context_usable
+        and _micro_vwap_usable(row)
+        and buy_pressure is not None
+        and buy_pressure >= 65.0
+        and tick_accel is not None
+        and tick_accel >= 1.20
+        and micro_vwap is not None
+        and micro_vwap >= 10.0
+        and not large_sell
     )
-    support = (
-        pressure_support
-        or (micro_context_usable and tick_accel is not None and tick_accel >= 1.10)
-        or (
-            micro_context_usable
-            and _micro_vwap_usable(row)
-            and micro_vwap is not None
-            and micro_vwap > 0.0
-        )
-    )
-    return bool(support and not (pressure_usable and large_sell))
 
 
 def _score(row: dict[str, Any]) -> float | None:
@@ -347,8 +565,137 @@ def _score(row: dict[str, Any]) -> float | None:
     return None
 
 
+def _canonical_supported_wait_action(row: dict[str, Any]) -> str:
+    """Prefer an actual AI action, but ignore non-decision placeholders."""
+
+    for key in ("ai_action", "action", "chosen_action"):
+        action = str(row.get(key) or "").strip().upper()
+        if action not in NON_DECISION_ACTION_TOKENS:
+            return action
+    return ""
+
+
+def _canonical_wait_probe_contract(row: dict[str, Any]) -> bool:
+    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+    contract_status = (
+        str(row.get("decision_quality_contract_status") or "").strip().lower()
+    )
+    edge_state = (
+        str(row.get("edge_state") or row.get("decision_quality_edge_state") or "")
+        .strip()
+        .upper()
+    )
+    probe_status = str(row.get("entry_probe_intent_status") or "").strip().lower()
+    recovery_trigger = (
+        str(
+            row.get("entry_recheck_recovery_trigger")
+            or row.get("evidence_trigger")
+            or evidence.get("trigger")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    return bool(
+        contract_status == "pass"
+        and edge_state == "EDGE"
+        and _safe_bool(row.get("entry_probe_intent"))
+        and probe_status == "eligible_wait_probe"
+        and recovery_trigger == "recovery_required"
+    )
+
+
+def _entry_context_indexes(
+    report: dict[str, Any],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    by_record: dict[str, list[dict[str, Any]]] = {}
+    by_candidate: dict[str, list[dict[str, Any]]] = {}
+    for raw in report.get("rows") or []:
+        if not isinstance(raw, dict):
+            continue
+        record_id = str(raw.get("record_id") or "").strip()
+        candidate_id = str(raw.get("candidate_id") or "").strip()
+        if record_id:
+            by_record.setdefault(record_id, []).append(raw)
+        if candidate_id:
+            by_candidate.setdefault(candidate_id, []).append(raw)
+    return by_record, by_candidate
+
+
+def _entry_context_row_rank(
+    row: dict[str, Any], *, anchor_stage: str
+) -> tuple[int, int, int, int]:
+    stage = str(row.get("stage") or "").strip().lower()
+    source_stage = str(row.get("source_stage") or "").strip().lower()
+    anchor = str(anchor_stage or "").strip().lower()
+    stage_match = int(bool(anchor) and anchor in {stage, source_stage})
+    decision_snapshot = int(
+        "scalp_entry_action_decision_snapshot" in {stage, source_stage}
+    )
+    action_present = int(
+        any(
+            _has_present_value(row.get(key))
+            for key in ("ai_action", "action", "chosen_action")
+        )
+    )
+    context_field_count = sum(
+        1 for key in ENTRY_CONTEXT_JOIN_FIELDS if _has_present_value(row.get(key))
+    )
+    return stage_match, decision_snapshot, action_present, context_field_count
+
+
+def _enrich_counterfactual_entry_context(
+    raw: dict[str, Any],
+    *,
+    by_record: dict[str, list[dict[str, Any]]],
+    by_candidate: dict[str, list[dict[str, Any]]],
+    source_path: Path,
+) -> tuple[dict[str, Any], str]:
+    row = dict(raw)
+    record_id = str(raw.get("record_id") or "").strip()
+    candidate_id = str(raw.get("candidate_id") or "").strip()
+    matches = by_record.get(record_id) if record_id else None
+    join_status = "joined_record_id"
+    if not matches:
+        matches = by_candidate.get(candidate_id) if candidate_id else None
+        join_status = "joined_candidate_id"
+    if not matches:
+        row["entry_context_join_status"] = "not_joined"
+        row["entry_context_join_source"] = str(source_path)
+        row["entry_context_joined"] = False
+        return row, "not_joined"
+    context = max(
+        matches,
+        key=lambda item: _entry_context_row_rank(
+            item, anchor_stage=str(raw.get("anchor_stage") or "")
+        ),
+    )
+    joined_fields: list[str] = []
+    for key in ENTRY_CONTEXT_JOIN_FIELDS:
+        if _has_present_value(row.get(key)) or not _has_present_value(context.get(key)):
+            continue
+        row[key] = context.get(key)
+        joined_fields.append(key)
+    row.update(
+        {
+            "entry_context_join_status": join_status,
+            "entry_context_join_source": str(source_path),
+            "entry_context_joined": True,
+            "entry_context_joined_fields": joined_fields,
+            "entry_context_join_record_id": str(context.get("record_id") or ""),
+            "entry_context_join_candidate_id": str(context.get("candidate_id") or ""),
+            "entry_context_join_stage": str(
+                context.get("stage") or context.get("source_stage") or ""
+            ),
+        }
+    )
+    return row, join_status
+
+
 def _realized_rows(
-    source_dates: list[str], missing: list[dict[str, str]]
+    source_dates: list[str],
+    missing: list[dict[str, str]],
+    consumed_dates: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source_date in source_dates:
@@ -356,16 +703,18 @@ def _realized_rows(
             SCALP_ENTRY_ADM_DIR
             / f"scalp_entry_action_decision_matrix_{source_date}.json"
         )
-        report = _load_json(path)
+        report, load_status = _load_json_with_status(path)
         if not report:
             missing.append(
                 {
                     "date": source_date,
                     "artifact": "scalp_entry_action_decision_matrix",
-                    "path": str(path),
+                    **load_status,
                 }
             )
             continue
+        if consumed_dates is not None:
+            consumed_dates.append(source_date)
         real_outcomes = _real_post_sell_outcomes(source_date)
         real_joined_by_record: dict[str, tuple[int, dict[str, Any]]] = {}
         for raw in report.get("rows") or []:
@@ -422,21 +771,32 @@ def _realized_rows(
 
 
 def _counterfactual_rows(
-    source_dates: list[str], missing: list[dict[str, str]]
+    source_dates: list[str],
+    missing: list[dict[str, str]],
+    consumed_dates: list[str] | None = None,
+    context_join_counts: Counter[str] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source_date in source_dates:
         path = _missed_entry_path(source_date)
-        report = _load_json(path)
+        report, load_status = _load_json_with_status(path)
         if not report:
             missing.append(
                 {
                     "date": source_date,
                     "artifact": "missed_entry_counterfactual",
-                    "path": str(path),
+                    **load_status,
                 }
             )
             continue
+        if consumed_dates is not None:
+            consumed_dates.append(source_date)
+        context_path = existing_or_gzip_path(
+            SCALP_ENTRY_ADM_DIR
+            / f"scalp_entry_action_decision_matrix_{source_date}.json"
+        )
+        context_report = _load_json(context_path)
+        by_record, by_candidate = _entry_context_indexes(context_report)
         for raw in report.get("full_rows") or []:
             if not isinstance(raw, dict):
                 continue
@@ -444,7 +804,15 @@ def _counterfactual_rows(
             score = _score(raw)
             if close_10m is None or score is None:
                 continue
-            row = dict(raw)
+            row, join_status = _enrich_counterfactual_entry_context(
+                raw,
+                by_record=by_record,
+                by_candidate=by_candidate,
+                source_path=context_path,
+            )
+            if context_join_counts is not None:
+                context_join_counts["eligible_counterfactual_rows"] += 1
+                context_join_counts[join_status] += 1
             row["_date"] = source_date
             row["_score"] = score
             row["_close_10m_pct"] = close_10m
@@ -499,7 +867,6 @@ def _metrics(rows: list[dict[str, Any]], value_key: str) -> dict[str, Any]:
 def _matches_policy(row: dict[str, Any], policy: str, threshold: int) -> bool:
     score = _safe_float(row.get("_score"), -1.0) or -1.0
     ai_action = str(row.get("ai_action") or row.get("action") or "").strip().upper()
-    chosen_action = str(row.get("chosen_action") or "").strip().upper()
     if policy == "strict_buy":
         return (
             ai_action == "BUY"
@@ -511,17 +878,98 @@ def _matches_policy(row: dict[str, Any], policy: str, threshold: int) -> bool:
     if policy == "diagnostic_score_only":
         return score >= threshold
     if policy == "supported_wait_recovery":
-        action_key = ai_action or chosen_action
+        action_key = _canonical_supported_wait_action(row)
         return (
             SUPPORTED_WAIT_MIN_SCORE <= score <= SUPPORTED_WAIT_MAX_SCORE
             and score >= threshold
             and action_key in SUPPORTED_WAIT_ACTIONS
+            and _canonical_wait_probe_contract(row)
             and not _stale(row)
             and not _hard_blocked(row)
             and not _source_quality_blocked(row)
             and _micro_support(row)
         )
     return False
+
+
+def _supported_wait_source_contract_evaluable(row: dict[str, Any]) -> bool:
+    score = _safe_float(row.get("_score"), -1.0) or -1.0
+    action_present = bool(_canonical_supported_wait_action(row))
+    wait_probe_contract_fields_present = bool(
+        _has_present_value(row.get("decision_quality_contract_status"))
+        and _has_present_value(
+            row.get("edge_state") or row.get("decision_quality_edge_state")
+        )
+        and row.get("entry_probe_intent") is not None
+        and _has_present_value(row.get("entry_probe_intent_status"))
+        and _has_present_value(
+            row.get("entry_recheck_recovery_trigger")
+            or row.get("evidence_trigger")
+            or (
+                (row.get("evidence") or {}).get("trigger")
+                if isinstance(row.get("evidence"), dict)
+                else None
+            )
+        )
+    )
+    micro_provenance_present = bool(
+        row.get("tick_aggressor_pressure_usable") is not None
+        or _has_present_value(row.get("tick_context_quality"))
+        or _has_present_value(row.get("tick_accel_source"))
+        or row.get("micro_vwap_available") is not None
+        or _has_present_value(row.get("minute_candle_context_quality"))
+    )
+    return bool(
+        SUPPORTED_WAIT_MIN_SCORE <= score <= SUPPORTED_WAIT_MAX_SCORE
+        and action_present
+        and wait_probe_contract_fields_present
+        and micro_provenance_present
+        and not _source_quality_blocked(row)
+    )
+
+
+def _supported_wait_contract_missing_reasons(row: dict[str, Any]) -> list[str]:
+    """Explain source-contract gaps without changing the AI action semantics."""
+
+    reasons: list[str] = []
+    score = _safe_float(row.get("_score"), None)
+    if score is None:
+        reasons.append("score_missing")
+    elif not (SUPPORTED_WAIT_MIN_SCORE <= score <= SUPPORTED_WAIT_MAX_SCORE):
+        reasons.append("score_outside_supported_wait_band")
+    if not _canonical_supported_wait_action(row):
+        reasons.append("canonical_action_missing")
+    if not _has_present_value(row.get("decision_quality_contract_status")):
+        reasons.append("decision_quality_contract_status_missing")
+    if not _has_present_value(
+        row.get("edge_state") or row.get("decision_quality_edge_state")
+    ):
+        reasons.append("edge_state_missing")
+    if row.get("entry_probe_intent") is None:
+        reasons.append("entry_probe_intent_missing")
+    if not _has_present_value(row.get("entry_probe_intent_status")):
+        reasons.append("entry_probe_intent_status_missing")
+    evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+    if not _has_present_value(
+        row.get("entry_recheck_recovery_trigger")
+        or row.get("evidence_trigger")
+        or evidence.get("trigger")
+    ):
+        reasons.append("recovery_trigger_missing")
+    if not (
+        row.get("tick_aggressor_pressure_usable") is not None
+        or _has_present_value(row.get("tick_context_quality"))
+        or _has_present_value(row.get("tick_accel_source"))
+    ):
+        reasons.append("tick_pressure_provenance_missing")
+    if not (
+        row.get("micro_vwap_available") is not None
+        or _has_present_value(row.get("minute_candle_context_quality"))
+    ):
+        reasons.append("micro_vwap_provenance_missing")
+    if _source_quality_blocked(row):
+        reasons.append("source_quality_blocked")
+    return reasons
 
 
 def _policy_result(
@@ -542,15 +990,23 @@ def _policy_result(
     mfe_values = [_safe_float(row.get("_mfe_10m_pct"), None) for row in counterfactual]
     mfe_values = [value for value in mfe_values if value is not None]
     primary_ev = float(realized_metrics.get("source_quality_adjusted_ev_pct") or 0.0)
+    counterfactual_ev = float(
+        opportunity_metrics.get("source_quality_adjusted_ev_pct") or 0.0
+    )
+    counterfactual_mfe = sum(mfe_values) / len(mfe_values) if mfe_values else 0.0
     sample_floor_passed = (
         realized_metrics["sample"] >= REALIZED_SAMPLE_FLOOR
         and opportunity_metrics["sample"] >= COUNTERFACTUAL_SAMPLE_FLOOR
     )
     primary_ev_positive = primary_ev > 0.0
+    counterfactual_opportunity_positive = bool(
+        counterfactual_ev > 0.0 and counterfactual_mfe > 0.0
+    )
     allowed = bool(
         policy != "diagnostic_score_only"
         and sample_floor_passed
         and primary_ev_positive
+        and (policy != "supported_wait_recovery" or counterfactual_opportunity_positive)
     )
     if policy == "diagnostic_score_only":
         apply_block_reason = "diagnostic_score_only"
@@ -558,6 +1014,10 @@ def _policy_result(
         apply_block_reason = "hold_sample"
     elif not primary_ev_positive:
         apply_block_reason = "non_positive_primary_ev"
+    elif (
+        policy == "supported_wait_recovery" and not counterfactual_opportunity_positive
+    ):
+        apply_block_reason = "non_positive_counterfactual_opportunity"
     else:
         apply_block_reason = ""
     return {
@@ -578,6 +1038,7 @@ def _policy_result(
         },
         "sample_floor_passed": sample_floor_passed,
         "primary_ev_positive": primary_ev_positive,
+        "counterfactual_opportunity_positive": counterfactual_opportunity_positive,
         "calibration_state": "candidate_ready" if allowed else "hold_sample",
         "allowed_runtime_apply": allowed,
         "apply_block_reason": apply_block_reason,
@@ -641,10 +1102,60 @@ def build_report(
     start = str(start_date or target_date).strip()
     end = str(end_date or target_date).strip()
     policy = clean_baseline_policy()
-    source_dates, excluded_dates = filter_allowed_dates(_date_range(start, end), policy)
+    baseline_source_dates, excluded_dates = filter_allowed_dates(
+        _date_range(start, end), policy
+    )
+    source_dates, source_quality_excluded_dates = filter_source_dates_by_preflight(
+        baseline_source_dates,
+        preflight_loader=load_source_quality_preflight,
+    )
+    clean_baseline_date = str(policy.get("clean_tuning_baseline_date") or "2026-06-05")
+    cumulative_start = max(start, clean_baseline_date)
     missing_artifacts: list[dict[str, str]] = []
-    realized = _realized_rows(source_dates, missing_artifacts)
-    counterfactual = _counterfactual_rows(source_dates, missing_artifacts)
+    realized_consumed_dates: list[str] = []
+    counterfactual_consumed_dates: list[str] = []
+    context_join_counts: Counter[str] = Counter()
+    realized = _realized_rows(
+        source_dates,
+        missing_artifacts,
+        consumed_dates=realized_consumed_dates,
+    )
+    counterfactual = _counterfactual_rows(
+        source_dates,
+        missing_artifacts,
+        consumed_dates=counterfactual_consumed_dates,
+        context_join_counts=context_join_counts,
+    )
+    effective_source_dates = sorted(
+        set(realized_consumed_dates) & set(counterfactual_consumed_dates)
+    )
+    effective_source_date_set = set(effective_source_dates)
+    realized = [
+        row
+        for row in realized
+        if str(row.get("_date") or "") in effective_source_date_set
+    ]
+    counterfactual = [
+        row
+        for row in counterfactual
+        if str(row.get("_date") or "") in effective_source_date_set
+    ]
+    artifact_excluded_dates = sorted(set(source_dates) - effective_source_date_set)
+    cumulative_quality_window = {
+        "window_policy": "clean_baseline_cumulative",
+        "start_date": cumulative_start,
+        "end_date": end,
+        "clean_tuning_baseline_date": clean_baseline_date,
+        "source_date_count": len(effective_source_dates),
+        "source_dates": effective_source_dates,
+        "intended_source_date_count": len(source_dates),
+        "intended_source_dates": source_dates,
+        "excluded_date_count": len(excluded_dates),
+        "source_quality_excluded_date_count": len(source_quality_excluded_dates),
+        "source_quality_excluded_dates": source_quality_excluded_dates,
+        "artifact_excluded_date_count": len(artifact_excluded_dates),
+        "artifact_excluded_dates": artifact_excluded_dates,
+    }
     results = [
         _policy_result(
             policy=policy_name,
@@ -680,6 +1191,50 @@ def build_report(
             > 0.0
         ]
     )
+    supported_wait_contract = {
+        "realized_evaluable_rows": sum(
+            1 for row in realized if _supported_wait_source_contract_evaluable(row)
+        ),
+        "counterfactual_evaluable_rows": sum(
+            1
+            for row in counterfactual
+            if _supported_wait_source_contract_evaluable(row)
+        ),
+        "realized_policy_eligible_rows": sum(
+            1
+            for row in realized
+            if _matches_policy(row, "supported_wait_recovery", SUPPORTED_WAIT_MIN_SCORE)
+        ),
+        "counterfactual_policy_eligible_rows": sum(
+            1
+            for row in counterfactual
+            if _matches_policy(row, "supported_wait_recovery", SUPPORTED_WAIT_MIN_SCORE)
+        ),
+    }
+    supported_wait_missing_reason_counts: dict[str, dict[str, int]] = {}
+    for scope, rows in (("realized", realized), ("counterfactual", counterfactual)):
+        counts: Counter[str] = Counter()
+        for row in rows:
+            if _supported_wait_source_contract_evaluable(row):
+                continue
+            counts.update(_supported_wait_contract_missing_reasons(row))
+        supported_wait_missing_reason_counts[scope] = dict(counts)
+    source_contract_status = (
+        "evaluable"
+        if supported_wait_contract["realized_evaluable_rows"] > 0
+        and supported_wait_contract["counterfactual_evaluable_rows"] > 0
+        else "source_contract_not_evaluable"
+    )
+    calibration_candidates = _entry_recheck_calibration_candidates(
+        best_allowed,
+        target_date=target_date,
+        cumulative_quality_window=cumulative_quality_window,
+    )
+    runtime_apply_ready = any(
+        _safe_bool(item.get("allowed_runtime_apply"))
+        and str(item.get("calibration_state") or "") == "adjust_down"
+        for item in calibration_candidates
+    )
     score_band_counts: Counter[str] = Counter()
     for row in counterfactual:
         score = _safe_float(row.get("_score"), -1.0) or -1.0
@@ -703,6 +1258,21 @@ def build_report(
         "clean_baseline_policy": policy,
         "source_dates": source_dates,
         "excluded_dates": excluded_dates,
+        "source_consumption": {
+            "baseline_eligible_source_dates": baseline_source_dates,
+            "intended_source_dates": source_dates,
+            "source_quality_excluded_dates": source_quality_excluded_dates,
+            "realized_consumed_dates": sorted(set(realized_consumed_dates)),
+            "counterfactual_consumed_dates": sorted(set(counterfactual_consumed_dates)),
+            "effective_source_dates": effective_source_dates,
+            "artifact_excluded_dates": artifact_excluded_dates,
+            "counterfactual_context_join_counts": dict(context_join_counts),
+            "supported_wait_recovery_contract": {
+                **supported_wait_contract,
+                "status": source_contract_status,
+                "missing_reason_counts": supported_wait_missing_reason_counts,
+            },
+        },
         "source_paths": {
             "scalp_entry_action_decision_matrix": str(SCALP_ENTRY_ADM_DIR),
             "missed_entry_counterfactual": [str(path) for path in MISSED_ENTRY_DIRS],
@@ -712,7 +1282,9 @@ def build_report(
         "metric_contract": {
             "metric_role": "primary_ev",
             "decision_authority": "entry_ai_gate_backtest_postclose_candidate",
-            "window_policy": f"{start}_to_{end}",
+            "window_policy": "clean_baseline_cumulative",
+            "requested_window": {"start_date": start, "end_date": end},
+            "effective_window": cumulative_quality_window,
             "sample_floor": {
                 "realized_joined_rows": REALIZED_SAMPLE_FLOOR,
                 "counterfactual_rows": COUNTERFACTUAL_SAMPLE_FLOOR,
@@ -727,11 +1299,49 @@ def build_report(
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
-        "allowed_runtime_apply": bool(best_allowed.get("allowed_runtime_apply", False)),
-        "calibration_state": "candidate_ready" if best_allowed else "hold_sample",
+        "allowed_runtime_apply": runtime_apply_ready,
+        "calibration_state": (
+            "candidate_ready"
+            if runtime_apply_ready
+            else (
+                "source_contract_not_evaluable"
+                if source_contract_status == "source_contract_not_evaluable"
+                else "hold_sample"
+            )
+        ),
+        "calibration_candidates": calibration_candidates,
         "summary": {
             "realized_joined_rows": len(realized),
             "counterfactual_rows": len(counterfactual),
+            "effective_source_date_count": len(effective_source_dates),
+            "artifact_excluded_date_count": len(artifact_excluded_dates),
+            "source_quality_excluded_date_count": len(
+                source_quality_excluded_dates
+            ),
+            "counterfactual_context_joined_count": sum(
+                count
+                for status, count in context_join_counts.items()
+                if status.startswith("joined_")
+            ),
+            "counterfactual_context_not_joined_count": context_join_counts.get(
+                "not_joined", 0
+            ),
+            "supported_wait_recovery_source_contract_status": source_contract_status,
+            "supported_wait_recovery_realized_evaluable_rows": (
+                supported_wait_contract["realized_evaluable_rows"]
+            ),
+            "supported_wait_recovery_counterfactual_evaluable_rows": (
+                supported_wait_contract["counterfactual_evaluable_rows"]
+            ),
+            "supported_wait_recovery_realized_policy_eligible_rows": (
+                supported_wait_contract["realized_policy_eligible_rows"]
+            ),
+            "supported_wait_recovery_counterfactual_policy_eligible_rows": (
+                supported_wait_contract["counterfactual_policy_eligible_rows"]
+            ),
+            "supported_wait_recovery_missing_reason_counts": (
+                supported_wait_missing_reason_counts
+            ),
             "score_band_counterfactual_counts": dict(score_band_counts),
             "best_policy": best.get("policy"),
             "best_threshold": best.get("threshold"),
@@ -778,6 +1388,24 @@ def build_report(
             "best_positive_realized_diagnostic_counterfactual_sample": (
                 best_positive_diagnostic.get("counterfactual") or {}
             ).get("sample"),
+            "bounded_calibration_candidate_count": len(calibration_candidates),
+            "diagnostic_conflict_detected": bool(
+                best_positive_diagnostic
+                and float(
+                    (best_positive_diagnostic.get("realized") or {}).get(
+                        "source_quality_adjusted_ev_pct"
+                    )
+                    or 0.0
+                )
+                > 0.0
+                and float(
+                    (best_positive_diagnostic.get("counterfactual") or {}).get(
+                        "missed_upside_close_10m_pct"
+                    )
+                    or 0.0
+                )
+                <= 0.0
+            ),
         },
         "best_candidate": best,
         "best_apply_candidate": best_allowed,
@@ -788,14 +1416,54 @@ def build_report(
         "forbidden_uses": FORBIDDEN_USES,
     }
     preflight = load_source_quality_preflight(target_date)
-    return apply_source_quality_preflight_block(report, preflight)
+    report = apply_source_quality_preflight_block(report, preflight)
+    final_candidates = [
+        item
+        for item in report.get("calibration_candidates") or []
+        if isinstance(item, dict)
+    ]
+    allowed_candidates = [
+        item
+        for item in final_candidates
+        if _safe_bool(item.get("allowed_runtime_apply"))
+    ]
+    report["runtime_update_contract"] = {
+        "schema_version": 1,
+        "update_mode": RUNTIME_UPDATE_MODE,
+        "owner_family": ENTRY_OPPORTUNITY_RECHECK_FAMILY,
+        "max_runtime_apply_count": 1,
+        "runtime_apply_candidate_count": len(final_candidates),
+        "allowed_runtime_apply_count": len(allowed_candidates),
+        "quality_update_id": (
+            str(allowed_candidates[0].get("quality_update_id") or "")
+            if allowed_candidates
+            else ""
+        ),
+        "cumulative_quality_window": cumulative_quality_window,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": report.get("source_quality_gate") or "pass",
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+    return report
 
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    runtime_update_contract = (
+        report.get("runtime_update_contract")
+        if isinstance(report.get("runtime_update_contract"), dict)
+        else {}
+    )
     best = (
         report.get("best_candidate")
         if isinstance(report.get("best_candidate"), dict)
+        else {}
+    )
+    source_consumption = (
+        report.get("source_consumption")
+        if isinstance(report.get("source_consumption"), dict)
         else {}
     )
     lines = [
@@ -803,6 +1471,42 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- calibration_state: `{report.get('calibration_state')}`",
         f"- allowed_runtime_apply: `{report.get('allowed_runtime_apply')}`",
+        f"- bounded_calibration_candidate_count: "
+        f"`{summary.get('bounded_calibration_candidate_count')}`",
+        f"- diagnostic_conflict_detected: "
+        f"`{summary.get('diagnostic_conflict_detected')}`",
+        f"- runtime_update_mode: `{runtime_update_contract.get('update_mode')}`",
+        f"- runtime_apply_candidate_count: "
+        f"`{runtime_update_contract.get('runtime_apply_candidate_count')}`",
+        f"- allowed_runtime_apply_count: "
+        f"`{runtime_update_contract.get('allowed_runtime_apply_count')}`",
+        f"- effective_source_date_count: "
+        f"`{summary.get('effective_source_date_count')}`",
+        f"- artifact_excluded_date_count: "
+        f"`{summary.get('artifact_excluded_date_count')}`",
+        f"- source_quality_excluded_date_count: "
+        f"`{summary.get('source_quality_excluded_date_count')}`",
+        "- source_quality_excluded_dates: `"
+        + json.dumps(
+            source_consumption.get("source_quality_excluded_dates") or [],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "`",
+        f"- counterfactual_context_joined_count: "
+        f"`{summary.get('counterfactual_context_joined_count')}`",
+        f"- supported_wait_recovery_source_contract_status: "
+        f"`{summary.get('supported_wait_recovery_source_contract_status')}`",
+        f"- supported_wait_recovery_policy_eligible_rows(realized/counterfactual): "
+        f"`{summary.get('supported_wait_recovery_realized_policy_eligible_rows')}/"
+        f"{summary.get('supported_wait_recovery_counterfactual_policy_eligible_rows')}`",
+        "- supported_wait_recovery_missing_reason_counts: `"
+        + json.dumps(
+            summary.get("supported_wait_recovery_missing_reason_counts") or {},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "`",
         f"- realized_joined_rows: `{summary.get('realized_joined_rows')}`",
         f"- counterfactual_rows: `{summary.get('counterfactual_rows')}`",
         f"- best_policy: `{summary.get('best_policy')}`",
@@ -827,6 +1531,17 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "```json",
         json.dumps(best, ensure_ascii=False, indent=2, default=str),
+        "```",
+        "",
+        "## Bounded Calibration Candidates",
+        "",
+        "```json",
+        json.dumps(
+            report.get("calibration_candidates") or [],
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
         "```",
     ]
     return "\n".join(lines) + "\n"

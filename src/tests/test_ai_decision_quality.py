@@ -595,7 +595,13 @@ def test_mature_outcome_labels_calculates_mfe_mae_first_hit_and_correlation():
     assert row["label_status"] == "partial"
     assert row["horizon_metrics"]["1m"]["mae_pct"] == -2
     assert row["horizon_metrics"]["1m"]["first_hit"] == "adverse"
+    assert row["horizon_metrics"]["1m"]["entry_path_first_hit"] == "adverse_first"
+    assert row["horizon_metrics"]["1m"]["entry_path_target_pct"] == 0.3
+    assert row["horizon_metrics"]["1m"]["entry_path_adverse_pct"] == -0.7
     assert row["horizon_metrics"]["3m"]["mfe_pct"] == 2
+    assert row["stage_outcome"]["entry_path_label_status"] == (
+        "pending_primary_horizon"
+    )
     assert row["correlation"]["actual_order_submitted"] is True
     assert row["correlation"]["status"] == "exact_matched"
     assert row["correlation"]["realized_separate_from_counterfactual"] is True
@@ -866,6 +872,70 @@ def test_mature_outcome_uses_bar_high_low_and_marks_same_bar_first_hit_ambiguous
     assert metric["mae_pct"] == -2
     assert metric["end_return_pct"] == 0
     assert metric["first_hit"] == "ambiguous_same_bar"
+    assert metric["entry_path_first_hit"] == "same_bar_ambiguous"
+
+
+def test_mature_entry_outcome_exposes_ten_minute_tight_stop_path_label():
+    price_rows = []
+    for minute in (1, 3, 5, 10):
+        price_rows.append(
+            {
+                "timestamp": f"2026-07-27T09:{minute:02d}:00+09:00",
+                "stock_code": "005930",
+                "price": 100.1,
+                "high": 100.4 if minute == 1 else 100.2,
+                "low": 99.9 if minute == 1 else (99.2 if minute == 3 else 99.8),
+                "close": 100.1,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass",
+            }
+        )
+
+    row = quality.mature_outcome_labels(
+        pending_labels=[_pending("BUY")],
+        price_rows=price_rows,
+        lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+
+    assert row["horizon_metrics"]["10m"]["entry_path_first_hit"] == "target_first"
+    assert row["stage_outcome"] == {
+        "entry_path_primary_horizon": "10m",
+        "entry_path_label_version": "tight_stop_entry_path_v1",
+        "entry_path_first_hit": "target_first",
+        "entry_path_target_pct": 0.3,
+        "entry_path_adverse_pct": -0.7,
+        "entry_path_target_hit_at": "2026-07-27T09:01:00+09:00",
+        "entry_path_adverse_hit_at": "2026-07-27T09:03:00+09:00",
+        "entry_path_label_status": "mature",
+        "counterfactual_only": True,
+    }
+
+
+def test_mature_non_entry_outcome_does_not_emit_entry_path_label():
+    pending = {**_pending("HOLD"), "decision_stage": "holding"}
+    row = quality.mature_outcome_labels(
+        pending_labels=[pending],
+        price_rows=[
+            {
+                "timestamp": "2026-07-27T09:01:00+09:00",
+                "stock_code": "005930",
+                "price": 99.2,
+                "high": 100.4,
+                "low": 99.2,
+                "close": 99.5,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass",
+            }
+        ],
+        lifecycle_rows=[],
+        as_of=datetime(2026, 7, 27, 9, 2, tzinfo=KST),
+    )[0]
+
+    assert "entry_path_first_hit" not in row["horizon_metrics"]["1m"]
+    assert "entry_path_label_version" not in row["horizon_metrics"]["1m"]
 
 
 def test_mature_outcome_classifies_drawdown_then_profit_recovery():
@@ -2883,6 +2953,8 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "new_missed_upside_count": 0,
             "control_adverse_first_exposure_count": 0,
             "adverse_first_candidate_exposure_count": 0,
+            "control_tight_stop_adverse_first_exposure_count": 0,
+            "candidate_tight_stop_adverse_first_exposure_count": 0,
             "candidate_exposure_decision_count": 0,
             "candidate_exposure_unique_symbol_count": 0,
             "candidate_exposure_sample_floor_pass": False,
@@ -2894,6 +2966,7 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
                 "missed_upside_reduced": False,
                 "new_missed_upside_not_increased": True,
                 "adverse_first_exposure_not_increased": True,
+                "tight_stop_adverse_first_exposure_not_increased": True,
                 "candidate_action_not_collapsed": False,
                 "candidate_exposure_sample_floor_pass": False,
             },
@@ -2904,6 +2977,64 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             },
         }
     ]
+
+
+def test_paired_replay_consumes_tight_stop_entry_path_label():
+    report = quality.build_paired_replay_report(
+        target_date="2026-07-27",
+        requests=[
+            {
+                "decision_trace_id": "tight-stop-trace",
+                "paired_replay_id": "tight-stop-pair",
+                "stock_code": "005930",
+            }
+        ],
+        results=[
+            {
+                "decision_trace_id": "tight-stop-trace",
+                "paired_replay_id": "tight-stop-pair",
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "WAIT"},
+                "candidate_response": {"action": "BUY", "edge_state": "EDGE"},
+            }
+        ],
+        labels=[
+            {
+                "decision_trace_id": "tight-stop-trace",
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": -0.2,
+                        "mfe_pct": 0.1,
+                        "mae_pct": -0.8,
+                        "first_hit": "neither",
+                        "entry_path_first_hit": "adverse_first",
+                        "entry_path_target_pct": 0.3,
+                        "entry_path_adverse_pct": -0.7,
+                    }
+                },
+            }
+        ],
+    )
+
+    row = report["paired_comparisons"][0]
+    assert row["entry_path_first_hit"] == "adverse_first"
+    assert "false_buy_tight_stop_adverse_first" in row[
+        "candidate_error_taxonomy"
+    ]
+    assert report["control_tight_stop_adverse_first_exposure_count"] == 0
+    assert report["candidate_tight_stop_adverse_first_exposure_count"] == 1
+    assert report["candidate_quality_checks"][
+        "tight_stop_adverse_first_exposure_not_increased"
+    ] is False
+    assert report["entry_path_label_contract"]["decision_authority"] == (
+        "offline_replay_and_attribution_only"
+    )
 
 
 def test_paired_report_requires_diverse_candidate_exposure_sample():

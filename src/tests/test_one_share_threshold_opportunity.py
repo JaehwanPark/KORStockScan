@@ -101,6 +101,116 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
     assert order["implementation_provenance"]["broker_order_forbidden"] is True
     assert "broker_guard_bypass" in order["forbidden_uses"]
     assert report["ai_review"]["status"] == "unavailable"
+    assert report["probe_split_attribution"]["intent_record_count"] == 3
+    assert report["probe_split_attribution"]["status"] == "observed"
+
+
+def test_forced_reason_on_ineligible_skip_does_not_create_probe_intent(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_watch_not_rising_skipped",
+                {
+                    "forced_entry_reason": "rising_missed_one_share_entry",
+                    "rising_missed_one_share_eligible": False,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[],
+        generated_at="fixed",
+        ai_provider="none",
+    )
+
+    assert report["summary"]["forced_record_count"] == 0
+    assert report["probe_split_attribution"]["status"] == "no_natural_sample"
+    assert report["source_coverage_manifest"]["missing_post_sell_dates"] == []
+
+
+def test_probe_split_attribution_flags_submitted_row_without_variant(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {
+                        "rising_missed_one_share_entry_forced": True,
+                        "entry_split_order_probe_first_applied": True,
+                    },
+                ),
+                _event(1, "order_bundle_submitted", {"actual_order_submitted": True}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text("", encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="none",
+    )
+
+    attribution = report["probe_split_attribution"]
+    assert attribution["actual_submit_observed_count"] == 1
+    assert attribution["probe_first_submitted_count"] == 1
+    assert attribution["entry_split_variant_observed_count"] == 0
+    assert attribution["submitted_split_provenance_gap_count"] == 1
+    assert attribution["status"] == "instrumentation_gap"
+    assert report["source_coverage_manifest"]["expected_post_sell_dates"] == [
+        "2026-07-01"
+    ]
+
+
+def test_non_split_submit_is_not_a_probe_provenance_gap(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                ),
+                _event(1, "order_bundle_submitted", {"actual_order_submitted": True}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text("", encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="none",
+    )
+
+    attribution = report["probe_split_attribution"]
+    assert attribution["status"] == "observed"
+    assert attribution["probe_first_submitted_count"] == 0
+    assert attribution["legacy_or_non_split_submit_count"] == 1
+    assert attribution["submitted_split_provenance_gap_count"] == 0
 
 
 def test_valid_profit_sample_floor_blocks_incomplete_pnl_order(tmp_path):

@@ -6012,6 +6012,60 @@ def test_score65_74_recovery_probe_cannot_reopen_semantic_rejection(monkeypatch)
     }
 
 
+def test_score65_74_probe_delegates_canonical_wait_probe_to_recheck_owner(
+    monkeypatch,
+):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
+        "false",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+        "true",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
+    )
+
+    decision = _score65_74_recovery_probe_decision(
+        {
+            "action": "WAIT",
+            "decision_quality_contract_status": "pass",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "evidence": {
+                "adverse_risk": "high",
+                "trigger": "recovery_required",
+            },
+        },
+        68,
+        {"latency_state": "SAFE"},
+        [],
+        [],
+        None,
+    )
+
+    assert decision == {
+        "allowed": False,
+        "evaluated": False,
+        "score65_74_recovery_probe_skip_reason": (
+            "delegated_to_entry_opportunity_recheck_runtime"
+        ),
+    }
+
+
 def test_score65_74_recovery_probe_enforces_micro_context_hard_gate(monkeypatch):
     rules = replace(
         TRADING_RULES,

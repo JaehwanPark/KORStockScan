@@ -13,6 +13,14 @@
 - entry_reaction_quality_counts: `{'-': 29237, 'favorable_reaction': 24, 'mixed_reaction': 217, 'neutral_unusable': 3837, 'risk_context_only': 243, 'weak_reaction': 200}`
 - source_quality_counts: `{'-': 29237, 'ai_confirmed_terminal_no_budget_source_quality_missing': 146, 'ai_score_50_buy_hold_override_no_tick_audit': 130, 'blocked_ai_score_no_tick_audit': 54, 'fresh_short_window': 684, 'pre_ai_liquidity_gate': 303, 'pre_ai_overbought_gate': 1721, 'snapshot_pre_contract_backfill': 187, 'stale_tick_or_quote': 1132, 'tick_aggressor_pressure_unusable': 118, 'watching_ai_cooldown_active': 46}`
 - stage_counts: `{'ai_confirmed': 337, 'ai_confirmed_terminal_no_budget': 492, 'ai_cooldown_blocked': 46, 'ai_holding_review': 217, 'blocked_ai_score': 429, 'blocked_liquidity': 303, 'blocked_overbought': 1721, 'entry_ai_price_canary_skipped_by_tick_speed_hard_block': 5, 'krx_direct_canary_live_ai_wait_submit_block': 2, 'latency_block': 196, 'latency_pass': 36, 'opening_rotation_1pct_observed': 1066, 'order_bundle_submitted': 5, 'pre_submit_entry_ai_authority_guard_block': 28, 'pre_submit_micro_unavailable_block': 9, 'real_weak_ai_micro_entry_block': 7, 'rising_missed_one_share_entry': 744, 'rising_missed_one_share_entry_blocked': 270, 'rising_missed_scout_quality_guard_blocked': 4, 'rising_missed_tick_absolute_throughput_relief_applied': 3, 'rising_missed_tick_speed_entry_block': 27, 'rising_missed_tp1_candidate_blocked': 2571, 'rising_missed_tp1_candidate_deferred': 4508, 'rising_missed_tp1_counterfactual_submit_safety': 7079, 'scalp_entry_action_decision_snapshot': 910, 'scalping_scanner_fast_precheck': 12743}`
+- opportunity_funnel raw/entry/unique_unsubmitted: `24` / `19` / `4`
+- opportunity_first_blocker_counts: `{'ai_confirmed': 3, 'rising_missed_tick_speed_entry_block': 1}`
+- opportunity_outcome_join_status_counts: `{'no_matching_watch_cycle': 1, 'reference_time_mismatch': 1, 'time_exact': 2}`
+- opportunity_outcome_source_status: `loaded`
+- opportunity_source_quality_pass/sample_floor: `1` / `rolling_source_quality_pass_unique_opportunities_ge_20`
+- cumulative available/included dates: `43` / `39`
+- cumulative unique/pass/EV: `561` / `1` / `1.509`
+- cumulative_runtime_reflection_status: `sample_floor_not_met`
 - v_pw_source_counts: `{'missing': 226, 'not_applicable': 30327, 'ws_0b_latest_strength': 3205}`
 - v_pw_rest_fallback_rate_pct: `0.0`
 - v_pw_runtime_support_unusable_count: `33758`

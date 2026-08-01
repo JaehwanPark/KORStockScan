@@ -37,6 +37,32 @@ def _write_lab_outputs(
     return lab_dir
 
 
+def test_pattern_lab_next_day_completion_is_timing_fresh_but_coverage_can_block(
+    tmp_path,
+):
+    lab_dir = _write_lab_outputs(tmp_path, "claude")
+    paths = mod._lab_output_paths(lab_dir, "claude")
+    paths["manifest"].write_text(
+        json.dumps(
+            {
+                "run_at": "2026-05-09T00:12:00+09:00",
+                "history_coverage_end": "2026-05-08",
+                "history_coverage_ok": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    freshness = mod._lab_freshness("claude", paths, "2026-05-08")
+    result = mod._load_lab("claude", lab_dir, "2026-05-08")
+
+    assert freshness["timing_fresh"] is True
+    assert freshness["source_quality_usable"] is False
+    assert freshness["tuning_input_allowed"] is False
+    assert result["findings"] == []
+    assert result["rejected_findings"][0]["reason"] == "history_coverage_incomplete"
+
+
 def test_pattern_lab_automation_builds_consensus_orders_and_family_candidates(
     tmp_path, monkeypatch
 ):

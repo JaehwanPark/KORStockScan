@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import types
 
+import pytest
+
 from src.engine import log_archive_service as service
 from src.engine import monitor_snapshot_runtime as runtime
 from src.engine.notify_monitor_snapshot_admin import _build_message, _load_json_line
@@ -24,6 +26,32 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     loaded = service.load_monitor_snapshot("trade_review", "2026-04-06")
     assert loaded is not None
     assert loaded == payload
+    assert not list(snapshot_dir.glob(".trade_review_2026-04-06.json.*.tmp"))
+
+
+def test_monitor_snapshot_atomic_write_preserves_previous_file_on_dump_failure(
+    tmp_path, monkeypatch
+):
+    snapshot_dir = tmp_path / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
+    path = service.save_monitor_snapshot(
+        "trade_review", "2026-04-06", {"status": "previous"}
+    )
+
+    def _raise_after_partial_write(payload, handle, **kwargs):
+        handle.write('{"status":')
+        raise RuntimeError("simulated_dump_failure")
+
+    monkeypatch.setattr(service.json, "dump", _raise_after_partial_write)
+
+    with pytest.raises(RuntimeError, match="simulated_dump_failure"):
+        service.save_monitor_snapshot(
+            "trade_review", "2026-04-06", {"status": "replacement"}
+        )
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"status": "previous"}
+    assert not list(snapshot_dir.glob(".trade_review_2026-04-06.json.*.tmp"))
 
 
 def test_load_monitor_snapshot_reads_gzip_file(tmp_path, monkeypatch):

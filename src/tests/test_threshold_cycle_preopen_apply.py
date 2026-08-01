@@ -1,9 +1,56 @@
 import json
 
 import pytest
+from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_mod
 from src.engine import threshold_cycle_preopen_apply as mod
+from src.engine.scalping import (
+    scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod,
+)
+from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
+
+
+def _entry_ai_cumulative_window():
+    return {
+        "window_policy": "clean_baseline_cumulative",
+        "start_date": "2026-06-05",
+        "end_date": "2026-07-03",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "source_date_count": 2,
+        "source_dates": ["2026-06-05", "2026-07-03"],
+        "excluded_date_count": 0,
+    }
+
+
+def _entry_ai_runtime_contract(*, candidate_count=1, allowed_count=1):
+    return {
+        "schema_version": 1,
+        "update_mode": "single_cumulative_quality_update",
+        "owner_family": "entry_opportunity_recheck_runtime",
+        "max_runtime_apply_count": 1,
+        "runtime_apply_candidate_count": candidate_count,
+        "allowed_runtime_apply_count": allowed_count,
+        "quality_update_id": "entry-quality-update-1" if allowed_count else "",
+        "cumulative_quality_window": _entry_ai_cumulative_window(),
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "pass",
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
+    }
+
+
+def _entry_ai_candidate_runtime_fields():
+    return {
+        "quality_update_id": "entry-quality-update-1",
+        "runtime_update_mode": "single_cumulative_quality_update",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": _entry_ai_cumulative_window(),
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -584,6 +631,49 @@ def test_scale_in_split_order_plan_does_not_close_pyramid_quality_guard(
     assert next_env == env
 
 
+@pytest.mark.parametrize(
+    "owner_family",
+    [
+        "scalping_pyramid_quality_gate",
+        "scalping_avg_down_recovery_quality_gate",
+    ],
+)
+def test_cumulative_scale_in_quality_update_keeps_downstream_pyramid_guard(
+    owner_family,
+):
+    selected = [
+        {
+            "family": mod.REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+            "stage": "scale_in",
+        },
+        {"family": owner_family, "stage": "scale_in"},
+    ]
+    decisions = [
+        {
+            "family": mod.REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+            "selected": True,
+        },
+        {"family": owner_family, "selected": True},
+    ]
+    env = {
+        "KORSTOCKSCAN_REAL_PYRAMID_MICRO_CONTEXT_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE": "65",
+    }
+
+    next_selected, next_decisions, next_env = (
+        mod._close_real_pyramid_scale_in_quality_guard_for_live_owner(
+            selected=selected,
+            decisions=decisions,
+            env_overrides=env,
+            owner_family=owner_family,
+        )
+    )
+
+    assert next_selected == selected
+    assert next_decisions == decisions
+    assert next_env == env
+
+
 def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(
     monkeypatch, tmp_path
 ):
@@ -620,27 +710,158 @@ def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(
     assert decisions[0]["decision_reason"] == "ai_guard_rejected_test"
 
 
-def test_ai_score_optimization_backtest_entry_recheck_candidate_emits_runtime_env(
+def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    split_candidate = {
+        "family": "scale_in_split_order_plan",
+        "stage": "scale_in",
+        "priority": 9,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "target_env_keys": ["SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"],
+        "current_values": {"enabled": False},
+        "recommended_values": {"enabled": True},
+    }
+    cumulative_window = {
+        "window_policy": "clean_baseline_cumulative",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "start_date": "2026-06-05",
+        "end_date": "2026-07-03",
+        "source_dates": ["2026-07-03"],
+        "source_date_count": 1,
+    }
+    pyramid_candidate = {
+        "family": "scalping_pyramid_quality_gate",
+        "stage": "scale_in",
+        "priority": 39,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "source_quality_gate": "pass",
+        "target_env_keys": ["SCALPING_PYRAMID_MIN_AI_SCORE"],
+        "current_values": {"min_ai_score": 70.0},
+        "recommended_values": {"min_ai_score": 65.0},
+        "quality_update_id": "pyramid-quality-1",
+        "runtime_update_mode": "single_cumulative_quality_update",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": cumulative_window,
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    avg_down_candidate = {
+        "family": "scalping_avg_down_recovery_quality_gate",
+        "stage": "scale_in",
+        "priority": 37,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "source_quality_gate": "pass",
+        "target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"],
+        "current_values": {"shallow_max_per_position": 1},
+        "recommended_values": {"shallow_max_per_position": 2},
+        "quality_update_id": "avg-down-quality-1",
+        "runtime_update_mode": "single_cumulative_quality_update",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": cumulative_window,
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [split_candidate, pyramid_candidate, avg_down_candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-07-04",
+    )
+
+    assert [item["family"] for item in selected] == [
+        "scale_in_split_order_plan",
+        "scalping_avg_down_recovery_quality_gate",
+    ]
+    assert decisions[2]["selected"] is False
+    assert decisions[2]["decision_reason"] == (
+        "single_cumulative_quality_update_conflict:"
+        "scalping_avg_down_recovery_quality_gate"
+    )
+    assert env["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"] == "true"
+    assert (
+        env["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"] == "2"
+    )
+    assert "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE" not in env
+
+
+def test_cumulative_quality_contract_rejects_quality_update_id_mismatch():
+    quality_window = {
+        "window_policy": "clean_baseline_cumulative",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "start_date": "2026-06-05",
+        "end_date": "2026-07-03",
+        "source_dates": ["2026-07-03"],
+        "source_date_count": 1,
+    }
+    candidate = {
+        "family": "scalping_pyramid_quality_gate",
+        "stage": "scale_in",
+        "quality_update_id": "candidate-id",
+        "runtime_update_mode": "single_cumulative_quality_update",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": quality_window,
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    payload = {
+        "target_date": "2026-07-03",
+        "runtime_update_contract": {
+            "update_mode": "single_cumulative_quality_update",
+            "owner_family": "scalping_pyramid_quality_gate",
+            "owner_stage": "scale_in",
+            "max_runtime_apply_count": 1,
+            "runtime_apply_candidate_count": 1,
+            "allowed_runtime_apply_count": 0,
+            "quality_update_id": "different-id",
+            "cumulative_quality_window": quality_window,
+            "post_apply_attribution_required": True,
+            "runtime_effect": False,
+        },
+    }
+
+    assert mod._cumulative_quality_update_contract_error(
+        payload,
+        [candidate],
+        owner_family="scalping_pyramid_quality_gate",
+        owner_stage="scale_in",
+    ) == "candidate_quality_update_id_mismatch"
+
+
+def test_entry_ai_gate_backtest_entry_recheck_candidate_emits_runtime_env(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
         mod,
-        "AI_SCORE_OPTIMIZATION_BACKTEST_DIR",
-        tmp_path / "ai_score_optimization_backtest",
+        "ENTRY_AI_GATE_BACKTEST_DIR",
+        tmp_path / "entry_ai_gate_backtest",
     )
-    path = (
-        mod.AI_SCORE_OPTIMIZATION_BACKTEST_DIR
-        / "ai_score_optimization_backtest_2026-07-03.json"
-    )
+    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "ai_score_optimization_backtest",
+                "report_type": "entry_ai_gate_backtest",
                 "target_date": "2026-07-03",
                 "summary": {"allowed_runtime_apply_candidate_count": 1},
+                "runtime_update_contract": _entry_ai_runtime_contract(),
                 "calibration_candidates": [
                     {
+                        **_entry_ai_candidate_runtime_fields(),
                         "family": "entry_opportunity_recheck_runtime",
                         "stage": "entry",
                         "priority": 42,
@@ -670,9 +891,7 @@ def test_ai_score_optimization_backtest_entry_recheck_candidate_emits_runtime_en
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_ai_score_optimization_backtest_candidates(
-        "2026-07-03"
-    )
+    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
     selected, decisions, env = mod._select_auto_apply_candidates(
         candidates,
         ai_review={},
@@ -681,8 +900,14 @@ def test_ai_score_optimization_backtest_entry_recheck_candidate_emits_runtime_en
     )
 
     assert status["status"] == "loaded"
+    assert status["runtime_update_contract_blocked"] is False
+    assert status["runtime_update_contract"]["max_runtime_apply_count"] == 1
+    assert len(candidates) == 1
     assert selected[0]["family"] == "entry_opportunity_recheck_runtime"
     assert decisions[0]["selected"] is True
+    assert decisions[0]["quality_update_id"] == "entry-quality-update-1"
+    assert decisions[0]["runtime_update_mode"] == ("single_cumulative_quality_update")
+    assert decisions[0]["post_apply_attribution_required"] is True
     assert env == {
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "68",
@@ -690,28 +915,121 @@ def test_ai_score_optimization_backtest_entry_recheck_candidate_emits_runtime_en
     }
 
 
-def test_ai_score_optimization_backtest_root_source_quality_blocks_runtime_env(
-    tmp_path, monkeypatch
-):
+def test_entry_ai_gate_loader_blocks_missing_cumulative_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(
         mod,
-        "AI_SCORE_OPTIMIZATION_BACKTEST_DIR",
-        tmp_path / "ai_score_optimization_backtest",
+        "ENTRY_AI_GATE_BACKTEST_DIR",
+        tmp_path / "entry_ai_gate_backtest",
     )
-    path = (
-        mod.AI_SCORE_OPTIMIZATION_BACKTEST_DIR
-        / "ai_score_optimization_backtest_2026-07-03.json"
-    )
+    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "ai_score_optimization_backtest",
+                "report_type": "entry_ai_gate_backtest",
+                "target_date": "2026-07-03",
+                "calibration_candidates": [
+                    {
+                        "family": "entry_opportunity_recheck_runtime",
+                        "allowed_runtime_apply": True,
+                        "calibration_state": "adjust_down",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
+
+    assert status["runtime_update_contract_blocked"] is True
+    assert status["runtime_update_contract_error"] == (
+        "missing_runtime_update_contract"
+    )
+    assert candidates[0]["allowed_runtime_apply"] is False
+    assert candidates[0]["calibration_state"] == "freeze"
+
+
+def test_entry_ai_gate_loader_preserves_zero_candidate_source_contract_status(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod,
+        "ENTRY_AI_GATE_BACKTEST_DIR",
+        tmp_path / "entry_ai_gate_backtest",
+    )
+    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "report_type": "entry_ai_gate_backtest",
+                "target_date": "2026-07-03",
+                "allowed_runtime_apply": False,
+                "calibration_state": "source_contract_not_evaluable",
+                "summary": {
+                    "diagnostic_conflict_detected": True,
+                    "supported_wait_recovery_source_contract_status": (
+                        "source_contract_not_evaluable"
+                    ),
+                },
+                "runtime_update_contract": _entry_ai_runtime_contract(
+                    candidate_count=0, allowed_count=0
+                ),
+                "calibration_candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
+
+    assert candidates == []
+    assert status["runtime_update_contract_blocked"] is False
+    assert status["allowed_runtime_apply"] is False
+    assert status["calibration_state"] == "source_contract_not_evaluable"
+    assert (
+        status["supported_wait_recovery_source_contract_status"]
+        == "source_contract_not_evaluable"
+    )
+
+
+def test_entry_ai_gate_contract_rejects_multiple_runtime_updates():
+    candidate = {
+        **_entry_ai_candidate_runtime_fields(),
+        "family": "entry_opportunity_recheck_runtime",
+        "allowed_runtime_apply": True,
+    }
+    contract = _entry_ai_runtime_contract(candidate_count=2, allowed_count=2)
+
+    error = mod._entry_ai_gate_cumulative_contract_error(
+        {"runtime_update_contract": contract}, [candidate, dict(candidate)]
+    )
+
+    assert error == "multiple_runtime_update_candidates"
+
+
+def test_entry_ai_gate_backtest_root_source_quality_blocks_runtime_env(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod,
+        "ENTRY_AI_GATE_BACKTEST_DIR",
+        tmp_path / "entry_ai_gate_backtest",
+    )
+    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "report_type": "entry_ai_gate_backtest",
                 "target_date": "2026-07-03",
                 "source_quality_gate": "source_quality_blocked",
                 "summary": {"allowed_runtime_apply_candidate_count": 1},
+                "runtime_update_contract": _entry_ai_runtime_contract(),
                 "calibration_candidates": [
                     {
+                        **_entry_ai_candidate_runtime_fields(),
                         "family": "entry_opportunity_recheck_runtime",
                         "stage": "entry",
                         "priority": 42,
@@ -741,9 +1059,7 @@ def test_ai_score_optimization_backtest_root_source_quality_blocks_runtime_env(
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_ai_score_optimization_backtest_candidates(
-        "2026-07-03"
-    )
+    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
     selected, decisions, env = mod._select_auto_apply_candidates(
         candidates,
         ai_review={},
@@ -763,11 +1079,6 @@ def test_ai_score_optimization_backtest_root_source_quality_blocks_runtime_env(
 def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(
-        mod,
-        "RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR",
-        tmp_path / "rising_missed_first_touch_calibration",
-    )
     monkeypatch.setattr(
         mod,
         "SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR",
@@ -792,10 +1103,6 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
         },
     )
     monkeypatch.setattr(mod, "source_quality_preflight_blocked", lambda preflight: True)
-    rising_path = (
-        mod.RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR
-        / "rising_missed_first_touch_calibration_2026-07-03.json"
-    )
     pyramid_path = (
         mod.SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR
         / "scalping_pyramid_quality_calibration_2026-07-03.json"
@@ -804,28 +1111,8 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
         mod.SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR
         / "scalping_avg_down_recovery_calibration_2026-07-03.json"
     )
-    rising_path.parent.mkdir(parents=True)
     pyramid_path.parent.mkdir(parents=True)
     avg_down_path.parent.mkdir(parents=True)
-    rising_path.write_text(
-        json.dumps(
-            {
-                "calibration_candidates": [
-                    {
-                        "family": "rising_missed_first_touch_avgdown_decision_gate",
-                        "stage": "scale_in",
-                        "calibration_state": "adjust_up",
-                        "allowed_runtime_apply": True,
-                        "sample_floor_passed": True,
-                        "source_quality_gate": "pass",
-                        "target_env_keys": ["SCALP_FIRST_TOUCH_AVGDOWN_MIN_AI_SUPPORT"],
-                        "recommended_values": {"min_ai_support": 75},
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
     pyramid_path.write_text(
         json.dumps(
             {
@@ -867,9 +1154,6 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
         encoding="utf-8",
     )
 
-    rising_candidates, rising_status = (
-        mod._load_rising_missed_first_touch_calibration_candidates("2026-07-03")
-    )
     pyramid_candidates, pyramid_status = (
         mod._load_scalping_pyramid_quality_calibration_candidates("2026-07-03")
     )
@@ -877,13 +1161,10 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
         mod._load_scalping_avg_down_recovery_calibration_candidates("2026-07-03")
     )
 
-    assert rising_status["source_quality_blocked"] is True
     assert pyramid_status["source_quality_blocked"] is True
     assert avg_down_status["source_quality_blocked"] is True
-    assert rising_candidates[0]["allowed_runtime_apply"] is False
     assert pyramid_candidates[0]["allowed_runtime_apply"] is False
     assert avg_down_candidates[0]["allowed_runtime_apply"] is False
-    assert rising_candidates[0]["source_quality_gate"] == "source_quality_blocked"
     assert pyramid_candidates[0]["source_quality_gate"] == "source_quality_blocked"
     assert avg_down_candidates[0]["source_quality_gate"] == "source_quality_blocked"
 
@@ -935,13 +1216,11 @@ def test_scalping_avg_down_recovery_carry_forward_filters_to_avg_down_env():
     }
 
 
-def test_ai_score_optimization_loader_blocks_source_quality_preflight(
-    tmp_path, monkeypatch
-):
+def test_entry_ai_gate_loader_blocks_source_quality_preflight(tmp_path, monkeypatch):
     monkeypatch.setattr(
         mod,
-        "AI_SCORE_OPTIMIZATION_BACKTEST_DIR",
-        tmp_path / "ai_score_optimization_backtest",
+        "ENTRY_AI_GATE_BACKTEST_DIR",
+        tmp_path / "entry_ai_gate_backtest",
     )
     monkeypatch.setattr(
         mod,
@@ -957,20 +1236,19 @@ def test_ai_score_optimization_loader_blocks_source_quality_preflight(
         },
     )
     monkeypatch.setattr(mod, "source_quality_preflight_blocked", lambda preflight: True)
-    path = (
-        mod.AI_SCORE_OPTIMIZATION_BACKTEST_DIR
-        / "ai_score_optimization_backtest_2026-07-03.json"
-    )
+    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "ai_score_optimization_backtest",
+                "report_type": "entry_ai_gate_backtest",
                 "target_date": "2026-07-03",
                 "source_quality_gate": "pass",
                 "summary": {"allowed_runtime_apply_candidate_count": 1},
+                "runtime_update_contract": _entry_ai_runtime_contract(),
                 "calibration_candidates": [
                     {
+                        **_entry_ai_candidate_runtime_fields(),
                         "family": "entry_opportunity_recheck_runtime",
                         "stage": "entry",
                         "priority": 42,
@@ -1000,9 +1278,7 @@ def test_ai_score_optimization_loader_blocks_source_quality_preflight(
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_ai_score_optimization_backtest_candidates(
-        "2026-07-03"
-    )
+    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
     selected, decisions, env = mod._select_auto_apply_candidates(
         candidates,
         ai_review={},
@@ -1132,7 +1408,7 @@ def test_calibration_candidate_dedupe_prefers_first_source():
         "recommended_values": {"min_profit_pct": 1.1},
         "source": "direct",
     }
-    duplicate = {**first, "source": "ai_score_optimization_backtest"}
+    duplicate = {**first, "source": "entry_ai_gate_backtest"}
     different = {
         **first,
         "threshold_version": "different",
@@ -1143,13 +1419,6 @@ def test_calibration_candidate_dedupe_prefers_first_source():
     deduped = mod._dedupe_calibration_candidates([first, duplicate, different])
 
     assert deduped == [first, different]
-
-
-from src.engine import lifecycle_bucket_discovery as discovery_mod
-from src.engine.scalping import (
-    scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod,
-)
-from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
 
 
 def _bounded_real_canary_tier2_contract() -> dict:
@@ -8471,6 +8740,44 @@ def test_verify_runtime_env_handoff_rejects_post_probe_resolver_without_probe_fi
     assert finding["family"] == "dynamic_entry_price_resolver"
 
 
+def test_verify_runtime_env_handoff_rejects_recheck_without_probe_dependencies(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-21.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-21",
+                "selected_families": ["entry_opportunity_recheck_runtime"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "false",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "true",
+                    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
+                    "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED": "false",
+                    "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY": "2",
+                    "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED": "false",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-21")
+
+    finding = next(
+        item
+        for item in result["findings"]
+        if item.get("policy_reason")
+        == "entry_recheck_probe_dependency_contract_invalid"
+    )
+    assert finding["family"] == "entry_opportunity_recheck_runtime"
+    assert "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED" in finding["missing_env_keys"]
+    assert "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY" in finding["missing_env_keys"]
+
+
 def test_entry_split_daily_operator_contract_accepts_recurring_stale_policy(
     tmp_path,
 ):
@@ -9469,7 +9776,7 @@ def test_gap_provenance_written_during_auto_apply(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    manifest = mod.build_preopen_apply_manifest(
+    mod.build_preopen_apply_manifest(
         "2026-06-11",
         source_date="2026-06-10",
         apply_mode="auto_bounded_live",

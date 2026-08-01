@@ -1450,6 +1450,24 @@ def build_report(
         if isinstance(classifier_prior.get("summary"), dict)
         else {}
     )
+    joined_forced_record_ids = {
+        str(item.get("record_id") or "")
+        for item in outcomes
+        if str(item.get("record_id") or "") in forced
+    }
+    joined_forced_count = len(joined_forced_record_ids)
+    outcome_join_coverage_pct = round(
+        (joined_forced_count / len(forced) * 100.0) if forced else 0.0, 6
+    )
+    outcome_coverage_state = (
+        "no_forced_scout"
+        if not forced
+        else "no_closed_outcome"
+        if not outcomes
+        else "complete"
+        if joined_forced_count == len(forced)
+        else "partial"
+    )
     return {
         "schema_version": 1,
         "report_type": "rising_missed_scout_workorder",
@@ -1496,11 +1514,23 @@ def build_report(
                 "source_quality_gate": "record_id_joined_forced_scout_event_to_post_sell_outcome_with_initial_qty_notional",
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "outcome_join_coverage": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_only_join_coverage_diagnostic",
+                "window_policy": "same_day_forced_scout_to_post_sell_record_id_join",
+                "sample_floor": "at_least_one_closed_outcome_for_outcome_analysis",
+                "primary_decision_metric": False,
+                "source_quality_gate": "explicit_record_id_join_and_valid_profit_rate",
+                "forbidden_uses": FORBIDDEN_USES,
+            },
         },
         "source_paths": source_paths,
         "summary": {
             "forced_scout_record_count": len(forced),
-            "forced_scout_with_post_sell_count": len(outcomes),
+            "forced_scout_with_post_sell_count": joined_forced_count,
+            "forced_scout_post_sell_join_coverage_pct": outcome_join_coverage_pct,
+            "forced_scout_outcome_coverage_state": outcome_coverage_state,
+            "forced_scout_outcome_analysis_ready": bool(outcomes),
             "profitable_forced_scout_count": len(winners),
             "loss_or_flat_forced_scout_count": len(losers),
             "winner_profit": _profit_summary(winners),
@@ -1601,6 +1631,8 @@ def write_outputs(
         "",
         f"- forced_scout_record_count: {summary.get('forced_scout_record_count')}",
         f"- forced_scout_with_post_sell_count: {summary.get('forced_scout_with_post_sell_count')}",
+        f"- forced_scout_post_sell_join_coverage_pct: {summary.get('forced_scout_post_sell_join_coverage_pct')}",
+        f"- forced_scout_outcome_coverage_state: {summary.get('forced_scout_outcome_coverage_state')}",
         f"- profitable_forced_scout_count: {summary.get('profitable_forced_scout_count')}",
         f"- loss_or_flat_forced_scout_count: {summary.get('loss_or_flat_forced_scout_count')}",
         f"- winner_avg_profit_rate: {(summary.get('winner_profit') or {}).get('avg_profit_rate')}",

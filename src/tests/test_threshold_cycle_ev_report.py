@@ -1849,3 +1849,49 @@ def test_swing_micro_provenance_gap_does_not_fallback_to_micro_missing():
     assert blocked["provenance_gap_count"] == 0
     assert blocked["source_quality_reason_stage_split"]["micro_missing"] == 7
     assert blocked["source_quality_reason_stage_split"]["provenance_gap"] == 0
+
+
+def test_microstructure_summary_propagates_clean_baseline_cumulative(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-07-31"
+    json_path = tmp_path / "microstructure.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "runtime_effect": False,
+                "summary": {
+                    "row_count": 10,
+                    "opportunity_exploration_funnel": {
+                        "unique_entry_opportunity_count": 2
+                    },
+                    "clean_baseline_cumulative_opportunity_exploration": {
+                        "included_date_count": 40,
+                        "source_quality_adjusted_ev_pct": 0.31,
+                        "runtime_reflection_status": "sample_floor_not_met",
+                        "runtime_apply_required": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "microstructure_reaction_report_paths",
+        lambda unused: (json_path, tmp_path / "microstructure.md"),
+    )
+
+    summary, source_path, warnings = mod._microstructure_reaction_context_summary(
+        target_date
+    )
+
+    assert source_path == str(json_path)
+    assert warnings == []
+    assert summary["opportunity_exploration_funnel"][
+        "unique_entry_opportunity_count"
+    ] == 2
+    cumulative = summary["clean_baseline_cumulative_opportunity_exploration"]
+    assert cumulative["included_date_count"] == 40
+    assert cumulative["source_quality_adjusted_ev_pct"] == 0.31
+    assert cumulative["runtime_apply_required"] is False

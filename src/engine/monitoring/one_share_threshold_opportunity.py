@@ -7,7 +7,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -187,7 +187,6 @@ def _is_forced_one_share(row: dict[str, Any]) -> bool:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     return (
         row.get("stage") == "rising_missed_one_share_entry"
-        or fields.get("forced_entry_reason") == FORCED_REASON
         or _boolish(fields.get("rising_missed_one_share_entry_forced"))
     )
 
@@ -231,7 +230,45 @@ def _record_feature(row: dict[str, Any]) -> dict[str, Any]:
             or fields.get("curr_price")
             or fields.get("curr")
         ),
+        "actual_order_submitted_observed": _boolish(
+            fields.get("actual_order_submitted")
+        ),
+        "entry_split_probe_first_applied_observed": _boolish(
+            fields.get("entry_split_order_probe_first_applied")
+            or fields.get("entry_split_probe_first_applied")
+        ),
+        "entry_split_probe_bundle_id": fields.get("entry_split_probe_bundle_id"),
+        "entry_split_order_variant_id": fields.get("entry_split_order_variant_id"),
+        "entry_split_probe_terminal_outcome": fields.get(
+            "entry_split_probe_terminal_outcome"
+        ),
     }
+
+
+def _merge_probe_split_provenance(
+    item: dict[str, Any], row: dict[str, Any]
+) -> None:
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    stage = str(row.get("stage") or "")
+    if _boolish(fields.get("actual_order_submitted")) or stage in {
+        "order_bundle_submitted",
+        "buy_order_filled",
+        "buy_order_partial_filled",
+    }:
+        item["actual_order_submitted_observed"] = True
+    if _boolish(
+        fields.get("entry_split_order_probe_first_applied")
+        or fields.get("entry_split_probe_first_applied")
+    ):
+        item["entry_split_probe_first_applied_observed"] = True
+    for key in (
+        "entry_split_probe_bundle_id",
+        "entry_split_order_variant_id",
+        "entry_split_probe_terminal_outcome",
+    ):
+        value = fields.get(key)
+        if value not in (None, "", "-"):
+            item[key] = value
 
 
 def _classify_threshold(row: dict[str, Any]) -> set[str]:
@@ -286,6 +323,7 @@ def _build_forced_index(
             item["forced_event_count"] = int(item.get("forced_event_count") or 0) + 1
             if row.get("stage") == "rising_missed_one_share_entry":
                 item.update(_record_feature(row))
+            _merge_probe_split_provenance(item, row)
     if not forced:
         return forced, threshold_counts, source_paths
     forced_ids = set(forced)
@@ -304,6 +342,7 @@ def _build_forced_index(
                 row, clean_baseline_ts_kst=clean_baseline_ts_kst
             ):
                 continue
+            _merge_probe_split_provenance(forced[record_id], row)
             for group in _classify_threshold(row):
                 threshold_counts[record_id][group] += 1
     return forced, threshold_counts, source_paths
@@ -315,6 +354,7 @@ def _source_coverage_manifest(
     post_sell_paths: list[Path],
     since_date: str,
     until_date: str,
+    expected_post_sell_dates: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     pipeline_dates = sorted(
         {_date_from_path(path) for path in pipeline_paths if _date_from_path(path)}
@@ -326,8 +366,15 @@ def _source_coverage_manifest(
     missing_pipeline_dates = [
         value for value in observed_dates if value not in set(pipeline_dates)
     ]
+    expected_post_sell = sorted(
+        {
+            str(value)
+            for value in (expected_post_sell_dates or [])
+            if _date_in_range(str(value), since_date=since_date, until_date=until_date)
+        }
+    )
     missing_post_sell_dates = [
-        value for value in observed_dates if value not in set(post_sell_dates)
+        value for value in expected_post_sell if value not in set(post_sell_dates)
     ]
     gap_count = len(missing_pipeline_dates) + len(missing_post_sell_dates)
     return {
@@ -338,6 +385,10 @@ def _source_coverage_manifest(
         "observed_dates": observed_dates,
         "pipeline_event_dates": pipeline_dates,
         "post_sell_dates": post_sell_dates,
+        "expected_post_sell_dates": expected_post_sell,
+        "post_sell_not_expected_pipeline_dates": sorted(
+            set(pipeline_dates) - set(expected_post_sell)
+        ),
         "missing_pipeline_event_dates": missing_pipeline_dates,
         "missing_post_sell_dates": missing_post_sell_dates,
         "gap_count": gap_count,
@@ -701,19 +752,27 @@ def build_report(
         or CLEAN_BASELINE_DATE
     )
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
-    pipeline_paths = pipeline_paths or _pipeline_paths(
-        since_date=since_date, until_date=target_date
-    )
-    post_sell_paths = post_sell_paths or _post_sell_paths(
-        since_date=since_date, until_date=target_date
-    )
+    if pipeline_paths is None:
+        pipeline_paths = _pipeline_paths(
+            since_date=since_date, until_date=target_date
+        )
+    if post_sell_paths is None:
+        post_sell_paths = _post_sell_paths(
+            since_date=since_date, until_date=target_date
+        )
+    forced, threshold_counts, pipeline_sources = _build_forced_index(pipeline_paths)
+    expected_post_sell_dates = {
+        str(item.get("entry_date") or "")
+        for item in forced.values()
+        if item.get("actual_order_submitted_observed")
+    }
     coverage_manifest = _source_coverage_manifest(
         pipeline_paths=pipeline_paths,
         post_sell_paths=post_sell_paths,
         since_date=since_date,
         until_date=target_date,
+        expected_post_sell_dates=expected_post_sell_dates,
     )
-    forced, threshold_counts, pipeline_sources = _build_forced_index(pipeline_paths)
     post_sell_by_record, post_sell_sources = _load_post_sell(post_sell_paths)
     rows = _joined_rows(forced, threshold_counts, post_sell_by_record)
     joined = [row for row in rows if row.get("post_sell_joined")]
@@ -730,8 +789,69 @@ def build_report(
     threshold_group_counts = Counter(
         group for row in rows for group in row.get("threshold_groups") or []
     )
+    submitted_rows = [row for row in rows if row.get("actual_order_submitted_observed")]
+    probe_first_rows = [
+        row for row in rows if row.get("entry_split_probe_first_applied_observed")
+    ]
+    variant_rows = [
+        row for row in rows if str(row.get("entry_split_order_variant_id") or "").strip()
+    ]
+    submitted_split_provenance_rows = [
+        row
+        for row in submitted_rows
+        if str(row.get("entry_split_probe_bundle_id") or "").strip()
+        or str(row.get("entry_split_order_variant_id") or "").strip()
+    ]
+    probe_first_submitted_rows = [
+        row
+        for row in submitted_rows
+        if row.get("entry_split_probe_first_applied_observed")
+    ]
+    probe_first_submit_with_provenance_rows = [
+        row
+        for row in probe_first_submitted_rows
+        if str(row.get("entry_split_probe_bundle_id") or "").strip()
+        or str(row.get("entry_split_order_variant_id") or "").strip()
+    ]
+    probe_first_provenance_gap_count = (
+        len(probe_first_submitted_rows)
+        - len(probe_first_submit_with_provenance_rows)
+    )
+    probe_split_attribution = {
+        "status": (
+            "no_natural_sample"
+            if not rows
+            else "instrumentation_gap"
+            if probe_first_provenance_gap_count > 0
+            else "observed"
+        ),
+        "intent_record_count": len(rows),
+        "actual_submit_observed_count": len(submitted_rows),
+        "probe_first_observed_count": len(probe_first_rows),
+        "entry_split_variant_observed_count": len(variant_rows),
+        "submitted_split_provenance_count": len(submitted_split_provenance_rows),
+        "submitted_split_provenance_gap_count": (
+            probe_first_provenance_gap_count
+        ),
+        "probe_first_submitted_count": len(probe_first_submitted_rows),
+        "probe_first_submit_with_provenance_count": len(
+            probe_first_submit_with_provenance_rows
+        ),
+        "legacy_or_non_split_submit_count": (
+            len(submitted_rows) - len(probe_first_submitted_rows)
+        ),
+        "post_sell_joined_count": len(joined),
+        "pending_or_unjoined_count": len(rows) - len(joined),
+        "join_owner": "record_id_to_post_sell_recommendation_id",
+        "execution_shape_owner": "entry_split_order_plan",
+        "scale_in_owner": "scale_in_split_order_plan_avg_down_only",
+        "decision_authority": "source_only_probe_split_attribution",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at": generated_at,
@@ -759,6 +879,7 @@ def build_report(
         },
         "source_paths": source_paths,
         "source_coverage_manifest": coverage_manifest,
+        "probe_split_attribution": probe_split_attribution,
         "summary": {
             "forced_record_count": len(rows),
             "post_sell_joined_count": len(joined),
@@ -797,6 +918,11 @@ def write_outputs(
         encoding="utf-8",
     )
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    probe_split = (
+        report.get("probe_split_attribution")
+        if isinstance(report.get("probe_split_attribution"), dict)
+        else {}
+    )
     lines = [
         f"# {report.get('target_date')} One Share Threshold Opportunity",
         "",
@@ -818,6 +944,10 @@ def write_outputs(
         f"- loss_or_flat_joined_count: {summary.get('loss_or_flat_joined_count')}",
         f"- threshold_opportunity_count: {summary.get('threshold_opportunity_count')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
+        f"- probe_split_attribution_status: {probe_split.get('status')}",
+        f"- probe_intent_record_count: {probe_split.get('intent_record_count')}",
+        f"- actual_submit_observed_count: {probe_split.get('actual_submit_observed_count')}",
+        f"- submitted_split_provenance_gap_count: {probe_split.get('submitted_split_provenance_gap_count')}",
         "",
         "## Opportunities",
         "",

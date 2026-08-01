@@ -4,7 +4,7 @@
 - gemini_fresh: `False`
 - gemini_enabled: `False`
 - gemini_retired_reason: `retired_from_automatic_execution`
-- claude_fresh: `False`
+- claude_fresh: `True`
 - active_labs: `['claude']`
 - consensus_count: `0`
 - auto_family_candidate_count: `0`
@@ -19,6 +19,3 @@
 
 ## Code Improvement Orders
 - none
-
-## Warnings
-- `claude:missing_manifest_or_target_date_mismatch`

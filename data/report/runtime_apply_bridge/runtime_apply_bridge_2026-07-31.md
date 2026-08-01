@@ -21,7 +21,7 @@
 ## 근거
 
 - `entry_wait6579_score66_69_recovery_gate_v1`: state=`entry_only_bridge_metadata`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, metadata_only=`True`, ai_followup=`-`
-- `scale_in_bucket_runtime_policy_v1`: state=`blocked_incremental_ev_runtime_authority`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, metadata_only=`False`, ai_followup=`-`
+- `scale_in_bucket_runtime_policy_v1`: state=`collecting_incremental_ev_runtime_authority_sample`, allowed_runtime_apply=`False`, approval_required=`False`, live_auto_apply=`False`, metadata_only=`False`, ai_followup=`-`
 
 ## 다음 액션
 

@@ -7,7 +7,7 @@
 - 재시도 큐: `0`
 - Codex 작업지시: `0`
 - source dimension gap: `44` / actionable=`0`
-- quiet gap: `245` / rollup=`245` / directive=`0`
+- quiet gap: `246` / rollup=`246` / directive=`0`
 
 ## 공격적 런타임 추진 대상
 - 대상 없음

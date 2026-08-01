@@ -69,8 +69,11 @@ COHORT_FIELDS = [
 ]
 
 
-def report_paths(target_date: str) -> tuple[Path, Path]:
-    base = REPORT_DIR / f"{REPORT_TYPE}_{target_date}"
+def report_paths(
+    target_date: str, artifact_suffix: str | None = None
+) -> tuple[Path, Path]:
+    suffix = f"_{artifact_suffix}" if artifact_suffix else ""
+    base = REPORT_DIR / f"{REPORT_TYPE}_{target_date}{suffix}"
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
@@ -148,6 +151,23 @@ def _has_sim_counterfactual_authority(event: dict[str, Any]) -> bool:
     return False
 
 
+def _has_explicit_sim_observation_authority(event: dict[str, Any]) -> bool:
+    fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+    return fields.get("actual_order_submitted") in {
+        False,
+        "false",
+        "False",
+        0,
+        "0",
+    } and fields.get("broker_order_forbidden") in {
+        True,
+        "true",
+        "True",
+        1,
+        "1",
+    }
+
+
 def _parse_emitted_at(event: dict[str, Any]) -> float:
     text = str(event.get("emitted_at") or "")
     try:
@@ -175,18 +195,9 @@ def _find_counterfactual_events(
             continue
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
         sim_id = fields.get("sim_record_id")
-        if not sim_id:
-            continue
         stage = str(item.get("stage") or "")
-        if stage.startswith("scalp_sim_"):
+        if sim_id and stage.startswith("scalp_sim_"):
             events_by_sim[str(sim_id)].append(item)
-
-    for item in _iter_events(target_date):
-        if not _event_allowed_by_clean_baseline(item, policy):
-            continue
-        stage = str(item.get("stage") or "")
-        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-
         if stage == "scalp_sim_scale_in_counterfactual_started":
             if not _has_sim_counterfactual_authority(item):
                 continue
@@ -267,8 +278,6 @@ def _reconstruct_counterfactual_from_legacy(
             prev_price = _safe_int(
                 fields.get("prev_buy_price") or fields.get("buy_price"), 0
             )
-            curr_price = _safe_int(fields.get("curr_price"), fill_price)
-
             if prev_price <= 0 and fill_price > 0:
                 prev_price = fill_price
 
@@ -426,23 +435,88 @@ def build_report(target_date: str) -> dict[str, Any]:
     source_diagnostics: dict[str, int] = {}
     cf_events = _find_counterfactual_events(target_date, source_diagnostics)
     if not cf_events:
+        candidate_diagnostics = _candidate_execution_diagnostics(
+            target_date, clean_policy
+        )
+        candidate_funnel_by_arm = candidate_diagnostics["candidate_funnel_by_arm"]
+        candidate_activity_count = sum(
+            sum(int(count or 0) for count in states.values())
+            for states in candidate_funnel_by_arm.values()
+        )
+        eligible_candidate_count = int(
+            candidate_diagnostics["eligible_candidate_count"]
+        )
+        candidate_terminal_count = int(
+            candidate_diagnostics["candidate_terminal_from_eligible_count"]
+        )
+        unresolved_eligible_count = int(
+            candidate_diagnostics["unresolved_eligible_candidate_count"]
+        )
+        status = (
+            "instrumentation_gap"
+            if unresolved_eligible_count or source_diagnostics
+            else "no_natural_sample"
+        )
         return {
             "schema_version": SCHEMA_VERSION,
             "date": target_date,
             "report_type": REPORT_TYPE,
             "runtime_effect": False,
             "decision_authority": "sim_scale_in_counterfactual_only",
-            "error": "no_counterfactual_events_found",
+            "metric_role": "sim_probe_ev",
+            "primary_decision_metric": "incremental_notional_ev_pct",
+            "scale_in_ev_label_version": EV_LABEL_VERSION,
+            "window_policy": "daily_only",
+            "sample_floor": SAMPLE_FLOOR,
+            "counterfactual_method": COUNTERFACTUAL_METHOD,
+            "runtime_authority_method_required": RUNTIME_AUTHORITY_METHOD,
+            "runtime_authority_ready": False,
+            "forbidden_uses": FORBIDDEN_USES,
+            "status": status,
+            "error": (
+                "counterfactual_event_contract_gap"
+                if status == "instrumentation_gap"
+                else None
+            ),
             "source_quality_gate": (
                 "pass_with_row_exclusions"
                 if source_diagnostics
                 else "clean_baseline_policy_sim_only_probe_events"
             ),
+            "clean_baseline_policy": clean_policy,
             "rows": [],
             "summary": {
                 "counterfactual_event_count": 0,
                 "source_quality_excluded_event_count": sum(source_diagnostics.values()),
                 "source_quality_exclusion_reasons": source_diagnostics,
+                "candidate_activity_count": candidate_activity_count,
+                "candidate_funnel_by_arm": candidate_funnel_by_arm,
+                **{
+                    key: value
+                    for key, value in candidate_diagnostics.items()
+                    if key != "candidate_funnel_by_arm"
+                },
+                "no_sample_reason": (
+                    "eligible_candidate_without_terminal_execution_event"
+                    if unresolved_eligible_count
+                    else (
+                        "counterfactual_rows_excluded_by_source_quality"
+                        if source_diagnostics
+                        else (
+                            "eligible_candidates_closed_without_counterfactual_execution"
+                            if candidate_terminal_count
+                            else (
+                                "all_eligible_candidates_guard_blocked_before_execution"
+                                if eligible_candidate_count
+                                else (
+                                    "no_execution_ready_scale_in_candidate"
+                                    if candidate_activity_count
+                                    else "no_scale_in_candidate_activity"
+                                )
+                            )
+                        )
+                    )
+                ),
             },
         }
 
@@ -562,11 +636,26 @@ def build_report(target_date: str) -> dict[str, Any]:
         rows.append(row)
 
     summary = _build_summary(rows, target_date, incomplete_count, incomplete_reasons)
-    summary["candidate_funnel_by_arm"] = _candidate_funnel_by_arm(
-        target_date, clean_policy
-    )
+    candidate_diagnostics = _candidate_execution_diagnostics(target_date, clean_policy)
+    summary.update(candidate_diagnostics)
     summary["source_quality_excluded_event_count"] = sum(source_diagnostics.values())
     summary["source_quality_exclusion_reasons"] = source_diagnostics
+    partial_instrumentation_gap = bool(
+        _safe_int(candidate_diagnostics.get("unresolved_eligible_candidate_count"))
+        or source_diagnostics
+    )
+    summary["instrumentation_gap_reason_counts"] = {
+        **(
+            {
+                "eligible_candidate_without_terminal_execution_event": _safe_int(
+                    candidate_diagnostics.get("unresolved_eligible_candidate_count")
+                )
+            }
+            if candidate_diagnostics.get("unresolved_eligible_candidate_count")
+            else {}
+        ),
+        **source_diagnostics,
+    }
     cohorts = _build_cohorts(rows)
 
     return {
@@ -574,6 +663,12 @@ def build_report(target_date: str) -> dict[str, Any]:
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": REPORT_TYPE,
+        "status": (
+            "instrumentation_gap" if partial_instrumentation_gap else "evaluated"
+        ),
+        "error": (
+            "counterfactual_event_contract_gap" if partial_instrumentation_gap else None
+        ),
         "metric_role": "sim_probe_ev",
         "decision_authority": "sim_scale_in_counterfactual_only",
         "primary_decision_metric": "incremental_notional_ev_pct",
@@ -587,8 +682,8 @@ def build_report(target_date: str) -> dict[str, Any]:
         "runtime_authority_ready": False,
         "forbidden_uses": FORBIDDEN_USES,
         "source_quality_gate": (
-            "pass_with_row_exclusions"
-            if source_diagnostics
+            "instrumentation_gap_with_evaluable_rows"
+            if partial_instrumentation_gap
             else "clean_baseline_policy_sim_only_probe_events"
         ),
         "clean_baseline_policy": clean_policy,
@@ -598,15 +693,26 @@ def build_report(target_date: str) -> dict[str, Any]:
     }
 
 
-def _candidate_funnel_by_arm(
+def _candidate_execution_diagnostics(
     target_date: str, clean_policy: dict[str, Any]
-) -> dict[str, dict[str, int]]:
+) -> dict[str, Any]:
     funnel: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    pending_eligible_by_sim: dict[str, int] = defaultdict(int)
+    eligible_candidate_count = 0
+    eligible_missing_lineage_count = 0
+    eligible_lineages: set[str] = set()
+    guard_blocked_count = 0
+    execution_started_count = 0
+    legacy_execution_terminal_count = 0
+    candidate_terminal_count = 0
+    guard_block_reasons: dict[str, int] = defaultdict(int)
+    candidate_terminal_reasons: dict[str, int] = defaultdict(int)
     for item in _iter_events(target_date):
         if not _event_allowed_by_clean_baseline(item, clean_policy):
             continue
         stage = str(item.get("stage") or "")
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        sim_id = str(fields.get("sim_record_id") or "")
         arm = str(
             fields.get("scale_in_arm") or fields.get("add_type") or "unknown"
         ).upper()
@@ -619,7 +725,101 @@ def _candidate_funnel_by_arm(
             state = "qty_guard_blocked"
         if state:
             funnel[arm][state] += 1
-    return {arm: dict(counts) for arm, counts in funnel.items()}
+        if stage == "scalp_sim_scale_in_candidate_funnel" and state == "eligible":
+            eligible_candidate_count += 1
+            if sim_id:
+                eligible_lineages.add(sim_id)
+                pending_eligible_by_sim[sim_id] += 1
+            else:
+                eligible_missing_lineage_count += 1
+            continue
+        if (
+            stage == "scalp_sim_scale_in_candidate_funnel"
+            and state
+            in {
+                "position_quota_blocked",
+                "daily_quota_blocked",
+                "execution_closed_without_result",
+            }
+            and _has_explicit_sim_observation_authority(item)
+        ):
+            if sim_id and pending_eligible_by_sim.get(sim_id, 0) > 0:
+                pending_eligible_by_sim[sim_id] -= 1
+                candidate_terminal_count += 1
+                candidate_terminal_reasons[f"next_funnel_state:{state}"] += 1
+            continue
+        if stage in {
+            "scalp_sim_panic_scale_in_blocked",
+            "scale_in_price_guard_block",
+            "scale_in_qty_block",
+        }:
+            if sim_id and pending_eligible_by_sim.get(sim_id, 0) > 0:
+                pending_eligible_by_sim[sim_id] -= 1
+                guard_blocked_count += 1
+                reason = str(
+                    fields.get("reason") or fields.get("block_reason") or state or stage
+                )
+                guard_block_reasons[f"{stage}:{reason}"] += 1
+            continue
+        if stage == "scalp_sim_scale_in_counterfactual_started":
+            if sim_id and pending_eligible_by_sim.get(sim_id, 0) > 0:
+                pending_eligible_by_sim[sim_id] -= 1
+                execution_started_count += 1
+            continue
+        if stage in {
+            "scalp_sim_scale_in_order_assumed_filled",
+            "scalp_sim_scale_in_order_unfilled",
+        } and _has_sim_counterfactual_authority(item):
+            if sim_id and pending_eligible_by_sim.get(sim_id, 0) > 0:
+                pending_eligible_by_sim[sim_id] -= 1
+                legacy_execution_terminal_count += 1
+            continue
+        if (
+            stage == "scalp_sim_sell_order_assumed_filled"
+            and _has_explicit_sim_observation_authority(item)
+        ):
+            if sim_id and pending_eligible_by_sim.get(sim_id, 0) > 0:
+                pending_eligible_by_sim[sim_id] -= 1
+                candidate_terminal_count += 1
+                candidate_terminal_reasons["exit_preempted_scale_in_candidate"] += 1
+
+    unresolved_count = (
+        sum(pending_eligible_by_sim.values()) + eligible_missing_lineage_count
+    )
+    return {
+        "candidate_funnel_by_arm": {
+            arm: dict(counts) for arm, counts in funnel.items()
+        },
+        "eligible_candidate_count": eligible_candidate_count,
+        "eligible_lineage_count": len(eligible_lineages),
+        "eligible_missing_lineage_count": eligible_missing_lineage_count,
+        "guard_blocked_before_execution_count": guard_blocked_count,
+        "guard_block_reasons": dict(guard_block_reasons),
+        "execution_started_from_eligible_count": execution_started_count,
+        "legacy_execution_terminal_from_eligible_count": (
+            legacy_execution_terminal_count
+        ),
+        "candidate_terminal_from_eligible_count": candidate_terminal_count,
+        "candidate_terminal_reasons": dict(candidate_terminal_reasons),
+        "terminal_execution_event_from_eligible_count": (
+            execution_started_count + legacy_execution_terminal_count
+        ),
+        "terminal_candidate_event_from_eligible_count": (
+            execution_started_count
+            + legacy_execution_terminal_count
+            + candidate_terminal_count
+        ),
+        "unresolved_eligible_candidate_count": unresolved_count,
+    }
+
+
+def _candidate_funnel_by_arm(
+    target_date: str, clean_policy: dict[str, Any]
+) -> dict[str, dict[str, int]]:
+    """Compatibility view for callers that only need funnel counts."""
+    return _candidate_execution_diagnostics(target_date, clean_policy)[
+        "candidate_funnel_by_arm"
+    ]
 
 
 def _build_summary(
@@ -760,7 +960,9 @@ def _cohort_ev_summary(cohort_rows: list[dict[str, Any]]) -> dict[str, Any]:
 def write_outputs(report: dict[str, Any]) -> tuple[Path, Path]:
     target_date = str(report.get("date") or "")
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = report_paths(target_date)
+    json_path, md_path = report_paths(
+        target_date, str(report.get("artifact_suffix") or "") or None
+    )
     json_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -781,6 +983,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- runtime_effect: `{report.get('runtime_effect')}`",
         "",
         "## Summary",
+        f"- status: `{report.get('status')}`",
+        f"- window_policy: `{report.get('window_policy')}`",
         f"- counterfactual_event_count: `{summary.get('counterfactual_event_count')}`",
         f"- complete_row_count: `{summary.get('complete_row_count')}`",
         f"- incomplete_row_count: `{summary.get('incomplete_row_count')}`",
@@ -789,6 +993,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- filled_count: `{summary.get('filled_count')}`",
         f"- unfilled_count: `{summary.get('unfilled_count')}`",
         f"- candidate_funnel_by_arm: `{summary.get('candidate_funnel_by_arm')}`",
+        f"- source_status_counts: `{summary.get('source_status_counts')}`",
+        f"- eligible_candidate_count: `{summary.get('eligible_candidate_count')}`",
+        "- guard_blocked_before_execution_count: "
+        f"`{summary.get('guard_blocked_before_execution_count')}`",
+        "- unresolved_eligible_candidate_count: "
+        f"`{summary.get('unresolved_eligible_candidate_count')}`",
+        f"- no_sample_reason: `{summary.get('no_sample_reason')}`",
         f"- incomplete_reasons: `{summary.get('incomplete_reasons')}`",
         "",
         "## Horizon Summary",
@@ -843,11 +1054,92 @@ def build_backfill_report(
     all_rows: list[dict[str, Any]] = []
     clean_policy = clean_baseline_policy()
     allowed_dates, _ = filter_allowed_dates(dates, clean_policy)
+    available_dates: list[str] = []
+    unavailable_dates: list[str] = []
+    non_trading_source_dates_excluded: list[str] = []
+    source_status_counts: dict[str, int] = defaultdict(int)
+    source_status_by_date: dict[str, dict[str, Any]] = {}
+    candidate_funnel_by_arm: dict[str, dict[str, int]] = defaultdict(
+        lambda: defaultdict(int)
+    )
+    candidate_totals: dict[str, int] = defaultdict(int)
+    candidate_terminal_reasons: dict[str, int] = defaultdict(int)
 
     for source_date in allowed_dates:
-        daily = build_report(source_date)
-        if daily.get("error"):
+        if datetime.strptime(source_date, "%Y-%m-%d").weekday() >= 5:
+            non_trading_source_dates_excluded.append(source_date)
             continue
+        event_path = existing_or_gzip_path(_event_path(source_date))
+        if not event_path or not event_path.exists():
+            unavailable_dates.append(source_date)
+            continue
+        available_dates.append(source_date)
+        daily = build_report(source_date)
+        daily_status = str(
+            daily.get("status")
+            or ("instrumentation_gap" if daily.get("error") else "evaluated")
+        )
+        source_status_counts[daily_status] += 1
+        daily_summary = (
+            daily.get("summary") if isinstance(daily.get("summary"), dict) else {}
+        )
+        source_status_by_date[source_date] = {
+            "status": daily_status,
+            "error": daily.get("error"),
+            "no_sample_reason": daily_summary.get("no_sample_reason"),
+            "counterfactual_event_count": _safe_int(
+                daily_summary.get("counterfactual_event_count")
+            ),
+            "eligible_candidate_count": _safe_int(
+                daily_summary.get("eligible_candidate_count")
+            ),
+            "guard_blocked_before_execution_count": _safe_int(
+                daily_summary.get("guard_blocked_before_execution_count")
+            ),
+            "execution_started_from_eligible_count": _safe_int(
+                daily_summary.get("execution_started_from_eligible_count")
+            ),
+            "legacy_execution_terminal_from_eligible_count": _safe_int(
+                daily_summary.get("legacy_execution_terminal_from_eligible_count")
+            ),
+            "candidate_terminal_from_eligible_count": _safe_int(
+                daily_summary.get("candidate_terminal_from_eligible_count")
+            ),
+            "candidate_terminal_reasons": (
+                daily_summary.get("candidate_terminal_reasons")
+                if isinstance(daily_summary.get("candidate_terminal_reasons"), dict)
+                else {}
+            ),
+            "terminal_execution_event_from_eligible_count": _safe_int(
+                daily_summary.get("terminal_execution_event_from_eligible_count")
+            ),
+            "terminal_candidate_event_from_eligible_count": _safe_int(
+                daily_summary.get("terminal_candidate_event_from_eligible_count")
+            ),
+            "unresolved_eligible_candidate_count": _safe_int(
+                daily_summary.get("unresolved_eligible_candidate_count")
+            ),
+        }
+        for key in (
+            "eligible_candidate_count",
+            "guard_blocked_before_execution_count",
+            "execution_started_from_eligible_count",
+            "legacy_execution_terminal_from_eligible_count",
+            "candidate_terminal_from_eligible_count",
+            "terminal_execution_event_from_eligible_count",
+            "terminal_candidate_event_from_eligible_count",
+            "unresolved_eligible_candidate_count",
+        ):
+            candidate_totals[key] += _safe_int(daily_summary.get(key))
+        for reason, count in (
+            daily_summary.get("candidate_terminal_reasons") or {}
+        ).items():
+            candidate_terminal_reasons[str(reason)] += _safe_int(count)
+        for arm, states in (daily_summary.get("candidate_funnel_by_arm") or {}).items():
+            if not isinstance(states, dict):
+                continue
+            for state, count in states.items():
+                candidate_funnel_by_arm[str(arm)][str(state)] += _safe_int(count)
         daily_rows = daily.get("rows", [])
         for row in daily_rows:
             row.setdefault("source_date", source_date)
@@ -871,13 +1163,31 @@ def build_backfill_report(
     summary = _build_summary(
         all_rows, target_date, incomplete_count, incomplete_reasons
     )
+    summary.update(candidate_totals)
+    summary["candidate_terminal_reasons"] = dict(candidate_terminal_reasons)
+    summary["candidate_funnel_by_arm"] = {
+        arm: dict(states) for arm, states in candidate_funnel_by_arm.items()
+    }
+    summary["source_status_counts"] = dict(source_status_counts)
+    summary["available_source_date_count"] = len(available_dates)
+    summary["unavailable_source_date_count"] = len(unavailable_dates)
+    summary["non_trading_source_date_excluded_count"] = len(
+        non_trading_source_dates_excluded
+    )
     cohorts = _build_cohorts(all_rows)
+    aggregate_status = (
+        "instrumentation_gap"
+        if source_status_counts.get("instrumentation_gap", 0)
+        else ("evaluated" if all_rows else "no_natural_sample")
+    )
+    artifact_suffix = f"{start}_to_{end}"
 
     return {
         "schema_version": SCHEMA_VERSION,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": REPORT_TYPE,
+        "status": aggregate_status,
         "metric_role": "sim_probe_ev",
         "decision_authority": "sim_scale_in_counterfactual_only",
         "primary_decision_metric": "incremental_notional_ev_pct",
@@ -886,11 +1196,20 @@ def build_backfill_report(
         "runtime_authority_method_required": RUNTIME_AUTHORITY_METHOD,
         "runtime_authority_ready": False,
         "window_policy": f"{start}_to_{end}",
+        "artifact_suffix": artifact_suffix,
         "runtime_effect": False,
+        "source_quality_gate": (
+            "instrumentation_gap"
+            if aggregate_status == "instrumentation_gap"
+            else "clean_baseline_available_event_sources"
+        ),
         "sample_floor": SAMPLE_FLOOR,
         "forbidden_uses": FORBIDDEN_USES,
         "clean_baseline_policy": clean_policy,
-        "source_dates": allowed_dates,
+        "source_dates": available_dates,
+        "unavailable_source_dates": unavailable_dates,
+        "non_trading_source_dates_excluded": non_trading_source_dates_excluded,
+        "source_status_by_date": source_status_by_date,
         "summary": summary,
         "cohorts": cohorts,
         "rows": all_rows,

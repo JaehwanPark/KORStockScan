@@ -2024,6 +2024,8 @@ def _microstructure_reaction_context_summary(
                 "status_counts": {},
                 "entry_reaction_quality_counts": {},
                 "source_quality_counts": {},
+                "opportunity_exploration_funnel": {},
+                "clean_baseline_cumulative_opportunity_exploration": {},
                 "runtime_effect": False,
                 "decision_authority": "entry_confidence_modifier_source_only",
                 "forbidden_uses": [
@@ -2068,6 +2070,21 @@ def _microstructure_reaction_context_summary(
             "source_quality_counts": (
                 summary.get("source_quality_counts")
                 if isinstance(summary.get("source_quality_counts"), dict)
+                else {}
+            ),
+            "opportunity_exploration_funnel": (
+                summary.get("opportunity_exploration_funnel")
+                if isinstance(summary.get("opportunity_exploration_funnel"), dict)
+                else {}
+            ),
+            "clean_baseline_cumulative_opportunity_exploration": (
+                summary.get("clean_baseline_cumulative_opportunity_exploration")
+                if isinstance(
+                    summary.get(
+                        "clean_baseline_cumulative_opportunity_exploration"
+                    ),
+                    dict,
+                )
                 else {}
             ),
             "v_pw_source_counts": (

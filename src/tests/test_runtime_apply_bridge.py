@@ -669,9 +669,6 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(
     states = {
         item["family"]: item["bridge_candidate_state"] for item in report["candidates"]
     }
-    entry = {item["family"]: item for item in report["candidates"]}[
-        mod.ENTRY_BRIDGE_FAMILY
-    ]
 
     assert states[mod.ENTRY_BRIDGE_FAMILY] == "entry_only_bridge_metadata"
     assert (

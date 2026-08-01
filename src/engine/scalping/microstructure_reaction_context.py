@@ -16,7 +16,25 @@ from src.utils.constants import DATA_DIR
 CONTEXT_VERSION = "microstructure_reaction_context_v1"
 REPORT_DIR = DATA_DIR / "report" / "microstructure_reaction_context"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
+MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
+CLEAN_BASELINE_POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
+SOURCE_QUALITY_AUDIT_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
+
+_ENTRY_OPPORTUNITY_STAGES = {
+    "ai_confirmed",
+    "ai_confirmed_terminal_no_budget",
+    "blocked_ai_score",
+    "pre_submit_entry_ai_authority_guard_block",
+    "pre_submit_entry_ai_authority_retry",
+    "rising_missed_tick_speed_entry_block",
+    "scalp_entry_action_decision_snapshot",
+    "watching_analyze_target",
+}
+_OPPORTUNITY_CLUSTER_GAP_MS = 120_000
+_BLOCKER_LOOKAHEAD_MS = 15_000
+_OUTCOME_REFERENCE_TOLERANCE_MS = 5_000
+_DEFAULT_CLEAN_BASELINE_DATE = "2026-06-05"
 
 CONTEXT_KEYS = (
     "microstructure_reaction_context_version",
@@ -1359,6 +1377,1033 @@ def _latest_rows_by_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(latest.values())
 
 
+_DIAGNOSTIC_ROW_KEYS = (
+    "stock_code",
+    "stock_name",
+    "event_time",
+    "record_id",
+    "sim_record_id",
+    "sim_parent_record_id",
+    "source_event_stage",
+    "stage",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+    "microstructure_reaction_context_status",
+    "microstructure_reaction_entry_reaction_quality",
+    "microstructure_reaction_source_quality",
+    "microstructure_reaction_ask_sweep_score",
+    "microstructure_reaction_post_sweep_hold_score",
+    "microstructure_reaction_bid_replenishment_score",
+    "microstructure_reaction_wall_replenishment_risk_score",
+    "microstructure_reaction_vi_proximity_risk",
+    "microstructure_reaction_tick_aggressor_pressure_usable",
+    "microstructure_reaction_tick_aggressor_trusted_count",
+    "market_data_freshness_state",
+    "quote_age_ms",
+    "ws_age_ms",
+    "v_pw_source",
+    "v_pw_runtime_support_usable",
+)
+
+
+def _compact_diagnostic_rows(
+    rows: list[dict[str, Any]], *, limit: int = 200
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def append_group(group: list[dict[str, Any]], group_limit: int) -> None:
+        added = 0
+        for row in group:
+            key = tuple(
+                str(row.get(field) or "")
+                for field in ("record_id", "sim_record_id", "event_time", "stage")
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(
+                {
+                    field: row.get(field)
+                    for field in _DIAGNOSTIC_ROW_KEYS
+                    if field in row
+                }
+            )
+            added += 1
+            if added >= group_limit or len(selected) >= limit:
+                return
+
+    submitted = [row for row in rows if row.get("actual_order_submitted") is True]
+    favorable = [
+        row
+        for row in rows
+        if row.get("microstructure_reaction_entry_reaction_quality")
+        == "favorable_reaction"
+        and row.get("microstructure_reaction_context_status") == "ok"
+    ]
+    usable = [
+        row for row in rows if row.get("microstructure_reaction_context_status") == "ok"
+    ]
+    source_quality_incidents = [
+        row for row in rows if row.get("microstructure_reaction_context_status") != "ok"
+    ]
+    append_group(submitted, 50)
+    append_group(favorable, 50)
+    append_group(usable, 75)
+    append_group(source_quality_incidents, 25)
+    if len(selected) < limit:
+        append_group(rows, limit - len(selected))
+    return selected
+
+
+def _is_entry_opportunity_row(row: dict[str, Any]) -> bool:
+    stages = {
+        str(row.get("stage") or "").strip(),
+        str(row.get("source_event_stage") or "").strip(),
+    }
+    return bool(stages & _ENTRY_OPPORTUNITY_STAGES)
+
+
+def _opportunity_identity(row: dict[str, Any]) -> tuple[str, str]:
+    stock_code = str(row.get("stock_code") or "").lstrip("A")
+    record_id = str(
+        row.get("record_id")
+        or row.get("sim_record_id")
+        or row.get("sim_parent_record_id")
+        or ""
+    )
+    return stock_code, record_id
+
+
+def _unique_entry_opportunities(
+    favorable_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ordered_rows = sorted(
+        (row for row in favorable_rows if _is_entry_opportunity_row(row)),
+        key=lambda row: (
+            *_opportunity_identity(row),
+            _safe_epoch_ms(row.get("event_time")) or 0,
+        ),
+    )
+    opportunities: list[dict[str, Any]] = []
+    latest_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in ordered_rows:
+        identity = _opportunity_identity(row)
+        event_ms = _safe_epoch_ms(row.get("event_time"))
+        if not identity[0] or event_ms is None:
+            continue
+        previous = latest_by_identity.get(identity)
+        if (
+            previous is None
+            or event_ms - int(previous["cluster_end_ms"]) > _OPPORTUNITY_CLUSTER_GAP_MS
+        ):
+            opportunity = {
+                "opportunity_id": (
+                    f"{identity[0]}:{identity[1] or 'record_missing'}:{event_ms}"
+                ),
+                "stock_code": identity[0],
+                "stock_name": row.get("stock_name"),
+                "record_id": identity[1] or None,
+                "opportunity_identity_quality": (
+                    "pass" if identity[1] else "record_missing"
+                ),
+                "observation_time": row.get("event_time"),
+                "anchor_ms": event_ms,
+                "cluster_end_ms": event_ms,
+                "observation_event_count": 0,
+                "observation_stages": set(),
+                "actual_order_submitted": False,
+            }
+            opportunities.append(opportunity)
+            latest_by_identity[identity] = opportunity
+        else:
+            opportunity = previous
+        opportunity["cluster_end_ms"] = max(
+            int(opportunity["cluster_end_ms"]), event_ms
+        )
+        opportunity["observation_event_count"] += 1
+        opportunity["observation_stages"].add(
+            str(row.get("source_event_stage") or row.get("stage") or "missing")
+        )
+        if row.get("actual_order_submitted") is True:
+            opportunity["actual_order_submitted"] = True
+    for opportunity in opportunities:
+        opportunity["observation_stages"] = sorted(opportunity["observation_stages"])
+    return opportunities
+
+
+def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
+    fields = event.get("fields")
+    return fields if isinstance(fields, dict) else {}
+
+
+def _event_identity(event: dict[str, Any]) -> tuple[str, str]:
+    fields = _event_fields(event)
+    return (
+        str(event.get("stock_code") or fields.get("stock_code") or "").lstrip("A"),
+        str(event.get("record_id") or fields.get("record_id") or ""),
+    )
+
+
+def _blocking_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    fields = _event_fields(event)
+    stage = str(event.get("stage") or fields.get("source_event_stage") or "")
+    action = str(fields.get("ai_action") or fields.get("action") or "").strip().upper()
+    chosen_action = str(fields.get("chosen_action") or "").strip().upper()
+    explicitly_blocked = (
+        stage.endswith("_block")
+        or stage.endswith("_blocked")
+        or "_guard_block" in stage
+        or stage in {"latency_block", "ai_confirmed_terminal_no_budget"}
+    )
+    ai_veto = stage == "ai_confirmed" and action == "DROP"
+    snapshot_veto = (
+        stage == "scalp_entry_action_decision_snapshot"
+        and chosen_action.startswith(("NO_BUY", "SKIP"))
+        and _safe_bool(fields.get("broker_order_forbidden"), False)
+    )
+    if not (explicitly_blocked or ai_veto or snapshot_veto):
+        return None
+    reason = str(
+        fields.get("block_reason")
+        or fields.get("reason")
+        or ("ai_drop" if ai_veto else stage)
+    )
+    blocker_class = "entry_guard"
+    stage_and_reason = f"{stage} {reason}".lower()
+    for token, candidate_class in (
+        ("ai_", "ai_decision"),
+        ("latency", "latency"),
+        ("tick_speed", "tick_speed"),
+        ("liquidity", "liquidity"),
+        ("strength", "strength_momentum"),
+        ("momentum", "strength_momentum"),
+        ("overbought", "overbought"),
+        ("source_quality", "source_quality"),
+        ("quantity", "quantity"),
+        ("zero_qty", "quantity"),
+        ("cooldown", "cooldown"),
+    ):
+        if token in stage_and_reason:
+            blocker_class = candidate_class
+            break
+    return {
+        "first_blocker": stage,
+        "first_blocker_reason": reason,
+        "first_blocker_class": blocker_class,
+        "first_blocker_time": event.get("emitted_at")
+        or fields.get("event_time")
+        or fields.get("event_ts"),
+    }
+
+
+def _attach_first_blockers(
+    opportunities: list[dict[str, Any]], event_path: Path
+) -> None:
+    pending_by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for opportunity in opportunities:
+        if opportunity.get("actual_order_submitted") is True:
+            continue
+        identity = (
+            str(opportunity.get("stock_code") or ""),
+            str(opportunity.get("record_id") or ""),
+        )
+        pending_by_identity.setdefault(identity, []).append(opportunity)
+    if not pending_by_identity:
+        return
+    for event in _iter_jsonl(event_path) or []:
+        identity = _event_identity(event)
+        if identity not in pending_by_identity:
+            continue
+        event_ms = _safe_epoch_ms(
+            event.get("emitted_at") or _event_fields(event).get("event_time")
+        )
+        if event_ms is None:
+            continue
+        blocker = _blocking_event(event)
+        if blocker is None:
+            continue
+        for opportunity in pending_by_identity[identity]:
+            if not (
+                int(opportunity["anchor_ms"])
+                <= event_ms
+                <= int(opportunity["cluster_end_ms"]) + _BLOCKER_LOOKAHEAD_MS
+            ):
+                continue
+            current_blocker_ms = _safe_epoch_ms(opportunity.get("first_blocker_time"))
+            if current_blocker_ms is not None and current_blocker_ms <= event_ms:
+                continue
+            opportunity.update(blocker)
+
+
+def _missed_entry_counterfactual_path(target_date: str) -> Path:
+    base = MONITOR_SNAPSHOT_DIR / f"missed_entry_counterfactual_{target_date}.json"
+    return base if base.exists() else Path(f"{base}.gz")
+
+
+def _load_watch_cycle_outcomes(
+    target_date: str,
+) -> tuple[list[dict[str, Any]], Path, str]:
+    path = _missed_entry_counterfactual_path(target_date)
+    if not path.exists():
+        return [], path, "missing"
+    opener = gzip.open if path.suffix == ".gz" else open
+    try:
+        with opener(path, "rt", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return [], path, "unreadable"
+    ledger = payload.get("watch_cycle_participation_ledger")
+    if not isinstance(ledger, dict) or not isinstance(ledger.get("rows"), list):
+        return [], path, "contract_invalid"
+    return (
+        [row for row in ledger["rows"] if isinstance(row, dict)],
+        path,
+        "loaded",
+    )
+
+
+def _attach_time_exact_outcomes(
+    opportunities: list[dict[str, Any]], target_date: str
+) -> tuple[Path, str]:
+    outcomes, path, source_status = _load_watch_cycle_outcomes(target_date)
+    by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for outcome in outcomes:
+        identity = (
+            str(outcome.get("stock_code") or "").lstrip("A"),
+            str(outcome.get("runtime_record_id") or ""),
+        )
+        if not identity[0] or not identity[1]:
+            continue
+        by_identity.setdefault(identity, []).append(outcome)
+    for opportunity in opportunities:
+        if opportunity.get("actual_order_submitted") is True:
+            opportunity["outcome_join_status"] = "not_applicable_submitted"
+            continue
+        identity = (
+            str(opportunity.get("stock_code") or ""),
+            str(opportunity.get("record_id") or ""),
+        )
+        candidates: list[tuple[int, dict[str, Any]]] = []
+        for outcome in by_identity.get(identity, []):
+            reference_ms = _safe_epoch_ms(outcome.get("reference_time"))
+            if reference_ms is None:
+                continue
+            candidates.append(
+                (abs(reference_ms - int(opportunity["anchor_ms"])), outcome)
+            )
+        if not candidates:
+            opportunity["outcome_join_status"] = "no_matching_watch_cycle"
+            continue
+        delta_ms, outcome = min(candidates, key=lambda item: item[0])
+        opportunity["outcome_reference_delta_ms"] = delta_ms
+        if delta_ms > _OUTCOME_REFERENCE_TOLERANCE_MS:
+            opportunity["outcome_join_status"] = "reference_time_mismatch"
+            continue
+        source_quality = str(outcome.get("primary_source_quality_state") or "missing")
+        opportunity.update(
+            {
+                "outcome_join_status": "time_exact",
+                "outcome_source_quality": source_quality,
+                "outcome_source_quality_pass": source_quality == "pass",
+                "effective_venue": outcome.get("effective_venue"),
+                "market_session_bucket": outcome.get("market_session_bucket"),
+                "opportunity_label": outcome.get("opportunity_label"),
+                "primary_horizon_min": outcome.get("primary_horizon_min"),
+                "cost_adjusted_counterfactual_return_pct": outcome.get(
+                    "cost_adjusted_counterfactual_return_pct"
+                ),
+                "forward_horizon_metrics": outcome.get("forward_horizon_metrics")
+                if isinstance(outcome.get("forward_horizon_metrics"), dict)
+                else {},
+            }
+        )
+    return path, source_status
+
+
+def _microstructure_exploration_funnel(
+    rows: list[dict[str, Any]], target_date: str, event_path: Path
+) -> dict[str, Any]:
+    by_quality: dict[str, Counter[str]] = {}
+    favorable_rows: list[dict[str, Any]] = []
+    for row in rows:
+        quality = str(
+            row.get("microstructure_reaction_entry_reaction_quality") or "missing"
+        )
+        status = str(row.get("microstructure_reaction_context_status") or "missing")
+        bucket = by_quality.setdefault(quality, Counter())
+        bucket["observed"] += 1
+        if status == "ok":
+            bucket["usable"] += 1
+        if row.get("actual_order_submitted") is True:
+            bucket["actual_order_submitted"] += 1
+        if quality == "favorable_reaction" and status == "ok":
+            favorable_rows.append(row)
+    favorable_submitted = sum(
+        1 for row in favorable_rows if row.get("actual_order_submitted") is True
+    )
+    favorable_unsubmitted_rows = [
+        row for row in favorable_rows if row.get("actual_order_submitted") is not True
+    ]
+    favorable_unsubmitted_stage_counts = Counter(
+        str(row.get("source_event_stage") or "missing")
+        for row in favorable_unsubmitted_rows
+    )
+    entry_favorable_rows = [
+        row for row in favorable_rows if _is_entry_opportunity_row(row)
+    ]
+    opportunities = _unique_entry_opportunities(favorable_rows)
+    _attach_first_blockers(opportunities, event_path)
+    outcome_source_path, outcome_source_status = _attach_time_exact_outcomes(
+        opportunities, target_date
+    )
+    unsubmitted_opportunities = [
+        item for item in opportunities if item.get("actual_order_submitted") is not True
+    ]
+    attributed_opportunities = [
+        item for item in unsubmitted_opportunities if item.get("first_blocker")
+    ]
+    joined_opportunities = [
+        item
+        for item in unsubmitted_opportunities
+        if item.get("outcome_join_status") == "time_exact"
+    ]
+    source_quality_pass_opportunities = [
+        item
+        for item in joined_opportunities
+        if item.get("outcome_source_quality_pass") is True
+    ]
+    blocker_counts = Counter(
+        str(item.get("first_blocker") or "missing")
+        for item in unsubmitted_opportunities
+    )
+    outcome_join_counts = Counter(
+        str(item.get("outcome_join_status") or "missing")
+        for item in unsubmitted_opportunities
+    )
+    identity_quality_counts = Counter(
+        str(item.get("opportunity_identity_quality") or "missing")
+        for item in opportunities
+    )
+    return {
+        "metric_role": "opportunity_exploration_funnel",
+        "decision_authority": "source_only_no_runtime_mutation",
+        "window_policy": (
+            "same_day_entry_stage_only_120s_attempt_cluster_with_15s_blocker_lookahead_"
+            "and_5s_exact_outcome_reference"
+        ),
+        "sample_floor": "rolling_source_quality_pass_unique_opportunities_ge_20",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "entry_stage_only and unique stock-record-time attempt and first blocker "
+            "within attempt window and outcome reference delta <=5s and horizon quality pass"
+        ),
+        "runtime_effect": False,
+        "forbidden_uses": [
+            "broker_guard_bypass",
+            "direct_threshold_relaxation",
+            "direct_order_submission",
+            "raw_event_count_as_unique_opportunity_count",
+            "record_only_cross_attempt_outcome_join",
+            "realized_pnl_substitution",
+        ],
+        "by_quality": {
+            quality: dict(counts) for quality, counts in sorted(by_quality.items())
+        },
+        "favorable_reaction_usable_count": len(favorable_rows),
+        "favorable_reaction_submitted_count": favorable_submitted,
+        "favorable_reaction_unsubmitted_count": len(favorable_rows)
+        - favorable_submitted,
+        # Observation-stage counts remain raw diagnostics and are not causal
+        # blockers; the attempt-scoped attribution below owns that distinction.
+        "favorable_reaction_unsubmitted_observation_stage_counts": dict(
+            sorted(favorable_unsubmitted_stage_counts.items())
+        ),
+        "favorable_reaction_unsubmitted_unique_stock_count": len(
+            {
+                str(row.get("stock_code") or "")
+                for row in favorable_unsubmitted_rows
+                if row.get("stock_code")
+            }
+        ),
+        "raw_favorable_event_count": len(favorable_rows),
+        "entry_favorable_event_count": len(entry_favorable_rows),
+        "holding_or_non_entry_favorable_event_count": len(favorable_rows)
+        - len(entry_favorable_rows),
+        "unique_entry_opportunity_count": len(opportunities),
+        "unique_entry_submitted_opportunity_count": len(opportunities)
+        - len(unsubmitted_opportunities),
+        "unique_entry_unsubmitted_opportunity_count": len(unsubmitted_opportunities),
+        "opportunity_identity_quality_counts": dict(
+            sorted(identity_quality_counts.items())
+        ),
+        "first_blocker_attributed_count": len(attributed_opportunities),
+        "first_blocker_counts": dict(sorted(blocker_counts.items())),
+        "causal_blocker_attribution_complete": len(attributed_opportunities)
+        == len(unsubmitted_opportunities),
+        "outcome_time_exact_join_count": len(joined_opportunities),
+        "outcome_source_quality_pass_count": len(source_quality_pass_opportunities),
+        "outcome_join_status_counts": dict(sorted(outcome_join_counts.items())),
+        "post_observation_outcome_join_complete": len(joined_opportunities)
+        == len(unsubmitted_opportunities),
+        "outcome_source_path": str(outcome_source_path)
+        if outcome_source_path.exists()
+        else None,
+        "outcome_source_status": outcome_source_status,
+        "required_downstream_join": (
+            "generate attempt-time outcome rows for no_matching_watch_cycle or "
+            "reference_time_mismatch opportunities"
+        ),
+        "favorable_reaction_unique_stock_count": len(
+            {
+                str(row.get("stock_code") or "")
+                for row in favorable_rows
+                if row.get("stock_code")
+            }
+        ),
+        "opportunities": opportunities,
+    }
+
+
+def _clean_baseline_date() -> str:
+    try:
+        payload = json.loads(CLEAN_BASELINE_POLICY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return _DEFAULT_CLEAN_BASELINE_DATE
+    return str(
+        payload.get("clean_tuning_baseline_date") or _DEFAULT_CLEAN_BASELINE_DATE
+    )
+
+
+def _available_pipeline_dates(target_date: str) -> list[str]:
+    baseline_date = _clean_baseline_date()
+    dates: set[str] = set()
+    for path in PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl*"):
+        date_part = path.name.removeprefix("pipeline_events_")[:10]
+        if baseline_date <= date_part <= target_date:
+            dates.add(date_part)
+    return sorted(dates)
+
+
+def _daily_opportunity_rollup_path(target_date: str) -> Path:
+    return (
+        REPORT_DIR
+        / "daily_opportunity_rollups"
+        / f"microstructure_opportunity_rollup_{target_date}.json"
+    )
+
+
+def _source_signature(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": None, "size_bytes": 0, "mtime_ns": 0}
+    stat = path.stat()
+    return {
+        "path": str(path),
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _source_quality_audit_path(target_date: str) -> Path:
+    return SOURCE_QUALITY_AUDIT_DIR / (
+        f"observation_source_quality_audit_{target_date}.json"
+    )
+
+
+def _source_quality_preflight(target_date: str) -> dict[str, Any]:
+    path = _source_quality_audit_path(target_date)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {
+            "status": "missing_or_unreadable",
+            "tuning_input_allowed": False,
+            "blocked_reason": "source_quality_preflight_missing_or_unreadable",
+            "signature": _source_signature(path),
+        }
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    allowed = payload.get("tuning_input_allowed")
+    if allowed is None:
+        allowed = summary.get("tuning_input_allowed")
+    return {
+        "status": str(payload.get("status") or summary.get("status") or "missing"),
+        "tuning_input_allowed": allowed is True,
+        "blocked_reason": payload.get("blocked_reason")
+        or summary.get("blocked_reason"),
+        "signature": _source_signature(path),
+    }
+
+
+def _lightweight_daily_opportunity_funnel(
+    target_date: str,
+) -> tuple[dict[str, Any], Path]:
+    event_path = _event_path(target_date)
+    favorable_rows: list[dict[str, Any]] = []
+    for event in _iter_jsonl(event_path) or []:
+        fields = _event_fields(event)
+        if (
+            fields.get("microstructure_reaction_entry_reaction_quality")
+            == "favorable_reaction"
+            and fields.get("microstructure_reaction_context_status") == "ok"
+        ):
+            row = _row_from_event(event)
+            if row is not None:
+                favorable_rows.append(row)
+
+    opportunities = _unique_entry_opportunities(favorable_rows)
+    _attach_first_blockers(opportunities, event_path)
+    outcome_path, outcome_source_status = _attach_time_exact_outcomes(
+        opportunities, target_date
+    )
+    entry_rows = [row for row in favorable_rows if _is_entry_opportunity_row(row)]
+    unsubmitted = [
+        item for item in opportunities if item.get("actual_order_submitted") is not True
+    ]
+    first_blocker_counts = Counter(
+        str(item.get("first_blocker") or "missing") for item in unsubmitted
+    )
+    outcome_join_counts = Counter(
+        str(item.get("outcome_join_status") or "missing") for item in unsubmitted
+    )
+    return (
+        {
+            "raw_favorable_event_count": len(favorable_rows),
+            "entry_favorable_event_count": len(entry_rows),
+            "holding_or_non_entry_favorable_event_count": len(favorable_rows)
+            - len(entry_rows),
+            "unique_entry_opportunity_count": len(opportunities),
+            "unique_entry_submitted_opportunity_count": len(opportunities)
+            - len(unsubmitted),
+            "unique_entry_unsubmitted_opportunity_count": len(unsubmitted),
+            "first_blocker_attributed_count": sum(
+                1 for item in unsubmitted if item.get("first_blocker")
+            ),
+            "first_blocker_counts": dict(sorted(first_blocker_counts.items())),
+            "outcome_time_exact_join_count": sum(
+                1
+                for item in unsubmitted
+                if item.get("outcome_join_status") == "time_exact"
+            ),
+            "outcome_source_quality_pass_count": sum(
+                1
+                for item in unsubmitted
+                if item.get("outcome_source_quality_pass") is True
+            ),
+            "outcome_join_status_counts": dict(sorted(outcome_join_counts.items())),
+            "outcome_source_path": str(outcome_path) if outcome_path.exists() else None,
+            "outcome_source_status": outcome_source_status,
+            "opportunities": opportunities,
+        },
+        event_path,
+    )
+
+
+def _daily_opportunity_rollup(
+    target_date: str,
+    funnel: dict[str, Any],
+    event_path: Path,
+) -> dict[str, Any]:
+    opportunities = (
+        funnel.get("opportunities")
+        if isinstance(funnel.get("opportunities"), list)
+        else []
+    )
+    pass_opportunities = [
+        item
+        for item in opportunities
+        if isinstance(item, dict) and item.get("outcome_source_quality_pass") is True
+    ]
+    cost_adjusted_returns = [
+        _safe_float(item.get("cost_adjusted_counterfactual_return_pct"), float("nan"))
+        for item in pass_opportunities
+    ]
+    cost_adjusted_returns = [value for value in cost_adjusted_returns if value == value]
+    primary_metrics: list[dict[str, Any]] = []
+    for item in pass_opportunities:
+        horizons = item.get("forward_horizon_metrics")
+        if not isinstance(horizons, dict):
+            continue
+        primary = horizons.get(str(item.get("primary_horizon_min") or 20))
+        if isinstance(primary, dict):
+            primary_metrics.append(primary)
+    label_counts = Counter(
+        str(item.get("opportunity_label") or "missing") for item in pass_opportunities
+    )
+    outcome_path = _missed_entry_counterfactual_path(target_date)
+    source_quality_preflight = _source_quality_preflight(target_date)
+    return {
+        "schema_version": 1,
+        "date": target_date,
+        "metric_role": "counterfactual_opportunity_attribution",
+        "decision_authority": "source_only_no_runtime_mutation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "input_read_mode": "two_pass_streaming_filtered_no_full_event_materialization",
+        "source_event_signature": _source_signature(event_path),
+        "outcome_source_signature": _source_signature(outcome_path),
+        "source_quality_audit_signature": source_quality_preflight["signature"],
+        "source_quality_preflight_status": source_quality_preflight["status"],
+        "tuning_input_allowed": source_quality_preflight["tuning_input_allowed"],
+        "source_quality_blocked_reason": source_quality_preflight["blocked_reason"],
+        "raw_favorable_event_count": _safe_int(
+            funnel.get("raw_favorable_event_count"), 0
+        ),
+        "entry_favorable_event_count": _safe_int(
+            funnel.get("entry_favorable_event_count"), 0
+        ),
+        "holding_or_non_entry_favorable_event_count": _safe_int(
+            funnel.get("holding_or_non_entry_favorable_event_count"), 0
+        ),
+        "unique_entry_opportunity_count": _safe_int(
+            funnel.get("unique_entry_opportunity_count"), 0
+        ),
+        "unique_entry_submitted_opportunity_count": _safe_int(
+            funnel.get("unique_entry_submitted_opportunity_count"), 0
+        ),
+        "unique_entry_unsubmitted_opportunity_count": _safe_int(
+            funnel.get("unique_entry_unsubmitted_opportunity_count"), 0
+        ),
+        "first_blocker_attributed_count": _safe_int(
+            funnel.get("first_blocker_attributed_count"), 0
+        ),
+        "first_blocker_counts": funnel.get("first_blocker_counts") or {},
+        "outcome_time_exact_join_count": _safe_int(
+            funnel.get("outcome_time_exact_join_count"), 0
+        ),
+        "outcome_source_quality_pass_count": len(pass_opportunities),
+        "outcome_join_status_counts": funnel.get("outcome_join_status_counts") or {},
+        "outcome_source_status": funnel.get("outcome_source_status") or "missing",
+        "source_quality_adjusted_return_sum_pct": round(sum(cost_adjusted_returns), 6),
+        "source_quality_adjusted_ev_evaluable_count": len(cost_adjusted_returns),
+        "primary_mfe_sum_pct": round(
+            sum(_safe_float(item.get("mfe_pct"), 0.0) for item in primary_metrics),
+            6,
+        ),
+        "primary_mae_sum_pct": round(
+            sum(_safe_float(item.get("mae_pct"), 0.0) for item in primary_metrics),
+            6,
+        ),
+        "primary_horizon_evaluable_count": len(primary_metrics),
+        "opportunity_label_counts": dict(sorted(label_counts.items())),
+    }
+
+
+def _write_daily_opportunity_rollup(rollup: dict[str, Any]) -> Path:
+    path = _daily_opportunity_rollup_path(str(rollup.get("date") or ""))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rollup, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _load_daily_opportunity_rollup(target_date: str) -> dict[str, Any]:
+    path = _daily_opportunity_rollup_path(target_date)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    event_signature = payload.get("source_event_signature")
+    outcome_signature = payload.get("outcome_source_signature")
+    source_quality_audit_signature = payload.get("source_quality_audit_signature")
+    if (
+        not isinstance(event_signature, dict)
+        or not isinstance(outcome_signature, dict)
+        or not isinstance(source_quality_audit_signature, dict)
+    ):
+        return {}
+    current_event_signature = _source_signature(_event_path(target_date))
+    current_outcome_signature = _source_signature(
+        _missed_entry_counterfactual_path(target_date)
+    )
+    if event_signature != current_event_signature:
+        return {}
+    if outcome_signature != current_outcome_signature:
+        return {}
+    if source_quality_audit_signature != _source_signature(
+        _source_quality_audit_path(target_date)
+    ):
+        return {}
+    return payload
+
+
+def backfill_clean_baseline_opportunity_rollups(target_date: str) -> dict[str, Any]:
+    generated_dates: list[str] = []
+    reused_dates: list[str] = []
+    failed_dates: list[str] = []
+    failure_details: list[dict[str, str]] = []
+    for source_date in _available_pipeline_dates(target_date):
+        if _load_daily_opportunity_rollup(source_date):
+            reused_dates.append(source_date)
+            continue
+        try:
+            funnel, event_path = _lightweight_daily_opportunity_funnel(source_date)
+            _write_daily_opportunity_rollup(
+                _daily_opportunity_rollup(source_date, funnel, event_path)
+            )
+            generated_dates.append(source_date)
+        except Exception as exc:
+            failed_dates.append(source_date)
+            failure_details.append(
+                {
+                    "date": source_date,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+    return {
+        "generated_dates": generated_dates,
+        "reused_dates": reused_dates,
+        "failed_dates": failed_dates,
+        "failure_details": failure_details,
+    }
+
+
+def _sum_counter_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for row in rows:
+        value = row.get(field)
+        if not isinstance(value, dict):
+            continue
+        counts.update({str(key): _safe_int(count, 0) for key, count in value.items()})
+    return dict(sorted(counts.items()))
+
+
+def _clean_baseline_cumulative_opportunity_exploration(
+    target_date: str,
+) -> dict[str, Any]:
+    available_dates = _available_pipeline_dates(target_date)
+    rows: list[dict[str, Any]] = []
+    missing_rollup_dates: list[str] = []
+    for source_date in available_dates:
+        row = _load_daily_opportunity_rollup(source_date)
+        if row:
+            rows.append(row)
+        else:
+            missing_rollup_dates.append(source_date)
+    decision_rows = [row for row in rows if row.get("tuning_input_allowed") is True]
+    source_quality_excluded_dates = [
+        {
+            "date": str(row.get("date") or ""),
+            "status": row.get("source_quality_preflight_status"),
+            "blocked_reason": row.get("source_quality_blocked_reason"),
+        }
+        for row in rows
+        if row.get("tuning_input_allowed") is not True
+    ]
+    pass_count = sum(
+        _safe_int(row.get("outcome_source_quality_pass_count"), 0)
+        for row in decision_rows
+    )
+    ev_count = sum(
+        _safe_int(row.get("source_quality_adjusted_ev_evaluable_count"), 0)
+        for row in decision_rows
+    )
+    ev_sum = sum(
+        _safe_float(row.get("source_quality_adjusted_return_sum_pct"), 0.0)
+        for row in decision_rows
+    )
+    horizon_count = sum(
+        _safe_int(row.get("primary_horizon_evaluable_count"), 0)
+        for row in decision_rows
+    )
+    unsubmitted_count = sum(
+        _safe_int(row.get("unique_entry_unsubmitted_opportunity_count"), 0)
+        for row in decision_rows
+    )
+    attributed_count = sum(
+        _safe_int(row.get("first_blocker_attributed_count"), 0) for row in decision_rows
+    )
+    exact_join_count = sum(
+        _safe_int(row.get("outcome_time_exact_join_count"), 0) for row in decision_rows
+    )
+    source_quality_adjusted_ev_pct = round(ev_sum / ev_count, 6) if ev_count else None
+    sample_floor_met = pass_count >= 20
+    source_complete = bool(available_dates) and not missing_rollup_dates
+    if not source_complete:
+        runtime_reflection_status = "source_quality_incomplete"
+    elif not sample_floor_met:
+        runtime_reflection_status = "sample_floor_not_met"
+    elif source_quality_adjusted_ev_pct is None or source_quality_adjusted_ev_pct <= 0:
+        runtime_reflection_status = "non_positive_ev_keep_observe"
+    else:
+        runtime_reflection_status = "bounded_candidate_review_only"
+    runtime_reflection_blockers: list[str] = []
+    if missing_rollup_dates:
+        runtime_reflection_blockers.append("daily_rollup_missing_or_stale")
+    outcome_source_status_counts = Counter(
+        str(row.get("outcome_source_status") or "missing") for row in decision_rows
+    )
+    if outcome_source_status_counts.get("loaded", 0) < len(decision_rows):
+        runtime_reflection_blockers.append(
+            "historical_outcome_contract_coverage_incomplete"
+        )
+    if exact_join_count < unsubmitted_count:
+        runtime_reflection_blockers.append(
+            "exact_attempt_time_outcome_coverage_incomplete"
+        )
+    if not sample_floor_met:
+        runtime_reflection_blockers.append(
+            "source_quality_pass_outcome_sample_below_20"
+        )
+    if sample_floor_met and (
+        source_quality_adjusted_ev_pct is None or source_quality_adjusted_ev_pct <= 0
+    ):
+        runtime_reflection_blockers.append("source_quality_adjusted_ev_not_positive")
+    return {
+        "metric_role": "counterfactual_opportunity_attribution",
+        "decision_authority": "clean_baseline_cumulative_source_only",
+        "window_policy": "clean_tuning_baseline_through_target_date_available_pipeline_dates",
+        "sample_floor": "source_quality_pass_unique_opportunities_ge_20",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "all available source dates have fresh rollup and exact attempt-time outcome "
+            "join rows contribute to EV"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "runtime_apply_required": False,
+        "input_read_mode": "compact_daily_rollups_only",
+        "runtime_reflection_status": runtime_reflection_status,
+        "runtime_reflection_blockers": runtime_reflection_blockers,
+        "required_runtime_reflection_actions": [
+            "produce attempt-time outcome rows for no_matching_watch_cycle and reference_time_mismatch opportunities",
+            "regenerate clean-baseline daily rollups and cumulative attribution after outcome coverage repair",
+            "review one bounded PREOPEN candidate only after sample floor, positive EV, conflict, rollback, and post-apply attribution gates pass",
+        ],
+        "candidate_review_required": runtime_reflection_status
+        == "bounded_candidate_review_only",
+        "forbidden_uses": [
+            "direct_threshold_mutation",
+            "direct_runtime_apply",
+            "broker_guard_bypass",
+            "order_submission",
+            "provider_route_change",
+            "bot_restart",
+            "pre_clean_baseline_tuning_evidence",
+        ],
+        "clean_tuning_baseline_date": _clean_baseline_date(),
+        "window_end_date": target_date,
+        "available_source_date_count": len(available_dates),
+        "loaded_rollup_date_count": len(rows),
+        "included_date_count": len(decision_rows),
+        "included_dates": [str(row.get("date") or "") for row in decision_rows],
+        "missing_or_stale_rollup_dates": missing_rollup_dates,
+        "source_quality_excluded_dates": source_quality_excluded_dates,
+        "raw_favorable_event_count": sum(
+            _safe_int(row.get("raw_favorable_event_count"), 0) for row in decision_rows
+        ),
+        "entry_favorable_event_count": sum(
+            _safe_int(row.get("entry_favorable_event_count"), 0)
+            for row in decision_rows
+        ),
+        "unique_entry_opportunity_count": sum(
+            _safe_int(row.get("unique_entry_opportunity_count"), 0)
+            for row in decision_rows
+        ),
+        "unique_entry_unsubmitted_opportunity_count": unsubmitted_count,
+        "first_blocker_attributed_count": attributed_count,
+        "first_blocker_attribution_coverage_pct": _rate_pct(
+            attributed_count, unsubmitted_count
+        ),
+        "first_blocker_counts": _sum_counter_field(
+            decision_rows, "first_blocker_counts"
+        ),
+        "outcome_time_exact_join_count": exact_join_count,
+        "outcome_time_exact_join_coverage_pct": _rate_pct(
+            exact_join_count, unsubmitted_count
+        ),
+        "outcome_source_quality_pass_count": pass_count,
+        "outcome_source_quality_pass_coverage_pct": _rate_pct(
+            pass_count, unsubmitted_count
+        ),
+        "outcome_join_status_counts": _sum_counter_field(
+            decision_rows, "outcome_join_status_counts"
+        ),
+        "outcome_source_status_date_counts": dict(
+            sorted(outcome_source_status_counts.items())
+        ),
+        "opportunity_label_counts": _sum_counter_field(
+            decision_rows, "opportunity_label_counts"
+        ),
+        "source_quality_adjusted_ev_pct": source_quality_adjusted_ev_pct,
+        "source_quality_adjusted_ev_evaluable_count": ev_count,
+        "primary_horizon_avg_mfe_pct": round(
+            sum(
+                _safe_float(row.get("primary_mfe_sum_pct"), 0.0)
+                for row in decision_rows
+            )
+            / horizon_count,
+            6,
+        )
+        if horizon_count
+        else None,
+        "primary_horizon_avg_mae_pct": round(
+            sum(
+                _safe_float(row.get("primary_mae_sum_pct"), 0.0)
+                for row in decision_rows
+            )
+            / horizon_count,
+            6,
+        )
+        if horizon_count
+        else None,
+        "primary_horizon_evaluable_count": horizon_count,
+        "sample_floor_met": sample_floor_met,
+        "daily_rows": rows,
+    }
+
+
+def _write_clean_baseline_cumulative_artifact(
+    target_date: str, cumulative: dict[str, Any]
+) -> tuple[Path, Path]:
+    base = REPORT_DIR / (
+        f"microstructure_reaction_context_{target_date}_clean_baseline_cumulative"
+    )
+    json_path = base.with_suffix(".json")
+    md_path = base.with_suffix(".md")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(
+        json.dumps(cumulative, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    md_path.write_text(
+        "\n".join(
+            [
+                f"# Microstructure Clean-Baseline Cumulative - {target_date}",
+                "",
+                f"- window: `{cumulative.get('clean_tuning_baseline_date')}` ~ `{target_date}`",
+                "- available/included dates: "
+                f"`{cumulative.get('available_source_date_count')}` / "
+                f"`{cumulative.get('included_date_count')}`",
+                f"- missing_or_stale_rollup_dates: `{cumulative.get('missing_or_stale_rollup_dates') or []}`",
+                "- raw/entry/unique opportunities: "
+                f"`{cumulative.get('raw_favorable_event_count')}` / "
+                f"`{cumulative.get('entry_favorable_event_count')}` / "
+                f"`{cumulative.get('unique_entry_opportunity_count')}`",
+                "- exact_join/source_quality_pass: "
+                f"`{cumulative.get('outcome_time_exact_join_count')}` / "
+                f"`{cumulative.get('outcome_source_quality_pass_count')}`",
+                "- exact_join/source_quality_pass coverage_pct: "
+                f"`{cumulative.get('outcome_time_exact_join_coverage_pct')}` / "
+                f"`{cumulative.get('outcome_source_quality_pass_coverage_pct')}`",
+                f"- outcome_source_status_date_counts: `{cumulative.get('outcome_source_status_date_counts') or {}}`",
+                f"- source_quality_adjusted_ev_pct: `{cumulative.get('source_quality_adjusted_ev_pct')}`",
+                f"- primary_horizon_avg_mfe_pct: `{cumulative.get('primary_horizon_avg_mfe_pct')}`",
+                f"- primary_horizon_avg_mae_pct: `{cumulative.get('primary_horizon_avg_mae_pct')}`",
+                f"- sample_floor_met: `{cumulative.get('sample_floor_met')}`",
+                f"- runtime_reflection_status: `{cumulative.get('runtime_reflection_status')}`",
+                f"- runtime_reflection_blockers: `{cumulative.get('runtime_reflection_blockers') or []}`",
+                "- runtime_effect/allowed_runtime_apply: `False` / `False`",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return json_path, md_path
+
+
 def build_microstructure_reaction_context_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     path = _event_path(target_date)
@@ -1467,6 +2512,25 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         rows,
         "ka10003_buy_dominance_observation_split_vs_15_mismatch_count",
     )
+    opportunity_exploration_funnel = _microstructure_exploration_funnel(
+        rows, target_date, path
+    )
+    daily_opportunity_rollup_path = _write_daily_opportunity_rollup(
+        _daily_opportunity_rollup(
+            target_date,
+            opportunity_exploration_funnel,
+            path,
+        )
+    )
+    opportunity_exploration_funnel["opportunities"] = (
+        opportunity_exploration_funnel.get("opportunities") or []
+    )[:50]
+    clean_baseline_cumulative = _clean_baseline_cumulative_opportunity_exploration(
+        target_date
+    )
+    cumulative_base = REPORT_DIR / (
+        f"microstructure_reaction_context_{target_date}_clean_baseline_cumulative"
+    )
     summary = {
         "available": bool(rows),
         "row_count": len(rows),
@@ -1477,6 +2541,8 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "source_quality_counts": dict(sorted(source_quality_counts.items())),
         "stage_counts": dict(sorted(stage_counts.items())),
         "real_submitted_count": len(real_rows),
+        "opportunity_exploration_funnel": opportunity_exploration_funnel,
+        "clean_baseline_cumulative_opportunity_exploration": clean_baseline_cumulative,
         "v_pw_source_counts": v_pw_source_counts,
         "v_pw_rest_fallback_count": v_pw_source_counts.get("ka10046_rest_fallback", 0),
         "v_pw_ws_0b_count": (
@@ -1720,8 +2786,9 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         }
         for order in code_improvement_orders[:5]
     ]
+    diagnostic_rows = _compact_diagnostic_rows(rows)
     report = {
-        "schema_version": 1,
+        "schema_version": 3,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "microstructure_reaction_context",
@@ -1734,9 +2801,21 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "context_status ok and connection keys present",
         "forbidden_uses": FORBIDDEN_USES,
-        "sources": {"pipeline_events": str(path) if path.exists() else None},
+        "sources": {
+            "pipeline_events": str(path) if path.exists() else None,
+            "missed_entry_counterfactual": opportunity_exploration_funnel.get(
+                "outcome_source_path"
+            ),
+            "daily_opportunity_rollup": str(daily_opportunity_rollup_path),
+            "clean_baseline_cumulative_opportunity_exploration": str(
+                cumulative_base.with_suffix(".json")
+            ),
+        },
         "summary": summary,
-        "rows": rows[:500],
+        "row_storage_policy": "priority_compact_diagnostics_max_200_full_source_retained_in_pipeline_jsonl",
+        "source_row_count": len(rows),
+        "stored_row_count": len(diagnostic_rows),
+        "rows": diagnostic_rows,
         "code_improvement_orders": code_improvement_orders,
         "warnings": [
             message
@@ -1754,6 +2833,7 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
     md_path.write_text(
         render_microstructure_reaction_context_markdown(report), encoding="utf-8"
     )
+    _write_clean_baseline_cumulative_artifact(target_date, clean_baseline_cumulative)
     return report
 
 
@@ -1765,6 +2845,19 @@ def _avg_score(rows: list[dict[str, Any]], key: str) -> float | None:
 
 def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    funnel = (
+        summary.get("opportunity_exploration_funnel")
+        if isinstance(summary.get("opportunity_exploration_funnel"), dict)
+        else {}
+    )
+    cumulative = (
+        summary.get("clean_baseline_cumulative_opportunity_exploration")
+        if isinstance(
+            summary.get("clean_baseline_cumulative_opportunity_exploration"),
+            dict,
+        )
+        else {}
+    )
     lines = [
         f"# Microstructure Reaction Context - {report.get('date')}",
         "",
@@ -1781,6 +2874,24 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
         f"- entry_reaction_quality_counts: `{summary.get('entry_reaction_quality_counts') or {}}`",
         f"- source_quality_counts: `{summary.get('source_quality_counts') or {}}`",
         f"- stage_counts: `{summary.get('stage_counts') or {}}`",
+        "- opportunity_funnel raw/entry/unique_unsubmitted: "
+        f"`{funnel.get('raw_favorable_event_count')}` / "
+        f"`{funnel.get('entry_favorable_event_count')}` / "
+        f"`{funnel.get('unique_entry_unsubmitted_opportunity_count')}`",
+        f"- opportunity_first_blocker_counts: `{funnel.get('first_blocker_counts') or {}}`",
+        f"- opportunity_outcome_join_status_counts: `{funnel.get('outcome_join_status_counts') or {}}`",
+        f"- opportunity_outcome_source_status: `{funnel.get('outcome_source_status')}`",
+        "- opportunity_source_quality_pass/sample_floor: "
+        f"`{funnel.get('outcome_source_quality_pass_count')}` / "
+        f"`{funnel.get('sample_floor')}`",
+        "- cumulative available/included dates: "
+        f"`{cumulative.get('available_source_date_count')}` / "
+        f"`{cumulative.get('included_date_count')}`",
+        "- cumulative unique/pass/EV: "
+        f"`{cumulative.get('unique_entry_opportunity_count')}` / "
+        f"`{cumulative.get('outcome_source_quality_pass_count')}` / "
+        f"`{cumulative.get('source_quality_adjusted_ev_pct')}`",
+        f"- cumulative_runtime_reflection_status: `{cumulative.get('runtime_reflection_status')}`",
         f"- v_pw_source_counts: `{summary.get('v_pw_source_counts') or {}}`",
         f"- v_pw_rest_fallback_rate_pct: `{summary.get('v_pw_rest_fallback_rate_pct')}`",
         f"- v_pw_runtime_support_unusable_count: `{summary.get('v_pw_runtime_support_unusable_count')}`",
@@ -1844,7 +2955,20 @@ def main(argv: list[str] | None = None) -> int:
         description="Build source-only microstructure reaction context artifact."
     )
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
+    parser.add_argument(
+        "--backfill-clean-baseline-rollups",
+        action="store_true",
+        help=(
+            "Stream clean-baseline pipeline sources and create missing/stale compact "
+            "daily opportunity rollups before building the target-date report."
+        ),
+    )
     args = parser.parse_args(argv)
+    backfill = (
+        backfill_clean_baseline_opportunity_rollups(args.date)
+        if args.backfill_clean_baseline_rollups
+        else None
+    )
     report = build_microstructure_reaction_context_report(args.date)
     print(
         json.dumps(
@@ -1852,6 +2976,7 @@ def main(argv: list[str] | None = None) -> int:
                 "date": report.get("date"),
                 "summary": report.get("summary"),
                 "warnings": report.get("warnings"),
+                "backfill": backfill,
             },
             ensure_ascii=False,
         )

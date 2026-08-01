@@ -1435,9 +1435,6 @@ def test_postclose_done_controller_accepts_report_only_followup_warnings(
             "artifact_status": _passable_artifact_status(),
             "handoff_warnings": [
                 "active_sim_priority_stale_seed_alias_consumed",
-                "quote_consistency_divergence_without_safety_exit_rows",
-                "quote_consistency_required_fields_excluded",
-                "quote_consistency_source_missing",
                 "lifecycle_bucket_discovery_mtd_parent_granularity_not_target",
                 "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
                 "limit_down_watch_candidate_source_invalid",

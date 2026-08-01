@@ -2405,6 +2405,11 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "learning_update_policy": (
                 "one_mature_split_variant_outcome_updates_cumulative_judgment_quality"
             ),
+            "probe_attribution_contract": (
+                "A one-share entry intent is attributed to this owner only when entry_split_probe_bundle_id "
+                "or entry_split_order_variant_id is observed; record-level opportunity EV alone cannot claim "
+                "split-policy execution quality."
+            ),
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
             "policy_modes": {

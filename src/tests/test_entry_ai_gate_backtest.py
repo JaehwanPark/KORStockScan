@@ -48,6 +48,20 @@ def _realized_row(score, *, action="WAIT", profit=1.0, stale=False, hard_blocked
         "net_aggressive_delta_10t": 10,
         "tick_aggressor_trusted_count": 2,
         "tick_aggressor_pressure_usable": True,
+        "tick_context_quality": "fresh_computed",
+        "tick_accel_source": "computed_10ticks",
+        "quote_age_ms": 100,
+        "quote_age_source": "last_ws_update_ts",
+        "tick_acceleration_ratio": 1.25,
+        "curr_vs_micro_vwap_bp": 12.0,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_completed_bars",
+        "decision_quality_contract_status": "pass",
+        "edge_state": "EDGE",
+        "entry_probe_intent": True,
+        "entry_probe_intent_status": "eligible_wait_probe",
+        "evidence_trigger": "recovery_required",
     }
 
 
@@ -72,7 +86,21 @@ def _counterfactual_row(
         "net_aggressive_delta_10t": 1,
         "tick_aggressor_trusted_count": 2,
         "tick_aggressor_pressure_usable": True,
+        "tick_context_quality": "fresh_computed",
+        "tick_accel_source": "computed_10ticks",
+        "quote_age_ms": 100,
+        "quote_age_source": "last_ws_update_ts",
         "minute_candle_source_quality_gate": minute_candle_source_quality_gate,
+        "tick_acceleration_ratio": 1.25,
+        "curr_vs_micro_vwap_bp": 12.0,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_completed_bars",
+        "decision_quality_contract_status": "pass",
+        "edge_state": "EDGE",
+        "entry_probe_intent": True,
+        "entry_probe_intent_status": "eligible_wait_probe",
+        "evidence_trigger": "recovery_required",
         "minute_candle_source_quality_reason": (
             "no_ka10080_bars_in_forward_10m_window"
             if minute_candle_source_quality_gate == "source_quality_insufficient"
@@ -83,6 +111,20 @@ def _counterfactual_row(
             )
         ),
     }
+
+
+def test_supported_wait_contract_missing_reasons_are_instrumentation_only():
+    row = {"_score": 66, "ai_action": "WAIT"}
+
+    reasons = mod._supported_wait_contract_missing_reasons(row)
+
+    assert "decision_quality_contract_status_missing" in reasons
+    assert "edge_state_missing" in reasons
+    assert "entry_probe_intent_missing" in reasons
+    assert "recovery_trigger_missing" in reasons
+    assert "tick_pressure_provenance_missing" in reasons
+    assert "micro_vwap_provenance_missing" in reasons
+    assert mod._canonical_supported_wait_action(row) == "WAIT"
 
 
 def test_entry_ai_gate_micro_context_rejects_not_evaluated_quality():
@@ -111,6 +153,8 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
     monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
     monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
     monkeypatch.setattr(mod, "REPORT_DIR", out_dir)
+    runtime_env_dir = tmp_path / "runtime_env"
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_env_dir)
     monkeypatch.setattr(
         mod,
         "clean_baseline_policy",
@@ -180,6 +224,16 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
         missed_dir / "missed_entry_counterfactual_2026-06-05.json",
         {"full_rows": counterfactual_rows},
     )
+    _write_json(
+        runtime_env_dir / "threshold_runtime_env_2026-06-05.json",
+        {
+            "env_overrides": {
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false",
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "70",
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74.999",
+            }
+        },
+    )
 
     report = mod.build_report(
         "2026-06-05", start_date="2026-06-03", end_date="2026-06-05"
@@ -202,6 +256,28 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
         report["best_candidate"]["counterfactual"]["missed_upside_close_10m_pct"] == 1.5
     )
     assert report["best_apply_candidate"]["policy"] == "supported_wait_recovery"
+    assert report["summary"]["bounded_calibration_candidate_count"] == 1
+    runtime_update = report["runtime_update_contract"]
+    assert runtime_update["update_mode"] == "single_cumulative_quality_update"
+    assert runtime_update["max_runtime_apply_count"] == 1
+    assert runtime_update["runtime_apply_candidate_count"] == 1
+    assert runtime_update["allowed_runtime_apply_count"] == 1
+    assert runtime_update["cumulative_quality_window"]["start_date"] == ("2026-06-04")
+    calibration = report["calibration_candidates"][0]
+    assert calibration["family"] == "entry_opportunity_recheck_runtime"
+    assert calibration["allowed_runtime_apply"] is True
+    assert calibration["recommended_values"]["min_ai_score"] <= 66
+    assert calibration["recommended_values"]["allow_wait_probe_intent"] is True
+    assert calibration["recommended_values"]["require_explicit_buy_action"] is False
+    assert calibration["current_values"]["enabled"] is False
+    assert calibration["runtime_update_mode"] == ("single_cumulative_quality_update")
+    assert calibration["max_runtime_apply_count"] == 1
+    assert calibration["quality_update_id"] == runtime_update["quality_update_id"]
+    assert calibration["post_apply_attribution_required"] is True
+    assert "broad_buy_score_threshold_relaxation" in calibration["forbidden_uses"]
+    markdown = mod.render_markdown(report)
+    assert "runtime_update_mode: `single_cumulative_quality_update`" in markdown
+    assert "runtime_apply_candidate_count: `1`" in markdown
 
     diagnostic = next(
         item
@@ -251,7 +327,23 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
         ws_data={"quote_stale": False},
     )
     assert usable["entry_score_usable_for_entry_submit"] is True
-    assert usable["entry_score_usable_for_recheck"] is True
+    assert usable["entry_score_usable_for_recheck"] is False
+
+    valid_wait_recheck = gate.evaluate_entry_score_role_gate(
+        {
+            "action": "WAIT",
+            "score": 72,
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+            "edge_state": "EDGE",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "evidence": {"trigger": "recovery_required"},
+        },
+        ws_data={"quote_stale": False},
+    )
+    assert valid_wait_recheck["entry_score_usable_for_recheck"] is True
 
     stale = gate.evaluate_entry_score_role_gate(
         {
@@ -364,14 +456,23 @@ def test_entry_ai_gate_backtest_ignores_untrusted_pressure_micro_support():
         **untrusted_pressure_only,
         "tick_aggressor_pressure_usable": "stale",
     }
+    fully_confirmed = {
+        **micro_vwap_with_provenance,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 2,
+        "tick_context_quality": "fresh_computed",
+        "tick_accel_source": "computed_10ticks",
+        "tick_acceleration_ratio": 1.2,
+    }
 
     assert mod._micro_support(untrusted_pressure_only) is False
-    assert mod._micro_support(trusted_pressure) is True
+    assert mod._micro_support(trusted_pressure) is False
     assert mod._micro_support(independent_tick_accel) is False
-    assert mod._micro_support(independent_tick_accel_with_source) is True
+    assert mod._micro_support(independent_tick_accel_with_source) is False
     assert mod._micro_support(micro_vwap_without_provenance) is False
     assert mod._micro_support(micro_vwap_without_minute_quality) is False
-    assert mod._micro_support(micro_vwap_with_provenance) is True
+    assert mod._micro_support(micro_vwap_with_provenance) is False
+    assert mod._micro_support(fully_confirmed) is True
     assert mod._micro_support(stale_micro_vwap) is False
     assert mod._micro_support(stale_pressure_flag) is False
 
@@ -379,23 +480,17 @@ def test_entry_ai_gate_backtest_ignores_untrusted_pressure_micro_support():
 def test_entry_ai_gate_backtest_blocks_non_positive_primary_ev_apply_candidate():
     realized_rows = [
         {
+            **_realized_row(66, action="WAIT", profit=-0.2),
             "_score": 66,
             "_realized_profit_pct": -0.2,
-            "ai_action": "WAIT",
-            "buy_pressure_10t": 75,
-            "tick_aggressor_pressure_usable": True,
-            "tick_aggressor_trusted_count": 2,
         }
         for _ in range(mod.REALIZED_SAMPLE_FLOOR)
     ]
     counterfactual_rows = [
         {
+            **_counterfactual_row(66, action="WAIT", close_10m=0.5),
             "_score": 66,
             "_close_10m_pct": 0.5,
-            "ai_action": "WAIT",
-            "buy_pressure_10t": 75,
-            "tick_aggressor_pressure_usable": True,
-            "tick_aggressor_trusted_count": 2,
         }
         for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)
     ]
@@ -411,6 +506,70 @@ def test_entry_ai_gate_backtest_blocks_non_positive_primary_ev_apply_candidate()
     assert result["primary_ev_positive"] is False
     assert result["allowed_runtime_apply"] is False
     assert result["apply_block_reason"] == "non_positive_primary_ev"
+
+
+def test_entry_ai_gate_backtest_blocks_non_positive_counterfactual_opportunity(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    _write_json(
+        runtime_dir / "threshold_runtime_env_2026-06-05.json",
+        {
+            "env_overrides": {
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false",
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "70",
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74.999",
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "true",
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "false",
+                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
+            }
+        },
+    )
+    realized_rows = [
+        {
+            **_realized_row(66, action="WAIT", profit=0.5),
+            "_score": 66,
+            "_realized_profit_pct": 0.5,
+        }
+        for _ in range(mod.REALIZED_SAMPLE_FLOOR)
+    ]
+    counterfactual_rows = [
+        {
+            **_counterfactual_row(66, action="WAIT", close_10m=-0.3),
+            "_score": 66,
+            "_close_10m_pct": -0.3,
+            "_mfe_10m_pct": -0.1,
+        }
+        for _ in range(mod.COUNTERFACTUAL_SAMPLE_FLOOR)
+    ]
+
+    result = mod._policy_result(
+        policy="supported_wait_recovery",
+        threshold=66,
+        realized_rows=realized_rows,
+        counterfactual_rows=counterfactual_rows,
+    )
+
+    assert result["sample_floor_passed"] is True
+    assert result["primary_ev_positive"] is True
+    assert result["counterfactual_opportunity_positive"] is False
+    assert result["allowed_runtime_apply"] is False
+    assert result["apply_block_reason"] == ("non_positive_counterfactual_opportunity")
+
+    candidate = mod._entry_recheck_calibration_candidates(
+        result,
+        target_date="2026-06-05",
+        cumulative_quality_window={
+            "start_date": "2026-06-05",
+            "end_date": "2026-06-05",
+        },
+    )
+    assert candidate[0]["allowed_runtime_apply"] is False
+    assert candidate[0]["counterfactual_opportunity_positive"] is False
+    assert candidate[0]["apply_block_reason"] == (
+        "non_positive_counterfactual_opportunity"
+    )
 
 
 def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(
@@ -498,6 +657,122 @@ def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(
     assert strict["realized"]["equal_weight_avg_profit_pct"] == 2.5
 
 
+def test_entry_ai_gate_backtest_joins_counterfactual_to_entry_snapshot(
+    tmp_path, monkeypatch
+):
+    adm_dir = tmp_path / "adm"
+    missed_dir = tmp_path / "missed"
+    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
+    monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
+    monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
+    _write_json(
+        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        {
+            "rows": [
+                {
+                    **_realized_row(66, action="WAIT", profit=1.0),
+                    "record_id": "R1",
+                    "candidate_id": "ADM-R1",
+                    "stage": "scalp_entry_action_decision_snapshot",
+                    "ai_action": "not_evaluated",
+                    "chosen_action": "WAIT_REQUOTE",
+                }
+            ]
+        },
+    )
+    _write_json(
+        missed_dir / "missed_entry_counterfactual_2026-06-05.json",
+        {
+            "full_rows": [
+                {
+                    "record_id": "R1",
+                    "candidate_id": "MISSED-R1",
+                    "anchor_stage": "scalp_entry_action_decision_snapshot",
+                    "ai_score": 66,
+                    "close_10m_pct": 1.25,
+                    "mfe_10m_pct": 1.5,
+                    "mae_10m_pct": -0.2,
+                    "minute_candle_source_quality_gate": "pass",
+                    "minute_candle_source_quality_reason": (
+                        "ka10080_forward_window_available"
+                    ),
+                }
+            ]
+        },
+    )
+
+    report = mod.build_report("2026-06-05")
+    supported = next(
+        item
+        for item in report["policy_results"]
+        if item["policy"] == "supported_wait_recovery" and item["threshold"] == 66
+    )
+
+    assert supported["counterfactual"]["sample"] == 1
+    assert (
+        mod._canonical_supported_wait_action(
+            {
+                "ai_action": "not_evaluated",
+                "chosen_action": "WAIT_REQUOTE",
+            }
+        )
+        == "WAIT_REQUOTE"
+    )
+    assert report["summary"]["counterfactual_context_joined_count"] == 1
+    assert report["summary"]["counterfactual_context_not_joined_count"] == 0
+    assert (
+        report["summary"]["supported_wait_recovery_source_contract_status"]
+        == "evaluable"
+    )
+    assert (
+        report["summary"]["supported_wait_recovery_realized_policy_eligible_rows"] == 1
+    )
+    assert (
+        report["summary"]["supported_wait_recovery_counterfactual_policy_eligible_rows"]
+        == 1
+    )
+    assert report["source_consumption"]["effective_source_dates"] == ["2026-06-05"]
+    assert report["runtime_update_contract"]["cumulative_quality_window"][
+        "source_dates"
+    ] == ["2026-06-05"]
+
+
+def test_entry_ai_gate_backtest_excludes_invalid_json_source_date(
+    tmp_path, monkeypatch
+):
+    adm_dir = tmp_path / "adm"
+    missed_dir = tmp_path / "missed"
+    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
+    monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
+    monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
+    _write_json(
+        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        {"rows": [_realized_row(66, action="WAIT", profit=1.0)]},
+    )
+    corrupt = missed_dir / "missed_entry_counterfactual_2026-06-05.json"
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_text('{"full_rows": [', encoding="utf-8")
+
+    report = mod.build_report("2026-06-05")
+
+    missing = next(
+        item
+        for item in report["missing_artifacts"]
+        if item["artifact"] == "missed_entry_counterfactual"
+    )
+    window = report["runtime_update_contract"]["cumulative_quality_window"]
+    assert missing["status"] == "invalid_json"
+    assert missing["error"].startswith("JSONDecodeError:")
+    assert report["source_consumption"]["effective_source_dates"] == []
+    assert report["source_consumption"]["artifact_excluded_dates"] == ["2026-06-05"]
+    assert window["source_date_count"] == 0
+    assert window["artifact_excluded_dates"] == ["2026-06-05"]
+    assert report["calibration_state"] == "source_contract_not_evaluable"
+    assert report["allowed_runtime_apply"] is False
+
+
 def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
     tmp_path, monkeypatch
 ):
@@ -546,4 +821,11 @@ def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
     assert report["source_quality_gate"] == "blocked_contract_gap"
     assert report["summary"]["allowed_runtime_apply"] is False
     assert report["summary"]["calibration_state"] == "source_quality_blocked"
-    assert report["best_apply_candidate"]["allowed_runtime_apply"] is False
+    assert report["best_apply_candidate"] == {}
+    assert report["summary"]["source_quality_excluded_date_count"] == 1
+    assert report["source_consumption"]["source_quality_excluded_dates"][0][
+        "source_date"
+    ] == "2026-06-05"
+    assert report["calibration_candidates"] == []
+    assert report["runtime_update_contract"]["runtime_apply_candidate_count"] == 0
+    assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 0

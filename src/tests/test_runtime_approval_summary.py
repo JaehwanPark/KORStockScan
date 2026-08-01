@@ -174,6 +174,15 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(
                         "favorable_reaction": 1,
                         "neutral_unusable": 1,
                     },
+                    "opportunity_exploration_funnel": {
+                        "unique_entry_opportunity_count": 2
+                    },
+                    "clean_baseline_cumulative_opportunity_exploration": {
+                        "included_date_count": 20,
+                        "source_quality_adjusted_ev_pct": 0.42,
+                        "runtime_reflection_status": "bounded_candidate_review_only",
+                        "runtime_apply_required": False,
+                    },
                     "avg_ask_sweep_score": 61.5,
                     "avg_post_sweep_hold_score": 58.5,
                     "avg_bid_replenishment_score": 63.0,
@@ -202,6 +211,12 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(
     assert summary["decision_authority"] == "entry_confidence_modifier_source_only"
     assert summary["row_count"] == 3
     assert summary["ok_count"] == 2
+    assert summary["opportunity_exploration_funnel"][
+        "unique_entry_opportunity_count"
+    ] == 2
+    assert summary["clean_baseline_cumulative_opportunity_exploration"][
+        "source_quality_adjusted_ev_pct"
+    ] == 0.42
     assert "standalone_buy" in summary["forbidden_uses"]
     markdown = (out_dir / "runtime_approval_summary_2026-05-31.md").read_text(
         encoding="utf-8"

@@ -68,18 +68,15 @@ SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 LATENCY_CLASSIFIER_RECOMMENDATION_DIR = (
     DATA_DIR / "report" / "latency_classifier_recommendation"
 )
-RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR = (
-    DATA_DIR / "report" / "rising_missed_first_touch_calibration"
-)
 SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_pyramid_quality_calibration"
 )
 SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_avg_down_recovery_calibration"
 )
-AI_SCORE_OPTIMIZATION_BACKTEST_DIR = (
-    DATA_DIR / "report" / "ai_score_optimization_backtest"
-)
+ENTRY_AI_GATE_BACKTEST_DIR = DATA_DIR / "report" / "entry_ai_gate_backtest"
+ENTRY_AI_GATE_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
+CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
@@ -247,6 +244,8 @@ TARGET_ENV_VALUE_KEYS = {
     "ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER": "forbid_danger",
     "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE": "require_fresh_quote",
     "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "require_explicit_buy_action",
+    "ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "allow_wait_probe_intent",
+    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "require_probe_first_contract",
     "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC": "min_hold_sec",
     "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT": "min_loss_pct",
     "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT": "max_peak_profit_pct",
@@ -723,7 +722,131 @@ def _bridge_source_quality_pass(value: Any) -> bool:
         "ok",
         "clean",
         "source_quality_pass",
+        "pass_with_row_exclusions",
     }
+
+
+def _cumulative_quality_update_contract_error(
+    payload: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    owner_family: str,
+    owner_stage: str,
+) -> str:
+    contract = (
+        payload.get("runtime_update_contract")
+        if isinstance(payload.get("runtime_update_contract"), dict)
+        else {}
+    )
+    if not contract:
+        return "missing_runtime_update_contract"
+    if str(contract.get("update_mode") or "") != (
+        CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
+    ):
+        return "invalid_runtime_update_mode"
+    if str(contract.get("owner_family") or "") != owner_family:
+        return "invalid_runtime_update_owner_family"
+    if str(contract.get("owner_stage") or "") != owner_stage:
+        return "invalid_runtime_update_owner_stage"
+    try:
+        max_apply_count = int(contract.get("max_runtime_apply_count") or 0)
+        declared_candidate_count = int(
+            contract.get("runtime_apply_candidate_count") or 0
+        )
+        declared_allowed_count = int(
+            contract.get("allowed_runtime_apply_count") or 0
+        )
+    except (TypeError, ValueError):
+        return "invalid_runtime_update_counts"
+    actual_allowed_count = sum(
+        1 for item in candidates if bool(item.get("allowed_runtime_apply"))
+    )
+    if max_apply_count != 1:
+        return "invalid_max_runtime_apply_count"
+    if len(candidates) > 1 or actual_allowed_count > 1:
+        return "multiple_runtime_update_candidates"
+    if declared_candidate_count != len(candidates):
+        return "runtime_update_candidate_count_mismatch"
+    if declared_allowed_count != actual_allowed_count:
+        return "allowed_runtime_update_count_mismatch"
+    if bool(contract.get("runtime_effect")):
+        return "runtime_update_contract_runtime_effect_leak"
+    quality_window = (
+        contract.get("cumulative_quality_window")
+        if isinstance(contract.get("cumulative_quality_window"), dict)
+        else {}
+    )
+    if str(quality_window.get("window_policy") or "") != (
+        "clean_baseline_cumulative"
+    ):
+        return "invalid_cumulative_window_policy"
+    start_date = str(quality_window.get("start_date") or "")
+    end_date = str(quality_window.get("end_date") or "")
+    baseline_date = str(quality_window.get("clean_tuning_baseline_date") or "")
+    source_dates = quality_window.get("source_dates")
+    if not start_date or not end_date or not baseline_date:
+        return "missing_cumulative_window_bounds"
+    if start_date < baseline_date or end_date < start_date:
+        return "invalid_cumulative_window_bounds"
+    if end_date != str(payload.get("target_date") or ""):
+        return "cumulative_window_target_date_mismatch"
+    if not isinstance(source_dates, list):
+        return "cumulative_source_dates_missing"
+    try:
+        source_date_count = int(quality_window.get("source_date_count") or 0)
+    except (TypeError, ValueError):
+        return "cumulative_source_date_count_invalid"
+    if source_date_count != len(source_dates):
+        return "cumulative_source_date_count_mismatch"
+    if candidates and not source_dates:
+        return "candidate_without_cumulative_source_dates"
+    normalized_source_dates = [str(value or "") for value in source_dates]
+    if (
+        len(set(normalized_source_dates)) != len(normalized_source_dates)
+        or normalized_source_dates != sorted(normalized_source_dates)
+        or any(
+            not value or value < start_date or value > end_date
+            for value in normalized_source_dates
+        )
+    ):
+        return "invalid_cumulative_source_dates"
+    if not bool(contract.get("post_apply_attribution_required")):
+        return "runtime_update_post_apply_attribution_missing"
+    contract_quality_update_id = str(contract.get("quality_update_id") or "")
+    if candidates and not contract_quality_update_id:
+        return "runtime_update_quality_update_id_missing"
+    for item in candidates:
+        if str(item.get("family") or "") != owner_family:
+            return "candidate_owner_family_mismatch"
+        if str(item.get("stage") or "") != owner_stage:
+            return "candidate_stage_mismatch"
+        if str(item.get("runtime_update_mode") or "") != (
+            CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
+        ):
+            return "candidate_runtime_update_mode_mismatch"
+        try:
+            candidate_max_apply_count = int(
+                item.get("max_runtime_apply_count") or 0
+            )
+        except (TypeError, ValueError):
+            return "candidate_max_runtime_apply_count_invalid"
+        if candidate_max_apply_count != 1:
+            return "candidate_max_runtime_apply_count_mismatch"
+        if not str(item.get("quality_update_id") or ""):
+            return "candidate_quality_update_id_missing"
+        if str(item.get("quality_update_id") or "") != contract_quality_update_id:
+            return "candidate_quality_update_id_mismatch"
+        if item.get("cumulative_quality_window") != quality_window:
+            return "candidate_cumulative_window_mismatch"
+        if not bool(item.get("post_apply_attribution_required")):
+            return "candidate_post_apply_attribution_missing"
+        if bool(item.get("runtime_effect")) or bool(
+            item.get("actual_order_submitted")
+        ):
+            return "candidate_runtime_authority_leak"
+        if item.get("broker_order_forbidden") is not True:
+            return "candidate_broker_order_forbidden_missing"
+    return ""
 
 
 def _runtime_bridge_candidate_contract_blockers(item: dict[str, Any]) -> list[str]:
@@ -972,43 +1095,6 @@ def _load_latency_classifier_candidates(
     }
 
 
-def _rising_missed_first_touch_calibration_path(source_date: str) -> Path:
-    return RISING_MISSED_FIRST_TOUCH_CALIBRATION_DIR / (
-        f"rising_missed_first_touch_calibration_{source_date}.json"
-    )
-
-
-def _load_rising_missed_first_touch_calibration_candidates(
-    source_date: str | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if not source_date:
-        return [], {"status": "missing_source_date", "path": None}
-    path = _rising_missed_first_touch_calibration_path(source_date)
-    if not path.exists():
-        return [], {"status": "missing_report", "path": str(path)}
-    payload = _load_json(path)
-    candidates = payload.get("calibration_candidates")
-    if not isinstance(candidates, list):
-        candidate = payload.get("calibration_candidate")
-        candidates = [candidate] if isinstance(candidate, dict) else []
-    normalized = [item for item in candidates if isinstance(item, dict)]
-    normalized, preflight_status = _block_candidates_by_source_quality_preflight(
-        normalized,
-        source_date,
-        source_report_type="rising_missed_first_touch_calibration",
-    )
-    selected_candidate = normalized[0] if normalized else {}
-    return normalized, {
-        "status": "loaded",
-        "path": str(path),
-        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
-        "calibration_state": selected_candidate.get("calibration_state"),
-        "sample_count": selected_candidate.get("sample_count"),
-        "source_quality_preflight": preflight_status,
-        "source_quality_blocked": bool(preflight_status.get("blocked")),
-    }
-
-
 def _scalping_pyramid_quality_calibration_path(source_date: str) -> Path:
     return SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR / (
         f"scalping_pyramid_quality_calibration_{source_date}.json"
@@ -1074,6 +1160,25 @@ def _load_scalping_pyramid_quality_calibration_candidates(
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
     normalized = [item for item in candidates if isinstance(item, dict)]
+    cumulative_contract_error = _cumulative_quality_update_contract_error(
+        payload,
+        normalized,
+        owner_family="scalping_pyramid_quality_gate",
+        owner_stage="scale_in",
+    )
+    if cumulative_contract_error:
+        normalized = [
+            {
+                **item,
+                "allowed_runtime_apply": False,
+                "calibration_state": "freeze",
+                "apply_block_reason": (
+                    "single_cumulative_quality_contract:"
+                    f"{cumulative_contract_error}"
+                ),
+            }
+            for item in normalized
+        ]
     normalized, preflight_status = _block_candidates_by_source_quality_preflight(
         normalized,
         source_date,
@@ -1088,6 +1193,7 @@ def _load_scalping_pyramid_quality_calibration_candidates(
         "sample_count": selected_candidate.get("sample_count"),
         "source_quality_preflight": preflight_status,
         "source_quality_blocked": bool(preflight_status.get("blocked")),
+        "runtime_update_contract_error": cumulative_contract_error or None,
     }
 
 
@@ -1105,6 +1211,25 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
     normalized = [item for item in candidates if isinstance(item, dict)]
+    cumulative_contract_error = _cumulative_quality_update_contract_error(
+        payload,
+        normalized,
+        owner_family="scalping_avg_down_recovery_quality_gate",
+        owner_stage="scale_in",
+    )
+    if cumulative_contract_error:
+        normalized = [
+            {
+                **item,
+                "allowed_runtime_apply": False,
+                "calibration_state": "freeze",
+                "apply_block_reason": (
+                    "single_cumulative_quality_contract:"
+                    f"{cumulative_contract_error}"
+                ),
+            }
+            for item in normalized
+        ]
     normalized, preflight_status = _block_candidates_by_source_quality_preflight(
         normalized,
         source_date,
@@ -1119,17 +1244,15 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
         ),
         "source_quality_preflight": preflight_status,
         "source_quality_blocked": bool(preflight_status.get("blocked")),
+        "runtime_update_contract_error": cumulative_contract_error or None,
     }
 
 
-def _ai_score_optimization_backtest_path(source_date: str) -> Path:
-    return (
-        AI_SCORE_OPTIMIZATION_BACKTEST_DIR
-        / f"ai_score_optimization_backtest_{source_date}.json"
-    )
+def _entry_ai_gate_backtest_path(source_date: str) -> Path:
+    return ENTRY_AI_GATE_BACKTEST_DIR / f"entry_ai_gate_backtest_{source_date}.json"
 
 
-def _ai_score_optimization_payload_source_quality_blocked(
+def _entry_ai_gate_payload_source_quality_blocked(
     payload: dict[str, Any],
 ) -> bool:
     if not isinstance(payload, dict):
@@ -1159,12 +1282,115 @@ def _ai_score_optimization_payload_source_quality_blocked(
     return "source_quality_blocked" in status_text or "hard_block" in status_text
 
 
-def _load_ai_score_optimization_backtest_candidates(
+def _entry_ai_gate_cumulative_contract_error(
+    payload: dict[str, Any], candidates: list[dict[str, Any]]
+) -> str:
+    contract = (
+        payload.get("runtime_update_contract")
+        if isinstance(payload.get("runtime_update_contract"), dict)
+        else {}
+    )
+    if not contract:
+        return "missing_runtime_update_contract"
+    if str(contract.get("update_mode") or "") != ENTRY_AI_GATE_RUNTIME_UPDATE_MODE:
+        return "invalid_runtime_update_mode"
+    if str(contract.get("owner_family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
+        return "invalid_runtime_update_owner_family"
+    try:
+        max_apply_count = int(contract.get("max_runtime_apply_count") or 0)
+        declared_candidate_count = int(
+            contract.get("runtime_apply_candidate_count") or 0
+        )
+        declared_allowed_count = int(contract.get("allowed_runtime_apply_count") or 0)
+    except (TypeError, ValueError):
+        return "invalid_runtime_update_counts"
+    if max_apply_count != 1:
+        return "invalid_max_runtime_apply_count"
+    if bool(contract.get("runtime_effect")):
+        return "runtime_update_contract_runtime_effect_leak"
+    actual_allowed_count = sum(
+        1 for item in candidates if bool(item.get("allowed_runtime_apply"))
+    )
+    if len(candidates) > 1 or actual_allowed_count > 1:
+        return "multiple_runtime_update_candidates"
+    if declared_candidate_count != len(candidates):
+        return "runtime_update_candidate_count_mismatch"
+    if declared_allowed_count != actual_allowed_count:
+        return "allowed_runtime_update_count_mismatch"
+    quality_window = (
+        contract.get("cumulative_quality_window")
+        if isinstance(contract.get("cumulative_quality_window"), dict)
+        else {}
+    )
+    if str(quality_window.get("window_policy") or "") != ("clean_baseline_cumulative"):
+        return "invalid_cumulative_window_policy"
+    window_start = str(quality_window.get("start_date") or "")
+    window_end = str(quality_window.get("end_date") or "")
+    clean_baseline_date = str(quality_window.get("clean_tuning_baseline_date") or "")
+    if not window_start or not window_end or not clean_baseline_date:
+        return "missing_cumulative_window_bounds"
+    if window_start < clean_baseline_date or window_end < window_start:
+        return "invalid_cumulative_window_bounds"
+    if window_end != str(payload.get("target_date") or ""):
+        return "cumulative_window_target_date_mismatch"
+    source_dates = quality_window.get("source_dates")
+    if not isinstance(source_dates, list):
+        return "cumulative_source_dates_missing"
+    try:
+        source_date_count = int(quality_window.get("source_date_count") or 0)
+    except (TypeError, ValueError):
+        return "cumulative_source_date_count_invalid"
+    if source_date_count != len(source_dates):
+        return "cumulative_source_date_count_mismatch"
+    if any(
+        not isinstance(day, str) or day < window_start or day > window_end
+        for day in source_dates
+    ):
+        return "cumulative_source_date_out_of_window"
+    if candidates and source_date_count <= 0:
+        return "candidate_without_cumulative_source_dates"
+    if not bool(contract.get("post_apply_attribution_required")):
+        return "runtime_update_post_apply_attribution_missing"
+    for item in candidates:
+        if str(item.get("family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
+            return "candidate_owner_family_mismatch"
+        if str(item.get("stage") or "") != "entry":
+            return "candidate_stage_mismatch"
+        if str(item.get("runtime_update_mode") or "") != (
+            ENTRY_AI_GATE_RUNTIME_UPDATE_MODE
+        ):
+            return "candidate_runtime_update_mode_mismatch"
+        try:
+            candidate_max_apply_count = int(item.get("max_runtime_apply_count") or 0)
+        except (TypeError, ValueError):
+            return "candidate_max_runtime_apply_count_invalid"
+        if candidate_max_apply_count != 1:
+            return "candidate_max_runtime_apply_count_mismatch"
+        if not str(item.get("quality_update_id") or ""):
+            return "candidate_quality_update_id_missing"
+        if item.get("cumulative_quality_window") != quality_window:
+            return "candidate_cumulative_window_mismatch"
+        if not bool(item.get("post_apply_attribution_required")):
+            return "candidate_post_apply_attribution_missing"
+        if bool(item.get("runtime_effect")):
+            return "candidate_runtime_effect_leak"
+        if bool(item.get("actual_order_submitted")):
+            return "candidate_actual_order_submitted_leak"
+        if item.get("broker_order_forbidden") is not True:
+            return "candidate_broker_order_forbidden_missing"
+    if actual_allowed_count == 1 and str(
+        contract.get("quality_update_id") or ""
+    ) != str(candidates[0].get("quality_update_id") or ""):
+        return "quality_update_id_mismatch"
+    return ""
+
+
+def _load_entry_ai_gate_backtest_candidates(
     source_date: str | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not source_date:
         return [], {"status": "missing_source_date", "path": None}
-    path = _ai_score_optimization_backtest_path(source_date)
+    path = _entry_ai_gate_backtest_path(source_date)
     if not path.exists():
         return [], {"status": "missing_report", "path": str(path)}
     payload = _load_json(path)
@@ -1172,18 +1398,31 @@ def _load_ai_score_optimization_backtest_candidates(
     if not isinstance(candidates, list):
         candidates = []
     normalized = [item for item in candidates if isinstance(item, dict)]
-    source_quality_blocked = _ai_score_optimization_payload_source_quality_blocked(
-        payload
+    cumulative_contract_error = _entry_ai_gate_cumulative_contract_error(
+        payload, normalized
     )
+    if cumulative_contract_error:
+        normalized = [
+            {
+                **item,
+                "allowed_runtime_apply": False,
+                "calibration_state": "freeze",
+                "apply_block_reason": (
+                    f"single_cumulative_quality_contract:{cumulative_contract_error}"
+                ),
+            }
+            for item in normalized
+        ]
+    source_quality_blocked = _entry_ai_gate_payload_source_quality_blocked(payload)
     preflight_status = _source_quality_preflight_status(source_date)
     if source_quality_blocked or preflight_status.get("blocked"):
         preflight_reason = str(
             preflight_status.get("reason") or "source_quality_blocked"
         )
         block_reason = (
-            "ai_score_optimization_backtest_root_source_quality_blocked"
+            "entry_ai_gate_backtest_root_source_quality_blocked"
             if source_quality_blocked
-            else f"ai_score_optimization_backtest_source_quality_preflight_blocked:{preflight_reason}"
+            else f"entry_ai_gate_backtest_source_quality_preflight_blocked:{preflight_reason}"
         )
         normalized = [
             {
@@ -1206,12 +1445,23 @@ def _load_ai_score_optimization_backtest_candidates(
     return normalized, {
         "status": "loaded",
         "path": str(path),
-        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
-        "calibration_state": selected_candidate.get("calibration_state"),
-        "candidate_count": len(normalized),
-        "allowed_runtime_apply_candidate_count": summary.get(
-            "allowed_runtime_apply_candidate_count"
+        "allowed_runtime_apply": selected_candidate.get(
+            "allowed_runtime_apply", payload.get("allowed_runtime_apply")
         ),
+        "calibration_state": selected_candidate.get(
+            "calibration_state", payload.get("calibration_state")
+        ),
+        "candidate_count": len(normalized),
+        "allowed_runtime_apply_candidate_count": sum(
+            1 for item in normalized if bool(item.get("allowed_runtime_apply"))
+        ),
+        "diagnostic_conflict_detected": summary.get("diagnostic_conflict_detected"),
+        "supported_wait_recovery_source_contract_status": summary.get(
+            "supported_wait_recovery_source_contract_status"
+        ),
+        "runtime_update_contract": payload.get("runtime_update_contract") or {},
+        "runtime_update_contract_blocked": bool(cumulative_contract_error),
+        "runtime_update_contract_error": cumulative_contract_error or None,
         "source_quality_blocked": source_quality_blocked,
         "source_quality_preflight": preflight_status,
     }
@@ -2848,6 +3098,31 @@ def _operator_lock_stage_coexist(
     }
 
 
+def _scale_in_cumulative_quality_stage_coexist(
+    *,
+    candidate: dict[str, Any],
+    stage: str,
+    selected_by_stage: dict[str, dict[str, Any]],
+) -> bool:
+    """Allow one opportunity-quality update beside structural/protective owners."""
+    if stage != "scale_in" or stage not in selected_by_stage:
+        return False
+    previous = selected_by_stage[stage]
+    candidate_mode = str(candidate.get("runtime_update_mode") or "")
+    previous_mode = str(previous.get("runtime_update_mode") or "")
+    if candidate_mode == previous_mode == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE:
+        return False
+    structural_or_protective = {
+        "scale_in_split_order_plan",
+        REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
+    }
+    if candidate_mode == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE:
+        return str(previous.get("family") or "") in structural_or_protective
+    if previous_mode == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE:
+        return str(candidate.get("family") or "") in structural_or_protective
+    return False
+
+
 def _select_auto_apply_candidates(
     calibration_candidates: list[dict[str, Any]],
     *,
@@ -2858,6 +3133,7 @@ def _select_auto_apply_candidates(
     operator_locks: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     selected_by_stage: dict[str, dict[str, Any]] = {}
+    selected_cumulative_quality_by_stage: dict[str, str] = {}
     decisions: list[dict[str, Any]] = []
     locks_by_family = {
         str(lock.get("family") or ""): lock
@@ -2885,6 +3161,10 @@ def _select_auto_apply_candidates(
             candidate, ai_review, require_ai=require_ai
         )
         contract_blockers = _candidate_apply_contract_blockers(candidate)
+        cumulative_quality_update = (
+            str(candidate.get("runtime_update_mode") or "")
+            == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
+        )
         reject_reason = ""
         hold_carry_forward = False
         hold_carry_forward_blockers: list[str] = []
@@ -2932,11 +3212,24 @@ def _select_auto_apply_candidates(
             reject_reason = reason
         elif not _env_overrides_for_candidate(candidate):
             reject_reason = "no_runtime_env_override"
-        elif stage in selected_by_stage and not _operator_lock_stage_coexist(
-            family=family,
-            stage=stage,
-            selected_by_stage=selected_by_stage,
-            locks_by_family=locks_by_family,
+        elif cumulative_quality_update and stage in selected_cumulative_quality_by_stage:
+            reject_reason = (
+                "single_cumulative_quality_update_conflict:"
+                f"{selected_cumulative_quality_by_stage[stage]}"
+            )
+        elif (
+            stage in selected_by_stage
+            and not _operator_lock_stage_coexist(
+                family=family,
+                stage=stage,
+                selected_by_stage=selected_by_stage,
+                locks_by_family=locks_by_family,
+            )
+            and not _scale_in_cumulative_quality_stage_coexist(
+                candidate=candidate,
+                stage=stage,
+                selected_by_stage=selected_by_stage,
+            )
         ):
             reject_reason = (
                 f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
@@ -2952,6 +3245,11 @@ def _select_auto_apply_candidates(
                 stage=stage,
                 selected_by_stage=selected_by_stage,
                 locks_by_family=locks_by_family,
+            )
+            and not _scale_in_cumulative_quality_stage_coexist(
+                candidate=candidate,
+                stage=stage,
+                selected_by_stage=selected_by_stage,
             )
         ):
             lock_stage_conflict_reason = (
@@ -3004,6 +3302,18 @@ def _select_auto_apply_candidates(
                 )
             ),
         }
+        if candidate.get("quality_update_id"):
+            decision["quality_update_id"] = candidate.get("quality_update_id")
+            decision["runtime_update_mode"] = candidate.get("runtime_update_mode")
+            decision["max_runtime_apply_count"] = candidate.get(
+                "max_runtime_apply_count"
+            )
+            decision["cumulative_quality_window"] = candidate.get(
+                "cumulative_quality_window"
+            )
+            decision["post_apply_attribution_required"] = bool(
+                candidate.get("post_apply_attribution_required")
+            )
         if hold_carry_forward:
             decision["hold_carry_forward"] = {
                 "previous_runtime_env_family": family,
@@ -3024,6 +3334,8 @@ def _select_auto_apply_candidates(
         if reject_reason:
             decisions.append(decision)
             continue
+        if cumulative_quality_update:
+            selected_cumulative_quality_by_stage[stage] = family
         selected_by_stage[stage] = candidate
         decisions.append(decision)
 
@@ -3512,6 +3824,11 @@ def _close_real_pyramid_scale_in_quality_guard_for_live_owner(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     if not owner_family:
         return selected, decisions, env_overrides
+    if owner_family in {
+        "scalping_pyramid_quality_gate",
+        "scalping_avg_down_recovery_quality_gate",
+    }:
+        return selected, decisions, env_overrides
     reason = f"same_stage_owner_conflict:{owner_family}"
     filtered_selected = [
         item
@@ -3797,6 +4114,9 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     ],
     "entry_opportunity_recheck_runtime": [
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
     ],
     "weak_context_late_entry_guard_runtime": [
         "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED",
@@ -4780,6 +5100,60 @@ def verify_runtime_env_handoff(
                 "policy_reason": "post_probe_resolver_probe_first_dependency_disabled",
             }
         )
+    entry_recheck_enabled_key = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"
+    entry_recheck_wait_probe_key = (
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT"
+    )
+    entry_recheck_legacy_buy_key = (
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION"
+    )
+    entry_recheck_probe_contract_key = (
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT"
+    )
+    if _runtime_env_enabled(effective_env_overrides.get(entry_recheck_enabled_key)):
+        recheck_contract_failures: list[str] = []
+        if not _runtime_env_enabled(
+            effective_env_overrides.get(entry_recheck_wait_probe_key)
+        ):
+            recheck_contract_failures.append(entry_recheck_wait_probe_key)
+        if _runtime_env_enabled(
+            effective_env_overrides.get(entry_recheck_legacy_buy_key)
+        ):
+            recheck_contract_failures.append(entry_recheck_legacy_buy_key)
+        if not _runtime_env_enabled(
+            effective_env_overrides.get(entry_recheck_probe_contract_key)
+        ):
+            recheck_contract_failures.append(entry_recheck_probe_contract_key)
+        if not _runtime_env_enabled(
+            effective_env_overrides.get(probe_first_enabled_key)
+        ):
+            recheck_contract_failures.append(probe_first_enabled_key)
+        if (
+            str(
+                effective_env_overrides.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY") or ""
+            ).strip()
+            != "1"
+        ):
+            recheck_contract_failures.append("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY")
+        if not _runtime_env_enabled(
+            effective_env_overrides.get(post_probe_resolver_enabled_key)
+        ):
+            recheck_contract_failures.append(post_probe_resolver_enabled_key)
+        if recheck_contract_failures:
+            findings.append(
+                {
+                    "family": ENTRY_OPPORTUNITY_RECHECK_FAMILY,
+                    "missing_env_keys": sorted(set(recheck_contract_failures)),
+                    "severity": "runtime_policy_unusable",
+                    "detail": (
+                        "entry opportunity recheck requires canonical WAIT probe "
+                        "intent, one-share probe-first, and post-probe resolver"
+                    ),
+                    "policy_reason": (
+                        "entry_recheck_probe_dependency_contract_invalid"
+                    ),
+                }
+            )
     audited_runtime_families = {
         str(audit.get("family") or "")
         for audit in runtime_policy_audits
@@ -5416,14 +5790,6 @@ def build_preopen_apply_manifest(
         )
         if latency_candidates:
             calibration_candidates = [*calibration_candidates, *latency_candidates]
-        rising_missed_first_touch_candidates, rising_missed_first_touch_calibration = (
-            _load_rising_missed_first_touch_calibration_candidates(report_source_date)
-        )
-        if rising_missed_first_touch_candidates:
-            calibration_candidates = [
-                *calibration_candidates,
-                *rising_missed_first_touch_candidates,
-            ]
         scalping_pyramid_quality_candidates, scalping_pyramid_quality_calibration = (
             _load_scalping_pyramid_quality_calibration_candidates(report_source_date)
         )
@@ -5441,13 +5807,13 @@ def build_preopen_apply_manifest(
                 *calibration_candidates,
                 *scalping_avg_down_recovery_candidates,
             ]
-        ai_score_optimization_candidates, ai_score_optimization_backtest = (
-            _load_ai_score_optimization_backtest_candidates(report_source_date)
+        entry_ai_gate_candidates, entry_ai_gate_backtest = (
+            _load_entry_ai_gate_backtest_candidates(report_source_date)
         )
-        if ai_score_optimization_candidates:
+        if entry_ai_gate_candidates:
             calibration_candidates = [
                 *calibration_candidates,
-                *ai_score_optimization_candidates,
+                *entry_ai_gate_candidates,
             ]
         calibration_candidates = _dedupe_calibration_candidates(calibration_candidates)
         calibration_candidates = _scrub_removed_contracts(calibration_candidates) or []
@@ -5782,10 +6148,9 @@ def build_preopen_apply_manifest(
                 "provider_status": ai_review.get("provider_status") or {},
             },
             "latency_classifier_recommendation": latency_recommendation,
-            "rising_missed_first_touch_calibration": rising_missed_first_touch_calibration,
             "scalping_pyramid_quality_calibration": scalping_pyramid_quality_calibration,
             "scalping_avg_down_recovery_calibration": scalping_avg_down_recovery_calibration,
-            "ai_score_optimization_backtest": ai_score_optimization_backtest,
+            "entry_ai_gate_backtest": entry_ai_gate_backtest,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "entry_cancel_wait_runtime": entry_cancel_wait_decision,

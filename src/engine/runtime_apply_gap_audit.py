@@ -166,19 +166,23 @@ def _artifact_path(label: str, target_date: str) -> Path:
 
 def _artifact_status(
     target_date: str,
+    *,
+    include_swing: bool = True,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    labels = (
+    labels = [
         "lifecycle_bucket_discovery",
-        "swing_lifecycle_bucket_discovery",
         "runtime_apply_bridge",
         "runtime_approval_summary",
         "code_improvement_workorder",
         "observation_source_quality_audit",
         "threshold_cycle_ev",
         "lifecycle_decision_matrix",
-        "swing_lifecycle_decision_matrix",
         "threshold_preopen_apply_next",
-    )
+    ]
+    if include_swing:
+        labels.extend(
+            ["swing_lifecycle_bucket_discovery", "swing_lifecycle_decision_matrix"]
+        )
     status: dict[str, dict[str, Any]] = {}
     payloads: dict[str, dict[str, Any]] = {}
     for label in labels:
@@ -2391,6 +2395,7 @@ def build_runtime_apply_gap_audit(
     *,
     ai_review_provider: str | None = None,
     ai_review_model: str | None = None,
+    include_swing: bool = True,
 ) -> dict[str, Any]:
     provider = str(
         ai_review_provider
@@ -2398,7 +2403,9 @@ def build_runtime_apply_gap_audit(
         or "openai"
     ).strip()
     config = _ai_review_config(model_override=ai_review_model)
-    artifact_status, payloads = _artifact_status(target_date)
+    artifact_status, payloads = _artifact_status(
+        target_date, include_swing=include_swing
+    )
     source_dimension_gap_summary = _source_dimension_gap_summary_from_payloads(payloads)
     quiet_gap_summary = _quiet_gap_summary_from_payloads(payloads)
     ledger_rows: list[dict[str, Any]] = []
@@ -2413,12 +2420,12 @@ def build_runtime_apply_gap_audit(
             )
         )
     swing_matrix = payloads.get("swing_lifecycle_decision_matrix") or {}
-    if swing_matrix:
+    if include_swing and swing_matrix:
         ledger_rows.extend(
             _ledger_from_swing_ldm(swing_matrix, target_date=target_date)
         )
     swing_discovery = payloads.get("swing_lifecycle_bucket_discovery") or {}
-    if swing_discovery:
+    if include_swing and swing_discovery:
         ledger_rows.extend(
             _ledger_from_discovery(
                 swing_discovery,
@@ -2480,6 +2487,8 @@ def build_runtime_apply_gap_audit(
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "decision_authority": "runtime_apply_gap_aggressive_watcher_source_only",
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "sources": {
             label: status_item["path"] for label, status_item in artifact_status.items()
         },
@@ -2610,11 +2619,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--ai-review-provider", default=None)
     parser.add_argument("--ai-review-model", default=None)
+    parser.add_argument("--exclude-swing", action="store_true")
     args = parser.parse_args(argv)
     report = build_runtime_apply_gap_audit(
         args.date,
         ai_review_provider=args.ai_review_provider,
         ai_review_model=args.ai_review_model,
+        include_swing=not args.exclude_swing,
     )
     json_path, md_path = write_runtime_apply_gap_audit(report)
     print(f"runtime_apply_gap_audit_json={json_path}")

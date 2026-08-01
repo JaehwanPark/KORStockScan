@@ -57,6 +57,10 @@ HOLDING_CONTEXT_SCHEMA = "holding_decision_context_v1"
 HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 HORIZON_END_MAX_LAG_SEC = 90
 PROFIT_OPPORTUNITY_THRESHOLD_PCT = 1.0
+ENTRY_PATH_TARGET_PCT = 0.30
+ENTRY_PATH_ADVERSE_PCT = -0.70
+ENTRY_PATH_PRIMARY_HORIZON = "10m"
+ENTRY_PATH_LABEL_VERSION = "tight_stop_entry_path_v1"
 PIPELINE_FORWARD_DAYS = 7
 PRIMARY_HORIZON_BY_STAGE = {
     "entry": "10m",
@@ -1864,6 +1868,57 @@ def mature_outcome_labels(
                     else ("adverse" if adverse_hit else "neither")
                 )
             )
+            entry_path_metrics: dict[str, Any] = {}
+            if stage == "entry":
+                entry_path_target_price = reference * (
+                    1.0 + (ENTRY_PATH_TARGET_PCT / 100.0)
+                )
+                entry_path_adverse_price = reference * (
+                    1.0 + (ENTRY_PATH_ADVERSE_PCT / 100.0)
+                )
+                entry_path_target_hit = next(
+                    (
+                        row["_timestamp"].isoformat()
+                        for row in window
+                        if row["_high"] >= entry_path_target_price
+                    ),
+                    None,
+                )
+                entry_path_adverse_hit = next(
+                    (
+                        row["_timestamp"].isoformat()
+                        for row in window
+                        if row["_low"] <= entry_path_adverse_price
+                    ),
+                    None,
+                )
+                entry_path_first_hit = (
+                    "same_bar_ambiguous"
+                    if entry_path_target_hit
+                    and entry_path_adverse_hit
+                    and entry_path_target_hit == entry_path_adverse_hit
+                    else (
+                        "target_first"
+                        if entry_path_target_hit
+                        and (
+                            not entry_path_adverse_hit
+                            or entry_path_target_hit < entry_path_adverse_hit
+                        )
+                        else (
+                            "adverse_first"
+                            if entry_path_adverse_hit
+                            else "neither_hit"
+                        )
+                    )
+                )
+                entry_path_metrics = {
+                    "entry_path_label_version": ENTRY_PATH_LABEL_VERSION,
+                    "entry_path_target_pct": ENTRY_PATH_TARGET_PCT,
+                    "entry_path_adverse_pct": ENTRY_PATH_ADVERSE_PCT,
+                    "entry_path_target_hit_at": entry_path_target_hit,
+                    "entry_path_adverse_hit_at": entry_path_adverse_hit,
+                    "entry_path_first_hit": entry_path_first_hit,
+                }
             profit_opportunity_price = reference * (
                 1.0 + (PROFIT_OPPORTUNITY_THRESHOLD_PCT / 100.0)
             )
@@ -1916,6 +1971,7 @@ def mature_outcome_labels(
                 "target_hit_at": target_hit,
                 "adverse_hit_at": adverse_hit,
                 "first_hit": first_hit,
+                **entry_path_metrics,
                 "profit_opportunity_threshold_pct": (PROFIT_OPPORTUNITY_THRESHOLD_PCT),
                 "profit_opportunity_observed": (profit_opportunity_index is not None),
                 "profit_opportunity_hit_at": (
@@ -1967,7 +2023,30 @@ def mature_outcome_labels(
             horizon_metrics[f"{max(matured_horizons)}m"] if matured_horizons else {}
         )
         stage_outcome: dict[str, Any] = {}
-        if stage == "post_probe":
+        if stage == "entry":
+            primary_entry_path = horizon_metrics.get(ENTRY_PATH_PRIMARY_HORIZON) or {}
+            stage_outcome = {
+                "entry_path_primary_horizon": ENTRY_PATH_PRIMARY_HORIZON,
+                "entry_path_label_version": ENTRY_PATH_LABEL_VERSION,
+                "entry_path_first_hit": primary_entry_path.get(
+                    "entry_path_first_hit"
+                ),
+                "entry_path_target_pct": ENTRY_PATH_TARGET_PCT,
+                "entry_path_adverse_pct": ENTRY_PATH_ADVERSE_PCT,
+                "entry_path_target_hit_at": primary_entry_path.get(
+                    "entry_path_target_hit_at"
+                ),
+                "entry_path_adverse_hit_at": primary_entry_path.get(
+                    "entry_path_adverse_hit_at"
+                ),
+                "entry_path_label_status": (
+                    "mature"
+                    if primary_entry_path
+                    else "pending_primary_horizon"
+                ),
+                "counterfactual_only": True,
+            }
+        elif stage == "post_probe":
             stage_outcome = {
                 "residual_submitted": correlation["actual_order_submitted"],
                 "fill_observed": correlation["fill_observed"],
@@ -2056,6 +2135,7 @@ def _taxonomy(label: dict[str, Any]) -> list[str]:
     mae = _number(preferred.get("mae_pct")) or 0.0
     end_return = _number(preferred.get("end_return_pct")) or 0.0
     first_hit = str(preferred.get("first_hit") or "")
+    entry_path_first_hit = str(preferred.get("entry_path_first_hit") or "")
     stage = _stage(label.get("decision_stage"))
     errors: list[str] = []
     if action == "DROP" and mfe >= 1.0:
@@ -2064,6 +2144,14 @@ def _taxonomy(label: dict[str, Any]) -> list[str]:
         errors.append("false_wait")
     if action == "BUY" and (first_hit == "adverse" or mae <= -1.0):
         errors.append("false_buy")
+    if stage == "entry" and action == "BUY" and entry_path_first_hit == "adverse_first":
+        errors.append("false_buy_tight_stop_adverse_first")
+    if (
+        stage == "entry"
+        and action in {"WAIT", "DROP"}
+        and entry_path_first_hit == "target_first"
+    ):
+        errors.append("missed_entry_tight_stop_target_first")
     if stage == "scale_in" and action in {"ADD", "BUY", "SUPPORT"} and end_return < 0:
         errors.append("bad_scale_support")
     if stage in {"holding", "exit"} and action == "HOLD" and end_return <= -1.0:
@@ -2120,6 +2208,9 @@ def build_quality_baseline(
             "session_bucket": row.get("session_bucket"),
             "action": row.get("action"),
             "outcome_return_pct": outcome,
+            "entry_path_first_hit": preferred.get("entry_path_first_hit"),
+            "entry_path_target_pct": preferred.get("entry_path_target_pct"),
+            "entry_path_adverse_pct": preferred.get("entry_path_adverse_pct"),
             "decision_value_pct": decision_value,
             "errors": errors,
         }
@@ -4914,6 +5005,11 @@ def build_paired_replay_report(
         mfe = _number(preferred.get("mfe_pct"))
         mae = _number(preferred.get("mae_pct"))
         first_hit = str(preferred.get("first_hit") or "")
+        entry_path_first_hit = str(preferred.get("entry_path_first_hit") or "")
+        comparison_stage = _stage(
+            result.get("stage"),
+            label.get("decision_stage") if isinstance(label, dict) else None,
+        )
         profit_opportunity_observed = preferred.get("profit_opportunity_observed")
         if profit_opportunity_observed is None:
             profit_opportunity_observed = bool(
@@ -4943,11 +5039,23 @@ def build_paired_replay_report(
             first_hit == "adverse" or (mae is not None and mae <= -1.0)
         ):
             candidate_errors.append("false_buy")
+        if (
+            comparison_stage == "entry"
+            and candidate_action == "BUY"
+            and entry_path_first_hit == "adverse_first"
+        ):
+            candidate_errors.append("false_buy_tight_stop_adverse_first")
+        if (
+            comparison_stage == "entry"
+            and candidate_action in {"WAIT", "DROP"}
+            and entry_path_first_hit == "target_first"
+        ):
+            candidate_errors.append("missed_entry_tight_stop_target_first")
         comparable_rows.append(
             {
                 "decision_trace_id": trace_id,
                 "stock_code": request.get("stock_code"),
-                "stage": result.get("stage"),
+                "stage": comparison_stage,
                 "effective_venue": result.get("effective_venue"),
                 "session_bucket": result.get("session_bucket"),
                 "control_action": control_action,
@@ -4973,6 +5081,9 @@ def build_paired_replay_report(
                 "outcome_mfe_pct": mfe,
                 "outcome_mae_pct": mae,
                 "first_hit": first_hit,
+                "entry_path_first_hit": entry_path_first_hit or None,
+                "entry_path_target_pct": preferred.get("entry_path_target_pct"),
+                "entry_path_adverse_pct": preferred.get("entry_path_adverse_pct"),
                 "profit_opportunity_threshold_pct": (
                     _number(preferred.get("profit_opportunity_threshold_pct"))
                     or PROFIT_OPPORTUNITY_THRESHOLD_PCT
@@ -5042,6 +5153,18 @@ def build_paired_replay_report(
             and row["candidate_action"] in EXPOSURE_ACTIONS
             for row in rows
         )
+        bucket_control_tight_stop_adverse_exposure = sum(
+            row["stage"] == "entry"
+            and row["entry_path_first_hit"] == "adverse_first"
+            and row["control_action"] in EXPOSURE_ACTIONS
+            for row in rows
+        )
+        bucket_candidate_tight_stop_adverse_exposure = sum(
+            row["stage"] == "entry"
+            and row["entry_path_first_hit"] == "adverse_first"
+            and row["candidate_action"] in EXPOSURE_ACTIONS
+            for row in rows
+        )
         bucket_exposure_rows = [
             row for row in rows if row["candidate_action"] in EXPOSURE_ACTIONS
         ]
@@ -5064,6 +5187,10 @@ def build_paired_replay_report(
             "new_missed_upside_not_increased": bucket_new_missed_upside == 0,
             "adverse_first_exposure_not_increased": (
                 bucket_candidate_adverse_exposure <= bucket_control_adverse_exposure
+            ),
+            "tight_stop_adverse_first_exposure_not_increased": (
+                bucket_candidate_tight_stop_adverse_exposure
+                <= bucket_control_tight_stop_adverse_exposure
             ),
             "candidate_action_not_collapsed": bucket_dominant_action_ratio <= 0.90,
             "candidate_exposure_sample_floor_pass": bucket_exposure_floor_pass,
@@ -5091,6 +5218,12 @@ def build_paired_replay_report(
                 ),
                 "adverse_first_candidate_exposure_count": (
                     bucket_candidate_adverse_exposure
+                ),
+                "control_tight_stop_adverse_first_exposure_count": (
+                    bucket_control_tight_stop_adverse_exposure
+                ),
+                "candidate_tight_stop_adverse_first_exposure_count": (
+                    bucket_candidate_tight_stop_adverse_exposure
                 ),
                 "candidate_exposure_decision_count": len(bucket_exposure_rows),
                 "candidate_exposure_unique_symbol_count": len(bucket_exposure_symbols),
@@ -5155,6 +5288,18 @@ def build_paired_replay_report(
     )
     candidate_adverse_first_exposure_count = sum(
         row["first_hit"] == "adverse" and row["candidate_action"] in EXPOSURE_ACTIONS
+        for row in comparable_rows
+    )
+    control_tight_stop_adverse_first_exposure_count = sum(
+        row["stage"] == "entry"
+        and row["entry_path_first_hit"] == "adverse_first"
+        and row["control_action"] in EXPOSURE_ACTIONS
+        for row in comparable_rows
+    )
+    candidate_tight_stop_adverse_first_exposure_count = sum(
+        row["stage"] == "entry"
+        and row["entry_path_first_hit"] == "adverse_first"
+        and row["candidate_action"] in EXPOSURE_ACTIONS
         for row in comparable_rows
     )
     candidate_exposure_rows = [
@@ -5272,6 +5417,10 @@ def build_paired_replay_report(
             candidate_adverse_first_exposure_count
             <= control_adverse_first_exposure_count
         ),
+        "tight_stop_adverse_first_exposure_not_increased": (
+            candidate_tight_stop_adverse_first_exposure_count
+            <= control_tight_stop_adverse_first_exposure_count
+        ),
         "candidate_action_not_collapsed": (
             dominant_candidate_action_ratio is not None
             and dominant_candidate_action_ratio <= 0.90
@@ -5364,6 +5513,25 @@ def build_paired_replay_report(
         "adverse_first_candidate_exposure_count": (
             candidate_adverse_first_exposure_count
         ),
+        "control_tight_stop_adverse_first_exposure_count": (
+            control_tight_stop_adverse_first_exposure_count
+        ),
+        "candidate_tight_stop_adverse_first_exposure_count": (
+            candidate_tight_stop_adverse_first_exposure_count
+        ),
+        "entry_path_label_contract": {
+            "version": ENTRY_PATH_LABEL_VERSION,
+            "primary_horizon": ENTRY_PATH_PRIMARY_HORIZON,
+            "target_pct": ENTRY_PATH_TARGET_PCT,
+            "adverse_pct": ENTRY_PATH_ADVERSE_PCT,
+            "labels": [
+                "target_first",
+                "adverse_first",
+                "same_bar_ambiguous",
+                "neither_hit",
+            ],
+            "decision_authority": "offline_replay_and_attribution_only",
+        },
         "candidate_exposure_decision_count": len(candidate_exposure_rows),
         "candidate_exposure_unique_symbol_count": candidate_exposure_symbol_count,
         "candidate_exposure_sample_floor": {

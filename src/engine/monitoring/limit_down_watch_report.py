@@ -121,14 +121,8 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _evidence_readiness(
-    *,
-    target_date: str,
-    candidate_source: dict[str, Any],
-    event_source: dict[str, Any],
-    registered_code_count: int,
-    snapshot_code_count: int,
-    ordered_path_captured_code_count: int,
+def _candidate_source_summary(
+    target_date: str, candidate_source: dict[str, Any]
 ) -> dict[str, Any]:
     candidates = (
         candidate_source.get("candidates")
@@ -142,7 +136,8 @@ def _evidence_readiness(
     )
     candidate_source_valid = (
         candidate_source.get("schema_version") == 1
-        and candidate_source.get("report_type") == "limit_down_watch_candidate_source"
+        and candidate_source.get("report_type")
+        == "limit_down_watch_candidate_source"
         and candidate_source.get("target_date") == target_date
         and candidate_source.get("status") in {"pass", "partial"}
         and candidate_source.get("candidate_count") == len(candidates)
@@ -164,10 +159,57 @@ def _evidence_readiness(
         source_quality_status = "pass"
     else:
         source_quality_status = "no_candidate"
+    return {
+        "candidates": candidates,
+        "source_pass_count": source_pass_count,
+        "candidate_source_valid": candidate_source_valid,
+        "source_quality_status": source_quality_status,
+        "event_source_required": bool(
+            candidate_source_valid
+            and candidates
+            and source_quality_status in {"pass", "pass_with_exclusions"}
+        ),
+    }
+
+
+def _event_source_not_scanned(path: Path, *, reason: str) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "readable": None,
+        "read_mode": "not_scanned_candidate_preflight",
+        "full_source_materialized": False,
+        "line_count": 0,
+        "invalid_json_line_count": 0,
+        "invalid_schema_line_count": 0,
+        "matching_event_count": 0,
+        "contract_violation_count": 0,
+        "valid": None,
+        "scan_skipped": True,
+        "scan_skip_reason": reason,
+    }
+
+
+def _evidence_readiness(
+    *,
+    target_date: str,
+    candidate_source: dict[str, Any],
+    event_source: dict[str, Any],
+    registered_code_count: int,
+    snapshot_code_count: int,
+    ordered_path_captured_code_count: int,
+) -> dict[str, Any]:
+    candidate_summary = _candidate_source_summary(target_date, candidate_source)
+    candidates = candidate_summary["candidates"]
+    source_pass_count = candidate_summary["source_pass_count"]
+    candidate_source_valid = candidate_summary["candidate_source_valid"]
+    source_quality_status = candidate_summary["source_quality_status"]
+    event_source_required = candidate_summary["event_source_required"]
+    event_source_valid = bool(event_source.get("valid")) if event_source_required else True
     blockers = []
     if source_quality_status not in {"pass", "pass_with_exclusions", "no_candidate"}:
         blockers.append(f"candidate_source_quality_{source_quality_status}")
-    if not event_source.get("valid"):
+    if not event_source_valid:
         blockers.append("ordered_intraday_event_source_invalid")
     if snapshot_code_count <= 0:
         blockers.append("ordered_intraday_path_sample_missing")
@@ -191,7 +233,8 @@ def _evidence_readiness(
         "source_quality_status": source_quality_status,
         "candidate_source_valid": candidate_source_valid,
         "candidate_source_report_status": candidate_source.get("status"),
-        "event_source_valid": bool(event_source.get("valid")),
+        "event_source_required": event_source_required,
+        "event_source_valid": event_source_valid,
         "event_source": event_source,
         "candidate_count": len(candidates),
         "source_pass_count": source_pass_count,
@@ -225,8 +268,16 @@ def build_report(
     candidate_path = candidate_path or (
         CANDIDATE_DIR / f"limit_down_watch_candidate_source_{target_date}.json"
     )
-    events, event_source = _load_events(event_path)
     candidate_source = _load_json(candidate_path)
+    candidate_summary = _candidate_source_summary(target_date, candidate_source)
+    if candidate_summary["event_source_required"]:
+        events, event_source = _load_events(event_path)
+    else:
+        events = []
+        event_source = _event_source_not_scanned(
+            event_path,
+            reason=str(candidate_summary["source_quality_status"]),
+        )
     snapshots: dict[str, dict[str, Any]] = {}
     transitions: dict[str, list[str]] = defaultdict(list)
     registered_meta: dict[str, dict[str, Any]] = {}
@@ -376,6 +427,11 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"- status: `{payload.get('status')}`",
         f"- registered_code_count: `{payload.get('registered_code_count')}`",
         f"- snapshot_code_count: `{payload.get('snapshot_code_count')}`",
+        f"- event_source_required: `{readiness.get('event_source_required')}`",
+        (
+            "- event_source_read_mode: "
+            f"`{(readiness.get('event_source') or {}).get('read_mode')}`"
+        ),
         (
             "- ordered_intraday_path_capture: "
             f"`{readiness.get('ordered_path_captured_code_count', 0)}`"

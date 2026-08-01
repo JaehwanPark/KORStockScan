@@ -1307,6 +1307,21 @@ def _scale_candidate_legacy_blocked(
         discovery_live_by_family=discovery_live_by_family,
     )
     has_v2_observation = ev_label_version == "incremental_counterfactual_v2"
+    authority_reasons = [
+        str(bucket.get("runtime_authority_block_reason") or "").strip()
+        for bucket in (pyramid, avg_down)
+        if isinstance(bucket, dict)
+        and str(bucket.get("runtime_authority_block_reason") or "").strip()
+    ]
+    observed_authority_reason = (
+        authority_reasons[0]
+        if authority_reasons
+        else (
+            "runtime_authority_sample_not_observed"
+            if has_v2_observation
+            else "incremental_counterfactual_v2_label_missing"
+        )
+    )
     blocked_role = (
         "v2_treatment_path_observation_not_runtime_authority"
         if has_v2_observation
@@ -1318,9 +1333,19 @@ def _scale_candidate_legacy_blocked(
     if avg_down:
         source_buckets.append(_scale_source(avg_down, role=blocked_role))
     blocked_state = (
-        "blocked_incremental_ev_runtime_authority"
+        "collecting_incremental_ev_runtime_authority_sample"
         if has_v2_observation
-        else "blocked_legacy_v1_label_missing_incremental_ev"
+        and observed_authority_reason
+        in {
+            "no_natural_sample",
+            "evaluated_no_runtime_eligible_sample",
+            "runtime_authority_sample_not_observed",
+        }
+        else (
+            "blocked_incremental_ev_runtime_authority"
+            if has_v2_observation
+            else "blocked_legacy_v1_label_missing_incremental_ev"
+        )
     )
     source_bucket_keys = [
         str(item.get("bucket_key") or "").strip() for item in source_buckets
@@ -1337,7 +1362,7 @@ def _scale_candidate_legacy_blocked(
         "allowed_runtime_apply": False,
         "runtime_effect": False,
         "runtime_effect_after_approval": (
-            "blocked_until_paired_no_add_replay_available"
+            "blocked_until_runtime_authority_sample_available"
             if has_v2_observation
             else "blocked_until_incremental_counterfactual_v2_label_available"
         ),
@@ -1346,7 +1371,7 @@ def _scale_candidate_legacy_blocked(
             "effective_qty_cap": 1,
             "threshold_version": f"{SCALE_IN_BRIDGE_FAMILY}:{target_date}",
             "calibration_state": (
-                "blocked_paired_add_lifecycle_replay_missing"
+                f"source_only_{observed_authority_reason}"
                 if has_v2_observation
                 else "blocked_legacy_v1_label"
             ),
@@ -1354,6 +1379,7 @@ def _scale_candidate_legacy_blocked(
             "legacy_state_label_not_runtime_authority": not has_v2_observation,
             "treatment_path_observation_not_runtime_authority": has_v2_observation,
             "source_only_keep_collecting": True,
+            "runtime_authority_block_reason": observed_authority_reason,
         },
         "current_values": {
             "effective_qty_cap": 1,
@@ -1375,11 +1401,17 @@ def _scale_candidate_legacy_blocked(
             {
                 "pyramid": {
                     "runtime_authority_ready": False,
-                    "block_reason": "paired_add_lifecycle_replay_not_implemented",
+                    "block_reason": str(
+                        pyramid.get("runtime_authority_block_reason")
+                        or observed_authority_reason
+                    ),
                 },
                 "avg_down": {
                     "runtime_authority_ready": False,
-                    "block_reason": "paired_add_lifecycle_replay_not_implemented",
+                    "block_reason": str(
+                        avg_down.get("runtime_authority_block_reason")
+                        or observed_authority_reason
+                    ),
                 },
             }
             if has_v2_observation
@@ -1665,9 +1697,6 @@ def build_runtime_apply_bridge_report(target_date: str) -> dict[str, Any]:
     promotion_discovery_path = discovery_context["promotion_path"]
     promotion_discovery = discovery_context["promotion"]
     confirmation_discoveries = discovery_context["confirmation"]
-    discovery_path = (
-        promotion_discovery_path if promotion_discovery else daily_discovery_path
-    )
     discovery = promotion_discovery if promotion_discovery else daily_discovery
     promotion_contract_passed = (
         _summary_contract_passed(promotion_discovery) if promotion_discovery else False

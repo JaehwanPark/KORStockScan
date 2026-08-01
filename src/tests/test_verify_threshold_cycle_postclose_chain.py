@@ -4865,6 +4865,8 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         "threshold_cycle_ev_sources_pattern_lab_currentness_audit"
     ].endswith("pattern_lab_currentness_audit_2026-05-12.json")
     artifact_labels = {item["label"] for item in report["artifact_status"]}
+    assert "quote_consistency" not in artifact_labels
+    assert "quote_consistency" not in report
     assert {
         "market_panic_breadth",
         "panic_sell_defense",

@@ -272,12 +272,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     rising_missed_scout_idx = script.index(
         "src.engine.monitoring.rising_missed_scout_workorder"
     )
-    rising_missed_bridge_idx = script.index(
-        "src.engine.monitoring.rising_missed_normal_buy_bridge_candidate_discovery"
-    )
-    rising_missed_first_touch_calibration_idx = script.index(
-        "src.engine.monitoring.rising_missed_first_touch_calibration"
-    )
     scalping_pyramid_feedback_idx = script.index(
         "src.engine.monitoring.scalping_pyramid_intraday_feedback"
     )
@@ -292,12 +286,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     )
     entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
     entry_ai_gate_idx = script.index("src.engine.scalping.entry_ai_gate_backtest")
-    tight_stop_entry_companion_idx = script.index(
-        "src.engine.scalping.tight_stop_entry_companion_report"
-    )
-    ai_score_optimization_idx = script.index(
-        "src.engine.scalping.ai_score_optimization_backtest"
-    )
     microstructure_idx = script.index(
         "src.engine.scalping.microstructure_reaction_context"
     )
@@ -316,8 +304,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert (
         rising_missed_feedback_idx
         < rising_missed_scout_idx
-        < rising_missed_bridge_idx
-        < rising_missed_first_touch_calibration_idx
         < scalping_pyramid_feedback_idx
         < scalping_pyramid_calibration_idx
         < scalping_avg_down_recovery_idx
@@ -391,14 +377,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         sim_post_sell_idx
         < rising_missed_feedback_idx
         < rising_missed_scout_idx
-        < rising_missed_first_touch_calibration_idx
         < scalping_pyramid_feedback_idx
         < scalping_pyramid_calibration_idx
         < scalping_avg_down_recovery_idx
         < entry_adm_idx
         < entry_ai_gate_idx
-        < tight_stop_entry_companion_idx
-        < ai_score_optimization_idx
         < microstructure_idx
         < observation_preflight_idx
         < lifecycle_matrix_idx
@@ -469,10 +452,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert (
-        'RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION="${THRESHOLD_CYCLE_RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION:-true}"'
-        in script
-    )
-    assert (
         'RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE:-true}"'
         in script
     )
@@ -497,10 +476,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     )
     assert (
         'RUN_ENTRY_AI_GATE_BACKTEST="${THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-true}"'
-        in script
-    )
-    assert (
-        'RUN_AI_SCORE_OPTIMIZATION_BACKTEST="${THRESHOLD_CYCLE_RUN_AI_SCORE_OPTIMIZATION_BACKTEST:-true}"'
         in script
     )
     assert (
@@ -535,9 +510,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert "entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST" in script
-    assert (
-        "ai_score_optimization_backtest=$RUN_AI_SCORE_OPTIMIZATION_BACKTEST" in script
-    )
+    assert "ai_score_optimization_backtest" not in script
     assert (
         "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL"
         in script
@@ -733,27 +706,11 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         in script
     )
     assert (
-        '"$PROJECT_DIR/data/report/tight_stop_entry_companion_report/'
-        'tight_stop_entry_companion_report_${TARGET_DATE}.json"'
-    ) in script
-    assert (
-        '"$PROJECT_DIR/data/report/ai_score_optimization_backtest/ai_score_optimization_backtest_${TARGET_DATE}.json"'
-        in script
-    )
-    assert (
         '"$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.json"'
         in script
     )
     assert (
         '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"'
-        in script
-    )
-    assert (
-        '"$PROJECT_DIR/data/report/rising_missed_normal_buy_bridge_candidate_discovery/rising_missed_normal_buy_bridge_candidate_discovery_${TARGET_DATE}.json"'
-        in script
-    )
-    assert (
-        '"$PROJECT_DIR/data/report/rising_missed_first_touch_calibration/rising_missed_first_touch_calibration_${TARGET_DATE}.json"'
         in script
     )
     assert (
@@ -843,27 +800,22 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
     assert "entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST" in script
-    assert (
-        "tight_stop_entry_companion_report=$RUN_TIGHT_STOP_ENTRY_COMPANION_REPORT"
-        in script
-    )
-    assert (
-        "ai_score_optimization_backtest=$RUN_AI_SCORE_OPTIMIZATION_BACKTEST" in script
-    )
+    assert "tight_stop_entry_companion_report" not in script
+    assert "scalp_sim_ai_deferred_review" not in script
+    assert "THRESHOLD_CYCLE_RUN_QUOTE_CONSISTENCY_REPORT" not in script
+    assert "src.engine.monitoring.quote_consistency_report" not in script
+    assert "quote_consistency_report=$RUN_QUOTE_CONSISTENCY_REPORT" not in script
+    assert "THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_MONITOR" not in script
+    assert "intraday_ws_freshness_monitor_postclose" not in script
+    assert "ai_score_optimization_backtest" not in script
     assert (
         "rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE"
         in script
     )
     assert "limit_down_watch_report=$RUN_LIMIT_DOWN_WATCH_REPORT" in script
     assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
-    assert (
-        "rising_missed_normal_buy_bridge_candidate_discovery="
-        "$RUN_RISING_MISSED_NORMAL_BUY_BRIDGE_CANDIDATE_DISCOVERY"
-    ) in script
-    assert (
-        "rising_missed_first_touch_calibration=$RUN_RISING_MISSED_FIRST_TOUCH_CALIBRATION"
-        in script
-    )
+    assert "rising_missed_normal_buy_bridge_candidate_discovery" not in script
+    assert "rising_missed_first_touch_calibration" not in script
     assert (
         "scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE"
         in script

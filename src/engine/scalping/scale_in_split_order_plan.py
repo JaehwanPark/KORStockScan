@@ -1094,6 +1094,10 @@ def build_report(target_date: str) -> dict[str, Any]:
             "three_leg_runtime_missed_upside_proxy_max_exclusive": 0.40,
             "primary_decision_metric": "post_submit_tick_band_counterfactual_selector",
             "source_quality_gate": "observation_source_quality_audit_tuning_input_allowed",
+            "entry_probe_exclusion_contract": (
+                "One-share entry probes and residual entry legs are not scale-in samples. Only AVG_DOWN "
+                "additional-buy observations owned by scale_in_split_order_plan may update this plan."
+            ),
             "forbidden_uses": [
                 "quantity_expansion",
                 "cap_release",

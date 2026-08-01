@@ -7,6 +7,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.source_quality_hard_gate import (
+    filter_source_dates_by_preflight,
+    load_source_quality_preflight,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 KST = timezone(timedelta(hours=9))
@@ -62,6 +66,15 @@ PROFIT_GRID_MAX = 2.5
 PROFIT_GRID_STEP = 0.1
 PROFIT_GRID_MIN_ELIGIBLE = 20
 PROFIT_GRID_MIN_EV_DELTA = 0.2
+RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
+ROW_ISOLATABLE_SOURCE_QUALITY_STATUSES = {
+    "pass",
+    "pass_with_row_exclusions",
+    "micro_vwap_provenance_missing",
+    "micro_vwap_provenance_unusable",
+    "pressure_provenance_missing",
+    "pressure_provenance_unusable",
+}
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -88,6 +101,13 @@ def _default_output_paths(target_date: str) -> tuple[Path, Path]:
 
 def _feedback_report_path(target_date: str) -> Path:
     return INPUT_REPORT_DIR / f"scalping_pyramid_intraday_feedback_{target_date}.json"
+
+
+def _date_from_feedback_path(path: Path) -> str | None:
+    prefix = "scalping_pyramid_intraday_feedback_"
+    if path.stem.startswith(prefix):
+        return path.stem.removeprefix(prefix)
+    return None
 
 
 def _iter_feedback_report_paths(target_date: str) -> list[Path]:
@@ -156,7 +176,29 @@ def _current_values() -> dict[str, Any]:
     }
 
 
-def _closed_pyramid_rows(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _calibration_row_source_quality_reason(row: dict[str, Any]) -> str:
+    if row.get("buy_pressure_10t") is not None and not (
+        row.get("tick_aggressor_pressure_usable") is True
+        or _safe_float(row.get("tick_aggressor_trusted_count"), 0.0) > 0.0
+    ):
+        return "pressure_provenance_invalid"
+    if row.get("curr_vs_micro_vwap_bp") is not None and not (
+        row.get("micro_vwap_available") is True
+        and row.get("minute_candle_window_fresh") is True
+    ):
+        return "micro_vwap_provenance_invalid"
+    if row.get("probe_residual_observation_seen") and (
+        row.get("residual_fill_attribution_valid") is not True
+        or row.get("venue_source_quality_valid") is not True
+    ):
+        return "probe_residual_or_venue_provenance_invalid"
+    return ""
+
+
+def _closed_pyramid_rows(
+    reports: list[dict[str, Any]],
+    exclusion_counts: Counter[str] | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for report in reports:
         for row in report.get("pyramid_feedback_rows") or []:
@@ -164,12 +206,18 @@ def _closed_pyramid_rows(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             if str(row.get("pyramid_feedback_label") or "") not in CLOSED_LABELS:
                 continue
+            exclusion_reason = _calibration_row_source_quality_reason(row)
+            if exclusion_reason:
+                if exclusion_counts is not None:
+                    exclusion_counts[exclusion_reason] += 1
+                continue
             rows.append(row)
     return rows
 
 
 def _closed_one_share_pyramid_rows(
     reports: list[dict[str, Any]],
+    exclusion_counts: Counter[str] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     rows: list[dict[str, Any]] = []
     section_present = False
@@ -183,10 +231,10 @@ def _closed_one_share_pyramid_rows(
                 continue
             if str(row.get("pyramid_feedback_label") or "") not in CLOSED_LABELS:
                 continue
-            if row.get("probe_residual_observation_seen") and (
-                row.get("residual_fill_attribution_valid") is not True
-                or row.get("venue_source_quality_valid") is not True
-            ):
+            exclusion_reason = _calibration_row_source_quality_reason(row)
+            if exclusion_reason:
+                if exclusion_counts is not None:
+                    exclusion_counts[exclusion_reason] += 1
                 continue
             rows.append(row)
     return rows, section_present
@@ -878,22 +926,37 @@ def _calibration_candidate(
     target_date: str,
     reports: list[dict[str, Any]],
     source_paths: list[Path],
+    source_quality_excluded_dates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    one_share_rows, one_share_source_present = _closed_one_share_pyramid_rows(reports)
+    source_quality_excluded_dates = source_quality_excluded_dates or []
+    row_exclusion_counts: Counter[str] = Counter()
+    one_share_rows, one_share_source_present = _closed_one_share_pyramid_rows(
+        reports, row_exclusion_counts
+    )
     normal_winner_expansion = _normal_winner_expansion_observation(reports)
     post_probe_real_outcome = _post_probe_real_outcome_observation(reports)
     post_probe_reprice = _post_probe_reprice_observation(reports)
-    rows = one_share_rows if one_share_source_present else _closed_pyramid_rows(reports)
+    rows = (
+        one_share_rows
+        if one_share_source_present
+        else _closed_pyramid_rows(reports, row_exclusion_counts)
+    )
     calibration_source_scope = (
         "one_share_event_opportunity"
         if one_share_source_present
         else "legacy_pyramid_feedback_rows"
     )
     rates = _row_rates(rows)
-    source_quality_pass = bool(reports) and all(
-        ((report.get("source_quality") or {}).get("status") == "pass")
+    source_quality_status_counts = Counter(
+        str((report.get("source_quality") or {}).get("status") or "missing")
         for report in reports
     )
+    unisolatable_source_quality_statuses = sorted(
+        status
+        for status in source_quality_status_counts
+        if status not in ROW_ISOLATABLE_SOURCE_QUALITY_STATUSES
+    )
+    source_quality_pass = bool(reports) and not unisolatable_source_quality_statuses
     provenance_present = _provenance_present(rows)
     source_contract_pass = bool(source_quality_pass and provenance_present)
     sample_floor_met = int(rates["sample_count"]) >= 20
@@ -918,7 +981,23 @@ def _calibration_candidate(
         for row in rows
         if row.get("pyramid_opportunity_cost_pct") is not None
     ]
-
+    source_dates = sorted(
+        {
+            _date_from_feedback_path(path)
+            for path in source_paths
+            if _date_from_feedback_path(path)
+        }
+    )
+    cumulative_quality_window = {
+        "window_policy": "clean_baseline_cumulative",
+        "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+        "start_date": CLEAN_BASELINE_DATE,
+        "end_date": target_date,
+        "source_dates": source_dates,
+        "source_date_count": len(source_dates),
+        "source_quality_excluded_date_count": len(source_quality_excluded_dates),
+        "source_quality_excluded_dates": source_quality_excluded_dates,
+    }
     if blockers:
         state = "hold_sample"
         recommended = dict(current)
@@ -945,6 +1024,11 @@ def _calibration_candidate(
                 reason = str(grid_decision.get("reason") or reason)
         allowed = state in {"adjust_up", "adjust_down"}
 
+    quality_update_id = (
+        f"{FAMILY}:cumulative:{CLEAN_BASELINE_DATE}:{target_date}:"
+        f"{recommended.get('min_profit_pct', current['min_profit_pct'])}"
+    )
+
     return {
         "family": FAMILY,
         "stage": STAGE,
@@ -953,14 +1037,33 @@ def _calibration_candidate(
         "calibration_state": state,
         "calibration_reason": reason,
         "threshold_version": f"{FAMILY}:{target_date}:v1",
+        "quality_update_id": quality_update_id,
+        "runtime_update_mode": RUNTIME_UPDATE_MODE,
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": cumulative_quality_window,
+        "post_apply_attribution_required": True,
         "sample_count": rates["sample_count"],
         "sample_floor": 20,
         "allowed_runtime_apply": allowed,
         "safety_revert_required": False,
         "source_quality_gate": (
-            "pass" if source_contract_pass else "source_quality_blocked"
+            (
+                "pass_with_row_exclusions"
+                if row_exclusion_counts
+                else "pass"
+            )
+            if source_contract_pass
+            else "source_quality_blocked"
         ),
-        "source_quality_status": "pass" if source_contract_pass else "blocked",
+        "source_quality_status": (
+            (
+                "pass_with_row_exclusions"
+                if row_exclusion_counts
+                else "pass"
+            )
+            if source_contract_pass
+            else "blocked"
+        ),
         "source_quality_blocked": (
             None
             if source_contract_pass
@@ -982,6 +1085,12 @@ def _calibration_candidate(
             "profit_threshold_grid": profit_grid,
             "profit_threshold_grid_decision": grid_decision,
             "source_quality_pass": source_quality_pass,
+            "source_quality_status_counts": dict(source_quality_status_counts),
+            "unisolatable_source_quality_statuses": (
+                unisolatable_source_quality_statuses
+            ),
+            "source_quality_excluded_row_count": sum(row_exclusion_counts.values()),
+            "source_quality_exclusion_reasons": dict(row_exclusion_counts),
             "provenance_present": provenance_present,
             "recommended_action": state,
             "recommended_action_reason": reason,
@@ -1005,14 +1114,32 @@ def build_report(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
-    paths = (
+    intended_paths = (
         input_paths
         if input_paths is not None
         else _iter_feedback_report_paths(target_date)
     )
+    intended_dates = [
+        date_part
+        for path in intended_paths
+        if (date_part := _date_from_feedback_path(path))
+    ]
+    allowed_dates, source_quality_excluded_dates = filter_source_dates_by_preflight(
+        intended_dates,
+        preflight_loader=load_source_quality_preflight,
+    )
+    allowed_date_set = set(allowed_dates)
+    paths = [
+        path
+        for path in intended_paths
+        if _date_from_feedback_path(path) in allowed_date_set
+    ]
     reports = [_load_json(path) for path in paths if path.exists()]
     candidate = _calibration_candidate(
-        target_date=target_date, reports=reports, source_paths=paths
+        target_date=target_date,
+        reports=reports,
+        source_paths=paths,
+        source_quality_excluded_dates=source_quality_excluded_dates,
     )
     return {
         "schema_version": 1,
@@ -1033,7 +1160,10 @@ def build_report(
             "primary_decision_metric": (
                 "one_share_pyramid_recovered_or_extended_rate_reversal_or_flat_rate_and_opportunity_cost"
             ),
-            "source_quality_gate": "all_consumed_intraday_feedback_reports_source_quality_pass_and_provenance_present",
+            "source_quality_gate": (
+                "row_isolatable_provenance_gaps_excluded_then_remaining_rows_"
+                "must_have_complete_order_provenance"
+            ),
             "forbidden_uses": FORBIDDEN_USES,
         },
         "normal_winner_expansion_observation": (
@@ -1046,14 +1176,34 @@ def build_report(
             candidate["source_metrics"]["post_probe_reprice_observation"]
         ),
         "source_quality": {
-            "status": (
-                "pass"
-                if candidate["source_metrics"]["source_quality_pass"]
-                else "blocked"
-            ),
+            "status": candidate.get("source_quality_status"),
             "input_report_count": len(reports),
+            "intended_input_report_count": len(intended_paths),
             "input_paths": [str(path) for path in paths],
+            "source_quality_excluded_dates": source_quality_excluded_dates,
             "provenance_present": candidate["source_metrics"]["provenance_present"],
+            "excluded_row_count": candidate["source_metrics"].get(
+                "source_quality_excluded_row_count", 0
+            ),
+            "exclusion_reasons": candidate["source_metrics"].get(
+                "source_quality_exclusion_reasons", {}
+            ),
+        },
+        "runtime_update_contract": {
+            "update_mode": RUNTIME_UPDATE_MODE,
+            "owner_family": FAMILY,
+            "owner_stage": STAGE,
+            "max_runtime_apply_count": 1,
+            "runtime_apply_candidate_count": 1,
+            "allowed_runtime_apply_count": int(
+                bool(candidate.get("allowed_runtime_apply"))
+            ),
+            "quality_update_id": candidate.get("quality_update_id"),
+            "cumulative_quality_window": candidate.get(
+                "cumulative_quality_window"
+            ),
+            "post_apply_attribution_required": True,
+            "runtime_effect": False,
         },
         "calibration_candidates": [candidate],
     }
@@ -1089,6 +1239,11 @@ def write_outputs(
         if isinstance(report.get("post_probe_real_outcome_observation"), dict)
         else {}
     )
+    source_quality = (
+        report.get("source_quality")
+        if isinstance(report.get("source_quality"), dict)
+        else {}
+    )
     lines = [
         f"# {report.get('target_date')} Scalping Pyramid Quality Calibration",
         "",
@@ -1098,6 +1253,12 @@ def write_outputs(
         f"- calibration_state: {candidate.get('calibration_state')}",
         f"- calibration_reason: {candidate.get('calibration_reason')}",
         f"- allowed_runtime_apply: {str(candidate.get('allowed_runtime_apply')).lower()}",
+        "- source_quality_excluded_dates: "
+        + json.dumps(
+            source_quality.get("source_quality_excluded_dates") or [],
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
         "- runtime_effect: false",
         "- decision_authority: postclose_calibration_candidate_preopen_only",
         "- forbidden_uses: " + ", ".join(FORBIDDEN_USES),

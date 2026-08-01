@@ -233,6 +233,32 @@ def build_pattern_lab_propagation_audit(
             source_paths=[scalping_path],
         )
     )
+    scalping_summary = (
+        scalping.get("ev_report_summary")
+        if isinstance(scalping.get("ev_report_summary"), dict)
+        else {}
+    )
+    claude_quality_usable = scalping_summary.get(
+        "claude_source_quality_usable",
+        True if claude_status == "pass" else None,
+    )
+    checks.append(
+        _check(
+            "scalping_claude_source_quality_usable",
+            status=(
+                "pass"
+                if claude_quality_usable is True
+                else "warning"
+            ),
+            severity="info" if claude_quality_usable is True else "warning",
+            finding=(
+                "history coverage is usable for source-only findings"
+                if claude_quality_usable is True
+                else "timing may be fresh, but incomplete history coverage keeps findings source-quality blocked"
+            ),
+            source_paths=[scalping_path],
+        )
+    )
     if include_swing:
         swing_status, swing_finding = _automation_fresh(
             swing, target_date, "deepseek_lab_available"

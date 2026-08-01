@@ -18546,7 +18546,7 @@ def test_scalp_sim_scale_in_marketable_arm_requires_fresh_quote_timestamp(monkey
     )
 
 
-def test_scalp_sim_scale_in_window_has_no_cross_arm_fallback_and_counts_attempts(
+def test_scalp_sim_scale_in_window_has_no_cross_arm_fallback_and_claims_at_handoff(
     monkeypatch,
 ):
     rules = replace(
@@ -18556,6 +18556,10 @@ def test_scalp_sim_scale_in_window_has_no_cross_arm_fallback_and_counts_attempts
         SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION=1,
     )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(
+        state_handlers, "_log_holding_pipeline", lambda *args, **kwargs: None
+    )
+    state_handlers._SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED.clear()
     stock = {
         "strategy": "SCALPING",
         "scalp_live_simulator": True,
@@ -18575,7 +18579,18 @@ def test_scalp_sim_scale_in_window_has_no_cross_arm_fallback_and_counts_attempts
         stock=stock, strategy="SCALPING", profit_rate=1.1, peak_profit=1.1
     )
     assert first["add_type"] == "PYRAMID"
-    assert second == {}
+    assert second["add_type"] == "PYRAMID"
+    assert "sim_scale_in_attempt_count_pyramid" not in stock
+    assert state_handlers._claim_scalp_sim_scale_in_window_candidate(
+        stock, "123456", first
+    )
+    assert stock["sim_scale_in_attempt_count_pyramid"] == 1
+    assert (
+        state_handlers._evaluate_scalp_sim_scale_in_window_expansion(
+            stock=stock, strategy="SCALPING", profit_rate=1.2, peak_profit=1.2
+        )
+        == {}
+    )
 
 
 def test_execute_swing_sim_scale_in_logs_automation_fields(monkeypatch):

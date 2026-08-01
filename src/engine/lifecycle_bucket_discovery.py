@@ -1655,6 +1655,55 @@ def _quiet_gap_summary(
         type_counts["ai_review_parsed_low_coverage"] += 1
 
     quiet_gap_count = len(unique_candidates) + (1 if ai_review_low_coverage else 0)
+    detail_items = list(unique_candidates.values())
+    detail_items.sort(
+        key=lambda item: (
+            str(item.get("classification_state") or "")
+            not in QUIET_GAP_SIM_LIVE_STATES,
+            not bool(item.get("child_conflict_warning")),
+            -(_safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0),
+            str(item.get("source_bucket_id") or item.get("bucket_id") or ""),
+        )
+    )
+    rollups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for item in detail_items:
+        key = (
+            str(item.get("stage") or "unknown"),
+            str(item.get("parent_bucket_id") or item.get("bucket_type") or "unknown"),
+            str(item.get("classification_state") or "unknown"),
+            str(item.get("recommended_resolution") or "none"),
+        )
+        rollup = rollups.setdefault(
+            key,
+            {
+                "stage": key[0],
+                "parent_or_bucket_type": key[1],
+                "classification_state": key[2],
+                "recommended_resolution": key[3],
+                "count": 0,
+                "positive_ev_count": 0,
+                "max_source_quality_adjusted_ev_pct": None,
+                "quiet_gap_type_counts": {},
+                "representative_candidate_ids": [],
+            },
+        )
+        rollup["count"] += 1
+        ev = _safe_float(item.get("source_quality_adjusted_ev_pct"), None)
+        if ev is not None and ev > 0:
+            rollup["positive_ev_count"] += 1
+        if ev is not None and (
+            rollup["max_source_quality_adjusted_ev_pct"] is None
+            or ev > rollup["max_source_quality_adjusted_ev_pct"]
+        ):
+            rollup["max_source_quality_adjusted_ev_pct"] = ev
+        for gap_type in item.get("quiet_gap_types") or []:
+            counts = rollup["quiet_gap_type_counts"]
+            counts[gap_type] = counts.get(gap_type, 0) + 1
+        representative_id = str(
+            item.get("source_bucket_id") or item.get("bucket_id") or ""
+        )
+        if representative_id and len(rollup["representative_candidate_ids"]) < 3:
+            rollup["representative_candidate_ids"].append(representative_id)
     return {
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -1687,7 +1736,18 @@ def _quiet_gap_summary(
             "low_coverage": ai_review_low_coverage,
         },
         "sim_live_connected_candidate_ids": sorted(sim_live_connected_ids)[:50],
-        "items": list(unique_candidates.values())[:100],
+        "total_detail_item_count": len(detail_items),
+        "stored_item_count": min(len(detail_items), 50),
+        "item_storage_policy": "priority_representatives_max_50_plus_parent_stage_rollups",
+        "rollups": sorted(
+            rollups.values(),
+            key=lambda item: (
+                -_safe_int(item.get("positive_ev_count")),
+                -_safe_int(item.get("count")),
+                str(item.get("stage") or ""),
+            ),
+        ),
+        "items": detail_items[:50],
     }
 
 

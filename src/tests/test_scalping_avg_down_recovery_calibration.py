@@ -1,7 +1,23 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from src.engine.monitoring import scalping_avg_down_recovery_calibration as mod
+
+
+@pytest.fixture(autouse=True)
+def _source_quality_preflight_pass(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda target_date: {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "allowed_runtime_apply": True,
+            "source_quality_gate": "pass",
+        },
+    )
 
 
 def _write_event(path: Path, *, stage: str, emitted_at: str, **fields):
@@ -118,6 +134,50 @@ def test_scalping_avg_down_recovery_calibration_builds_post_add_candidate(
         "minimum_mfe_to_adverse_ratio": 1.0,
         "minimum_equal_weight_avg_profit_pct": 0.0,
     }
+
+
+def test_avg_down_calibration_excludes_blocked_source_date(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True)
+    allowed = events_dir / "pipeline_events_2026-07-09.jsonl"
+    blocked = events_dir / "pipeline_events_2026-07-10.jsonl"
+    _write_good_samples(allowed, "2026-07-09", shallow_count=1, deep_count=0)
+    _write_good_samples(blocked, "2026-07-10", shallow_count=1, deep_count=0)
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda source_date: {
+            "status": "pass" if source_date == "2026-07-09" else "missing",
+            "tuning_input_allowed": source_date == "2026-07-09",
+            "allowed_runtime_apply": source_date == "2026-07-09",
+            "source_quality_gate": (
+                "pass" if source_date == "2026-07-09" else "blocked_contract_gap"
+            ),
+            "blocked_reason": (
+                None
+                if source_date == "2026-07-09"
+                else "source_quality_preflight_missing"
+            ),
+        },
+    )
+
+    report = mod.build_report("2026-07-10")
+    candidate = report["calibration_candidates"][0]
+
+    assert candidate["cumulative_quality_window"]["source_dates"] == ["2026-07-09"]
+    assert candidate["source_metrics"]["shallow_raw_submit_pass_avg_down_count"] == 1
+    assert report["source_quality"]["input"] == [str(allowed)]
+    assert report["source_quality"]["source_quality_excluded_dates"][0][
+        "source_date"
+    ] == "2026-07-10"
+    assert candidate["runtime_update_mode"] == "single_cumulative_quality_update"
+    assert candidate["max_runtime_apply_count"] == 1
+    assert candidate["post_apply_attribution_required"] is True
+    assert report["runtime_update_contract"]["quality_update_id"] == candidate[
+        "quality_update_id"
+    ]
+    assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 0
 
 
 def test_scalping_avg_down_recovery_calibration_uses_rolling_window_for_apply(
@@ -246,6 +306,7 @@ def test_scalping_avg_down_recovery_calibration_adjusts_only_changed_values(
     assert (
         "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION" in candidate["target_env_keys"]
     )
+    assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 1
 
 
 def test_scalping_avg_down_recovery_calibration_blocks_missing_source(

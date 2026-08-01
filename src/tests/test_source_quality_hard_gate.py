@@ -17,7 +17,7 @@ def _write_preflight(tmp_path, target_date, payload):
 def test_source_quality_preflight_missing_artifact_blocks_tuning(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
 
-    preflight = mod.load_source_quality_preflight("2026-06-04")
+    preflight = mod.load_source_quality_preflight("2026-06-05")
 
     assert preflight["status"] == "missing"
     assert preflight["tuning_input_allowed"] is False
@@ -45,12 +45,12 @@ def test_source_quality_preflight_invalid_artifact_blocks_tuning(monkeypatch, tm
     path = (
         tmp_path
         / "observation_source_quality_audit"
-        / "observation_source_quality_audit_2026-06-04.json"
+        / "observation_source_quality_audit_2026-06-05.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{bad json", encoding="utf-8")
 
-    preflight = mod.load_source_quality_preflight("2026-06-04")
+    preflight = mod.load_source_quality_preflight("2026-06-05")
 
     assert preflight["status"] == "invalid"
     assert preflight["tuning_input_allowed"] is False
@@ -196,3 +196,45 @@ def test_source_quality_preflight_contract_gap_blocks_and_scrubs_runtime_aliases
     assert blocked["runtime_mutation_allowed"] is False
     assert blocked["summary"]["runtime_candidate_count"] == 0
     assert blocked["summary"]["calibration_state"] == "source_quality_blocked"
+
+
+def test_filter_source_dates_by_preflight_excludes_each_blocked_date(monkeypatch):
+    gates = {
+        "2026-06-05": {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "allowed_runtime_apply": True,
+            "source_quality_gate": "pass",
+        },
+        "2026-06-06": {
+            "status": "fail",
+            "tuning_input_allowed": False,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "blocked_contract_gap",
+            "blocked_reason": "blocked_contract_gap",
+            "artifact": "/tmp/audit-2026-06-06.json",
+            "hard_blocking_contract_gap_count": 2,
+        },
+        "2026-06-07": {
+            "status": "missing",
+            "tuning_input_allowed": False,
+            "allowed_runtime_apply": False,
+            "source_quality_gate": "blocked_contract_gap",
+            "blocked_reason": "source_quality_preflight_missing",
+        },
+    }
+    monkeypatch.setattr(
+        mod, "load_source_quality_preflight", lambda source_date: gates[source_date]
+    )
+
+    allowed, excluded = mod.filter_source_dates_by_preflight(
+        ["2026-06-05", "2026-06-06", "2026-06-07", "2026-06-05"]
+    )
+
+    assert allowed == ["2026-06-05"]
+    assert [item["source_date"] for item in excluded] == [
+        "2026-06-06",
+        "2026-06-07",
+    ]
+    assert excluded[0]["hard_blocking_contract_gap_count"] == 2
+    assert excluded[1]["blocked_reason"] == "source_quality_preflight_missing"

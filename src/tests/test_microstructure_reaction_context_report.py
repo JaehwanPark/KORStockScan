@@ -11,6 +11,9 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
     event_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(
+        mod, "MONITOR_SNAPSHOT_DIR", tmp_path / "report" / "monitor_snapshots"
+    )
 
     event_path = event_dir / "pipeline_events_2026-05-31.jsonl"
     event_path.write_text(
@@ -215,6 +218,20 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
     assert report["summary"]["row_count"] == 2
     assert report["summary"]["ok_count"] == 1
     assert report["summary"]["real_submitted_count"] == 1
+    assert report["schema_version"] == 3
+    assert report["source_row_count"] == 2
+    assert report["stored_row_count"] == 2
+    assert "rest_signed_trade_ticks" not in report["rows"][0]
+    funnel = report["summary"]["opportunity_exploration_funnel"]
+    assert funnel["favorable_reaction_usable_count"] == 1
+    assert funnel["favorable_reaction_submitted_count"] == 1
+    assert funnel["favorable_reaction_unsubmitted_count"] == 0
+    assert funnel["favorable_reaction_unsubmitted_observation_stage_counts"] == {}
+    assert funnel["favorable_reaction_unsubmitted_unique_stock_count"] == 0
+    assert funnel["unique_entry_opportunity_count"] == 1
+    assert funnel["unique_entry_submitted_opportunity_count"] == 1
+    assert funnel["causal_blocker_attribution_complete"] is True
+    assert funnel["runtime_effect"] is False
     assert report["summary"]["v_pw_source_counts"] == {
         "ka10046_rest_fallback": 1,
         "ws_0b": 1,
@@ -387,6 +404,194 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
     assert "order_microstructure_signed_tape_runtime_candidate_review" in markdown
     assert (report_dir / "microstructure_reaction_context_2026-05-31.json").exists()
     assert (report_dir / "microstructure_reaction_context_2026-05-31.md").exists()
+
+
+def test_opportunity_funnel_deduplicates_entry_attempts_and_time_matches_outcomes(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-07-20"
+    event_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "microstructure_reaction_context"
+    snapshot_dir = tmp_path / "report" / "monitor_snapshots"
+    source_quality_dir = tmp_path / "report" / "observation_source_quality_audit"
+    event_dir.mkdir(parents=True)
+    snapshot_dir.mkdir(parents=True)
+    source_quality_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", event_dir)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(mod, "SOURCE_QUALITY_AUDIT_DIR", source_quality_dir)
+
+    def favorable_event(stage, emitted_at, *, record_id="entry-1", extra=None):
+        fields = {
+            "source_event_stage": stage,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "microstructure_reaction_context_status": "ok",
+            "microstructure_reaction_entry_reaction_quality": "favorable_reaction",
+            "microstructure_reaction_source_quality": "fresh_short_window",
+        }
+        fields.update(extra or {})
+        return {
+            "stage": stage,
+            "stock_code": "A123456",
+            "stock_name": "Example",
+            "record_id": record_id,
+            "emitted_at": emitted_at,
+            "fields": fields,
+        }
+
+    events = [
+        favorable_event(
+            "ai_confirmed",
+            f"{target_date}T09:00:00.500000+09:00",
+            extra={"action": "DROP"},
+        ),
+        favorable_event(
+            "scalp_entry_action_decision_snapshot",
+            f"{target_date}T09:00:01+09:00",
+            extra={"chosen_action": "NO_BUY_AI", "ai_action": "DROP"},
+        ),
+        favorable_event(
+            "ai_holding_review",
+            f"{target_date}T09:00:02+09:00",
+            record_id="holding-1",
+        ),
+        favorable_event(
+            "ai_confirmed",
+            f"{target_date}T10:00:00+09:00",
+            extra={"action": "DROP"},
+        ),
+    ]
+    (event_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+    prior_date = "2026-07-19"
+    for source_date in (prior_date, target_date):
+        (
+            source_quality_dir / f"observation_source_quality_audit_{source_date}.json"
+        ).write_text(
+            json.dumps(
+                {
+                    "status": "pass",
+                    "tuning_input_allowed": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+    (event_dir / f"pipeline_events_{prior_date}.jsonl").write_text(
+        json.dumps(
+            favorable_event(
+                "ai_confirmed",
+                f"{prior_date}T09:30:00+09:00",
+                record_id="prior-entry",
+                extra={"action": "DROP"},
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (snapshot_dir / f"missed_entry_counterfactual_{prior_date}.json").write_text(
+        json.dumps(
+            {
+                "watch_cycle_participation_ledger": {
+                    "rows": [
+                        {
+                            "stock_code": "123456",
+                            "runtime_record_id": "prior-entry",
+                            "reference_time": f"{prior_date}T09:30:00+09:00",
+                            "primary_source_quality_state": "pass",
+                            "opportunity_label": "gross_target_first",
+                            "primary_horizon_min": 20,
+                            "cost_adjusted_counterfactual_return_pct": 1.0,
+                            "forward_horizon_metrics": {
+                                "20": {"mfe_pct": 1.5, "mae_pct": -0.2}
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    outcome_path = snapshot_dir / f"missed_entry_counterfactual_{target_date}.json"
+    outcome_path.write_text(
+        json.dumps(
+            {
+                "watch_cycle_participation_ledger": {
+                    "rows": [
+                        {
+                            "stock_code": "123456",
+                            "runtime_record_id": "entry-1",
+                            "reference_time": f"{target_date}T09:00:00+09:00",
+                            "primary_source_quality_state": "pass",
+                            "effective_venue": "KRX",
+                            "market_session_bucket": "krx_regular",
+                            "opportunity_label": "gross_target_first",
+                            "primary_horizon_min": 20,
+                            "cost_adjusted_counterfactual_return_pct": 2.0,
+                            "forward_horizon_metrics": {
+                                "1": {"mfe_pct": 0.8, "mae_pct": -0.1},
+                                "20": {"mfe_pct": 2.2, "mae_pct": -0.3},
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    backfill = mod.backfill_clean_baseline_opportunity_rollups(target_date)
+    assert backfill["generated_dates"] == [prior_date, target_date]
+    assert backfill["failed_dates"] == []
+    assert backfill["failure_details"] == []
+    report = mod.build_microstructure_reaction_context_report(target_date)
+    funnel = report["summary"]["opportunity_exploration_funnel"]
+
+    assert funnel["raw_favorable_event_count"] == 4
+    assert funnel["entry_favorable_event_count"] == 3
+    assert funnel["holding_or_non_entry_favorable_event_count"] == 1
+    assert funnel["unique_entry_opportunity_count"] == 2
+    assert funnel["unique_entry_unsubmitted_opportunity_count"] == 2
+    assert funnel["first_blocker_counts"] == {"ai_confirmed": 2}
+    assert funnel["causal_blocker_attribution_complete"] is True
+    assert funnel["outcome_time_exact_join_count"] == 1
+    assert funnel["outcome_source_quality_pass_count"] == 1
+    assert funnel["outcome_join_status_counts"] == {
+        "reference_time_mismatch": 1,
+        "time_exact": 1,
+    }
+    assert funnel["post_observation_outcome_join_complete"] is False
+    assert funnel["outcome_source_status"] == "loaded"
+    first, second = funnel["opportunities"]
+    assert first["observation_event_count"] == 2
+    assert first["outcome_join_status"] == "time_exact"
+    assert first["forward_horizon_metrics"]["20"]["mfe_pct"] == 2.2
+    assert second["outcome_join_status"] == "reference_time_mismatch"
+    assert "forward_horizon_metrics" not in second
+    assert report["sources"]["missed_entry_counterfactual"] == str(outcome_path)
+    cumulative = report["summary"]["clean_baseline_cumulative_opportunity_exploration"]
+    assert cumulative["available_source_date_count"] == 2
+    assert cumulative["included_date_count"] == 2
+    assert cumulative["missing_or_stale_rollup_dates"] == []
+    assert cumulative["unique_entry_opportunity_count"] == 3
+    assert cumulative["outcome_source_quality_pass_count"] == 2
+    assert cumulative["outcome_time_exact_join_coverage_pct"] == 66.667
+    assert cumulative["outcome_source_quality_pass_coverage_pct"] == 66.667
+    assert cumulative["source_quality_adjusted_ev_pct"] == 1.5
+    assert cumulative["sample_floor_met"] is False
+    assert cumulative["runtime_reflection_status"] == "sample_floor_not_met"
+    assert cumulative["runtime_reflection_blockers"] == [
+        "exact_attempt_time_outcome_coverage_incomplete",
+        "source_quality_pass_outcome_sample_below_20",
+    ]
+    assert cumulative["runtime_apply_required"] is False
+    assert (
+        report_dir
+        / f"microstructure_reaction_context_{target_date}_clean_baseline_cumulative.json"
+    ).exists()
 
 
 def test_microstructure_report_emits_full_gap_source_quality_orders(

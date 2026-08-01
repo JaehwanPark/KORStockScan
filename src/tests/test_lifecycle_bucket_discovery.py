@@ -1161,6 +1161,10 @@ def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():
     assert summary["positive_source_only_keep_collecting_count"] == 1
     assert summary["absorbed_into_parent_policy_count"] == 1
     assert summary["ai_review_parsed_low_coverage_count"] == 1
+    assert summary["total_detail_item_count"] == 3
+    assert summary["stored_item_count"] == 3
+    assert summary["rollups"]
+    assert summary["items"][0]["source_bucket_id"] == "lifecycle_flow:conflict-child"
 
 
 def _write_ldm(path):

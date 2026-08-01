@@ -1,3 +1,4 @@
+import gzip
 import json
 from pathlib import Path
 
@@ -2154,3 +2155,54 @@ def test_sim_policy_catalogs_merge_latest_hypothesis_plan(monkeypatch, tmp_path)
         swing["hypothesis_observation_plan"]["hypotheses"][0]["hypothesis_id"]
         == "hyp_1"
     )
+
+
+def test_key_lineage_retired_catalog_rows_are_intentional_not_blockers():
+    scalp = ledger._scalp_rows(
+        discovery={},
+        catalog={
+            "active_sim_priority_seeds": [
+                {"active_seed_id": "scalp-retired", "status": "retired"}
+            ]
+        },
+        apply_plan={},
+        events={},
+    )
+    swing = ledger._swing_rows(
+        catalog={
+            "active_arm_priority_policies": [
+                {"priority_policy_id": "swing-retired", "status": "retired"},
+                {"priority_policy_id": "swing-cooldown", "status": "cooldown"},
+            ]
+        },
+        apply_plan={},
+        events={},
+    )
+
+    assert scalp[0]["conversion_state"] == "retired_intentional"
+    assert scalp[0]["next_blocker"] == ""
+    assert [row["conversion_state"] for row in swing] == [
+        "cooldown_intentional",
+        "retired_intentional",
+    ]
+    assert all(row["next_blocker"] == "" for row in swing)
+
+
+def test_key_lineage_streams_gzip_event_artifact(tmp_path):
+    path = tmp_path / "pipeline_events_2026-07-31.jsonl.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"stage": "test", "fields": {"x": 1}}) + "\n")
+    values = {
+        "io_guard": {
+            "lines_read": 0,
+            "oversized_line_skipped_count": 0,
+            "json_decode_error_count": 0,
+            "file_read_error_count": 0,
+        }
+    }
+
+    rows = list(ledger._iter_jsonl_payloads(path, values, line_bytes_limit=1000))
+
+    assert rows[0]["fields"]["x"] == 1
+    assert values["io_guard"]["lines_read"] == 1
+    assert values["io_guard"]["file_read_error_count"] == 0

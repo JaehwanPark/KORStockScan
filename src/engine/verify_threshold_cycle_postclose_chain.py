@@ -88,7 +88,6 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "ldm_hypothesis_parent_refinement",
     "key_lineage_ledger",
     "conversion_lane",
-    "quote_consistency",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -774,9 +773,6 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "runtime_apply_bridge": REPORT_DIR
         / "runtime_apply_bridge"
         / f"runtime_apply_bridge_{target_date}.json",
-        "quote_consistency": REPORT_DIR
-        / "quote_consistency"
-        / f"quote_consistency_{target_date}.json",
         "threshold_preopen_apply_current": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -4788,7 +4784,6 @@ def build_threshold_cycle_postclose_verification(
     conversion_lane = _load_json(paths["conversion_lane"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
     entry_split_order_plan = _load_json(paths["entry_split_order_plan"])
-    quote_consistency_report = _load_json(paths["quote_consistency"])
     limit_down_watch_report = _load_json(paths["limit_down_watch"])
     limit_down_watch_markdown = _load_text(paths["limit_down_watch_markdown"])
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
@@ -5631,22 +5626,6 @@ def build_threshold_cycle_postclose_verification(
         and not paths["ldm_hypothesis_parent_refinement"].exists()
     ):
         missing_required_artifacts.append("ldm_hypothesis_parent_refinement")
-    quote_consistency_findings = quote_consistency_report.get("verifier_findings") or []
-    quote_consistency_failures = [
-        str(item.get("code") or "quote_consistency_fail")
-        for item in quote_consistency_findings
-        if isinstance(item, dict) and str(item.get("severity") or "").lower() == "fail"
-    ]
-    quote_consistency_warnings = [
-        str(item.get("code") or "quote_consistency_warning")
-        for item in quote_consistency_findings
-        if isinstance(item, dict)
-        and str(item.get("severity") or "").lower() == "warning"
-    ]
-    if target_date >= "2026-06-27" and not paths["quote_consistency"].exists():
-        quote_consistency_warnings.append("quote_consistency_report_missing")
-    if quote_consistency_warnings:
-        handoff_warnings.extend(quote_consistency_warnings)
     limit_down_watch_status = _limit_down_watch_report_status(
         limit_down_watch_report,
         enabled=limit_down_watch_verification_enabled,
@@ -6298,9 +6277,6 @@ def build_threshold_cycle_postclose_verification(
         log_issues.append("postclose_done_marker_missing_required_flags")
     elif missing_required_artifacts:
         status = "fail"
-    elif quote_consistency_failures:
-        status = "fail"
-        log_issues.extend(quote_consistency_failures)
     elif missing_downstream_links:
         status = "fail"
     elif runtime_apply_gap_audit_issues:
@@ -6406,22 +6382,6 @@ def build_threshold_cycle_postclose_verification(
             ),
             "threshold_preopen_apply_current_generated_at": preopen_apply_current.get(
                 "generated_at"
-            ),
-        },
-        "quote_consistency": {
-            "status": (
-                "fail"
-                if quote_consistency_failures
-                else "warning" if quote_consistency_warnings else "pass"
-            ),
-            "summary": quote_consistency_report.get("summary") or {},
-            "findings": quote_consistency_findings,
-            "failures": quote_consistency_failures,
-            "warnings": quote_consistency_warnings,
-            "path": (
-                str(paths["quote_consistency"])
-                if paths["quote_consistency"].exists()
-                else None
             ),
         },
         "conversion_kpi": {

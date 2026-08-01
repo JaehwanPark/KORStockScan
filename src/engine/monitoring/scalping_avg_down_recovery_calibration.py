@@ -8,10 +8,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.source_quality_hard_gate import (
+    filter_source_dates_by_preflight,
+    load_source_quality_preflight,
+)
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "scalping_avg_down_recovery_calibration"
+RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 FAMILY = "scalping_avg_down_recovery_quality_gate"
 STAGE = "scale_in"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -404,8 +409,29 @@ def build_report(
     target_date: str, *, generated_at: str | None = None
 ) -> dict[str, Any]:
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
-    window_paths = _iter_events_paths_for_window(target_date)
-    daily_paths = _events_paths_for_date(target_date)
+    intended_window_paths = _iter_events_paths_for_window(target_date)
+    intended_source_dates = [
+        date_part
+        for path in intended_window_paths
+        if (date_part := _date_from_events_path(path))
+    ]
+    allowed_source_dates, source_quality_excluded_dates = (
+        filter_source_dates_by_preflight(
+            intended_source_dates,
+            preflight_loader=load_source_quality_preflight,
+        )
+    )
+    allowed_source_date_set = set(allowed_source_dates)
+    window_paths = [
+        path
+        for path in intended_window_paths
+        if _date_from_events_path(path) in allowed_source_date_set
+    ]
+    daily_paths = [
+        path
+        for path in _events_paths_for_date(target_date)
+        if _date_from_events_path(path) in allowed_source_date_set
+    ]
     shallow_rows, deep_rows = _build_rows(window_paths)
     daily_shallow_rows, daily_deep_rows = _build_rows(daily_paths)
     shallow_primary = [
@@ -548,6 +574,27 @@ def build_report(
         "source_quality_gate": "pipeline_events_present_and_preopen_source_quality_preflight",
         "forbidden_uses": FORBIDDEN_USES,
     }
+    source_dates = sorted(
+        {
+            _date_from_events_path(path)
+            for path in window_paths
+            if _date_from_events_path(path)
+        }
+    )
+    cumulative_quality_window = {
+        "window_policy": "clean_baseline_cumulative",
+        "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+        "start_date": CLEAN_BASELINE_DATE,
+        "end_date": target_date,
+        "source_dates": source_dates,
+        "source_date_count": len(source_dates),
+        "source_quality_excluded_date_count": len(source_quality_excluded_dates),
+        "source_quality_excluded_dates": source_quality_excluded_dates,
+    }
+    quality_update_id = (
+        f"{FAMILY}:cumulative:{CLEAN_BASELINE_DATE}:{target_date}:"
+        f"{cumulative_primary_sample_count}"
+    )
     candidate = {
         "family": FAMILY,
         "stage": STAGE,
@@ -556,6 +603,11 @@ def build_report(
         "calibration_state": state,
         "calibration_reason": calibration_reason,
         "threshold_version": f"{FAMILY}:{target_date}:v1",
+        "quality_update_id": quality_update_id,
+        "runtime_update_mode": RUNTIME_UPDATE_MODE,
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": cumulative_quality_window,
+        "post_apply_attribution_required": True,
         "sample_count": cumulative_primary_sample_count,
         "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
         "learning_sample_floor_passed": cumulative_learning_ready,
@@ -636,8 +688,24 @@ def build_report(
         "source_quality": {
             "status": "pass" if source_available else "missing_input",
             "input": [str(path) for path in window_paths],
+            "intended_input": [str(path) for path in intended_window_paths],
             "daily_input": [str(path) for path in daily_paths],
             "clean_baseline_date": CLEAN_BASELINE_DATE,
+            "source_quality_excluded_dates": source_quality_excluded_dates,
+        },
+        "runtime_update_contract": {
+            "update_mode": RUNTIME_UPDATE_MODE,
+            "owner_family": FAMILY,
+            "owner_stage": STAGE,
+            "max_runtime_apply_count": 1,
+            "runtime_apply_candidate_count": 1,
+            "allowed_runtime_apply_count": int(
+                bool(candidate.get("allowed_runtime_apply"))
+            ),
+            "quality_update_id": candidate.get("quality_update_id"),
+            "cumulative_quality_window": cumulative_quality_window,
+            "post_apply_attribution_required": True,
+            "runtime_effect": False,
         },
         "calibration_candidates": [candidate],
     }
@@ -662,11 +730,23 @@ def write_outputs(
         if isinstance(candidate.get("source_metrics"), dict)
         else {}
     )
+    source_quality = (
+        report.get("source_quality")
+        if isinstance(report.get("source_quality"), dict)
+        else {}
+    )
     lines = [
         f"# {report.get('target_date')} Scalping AVG_DOWN Recovery Calibration",
         "",
         f"- calibration_state: `{candidate.get('calibration_state')}`",
         f"- allowed_runtime_apply: `{str(candidate.get('allowed_runtime_apply')).lower()}`",
+        "- source_quality_excluded_dates: `"
+        + json.dumps(
+            source_quality.get("source_quality_excluded_dates") or [],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "`",
         "- runtime_effect: `false`",
         f"- window_policy: `{(candidate.get('metric_contract') or {}).get('window_policy')}`",
         f"- cumulative_judgment_quality: `{metrics.get('cumulative_judgment_quality')}`",

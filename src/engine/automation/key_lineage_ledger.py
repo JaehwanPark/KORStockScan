@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -31,6 +32,7 @@ LINEAGE_BLOCKER_STATES = {
 }
 ALLOWED_STATES = {
     "collecting",
+    "retired_intentional",
     "cooldown_intentional",
     "cooldown_blocks_conversion",
     "matched",
@@ -351,7 +353,8 @@ def _bounded_add(
 def _iter_jsonl_payloads(path: Path, values: dict[str, Any], *, line_bytes_limit: int):
     guard = values["io_guard"]
     try:
-        with path.open("r", encoding="utf-8") as handle:
+        opener = gzip.open if path.suffix == ".gz" else Path.open
+        with opener(path, "rt", encoding="utf-8") as handle:
             for raw_line in handle:
                 guard["lines_read"] += 1
                 if line_bytes_limit and len(raw_line) > line_bytes_limit:
@@ -403,6 +406,7 @@ def _event_field_values(
     values["pre_policy_active_seed_id"] = set()
     values["io_guard"] = {
         "mode": "streaming_jsonl",
+        "gzip_supported": True,
         "untracked_value_limit_per_field": untracked_value_limit,
         "line_bytes_limit": line_bytes_limit,
         "files_seen": 0,
@@ -477,10 +481,16 @@ def _event_field_values(
     }
     panic_sim_record_ids: set[str] = set()
     panic_no_match_sim_record_ids: set[str] = set()
-    paths = [
+    paths = []
+    for base_path in (
         DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
         DATA_DIR / "threshold_cycle" / f"threshold_events_{target_date}.jsonl",
-    ]
+    ):
+        gzip_path = Path(f"{base_path}.gz")
+        if base_path.exists():
+            paths.append(base_path)
+        elif gzip_path.exists():
+            paths.append(gzip_path)
     for path in paths:
         if not path.exists():
             continue
@@ -1176,6 +1186,8 @@ def _scalp_rows(
                 if state == "cooldown_intentional"
                 else "key_lineage_cooldown_blocks_conversion"
             )
+        elif status == "retired":
+            state, blocker = "retired_intentional", ""
         elif not preopen_selected:
             state, blocker = "preopen_missing", "key_lineage_preopen_missing"
         elif policy_zero_only_window:
@@ -1269,8 +1281,24 @@ def _swing_rows(
     for policy_id, policy in sorted(catalog_by_id.items()):
         observed = policy_id in observed_ids
         preopen_selected = policy_id in preopen_ids
+        status = str(
+            policy.get("status") or policy.get("approval_state") or ""
+        ).strip().lower()
         if observed:
             state, blocker = "matched", ""
+        elif status == "retired":
+            state, blocker = "retired_intentional", ""
+        elif status == "cooldown":
+            state = (
+                "cooldown_intentional"
+                if not preopen_selected
+                else "cooldown_blocks_conversion"
+            )
+            blocker = (
+                ""
+                if state == "cooldown_intentional"
+                else "swing_active_arm_cooldown_blocks_conversion"
+            )
         elif not preopen_selected:
             state, blocker = "preopen_missing", "swing_active_arm_preopen_missing"
         else:
@@ -1594,7 +1622,9 @@ def _bucket_rows(
     return rows
 
 
-def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
+def build_key_lineage_ledger(
+    target_date: str, *, include_swing: bool = True
+) -> dict[str, Any]:
     discovery_path = (
         DATA_DIR
         / "report"
@@ -1630,7 +1660,7 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
     discovery = _load_json(discovery_path)
     refinement = _load_json(refinement_path)
     scalp_catalog = _load_json(scalp_catalog_path)
-    swing_catalog = _load_json(swing_catalog_path)
+    swing_catalog = _load_json(swing_catalog_path) if include_swing else {}
     hypothesis_plan = _load_json(hypothesis_plan_path)
     events = _event_field_values(
         target_date,
@@ -1661,9 +1691,10 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             events=events,
         )
     )
-    rows.extend(
-        _swing_rows(catalog=swing_catalog, apply_plan=apply_plan, events=events)
-    )
+    if include_swing:
+        rows.extend(
+            _swing_rows(catalog=swing_catalog, apply_plan=apply_plan, events=events)
+        )
     rows.extend(
         _hypothesis_rows(
             plan=hypothesis_plan,
@@ -1759,10 +1790,14 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "decision_authority": "conversion_lineage_observation_only",
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "swing_sources_enabled": include_swing,
         "sources": {
             "lifecycle_bucket_discovery": str(discovery_path),
             "scalp_sim_policy_catalog": str(scalp_catalog_path),
-            "swing_sim_policy_catalog": str(swing_catalog_path),
+            "swing_sim_policy_catalog": (
+                str(swing_catalog_path) if include_swing else None
+            ),
             "threshold_preopen_apply_next": str(apply_path),
             "ldm_hypothesis_observation_plan": str(hypothesis_plan_path),
             "ldm_hypothesis_parent_refinement": str(refinement_path),
@@ -1792,6 +1827,9 @@ def build_key_lineage_ledger(target_date: str) -> dict[str, Any]:
             "not_instrumented_count": state_counts.get("not_instrumented", 0),
             "natural_match_0_count": state_counts.get("natural_match_0", 0),
             "cooldown_intentional_count": state_counts.get("cooldown_intentional", 0),
+            "retired_intentional_count": state_counts.get(
+                "retired_intentional", 0
+            ),
             "lineage_blocker_count": len(blockers),
             "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
             "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
@@ -2166,8 +2204,15 @@ def write_key_lineage_ledger(report: dict[str, Any]) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build key lineage ledger")
     parser.add_argument("--date", default=date.today().isoformat())
+    parser.add_argument(
+        "--exclude-swing",
+        action="store_true",
+        help="Exclude Swing lineage when Swing postclose work is operator-disabled.",
+    )
     args = parser.parse_args(argv)
-    report = build_key_lineage_ledger(args.date)
+    report = build_key_lineage_ledger(
+        args.date, include_swing=not args.exclude_swing
+    )
     json_path, md_path = write_key_lineage_ledger(report)
     print(
         json.dumps(

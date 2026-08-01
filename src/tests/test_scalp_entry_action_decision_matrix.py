@@ -264,6 +264,17 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(
         >= 2
     )
     assert report["summary"]["outcome_join_diagnostic"]["runtime_effect"] is False
+    assert (
+        report["summary"]["outcome_join_diagnostic"][
+            "matched_post_sell_evaluation_rows"
+        ]
+        == 2
+    )
+    assert (
+        report["summary"]["outcome_join_diagnostic"]["coverage_state"]
+        == "source_outcome_underproduction"
+    )
+    assert "sim_post_sell_outcome_source_below_sample_floor" in report["warnings"]
     buy_now = next(
         item for item in report["action_summary"] if item["action"] == "BUY_NOW"
     )
@@ -865,6 +876,11 @@ def test_scalp_entry_adm_row_preserves_live_entry_replay_context_fields():
                 "source_stage": "ai_confirmed",
                 "chosen_action": "BUY_NOW",
                 "ai_score": "78",
+                "entry_recheck_contract_status": "pass",
+                "entry_recheck_edge_state": "EDGE",
+                "entry_recheck_probe_intent": "true",
+                "entry_recheck_probe_intent_status": "eligible_wait_probe",
+                "entry_recheck_recovery_trigger": "recovery_required",
                 "scalp_feature_packet_version": "scalp_feature_packet_v2",
                 "ai_input_schema": "entry_screen_hot_v1",
                 "ai_input_contract_mode": "structured_json",
@@ -941,6 +957,12 @@ def test_scalp_entry_adm_row_preserves_live_entry_replay_context_fields():
     assert row["scalp_feature_packet_version"] == "scalp_feature_packet_v2"
     assert row["ai_input_schema"] == "entry_screen_hot_v1"
     assert row["ai_input_contract_mode"] == "structured_json"
+    assert row["decision_quality_contract_status"] == "pass"
+    assert row["edge_state"] == "EDGE"
+    assert row["entry_probe_intent"] is True
+    assert row["entry_probe_intent_status"] == "eligible_wait_probe"
+    assert row["entry_recheck_recovery_trigger"] == "recovery_required"
+    assert row["evidence_trigger"] == "recovery_required"
     assert row["entry_liquidity_score"] == 84.0
     assert row["entry_liquidity_status"] == "good"
     assert row["fillability_score"] == 74.0

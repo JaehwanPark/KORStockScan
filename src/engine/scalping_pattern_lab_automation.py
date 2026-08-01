@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -174,10 +174,25 @@ def _lab_freshness(
     coverage_end = _parse_date_prefix(
         manifest.get("history_coverage_end") or manifest.get("analysis_end")
     )
-    fresh = bool(manifest) and run_date == target_date and coverage_end == target_date
+    try:
+        next_day = (date.fromisoformat(target_date) + timedelta(days=1)).isoformat()
+    except ValueError:
+        next_day = ""
+    timing_fresh = (
+        bool(manifest)
+        and run_date in {target_date, next_day}
+        and coverage_end == target_date
+    )
+    history_coverage_ok = manifest.get("history_coverage_ok")
+    source_quality_usable = history_coverage_ok is not False
+    tuning_input_allowed = timing_fresh and source_quality_usable
     return {
         "lab": lab_name,
-        "fresh": fresh,
+        "fresh": timing_fresh,
+        "timing_fresh": timing_fresh,
+        "source_quality_usable": source_quality_usable,
+        "history_coverage_ok": history_coverage_ok,
+        "tuning_input_allowed": tuning_input_allowed,
         "run_date": run_date or None,
         "coverage_end": coverage_end or None,
         "manifest": str(paths["manifest"]) if paths["manifest"].exists() else None,
@@ -186,11 +201,11 @@ def _lab_freshness(
         "observability_exists": paths["observability"].exists(),
         "stale_reason": (
             ""
-            if fresh
+            if timing_fresh
             else (
                 "missing_manifest_or_target_date_mismatch"
                 if not manifest
-                or run_date != target_date
+                or run_date not in {target_date, next_day}
                 or coverage_end != target_date
                 else ""
             )
@@ -359,15 +374,20 @@ def _load_lab(lab_name: str, lab_dir: Path, target_date: str) -> dict[str, Any]:
     freshness = _lab_freshness(lab_name, paths, target_date)
     findings = (
         _extract_findings(lab_name, ev_result, observability)
-        if freshness["fresh"]
+        if freshness["tuning_input_allowed"]
         else []
     )
     rejected = []
-    if not freshness["fresh"]:
+    if not freshness["tuning_input_allowed"]:
         rejected.append(
             {
                 "lab": lab_name,
-                "reason": freshness["stale_reason"],
+                "reason": (
+                    "history_coverage_incomplete"
+                    if freshness["fresh"]
+                    and not freshness["source_quality_usable"]
+                    else freshness["stale_reason"]
+                ),
                 "manifest": freshness["manifest"],
                 "run_date": freshness["run_date"],
                 "coverage_end": freshness["coverage_end"],
@@ -767,6 +787,15 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             "gemini_fresh": False,
             "gemini_retired_reason": RETIRED_LABS["gemini"]["reason"],
             "claude_fresh": bool(lab_results[0]["freshness"]["fresh"]),
+            "claude_timing_fresh": bool(
+                lab_results[0]["freshness"]["timing_fresh"]
+            ),
+            "claude_source_quality_usable": bool(
+                lab_results[0]["freshness"]["source_quality_usable"]
+            ),
+            "claude_tuning_input_allowed": bool(
+                lab_results[0]["freshness"]["tuning_input_allowed"]
+            ),
             "active_labs": [result["lab"] for result in lab_results],
             "consensus_count": len(consensus),
             "auto_family_candidate_count": len(family_candidates),

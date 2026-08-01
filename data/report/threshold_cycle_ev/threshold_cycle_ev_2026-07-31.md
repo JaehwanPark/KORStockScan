@@ -2,7 +2,7 @@
 
 ## Summary
 - status: `warning`
-- warning_count: `17`
+- warning_count: `16`
 - source_quality: status=`warning` allowed=`True`
 - samples real/sim: `26` / `12`
 - live_auto_ready_count: `0`
@@ -130,7 +130,7 @@
 
 ## Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-07-31.json`
-- fresh: gemini=`False` claude=`False`
+- fresh: gemini=`False` claude=`True`
 - consensus/orders/family_candidates: `0` / `0` / `0`
 
 ## Swing Pattern Lab Automation
@@ -235,7 +235,6 @@
 ## Warnings
 - `trade_review_missing`
 - `performance_tuning_missing`
-- `pattern_lab_claude_stale`
 - `swing_pattern_lab_automation_missing`
 - `scalp_entry_adm:joined_sample_below_sample_floor`
 - `scalp_entry_adm:unknown_bucket_source_quality_gap`

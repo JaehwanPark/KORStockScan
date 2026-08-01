@@ -303,6 +303,9 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     assert all(
         "position_cap_release" in order["forbidden_uses"] for order in scale_orders
     )
+    assert report["summary"]["forced_scout_post_sell_join_coverage_pct"] == 100.0
+    assert report["summary"]["forced_scout_outcome_coverage_state"] == "complete"
+    assert report["summary"]["forced_scout_outcome_analysis_ready"] is True
 
 
 def test_write_outputs_renders_json_and_markdown(tmp_path):

@@ -907,12 +907,14 @@ def _load_institutional_flow_feature_map(
 
 
 def _apply_institutional_flow_features(
-    rows: list[dict[str, Any]], feature_map: dict[str, dict[str, Any]]
+    rows: list[dict[str, Any]],
+    feature_maps_by_date: dict[str, dict[str, dict[str, Any]]],
 ) -> int:
     joined = 0
     for row in rows:
+        source_date = str(row.get("source_date") or "").strip()
         code = str(row.get("stock_code") or "").strip().lstrip("A")
-        features = feature_map.get(code)
+        features = (feature_maps_by_date.get(source_date) or {}).get(code)
         if not features:
             continue
         runtime_features = row.setdefault("runtime_features", {})
@@ -950,6 +952,48 @@ def _stage_ev(stage: str, labels: dict[str, Any]) -> float | None:
         + 0.10 * mae_value,
         4,
     )
+
+
+def _institutional_flow_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    groups: dict[str, list[float]] = {}
+    joined_count = 0
+    for row in rows:
+        features = (
+            row.get("runtime_features")
+            if isinstance(row.get("runtime_features"), dict)
+            else {}
+        )
+        regime = str(features.get("institutional_flow_regime") or "").strip()
+        if not regime:
+            continue
+        joined_count += 1
+        labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
+        ev = _stage_ev(str(row.get("stage") or "unknown"), labels)
+        if ev is not None:
+            groups.setdefault(regime, []).append(ev)
+        else:
+            groups.setdefault(regime, [])
+    return {
+        "metric_role": "diagnostic_context_attribution",
+        "decision_authority": "source_only_lifecycle_feature",
+        "causal_authority": False,
+        "runtime_effect": False,
+        "forbidden_uses": [
+            "direct_buy_decision",
+            "direct_scale_in_decision",
+            "threshold_or_runtime_mutation",
+        ],
+        "joined_row_count": joined_count,
+        "by_regime": {
+            regime: {
+                "outcome_evaluable_count": len(values),
+                "equal_weight_avg_stage_ev_pct": (
+                    round(sum(values) / len(values), 4) if values else None
+                ),
+            }
+            for regime, values in sorted(groups.items())
+        },
+    }
 
 
 def _adm_source_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1839,6 +1883,131 @@ def _load_scale_in_counterfactual_labels(target_date: str) -> dict[str, dict[str
     return labels
 
 
+def _load_scale_in_counterfactual_source_status(target_date: str) -> dict[str, Any]:
+    """Preserve daily counterfactual producer state even when no label rows exist."""
+    json_path, _ = cf_report_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return {
+            "date": target_date,
+            "artifact": str(json_path),
+            "status": "source_missing",
+            "error": "counterfactual_report_missing_or_invalid",
+        }
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    status = str(
+        payload.get("status")
+        or ("instrumentation_gap" if payload.get("error") else "evaluated")
+    )
+    return {
+        "date": target_date,
+        "artifact": str(json_path),
+        "status": status,
+        "error": payload.get("error"),
+        "no_sample_reason": summary.get("no_sample_reason"),
+        "row_count": len(rows),
+        "eligible_candidate_count": _safe_int(summary.get("eligible_candidate_count")),
+        "guard_blocked_before_execution_count": _safe_int(
+            summary.get("guard_blocked_before_execution_count")
+        ),
+        "execution_started_from_eligible_count": _safe_int(
+            summary.get("execution_started_from_eligible_count")
+        ),
+        "legacy_execution_terminal_from_eligible_count": _safe_int(
+            summary.get("legacy_execution_terminal_from_eligible_count")
+        ),
+        "candidate_terminal_from_eligible_count": _safe_int(
+            summary.get("candidate_terminal_from_eligible_count")
+        ),
+        "candidate_terminal_reasons": (
+            summary.get("candidate_terminal_reasons")
+            if isinstance(summary.get("candidate_terminal_reasons"), dict)
+            else {}
+        ),
+        "terminal_execution_event_from_eligible_count": _safe_int(
+            summary.get("terminal_execution_event_from_eligible_count")
+        ),
+        "terminal_candidate_event_from_eligible_count": _safe_int(
+            summary.get("terminal_candidate_event_from_eligible_count")
+        ),
+        "unresolved_eligible_candidate_count": _safe_int(
+            summary.get("unresolved_eligible_candidate_count")
+        ),
+    }
+
+
+def _load_scale_in_counterfactual_source_statuses(
+    target_date: str, source_dates: list[str]
+) -> list[dict[str, Any]]:
+    """Prefer the exact rolling artifact, falling back to daily provenance."""
+    if len(source_dates) <= 1:
+        return [
+            _load_scale_in_counterfactual_source_status(source_date)
+            for source_date in source_dates
+        ]
+    artifact_suffix = f"{source_dates[0]}_to_{source_dates[-1]}"
+    json_path, _ = cf_report_paths(target_date, artifact_suffix)
+    payload = _load_json(json_path)
+    by_date = (
+        payload.get("source_status_by_date")
+        if isinstance(payload, dict)
+        and isinstance(payload.get("source_status_by_date"), dict)
+        else {}
+    )
+    if by_date:
+        statuses: list[dict[str, Any]] = []
+        for source_date in source_dates:
+            raw = by_date.get(source_date)
+            if not isinstance(raw, dict):
+                continue
+            statuses.append(
+                {
+                    **raw,
+                    "date": source_date,
+                    "artifact": str(json_path),
+                }
+            )
+        if statuses:
+            return statuses
+    return [
+        _load_scale_in_counterfactual_source_status(source_date)
+        for source_date in source_dates
+    ]
+
+
+def _summarize_scale_in_counterfactual_source_statuses(
+    statuses: list[dict[str, Any]], enriched_rows: int
+) -> tuple[str, dict[str, int], dict[str, int]]:
+    status_counts = dict(
+        Counter(str(item.get("status") or "source_missing") for item in statuses)
+    )
+    candidate_totals = {
+        key: sum(_safe_int(item.get(key)) for item in statuses)
+        for key in (
+            "eligible_candidate_count",
+            "guard_blocked_before_execution_count",
+            "execution_started_from_eligible_count",
+            "legacy_execution_terminal_from_eligible_count",
+            "candidate_terminal_from_eligible_count",
+            "terminal_execution_event_from_eligible_count",
+            "terminal_candidate_event_from_eligible_count",
+            "unresolved_eligible_candidate_count",
+        )
+    }
+    if status_counts.get("instrumentation_gap", 0):
+        observation_state = "instrumentation_gap"
+    elif enriched_rows:
+        observation_state = "evaluated"
+    elif status_counts.get("evaluated", 0):
+        observation_state = "evaluated_no_runtime_eligible_sample"
+    elif status_counts.get("no_natural_sample", 0):
+        observation_state = "no_natural_sample"
+    else:
+        observation_state = "source_missing"
+    return observation_state, status_counts, candidate_totals
+
+
 def _enrich_scale_in_rows_with_counterfactual_ev(
     rows: list[dict[str, Any]],
     cf_labels: dict[str, dict[str, Any]],
@@ -2110,7 +2279,9 @@ def _load_scale_in_attribution_rows(
 def _load_scalp_sim_overnight_rows(
     target_date: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    path = existing_or_gzip_path(
+        PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    )
     rows: list[dict[str, Any]] = []
     stage_counts: Counter[str] = Counter()
     for item in _iter_jsonl(path) or []:
@@ -2980,7 +3151,7 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     runtime_candidates = [
         {
-            "candidate_id": f"entry_bucket_{idx+1}",
+            "candidate_id": f"entry_bucket_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "recommended_route": item.get("recommended_route"),
@@ -2997,7 +3168,7 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ][:10]
     edge_workorders = [
         {
-            "workorder_id": f"entry_bucket_source_quality_{idx+1}",
+            "workorder_id": f"entry_bucket_source_quality_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "reason": "bucket_has_edge_but_needs_rolling_or_feature_confirmation",
@@ -3015,7 +3186,7 @@ def _entry_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     source_quality_workorders = [
         {
-            "workorder_id": f"entry_bucket_unknown_source_quality_{idx+1}",
+            "workorder_id": f"entry_bucket_unknown_source_quality_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "reason": "unknown_bucket_source_quality_blocker",
@@ -3420,7 +3591,9 @@ def _submit_bucket_row(
     source_quality = (
         "source_quality_blocker"
         if unknown_bucket
-        else "pass" if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR else "hold_sample"
+        else "pass"
+        if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR
+        else "hold_sample"
     )
     unknown_context = _unknown_taxonomy_context(
         bucket_type=bucket_type,
@@ -3522,7 +3695,6 @@ def _submit_contract_gaps(submit_rows: list[dict[str, Any]]) -> list[dict[str, A
             if runtime_features.get("actual_order_submitted") is not None
             else row.get("actual_order_submitted")
         )
-        broker_forbidden = runtime_features.get("broker_order_forbidden")
         if source_stage == "order_bundle_submitted" and not _boolish_false(
             actual_submitted
         ):
@@ -4328,7 +4500,7 @@ def _holding_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ][:10]
     workorders = [
         {
-            "workorder_id": f"holding_bucket_source_quality_{idx+1}",
+            "workorder_id": f"holding_bucket_source_quality_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "reason": "holding_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation",
@@ -4463,7 +4635,7 @@ def _exit_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ][:10]
     workorders = [
         {
-            "workorder_id": f"exit_bucket_source_quality_{idx+1}",
+            "workorder_id": f"exit_bucket_source_quality_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "reason": "exit_stage_bucket_needs_source_quality_or_lifecycle_flow_confirmation",
@@ -4753,7 +4925,15 @@ def _scale_in_bucket_row(
         "runtime_authority_block_reason": (
             None
             if cf_rows and len(runtime_ready_rows) == len(cf_rows)
-            else "paired_add_lifecycle_replay_or_final_label_missing"
+            else (
+                "no_natural_sample"
+                if eligible_sample == 0
+                else (
+                    "evaluated_no_runtime_eligible_sample"
+                    if cf_joined_sample == 0
+                    else "runtime_authority_sample_not_observed"
+                )
+            )
         ),
         "scale_in_applicability_counts": dict(applicability_counts),
         "scale_in_execution_arm_counts": dict(execution_arm_counts),
@@ -4832,7 +5012,7 @@ def _scale_in_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     runtime_candidates = [
         {
-            "candidate_id": f"scale_in_bucket_{idx+1}",
+            "candidate_id": f"scale_in_bucket_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "recommended_route": item.get("recommended_route"),
@@ -4850,7 +5030,7 @@ def _scale_in_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ][:10]
     workorders = [
         {
-            "workorder_id": f"scale_in_bucket_source_quality_{idx+1}",
+            "workorder_id": f"scale_in_bucket_source_quality_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "reason": "scale_in_arm_bucket_needs_source_quality_or_threshold_cycle_confirmation",
@@ -5053,7 +5233,9 @@ def _overnight_bucket_row(
     }
 
 
-def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _overnight_bucket_attribution(
+    rows: list[dict[str, Any]], *, source_summary: dict[str, Any] | None = None
+) -> dict[str, Any]:
     overnight_rows = [
         row
         for row in rows
@@ -5103,7 +5285,7 @@ def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     runtime_candidates = [
         {
-            "candidate_id": f"overnight_bucket_{idx+1}",
+            "candidate_id": f"overnight_bucket_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "recommended_route": item.get("recommended_route"),
@@ -5121,7 +5303,7 @@ def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ][:10]
     workorders = [
         {
-            "workorder_id": f"overnight_bucket_source_quality_{idx+1}",
+            "workorder_id": f"overnight_bucket_source_quality_{idx + 1}",
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
             "reason": "overnight_decision_bucket_needs_source_quality_or_threshold_cycle_confirmation",
@@ -5138,6 +5320,19 @@ def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
         for idx, item in enumerate(actionable[:10])
     ]
+    source_summary = source_summary if isinstance(source_summary, dict) else {}
+    source_artifact_present = bool(
+        source_summary.get("artifact") or source_summary.get("artifacts")
+    )
+    if overnight_rows:
+        observation_state = "observed"
+        observation_reason = "overnight_pipeline_rows_available"
+    elif source_artifact_present:
+        observation_state = "no_natural_sample"
+        observation_reason = "pipeline_artifact_present_without_overnight_activity"
+    else:
+        observation_state = "instrumentation_gap"
+        observation_reason = "pipeline_artifact_missing_for_overnight_observation"
     return {
         "metric_role": "sim_probe_ev",
         "decision_authority": "adm_ldm_overnight_bucket_attribution_source_only",
@@ -5167,6 +5362,9 @@ def _overnight_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "bot_restart_trigger",
         ],
         "summary": {
+            "observation_state": observation_state,
+            "observation_reason": observation_reason,
+            "source_artifact_present": source_artifact_present,
             "overnight_rows": len(overnight_rows),
             "bucket_count": len(buckets),
             "actionable_bucket_count": len(actionable),
@@ -5744,7 +5942,9 @@ def _flow_record(
     scale_in_applicability = (
         "applied"
         if "applied" in scale_in_states
-        else "considered_not_applied" if scale_in_rows else "not_applicable"
+        else "considered_not_applied"
+        if scale_in_rows
+        else "not_applicable"
     )
     complete = all(stage_presence[stage] for stage in LIFECYCLE_FLOW_REQUIRED_STAGES)
     ev = _flow_ev(by_stage)
@@ -5806,7 +6006,9 @@ def _flow_record(
             else (
                 "real"
                 if real_flow and joined_flow
-                else "sim_probe" if joined_flow else "none"
+                else "sim_probe"
+                if joined_flow
+                else "none"
             )
         ),
     }
@@ -5875,7 +6077,9 @@ def _flow_record(
             1.0
             if _safe_float(labels.get("profit_rate"), None)
             and _safe_float(labels.get("profit_rate"), 0.0) > 0
-            else 0.0 if labels.get("profit_rate") is not None else None
+            else 0.0
+            if labels.get("profit_rate") is not None
+            else None
         ),
         "outcome_state": (
             "completed" if exit_row and ev is not None else "open_or_unjoined"
@@ -6051,7 +6255,7 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
     )
     runtime_candidates = [
         {
-            "candidate_id": f"lifecycle_flow_bucket_{idx+1}",
+            "candidate_id": f"lifecycle_flow_bucket_{idx + 1}",
             "lifecycle_flow_bucket_id": item.get("lifecycle_flow_bucket_id"),
             "bucket_type": item.get("bucket_type"),
             "bucket_key": item.get("bucket_key"),
@@ -6075,7 +6279,7 @@ def _lifecycle_flow_bucket_attribution(rows: list[dict[str, Any]]) -> dict[str, 
     ]
     workorders = [
         {
-            "workorder_id": f"lifecycle_flow_bucket_incomplete_{idx+1}",
+            "workorder_id": f"lifecycle_flow_bucket_incomplete_{idx + 1}",
             "reason": item.get("source_quality_gate"),
             "improvement_type": "join_gap_resolution",
             "join_gap_reasons": item.get("incomplete_reasons") or [],
@@ -6593,7 +6797,11 @@ def _aggregate_bucket_rows(
             first["runtime_authority_block_reason"] = (
                 None
                 if authority_ready
-                else "paired_add_lifecycle_replay_not_implemented"
+                else (
+                    "evaluated_no_runtime_eligible_sample"
+                    if eligible > 0 and cf_joined <= 0
+                    else "runtime_authority_sample_not_observed"
+                )
             )
             first["source_quality_gate"] = (
                 "pass" if coverage == "v2_ready" else "hold_sample"
@@ -6767,6 +6975,59 @@ def _aggregate_existing_daily_lifecycle_reports(
                 "promote_ready": False,
             }
         )
+    cf_enriched = sum(
+        _safe_int(
+            (report.get("summary") or {}).get("scale_in_counterfactual_enriched_rows")
+        )
+        for report in reports
+    )
+    cf_source_statuses = _load_scale_in_counterfactual_source_statuses(
+        target_date, source_dates
+    )
+    (
+        cf_observation_state,
+        cf_source_status_counts,
+        cf_candidate_totals,
+    ) = _summarize_scale_in_counterfactual_source_statuses(
+        cf_source_statuses, cf_enriched
+    )
+    institutional_sources_by_date: dict[str, dict[str, Any]] = {}
+    institutional_example_rows: list[dict[str, Any]] = []
+    for source_date, daily_report in zip(loaded_source_dates, reports):
+        daily_sources = (
+            daily_report.get("sources")
+            if isinstance(daily_report.get("sources"), dict)
+            else {}
+        )
+        daily_institutional = (
+            daily_sources.get("institutional_flow_context")
+            if isinstance(daily_sources.get("institutional_flow_context"), dict)
+            else {}
+        )
+        institutional_sources_by_date[source_date] = {
+            "artifact": daily_institutional.get("artifact"),
+            "rows": _safe_int(daily_institutional.get("rows")),
+            "joined_feature_codes": _safe_int(
+                daily_institutional.get("joined_feature_codes")
+            ),
+            "joined_rows": _safe_int(daily_institutional.get("joined_rows")),
+        }
+        institutional_example_rows.extend(
+            row
+            for row in (daily_report.get("examples") or [])
+            if isinstance(row, dict)
+            and isinstance(row.get("runtime_features"), dict)
+            and row["runtime_features"].get("institutional_flow_regime")
+        )
+    institutional_attribution = _institutional_flow_attribution(
+        institutional_example_rows
+    )
+    institutional_attribution["sample_scope"] = (
+        "daily_report_examples_max50_per_date"
+    )
+    institutional_attribution["full_joined_row_count"] = sum(
+        item["joined_rows"] for item in institutional_sources_by_date.values()
+    )
     summary = {
         "total_rows": sum(
             _safe_int((report.get("summary") or {}).get("total_rows"))
@@ -6799,6 +7060,13 @@ def _aggregate_existing_daily_lifecycle_reports(
             1 for entry in policy_entries if entry.get("source_quality_gate") == "pass"
         ),
         "promote_ready_count": 0,
+        "scale_in_counterfactual_enriched_rows": cf_enriched,
+        "scale_in_counterfactual_observation_state": cf_observation_state,
+        "scale_in_counterfactual_source_status_counts": cf_source_status_counts,
+        **{
+            f"scale_in_counterfactual_{key}": value
+            for key, value in cf_candidate_totals.items()
+        },
         "lifecycle_flow_bucket_count": lifecycle_summary.get("bucket_count", 0),
         "lifecycle_flow_complete_count": lifecycle_summary.get(
             "complete_flow_count", 0
@@ -6815,7 +7083,11 @@ def _aggregate_existing_daily_lifecycle_reports(
         "top_incomplete_reason": None,
         "incomplete_flow_reason_counts": {},
         "status": "pass",
-        "warnings": [],
+        "warnings": (
+            ["scale_in_counterfactual_instrumentation_gap"]
+            if cf_observation_state == "instrumentation_gap"
+            else []
+        ),
     }
     flow_total = _safe_int(summary.get("complete_flow_count")) + _safe_int(
         summary.get("incomplete_flow_count")
@@ -6858,8 +7130,40 @@ def _aggregate_existing_daily_lifecycle_reports(
                 for source_date in source_dates
                 if source_date in loaded_source_dates
             ],
+            "scale_in_counterfactual_enrichment": {
+                "enriched_rows": cf_enriched,
+                "ev_label_version": SCALE_IN_EV_LABEL_VERSION,
+                "observation_state": cf_observation_state,
+                "source_status_counts": cf_source_status_counts,
+                "source_status_by_date": cf_source_statuses,
+                **cf_candidate_totals,
+                "runtime_effect": False,
+                "decision_authority": "sim_scale_in_counterfactual_only",
+            },
+            "institutional_flow_context": {
+                "source_dates": loaded_source_dates,
+                "sources_by_date": institutional_sources_by_date,
+                "available_source_date_count": sum(
+                    1
+                    for item in institutional_sources_by_date.values()
+                    if item.get("artifact")
+                ),
+                "joined_rows": sum(
+                    item["joined_rows"]
+                    for item in institutional_sources_by_date.values()
+                ),
+                "date_scoped_join": True,
+                "cross_date_feature_reuse_forbidden": True,
+                "attribution": institutional_attribution,
+                "runtime_effect": False,
+                "decision_authority": "source_only_lifecycle_feature",
+            },
         },
-        "warnings": [],
+        "warnings": (
+            ["scale_in_counterfactual_instrumentation_gap"]
+            if cf_observation_state == "instrumentation_gap"
+            else []
+        ),
         **merged_sections,
     }
     source_quality_preflight_gate = load_source_quality_preflight(target_date)
@@ -6868,7 +7172,11 @@ def _aggregate_existing_daily_lifecycle_reports(
         source_quality_preflight_gate.get("artifact")
     )
     if source_quality_preflight_blocked(source_quality_preflight_gate):
-        report["warnings"] = ["source_quality_blocked_contract_gap"]
+        report["warnings"] = list(
+            dict.fromkeys(
+                [*report.get("warnings", []), "source_quality_blocked_contract_gap"]
+            )
+        )
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     MATRIX_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = report_paths(target_date, output_suffix=output_suffix)
@@ -6955,22 +7263,64 @@ def build_lifecycle_decision_matrix_report(
     cf_labels: dict[str, dict[str, Any]] = {}
     for source_date in source_dates:
         cf_labels.update(_load_scale_in_counterfactual_labels(source_date))
-    cf_enriched = _enrich_scale_in_rows_with_counterfactual_ev(rows, cf_labels)
-    institutional_feature_map, institutional_summary = (
-        _load_institutional_flow_feature_map(target_date)
+    cf_source_statuses = _load_scale_in_counterfactual_source_statuses(
+        target_date, source_dates
     )
+    cf_enriched = _enrich_scale_in_rows_with_counterfactual_ev(rows, cf_labels)
+    (
+        cf_observation_state,
+        cf_source_status_counts,
+        cf_candidate_totals,
+    ) = _summarize_scale_in_counterfactual_source_statuses(
+        cf_source_statuses, cf_enriched
+    )
+    institutional_feature_maps_by_date: dict[
+        str, dict[str, dict[str, Any]]
+    ] = {}
+    institutional_sources_by_date: dict[str, dict[str, Any]] = {}
+    for source_date in source_dates:
+        feature_map, source_summary = _load_institutional_flow_feature_map(
+            source_date
+        )
+        institutional_feature_maps_by_date[source_date] = feature_map
+        institutional_sources_by_date[source_date] = source_summary
     institutional_joined_rows = _apply_institutional_flow_features(
-        rows, institutional_feature_map
+        rows, institutional_feature_maps_by_date
     )
     sources["institutional_flow_context"] = {
-        **institutional_summary,
+        "source_dates": source_dates,
+        "sources_by_date": institutional_sources_by_date,
+        "artifact": (
+            institutional_sources_by_date.get(target_date, {}).get("artifact")
+        ),
+        "rows": sum(
+            _safe_int(item.get("rows"))
+            for item in institutional_sources_by_date.values()
+        ),
+        "joined_feature_codes": sum(
+            _safe_int(item.get("joined_feature_codes"))
+            for item in institutional_sources_by_date.values()
+        ),
+        "status": institutional_sources_by_date.get(target_date, {}).get("status"),
+        "available_source_date_count": sum(
+            1
+            for item in institutional_sources_by_date.values()
+            if item.get("artifact")
+        ),
         "joined_rows": institutional_joined_rows,
+        "date_scoped_join": True,
+        "cross_date_feature_reuse_forbidden": True,
+        "attribution": _institutional_flow_attribution(rows),
         "runtime_effect": False,
         "decision_authority": "source_only_lifecycle_feature",
     }
     sources["scale_in_counterfactual_enrichment"] = {
         "enriched_rows": cf_enriched,
         "ev_label_version": SCALE_IN_EV_LABEL_VERSION,
+        "observation_state": cf_observation_state,
+        "source_status_counts": cf_source_status_counts,
+        "source_status_by_date": cf_source_statuses,
+        **cf_candidate_totals,
         "runtime_effect": False,
         "decision_authority": "sim_scale_in_counterfactual_only",
     }
@@ -6985,6 +7335,8 @@ def build_lifecycle_decision_matrix_report(
         warnings.append("clean_tuning_baseline_excluded_source_dates")
     if not rows:
         warnings.append("lifecycle_rows_missing")
+    if cf_observation_state == "instrumentation_gap":
+        warnings.append("scale_in_counterfactual_instrumentation_gap")
     if all(entry.get("source_quality_gate") != "pass" for entry in policy_entries):
         warnings.append("all_stage_policy_entries_below_sample_floor")
     entry_bucket_attribution = _entry_bucket_attribution(rows)
@@ -6997,7 +7349,19 @@ def build_lifecycle_decision_matrix_report(
     holding_bucket_attribution = _holding_bucket_attribution(rows)
     exit_bucket_attribution = _exit_bucket_attribution(rows)
     scale_in_bucket_attribution = _scale_in_bucket_attribution(rows)
-    overnight_bucket_attribution = _overnight_bucket_attribution(rows)
+    overnight_bucket_attribution = _overnight_bucket_attribution(
+        rows,
+        source_summary=(
+            sources.get("scalp_sim_overnight")
+            if isinstance(sources.get("scalp_sim_overnight"), dict)
+            else {}
+        ),
+    )
+    if (
+        overnight_bucket_attribution.get("summary", {}).get("observation_state")
+        == "instrumentation_gap"
+    ):
+        warnings.append("overnight_observation_instrumentation_gap")
     lifecycle_flow_bucket_attribution = _lifecycle_flow_bucket_attribution(rows)
     bucket_directed_sim_probe = _bucket_directed_sim_probe_summary(rows)
     report = {
@@ -7115,6 +7479,12 @@ def build_lifecycle_decision_matrix_report(
                 else 0
             ),
             "scale_in_counterfactual_enriched_rows": cf_enriched,
+            "scale_in_counterfactual_observation_state": cf_observation_state,
+            "scale_in_counterfactual_source_status_counts": cf_source_status_counts,
+            **{
+                f"scale_in_counterfactual_{key}": value
+                for key, value in cf_candidate_totals.items()
+            },
             "scale_in_ev_label_version": SCALE_IN_EV_LABEL_VERSION,
             "overnight_bucket_actionable_count": (
                 overnight_bucket_attribution.get("summary", {}).get(
@@ -7122,6 +7492,11 @@ def build_lifecycle_decision_matrix_report(
                 )
                 if isinstance(overnight_bucket_attribution.get("summary"), dict)
                 else 0
+            ),
+            "overnight_observation_state": (
+                overnight_bucket_attribution.get("summary", {}).get("observation_state")
+                if isinstance(overnight_bucket_attribution.get("summary"), dict)
+                else "instrumentation_gap"
             ),
             "overnight_bucket_runtime_candidate_count": (
                 overnight_bucket_attribution.get("summary", {}).get(

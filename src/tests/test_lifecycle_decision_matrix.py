@@ -162,6 +162,24 @@ def test_rolling_aggregation_excludes_source_quality_blocked_daily_report(
             "hard_blocking_contract_gap_count": 0,
         },
     )
+    monkeypatch.setattr(
+        mod,
+        "_load_scale_in_counterfactual_source_statuses",
+        lambda target_date, source_dates: [
+            {
+                "date": source_dates[0],
+                "status": "instrumentation_gap",
+                "eligible_candidate_count": 2,
+                "guard_blocked_before_execution_count": 1,
+                "execution_started_from_eligible_count": 0,
+                "legacy_execution_terminal_from_eligible_count": 0,
+                "candidate_terminal_from_eligible_count": 0,
+                "terminal_execution_event_from_eligible_count": 0,
+                "terminal_candidate_event_from_eligible_count": 0,
+                "unresolved_eligible_candidate_count": 1,
+            }
+        ],
+    )
     sections = {
         name: {"buckets": []}
         for name in (
@@ -204,6 +222,29 @@ def test_rolling_aggregation_excludes_source_quality_blocked_daily_report(
         "2026-06-12": "daily_lifecycle_source_quality_preflight_blocked"
     }
     assert report["summary"]["unavailable_daily_report_dates"] == []
+    assert report["summary"]["scale_in_counterfactual_observation_state"] == (
+        "instrumentation_gap"
+    )
+    assert report["summary"]["scale_in_counterfactual_eligible_candidate_count"] == 2
+    assert (
+        report["summary"][
+            "scale_in_counterfactual_guard_blocked_before_execution_count"
+        ]
+        == 1
+    )
+    assert (
+        report["summary"][
+            "scale_in_counterfactual_terminal_execution_event_from_eligible_count"
+        ]
+        == 0
+    )
+    assert report["warnings"] == ["scale_in_counterfactual_instrumentation_gap"]
+    assert (
+        report["sources"]["scale_in_counterfactual_enrichment"][
+            "source_status_by_date"
+        ][0]["date"]
+        == "2026-06-11"
+    )
 
 
 def test_scale_in_counterfactual_enrichment_requires_exact_decision_id():
@@ -294,6 +335,96 @@ def test_scale_in_label_report_authority_does_not_upgrade_row(monkeypatch):
     labels = mod._load_scale_in_counterfactual_labels("2026-06-12")
 
     assert labels["decision-treatment-only"]["runtime_authority_ready"] is False
+
+
+def test_scale_in_counterfactual_source_status_preserves_no_sample_provenance(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        mod,
+        "_load_json",
+        lambda path: {
+            "status": "no_natural_sample",
+            "error": None,
+            "rows": [],
+            "summary": {
+                "no_sample_reason": (
+                    "all_eligible_candidates_guard_blocked_before_execution"
+                ),
+                "eligible_candidate_count": 9,
+                "guard_blocked_before_execution_count": 9,
+                "execution_started_from_eligible_count": 0,
+                "legacy_execution_terminal_from_eligible_count": 0,
+                "candidate_terminal_from_eligible_count": 0,
+                "terminal_execution_event_from_eligible_count": 0,
+                "terminal_candidate_event_from_eligible_count": 0,
+                "unresolved_eligible_candidate_count": 0,
+            },
+        },
+    )
+
+    status = mod._load_scale_in_counterfactual_source_status("2026-07-31")
+
+    assert status["status"] == "no_natural_sample"
+    assert status["eligible_candidate_count"] == 9
+    assert status["guard_blocked_before_execution_count"] == 9
+    assert status["legacy_execution_terminal_from_eligible_count"] == 0
+    assert status["terminal_execution_event_from_eligible_count"] == 0
+    assert status["unresolved_eligible_candidate_count"] == 0
+    assert status["no_sample_reason"] == (
+        "all_eligible_candidates_guard_blocked_before_execution"
+    )
+
+
+def test_scale_in_counterfactual_source_statuses_prefer_exact_rolling_artifact(
+    monkeypatch, tmp_path
+):
+    rolling_path = tmp_path / "rolling.json"
+    rolling_path.write_text(
+        json.dumps(
+            {
+                "source_status_by_date": {
+                    "2026-07-30": {
+                        "status": "no_natural_sample",
+                        "eligible_candidate_count": 2,
+                        "legacy_execution_terminal_from_eligible_count": 1,
+                        "candidate_terminal_from_eligible_count": 0,
+                        "terminal_execution_event_from_eligible_count": 1,
+                        "terminal_candidate_event_from_eligible_count": 1,
+                    },
+                    "2026-07-31": {
+                        "status": "no_natural_sample",
+                        "eligible_candidate_count": 9,
+                        "guard_blocked_before_execution_count": 9,
+                        "legacy_execution_terminal_from_eligible_count": 0,
+                        "candidate_terminal_from_eligible_count": 0,
+                        "terminal_execution_event_from_eligible_count": 0,
+                        "terminal_candidate_event_from_eligible_count": 0,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_paths(target_date, artifact_suffix=None):
+        assert target_date == "2026-07-31"
+        assert artifact_suffix == "2026-07-30_to_2026-07-31"
+        return rolling_path, rolling_path.with_suffix(".md")
+
+    monkeypatch.setattr(mod, "cf_report_paths", fake_paths)
+
+    statuses = mod._load_scale_in_counterfactual_source_statuses(
+        "2026-07-31", ["2026-07-30", "2026-07-31"]
+    )
+
+    assert [item["date"] for item in statuses] == ["2026-07-30", "2026-07-31"]
+    assert sum(item["eligible_candidate_count"] for item in statuses) == 11
+    assert (
+        sum(item["legacy_execution_terminal_from_eligible_count"] for item in statuses)
+        == 1
+    )
+    assert all(item["artifact"] == str(rolling_path) for item in statuses)
 
 
 def test_complete_lifecycle_without_scale_in_is_not_applicable_and_keeps_ev():
@@ -2365,6 +2496,53 @@ def test_lifecycle_matrix_joins_institutional_flow_features(tmp_path, monkeypatc
     assert features["inst_net_roll5"] == 200
     assert features["institutional_flow_status"] == "OK"
     assert report["sources"]["institutional_flow_context"]["joined_rows"] == 1
+    assert report["sources"]["institutional_flow_context"]["date_scoped_join"] is True
+
+
+def test_institutional_flow_features_do_not_leak_across_source_dates():
+    rows = [
+        {
+            "source_date": "2026-06-05",
+            "stock_code": "005930",
+            "stage": "entry",
+            "runtime_features": {},
+            "labels": {"mfe_10m_pct": 1.0, "mae_10m_pct": -0.2},
+        },
+        {
+            "source_date": "2026-06-06",
+            "stock_code": "005930",
+            "stage": "entry",
+            "runtime_features": {},
+            "labels": {"mfe_10m_pct": 0.5, "mae_10m_pct": -0.1},
+        },
+    ]
+    joined = mod._apply_institutional_flow_features(
+        rows,
+        {
+            "2026-06-05": {
+                "005930": {
+                    "institutional_flow_regime": "DUAL_ACCUMULATION",
+                    "institutional_flow_status": "OK",
+                }
+            },
+            "2026-06-06": {
+                "005930": {
+                    "institutional_flow_regime": "DISTRIBUTION",
+                    "institutional_flow_status": "OK",
+                }
+            },
+        },
+    )
+
+    assert joined == 2
+    assert (
+        rows[0]["runtime_features"]["institutional_flow_regime"]
+        == "DUAL_ACCUMULATION"
+    )
+    assert rows[1]["runtime_features"]["institutional_flow_regime"] == "DISTRIBUTION"
+    attribution = mod._institutional_flow_attribution(rows)
+    assert attribution["causal_authority"] is False
+    assert set(attribution["by_regime"]) == {"DUAL_ACCUMULATION", "DISTRIBUTION"}
 
 
 def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_split(
@@ -2933,6 +3111,44 @@ def test_lifecycle_matrix_backfills_completed_overnight_exit_outcome(
         == "derived_from_completed_sim_exit"
     )
     assert rows[0]["actual_order_submitted"] is False
+
+
+def test_overnight_bucket_attribution_distinguishes_natural_zero_from_gap(tmp_path):
+    artifact = tmp_path / "pipeline_events_2026-05-21.jsonl.gz"
+    artifact.write_bytes(b"gzip-placeholder")
+
+    natural = mod._overnight_bucket_attribution(
+        [], source_summary={"artifact": str(artifact), "rows": 0}
+    )
+    gap = mod._overnight_bucket_attribution(
+        [], source_summary={"artifact": None, "rows": 0}
+    )
+
+    assert natural["summary"]["observation_state"] == "no_natural_sample"
+    assert gap["summary"]["observation_state"] == "instrumentation_gap"
+
+
+def test_overnight_loader_reports_gzip_artifact(tmp_path, monkeypatch):
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir()
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
+    path = pipeline_dir / "pipeline_events_2026-05-21.jsonl.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "stage": "unrelated_stage",
+                    "stock_code": "000001",
+                    "fields": {},
+                }
+            )
+            + "\n"
+        )
+
+    rows, summary = mod._load_scalp_sim_overnight_rows("2026-05-21")
+
+    assert rows == []
+    assert summary["artifact"].endswith(".jsonl.gz")
 
 
 def test_lifecycle_flow_denominator_excludes_scale_in_noise_and_incomplete_seeds():

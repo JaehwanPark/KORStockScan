@@ -29,7 +29,7 @@ THRESHOLD_EVENT_DIR = DATA_DIR / "threshold_cycle"
 THRESHOLD_SNAPSHOT_DIR = THRESHOLD_EVENT_DIR / "snapshots"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 MATRIX_VERSION_PREFIX = "scalp_entry_adm_v1"
 SAMPLE_FLOOR = 20
 
@@ -785,6 +785,9 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
     )
 
     raw_entry_adm_bucket_token = _nonempty(fields.get("entry_adm_bucket_token"))
+    evidence = (
+        fields.get("evidence") if isinstance(fields.get("evidence"), dict) else {}
+    )
     row = {
         "candidate_id": candidate_id,
         "record_id": _nonempty(event.get("record_id") or fields.get("record_id")),
@@ -798,6 +801,32 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "ai_score": _safe_float(raw_score_value, None),
         "score_source_value": _safe_float(raw_score_value, None),
         "ai_action": _nonempty(fields.get("action") or fields.get("ai_action")),
+        "decision_quality_contract_status": _nonempty(
+            fields.get("decision_quality_contract_status")
+            or fields.get("entry_recheck_contract_status")
+        ),
+        "edge_state": _nonempty(
+            fields.get("edge_state") or fields.get("entry_recheck_edge_state")
+        ),
+        "entry_probe_intent": _optional_bool(
+            fields.get("entry_probe_intent")
+            if fields.get("entry_probe_intent") is not None
+            else fields.get("entry_recheck_probe_intent")
+        ),
+        "entry_probe_intent_status": _nonempty(
+            fields.get("entry_probe_intent_status")
+            or fields.get("entry_recheck_probe_intent_status")
+        ),
+        "entry_recheck_recovery_trigger": _nonempty(
+            fields.get("entry_recheck_recovery_trigger")
+            or fields.get("evidence_trigger")
+            or evidence.get("trigger")
+        ),
+        "evidence_trigger": _nonempty(
+            fields.get("evidence_trigger")
+            or fields.get("entry_recheck_recovery_trigger")
+            or evidence.get("trigger")
+        ),
         "chosen_action": action,
         "raw_chosen_action": raw_action,
         "action_normalized": bool(normalization_reason),
@@ -1362,12 +1391,56 @@ def _outcome_join_diagnostic(
         str(key or "").strip() for key in evaluations.keys() if str(key or "").strip()
     }
     overlap_keys = candidate_keys & evaluation_keys
+    sim_eligible_rows = [
+        row
+        for row in aggregate_rows
+        if str(row.get("sim_record_id") or "").strip()
+    ]
+    sim_eligible_keys = {
+        str(value).strip()
+        for row in sim_eligible_rows
+        for value in (row.get("candidate_id"), row.get("sim_record_id"))
+        if str(value or "").strip()
+    }
+    evaluation_join_candidate_keys = {
+        str(value).strip()
+        for row in aggregate_rows
+        for value in (row.get("candidate_id"), row.get("sim_record_id"))
+        if str(value or "").strip()
+    }
+    matched_evaluation_object_ids = {
+        id(evaluation)
+        for key, evaluation in evaluations.items()
+        if key in evaluation_join_candidate_keys
+    }
     aggregate_joined_sample = sum(
         1 for row in aggregate_rows if row.get("outcome_joined")
+    )
+    sim_eligible_joined_sample = sum(
+        1 for row in sim_eligible_rows if row.get("outcome_joined")
     )
     joined_sample_all_rows = sum(1 for row in rows if row.get("outcome_joined"))
     post_sell_rows = _safe_int(eval_summary.get("rows"), 0)
     join_keys = _safe_int(eval_summary.get("join_keys"), len(evaluation_keys))
+    matched_evaluation_rows = len(matched_evaluation_object_ids)
+    if not sim_eligible_rows:
+        coverage_state = "no_sim_outcome_eligible_candidates"
+        coverage_reason = "entry_adm_rows_have_no_sim_record_id"
+    elif post_sell_rows <= 0:
+        coverage_state = "post_sell_source_missing"
+        coverage_reason = "no_sim_post_sell_evaluation_rows_for_target_date"
+    elif matched_evaluation_rows < post_sell_rows:
+        coverage_state = "join_contract_gap"
+        coverage_reason = "some_sim_post_sell_evaluations_do_not_match_eligible_rows"
+    elif post_sell_rows < SAMPLE_FLOOR:
+        coverage_state = "source_outcome_underproduction"
+        coverage_reason = "sim_post_sell_evaluation_underproduction"
+    elif sim_eligible_joined_sample < SAMPLE_FLOOR:
+        coverage_state = "eligible_outcome_coverage_below_sample_floor"
+        coverage_reason = "sim_eligible_rows_outnumber_mature_post_sell_outcomes"
+    else:
+        coverage_state = "sufficient"
+        coverage_reason = "sim_outcome_source_and_join_coverage_meet_sample_floor"
     if aggregate_joined_sample > 0:
         status = "joined"
         reason = "post_sell_outcome_join_available"
@@ -1395,6 +1468,22 @@ def _outcome_join_diagnostic(
         },
         "post_sell_evaluation_rows": post_sell_rows,
         "post_sell_evaluation_join_keys": join_keys,
+        "sim_outcome_eligible_rows": len(sim_eligible_rows),
+        "sim_outcome_eligible_key_count": len(sim_eligible_keys),
+        "sim_eligible_joined_sample": sim_eligible_joined_sample,
+        "sim_eligible_outcome_coverage_rate": (
+            round(sim_eligible_joined_sample / len(sim_eligible_rows), 4)
+            if sim_eligible_rows
+            else None
+        ),
+        "matched_post_sell_evaluation_rows": matched_evaluation_rows,
+        "post_sell_evaluation_match_rate": (
+            round(matched_evaluation_rows / post_sell_rows, 4)
+            if post_sell_rows > 0
+            else None
+        ),
+        "coverage_state": coverage_state,
+        "coverage_reason": coverage_reason,
         "candidate_post_sell_key_overlap_count": len(overlap_keys),
         "joined_sample": aggregate_joined_sample,
         "joined_sample_all_rows": joined_sample_all_rows,
@@ -1853,6 +1942,10 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     warnings = []
     if aggregate_joined_sample < SAMPLE_FLOOR:
         warnings.append("joined_sample_below_sample_floor")
+    if outcome_join_diagnostic.get("coverage_state") == "source_outcome_underproduction":
+        warnings.append("sim_post_sell_outcome_source_below_sample_floor")
+    if outcome_join_diagnostic.get("coverage_state") == "join_contract_gap":
+        warnings.append("sim_post_sell_outcome_join_contract_gap")
     action_summary = _action_summary(aggregate_rows)
     action_summary_actions = {
         str(item.get("action") or "")

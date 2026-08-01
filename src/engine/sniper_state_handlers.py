@@ -757,8 +757,7 @@ def _persist_hydrated_scanner_promotion_context(
             record.scanner_cntr_str = _safe_float(hydrated.get("cntr_str"), 0.0)
     except Exception as exc:
         log_error(
-            "[SCANNER_PROMOTION_HYDRATION] "
-            f"persist failed record_id={record_id}: {exc}"
+            f"[SCANNER_PROMOTION_HYDRATION] persist failed record_id={record_id}: {exc}"
         )
 
 
@@ -1080,6 +1079,7 @@ _SCALP_SIM_CANDIDATE_WINDOW_DAILY_SOURCE_CREATED: dict[tuple[str, str], int] = {
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_ACTIVE_SEED_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_CANDIDATE_WINDOW_DAILY_HYPOTHESIS_CREATED: dict[tuple[str, str], int] = {}
 _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED: dict[str, int] = {}
+_SCALP_SIM_SCALE_IN_WINDOW_QUOTA_LOCK = threading.RLock()
 _SCALP_SIM_AI_CALL_TIMES: list[float] = []
 _SCALP_SIM_PANIC_DEDUP_LOG_TS: dict[tuple[str, str, int, str], float] = {}
 _SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
@@ -8944,7 +8944,9 @@ def _resolve_scalp_sim_panic_sell_price(
     quote_quality = (
         "BAD"
         if sell_price <= 0
-        else "DEGRADED" if liquidity_state != "NORMAL" or spread_bps >= 80 else "OK"
+        else "DEGRADED"
+        if liquidity_state != "NORMAL" or spread_bps >= 80
+        else "OK"
     )
     fill_quality = (
         "DEGRADED"
@@ -11464,9 +11466,19 @@ def bind_state_dependencies(
     dual_persona_engine=None,
     scanner_generation_submit_guard=None,
 ):
-    global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
+    global \
+        KIWOOM_TOKEN, \
+        DB, \
+        EVENT_BUS, \
+        ACTIVE_TARGETS, \
+        COOLDOWNS, \
+        ALERTED_STOCKS, \
+        HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
-    global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
+    global \
+        SHOULD_BLOCK_SWING_ENTRY, \
+        CONFIRM_CANCEL_OR_RELOAD_REMAINING, \
+        SEND_EXIT_BEST_IOC
     global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
 
     if kiwoom_token is not None:
@@ -12860,7 +12872,9 @@ def _scanner_runtime_event_venue_fields(stock) -> dict[str, str]:
         if not venue_resolution:
             venue_resolution = "scanner_runtime_event:explicit_venue_resolution_missing"
         elif venue_source == "scanner_fast_precheck":
-            venue_resolution = f"scanner_runtime_event:scanner_fast_precheck:{venue_resolution}"
+            venue_resolution = (
+                f"scanner_runtime_event:scanner_fast_precheck:{venue_resolution}"
+            )
     elif unique_venues:
         canonical_venue = "UNKNOWN"
         venue_resolution = (
@@ -17063,7 +17077,9 @@ def _scanner_runtime_queue_lag_fields(
         "queue_lag_anchor_field": (
             "entry_armed_at_epoch"
             if armed_time > 0
-            else "added_time" if added_time > 0 else "not_available"
+            else "added_time"
+            if added_time > 0
+            else "not_available"
         ),
         "loop_started_epoch": f"{loop_epoch:.3f}",
         "queue_emit_epoch": f"{emit_epoch:.3f}",
@@ -31118,7 +31134,9 @@ def _rising_missed_price_anchor(
     state = (
         "recovered_fallback"
         if selected_price > 0 and rejected
-        else "valid" if selected_price > 0 else "unavailable"
+        else "valid"
+        if selected_price > 0
+        else "unavailable"
     )
     if state == "recovered_fallback":
         stock["first_seen_price"] = selected_price
@@ -31679,7 +31697,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     relief_path = (
         "fresh_tp1_micro"
         if fresh_tp1_micro_path
-        else "absolute_tick_throughput" if absolute_throughput_path else "none"
+        else "absolute_tick_throughput"
+        if absolute_throughput_path
+        else "none"
     )
     reasons = []
     if missing_window:
@@ -31694,7 +31714,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     block_reason = (
         "tick_speed_absolute_throughput_relief"
         if relief_applied
-        else "+".join(reasons) if reasons else "tick_speed_guard_pass"
+        else "+".join(reasons)
+        if reasons
+        else "tick_speed_guard_pass"
     )
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
@@ -31757,7 +31779,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "metric_role": (
             "bounded_tunable"
             if relief_applied
-            else "safety_veto" if blocked else "diagnostic"
+            else "safety_veto"
+            if blocked
+            else "diagnostic"
         ),
         "decision_authority": (
             "operator_runtime_override_tick_absolute_throughput_relief"
@@ -32200,7 +32224,9 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
             else (
                 "missing_stored_at"
                 if age_sec is None
-                else "expired" if age_sec > ttl_sec else "missing_or_unusable_state"
+                else "expired"
+                if age_sec > ttl_sec
+                else "missing_or_unusable_state"
             )
         ),
     }
@@ -37733,7 +37759,9 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_scale_in_recheck_origin": (
             "normal_winner_recovery"
             if rising_missed_normal_winner_recheck
-            else "source_quality_or_non_nxt_direction_recovery" if soft_abort else "-"
+            else "source_quality_or_non_nxt_direction_recovery"
+            if soft_abort
+            else "-"
         ),
         "entry_split_probe_scale_in_recheck_reason": (
             (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
@@ -41797,12 +41825,16 @@ def _resolve_early_accel_strong_bundle_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(min_score) <= numeric_score <= float(max_score)
-                else "low" if numeric_score < float(min_score) else "high"
+                else "low"
+                if numeric_score < float(min_score)
+                else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(min_score) <= numeric_score <= float(max_score)
-                else -0.2 if numeric_score < float(min_score) else 0.0
+                else -0.2
+                if numeric_score < float(min_score)
+                else 0.0
             ),
         }
     )
@@ -42360,12 +42392,16 @@ def _resolve_ai_numeric_consistency_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(score_floor) <= numeric_score <= 74.0
-                else "low" if numeric_score < float(score_floor) else "high"
+                else "low"
+                if numeric_score < float(score_floor)
+                else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(score_floor) <= numeric_score <= 74.0
-                else -0.2 if numeric_score < float(score_floor) else 0.0
+                else -0.2
+                if numeric_score < float(score_floor)
+                else 0.0
             ),
         }
     )
@@ -45575,7 +45611,9 @@ def _evaluate_scalp_trailing_continuation_recheck(
     large_sell_state = (
         "confirmed_sell"
         if large_sell_print
-        else "confirmed_clear" if feature_context_usable else "unknown"
+        else "confirmed_clear"
+        if feature_context_usable
+        else "unknown"
     )
     micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
         ws_data,
@@ -47809,6 +47847,35 @@ _SCORE65_74_RECOVERY_PROBE_WAIT_NEGATIVE_REASON_TOKENS = (
 )
 
 
+def _entry_opportunity_recheck_wait_probe_owner_active(
+    *, now_ts: float | None = None
+) -> bool:
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE") or ""
+    ).strip()
+    now_value = _safe_float(now_ts, time.time())
+    current_date = datetime.fromtimestamp(now_value, tz=_KST).date().isoformat()
+    return bool(
+        _env_bool("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", False)
+        and _env_bool(
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
+            False,
+        )
+        and not _env_bool(
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
+            True,
+        )
+        and _env_bool(
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+            True,
+        )
+        and _env_bool("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", False)
+        and active_date.upper() in {current_date, "DAILY"}
+        and _safe_int(os.getenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY"), 0) == 1
+        and _post_probe_price_resolver_enabled()
+    )
+
+
 def _score65_74_recovery_probe_wait_negative_reason(ai_decision) -> str:
     reason = str((ai_decision or {}).get("reason") or "").strip().lower()
     if not reason:
@@ -48107,6 +48174,19 @@ def _score65_74_recovery_probe_decision(
                 "ai_blocking_adverse_risk_observation_only"
             ),
         }
+    if bool(
+        str((ai_decision or {}).get("action") or "").strip().upper()
+        in {"WAIT", "WAIT_REQUOTE"}
+        and _truthy_field((ai_decision or {}).get("entry_probe_intent"))
+        and _entry_opportunity_recheck_wait_probe_owner_active(now_ts=now_ts)
+    ):
+        return {
+            "allowed": False,
+            "evaluated": False,
+            "score65_74_recovery_probe_skip_reason": (
+                "delegated_to_entry_opportunity_recheck_runtime"
+            ),
+        }
     if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
         return {
             "allowed": False,
@@ -48139,7 +48219,9 @@ def _score65_74_recovery_probe_decision(
         "score_prior_band": (
             "supportive"
             if min_score <= score <= max_score
-            else "low" if score < min_score else "high"
+            else "low"
+            if score < min_score
+            else "high"
         ),
         "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
     }
@@ -49052,8 +49134,7 @@ def _opening_rotation_no_pullback_continuation_fields(
     generation_id = str(stock.get("scanner_generation_id") or "").strip()
     effective_venue = str(venue_fields.get("effective_venue") or "UNKNOWN")
     candidate_id = (
-        f"{generation_id}:{effective_venue}:"
-        "opening_rotation_no_pullback_continuation"
+        f"{generation_id}:{effective_venue}:opening_rotation_no_pullback_continuation"
         if generation_id
         else "not_available_scanner_generation_id"
     )
@@ -52872,9 +52953,7 @@ def _handle_watching_strategy_branch(
                                         "ai_numeric_consistency_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "ai_numeric_consistency_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[
-                                            :120
-                                        ],
+                                        )[:120],
                                         "ai_numeric_consistency_recheck_inconsistency_field": str(
                                             ai_decision.get(
                                                 "ai_reason_numeric_inconsistency_field"
@@ -52893,9 +52972,7 @@ def _handle_watching_strategy_branch(
                                             ),
                                             ensure_ascii=False,
                                             default=str,
-                                        )[
-                                            :240
-                                        ],
+                                        )[:240],
                                     },
                                     candle_context=candle_context,
                                 )
@@ -53107,9 +53184,7 @@ def _handle_watching_strategy_branch(
                                         "early_accel_strong_bundle_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "early_accel_strong_bundle_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[
-                                            :120
-                                        ],
+                                        )[:120],
                                         "early_accel_strong_bundle_recheck_scanner_promotion_reason": str(
                                             stock.get("scanner_promotion_reason") or "-"
                                         ),
@@ -54025,6 +54100,38 @@ def _handle_watching_strategy_branch(
                 if blocked_ai_score_candidate and entry_score_role_gate.get(
                     "entry_score_usable_for_recheck"
                 ):
+                    recheck_feature_probe = _extract_buy_recovery_probe_features(
+                        ai_engine,
+                        ws_data,
+                        recent_ticks,
+                        recent_candles,
+                    )
+                    recheck_micro_guard = _score65_74_recovery_probe_micro_guard(
+                        recheck_feature_probe
+                    )
+                    recheck_tick_source = str(
+                        (recheck_feature_probe or {}).get("tick_accel_source") or ""
+                    ).strip()
+                    recheck_micro_source_quality_ok = bool(
+                        _buy_recovery_probe_tick_pressure_usable(recheck_feature_probe)
+                        and _buy_recovery_probe_micro_vwap_usable(recheck_feature_probe)
+                        and not _truthy_field(
+                            (recheck_feature_probe or {}).get("tick_context_stale")
+                        )
+                        and not _truthy_field(
+                            (recheck_feature_probe or {}).get("quote_stale")
+                        )
+                        and recheck_tick_source
+                        in {"computed_10ticks", "same_second_burst_10ticks"}
+                        and not _truthy_field(
+                            (recheck_feature_probe or {}).get("large_sell_print")
+                        )
+                    )
+                    recheck_evidence = (
+                        (ai_decision or {}).get("evidence")
+                        if isinstance((ai_decision or {}).get("evidence"), dict)
+                        else {}
+                    )
                     ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
                     ws_age_ms = (
                         int(round(float(ws_age_sec) * 1000.0))
@@ -54041,6 +54148,45 @@ def _handle_watching_strategy_branch(
                         latency_state=(ws_data or {}).get("latency_state"),
                         source_stage="blocked_ai_score",
                         source_reason="entry_policy_no_buy_score_prior",
+                        ai_contract_status=(ai_decision or {}).get(
+                            "decision_quality_contract_status"
+                        ),
+                        ai_edge_state=(ai_decision or {}).get("edge_state"),
+                        ai_probe_intent=(ai_decision or {}).get("entry_probe_intent"),
+                        ai_probe_intent_status=(ai_decision or {}).get(
+                            "entry_probe_intent_status"
+                        ),
+                        ai_recovery_trigger=recheck_evidence.get("trigger"),
+                        microstructure_confirmed=bool(
+                            recheck_micro_guard.get("allowed")
+                            and recheck_micro_source_quality_ok
+                        ),
+                        microstructure_fields={
+                            "entry_opportunity_recheck_buy_pressure": (
+                                recheck_micro_guard.get("buy_pressure")
+                            ),
+                            "entry_opportunity_recheck_tick_accel": (
+                                recheck_micro_guard.get("tick_accel")
+                            ),
+                            "entry_opportunity_recheck_micro_vwap_bp": (
+                                recheck_micro_guard.get("micro_vwap_bp")
+                            ),
+                            "entry_opportunity_recheck_micro_skip_reason": (
+                                recheck_micro_guard.get(
+                                    "score65_74_recovery_probe_skip_reason"
+                                )
+                                or "-"
+                            ),
+                            "entry_opportunity_recheck_tick_source_quality_ok": (
+                                recheck_micro_source_quality_ok
+                            ),
+                            "entry_opportunity_recheck_tick_accel_source": (
+                                recheck_tick_source or "-"
+                            ),
+                            "entry_opportunity_recheck_large_sell_print": _truthy_field(
+                                (recheck_feature_probe or {}).get("large_sell_print")
+                            ),
+                        },
                         state=_ENTRY_OPPORTUNITY_RECHECK_STATE,
                         today=now_dt.date().isoformat(),
                     )
@@ -54072,6 +54218,9 @@ def _handle_watching_strategy_branch(
                                 ),
                                 "entry_opportunity_recheck_reason": entry_opportunity_recheck.reason,
                                 "entry_opportunity_recheck_at": now_ts,
+                                "entry_opportunity_recheck_probe_only": True,
+                                "entry_opportunity_recheck_ai_action": current_ai_action,
+                                "entry_opportunity_recheck_probe_intent": True,
                             },
                         )
                         _log_entry_pipeline(
@@ -54452,7 +54601,6 @@ def _handle_watching_strategy_branch(
                 action_key = gatekeeper.get("action_key")
                 gatekeeper_eval_ms = 0
             else:
-
                 realtime_ctx = None
                 gatekeeper_fast_sig = _build_gatekeeper_fast_signature(
                     stock, ws_data, strategy, score
@@ -74799,7 +74947,7 @@ def handle_holding_state(
             if drawdown >= 1.0:
                 is_sell_signal = True
                 sell_reason_type = "TRAILING"
-                reason = "🏆 KOSDAQ 트레일링 익절 (+" f"{kosdaq_target}% 돌파 후 하락)"
+                reason = f"🏆 KOSDAQ 트레일링 익절 (+{kosdaq_target}% 돌파 후 하락)"
                 exit_rule = "kosdaq_trailing_take_profit"
 
         kosdaq_stop = _rule_float("KOSDAQ_STOP", -2.0)
@@ -78309,6 +78457,106 @@ def _evaluate_scale_in_signal(
         return None
 
 
+def _log_scalp_sim_scale_in_window_funnel(
+    *,
+    stock,
+    code: str,
+    add_type: str,
+    state: str,
+    reason: str,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: float,
+) -> None:
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scalp_sim_scale_in_candidate_funnel",
+        **_scalp_sim_event_fields(
+            threshold_family="scalp_sim_scale_in_window_expansion",
+            sim_record_id=stock.get("sim_record_id"),
+            add_type=add_type,
+            scale_in_arm=add_type,
+            scale_in_candidate_funnel_state=state,
+            scale_in_candidate_funnel_reason=reason,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            metric_role="funnel_count",
+            window_policy="daily_arm_separated",
+            sample_floor="not_applicable_diagnostic",
+            primary_decision_metric="funnel_count",
+            source_quality_gate="sim_position_and_numeric_profit_rate",
+            runtime_effect=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            decision_authority="sim_observation_only",
+            forbidden_uses=[
+                "real_scale_in_order",
+                "runtime_ev_sample_floor",
+                "real_execution_quality_claim",
+            ],
+        ),
+    )
+
+
+def _claim_scalp_sim_scale_in_window_candidate(stock, code: str, action: dict) -> bool:
+    """Reserve sim-only quota when an eligible action reaches execution handoff."""
+    if action.get("scale_in_window_quota_claimed") is True:
+        return True
+    add_type = str(action.get("add_type") or "").upper()
+    if add_type not in {"PYRAMID", "AVG_DOWN"}:
+        return False
+    max_per_position = max(
+        0,
+        _safe_int(
+            action.get("max_orders_per_position"),
+            _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION", 1),
+        ),
+    )
+    max_daily = max(
+        0,
+        _safe_int(
+            action.get("max_orders_per_day"),
+            _rule_int("SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY", 30),
+        ),
+    )
+    attempt_key = f"sim_scale_in_attempt_count_{add_type.lower()}"
+    day_key = str(action.get("scale_in_window_day_key") or datetime.now().date())
+    daily_key = f"{day_key}:{add_type}"
+    state = "eligible"
+    reason = "arm_window_and_attempt_quota_pass_at_execution_handoff"
+    with _SCALP_SIM_SCALE_IN_WINDOW_QUOTA_LOCK:
+        attempted_for_position = _safe_int(stock.get(attempt_key), 0)
+        created_today = _safe_int(
+            _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED.get(daily_key), 0
+        )
+        if max_per_position > 0 and attempted_for_position >= max_per_position:
+            state = "position_quota_blocked"
+            reason = "arm_position_attempt_quota_reached_at_execution_handoff"
+        elif max_daily > 0 and created_today >= max_daily:
+            state = "daily_quota_blocked"
+            reason = "arm_daily_attempt_quota_reached_at_execution_handoff"
+        else:
+            stock[attempt_key] = attempted_for_position + 1
+            _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED[daily_key] = created_today + 1
+            action["scale_in_window_quota_claimed"] = True
+    _log_scalp_sim_scale_in_window_funnel(
+        stock=stock,
+        code=code,
+        add_type=add_type,
+        state=state,
+        reason=reason,
+        profit_rate=_safe_float(action.get("profit_rate"), 0.0),
+        peak_profit=_safe_float(action.get("peak_profit"), 0.0),
+        current_ai_score=_safe_float(action.get("current_ai_score"), 50.0),
+        held_sec=_safe_float(action.get("held_sec"), 0.0),
+    )
+    return state == "eligible"
+
+
 def _evaluate_scalp_sim_scale_in_window_expansion(
     *,
     stock,
@@ -78328,36 +78576,16 @@ def _evaluate_scalp_sim_scale_in_window_expansion(
     code = str(stock.get("code") or stock.get("stock_code") or "")
 
     def log_funnel(state: str, reason: str) -> None:
-        _log_holding_pipeline(
-            stock,
-            code,
-            "scalp_sim_scale_in_candidate_funnel",
-            **_scalp_sim_event_fields(
-                threshold_family="scalp_sim_scale_in_window_expansion",
-                sim_record_id=stock.get("sim_record_id"),
-                add_type=inferred_arm,
-                scale_in_arm=inferred_arm,
-                scale_in_candidate_funnel_state=state,
-                scale_in_candidate_funnel_reason=reason,
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                current_ai_score=current_ai_score,
-                held_sec=held_sec,
-                metric_role="funnel_count",
-                window_policy="daily_arm_separated",
-                sample_floor="not_applicable_diagnostic",
-                primary_decision_metric="funnel_count",
-                source_quality_gate="sim_position_and_numeric_profit_rate",
-                runtime_effect=False,
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
-                decision_authority="sim_observation_only",
-                forbidden_uses=[
-                    "real_scale_in_order",
-                    "runtime_ev_sample_floor",
-                    "real_execution_quality_claim",
-                ],
-            ),
+        _log_scalp_sim_scale_in_window_funnel(
+            stock=stock,
+            code=code,
+            add_type=inferred_arm,
+            state=state,
+            reason=reason,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
         )
 
     min_profit = _rule_float("SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT", -2.5)
@@ -78401,9 +78629,6 @@ def _evaluate_scalp_sim_scale_in_window_expansion(
     if max_daily > 0 and created_today >= max_daily:
         log_funnel("daily_quota_blocked", "arm_daily_attempt_quota_reached")
         return {}
-    _SCALP_SIM_SCALE_IN_WINDOW_DAILY_CREATED[daily_key] = created_today + 1
-    stock[attempt_key] = attempted_for_position + 1
-    log_funnel("eligible", "arm_window_and_attempt_quota_pass")
     return {
         "should_add": True,
         "add_type": add_type,
@@ -78419,6 +78644,7 @@ def _evaluate_scalp_sim_scale_in_window_expansion(
         "held_sec": held_sec,
         "max_orders_per_position": max_per_position,
         "max_orders_per_day": max_daily,
+        "scale_in_window_day_key": day_key,
         "scale_in_candidate_funnel_state": "eligible",
     }
 
@@ -78427,13 +78653,33 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
     """추가매수 주문 처리 (STEP4 이후 구현 예정)."""
     if not action:
         return None
-    return execute_scale_in_order(
+    is_sim_window_action = (
+        str(action.get("reason") or "") == "scalp_sim_scale_in_window_expansion"
+    )
+    if is_sim_window_action and not _claim_scalp_sim_scale_in_window_candidate(
+        stock, code, action
+    ):
+        return None
+    result = execute_scale_in_order(
         stock=stock,
         code=code,
         ws_data=ws_data,
         action=action,
         admin_id=admin_id,
     )
+    if is_sim_window_action and result is None:
+        _log_scalp_sim_scale_in_window_funnel(
+            stock=stock,
+            code=code,
+            add_type=str(action.get("add_type") or "").upper(),
+            state="execution_closed_without_result",
+            reason="execution_handoff_completed_without_structured_result",
+            profit_rate=_safe_float(action.get("profit_rate"), 0.0),
+            peak_profit=_safe_float(action.get("peak_profit"), 0.0),
+            current_ai_score=_safe_float(action.get("current_ai_score"), 50.0),
+            held_sec=_safe_float(action.get("held_sec"), 0.0),
+        )
+    return result
 
 
 def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
@@ -80443,9 +80689,7 @@ def handle_buy_ordered_state(stock, code):
             return
 
     if time_elapsed > timeout_sec:
-        log_info(
-            f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입."
-        )
+        log_info(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
         orig_ord_no = stock.get("odno")
 
         if not orig_ord_no:
