@@ -183,21 +183,16 @@ class EntryOrchestrator:
                 )
             ]
             mode = "normal"
-        else:
-            orders = []
-            mode = "reject"
-
-        if not orders:
+        else:  # Fail closed if a future policy decision reaches this older caller.
+            reason = f"unsupported_entry_policy_decision:{policy.decision}"
             self.state_machine.transition(
-                symbol,
-                "REJECTED_MARKET_CONDITION",
-                reason="latency_fallback_deprecated",
+                symbol, "REJECTED_MARKET_CONDITION", reason=reason
             )
-            self.metrics_recorder.increment("entry.reject_market_condition")
+            self.metrics_recorder.increment("entry.unsupported_policy_decision")
             result = {
                 "status": "REJECTED_MARKET_CONDITION",
                 "mode": "reject",
-                "reason": "latency_fallback_deprecated",
+                "reason": reason,
                 "latency_state": latency.state.value,
                 "orders": [],
                 "broker_results": [],
@@ -239,9 +234,6 @@ class EntryOrchestrator:
         }
         self.trade_logger.log_result(
             normal_mode=(mode == "normal"),
-            fallback_mode=False,
-            scout_filled=False,
-            main_filled=False,
             partial_fill_ratio=(
                 (len(accepted) / len(broker_results)) if broker_results else 0.0
             ),

@@ -667,12 +667,12 @@ def route_mode_for_model(model_name: str) -> tuple[str, BedrockNovaModelProfile 
             if primary_family in {"lite_v2", "v2", "nova_lite_v2"}
             else lite_profile_from_env()
         )
-        return (
-            str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow"))
+        mode = (
+            str(os.getenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "off"))
             .strip()
-            .lower(),
-            profile,
+            .lower()
         )
+        return ("primary" if mode == "primary" else "off", profile)
     return "off", None
 
 

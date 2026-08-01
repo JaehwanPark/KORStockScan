@@ -103,7 +103,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "sniper_time.py",
     "sniper_trade_review_report.py",
     "sniper_trade_utils.py",
-    "split_entry_followup_audit.py",
     "strategy_position_performance_report.py",
     "swing_daily_simulation_report.py",
     "swing_lifecycle_audit.py",

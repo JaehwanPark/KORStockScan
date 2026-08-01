@@ -95,6 +95,30 @@ NON_LIVE_SELECTABLE_FAMILIES = {
     "panic_buy_runner_tp_canary",
 }
 RETIRED_RUNTIME_ENV_KEYS = {
+    "KORSTOCKSCAN_LATENCY_CANARY_PROFILE",
+    "KORSTOCKSCAN_SCALP_LATENCY_FALLBACK_ENABLED",
+    "KORSTOCKSCAN_SCALP_SPLIT_ENTRY_ENABLED",
+    "KORSTOCKSCAN_SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED",
+    "KORSTOCKSCAN_SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED",
+    "KORSTOCKSCAN_SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_WINDOW_SEC",
+    "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_ENABLED",
+    "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_TAGS",
+    "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE",
+    "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS",
+    "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS",
+    "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO",
+    "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS",
+    "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED",
+    "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE",
+    "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS",
+    "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS",
+    "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO",
+    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED",
+    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT",
+    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC",
+    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT",
+    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT",
+    "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT",
     "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_OVERRIDE_ENABLED",
     "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_WEAK_SEC",
     "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_BASE_SEC",
@@ -123,6 +147,7 @@ REMOVED_TARGET_ENV_KEYS = {
 REMOVED_CALIBRATION_FAMILIES = {
     "ai_watching_score_smoothing_report_only",
     "position_sizing_cap_release",
+    "preset_tp_soft_stop_runtime",
 }
 ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
     "entry_score_parent",
@@ -270,11 +295,6 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION": "max_ws_age_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION": "max_ws_jitter_ms_for_caution",
     "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION": "max_spread_ratio_for_caution",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED": "recovery_enabled",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE": "recovery_min_signal_score",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS": "recovery_max_ws_age_ms",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS": "recovery_max_ws_jitter_ms",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO": "recovery_max_spread_ratio",
     "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED": "enabled",
     "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS": "max_below_bid_bps",
     "SCALPING_NORMAL_DEFENSIVE_TICKS": "normal_defensive_ticks",
@@ -337,12 +357,6 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALP_SOFT_STOP_DYNAMIC_GRACE_MIN_AI_SCORE": "min_ai_score",
     "SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT": "emergency_pct",
     "SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT": "max_worsen_pct",
-    "SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED": "enabled",
-    "SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT": "trigger_pct",
-    "SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC": "grace_sec",
-    "SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT": "emergency_pct",
-    "SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT": "max_worsen_pct",
-    "SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT": "recovery_buffer_pct",
     "LIFECYCLE_DECISION_MATRIX_ENABLED": "enabled",
     "LIFECYCLE_DECISION_MATRIX_POLICY_FILE": "policy_file",
     "LIFECYCLE_DECISION_MATRIX_POLICY_VERSION": "policy_version",
@@ -416,13 +430,9 @@ REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY = (
 )
 SCALE_IN_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_SCALE_IN_LIVE_TUNING_SELECTED"
 SOFT_STOP_DYNAMIC_GRACE_FAMILY = "soft_stop_dynamic_grace_runtime"
-PRESET_TP_SOFT_STOP_FAMILY = "preset_tp_soft_stop_runtime"
 PROFIT_STAGNATION_EXIT_FAMILY = "profit_stagnation_exit_runtime"
 NEVER_GREEN_DEFER_CLAMP_FAMILY = "never_green_defer_clamp_runtime"
 HOLDING_EXIT_LIVE_TUNING_MARKER_ENV = "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
-PRESET_TP_EXIT_LIVE_TUNING_MARKER_ENV = (
-    "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED"
-)
 SCALPING_SCANNER_REAL_SOURCE_GUARD_ENV_KEYS = frozenset(
     {
         "KORSTOCKSCAN_SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED",
@@ -545,17 +555,6 @@ SOFT_STOP_DYNAMIC_GRACE_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT",
     }
 )
-PRESET_TP_SOFT_STOP_ENV_KEYS = frozenset(
-    {
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED",
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT",
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC",
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT",
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT",
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT",
-    }
-)
-
 DETERMINISTIC_POLICY_HANDOFF_FAMILIES = frozenset(
     {
         "entry_split_order_plan",
@@ -3092,10 +3091,7 @@ def _operator_lock_stage_coexist(
         REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_FAMILY,
     }:
         return True
-    return stage == "holding_exit" and {family, previous_family} == {
-        PRESET_TP_SOFT_STOP_FAMILY,
-        PROFIT_STAGNATION_EXIT_FAMILY,
-    }
+    return False
 
 
 def _scale_in_cumulative_quality_stage_coexist(
@@ -3682,7 +3678,6 @@ def _holding_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> s
             family = str(item.get("family") or "")
             if family in {
                 SOFT_STOP_DYNAMIC_GRACE_FAMILY,
-                PRESET_TP_SOFT_STOP_FAMILY,
                 NEVER_GREEN_DEFER_CLAMP_FAMILY,
             }:
                 continue
@@ -3705,20 +3700,6 @@ def _scale_in_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
                 continue
             stage = str(item.get("stage") or "")
             if stage == "scale_in":
-                return family
-    return ""
-
-
-def _preset_tp_exit_live_owner_family(*selected_groups: list[dict[str, Any]]) -> str:
-    for group in selected_groups:
-        for item in group or []:
-            if not isinstance(item, dict):
-                continue
-            family = str(item.get("family") or "")
-            if family in {PRESET_TP_SOFT_STOP_FAMILY, PROFIT_STAGNATION_EXIT_FAMILY}:
-                continue
-            stage = str(item.get("stage") or "")
-            if stage in {"holding_exit", "holding", "exit"}:
                 return family
     return ""
 
@@ -3892,52 +3873,6 @@ def _close_soft_stop_dynamic_grace_for_live_owner(
     updated_decisions: list[dict[str, Any]] = []
     for decision in decisions:
         if str(decision.get("family") or "") != SOFT_STOP_DYNAMIC_GRACE_FAMILY:
-            updated_decisions.append(decision)
-            continue
-        next_decision = {
-            **decision,
-            "selected": False,
-            "decision_reason": reason,
-            "env_overrides": {},
-        }
-        lock = next_decision.get("operator_runtime_env_lock")
-        if isinstance(lock, dict):
-            close_reasons = list(lock.get("close_reasons") or [])
-            if reason not in close_reasons:
-                close_reasons.append(reason)
-            next_decision["operator_runtime_env_lock"] = {
-                **lock,
-                "applied": False,
-                "close_reasons": close_reasons,
-                "allowed_close": _lock_allows_close(lock, close_reasons),
-            }
-        updated_decisions.append(next_decision)
-    return filtered_selected, updated_decisions, filtered_env
-
-
-def _close_preset_tp_soft_stop_for_live_owner(
-    *,
-    selected: list[dict[str, Any]],
-    decisions: list[dict[str, Any]],
-    env_overrides: dict[str, str],
-    owner_family: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    if not owner_family:
-        return selected, decisions, env_overrides
-    reason = f"same_stage_owner_conflict:{owner_family}"
-    filtered_selected = [
-        item
-        for item in selected
-        if str(item.get("family") or "") != PRESET_TP_SOFT_STOP_FAMILY
-    ]
-    filtered_env = {
-        key: value
-        for key, value in env_overrides.items()
-        if str(key) not in PRESET_TP_SOFT_STOP_ENV_KEYS
-    }
-    updated_decisions: list[dict[str, Any]] = []
-    for decision in decisions:
-        if str(decision.get("family") or "") != PRESET_TP_SOFT_STOP_FAMILY:
             updated_decisions.append(decision)
             continue
         next_decision = {
@@ -5972,10 +5907,6 @@ def build_preopen_apply_manifest(
                 selected,
                 runtime_bridge_selected,
             )
-            preset_tp_exit_live_owner_family = _preset_tp_exit_live_owner_family(
-                selected,
-                runtime_bridge_selected,
-            )
             selected, decisions, env_overrides = (
                 _close_aggressive_entry_price_override_for_live_owner(
                     selected=selected,
@@ -6056,14 +5987,6 @@ def build_preopen_apply_manifest(
                     owner_family=holding_exit_live_owner_family,
                 )
             )
-            selected, decisions, env_overrides = (
-                _close_preset_tp_soft_stop_for_live_owner(
-                    selected=selected,
-                    decisions=decisions,
-                    env_overrides=env_overrides,
-                    owner_family=preset_tp_exit_live_owner_family,
-                )
-            )
             env_overrides = {
                 **env_overrides,
                 **entry_cancel_wait_env_overrides,
@@ -6095,8 +6018,6 @@ def build_preopen_apply_manifest(
                 env_overrides[SCALE_IN_LIVE_TUNING_MARKER_ENV] = "true"
             if holding_exit_live_owner_family:
                 env_overrides[HOLDING_EXIT_LIVE_TUNING_MARKER_ENV] = "true"
-            if preset_tp_exit_live_owner_family:
-                env_overrides[PRESET_TP_EXIT_LIVE_TUNING_MARKER_ENV] = "true"
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
             "auto_bounded_live_ready"

@@ -3620,7 +3620,7 @@ class GPTSniperEngine:
             )
         elif model_name == "gpt-5.4-mini":
             configured_route_mode = os.getenv(
-                "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow"
+                "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "off"
             )
         else:
             return None
@@ -3751,7 +3751,7 @@ class GPTSniperEngine:
                 profile,
                 timeout_ms=min(profile.timeout_ms, fallback_timeout_ms, remaining_ms),
             )
-            request_meta = self._build_bedrock_shadow_request_meta(
+            request_meta = self._build_bedrock_provider_request_meta(
                 request=request, transport_meta=transport_meta, roundtrip_ms=0
             )
             request_meta.update(
@@ -3829,7 +3829,7 @@ class GPTSniperEngine:
                 }
             )
             try:
-                request_meta = self._build_bedrock_shadow_request_meta(
+                request_meta = self._build_bedrock_provider_request_meta(
                     request=request, transport_meta=transport_meta, roundtrip_ms=0
                 )
                 request_meta.update(
@@ -3904,7 +3904,7 @@ class GPTSniperEngine:
                 user_input=request.user_input,
                 profile=profile,
             )
-            request_meta = self._build_bedrock_shadow_request_meta(
+            request_meta = self._build_bedrock_provider_request_meta(
                 request=request,
                 transport_meta=transport_meta,
                 roundtrip_ms=result.latency_ms,
@@ -3969,7 +3969,7 @@ class GPTSniperEngine:
                     write_provider_audit_row,
                 )
 
-                request_meta = self._build_bedrock_shadow_request_meta(
+                request_meta = self._build_bedrock_provider_request_meta(
                     request=request, transport_meta=transport_meta, roundtrip_ms=0
                 )
                 request_meta["request_id"] = request.request_id
@@ -4011,7 +4011,7 @@ class GPTSniperEngine:
         primary_profile = entry_price_primary_profile_from_env()
         if primary_profile is None:
             return None
-        request_meta = self._build_bedrock_shadow_request_meta(
+        request_meta = self._build_bedrock_provider_request_meta(
             request=request, transport_meta=transport_meta, roundtrip_ms=0
         )
         request_meta["request_id"] = request.request_id
@@ -4199,7 +4199,7 @@ class GPTSniperEngine:
                 self._set_last_transport_meta(transport_meta)
                 raise
 
-    def _build_bedrock_shadow_request_meta(
+    def _build_bedrock_provider_request_meta(
         self, *, request, transport_meta, roundtrip_ms=0
     ):
         return {

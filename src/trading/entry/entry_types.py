@@ -63,7 +63,6 @@ class PolicyResult:
 
     decision: EntryDecision
     reason: str
-    fallback_allowed: bool
     computed_allowed_slippage: int
     computed_deadline_ms: int
     latest_price: int

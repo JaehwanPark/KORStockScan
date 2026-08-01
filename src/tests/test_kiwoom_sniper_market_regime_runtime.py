@@ -23,6 +23,15 @@ class _RuntimeRecordSession:
         return False
 
 
+def test_retired_latency_profile_cannot_select_remote_runtime_role(monkeypatch):
+    monkeypatch.setattr(kiwoom_sniper_v2.socket, "gethostname", lambda: "main-node")
+    monkeypatch.delenv("KORSTOCKSCAN_RUNTIME_ROLE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_FORCE_MAIN_ON_REMOTE", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "remote_v2")
+
+    assert kiwoom_sniper_v2.resolve_runtime_role() == "main"
+
+
 class _RuntimeRecordDB:
     def __init__(self, record_id):
         self.record_id = record_id

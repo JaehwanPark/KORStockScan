@@ -182,11 +182,6 @@ def test_latency_classifier_recommendation_holds_after_runtime_simplification(
         "max_ws_age_ms_for_caution": 800,
         "max_ws_jitter_ms_for_caution": 900,
         "max_spread_ratio_for_caution": 0.008,
-        "recovery_enabled": False,
-        "recovery_min_signal_score": 75.0,
-        "recovery_max_ws_age_ms": 800,
-        "recovery_max_ws_jitter_ms": 900,
-        "recovery_max_spread_ratio": 0.008,
     }
     assert "CAUTION no longer blocks submit" in candidate["calibration_reason"]
     selected = candidate["source_metrics"]["selected_profile"]

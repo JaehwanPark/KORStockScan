@@ -555,42 +555,6 @@ class TradingConfig:
     SCALP_PRESET_HARD_STOP_EMERGENCY_PCT: float = (
         -1.2
     )  # 유예 중에도 강제 청산하는 비상 손절선
-    SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED: bool = (
-        False  # real SCALP_PRESET_TP 손절 soft-stop화 operator override
-    )
-    SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT: float = -0.7
-    SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC: int = 45
-    SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT: float = -1.2
-    SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT: float = 0.30
-    SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT: float = 0.05
-    PRESET_TP_EXIT_LIVE_TUNING_SELECTED: bool = False
-    SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT: float = (
-        -0.7
-    )  # SCALP_BASE + fallback 전용 기본 손절선
-    SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC: int = (
-        35  # SCALP_BASE + fallback 전용 유예시간
-    )
-    SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT: float = (
-        -1.2
-    )  # SCALP_BASE + fallback 비상 손절선
-    SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER: float = (
-        0.70  # historical-only: fallback 경로 복기용 잔존 상수
-    )
-    SCALP_LATENCY_FALLBACK_ENABLED: bool = (
-        False  # 폐기 확정: CAUTION fallback 진입 재개 금지
-    )
-    SCALP_SPLIT_ENTRY_ENABLED: bool = (
-        False  # 폐기 확정: fallback scout/main split-entry 재개 금지
-    )
-    SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED: bool = (
-        False  # 폐기 정합화: split-entry runtime shadow 기본 OFF
-    )
-    SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED: bool = (
-        False  # 폐기 정합화: split-entry immediate recheck shadow 기본 OFF
-    )
-    SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_WINDOW_SEC: int = (
-        90  # historical-only: shadow 재생 분석용 기준창
-    )
     SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED: bool = (
         True  # 2026-04-20 immediate fix: partial fill 최소 체결비율 guard on
     )
@@ -794,42 +758,13 @@ class TradingConfig:
     SCALP_OPEN_RECLAIM_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC: int = (
         120  # OPEN_RECLAIM 양전환 이력 케이스 near_ai_exit 지속 필요시간
     )
-    SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC: int = (
-        420  # SCANNER fallback never-green 조기 정리 최소 보유시간
+    SCALP_LATENCY_DANGER_MAX_WS_AGE_MS: int = 450
+    SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS: int = (
+        260  # DANGER 상세 원인 분류 기준
     )
-    SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT: float = (
-        0.20  # SCANNER fallback 최대 허용 고점수익
+    SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO: float = (
+        0.0100  # DANGER 상세 원인 분류 및 hard-safety provenance 기준
     )
-    SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER: int = (
-        8  # SCANNER fallback near_ai_exit 점수 여유폭
-    )
-    SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC: int = (
-        120  # SCANNER fallback near_ai_exit 지속 필요시간
-    )
-    SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC: int = (
-        150  # SCANNER fallback 양전환 이력 케이스 near_ai_exit 지속 필요시간
-    )
-    SCALP_LATENCY_GUARD_CANARY_ENABLED: bool = (
-        False  # 긴급 운영가드: REJECT_DANGER -> fallback canary override 비활성화
-    )
-    SCALP_LATENCY_GUARD_CANARY_TAGS: tuple = (
-        "SCANNER",
-        "VWAP_RECLAIM",
-        "OPEN_RECLAIM",
-    )  # latency canary 적용 태그
-    SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE: float = (
-        85.0  # latency canary 최소 AI 점수
-    )
-    SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS: int = 450  # latency canary 최대 ws_age
-    SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS: int = (
-        260  # latency canary 최대 ws_jitter
-    )
-    SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO: float = (
-        0.0100  # latency canary 최대 spread_ratio
-    )
-    SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS: (
-        tuple
-    ) = ()  # 비어 있으면 전체 허용, 값이 있으면 해당 danger reason만 canary 허용
     SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION: int = (
         700  # latency classifier CAUTION 최대 ws_age
     )
@@ -847,21 +782,6 @@ class TradingConfig:
     )
     SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO: float = (
         0.015  # refresh 후 허용 최대 spread
-    )
-    SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED: bool = (
-        False  # legacy recovery flag; CAUTION now follows normal submit after slippage
-    )
-    SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE: float = (
-        75.0  # recovery canary 최소 AI 점수
-    )
-    SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS: int = (
-        1200  # recovery canary 최대 ws_age
-    )
-    SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS: int = (
-        1500  # recovery canary 최대 ws_jitter
-    )
-    SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO: float = (
-        0.0100  # recovery canary 최대 spread_ratio
     )
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED: bool = (
         False  # 2026-04-29 OFF 확정: quote freshness 복합 residual canary 기본 비활성
@@ -1611,22 +1531,10 @@ def _build_trading_rules() -> TradingConfig:
             config,
             KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW=max(0, env_kt00001_orderable_floor),
         )
-    latency_profile = (
-        str(os.getenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "") or "").strip().lower()
-    )
-    if latency_profile == "remote_v2":
-        config = replace(
-            config,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=400,
-        )
-
-    env_ws_jitter = _env_int("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS")
-    env_ws_age = _env_int("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS")
+    env_ws_jitter = _env_int("KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS")
+    env_ws_age = _env_int("KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_AGE_MS")
     env_spread_ratio = _env_float(
-        "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO"
-    )
-    env_allowed_danger_reasons = _env_csv_tuple(
-        "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS"
+        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO"
     )
     env_entry_latency_max_ws_age_caution = _env_int(
         "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION"
@@ -1645,21 +1553,6 @@ def _build_trading_rules() -> TradingConfig:
     )
     env_pre_submit_quote_refresh_max_spread = _env_float(
         "KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO"
-    )
-    env_latency_submit_recovery_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED"
-    )
-    env_latency_submit_recovery_min_signal = _env_float(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE"
-    )
-    env_latency_submit_recovery_max_ws_age = _env_int(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS"
-    )
-    env_latency_submit_recovery_max_ws_jitter = _env_int(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS"
-    )
-    env_latency_submit_recovery_max_spread = _env_float(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO"
     )
     env_spread_relief_enabled = _env_bool(
         "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED"
@@ -1782,18 +1675,12 @@ def _build_trading_rules() -> TradingConfig:
         env_ws_jitter is not None
         or env_ws_age is not None
         or env_spread_ratio is not None
-        or env_allowed_danger_reasons is not None
         or env_entry_latency_max_ws_age_caution is not None
         or env_entry_latency_max_ws_jitter_caution is not None
         or env_entry_latency_max_spread_caution is not None
         or env_pre_submit_quote_refresh_enabled is not None
         or env_pre_submit_quote_refresh_max_age is not None
         or env_pre_submit_quote_refresh_max_spread is not None
-        or env_latency_submit_recovery_enabled is not None
-        or env_latency_submit_recovery_min_signal is not None
-        or env_latency_submit_recovery_max_ws_age is not None
-        or env_latency_submit_recovery_max_ws_jitter is not None
-        or env_latency_submit_recovery_max_spread is not None
         or env_spread_relief_enabled is not None
         or env_spread_relief_tags is not None
         or env_spread_relief_min_signal is not None
@@ -1830,25 +1717,20 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=(
+            SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS=(
                 env_ws_jitter
                 if env_ws_jitter is not None
-                else config.SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS
+                else config.SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS
             ),
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=(
+            SCALP_LATENCY_DANGER_MAX_WS_AGE_MS=(
                 env_ws_age
                 if env_ws_age is not None
-                else config.SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS
+                else config.SCALP_LATENCY_DANGER_MAX_WS_AGE_MS
             ),
-            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=(
+            SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO=(
                 env_spread_ratio
                 if env_spread_ratio is not None
-                else config.SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO
-            ),
-            SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS=(
-                env_allowed_danger_reasons
-                if env_allowed_danger_reasons is not None
-                else config.SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS
+                else config.SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO
             ),
             SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION=(
                 env_entry_latency_max_ws_age_caution
@@ -1879,31 +1761,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_pre_submit_quote_refresh_max_spread
                 if env_pre_submit_quote_refresh_max_spread is not None
                 else config.SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_SPREAD_RATIO
-            ),
-            SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED=(
-                env_latency_submit_recovery_enabled
-                if env_latency_submit_recovery_enabled is not None
-                else config.SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED
-            ),
-            SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE=(
-                env_latency_submit_recovery_min_signal
-                if env_latency_submit_recovery_min_signal is not None
-                else config.SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE
-            ),
-            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS=(
-                env_latency_submit_recovery_max_ws_age
-                if env_latency_submit_recovery_max_ws_age is not None
-                else config.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS
-            ),
-            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS=(
-                env_latency_submit_recovery_max_ws_jitter
-                if env_latency_submit_recovery_max_ws_jitter is not None
-                else config.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS
-            ),
-            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO=(
-                env_latency_submit_recovery_max_spread
-                if env_latency_submit_recovery_max_spread is not None
-                else config.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO
             ),
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=(
                 env_spread_relief_enabled
@@ -2986,27 +2843,6 @@ def _build_trading_rules() -> TradingConfig:
     env_holding_exit_live_tuning_selected = _env_bool(
         "KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED"
     )
-    env_preset_tp_soft_stop_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED"
-    )
-    env_preset_tp_soft_stop_trigger = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT"
-    )
-    env_preset_tp_soft_stop_grace = _env_int(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC"
-    )
-    env_preset_tp_soft_stop_emergency = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT"
-    )
-    env_preset_tp_soft_stop_max_worsen = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT"
-    )
-    env_preset_tp_soft_stop_recovery_buffer = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT"
-    )
-    env_preset_tp_exit_live_tuning_selected = _env_bool(
-        "KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED"
-    )
     env_scalp_safe_profit = _env_float("KORSTOCKSCAN_SCALP_SAFE_PROFIT")
     env_scalp_trailing_strong_ai_score = _env_int(
         "KORSTOCKSCAN_SCALP_TRAILING_STRONG_AI_SCORE"
@@ -3320,13 +3156,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_never_green_defer_clamp_max_micro_vwap_bp is not None
         or env_never_green_defer_clamp_min_loss_pct is not None
         or env_holding_exit_live_tuning_selected is not None
-        or env_preset_tp_soft_stop_enabled is not None
-        or env_preset_tp_soft_stop_trigger is not None
-        or env_preset_tp_soft_stop_grace is not None
-        or env_preset_tp_soft_stop_emergency is not None
-        or env_preset_tp_soft_stop_max_worsen is not None
-        or env_preset_tp_soft_stop_recovery_buffer is not None
-        or env_preset_tp_exit_live_tuning_selected is not None
         or env_scalp_safe_profit is not None
         or env_profit_stagnation_enabled is not None
         or env_profit_stagnation_min_profit is not None
@@ -4380,41 +4209,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_holding_exit_live_tuning_selected
                 if env_holding_exit_live_tuning_selected is not None
                 else config.HOLDING_EXIT_LIVE_TUNING_SELECTED
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED=(
-                env_preset_tp_soft_stop_enabled
-                if env_preset_tp_soft_stop_enabled is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT=(
-                env_preset_tp_soft_stop_trigger
-                if env_preset_tp_soft_stop_trigger is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC=(
-                env_preset_tp_soft_stop_grace
-                if env_preset_tp_soft_stop_grace is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT=(
-                env_preset_tp_soft_stop_emergency
-                if env_preset_tp_soft_stop_emergency is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT=(
-                env_preset_tp_soft_stop_max_worsen
-                if env_preset_tp_soft_stop_max_worsen is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT=(
-                env_preset_tp_soft_stop_recovery_buffer
-                if env_preset_tp_soft_stop_recovery_buffer is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT
-            ),
-            PRESET_TP_EXIT_LIVE_TUNING_SELECTED=(
-                env_preset_tp_exit_live_tuning_selected
-                if env_preset_tp_exit_live_tuning_selected is not None
-                else config.PRESET_TP_EXIT_LIVE_TUNING_SELECTED
             ),
             SCALP_SAFE_PROFIT=(
                 env_scalp_safe_profit
@@ -6801,18 +6595,6 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_preset_hard_stop_emergency = _env_float(
         "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_EMERGENCY_PCT"
     )
-    env_scalp_preset_tp_soft_stop_trigger = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT"
-    )
-    env_scalp_preset_tp_soft_stop_emergency = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT"
-    )
-    env_scalp_preset_fallback_hard_stop = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT"
-    )
-    env_scalp_preset_fallback_hard_stop_emergency = _env_float(
-        "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT"
-    )
     env_kosdaq_stop = _env_float("KORSTOCKSCAN_KOSDAQ_STOP")
     if (
         env_stop_loss_bull is not None
@@ -6825,10 +6607,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalp_soft_stop_dynamic_grace_emergency is not None
         or env_scalp_preset_hard_stop is not None
         or env_scalp_preset_hard_stop_emergency is not None
-        or env_scalp_preset_tp_soft_stop_trigger is not None
-        or env_scalp_preset_tp_soft_stop_emergency is not None
-        or env_scalp_preset_fallback_hard_stop is not None
-        or env_scalp_preset_fallback_hard_stop_emergency is not None
         or env_kosdaq_stop is not None
     ):
         config = replace(
@@ -6880,26 +6658,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_scalp_preset_hard_stop_emergency
                 if env_scalp_preset_hard_stop_emergency is not None
                 else config.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT=(
-                env_scalp_preset_tp_soft_stop_trigger
-                if env_scalp_preset_tp_soft_stop_trigger is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT
-            ),
-            SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT=(
-                env_scalp_preset_tp_soft_stop_emergency
-                if env_scalp_preset_tp_soft_stop_emergency is not None
-                else config.SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT
-            ),
-            SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT=(
-                env_scalp_preset_fallback_hard_stop
-                if env_scalp_preset_fallback_hard_stop is not None
-                else config.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT
-            ),
-            SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT=(
-                env_scalp_preset_fallback_hard_stop_emergency
-                if env_scalp_preset_fallback_hard_stop_emergency is not None
-                else config.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT
             ),
             KOSDAQ_STOP=(
                 env_kosdaq_stop if env_kosdaq_stop is not None else config.KOSDAQ_STOP

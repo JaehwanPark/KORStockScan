@@ -79,8 +79,7 @@ if pid:
             k, v = chunk.split('=', 1)
             env_map[k] = v
     for key in [
-        'KORSTOCKSCAN_LATENCY_CANARY_PROFILE',
-        'KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS',
+        'KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS',
     ]:
         if key in env_map:
             latency_env[key] = env_map[key]
@@ -154,8 +153,7 @@ def _render_markdown(window: str, payload: dict[str, Any]) -> str:
         f"- bot_running: `{payload.get('bot_running', False)}`",
         f"- bot_pid: `{payload.get('bot_pid', '')}`",
         f"- tmux_bot_session: `{payload.get('tmux_bot_session', False)}`",
-        f"- latency_profile: `{latency_env.get('KORSTOCKSCAN_LATENCY_CANARY_PROFILE', '')}`",
-        f"- latency_max_ws_jitter_ms: `{latency_env.get('KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS', '')}`",
+        f"- danger_max_ws_jitter_ms: `{latency_env.get('KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS', '')}`",
         f"- pipeline_exists: `{pipeline.get('exists', False)}`",
         f"- pipeline_line_count: `{pipeline.get('line_count', 0)}`",
         f"- entry_pipeline_rows: `{pipeline.get('entry_pipeline_rows', 0)}`",

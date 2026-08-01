@@ -24,21 +24,11 @@ TARGET_ENV_KEYS = [
     "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
     "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
     "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS",
-    "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO",
 ]
 DEFAULT_CURRENT_VALUES = {
     "max_ws_age_ms_for_caution": 700,
     "max_ws_jitter_ms_for_caution": 300,
     "max_spread_ratio_for_caution": 0.005,
-    "recovery_enabled": False,
-    "recovery_min_signal_score": 75.0,
-    "recovery_max_ws_age_ms": 1200,
-    "recovery_max_ws_jitter_ms": 1500,
-    "recovery_max_spread_ratio": 0.0100,
 }
 SYNTHETIC_CODES = {"123456", "000000", "-", ""}
 SYNTHETIC_NAMES = {"TEST", "DUMMY", "MOCK"}
@@ -632,11 +622,6 @@ def _build_candidate(
             "max_spread_ratio_for_caution": float(
                 profile["max_spread_ratio_for_caution"]
             ),
-            "recovery_enabled": bool(eligible),
-            "recovery_min_signal_score": RECOVERY_MIN_SIGNAL_SCORE,
-            "recovery_max_ws_age_ms": int(profile["max_ws_age_ms_for_caution"]),
-            "recovery_max_ws_jitter_ms": int(profile["max_ws_jitter_ms_for_caution"]),
-            "recovery_max_spread_ratio": float(profile["max_spread_ratio_for_caution"]),
         },
         "threshold_version": f"{FAMILY}:{target_date}:{profile['profile_id']}",
         "sample_count": total_events,
@@ -705,7 +690,7 @@ def _build_candidate(
             "r0_r6_consumer_map": {
                 "R0_collect": "latency_block/latency_pass/order_bundle_submitted provenance",
                 "R1_daily_report": "SAFE/CAUTION normal/DANGER hard reject split plus counterfactual EV",
-                "R2_cumulative_report": "rolling latency submit recovery attribution and label coverage",
+                "R2_cumulative_report": "rolling latency classifier attribution and label coverage",
                 "R3_manifest_only": "runtime-semantics-matched EV-ranked profile candidate",
                 "R4_preopen_apply_candidate": "auto_bounded_live guard consumes recommended_action",
                 "R5_bounded_calibrated_apply": "no adaptive latency env apply after CAUTION normal-submit simplification",

@@ -168,3 +168,12 @@ def test_route_mode_for_gpt54_mini_can_select_lite_v2_primary(monkeypatch):
     assert profile is not None
     assert profile.family == "lite_v2"
     assert profile.model_id == "global.amazon.nova-2-lite-v1:0"
+
+
+def test_route_mode_for_gpt54_mini_rejects_removed_shadow_mode(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")
+
+    route_mode, profile = mod.route_mode_for_model("gpt-5.4-mini")
+
+    assert route_mode == "off"
+    assert profile is not None

@@ -24,8 +24,7 @@ def test_render_markdown_contains_key_fields() -> None:
         "bot_pid": "1234",
         "tmux_bot_session": True,
         "latency_env": {
-            "KORSTOCKSCAN_LATENCY_CANARY_PROFILE": "remote_v2",
-            "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS": "400",
+            "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS": "400",
         },
         "pipeline": {
             "exists": True,
@@ -39,6 +38,6 @@ def test_render_markdown_contains_key_fields() -> None:
     }
     text = _render_markdown("preopen", payload)
     assert "Remote Latency Baseline / preopen" in text
-    assert "remote_v2" in text
+    assert "danger_max_ws_jitter_ms: `400`" in text
     assert "pipeline_line_count: `11`" in text
     assert "thread_snapshot" not in text.lower()

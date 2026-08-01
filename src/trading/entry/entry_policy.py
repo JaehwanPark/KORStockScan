@@ -35,7 +35,6 @@ class EntryPolicy:
             return PolicyResult(
                 decision=EntryDecision.REJECT_TIMEOUT,
                 reason="signal_deadline_exceeded",
-                fallback_allowed=False,
                 computed_allowed_slippage=0,
                 computed_deadline_ms=self.config.entry_deadline_ms,
                 latest_price=int(latest_price),
@@ -45,7 +44,6 @@ class EntryPolicy:
             return PolicyResult(
                 decision=EntryDecision.REJECT_DANGER,
                 reason="latency_state_danger",
-                fallback_allowed=False,
                 computed_allowed_slippage=0,
                 computed_deadline_ms=self.config.entry_deadline_ms,
                 latest_price=int(latest_price),
@@ -64,7 +62,6 @@ class EntryPolicy:
                 return PolicyResult(
                     decision=EntryDecision.REJECT_SLIPPAGE,
                     reason="safe_slippage_exceeded",
-                    fallback_allowed=False,
                     computed_allowed_slippage=allowed,
                     computed_deadline_ms=self.config.entry_deadline_ms,
                     latest_price=int(latest_price),
@@ -72,7 +69,6 @@ class EntryPolicy:
             return PolicyResult(
                 decision=EntryDecision.ALLOW_NORMAL,
                 reason="safe_normal_entry_allowed",
-                fallback_allowed=False,
                 computed_allowed_slippage=allowed,
                 computed_deadline_ms=self.config.entry_deadline_ms,
                 latest_price=int(latest_price),
@@ -81,8 +77,8 @@ class EntryPolicy:
         allowed = self._allowed_slippage(
             signal_price=snapshot.signal_price,
             latest_price=latest_price,
-            tick_limit=self.config.fallback_allowed_slippage_ticks,
-            pct_limit=self.config.fallback_allowed_slippage_pct,
+            tick_limit=self.config.caution_allowed_slippage_ticks,
+            pct_limit=self.config.caution_allowed_slippage_pct,
         )
         if not self._slippage_ok(
             snapshot.signal_price, latest_price, allowed, snapshot.side
@@ -90,7 +86,6 @@ class EntryPolicy:
             return PolicyResult(
                 decision=EntryDecision.REJECT_SLIPPAGE,
                 reason="caution_slippage_exceeded",
-                fallback_allowed=False,
                 computed_allowed_slippage=allowed,
                 computed_deadline_ms=self.config.entry_deadline_ms,
                 latest_price=int(latest_price),
@@ -98,7 +93,6 @@ class EntryPolicy:
         return PolicyResult(
             decision=EntryDecision.ALLOW_NORMAL,
             reason="caution_normal_entry_allowed",
-            fallback_allowed=False,
             computed_allowed_slippage=allowed,
             computed_deadline_ms=self.config.entry_deadline_ms,
             latest_price=int(latest_price),

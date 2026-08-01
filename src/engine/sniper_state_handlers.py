@@ -1056,11 +1056,6 @@ _LOW_PROFIT_STAGNATION_STATE_FIELDS = (
     "low_profit_stagnation_anchor_peak",
     "low_profit_stagnation_state",
 )
-_PRESET_TP_SOFT_STOP_STATE_FIELDS = (
-    "preset_tp_soft_stop_started_at",
-    "preset_tp_soft_stop_anchor_profit",
-    "preset_tp_soft_stop_anchor_price",
-)
 SCALP_SIMULATION_BOOK = "scalp_ai_buy_all"
 SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
 SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
@@ -23674,133 +23669,6 @@ def _build_soft_stop_dynamic_grace_decision(
         "data_window_start": "2026-06-04T14:29:09+09:00",
         "data_window_end": "2026-06-12",
     }
-
-
-def _clear_preset_tp_soft_stop_state(stock: dict) -> None:
-    for field in _PRESET_TP_SOFT_STOP_STATE_FIELDS:
-        stock.pop(field, None)
-
-
-def _preset_tp_soft_stop_common_fields(
-    *,
-    trigger_pct: float,
-    emergency_pct: float,
-    grace_sec: int,
-    elapsed_sec: int,
-    anchor_profit: float,
-    current_profit: float,
-    max_worsen_pct: float,
-    recovery_buffer_pct: float,
-    formal_live_selected: bool,
-) -> dict[str, Any]:
-    return {
-        "preset_tp_soft_stop_trigger_pct": f"{trigger_pct:+.2f}",
-        "preset_tp_soft_stop_emergency_pct": f"{emergency_pct:+.2f}",
-        "preset_tp_soft_stop_grace_sec": int(grace_sec),
-        "preset_tp_soft_stop_elapsed_sec": int(max(0, elapsed_sec)),
-        "preset_tp_soft_stop_anchor_profit": f"{anchor_profit:+.2f}",
-        "preset_tp_soft_stop_current_profit": f"{current_profit:+.2f}",
-        "preset_tp_soft_stop_max_worsen_pct": f"{max_worsen_pct:.2f}",
-        "preset_tp_soft_stop_recovery_buffer_pct": f"{recovery_buffer_pct:.2f}",
-        "formal_preset_tp_exit_tuning_selected": bool(formal_live_selected),
-    }
-
-
-def _build_preset_tp_soft_stop_decision(
-    stock: dict,
-    *,
-    strategy: str,
-    now_ts: float,
-    curr_price: int,
-    profit_rate: float,
-) -> dict[str, Any]:
-    enabled = _rule_bool("SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED", False)
-    formal_live_selected = _rule_bool("PRESET_TP_EXIT_LIVE_TUNING_SELECTED", False)
-    trigger_pct = _rule_float("SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", -0.7)
-    grace_sec = max(0, _rule_int("SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC", 45))
-    emergency_pct = min(
-        _rule_float("SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT", -1.2),
-        float(trigger_pct),
-    )
-    max_worsen_pct = max(
-        0.0, _rule_float("SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT", 0.30)
-    )
-    recovery_buffer_pct = max(
-        0.0, _rule_float("SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT", 0.05)
-    )
-    started_at = _safe_float(stock.get("preset_tp_soft_stop_started_at"), 0.0)
-    anchor_profit = _safe_float(
-        stock.get("preset_tp_soft_stop_anchor_profit"), profit_rate
-    )
-    if started_at <= 0:
-        anchor_profit = float(profit_rate or 0.0)
-    elapsed_sec = max(0, int(now_ts - started_at)) if started_at > 0 else 0
-    additional_worsen = max(
-        0.0, float(anchor_profit or 0.0) - float(profit_rate or 0.0)
-    )
-    base = {
-        "enabled": bool(enabled),
-        "formal_live_selected": bool(formal_live_selected),
-        "trigger_pct": float(trigger_pct),
-        "emergency_pct": float(emergency_pct),
-        "grace_sec": int(grace_sec),
-        "elapsed_sec": int(elapsed_sec),
-        "anchor_profit": float(anchor_profit),
-        "current_profit": float(profit_rate or 0.0),
-        "max_worsen_pct": float(max_worsen_pct),
-        "recovery_buffer_pct": float(recovery_buffer_pct),
-        "additional_worsen": float(additional_worsen),
-    }
-    skip_reason = ""
-    if not enabled:
-        skip_reason = "disabled"
-    elif formal_live_selected:
-        skip_reason = "formal_preset_tp_exit_tuning_selected"
-    elif strategy != "SCALPING":
-        skip_reason = "non_scalping"
-    elif _is_scalp_simulated_position(stock, strategy) or _has_sim_probe_provenance(
-        stock
-    ):
-        skip_reason = "sim_or_probe_position"
-    if skip_reason:
-        return {**base, "action": "skip", "skip_reason": skip_reason}
-
-    recovery_threshold = trigger_pct + recovery_buffer_pct
-    if started_at > 0 and profit_rate > trigger_pct:
-        return {
-            **base,
-            "action": "recovered",
-            "reason": (
-                "preset_tp_soft_stop_recovered"
-                if profit_rate >= recovery_threshold
-                else "preset_tp_soft_stop_recovered_above_trigger"
-            ),
-        }
-    if profit_rate > trigger_pct:
-        return {**base, "action": "idle", "reason": "above_trigger"}
-    if profit_rate <= emergency_pct:
-        return {**base, "action": "emergency", "reason": "emergency_pct_breached"}
-    if started_at <= 0:
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "preset_tp_soft_stop_started_at": float(now_ts),
-                "preset_tp_soft_stop_anchor_profit": float(profit_rate or 0.0),
-                "preset_tp_soft_stop_anchor_price": int(curr_price or 0),
-            },
-        )
-        return {
-            **base,
-            "action": "defer",
-            "reason": "preset_tp_soft_stop_triggered",
-            "elapsed_sec": 0,
-            "anchor_profit": float(profit_rate or 0.0),
-        }
-    if additional_worsen > max_worsen_pct:
-        return {**base, "action": "emergency", "reason": "max_worsen_exceeded"}
-    if elapsed_sec < grace_sec:
-        return {**base, "action": "defer", "reason": "preset_tp_soft_stop_deferred"}
-    return {**base, "action": "confirmed", "reason": "grace_elapsed_below_trigger"}
 
 
 def _emit_soft_stop_expert_observations(
@@ -59232,7 +59100,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         request = _resolve_live_entry_order_request(
             strategy=strategy,
-            entry_mode=entry_mode,
             planned_order=planned_order,
             default_order_type_code=order_type_code,
             default_price=final_price,
@@ -67632,13 +67499,10 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
             stock.get("hard_stop_pct"),
             _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.7),
         )
-        soft_stop_trigger_pct = _rule_float(
-            "SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", hard_stop_pct
-        )
         protect_profit_pct = _safe_float(stock.get("protect_profit_pct"), None)
         trailing_stop_price = _safe_int(stock.get("trailing_stop_price"), 0)
         stop_precedence = bool(
-            holding_profit_rate <= max(hard_stop_pct, soft_stop_trigger_pct)
+            holding_profit_rate <= hard_stop_pct
             or (
                 protect_profit_pct is not None
                 and holding_profit_rate <= float(protect_profit_pct)
@@ -68440,7 +68304,7 @@ def _finalize_buy_order_submission(
 
 
 def _resolve_live_entry_order_request(
-    strategy, entry_mode, planned_order, default_order_type_code, default_price
+    strategy, planned_order, default_order_type_code, default_price
 ):
     tif = str(planned_order.get("tif", "DAY") or "DAY").upper()
     tag = str(planned_order.get("tag", "normal") or "normal")
@@ -68486,7 +68350,7 @@ def _resolve_live_entry_order_request(
             "tag": tag,
         }
 
-    if strategy == "SCALPING" or entry_mode == "fallback":
+    if strategy == "SCALPING":
         return {
             "qty": qty,
             "price": price,
@@ -70309,13 +70173,10 @@ def _submit_entry_split_probe_residual_locked(
     hard_stop_pct = _safe_float(
         stock.get("hard_stop_pct"), _rule_float("SCALP_PRESET_HARD_STOP_PCT", -0.7)
     )
-    soft_stop_trigger_pct = _rule_float(
-        "SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", hard_stop_pct
-    )
     protect_profit_pct = _safe_float(stock.get("protect_profit_pct"), None)
     trailing_stop_price = _safe_int(stock.get("trailing_stop_price"), 0)
     stop_precedence = bool(
-        profit_rate <= max(hard_stop_pct, soft_stop_trigger_pct)
+        profit_rate <= hard_stop_pct
         or (protect_profit_pct is not None and profit_rate <= float(protect_profit_pct))
         or (trailing_stop_price > 0 and curr_price <= trailing_stop_price)
     )
@@ -71808,133 +71669,6 @@ def handle_holding_state(
             _mutate_stock_state(
                 stock, set_fields={"last_exit_guard_reason": "broker_recovered_legacy"}
             )
-        else:
-            preset_soft_stop_decision = _build_preset_tp_soft_stop_decision(
-                stock,
-                strategy=strategy,
-                now_ts=now_ts,
-                curr_price=curr_p,
-                profit_rate=profit_rate,
-            )
-            preset_soft_stop_action = str(preset_soft_stop_decision.get("action") or "")
-            preset_soft_stop_fields = _preset_tp_soft_stop_common_fields(
-                trigger_pct=_safe_float(
-                    preset_soft_stop_decision.get("trigger_pct"),
-                    _rule("SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", -0.7),
-                ),
-                emergency_pct=_safe_float(
-                    preset_soft_stop_decision.get("emergency_pct"),
-                    _rule("SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT", -1.2),
-                ),
-                grace_sec=_safe_int(
-                    preset_soft_stop_decision.get("grace_sec"),
-                    _rule("SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC", 45),
-                ),
-                elapsed_sec=_safe_int(preset_soft_stop_decision.get("elapsed_sec"), 0),
-                anchor_profit=_safe_float(
-                    preset_soft_stop_decision.get("anchor_profit"), profit_rate
-                ),
-                current_profit=_safe_float(
-                    preset_soft_stop_decision.get("current_profit"), profit_rate
-                ),
-                max_worsen_pct=_safe_float(
-                    preset_soft_stop_decision.get("max_worsen_pct"),
-                    _rule("SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT", 0.30),
-                ),
-                recovery_buffer_pct=_safe_float(
-                    preset_soft_stop_decision.get("recovery_buffer_pct"),
-                    _rule("SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT", 0.05),
-                ),
-                formal_live_selected=bool(
-                    preset_soft_stop_decision.get("formal_live_selected")
-                ),
-            )
-            if preset_soft_stop_action == "recovered":
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    "preset_tp_soft_stop_recovered",
-                    **preset_soft_stop_fields,
-                    preset_tp_soft_stop_reason=preset_soft_stop_decision.get(
-                        "reason", "-"
-                    ),
-                )
-                _clear_preset_tp_soft_stop_state(stock)
-            elif preset_soft_stop_action == "defer":
-                stage = str(
-                    preset_soft_stop_decision.get("reason")
-                    or "preset_tp_soft_stop_deferred"
-                )
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    stage,
-                    preset_tp_soft_stop_triggered=True,
-                    preset_tp_soft_stop_deferred=True,
-                    preset_tp_soft_stop_reason=preset_soft_stop_decision.get(
-                        "reason", "-"
-                    ),
-                    preset_tp_soft_stop_additional_worsen=f"{_safe_float(preset_soft_stop_decision.get('additional_worsen'), 0.0):.2f}",
-                    **preset_soft_stop_fields,
-                )
-                return
-            elif preset_soft_stop_action in {"confirmed", "emergency"}:
-                exit_rule = (
-                    "scalp_preset_emergency_stop_pct"
-                    if preset_soft_stop_action == "emergency"
-                    else "scalp_preset_soft_stop_confirmed"
-                )
-                stage = exit_rule
-                _log_holding_pipeline(
-                    stock,
-                    code,
-                    stage,
-                    preset_tp_soft_stop_triggered=True,
-                    preset_tp_soft_stop_deferred=False,
-                    preset_tp_soft_stop_reason=preset_soft_stop_decision.get(
-                        "reason", "-"
-                    ),
-                    preset_tp_soft_stop_additional_worsen=f"{_safe_float(preset_soft_stop_decision.get('additional_worsen'), 0.0):.2f}",
-                    **preset_soft_stop_fields,
-                )
-                log_info(
-                    f"🔪 [SCALP 출구엔진] {stock['name']} preset TP 손절 soft-stop "
-                    f"{'비상' if preset_soft_stop_action == 'emergency' else '확정'}({profit_rate:.2f}%). "
-                    "최유리(IOC) 청산!"
-                )
-                _clear_preset_tp_soft_stop_state(stock)
-                _dispatch_scalp_preset_exit(
-                    stock=stock,
-                    code=code,
-                    now_ts=now_ts,
-                    curr_p=curr_p,
-                    buy_p=buy_p,
-                    profit_rate=profit_rate,
-                    peak_profit=peak_profit,
-                    strategy=strategy,
-                    sell_reason_type="LOSS",
-                    reason=(
-                        f"🚨 SCALP preset TP emergency stop ({preset_soft_stop_fields['preset_tp_soft_stop_emergency_pct']}%)"
-                        if preset_soft_stop_action == "emergency"
-                        else f"🛑 SCALP preset TP soft stop confirmed ({preset_soft_stop_fields['preset_tp_soft_stop_trigger_pct']}%)"
-                    ),
-                    exit_rule=exit_rule,
-                    ws_data=ws_data,
-                    admin_id=admin_id,
-                    market_regime=market_regime,
-                    extra_fields={
-                        **preset_soft_stop_fields,
-                        "preset_tp_soft_stop_triggered": True,
-                        "preset_tp_soft_stop_deferred": False,
-                        "preset_tp_soft_stop_reason": preset_soft_stop_decision.get(
-                            "reason", "-"
-                        ),
-                        "preset_tp_soft_stop_additional_worsen": (
-                            f"{_safe_float(preset_soft_stop_decision.get('additional_worsen'), 0.0):.2f}"
-                        ),
-                    },
-                )
-                return
 
         if not legacy_broker_recovered and profit_rate <= preset_hard_stop_pct:
             within_grace = (
@@ -73519,21 +73253,6 @@ def handle_holding_state(
         open_reclaim_retrace_sustain_sec = _rule_int(
             "SCALP_OPEN_RECLAIM_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC", 120
         )
-        scanner_fallback_peak_max_pct = _rule_float(
-            "SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT", 0.20
-        )
-        scanner_fallback_hold_sec = _rule_int(
-            "SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC", 420
-        )
-        scanner_fallback_score_buffer = _rule_int(
-            "SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER", 8
-        )
-        scanner_fallback_near_ai_exit_sustain_sec = _rule_int(
-            "SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC", 120
-        )
-        scanner_fallback_retrace_sustain_sec = _rule_int(
-            "SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC", 150
-        )
         if highest_prices.get(price_key, 0) > 0:
             drawdown = (
                 (highest_prices[price_key] - curr_p) / highest_prices[price_key] * 100
@@ -73667,12 +73386,6 @@ def handle_holding_state(
             and current_ai_score
             <= (near_ai_exit_score_limit + open_reclaim_score_buffer)
         )
-        scanner_fallback_near_ai_exit = (
-            profit_rate <= near_ai_exit_min_loss_pct
-            and holding_score_negative_exit_usable
-            and current_ai_score
-            <= (near_ai_exit_score_limit + scanner_fallback_score_buffer)
-        )
         default_near_ai_exit = (
             profit_rate <= near_ai_exit_min_loss_pct
             and holding_score_negative_exit_usable
@@ -73682,12 +73395,6 @@ def handle_holding_state(
             stock,
             key="open_reclaim_near_ai_exit_started_at",
             active=open_reclaim_near_ai_exit,
-            now_ts=now_ts,
-        )
-        scanner_fallback_near_ai_exit_sustain_runtime_sec = _update_boolean_sustain_sec(
-            stock,
-            key="near_ai_exit_started_at",
-            active=scanner_fallback_near_ai_exit,
             now_ts=now_ts,
         )
         _update_boolean_sustain_sec(
@@ -74756,45 +74463,6 @@ def handle_holding_state(
                 f"(hold={held_sec}s, near_ai_exit={open_reclaim_near_ai_exit_sustain_sec}s, peak={peak_profit:.2f}%)"
             )
             exit_rule = "scalp_open_reclaim_retrace_exit"
-
-        elif (
-            not is_sell_signal
-            and not legacy_broker_recovered
-            and pos_tag == "SCANNER"
-            and str(stock.get("entry_mode", "")).strip().lower() == "fallback"
-            and held_sec >= scanner_fallback_hold_sec
-            and peak_profit <= scanner_fallback_peak_max_pct
-            and scanner_fallback_near_ai_exit_sustain_runtime_sec
-            >= scanner_fallback_near_ai_exit_sustain_sec
-            and holding_score_negative_exit_usable
-            and current_ai_score
-            <= (near_ai_exit_score_limit + scanner_fallback_score_buffer)
-        ):
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = (
-                f"🧯 SCANNER fallback 지연손절 보정 "
-                f"(hold={held_sec}s, near_ai_exit={scanner_fallback_near_ai_exit_sustain_runtime_sec}s, peak={peak_profit:.2f}%)"
-            )
-            exit_rule = "scalp_scanner_fallback_never_green"
-
-        elif (
-            not is_sell_signal
-            and not legacy_broker_recovered
-            and pos_tag == "SCANNER"
-            and str(stock.get("entry_mode", "")).strip().lower() == "fallback"
-            and held_sec >= scanner_fallback_hold_sec
-            and peak_profit > scanner_fallback_peak_max_pct
-            and scanner_fallback_near_ai_exit_sustain_runtime_sec
-            >= scanner_fallback_retrace_sustain_sec
-        ):
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = (
-                f"🧯 SCANNER fallback 양전환 후 재약세 정리 "
-                f"(hold={held_sec}s, near_ai_exit={scanner_fallback_near_ai_exit_sustain_runtime_sec}s, peak={peak_profit:.2f}%)"
-            )
-            exit_rule = "scalp_scanner_fallback_retrace_exit"
 
         elif not is_sell_signal and (
             profit_rate >= safe_profit_pct or scalp_trailing_peak_armed

@@ -241,11 +241,6 @@ def resolve_runtime_role() -> str:
             return "remote"
         return explicit
 
-    latency_profile = (
-        str(os.getenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "") or "").strip().lower()
-    )
-    if "remote" in latency_profile:
-        return "remote"
     if host_looks_remote:
         return "remote"
     return "main"
@@ -10493,44 +10488,9 @@ def _restore_holding_runtime_state(targets):
                     or min(base_stop - 0.5, -1.2)
                 )
 
-                if str(stock.get("entry_mode", "")).strip().lower() == "fallback":
-                    stock.setdefault(
-                        "hard_stop_pct",
-                        float(
-                            getattr(
-                                TRADING_RULES,
-                                "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT",
-                                base_stop,
-                            )
-                            or base_stop
-                        ),
-                    )
-                    stock.setdefault(
-                        "hard_stop_grace_sec",
-                        int(
-                            getattr(
-                                TRADING_RULES,
-                                "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC",
-                                base_grace,
-                            )
-                            or base_grace
-                        ),
-                    )
-                    stock.setdefault(
-                        "hard_stop_emergency_pct",
-                        float(
-                            getattr(
-                                TRADING_RULES,
-                                "SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT",
-                                base_emergency,
-                            )
-                            or base_emergency
-                        ),
-                    )
-                else:
-                    stock.setdefault("hard_stop_pct", base_stop)
-                    stock.setdefault("hard_stop_grace_sec", base_grace)
-                    stock.setdefault("hard_stop_emergency_pct", base_emergency)
+                stock.setdefault("hard_stop_pct", base_stop)
+                stock.setdefault("hard_stop_grace_sec", base_grace)
+                stock.setdefault("hard_stop_emergency_pct", base_emergency)
 
                 stock.setdefault("protect_profit_pct", None)
                 stock.setdefault("ai_review_done", False)

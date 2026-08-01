@@ -554,7 +554,7 @@ def test_gpt5_nano_always_uses_openai_after_micro_removal(monkeypatch):
             raise AssertionError("gpt-5-nano must not route to Bedrock")
 
     engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
-    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "shadow")
+    monkeypatch.setenv("KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "off")
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
     monkeypatch.setattr(
         openai_module,

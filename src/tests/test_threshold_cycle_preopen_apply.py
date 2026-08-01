@@ -2125,11 +2125,6 @@ def test_auto_bounded_live_imports_latency_classifier_recommendation(
                             "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
                             "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
                             "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
-                            "SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED",
-                            "SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE",
-                            "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS",
-                            "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS",
-                            "SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO",
                         ],
                         "current_values": {
                             "max_ws_age_ms_for_caution": 700,
@@ -2140,11 +2135,6 @@ def test_auto_bounded_live_imports_latency_classifier_recommendation(
                             "max_ws_age_ms_for_caution": 1200,
                             "max_ws_jitter_ms_for_caution": 1500,
                             "max_spread_ratio_for_caution": 0.01,
-                            "recovery_enabled": True,
-                            "recovery_min_signal_score": 75.0,
-                            "recovery_max_ws_age_ms": 1200,
-                            "recovery_max_ws_jitter_ms": 1500,
-                            "recovery_max_spread_ratio": 0.01,
                         },
                     }
                 ],
@@ -2180,35 +2170,9 @@ def test_auto_bounded_live_imports_latency_classifier_recommendation(
         ]
         == "0.01"
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED"
-        ]
-        == "true"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE"
-        ]
-        == "75"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS"
-        ]
-        == "1200"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS"
-        ]
-        == "1500"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO"
-        ]
-        == "0.01"
+    assert not any(
+        key.startswith("KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY")
+        for key in manifest["runtime_env_overrides"]
     )
 
 

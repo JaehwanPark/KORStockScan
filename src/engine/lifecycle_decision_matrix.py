@@ -2365,9 +2365,6 @@ def _load_scalp_sim_overnight_rows(
                     "metric_role": fields.get("metric_role"),
                     "openai_model": fields.get("openai_model"),
                     "openai_transport_mode": fields.get("openai_transport_mode"),
-                    "bedrock_shadow_route_mode": fields.get(
-                        "bedrock_shadow_route_mode"
-                    ),
                     "actual_order_submitted": fields.get("actual_order_submitted"),
                     "broker_order_forbidden": fields.get("broker_order_forbidden"),
                     "sim_record_id": fields.get("sim_record_id"),

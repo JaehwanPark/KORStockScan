@@ -2339,19 +2339,7 @@ def test_latency_entry_caution_submits_normal_after_slippage_check():
     clear_signal_reference(stock)
 
 
-def test_latency_submit_recovery_canary_not_needed_for_caution_normal(monkeypatch):
-    monkeypatch.setattr(
-        entry_latency_module,
-        "TRADING_RULES",
-        replace(
-            CONFIG,
-            SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED=True,
-            SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE=75.0,
-            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS=1200,
-            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS=1500,
-            SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO=0.0100,
-        ),
-    )
+def test_latency_caution_submits_normal_without_retired_recovery_runtime():
     stock = {"name": "TEST", "position_tag": "SCANNER"}
     freeze_signal_reference(
         stock,
@@ -2387,7 +2375,7 @@ def test_latency_submit_recovery_canary_not_needed_for_caution_normal(monkeypatc
     clear_signal_reference(stock)
 
 
-def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
+def test_latency_danger_cannot_use_removed_fallback_for_scanner(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2397,13 +2385,6 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
-            SCALP_LATENCY_FALLBACK_ENABLED=True,
-            SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
-            SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=85.0,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=300,
-            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,
         ),
     )
 
@@ -2430,7 +2411,7 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
     )
 
 
-def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch):
+def test_latency_danger_blocks_probability_signal_strength(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2440,13 +2421,6 @@ def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
-            SCALP_LATENCY_FALLBACK_ENABLED=True,
-            SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
-            SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=85.0,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=300,
-            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,
         ),
     )
 
@@ -2473,7 +2447,7 @@ def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch
     )
 
 
-def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
+def test_latency_danger_blocks_even_high_signal_without_active_relief(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -2483,13 +2457,6 @@ def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
-            SCALP_LATENCY_FALLBACK_ENABLED=True,
-            SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
-            SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=95.0,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=300,
-            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,
         ),
     )
 
@@ -2534,9 +2501,8 @@ def test_latency_spread_caution_records_explicit_reason_without_taxonomy_gap(
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,
+            SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO=0.0100,
         ),
     )
 
@@ -2868,7 +2834,6 @@ def test_latency_spread_relief_uses_fresh_orderbook_micro_signal_when_input_miss
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -2930,7 +2895,6 @@ def test_latency_spread_relief_does_not_use_insufficient_orderbook_micro_signal(
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -2989,7 +2953,6 @@ def test_latency_spread_relief_uses_fresh_true_ofi_estimator_when_observer_windo
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -3061,7 +3024,6 @@ def test_latency_spread_relief_true_ofi_estimator_keeps_block_below_sample_floor
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -3121,7 +3083,6 @@ def test_latency_false_negative_remeasure_enqueues_report_ready_true_ofi_without
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -3186,7 +3147,6 @@ def test_latency_false_negative_remeasure_requires_report_ready_marker(monkeypat
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -3811,7 +3771,6 @@ def test_latency_true_ofi_direct_canary_allows_high_opportunity_without_report_m
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -3894,7 +3853,6 @@ def test_latency_true_ofi_direct_canary_allows_near_cap_spread(monkeypatch):
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -3968,7 +3926,6 @@ def test_latency_true_ofi_direct_canary_allows_bounded_extended_spread_tier(
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -4354,7 +4311,6 @@ def test_latency_true_ofi_direct_canary_treats_missing_tape_as_neutral(monkeypat
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -4425,7 +4381,6 @@ def test_latency_true_ofi_direct_canary_blocks_sell_dominated_tape(monkeypatch):
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -4499,7 +4454,6 @@ def test_latency_true_ofi_direct_canary_blocks_recent_signed_sell_tape(monkeypat
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -4581,7 +4535,6 @@ def test_latency_true_ofi_direct_canary_blocks_rest_signed_sell_tape(monkeypatch
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -4761,7 +4714,6 @@ def test_latency_true_ofi_direct_canary_keeps_wide_spread_blocked(monkeypatch):
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -4832,7 +4784,6 @@ def test_latency_true_ofi_direct_canary_reports_stale_true_ofi_source_before_val
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -5134,7 +5085,6 @@ def test_latency_false_negative_remeasure_preserves_explicit_ai_wait(monkeypatch
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -5269,7 +5219,6 @@ def test_latency_spread_relief_true_ofi_estimator_covers_all_scalping_tags(monke
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -5347,7 +5296,6 @@ def test_latency_spread_relief_true_ofi_estimator_keeps_non_allowlisted_tag_bloc
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -5440,7 +5388,6 @@ def test_latency_spread_relief_preserves_explicit_ai_wait_even_with_true_ofi_sup
             SCALP_LATENCY_WIDE_SPREAD_PASSIVE_REQUOTE_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=False,
             SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=False,
         ),
     )
@@ -6901,7 +6848,7 @@ def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_o
     )
 
 
-def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
+def test_latency_danger_reasons_follow_direct_danger_thresholds(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
@@ -6912,14 +6859,9 @@ def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
-            SCALP_LATENCY_FALLBACK_ENABLED=True,
-            SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
-            SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=85.0,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=300,
-            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0040,
-            SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS=("ws_jitter_too_high",),
+            SCALP_LATENCY_DANGER_MAX_WS_AGE_MS=450,
+            SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS=300,
+            SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO=0.0040,
         ),
     )
 
@@ -6952,9 +6894,9 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
-            SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=300,
-            SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,
+            SCALP_LATENCY_DANGER_MAX_WS_AGE_MS=450,
+            SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS=300,
+            SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO=0.0100,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
         ),
     )

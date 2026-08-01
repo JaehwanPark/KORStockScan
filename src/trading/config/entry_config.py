@@ -16,17 +16,13 @@ class EntryConfig:
     normal_allowed_slippage_ticks: int = 2
     normal_allowed_slippage_pct: float = 0.002
 
-    fallback_allowed_slippage_ticks: int = 3
-    fallback_allowed_slippage_pct: float = 0.003
+    caution_allowed_slippage_ticks: int = 3
+    caution_allowed_slippage_pct: float = 0.003
 
     normal_defensive_ticks: int = 1
     latency_override_defensive_ticks: int = 3
-    fallback_main_defensive_ticks: int = 2
-    fallback_scout_aggressive_ticks: int = 0
 
     enable_ioc_for_normal: bool = False
-    enable_ioc_for_fallback_scout: bool = True
-    enable_ioc_for_fallback_main: bool = False
 
     max_spread_ratio_for_safe: float = 0.003
     max_spread_ratio_for_caution: float = 0.005

@@ -24,16 +24,15 @@ def test_kt00001_orderable_amount_floor_default_and_rollback_env(monkeypatch):
     assert reloaded.TRADING_RULES.KT00001_ORDERABLE_AMOUNT_MIN_FLOOR_KRW == 0
 
 
-def test_trading_rules_default_latency_canary_thresholds(monkeypatch):
-    monkeypatch.delenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", raising=False)
+def test_trading_rules_default_latency_danger_thresholds(monkeypatch):
     monkeypatch.delenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", raising=False
+        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", raising=False
     )
     monkeypatch.delenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS", raising=False
+        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_AGE_MS", raising=False
     )
     monkeypatch.delenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO", raising=False
+        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO", raising=False
     )
     monkeypatch.delenv(
         "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", raising=False
@@ -95,9 +94,9 @@ def test_trading_rules_default_latency_canary_thresholds(monkeypatch):
 
     reloaded = importlib.reload(constants)
 
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS == 260
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS == 450
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO == 0.0100
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS == 260
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_DANGER_MAX_WS_AGE_MS == 450
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO == 0.0100
     assert (
         reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE is True
     )
@@ -245,12 +244,6 @@ def test_stop_loss_runtime_env_overrides(monkeypatch):
     )
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_PCT", "-1.4")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_EMERGENCY_PCT", "-2.4")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", "-1.4")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT", "-2.4")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT", "-1.4")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT", "-2.4"
-    )
     monkeypatch.setenv("KORSTOCKSCAN_KOSDAQ_STOP", "-5.0")
     monkeypatch.setenv("KORSTOCKSCAN_STOP_LOSS_BULL", "-6.0")
     monkeypatch.setenv("KORSTOCKSCAN_STOP_LOSS_BEAR", "-6.0")
@@ -265,13 +258,6 @@ def test_stop_loss_runtime_env_overrides(monkeypatch):
     assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT == -5.6
     assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_PCT == -1.4
     assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_EMERGENCY_PCT == -2.4
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT == -1.4
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT == -2.4
-    assert reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_PCT == -1.4
-    assert (
-        reloaded.TRADING_RULES.SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT
-        == -2.4
-    )
     assert reloaded.TRADING_RULES.KOSDAQ_STOP == -5.0
     assert reloaded.TRADING_RULES.STOP_LOSS_BULL == -6.0
     assert reloaded.TRADING_RULES.STOP_LOSS_BEAR == -6.0
@@ -478,27 +464,25 @@ def test_trading_rules_sell_order_failure_retry_backoff_default_on_and_env_overr
     assert reloaded.TRADING_RULES.SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC == 45
 
 
-def test_trading_rules_remote_v2_profile_relaxes_latency_canary_jitter(monkeypatch):
+def test_retired_latency_canary_profile_cannot_change_danger_thresholds(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "remote_v2")
     monkeypatch.delenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", raising=False
+        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", raising=False
     )
 
     reloaded = importlib.reload(constants)
 
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS == 400
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS == 450
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS == 260
 
 
-def test_trading_rules_env_override_wins_over_profile(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "remote_v2")
+def test_trading_rules_latency_danger_jitter_env_override(monkeypatch):
     monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS", "420"
+        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", "420"
     )
 
     reloaded = importlib.reload(constants)
 
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS == 420
+    assert reloaded.TRADING_RULES.SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS == 420
 
 
 def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch):
@@ -510,21 +494,6 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
     )
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION", "0.01"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE", "75"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS", "1200"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS", "1500"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO", "0.01"
     )
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE", "false"
@@ -622,11 +591,6 @@ def test_trading_rules_entry_latency_classifier_jitter_env_override(monkeypatch)
     assert (
         reloaded.TRADING_RULES.SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION == 0.01
     )
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_CANARY_ENABLED is True
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MIN_SIGNAL_SCORE == 75
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_AGE_MS == 1200
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_WS_JITTER_MS == 1500
-    assert reloaded.TRADING_RULES.SCALP_LATENCY_SUBMIT_RECOVERY_MAX_SPREAD_RATIO == 0.01
     assert (
         reloaded.TRADING_RULES.SCALP_LATENCY_SPREAD_RELIEF_BLOCK_UNSTABLE_QUOTE is False
     )
@@ -887,17 +851,6 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT", "0.30"
     )
     monkeypatch.setenv("KORSTOCKSCAN_HOLDING_EXIT_LIVE_TUNING_SELECTED", "true")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED", "true"
-    )
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT", "-0.7")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC", "45")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT", "-1.2")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT", "0.30")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT", "0.05"
-    )
-    monkeypatch.setenv("KORSTOCKSCAN_PRESET_TP_EXIT_LIVE_TUNING_SELECTED", "true")
 
     reloaded = importlib.reload(constants)
 
@@ -1029,13 +982,6 @@ def test_trading_rules_scalping_entry_price_percent_bps_env_override(monkeypatch
     assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_EMERGENCY_PCT == -2.8
     assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT == 0.30
     assert reloaded.TRADING_RULES.HOLDING_EXIT_LIVE_TUNING_SELECTED is True
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_OVERRIDE_ENABLED is True
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_TRIGGER_PCT == -0.7
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_GRACE_SEC == 45
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_EMERGENCY_PCT == -1.2
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_MAX_WORSEN_PCT == 0.30
-    assert reloaded.TRADING_RULES.SCALP_PRESET_TP_SOFT_STOP_RECOVERY_BUFFER_PCT == 0.05
-    assert reloaded.TRADING_RULES.PRESET_TP_EXIT_LIVE_TUNING_SELECTED is True
 
 
 def test_trading_rules_score65_74_strong_micro_override_env(monkeypatch):
