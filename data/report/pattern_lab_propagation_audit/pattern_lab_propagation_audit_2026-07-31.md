@@ -2,12 +2,12 @@
 
 ## Summary
 
-- status: `warning`
+- status: `pass`
 - runtime_effect: `False`
 - decision_authority: `source_quality_only`
-- check_count: `11`
+- check_count: `12`
 - fail_count: `0`
-- warning_count: `1`
+- warning_count: `0`
 
 ## Checks
 
@@ -20,9 +20,16 @@
 
 ### `scalping_claude_automation_fresh`
 
-- status: `warning`
-- severity: `warning`
-- finding: lab output unavailable; downstream must block it explicitly
+- status: `pass`
+- severity: `info`
+- finding: fresh lab automation source is available
+- sources: `['/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-07-31.json']`
+
+### `scalping_claude_source_quality_usable`
+
+- status: `pass`
+- severity: `info`
+- finding: history coverage is usable for source-only findings
 - sources: `['/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-07-31.json']`
 
 ### `currentness_audit_available`

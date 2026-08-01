@@ -25,21 +25,21 @@
 - P1 `submit_drought` 판정: `pass_handoff_closed`
   - 근거: `{'status': 'pass', 'handoff_status': 'pass', 'root_cause_closure_status': 'closed', 'root_cause_open_reasons': [], 'artifact_regeneration_required': False, 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'quote_freshness_attribution_inconsistent': False, 'submit_drought_refresh_attempted_count': 77, 'submit_drought_refresh_applied_count': 30, 'submit_drought_latency_pass_recovered_count': 5, 'submit_drought_unknown_latency_reason_count': 0, 'ldm_submit_real_submitted_row_count': 5, 'ldm_submit_missing_broker_order_key_count': 0, 'ldm_submit_missing_broker_order_key_rate': 0.0, 'ldm_submit_post_submit_provenance_join_gap': False, 'ldm_submit_post_submit_provenance_join_gap_raw': False, 'ldm_submit_bot_history_backfill_candidate_count': 0, 'ldm_submit_bot_history_backfill_full_coverage': False, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'no_gap_broker_order_key_present_or_no_missing_rows'}`
   - 다음 액션: `No new implementation from this warning pass; continue postclose attribution and submit blocker tracking.`
-- P2 `scalp_entry_adm_unknown_bucket_source_quality_gap` 판정: `source_quality_followup_required`
-  - 근거: `{'status': 'warning', 'warnings': ['joined_sample_below_sample_floor', 'unknown_bucket_source_quality_gap'], 'affected_rows': 11, 'affected_rate': 0.0171, 'dimension_counts': {'score_bucket': 11}, 'unknown_root_cause_counts': {'score_bucket:source_score_missing': 11}, 'stage_counts': {'scalp_entry_action_decision_snapshot': 177, 'blocked_ai_score': 108, 'latency_block': 35, 'scalp_sim_entry_ai_price_skip_order': 75, 'order_bundle_submitted': 5}, 'recommended_route': 'source_quality_workorder', 'not_available_route': 'field_legitimately_unavailable_no_workorder', 'lookup_status_counts': {'new_or_unseen_token_vs_prior_adm': 580, 'matched_prior_bucket': 65}}`
+- P2 `scalp_entry_adm_unknown_bucket_source_quality_gap` 판정: `pass_no_unknown_bucket_warning`
+  - 근거: `{'status': 'warning', 'warnings': ['joined_sample_below_sample_floor', 'sim_post_sell_outcome_source_below_sample_floor'], 'affected_rows': 0, 'affected_rate': 0.0, 'dimension_counts': {}, 'unknown_root_cause_counts': {}, 'stage_counts': {'scalp_entry_action_decision_snapshot': 177, 'blocked_ai_score': 108, 'latency_block': 35, 'scalp_sim_entry_ai_price_skip_order': 75, 'order_bundle_submitted': 5}, 'recommended_route': 'none', 'not_available_route': 'field_legitimately_unavailable_no_workorder', 'lookup_status_counts': {'new_or_unseen_token_vs_prior_adm': 585, 'matched_prior_bucket': 60}}`
   - 다음 액션: `Prioritize source score emission for score_bucket unknown rows, then risk_context/price_resolution source fields; keep not_available buckets as explicit non-workorder context unless they become required source fields.`
 - P3 `pattern_lab_warning` 판정: `pass_no_current_handoff_workorder`
   - 근거: `{'currentness_status': 'pass', 'currentness_fail_count': 0, 'ai_review_status': 'pass', 'ai_review_workorder_count': 0, 'ai_review_warnings': []}`
   - 다음 액션: `No new pattern-lab implement_now item; keep pattern lab warning as source-only monitoring unless fresh currentness or AI review emits a concrete workorder.`
 - P4 `live_auto_ready_zero_breakdown` 판정: `warning_explained_no_live_auto_ready`
-  - 근거: `{'live_auto_apply_ready_count': 0, 'state_counts': {'source_only_keep_collecting': 312, 'runtime_blocked_contract_gap': 2, 'new_bucket_candidate': 10}, 'source_bucket_kind_counts': {'taxonomy_provenance_gap': 49, 'source_only_observation': 273, 'source_quality_gap': 2}, 'runtime_gap_categories': {'runtime_blocked_contract_gap': 16, 'sim_auto_approved': 1, 'source_only_explicit_exclusion': 2, 'source_quality_blocker': 12}, 'source_contract_status': 'warning', 'source_contract_change_count': 12, 'ai_two_pass_review_status': 'parsed', 'positive_edge_source_quality_pass_count': 0, 'bridge_blocker_ledger_count': 31, 'runtime_uptake_rate_pct': 0.0, 'handoff_warnings': ['lifecycle_bucket_discovery_source_contract_warning', 'source_contract_drift_warning']}`
+  - 근거: `{'live_auto_apply_ready_count': 0, 'state_counts': {'source_only_keep_collecting': 312, 'runtime_blocked_contract_gap': 2, 'new_bucket_candidate': 10}, 'source_bucket_kind_counts': {'taxonomy_provenance_gap': 49, 'source_only_observation': 273, 'source_quality_gap': 2}, 'runtime_gap_categories': {'runtime_blocked_contract_gap': 16, 'source_only_explicit_exclusion': 2, 'source_quality_blocker': 12}, 'source_contract_status': 'warning', 'source_contract_change_count': 12, 'ai_two_pass_review_status': 'parsed', 'positive_edge_source_quality_pass_count': 0, 'bridge_blocker_ledger_count': 30, 'runtime_uptake_rate_pct': 0.0, 'handoff_warnings': ['lifecycle_bucket_discovery_source_contract_warning', 'source_contract_drift_warning']}`
   - 다음 액션: `Keep complete lifecycle promotion as the owner; close source-contract drift, source-quality blockers, and runtime_blocked_contract_gap buckets before expecting live-auto candidates.`
 
 ## Runtime Apply Gap Audit
 - status: `pass`
 - retry_queue_count: `0`
 - codex_directive_count: `0`
-- summary: `{'actionable_unknown_gap_count': 0, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'bridge_blocker_ledger_count': 31, 'candidate_count': 31, 'codex_directive_count': 0, 'conversion_blocker_rank_count': 30, 'critical_failure_count': 0, 'derived_review_category_counts': {'runtime_blocked_contract_gap': 16, 'sim_auto_approved': 1, 'source_only_explicit_exclusion': 2, 'source_quality_blocker': 12}, 'positive_edge_source_quality_pass_count': 0, 'quiet_gap_codex_directive_count': 0, 'quiet_gap_count': 245, 'quiet_gap_rollup_count': 245, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 44, 'status': 'pass'}`
+- summary: `{'actionable_unknown_gap_count': 0, 'ai_review_retry_pending': False, 'ai_review_status': 'parsed', 'bridge_blocker_ledger_count': 30, 'candidate_count': 30, 'codex_directive_count': 0, 'conversion_blocker_rank_count': 30, 'critical_failure_count': 0, 'derived_review_category_counts': {'runtime_blocked_contract_gap': 16, 'source_only_explicit_exclusion': 2, 'source_quality_blocker': 12}, 'positive_edge_source_quality_pass_count': 0, 'quiet_gap_codex_directive_count': 0, 'quiet_gap_count': 246, 'quiet_gap_rollup_count': 246, 'retry_queue_count': 0, 'runtime_uptake_rate_pct': 0.0, 'source_dimension_gap_count': 44, 'status': 'pass'}`
 
 ## BUY Funnel Submit Drought Handoff
 - status: `pass`
@@ -224,11 +224,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-07-31-ce44287de3d6`
-- source_hash: `ce44287de3d659872b848efbd2a4eb2b76571d37927bd40ee83ee53b87149b5b`
+- generation_id: `2026-07-31-f287d7127b6e`
+- source_hash: `f287d7127b6e3d16d79b84c758d9f70479fd258fb5c559665fc60431ef66583b`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-07-31-983fedf475c3`
-- previous_source_hash: `983fedf475c3a273b3d3855490c294c27fc153f3849f15124039b0376034b4bd`
+- previous_generation_id: `2026-07-31-2e918a030247`
+- previous_source_hash: `2e918a030247380b07c9ada29882cde8d4a2f0e7c2f4a659f6ec161a9ac76195`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

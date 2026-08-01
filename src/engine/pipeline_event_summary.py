@@ -1003,6 +1003,8 @@ class ProducerSummaryCompactor:
         summary_path.touch(exist_ok=True)
         flushed_rows = 0
         flushed_events = 0
+        flush_first_event_at = ""
+        flush_last_event_at = ""
         with summary_path.open("a", encoding="utf-8") as handle:
             for key in sorted(self._groups):
                 row = self._groups[key].to_row(target_date=safe_date)
@@ -1014,9 +1016,27 @@ class ProducerSummaryCompactor:
                 )
                 flushed_rows += 1
                 flushed_events += int(row.get("event_count") or 0)
+                first_seen = _safe_str(row.get("first_seen"))
+                last_seen = _safe_str(row.get("last_seen"))
+                if first_seen:
+                    flush_first_event_at = (
+                        min(flush_first_event_at, first_seen)
+                        if flush_first_event_at
+                        else first_seen
+                    )
+                if last_seen:
+                    flush_last_event_at = max(flush_last_event_at, last_seen)
         existing = _read_json(manifest_path)
         previous_rows = int(existing.get("summary_row_count") or 0)
         previous_events = int(existing.get("summary_event_count") or 0)
+        existing_first_event_at = _safe_str(existing.get("coverage_first_event_at"))
+        existing_last_event_at = _safe_str(existing.get("coverage_last_event_at"))
+        coverage_first_event_at = (
+            min(existing_first_event_at, flush_first_event_at)
+            if existing_first_event_at and flush_first_event_at
+            else existing_first_event_at or flush_first_event_at
+        )
+        coverage_last_event_at = max(existing_last_event_at, flush_last_event_at)
         manifest = {
             "schema_version": PRODUCER_SUMMARY_SCHEMA_VERSION,
             "summary_path": str(summary_path),
@@ -1024,6 +1044,8 @@ class ProducerSummaryCompactor:
             "summary_event_count": previous_events + flushed_events,
             "last_flush_rows": flushed_rows,
             "last_flush_events": flushed_events,
+            "coverage_first_event_at": coverage_first_event_at or None,
+            "coverage_last_event_at": coverage_last_event_at or None,
             "mode": self.mode,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),

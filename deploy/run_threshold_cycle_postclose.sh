@@ -121,6 +121,22 @@ RUN_RUNTIME_APPLY_BRIDGE="${THRESHOLD_CYCLE_RUN_RUNTIME_APPLY_BRIDGE:-$RUN_LIFEC
 RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_SCALP_SIM_AUTO_APPROVAL_CONTROL_TOWER:-$RUN_LIFECYCLE_BUCKET_DISCOVERY}"
 RUN_LATENCY_CLASSIFIER_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LATENCY_CLASSIFIER_RECOMMENDATION:-true}"
 RUN_TUNING_PERFORMANCE_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER:-true}"
+EV_SCOPE_ARGS=("${POSTCLOSE_SWING_SCOPE_ARGS[@]}")
+if [[ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" != "true" && "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" != "1" ]]; then
+  EV_SCOPE_ARGS+=(--disabled-source codebase_performance_workorder)
+fi
+if [[ "$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" != "true" && "$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL" != "1" ]]; then
+  EV_SCOPE_ARGS+=(--disabled-source time_window_regime_counterfactual)
+fi
+if [[ "$RUN_PRODUCER_GAP_DISCOVERY" != "true" && "$RUN_PRODUCER_GAP_DISCOVERY" != "1" ]]; then
+  EV_SCOPE_ARGS+=(--disabled-source producer_gap_discovery)
+fi
+if [[ "$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" != "true" && "$RUN_STAGE_HOOK_WORKORDER_DISCOVERY" != "1" ]]; then
+  EV_SCOPE_ARGS+=(--disabled-source stage_hook_workorder_discovery)
+fi
+if [[ "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" != "true" && "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" != "1" ]]; then
+  EV_SCOPE_ARGS+=(--disabled-source stage_hook_runtime_scaffold)
+fi
 export RUN_ENTRY_AI_GATE_BACKTEST
 FORCE_DUPLICATE_REFRESH="${THRESHOLD_CYCLE_FORCE_DUPLICATE_REFRESH:-false}"
 FORCE_LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS:-false}"
@@ -784,7 +800,7 @@ run_threshold_cycle_ev_and_wait() {
     wait_for_report_artifact "$json_path" "$md_path" "threshold_cycle_ev_${pass_label}"
     return 0
   fi
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE" "${EV_SCOPE_ARGS[@]}"
   wait_for_report_artifact "$json_path" "$md_path" "threshold_cycle_ev_${pass_label}"
 }
 

@@ -55,6 +55,7 @@ from src.engine.swing_pattern_lab_automation import (
     swing_pattern_lab_automation_report_paths,
 )
 from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
 MONITOR_SNAPSHOT_DIR = REPORT_DIR / "monitor_snapshots"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
@@ -73,16 +74,82 @@ SCALE_IN_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "scale_in_split_order_plan"
 
 _JSON_LOAD_DIAGNOSTICS: list[dict[str, Any]] = []
 
+SWING_WARNING_SOURCES = frozenset(
+    {
+        "swing_pattern_lab_automation",
+        "swing_lab",
+        "swing_strategy_discovery",
+        "swing_strategy_discovery_ev",
+        "swing_lifecycle_decision_matrix",
+        "swing_lifecycle_bucket_discovery",
+    }
+)
+
+OPTIONAL_WARNING_SOURCES = frozenset(
+    {
+        "codebase_performance_workorder",
+        "time_window_regime_counterfactual",
+        "producer_gap_discovery",
+        "stage_hook_workorder_discovery",
+        "stage_hook_runtime_scaffold",
+        *SWING_WARNING_SOURCES,
+    }
+)
+
+
+def _warning_belongs_to_source(warning: str, source: str) -> bool:
+    return (
+        warning == source
+        or warning == f"{source}_missing"
+        or warning.startswith(f"{source}:")
+    )
+
+
+def _warning_contract(
+    raw_warnings: list[str], *, disabled_sources: set[str]
+) -> tuple[list[str], dict[str, Any]]:
+    unique_warnings = list(dict.fromkeys(str(item) for item in raw_warnings if item))
+    requested_disabled_sources = {
+        str(item).strip() for item in disabled_sources if str(item).strip()
+    }
+    accepted_disabled_sources = requested_disabled_sources & OPTIONAL_WARNING_SOURCES
+    rejected_disabled_sources = requested_disabled_sources - OPTIONAL_WARNING_SOURCES
+    disabled_not_applicable: list[str] = []
+    active: list[str] = []
+    for warning in unique_warnings:
+        if any(
+            _warning_belongs_to_source(warning, source)
+            for source in accepted_disabled_sources
+        ):
+            disabled_not_applicable.append(warning)
+        else:
+            active.append(warning)
+    required_missing = [item for item in active if item.endswith("_missing")]
+    quality_warnings = [item for item in active if item not in required_missing]
+    return active, {
+        "raw_warning_count": len(raw_warnings),
+        "unique_warning_count": len(unique_warnings),
+        "active_warning_count": len(active),
+        "required_missing": required_missing,
+        "quality_warnings": quality_warnings,
+        "disabled_not_applicable": disabled_not_applicable,
+        "disabled_sources": sorted(accepted_disabled_sources),
+        "requested_disabled_sources": sorted(requested_disabled_sources),
+        "rejected_disabled_sources": sorted(rejected_disabled_sources),
+    }
+
 
 def _load_json(path: Path) -> dict[str, Any]:
+    actual_path = existing_or_gzip_path(path)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        with open_text_auto(actual_path) as handle:
+            payload = json.load(handle)
     except FileNotFoundError:
         return {}
     except Exception as exc:
         _JSON_LOAD_DIAGNOSTICS.append(
             {
-                "path": str(path),
+                "path": str(actual_path),
                 "status": "parse_error",
                 "error": str(exc),
             }
@@ -182,7 +249,7 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
     primary_sample_book = (
         "real" if real_sample >= 20 else "sim" if sim_sample > 0 else "none"
     )
-    for item in (decisions if isinstance(decisions, list) else []):
+    for item in decisions if isinstance(decisions, list) else []:
         if not isinstance(item, dict):
             continue
         metrics = (
@@ -2080,9 +2147,7 @@ def _microstructure_reaction_context_summary(
             "clean_baseline_cumulative_opportunity_exploration": (
                 summary.get("clean_baseline_cumulative_opportunity_exploration")
                 if isinstance(
-                    summary.get(
-                        "clean_baseline_cumulative_opportunity_exploration"
-                    ),
+                    summary.get("clean_baseline_cumulative_opportunity_exploration"),
                     dict,
                 )
                 else {}
@@ -3034,11 +3099,20 @@ def _lifecycle_bucket_windows_summary(
     return result, warnings
 
 
-def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
+def build_threshold_cycle_ev_report(
+    target_date: str,
+    *,
+    include_swing: bool = True,
+    disabled_sources: tuple[str, ...] = (),
+) -> dict[str, Any]:
     _JSON_LOAD_DIAGNOSTICS.clear()
     target_date = str(target_date).strip()
-    trade_review_path = MONITOR_SNAPSHOT_DIR / f"trade_review_{target_date}.json"
-    performance_path = MONITOR_SNAPSHOT_DIR / f"performance_tuning_{target_date}.json"
+    trade_review_path = existing_or_gzip_path(
+        MONITOR_SNAPSHOT_DIR / f"trade_review_{target_date}.json"
+    )
+    performance_path = existing_or_gzip_path(
+        MONITOR_SNAPSHOT_DIR / f"performance_tuning_{target_date}.json"
+    )
     calibration_path = _calibration_path(target_date)
     apply_path = apply_manifest_path(target_date)
 
@@ -3251,11 +3325,63 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     clean_policy = clean_baseline_policy()
     clean_policy_warning = policy_warning_for_date(target_date, clean_policy)
     source_quality_preflight_gate = load_source_quality_preflight(target_date)
+    effective_disabled_sources = {
+        str(item).strip() for item in disabled_sources if str(item).strip()
+    }
+    if not include_swing:
+        effective_disabled_sources.update(SWING_WARNING_SOURCES)
+    raw_warnings = [
+        message
+        for message in [
+            "trade_review_missing" if not trade_review_path.exists() else "",
+            "performance_tuning_missing" if not performance_path.exists() else "",
+            "calibration_report_missing" if not calibration_path.exists() else "",
+            "apply_manifest_missing" if not apply_path.exists() else "",
+            *pattern_lab_warnings,
+            *swing_lab_warnings,
+            *scalp_entry_adm_warnings,
+            *buy_funnel_sentinel_warnings,
+            *entry_split_order_plan_warnings,
+            *scale_in_split_order_plan_warnings,
+            *lifecycle_matrix_warnings,
+            *lifecycle_bucket_discovery_warnings,
+            *lifecycle_bucket_windows_warnings,
+            *lifecycle_ai_context_warnings,
+            *lifecycle_ai_context_attribution_warnings,
+            *swing_discovery_warnings,
+            *swing_lifecycle_matrix_warnings,
+            *swing_lifecycle_bucket_discovery_warnings,
+            *institutional_flow_warnings,
+            *microstructure_reaction_warnings,
+            *pipeline_verbosity_warnings,
+            *codebase_perf_warnings,
+            *currentness_audit_warnings,
+            *pattern_lab_ai_review_warnings,
+            *time_window_regime_warnings,
+            *producer_gap_discovery_warnings,
+            *stage_hook_workorder_warnings,
+            *stage_hook_scaffold_warnings,
+            *propagation_audit_warnings,
+            *code_workorder_warnings,
+            *source_load_warnings,
+            clean_policy_warning or "",
+            (
+                "source_quality_blocked_contract_gap"
+                if source_quality_preflight_blocked(source_quality_preflight_gate)
+                else ""
+            ),
+        ]
+        if message
+    ]
+    active_warnings, warning_contract = _warning_contract(
+        raw_warnings, disabled_sources=effective_disabled_sources
+    )
 
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "purpose": "daily_ev_performance_report_for_unattended_threshold_calibration",
+        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
         "clean_tuning_baseline": clean_policy,
         "source_quality_preflight_gate": source_quality_preflight_gate,
         "runtime_apply": {
@@ -3460,49 +3586,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             ),
         },
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
-        "warnings": [
-            message
-            for message in [
-                "trade_review_missing" if not trade_review_path.exists() else "",
-                "performance_tuning_missing" if not performance_path.exists() else "",
-                "calibration_report_missing" if not calibration_path.exists() else "",
-                "apply_manifest_missing" if not apply_path.exists() else "",
-                *pattern_lab_warnings,
-                *swing_lab_warnings,
-                *scalp_entry_adm_warnings,
-                *buy_funnel_sentinel_warnings,
-                *entry_split_order_plan_warnings,
-                *scale_in_split_order_plan_warnings,
-                *lifecycle_matrix_warnings,
-                *lifecycle_bucket_discovery_warnings,
-                *lifecycle_bucket_windows_warnings,
-                *lifecycle_ai_context_warnings,
-                *lifecycle_ai_context_attribution_warnings,
-                *swing_discovery_warnings,
-                *swing_lifecycle_matrix_warnings,
-                *swing_lifecycle_bucket_discovery_warnings,
-                *institutional_flow_warnings,
-                *microstructure_reaction_warnings,
-                *pipeline_verbosity_warnings,
-                *codebase_perf_warnings,
-                *currentness_audit_warnings,
-                *pattern_lab_ai_review_warnings,
-                *time_window_regime_warnings,
-                *producer_gap_discovery_warnings,
-                *stage_hook_workorder_warnings,
-                *stage_hook_scaffold_warnings,
-                *propagation_audit_warnings,
-                *code_workorder_warnings,
-                *source_load_warnings,
-                clean_policy_warning or "",
-                (
-                    "source_quality_blocked_contract_gap"
-                    if source_quality_preflight_blocked(source_quality_preflight_gate)
-                    else ""
-                ),
-            ]
-            if message
-        ],
+        "warning_contract": warning_contract,
+        "warnings": active_warnings,
     }
     report["summary"] = _top_level_summary(report)
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
@@ -3653,6 +3738,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("approval_requests"), list)
         else []
     )
+    warning_contract = (
+        report.get("warning_contract")
+        if isinstance(report.get("warning_contract"), dict)
+        else {}
+    )
     decisions = (
         ((report.get("calibration_outcome") or {}).get("decisions") or [])
         if isinstance(report.get("calibration_outcome"), dict)
@@ -3669,6 +3759,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         "## Summary",
         f"- status: `{summary.get('status')}`",
         f"- warning_count: `{summary.get('warning_count', 0)}`",
+        f"- warning_contract active/disabled/raw: `{warning_contract.get('active_warning_count', 0)}` / `{len(warning_contract.get('disabled_not_applicable') or [])}` / `{warning_contract.get('raw_warning_count', 0)}`",
         f"- source_quality: status=`{summary.get('source_quality_status')}` allowed=`{summary.get('source_quality_tuning_input_allowed')}`",
         f"- samples real/sim: `{summary.get('real_sample', 0)}` / `{summary.get('sim_sample', 0)}`",
         f"- live_auto_ready_count: `{summary.get('live_auto_ready_count', 0)}`",
@@ -3963,8 +4054,19 @@ def main(argv: list[str] | None = None) -> int:
         description="Build threshold-cycle daily EV performance report."
     )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    parser.add_argument("--exclude-swing", action="store_true")
+    parser.add_argument(
+        "--disabled-source",
+        action="append",
+        choices=sorted(OPTIONAL_WARNING_SOURCES),
+        default=[],
+    )
     args = parser.parse_args(argv)
-    report = build_threshold_cycle_ev_report(args.target_date)
+    report = build_threshold_cycle_ev_report(
+        args.target_date,
+        include_swing=not args.exclude_swing,
+        disabled_sources=tuple(args.disabled_source),
+    )
     print(json.dumps(report, ensure_ascii=False))
     return 0
 

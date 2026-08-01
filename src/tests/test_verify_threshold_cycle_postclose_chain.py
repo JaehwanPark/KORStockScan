@@ -2067,6 +2067,94 @@ def test_buy_funnel_submit_drought_handoff_warns_when_quote_freshness_attributio
     assert report["ldm_submit_quote_freshness_attribution_present"] is False
 
 
+def test_code_improvement_workorder_contract_status_verifies_declared_contract():
+    report = mod._code_improvement_workorder_contract_status(
+        {
+            "summary": {
+                "duplicate_order_warnings": [],
+                "root_cause_followup_contract_required_count": 1,
+                "root_cause_followup_contract_complete_count": 1,
+                "root_cause_followup_contract_missing_order_ids": [],
+            },
+            "orders": [
+                {
+                    "order_id": "order_open",
+                    "root_cause_closure_status": "handoff_closed_root_cause_open",
+                    "root_cause_followup_contract": {
+                        "root_cause_signal": "conversion_lane:submit_drought:open",
+                        "acceptance_test": "new artifact closes the blocker",
+                        "next_repair_action": "collect the next trading-day sample",
+                        "closure_requires_new_evidence": True,
+                        "implementation_only_closure_allowed": False,
+                    },
+                }
+            ],
+        },
+        target_date="2026-07-31",
+    )
+
+    assert report["status"] == "pass"
+    assert report["contract_state"] == "declared_and_verified"
+    assert report["issues"] == []
+    assert report["root_cause_followup_contract_complete_count"] == 1
+
+
+def test_code_improvement_workorder_contract_status_fails_collision_and_gap():
+    report = mod._code_improvement_workorder_contract_status(
+        {
+            "summary": {
+                "duplicate_order_warnings": ["duplicate_order_id=order_open"],
+                "root_cause_followup_contract_required_count": 1,
+                "root_cause_followup_contract_complete_count": 1,
+                "root_cause_followup_contract_missing_order_ids": [],
+            },
+            "orders": [
+                {
+                    "order_id": "order_open",
+                    "root_cause_closure_status": "handoff_closed_root_cause_open",
+                    "root_cause_followup_contract": None,
+                },
+                {"order_id": "order_open"},
+            ],
+        },
+        target_date="2026-07-31",
+    )
+
+    assert report["status"] == "fail"
+    assert report["duplicate_order_ids"] == ["order_open"]
+    assert report["root_cause_followup_contract_missing_order_ids"] == ["order_open"]
+    assert set(report["issues"]) == {
+        "code_improvement_workorder_duplicate_order_id_present",
+        "code_improvement_workorder_duplicate_order_warning_present",
+        "code_improvement_workorder_root_cause_complete_count_mismatch",
+        "code_improvement_workorder_root_cause_followup_contract_incomplete",
+        "code_improvement_workorder_root_cause_missing_ids_mismatch",
+    }
+
+
+def test_code_improvement_workorder_contract_status_keeps_legacy_compatible():
+    report = mod._code_improvement_workorder_contract_status(
+        {"summary": {}, "orders": [{"order_id": "legacy_order"}]},
+        target_date="2026-05-12",
+    )
+
+    assert report["status"] == "pass"
+    assert report["contract_state"] == "legacy_not_declared"
+
+
+def test_code_improvement_workorder_contract_status_requires_new_declaration():
+    report = mod._code_improvement_workorder_contract_status(
+        {"summary": {}, "orders": [{"order_id": "new_order"}]},
+        target_date="2026-07-31",
+    )
+
+    assert report["status"] == "fail"
+    assert report["contract_state"] == "required_but_missing"
+    assert report["issues"] == [
+        "code_improvement_workorder_root_cause_followup_contract_not_declared"
+    ]
+
+
 def test_buy_funnel_submit_drought_handoff_closes_when_root_cause_is_fully_decomposed():
     buy = {
         "classification": {
@@ -5486,6 +5574,32 @@ def test_build_threshold_cycle_postclose_verification_not_yet_due_before_postclo
     assert report["status"] == "not_yet_due"
     assert report["predecessor_integrity"]["status"] == "not_yet_due"
     assert report["predecessor_integrity"]["log_issues"] == []
+
+
+def test_entry_bucket_handoff_uses_collision_safe_workorder_ids():
+    common_prefix = "entry_spot_score:score_unknown:source:scalp_sim_entry_ai_price_skip_order:stale:stale_not_available:"
+    source_workorders = [
+        {"bucket_type": "combo", "bucket_key": f"{common_prefix}first"},
+        {"bucket_type": "combo", "bucket_key": f"{common_prefix}second"},
+    ]
+    expected_order_ids = [
+        mod._entry_bucket_order_id(item) for item in source_workorders
+    ]
+
+    assert len(set(expected_order_ids)) == 2
+    report = mod._entry_bucket_handoff_status(
+        {
+            "entry_bucket_attribution": {
+                "code_improvement_workorders": source_workorders
+            }
+        },
+        {},
+        {},
+        {"orders": [{"order_id": order_id} for order_id in expected_order_ids]},
+    )
+
+    assert report["status"] == "pass"
+    assert report["missing_workorder_order_ids"] == []
 
 
 def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_handoff_drop(

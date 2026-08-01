@@ -117,6 +117,77 @@ def test_claude_pattern_lab_empty_input_overwrites_trade_fact_with_header(
     assert len(written) == 0
 
 
+def test_source_manifest_requires_krx_trading_days_not_calendar_days(
+    monkeypatch, tmp_path
+):
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    monkeypatch.setattr(prepare, "OUTPUT_DIR", output_dir)
+
+    prepare.write_source_manifest(
+        {
+            "pipeline_source_stats": {"duckdb": 2, "none": 2},
+            "non_trading_pipeline_source_stats": {"jsonl:.jsonl.gz": 1},
+            "covered_dates": ["2026-07-17", "2026-07-18", "2026-07-20"],
+            "expected_dates": ["2026-07-17", "2026-07-20"],
+        }
+    )
+
+    manifest = json.loads((output_dir / "source_manifest.json").read_text())
+    assert manifest["history_coverage_ok"] is True
+    assert manifest["expected_trading_date_count"] == 2
+    assert manifest["covered_expected_trading_date_count"] == 2
+    assert manifest["missing_expected_trading_dates"] == []
+    assert manifest["observed_non_trading_dates"] == ["2026-07-18"]
+    assert manifest["non_trading_pipeline_source_stats"] == {"jsonl:.jsonl.gz": 1}
+
+
+def test_source_manifest_surfaces_missing_krx_trading_day(monkeypatch, tmp_path):
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    monkeypatch.setattr(prepare, "OUTPUT_DIR", output_dir)
+
+    prepare.write_source_manifest(
+        {
+            "pipeline_source_stats": {"duckdb": 1, "none": 1},
+            "covered_dates": ["2026-07-20"],
+            "expected_dates": ["2026-07-17", "2026-07-20"],
+        }
+    )
+
+    manifest = json.loads((output_dir / "source_manifest.json").read_text())
+    assert manifest["history_coverage_ok"] is False
+    assert manifest["missing_expected_trading_dates"] == ["2026-07-17"]
+
+
+def test_run_manifest_preserves_trading_day_coverage_provenance(monkeypatch, tmp_path):
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    monkeypatch.setattr(payload, "OUTPUT_DIR", output_dir)
+    source_manifest = {
+        "data_source_mode": "mixed",
+        "history_coverage_start": "2026-06-05",
+        "history_coverage_end": "2026-07-31",
+        "history_coverage_ok": False,
+        "expected_trading_date_count": 40,
+        "covered_expected_trading_date_count": 39,
+        "missing_expected_trading_dates": ["2026-07-17"],
+        "observed_non_trading_dates": ["2026-06-13"],
+        "local_pipeline_source_stats": {"duckdb": 39, "none": 1},
+        "non_trading_pipeline_source_stats": {"jsonl:.jsonl.gz": 1},
+    }
+    (output_dir / "source_manifest.json").write_text(json.dumps(source_manifest))
+
+    empty = pd.DataFrame()
+    payload.write_run_manifest(empty, empty, empty)
+
+    manifest = json.loads((output_dir / "run_manifest.json").read_text())
+    assert manifest["missing_expected_trading_dates"] == ["2026-07-17"]
+    assert manifest["expected_trading_date_count"] == 40
+    assert manifest["covered_expected_trading_date_count"] == 39
+    assert manifest["non_trading_pipeline_source_stats"] == {"jsonl:.jsonl.gz": 1}
+
+
 def test_claude_payload_feedback_selector_uses_daily_clean_baseline_artifacts(
     monkeypatch, tmp_path
 ):

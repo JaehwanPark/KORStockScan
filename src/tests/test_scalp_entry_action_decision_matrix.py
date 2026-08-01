@@ -601,6 +601,25 @@ def test_scalp_entry_adm_preserves_sim_candidate_original_score_on_price_skip():
     )
 
 
+def test_scalp_entry_adm_uses_current_ai_score_on_price_skip():
+    row = mod._base_row(
+        {
+            "stage": "scalp_sim_entry_ai_price_skip_order",
+            "stock_code": "005930",
+            "emitted_at": "2026-07-31T09:10:00",
+            "fields": {
+                "current_ai_score": 68.0,
+                "ai_entry_price_canary_action": "SKIP",
+                "ai_entry_price_canary_reason": "low_fillability",
+            },
+        }
+    )
+
+    assert row["ai_score"] == 68.0
+    assert row["score_source_value"] == 68.0
+    assert row["score_bucket"] == "score65_74"
+
+
 def test_scalp_entry_adm_ai_confirmed_uses_score_as_prior_not_hard_gate(monkeypatch):
     monkeypatch.setattr(
         entry_gate_mod,
@@ -1807,6 +1826,235 @@ def test_scalp_entry_adm_score_backfill_prefers_exact_key_over_nearer_stock_even
     assert row["score_backfill_match_type"] == "exact_key"
     assert row["score_backfill_source_candidate_id"] == "C1"
     assert row["score_backfill_seconds_since_source"] == 90.0
+
+
+def test_scalp_entry_adm_price_skip_backfills_score_from_exact_parent_lineage(
+    tmp_path, monkeypatch
+):
+    pipeline_dir = tmp_path / "pipeline_events"
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-07-31.jsonl",
+        [
+            {
+                "stage": "ai_confirmed",
+                "stock_code": "008700",
+                "record_id": "25643",
+                "emitted_at": "2026-07-31T09:50:07",
+                "emitted_date": "2026-07-31",
+                "fields": {"ai_score": 68, "action": "BUY"},
+            },
+            {
+                "stage": "ai_confirmed",
+                "stock_code": "999999",
+                "record_id": "25643",
+                "emitted_at": "2026-07-31T09:50:07.500000",
+                "emitted_date": "2026-07-31",
+                "fields": {"ai_score": 21, "action": "WAIT"},
+            },
+            {
+                "stage": "scalp_sim_entry_ai_price_skip_order",
+                "stock_code": "008700",
+                "record_id": "SCALPSIM-008700-1",
+                "emitted_at": "2026-07-31T09:50:08",
+                "emitted_date": "2026-07-31",
+                "fields": {
+                    "sim_record_id": "SCALPSIM-008700-1",
+                    "sim_parent_record_id": "25643",
+                    "entry_adm_candidate_id": "ADM-008700-25643-1",
+                    "ai_entry_price_canary_action": "SKIP",
+                },
+            },
+            {
+                "stage": "entry_ai_price_canary_skip_followup",
+                "stock_code": "008700",
+                "record_id": "25643",
+                "emitted_at": "2026-07-31T09:50:38",
+                "emitted_date": "2026-07-31",
+                "fields": {
+                    "sim_record_id": "SCALPSIM-008700-1",
+                    "sim_parent_record_id": "25643",
+                    "entry_adm_candidate_id": "ADM-008700-25643-1",
+                    "elapsed_sec": 30,
+                    "mark_price": 10_000,
+                    "followup_price": 10_050,
+                    "max_price": 10_100,
+                    "min_price": 9_980,
+                    "mfe_bps": 100,
+                    "mae_bps": -20,
+                },
+            },
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-07-31")
+    row = next(
+        item
+        for item in report["rows"]
+        if item["stage"] == "scalp_sim_entry_ai_price_skip_order"
+    )
+
+    assert row["sim_parent_record_id"] == "25643"
+    assert row["score_source_value"] == 68.0
+    assert row["score_bucket"] == "score65_74"
+    assert row["score_backfill_match_type"] == "exact_key"
+    assert row["score_backfill_source_stage"] == "ai_confirmed"
+    assert row["score_backfill_seconds_since_source"] == 1.0
+    assert row["entry_price_skip_followup_30s_mfe_bps"] == 100.0
+    assert row["entry_price_skip_followup_30s_mae_bps"] == -20.0
+    assert row["entry_price_skip_followup_30s_source"] == (
+        "entry_ai_price_canary_skip_followup"
+    )
+    assert report["summary"]["entry_price_skip_followup"] == {
+        "skip_candidate_count": 1,
+        "followup_event_count": 1,
+        "attached_by_interval": {"30s": 1, "90s": 0},
+        "coverage_rate_by_interval": {"30s": 1.0, "90s": 0.0},
+        "decision_authority": "report_only_source_quality_observation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def test_scalp_entry_adm_price_skip_does_not_temporally_borrow_other_attempt_score(
+    tmp_path, monkeypatch
+):
+    pipeline_dir = tmp_path / "pipeline_events"
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_DIR", pipeline_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_EVENT_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(
+        mod, "THRESHOLD_SNAPSHOT_DIR", tmp_path / "threshold_cycle" / "snapshots"
+    )
+    monkeypatch.setattr(mod, "POST_SELL_DIR", tmp_path / "post_sell")
+    monkeypatch.setattr(
+        mod,
+        "ADM_REPORT_DIR",
+        tmp_path / "report" / "scalp_entry_action_decision_matrix",
+    )
+    _write_jsonl(
+        pipeline_dir / "pipeline_events_2026-07-31.jsonl",
+        [
+            {
+                "stage": "ai_confirmed",
+                "stock_code": "008700",
+                "record_id": "OTHER-ATTEMPT",
+                "emitted_at": "2026-07-31T09:50:07",
+                "emitted_date": "2026-07-31",
+                "fields": {"ai_score": 68, "action": "BUY"},
+            },
+            {
+                "stage": "scalp_sim_entry_ai_price_skip_order",
+                "stock_code": "008700",
+                "record_id": "SCALPSIM-008700-1",
+                "emitted_at": "2026-07-31T09:50:08",
+                "emitted_date": "2026-07-31",
+                "fields": {
+                    "sim_record_id": "SCALPSIM-008700-1",
+                    "sim_parent_record_id": "TARGET-ATTEMPT",
+                    "entry_adm_candidate_id": "ADM-008700-TARGET-1",
+                },
+            },
+        ],
+    )
+
+    report = mod.build_scalp_entry_action_decision_matrix_report("2026-07-31")
+    row = next(
+        item
+        for item in report["rows"]
+        if item["stage"] == "scalp_sim_entry_ai_price_skip_order"
+    )
+
+    assert row["score_source_value"] is None
+    assert row["score_bucket"] == "score_unknown"
+    assert row.get("score_backfill_source") is None
+
+
+def test_entry_price_skip_followup_cumulative_uses_clean_daily_reports(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "report" / "scalp_entry_action_decision_matrix"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", report_dir)
+
+    prior_rows = []
+    for index in range(20):
+        prior_rows.append(
+            {
+                "stage": "scalp_sim_entry_ai_price_skip_order",
+                "stock_code": f"{index:06d}",
+                "sim_record_id": f"SIM-{index}",
+                "entry_price_skip_followup_30s_mfe_bps": 40.0 + index,
+                "entry_price_skip_followup_30s_mae_bps": -10.0,
+                "entry_price_skip_followup_90s_mfe_bps": 80.0 + index,
+                "entry_price_skip_followup_90s_mae_bps": -20.0,
+            }
+        )
+    prior_rows.append(
+        {
+            "stage": "scalp_sim_entry_ai_price_skip_order",
+            "stock_code": "999999",
+            "sim_record_id": "SIM-NAN",
+            "entry_price_skip_followup_90s_mfe_bps": float("nan"),
+            "entry_price_skip_followup_90s_mae_bps": -20.0,
+        }
+    )
+    (report_dir / "scalp_entry_action_decision_matrix_2026-07-30.json").write_text(
+        json.dumps({"rows": prior_rows}), encoding="utf-8"
+    )
+    (report_dir / "scalp_entry_action_decision_matrix_2026-06-04.json").write_text(
+        json.dumps({"rows": prior_rows}), encoding="utf-8"
+    )
+
+    summary = mod._entry_price_skip_followup_cumulative_summary("2026-07-31", [])
+
+    assert summary["status"] == "ready_for_offline_counterfactual_review"
+    assert summary["sample_floor_met"] is True
+    assert summary["intervals"]["90s"] == {
+        "mature_paired_sample_count": 20,
+        "equal_weight_avg_mfe_bps": 89.5,
+        "equal_weight_avg_mae_bps": -20.0,
+    }
+    assert summary["provenance"]["source_dates"] == ["2026-07-30"]
+    assert summary["runtime_effect"] is False
+    assert summary["allowed_runtime_apply"] is False
+    assert summary["max_runtime_apply_count"] == 0
+
+
+def test_entry_price_skip_followup_cumulative_blocks_pre_clean_baseline_current_rows(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod,
+        "ADM_REPORT_DIR",
+        tmp_path / "report" / "scalp_entry_action_decision_matrix",
+    )
+    current_rows = [
+        {
+            "stage": "scalp_sim_entry_ai_price_skip_order",
+            "stock_code": "005930",
+            "sim_record_id": "SIM-1",
+            "entry_price_skip_followup_90s_mfe_bps": 100.0,
+            "entry_price_skip_followup_90s_mae_bps": -10.0,
+        }
+        for _ in range(20)
+    ]
+
+    summary = mod._entry_price_skip_followup_cumulative_summary(
+        "2026-06-04", current_rows
+    )
+
+    assert summary["status"] == "source_quality_blocked_pre_clean_baseline"
+    assert summary["candidate_count"] == 0
+    assert summary["sample_floor_met"] is False
+    assert summary["provenance"]["target_date_allowed"] is False
 
 
 def test_scalp_entry_adm_runtime_pre_submit_missing_context_is_not_available():

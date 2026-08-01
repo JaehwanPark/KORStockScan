@@ -7,8 +7,10 @@
 - allowed_runtime_apply: `False`
 - decision_authority: `pattern_lab_ai_review_source_only`
 - ai_two_pass_review_status: `parsed`
-- provider: `openai`
+- provider: `bedrock_qwen3`
 - model: `qwen.qwen3-235b-a22b-2507-v1:0`
+- configured_primary_provider/model: `bedrock_qwen3` / `qwen.qwen3-235b-a22b-2507-v1:0`
+- response_reused/new_provider_call: `True` / `False`
 - fallback_used: `False`
 - audit_status: `pass`
 - final_conclusion_count: `6`

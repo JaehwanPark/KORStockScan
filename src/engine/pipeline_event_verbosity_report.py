@@ -67,6 +67,8 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
     stage_counts: Counter[str] = Counter()
     stage_bytes: Counter[str] = Counter()
     latest_emitted_at = ""
+    earliest_eligible_event_at = ""
+    latest_eligible_event_at = ""
     with open_text_auto(raw_path, errors="replace") as handle:
         for raw_line in handle:
             raw_stream_bytes += len(raw_line.encode("utf-8"))
@@ -83,12 +85,18 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
                 or payload.get("event_type") != "pipeline_event"
             ):
                 continue
-            latest_emitted_at = max(
-                latest_emitted_at, _safe_str(payload.get("emitted_at"))
-            )
+            emitted_at = _safe_str(payload.get("emitted_at"))
+            latest_emitted_at = max(latest_emitted_at, emitted_at)
             stage = _safe_str(payload.get("stage"))
             if stage not in PRODUCER_SUMMARY_STAGES:
                 continue
+            if emitted_at:
+                earliest_eligible_event_at = (
+                    min(earliest_eligible_event_at, emitted_at)
+                    if earliest_eligible_event_at
+                    else emitted_at
+                )
+                latest_eligible_event_at = max(latest_eligible_event_at, emitted_at)
             line_bytes = len(
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
                     "utf-8"
@@ -118,6 +126,8 @@ def _line_count_and_stage_bytes(raw_path: Path) -> dict[str, Any]:
         "high_volume_stage_counts": dict(sorted(stage_counts.items())),
         "high_volume_stage_bytes": dict(sorted(stage_bytes.items())),
         "latest_pipeline_event_at": latest_emitted_at or None,
+        "earliest_eligible_event_at": earliest_eligible_event_at or None,
+        "latest_eligible_event_at": latest_eligible_event_at or None,
     }
 
 
@@ -172,6 +182,28 @@ def _previous_parity_pass_count(target_date: str) -> int:
     return count
 
 
+def _producer_coverage(
+    rows: list[dict[str, Any]], manifest: dict[str, Any]
+) -> tuple[str, str]:
+    first_event_at = _safe_str(manifest.get("coverage_first_event_at"))
+    last_event_at = _safe_str(manifest.get("coverage_last_event_at"))
+    if not first_event_at:
+        first_values = [
+            _safe_str(row.get("first_seen"))
+            for row in rows
+            if _safe_str(row.get("first_seen"))
+        ]
+        first_event_at = min(first_values) if first_values else ""
+    if not last_event_at:
+        last_values = [
+            _safe_str(row.get("last_seen"))
+            for row in rows
+            if _safe_str(row.get("last_seen"))
+        ]
+        last_event_at = max(last_values) if last_values else ""
+    return first_event_at, last_event_at
+
+
 def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
@@ -198,19 +230,32 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     producer_exists = producer_actual_path.exists() and bool(producer_rows)
     manifest_exists = producer_manifest_path.exists()
     producer_updated_at = _safe_str(producer_manifest.get("updated_at"))
-    latest_pipeline_event_at = _safe_str(raw_stats.get("latest_pipeline_event_at"))
+    raw_coverage_start = _safe_str(raw_stats.get("earliest_eligible_event_at"))
+    raw_coverage_end = _safe_str(raw_stats.get("latest_eligible_event_at"))
+    producer_coverage_start, producer_coverage_end = _producer_coverage(
+        producer_rows, producer_manifest
+    )
+    producer_start_complete = bool(
+        producer_exists
+        and raw_coverage_start
+        and producer_coverage_start
+        and producer_coverage_start <= raw_coverage_start
+    )
     producer_pending_flush = bool(
         producer_exists
         and manifest_exists
-        and latest_pipeline_event_at
-        and producer_updated_at
-        and latest_pipeline_event_at > producer_updated_at
+        and raw_coverage_end
+        and producer_coverage_end
+        and raw_coverage_end > producer_coverage_end
+        and (not producer_updated_at or raw_coverage_end > producer_updated_at)
     )
     no_eligible_events = raw_total == 0
     parity_ok = bool(
         no_eligible_events
         or (
             producer_exists
+            and producer_start_complete
+            and not producer_pending_flush
             and not stage_diff
             and not blocker_diff
             and raw_total == producer_total
@@ -227,6 +272,9 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     elif not producer_exists or not manifest_exists:
         state = "v2_shadow_missing"
         recommended = "open_shadow_order"
+    elif not producer_start_complete:
+        state = "v2_shadow_partial_coverage"
+        recommended = "observe_next_full_coverage_day"
     elif producer_pending_flush:
         state = "v2_shadow_pending_flush"
         recommended = "observe_pending_next_flush"
@@ -291,9 +339,14 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
             "previous_parity_pass_count": previous_pass_count,
             "suppress_eligibility": suppress_candidate,
             "producer_pending_flush": producer_pending_flush,
+            "producer_start_complete": producer_start_complete,
+            "raw_coverage_start": raw_coverage_start or None,
+            "raw_coverage_end": raw_coverage_end or None,
+            "producer_coverage_start": producer_coverage_start or None,
+            "producer_coverage_end": producer_coverage_end or None,
             "no_eligible_events": no_eligible_events,
             "producer_updated_at": producer_updated_at or None,
-            "latest_pipeline_event_at": latest_pipeline_event_at or None,
+            "latest_pipeline_event_at": raw_stats.get("latest_pipeline_event_at"),
         },
     }
     json_path, md_path = report_paths(target_date)
@@ -336,6 +389,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- parity_ok: `{parity.get('ok')}`",
             f"- raw_derived_event_count: `{parity.get('raw_derived_event_count')}`",
             f"- producer_event_count: `{parity.get('producer_event_count')}`",
+            f"- producer_start_complete: `{parity.get('producer_start_complete')}`",
+            f"- producer_pending_flush: `{parity.get('producer_pending_flush')}`",
+            f"- coverage raw/producer: `{parity.get('raw_coverage_start')}` / `{parity.get('producer_coverage_start')}`",
             f"- previous_parity_pass_count: `{parity.get('previous_parity_pass_count')}`",
             "",
             "## 금지선",

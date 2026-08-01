@@ -287,3 +287,35 @@ def test_pipeline_event_verbosity_report_marks_pending_flush_when_raw_tail_is_ne
     assert report["state"] == "v2_shadow_pending_flush"
     assert report["recommended_workorder_state"] == "observe_pending_next_flush"
     assert report["parity"]["producer_pending_flush"] is True
+
+
+def test_pipeline_event_verbosity_report_separates_partial_day_coverage(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    raw_rows = [
+        _event(
+            "2026-05-06",
+            "09:00:00",
+            "blocked_strength_momentum",
+            record_id=1,
+            fields={"reason": "below_strength_base"},
+        ),
+        _event(
+            "2026-05-06",
+            "10:00:00",
+            "blocked_strength_momentum",
+            record_id=2,
+            fields={"reason": "below_window_buy_value"},
+        ),
+    ]
+    _write_raw(tmp_path, "2026-05-06", raw_rows)
+    _write_producer_summary(tmp_path, "2026-05-06", raw_rows[1:])
+
+    report = report_mod.build_pipeline_event_verbosity_report("2026-05-06")
+
+    assert report["state"] == "v2_shadow_partial_coverage"
+    assert report["recommended_workorder_state"] == "observe_next_full_coverage_day"
+    assert report["parity"]["producer_start_complete"] is False
+    assert report["parity"]["producer_pending_flush"] is False
+    assert report["parity"]["suppress_eligibility"] is False

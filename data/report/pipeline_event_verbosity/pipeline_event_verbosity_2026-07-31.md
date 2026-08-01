@@ -2,15 +2,15 @@
 
 ## 판정
 
-- state: `v2_shadow_pending_flush`
-- recommended_workorder_state: `observe_pending_next_flush`
+- state: `v2_shadow_partial_coverage`
+- recommended_workorder_state: `observe_next_full_coverage_day`
 - runtime_effect: `False`
 - raw_suppression_enabled: `False`
 
 ## 근거
 
 - raw_size_bytes: `4370652507`
-- raw_storage_size_bytes: `4370652507`
+- raw_storage_size_bytes: `386104760`
 - raw_line_count: `406281`
 - high_volume_line_count: `364634`
 - high_volume_byte_share_pct: `90.26`
@@ -19,6 +19,9 @@
 - parity_ok: `False`
 - raw_derived_event_count: `364634`
 - producer_event_count: `31078`
+- producer_start_complete: `False`
+- producer_pending_flush: `True`
+- coverage raw/producer: `2026-07-31T07:55:20.089457` / `2026-07-31T08:10:09`
 - previous_parity_pass_count: `0`
 
 ## 금지선

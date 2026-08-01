@@ -4522,10 +4522,9 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     monkeypatch.setattr(
         state_handlers,
         "_submit_watching_triggered_entry",
-        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append(
-            (stock, code, runtime)
-        )
-        or True,
+        lambda stock, code, ws_data, admin_id, runtime: (
+            submit_calls.append((stock, code, runtime)) or True
+        ),
     )
 
     stock = {
@@ -4601,10 +4600,9 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
     monkeypatch.setattr(
         state_handlers,
         "_submit_watching_triggered_entry",
-        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append(
-            (stock, code, runtime)
-        )
-        or True,
+        lambda stock, code, ws_data, admin_id, runtime: (
+            submit_calls.append((stock, code, runtime)) or True
+        ),
     )
 
     stock = {
@@ -4840,8 +4838,9 @@ def test_rising_missed_forced_async_retry_reevaluates_material_price_move(
     monkeypatch.setattr(
         state_handlers,
         "_resolve_scanner_async_entry_ai",
-        lambda *args, **kwargs: calls.append((args, kwargs))
-        or {"status": "dispatched"},
+        lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or {"status": "dispatched"}
+        ),
     )
     stock = {
         "strategy": "SCALPING",
@@ -4890,8 +4889,9 @@ def test_rising_missed_forced_async_retry_reevaluates_micro_state_change(
     monkeypatch.setattr(
         state_handlers,
         "_resolve_scanner_async_entry_ai",
-        lambda *args, **kwargs: calls.append((args, kwargs))
-        or {"status": "dispatched"},
+        lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or {"status": "dispatched"}
+        ),
     )
     prior_ws = {
         "curr": 10_000,
@@ -7458,10 +7458,9 @@ def test_rising_missed_scout_quality_guard_no_rest_estimator_after_block(monkeyp
     monkeypatch.setattr(
         state_handlers,
         "_submit_watching_triggered_entry",
-        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append(
-            (stock, code, ws_data, runtime)
-        )
-        or True,
+        lambda stock, code, ws_data, admin_id, runtime: (
+            submit_calls.append((stock, code, ws_data, runtime)) or True
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -7601,10 +7600,9 @@ def test_rising_missed_submit_safety_consumes_cached_scanner_envelope(monkeypatc
     monkeypatch.setattr(
         state_handlers,
         "_submit_watching_triggered_entry",
-        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append(
-            (stock, code, ws_data, runtime)
-        )
-        or True,
+        lambda stock, code, ws_data, admin_id, runtime: (
+            submit_calls.append((stock, code, ws_data, runtime)) or True
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -7806,24 +7804,27 @@ def test_rising_missed_quality_guard_pre_envelope_compares_fresh_ws_with_rest(
     monkeypatch.setattr(
         state_handlers,
         "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: rest_calls.append(("orderbook", code, timeout_ms))
-        or (
-            {
-                "source": "ka10004_rest_orderbook",
-                "rest_mid_price": 10020,
-                "best_bid": 10010,
-                "best_ask": 10020,
-                "rest_received_ts": 999.8,
-            },
-            "ok",
-            1.0,
+        lambda code, timeout_ms: (
+            rest_calls.append(("orderbook", code, timeout_ms))
+            or (
+                {
+                    "source": "ka10004_rest_orderbook",
+                    "rest_mid_price": 10020,
+                    "best_bid": 10010,
+                    "best_ask": 10020,
+                    "rest_received_ts": 999.8,
+                },
+                "ok",
+                1.0,
+            )
         ),
     )
     monkeypatch.setattr(
         state_handlers,
         "_fetch_rising_missed_signed_tape_bounded",
-        lambda code, timeout_ms: rest_calls.append(("signed_tape", code, timeout_ms))
-        or ([], "ok", 0.0),
+        lambda code, timeout_ms: (
+            rest_calls.append(("signed_tape", code, timeout_ms)) or ([], "ok", 0.0)
+        ),
     )
 
     refreshed_ws, fields = state_handlers._rising_missed_quality_guard_pre_envelope(
@@ -8254,10 +8255,9 @@ def test_rising_missed_micro_estimator_updates_from_fresh_ws_without_rest(monkey
     monkeypatch.setattr(
         state_handlers,
         "_submit_watching_triggered_entry",
-        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append(
-            (stock, code, ws_data, runtime)
-        )
-        or True,
+        lambda stock, code, ws_data, admin_id, runtime: (
+            submit_calls.append((stock, code, ws_data, runtime)) or True
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -8363,19 +8363,21 @@ def test_rising_missed_decision_input_resolver_shares_rest_envelope(monkeypatch)
     monkeypatch.setattr(
         state_handlers,
         "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: calls.append(("orderbook", code))
-        or (
-            {
-                "source": "ka10004_rest_orderbook",
-                "rest_mid_price": 10020,
-                "best_bid": 10010,
-                "best_ask": 10020,
-                "best_bid_qty": 900,
-                "best_ask_qty": 100,
-                "rest_received_ts": 999.9,
-            },
-            "ok",
-            1.0,
+        lambda code, timeout_ms: (
+            calls.append(("orderbook", code))
+            or (
+                {
+                    "source": "ka10004_rest_orderbook",
+                    "rest_mid_price": 10020,
+                    "best_bid": 10010,
+                    "best_ask": 10020,
+                    "best_bid_qty": 900,
+                    "best_ask_qty": 100,
+                    "rest_received_ts": 999.9,
+                },
+                "ok",
+                1.0,
+            )
         ),
     )
     monkeypatch.setattr(
@@ -8437,19 +8439,21 @@ def test_rising_missed_decision_input_cache_expires_rest_signed_tape(monkeypatch
     monkeypatch.setattr(
         state_handlers,
         "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: calls.append(("orderbook", code))
-        or (
-            {
-                "source": "ka10004_rest_orderbook",
-                "rest_mid_price": 10020,
-                "best_bid": 10010,
-                "best_ask": 10020,
-                "best_bid_qty": 900,
-                "best_ask_qty": 100,
-                "rest_received_ts": 1000.0,
-            },
-            "ok",
-            1.0,
+        lambda code, timeout_ms: (
+            calls.append(("orderbook", code))
+            or (
+                {
+                    "source": "ka10004_rest_orderbook",
+                    "rest_mid_price": 10020,
+                    "best_bid": 10010,
+                    "best_ask": 10020,
+                    "best_bid_qty": 900,
+                    "best_ask_qty": 100,
+                    "rest_received_ts": 1000.0,
+                },
+                "ok",
+                1.0,
+            )
         ),
     )
     signed_ticks = [
@@ -8465,8 +8469,9 @@ def test_rising_missed_decision_input_cache_expires_rest_signed_tape(monkeypatch
     monkeypatch.setattr(
         state_handlers,
         "_fetch_rising_missed_signed_tape_bounded",
-        lambda code, timeout_ms: calls.append(("signed_tape", code))
-        or (signed_ticks, "ok", 1.0),
+        lambda code, timeout_ms: (
+            calls.append(("signed_tape", code)) or (signed_ticks, "ok", 1.0)
+        ),
     )
     stock = {}
     raw_ws = {
@@ -10024,8 +10029,9 @@ def test_rising_missed_normal_bridge_uses_common_tp1_resolver(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "resolve_rising_missed_decision_input",
-        lambda *args, **kwargs: resolver_calls.append(args)
-        or ({"curr": 10000}, decision_input),
+        lambda *args, **kwargs: (
+            resolver_calls.append(args) or ({"curr": 10000}, decision_input)
+        ),
     )
 
     result = state_handlers._evaluate_rising_missed_normal_buy_bridge(
@@ -10793,10 +10799,9 @@ def test_rising_missed_scout_quality_guard_does_not_rest_ai_recheck_after_block(
     monkeypatch.setattr(
         state_handlers,
         "_submit_watching_triggered_entry",
-        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append(
-            (stock, code, ws_data, runtime)
-        )
-        or True,
+        lambda stock, code, ws_data, admin_id, runtime: (
+            submit_calls.append((stock, code, ws_data, runtime)) or True
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -11004,7 +11009,7 @@ def test_rising_missed_same_day_reentry_blocks_after_loss_exit(monkeypatch):
     assert entry_logs[-1][1]["venue"] == "KRX"
     assert entry_logs[-1][1]["rising_missed_effective_venue"] == "KRX"
     assert entry_logs[-1][1]["venue_resolution"] == (
-        "rising_missed_initial_gate:krx_regular:" "not_applicable_outside_nxt_window"
+        "rising_missed_initial_gate:krx_regular:not_applicable_outside_nxt_window"
     )
 
 
@@ -12575,7 +12580,7 @@ def test_rising_missed_one_share_hook_blocks_price_above_cap_without_submit(
     assert entry_logs[-1][1]["venue"] == "KRX"
     assert entry_logs[-1][1]["rising_missed_effective_venue"] == "KRX"
     assert entry_logs[-1][1]["venue_resolution"] == (
-        "rising_missed_initial_gate:krx_regular:" "not_applicable_outside_nxt_window"
+        "rising_missed_initial_gate:krx_regular:not_applicable_outside_nxt_window"
     )
 
 
@@ -13194,9 +13199,11 @@ def test_rising_missed_one_share_submit_blocks_entry_price_canary_skip_before_fo
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or (_ for _ in ()).throw(
-            AssertionError("canary SKIP must block before broker submit")
+        lambda *args, **kwargs: (
+            sent_orders.append(args)
+            or (_ for _ in ()).throw(
+                AssertionError("canary SKIP must block before broker submit")
+            )
         ),
     )
     monkeypatch.setattr(
@@ -13368,9 +13375,11 @@ def test_normal_scalping_buy_blocks_entry_price_canary_skip_before_broker_submit
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or (_ for _ in ()).throw(
-            AssertionError("canary SKIP must block normal BUY submit")
+        lambda *args, **kwargs: (
+            sent_orders.append(args)
+            or (_ for _ in ()).throw(
+                AssertionError("canary SKIP must block normal BUY submit")
+            )
         ),
     )
     monkeypatch.setattr(
@@ -16915,8 +16924,9 @@ def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "A1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "A1"}
+        ),
     )
 
     stock = {
@@ -16961,8 +16971,9 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -17056,8 +17067,9 @@ def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -17168,8 +17180,9 @@ def test_execute_defensive_avg_down_passes_buy_time_block_override(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "D1"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "D1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers, "record_add_history_event", lambda *args, **kwargs: True
@@ -17245,8 +17258,10 @@ def test_late_loss_avg_down_bypasses_quote_divergence_when_executable_price_exis
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "LATE1"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs))
+            or {"return_code": "0", "ord_no": "LATE1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers, "record_add_history_event", lambda *args, **kwargs: True
@@ -17339,8 +17354,9 @@ def test_non_defensive_avg_down_still_blocks_quote_divergence(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "AVG1"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "AVG1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -17538,8 +17554,10 @@ def test_defensive_avg_down_bypasses_stale_quote_consistency_when_executable_pri
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": f"STALE{len(sent_orders)}"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs))
+            or {"return_code": "0", "ord_no": f"STALE{len(sent_orders)}"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers, "record_add_history_event", lambda *args, **kwargs: True
@@ -17665,8 +17683,9 @@ def test_real_scalping_scale_in_uses_buy_window_not_regular_market_close(monkeyp
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "NXT1"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "NXT1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers, "record_add_history_event", lambda *args, **kwargs: True
@@ -17717,8 +17736,10 @@ def test_late_loss_avg_down_uses_fresh_rest_quote_after_stale_ws_refresh(monkeyp
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "REST-LATE"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs))
+            or {"return_code": "0", "ord_no": "REST-LATE"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers, "record_add_history_event", lambda *args, **kwargs: True
@@ -17816,8 +17837,9 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_quote_missing(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P-REST"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P-REST"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
@@ -17912,8 +17934,9 @@ def test_execute_scalping_pyramid_refreshes_rest_orderbook_when_ws_quote_stale(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P-REST-STALE"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P-REST-STALE"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -18028,8 +18051,9 @@ def test_execute_scalping_pyramid_blocks_when_real_micro_context_missing(monkeyp
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P-MICRO"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P-MICRO"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -18613,8 +18637,10 @@ def test_execute_swing_sim_scale_in_logs_automation_fields(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "SHOULD_NOT_SEND"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args)
+            or {"return_code": "0", "ord_no": "SHOULD_NOT_SEND"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -18701,8 +18727,9 @@ def test_execute_swing_real_canary_pyramid_submits_one_share_limit(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "REALADD1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "REALADD1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers, "record_add_history_event", lambda *args, **kwargs: True
@@ -18784,8 +18811,10 @@ def test_execute_swing_real_canary_blocks_bearish_micro(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "SHOULD_NOT_SEND"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args)
+            or {"return_code": "0", "ord_no": "SHOULD_NOT_SEND"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -18857,8 +18886,9 @@ def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch)
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "R1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "R1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -18911,8 +18941,9 @@ def test_execute_scalping_avg_down_stop_touch_uses_market_order(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "M1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "M1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -18973,8 +19004,9 @@ def test_execute_scalping_avg_down_market_override_blocks_before_stop_touch(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "M2"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "M2"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -19022,8 +19054,9 @@ def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P2"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P2"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -19304,10 +19337,7 @@ def test_real_pyramid_score_50_retry_success_allows_dynamic_qty(monkeypatch):
     assert context_call["include_disabled_forensics"] is True
     assert ai_position_context["curr_price"] == 30_650
     assert ai_position_context["profit_rate"] > 0
-    assert (
-        ai_position_context["peak_profit"]
-        >= ai_position_context["profit_rate"]
-    )
+    assert ai_position_context["peak_profit"] >= ai_position_context["profit_rate"]
     assert ai_position_context["drawdown_from_peak_pct"] >= 0
     assert ai_position_context["held_sec"] == 102
     assert (
@@ -19509,8 +19539,9 @@ def test_execute_scalping_pyramid_blocks_score_50_before_real_submit(monkeypatch
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P-SENTINEL"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P-SENTINEL"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -19838,8 +19869,9 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "P3"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "P3"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -20125,8 +20157,10 @@ def test_recent_pyramid_add_suppresses_scalp_trailing(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            calls.__setitem__("sell", calls["sell"] + 1)
+            or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -20208,8 +20242,9 @@ def test_scalp_trailing_uses_peak_start_after_profit_falls_below_safe_profit(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -20395,8 +20430,9 @@ def test_scalp_nxt_trailing_uses_fresh_0d_bid_without_inflating_trade_peak(monke
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S-NXT-1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S-NXT-1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -20508,8 +20544,10 @@ def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            calls.__setitem__("sell", calls["sell"] + 1)
+            or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -20684,8 +20722,10 @@ def test_protect_trailing_confirms_sustained_smoothed_break(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            calls.__setitem__("sell", calls["sell"] + 1)
+            or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     stock = {
@@ -20742,8 +20782,10 @@ def test_holding_flow_override_candidate_clears_when_exit_candidate_resolves(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            calls.__setitem__("sell", calls["sell"] + 1)
+            or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -23454,10 +23496,9 @@ def test_rising_missed_normal_buy_bridge_controls_first_ai_score_prior_path(
     monkeypatch.setattr(
         state_handlers,
         "_submit_watching_triggered_entry",
-        lambda stock, code, ws_data, admin_id, runtime: submit_calls.append(
-            (stock, code, runtime)
-        )
-        or True,
+        lambda stock, code, ws_data, admin_id, runtime: (
+            submit_calls.append((stock, code, runtime)) or True
+        ),
     )
 
     stock = {
@@ -24100,8 +24141,9 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "O1"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "O1"}
+        ),
     )
 
     stock = {
@@ -24273,8 +24315,9 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "O1"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "O1"}
+        ),
     )
 
     stock = {
@@ -24511,8 +24554,9 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "O1"},
+        lambda *args, **kwargs: (
+            sent_orders.append((args, kwargs)) or {"return_code": "0", "ord_no": "O1"}
+        ),
     )
 
     stock = {
@@ -25580,21 +25624,23 @@ def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
         state_handlers,
         "_handle_watching_opening_rotation",
         lambda stock, code, ws_data, runtime, config: (
-            runtime.update(
-                {
-                    "opening_rotation_entry_owner_handoff": True,
-                    "opening_rotation_entry_owner_handoff_reason": (
-                        "pullback_not_observed"
-                    ),
-                    "opening_rotation_entry_owner_handoff_target": (
-                        "general_scalping_ai_entry"
-                    ),
-                }
+            (
+                runtime.update(
+                    {
+                        "opening_rotation_entry_owner_handoff": True,
+                        "opening_rotation_entry_owner_handoff_reason": (
+                            "pullback_not_observed"
+                        ),
+                        "opening_rotation_entry_owner_handoff_target": (
+                            "general_scalping_ai_entry"
+                        ),
+                    }
+                )
+                if opening_rotation_handoff
+                else None
             )
-            if opening_rotation_handoff
-            else None
-        )
-        or False,
+            or False
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -25653,8 +25699,9 @@ def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "O1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -25950,8 +25997,9 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "O1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -26498,8 +26546,9 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
-        lambda *args, **kwargs: sent_orders.append(args)
-        or {"return_code": "0", "ord_no": "O1"},
+        lambda *args, **kwargs: (
+            sent_orders.append(args) or {"return_code": "0", "ord_no": "O1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -28485,8 +28534,10 @@ def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"}
+        ),
     )
     stock = {
         "id": 1,
@@ -28547,8 +28598,10 @@ def test_split_entry_cancel_only_expired_leg_keeps_later_legs(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"}
+        ),
     )
     stock = {
         "id": 1,
@@ -28750,8 +28803,10 @@ def test_split_entry_residual_cancel_after_partial_fill_has_no_cooldown(monkeypa
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"}
+        ),
     )
     stock = {
         "id": 1,
@@ -28815,8 +28870,10 @@ def test_split_entry_bundle_hard_ttl_cancels_all_and_sets_single_cooldown(monkey
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"}
+        ),
     )
     monkeypatch.setattr(state_handlers.time, "time", lambda: 1000.0)
 
@@ -28875,8 +28932,10 @@ def test_pending_entry_cancel_corrects_legacy_krx_limit_marker(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"}
+        ),
     )
     stock = {
         "id": 1,
@@ -28911,8 +28970,10 @@ def test_pending_entry_cancel_preserves_explicit_nxt(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "C1", "return_msg": "정상"}
+        ),
     )
     stock = {
         "id": 1,
@@ -29021,11 +29082,13 @@ def test_pending_entry_cancel_does_not_retry_when_unfilled_snapshot_still_sor(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {
-            "return_code": "2000",
-            "return_msg": "[2000](571412:SOR정정 및 취소주문은 원주문이 SOR주문인 경우 가능합니다.)",
-        },
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {
+                "return_code": "2000",
+                "return_msg": "[2000](571412:SOR정정 및 취소주문은 원주문이 SOR주문인 경우 가능합니다.)",
+            }
+        ),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
@@ -29281,8 +29344,9 @@ def test_hard_stop_avg_down_attempt_runs_after_quote_revalidation(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            sell_calls.append((args, kwargs)) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     stock = {
@@ -30028,6 +30092,9 @@ def test_entry_ai_price_skip_followup_logs_mfe_mae(monkeypatch):
         "entry_ai_price_skip_bucket_key": "spread=unknown|price=unknown|depth=unknown|sample=insufficient",
         "entry_ai_price_skip_followup_30s": False,
         "entry_ai_price_skip_followup_90s": False,
+        "entry_adm_candidate_id": "ADM-123456-R1",
+        "sim_record_id": "SIM-R1",
+        "sim_parent_record_id": "R1",
     }
 
     state_handlers._maybe_emit_entry_ai_price_skip_followup(
@@ -30045,7 +30112,107 @@ def test_entry_ai_price_skip_followup_logs_mfe_mae(monkeypatch):
         == "spread=unknown|price=unknown|depth=unknown|sample=insufficient"
     )
     assert logs[0][1]["entry_ai_price_skip_policy_warning"] == "ofi_not_ready"
+    assert logs[0][1]["metric_role"] == ("entry_price_skip_counterfactual_observation")
+    assert logs[0][1]["decision_authority"] == (
+        "report_only_source_quality_observation"
+    )
+    assert logs[0][1]["runtime_effect"] is False
+    assert logs[0][1]["actual_order_submitted"] is False
+    assert logs[0][1]["broker_order_forbidden"] is True
+    assert logs[0][1]["allowed_runtime_apply"] is False
+    assert logs[0][1]["entry_adm_candidate_id"] == "ADM-123456-R1"
+    assert logs[0][1]["sim_record_id"] == "SIM-R1"
+    assert logs[0][1]["sim_parent_record_id"] == "R1"
     assert stock["entry_ai_price_skip_followup_30s"] is True
+
+
+def test_entry_ai_price_skip_followup_runs_before_manual_exclusion_return(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_observe_entry_cancel_wait_counterfactuals",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_log_watching_state_debug", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "_manual_control_exclusion_blocked", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        state_handlers, "emit_scanner_watching_runtime_skip", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_emit_entry_ai_price_skip_followup",
+        lambda stock, code, **kwargs: calls.append((stock, code, kwargs)),
+    )
+    stock = {"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER"}
+
+    state_handlers.handle_watching_state(
+        stock,
+        "123456",
+        {"curr": 10_050},
+        admin_id=1,
+        now_ts=130.0,
+        now_dt=datetime(2026, 7, 31, 10, 0, 0),
+    )
+
+    assert calls == [(stock, "123456", {"curr_price": 10_050, "now_ts": 130.0})]
+
+
+def test_entry_ai_price_skip_followup_continues_after_sim_entry_is_holding(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_release_auto_manual_control_at_average_price",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        state_handlers, "_retry_pending_hard_stop_manual_handoff", lambda *a, **k: False
+    )
+    monkeypatch.setattr(
+        state_handlers, "_manual_control_exclusion_blocked", lambda *a, **k: False
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_ws_freshness_recover_or_block",
+        lambda stock, code, ws_data, **kwargs: (ws_data, False, {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *a, **k: ({}, 10_050, 0, 10_040),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_holding_quote_provenance_fields", lambda *a, **k: {}
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_emit_entry_ai_price_skip_followup",
+        lambda stock, code, **kwargs: calls.append((stock, code, kwargs)),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_maybe_auto_exclude_open_loss_holding", lambda *a, **k: True
+    )
+    stock = {
+        "name": "SIM-HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 10_000,
+    }
+
+    state_handlers.handle_holding_state(
+        stock,
+        "123456",
+        {"curr": 10_050},
+        admin_id=1,
+        market_regime="NORMAL",
+        now_ts=130.0,
+        now_dt=datetime(2026, 7, 31, 10, 0, 0),
+    )
+
+    assert calls == [(stock, "123456", {"curr_price": 10_050, "now_ts": 130.0})]
 
 
 def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
@@ -32119,14 +32286,17 @@ def test_scalp_entry_uses_trailing_unified_without_preset_tp_order(monkeypatch):
     monkeypatch.setattr(
         kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs["orig_ord_no"])
-        or {"return_code": "0"},
+        lambda **kwargs: (
+            cancel_calls.append(kwargs["orig_ord_no"]) or {"return_code": "0"}
+        ),
     )
     monkeypatch.setattr(
         kiwoom_orders,
         "send_sell_order_market",
-        lambda **kwargs: sell_calls.append(kwargs["qty"])
-        or {"ord_no": f"TP{len(sell_calls)}", "return_code": "0"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs["qty"])
+            or {"ord_no": f"TP{len(sell_calls)}", "return_code": "0"}
+        ),
     )
 
     stock = {
@@ -32222,8 +32392,9 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_sell_order_market",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     now = datetime.now().timestamp()
@@ -32283,8 +32454,9 @@ def test_reconcile_partial_fill_strong_override_uses_relaxed_ratio(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_sell_order_market",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     now = datetime.now().timestamp()
@@ -32331,14 +32503,17 @@ def test_holding_sell_cancels_pending_entry_orders_first(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: calls.append(("cancel", kwargs["orig_ord_no"]))
-        or {"return_code": "0"},
+        lambda **kwargs: (
+            calls.append(("cancel", kwargs["orig_ord_no"])) or {"return_code": "0"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: calls.append(("sell", kwargs["qty"]))
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            calls.append(("sell", kwargs["qty"]))
+            or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     stock = {
@@ -32437,14 +32612,17 @@ def test_holding_sell_still_works_when_paused(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: called.__setitem__("sell", True)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            called.__setitem__("sell", True) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
         "can_consider_scale_in",
-        lambda *args, **kwargs: called.__setitem__("gate", True)
-        or {"allowed": False, "reason": "buy_side_paused"},
+        lambda *args, **kwargs: (
+            called.__setitem__("gate", True)
+            or {"allowed": False, "reason": "buy_side_paused"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -32565,13 +32743,15 @@ def test_s15_fast_track_pause_is_policy_blocked_not_failed(tmp_path, monkeypatch
     monkeypatch.setattr(
         s15,
         "_log_s15_event",
-        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
-            {
-                "stage": stage,
-                "code": code,
-                "actual_order_submitted": actual_order_submitted,
-                "fields": fields,
-            }
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: (
+            events.append(
+                {
+                    "stage": stage,
+                    "code": code,
+                    "actual_order_submitted": actual_order_submitted,
+                    "fields": fields,
+                }
+            )
         ),
     )
     monkeypatch.setattr(s15, "_unarm_s15_candidate", lambda code: None)
@@ -32675,12 +32855,14 @@ def test_s15_fast_track_ai_score_below_buy_threshold_is_prior_not_hard_gate(
     monkeypatch.setattr(
         s15,
         "_log_s15_event",
-        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
-            {
-                "stage": stage,
-                "actual_order_submitted": actual_order_submitted,
-                "fields": fields,
-            }
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: (
+            events.append(
+                {
+                    "stage": stage,
+                    "actual_order_submitted": actual_order_submitted,
+                    "fields": fields,
+                }
+            )
         ),
     )
 
@@ -32769,12 +32951,14 @@ def test_s15_fast_track_ai_score_75_passes_ai_gate(monkeypatch):
     monkeypatch.setattr(
         s15,
         "_log_s15_event",
-        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
-            {
-                "stage": stage,
-                "actual_order_submitted": actual_order_submitted,
-                "fields": fields,
-            }
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: (
+            events.append(
+                {
+                    "stage": stage,
+                    "actual_order_submitted": actual_order_submitted,
+                    "fields": fields,
+                }
+            )
         ),
     )
 
@@ -32883,12 +33067,14 @@ def test_s15_fast_track_submitted_logs_score_prior_fields(monkeypatch):
     monkeypatch.setattr(
         s15,
         "_log_s15_event",
-        lambda stage, code, name="-", actual_order_submitted=False, **fields: events.append(
-            {
-                "stage": stage,
-                "actual_order_submitted": actual_order_submitted,
-                "fields": fields,
-            }
+        lambda stage, code, name="-", actual_order_submitted=False, **fields: (
+            events.append(
+                {
+                    "stage": stage,
+                    "actual_order_submitted": actual_order_submitted,
+                    "fields": fields,
+                }
+            )
         ),
     )
 
@@ -33442,8 +33628,8 @@ def test_add_execution_keeps_original_buy_time(monkeypatch):
 def test_reconcile_scale_in_lock_auto_unlocks_when_account_matches():
     calls = []
 
-    sniper_sync.record_add_history_event = (
-        lambda *args, **kwargs: calls.append(kwargs) or True
+    sniper_sync.record_add_history_event = lambda *args, **kwargs: (
+        calls.append(kwargs) or True
     )
     sniper_sync.find_latest_open_add_order_no = lambda *args, **kwargs: "A1"
     sniper_sync.ACTIVE_TARGETS = [
@@ -33517,14 +33703,17 @@ def test_protection_price_triggers_sell_before_add(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "can_consider_scale_in",
-        lambda *args, **kwargs: called.__setitem__("gate", True)
-        or {"allowed": True, "reason": "ok"},
+        lambda *args, **kwargs: (
+            called.__setitem__("gate", True) or {"allowed": True, "reason": "ok"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: called.__setitem__("sell", called["sell"] + 1)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            called.__setitem__("sell", called["sell"] + 1)
+            or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     stock = {
@@ -33685,8 +33874,10 @@ def test_holding_limit_up_immediate_exit_submits_sell(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "LIMITUP1"},
+        lambda *args, **kwargs: (
+            sell_calls.append((args, kwargs))
+            or {"return_code": "0", "ord_no": "LIMITUP1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -33805,8 +33996,10 @@ def test_holding_limit_up_exit_does_not_duplicate_pending_sell(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "LIMITUP1"},
+        lambda *args, **kwargs: (
+            sell_calls.append((args, kwargs))
+            or {"return_code": "0", "ord_no": "LIMITUP1"}
+        ),
     )
 
     stock = {
@@ -33860,15 +34053,19 @@ def test_holding_limit_up_sim_position_does_not_submit_real_sell(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "LIMITUP1"},
+        lambda *args, **kwargs: (
+            sell_calls.append((args, kwargs))
+            or {"return_code": "0", "ord_no": "LIMITUP1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
         "_complete_scalp_simulated_sell",
-        lambda **kwargs: sim_exits.append(kwargs)
-        or kwargs["stock"].update(
-            {"status": "SIM_COMPLETED", "last_exit_rule": kwargs["exit_rule"]}
+        lambda **kwargs: (
+            sim_exits.append(kwargs)
+            or kwargs["stock"].update(
+                {"status": "SIM_COMPLETED", "last_exit_rule": kwargs["exit_rule"]}
+            )
         ),
     )
 
@@ -34071,8 +34268,9 @@ def test_legacy_preset_tp_position_flows_to_scalp_trailing(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -34173,8 +34371,9 @@ def test_scalp_preset_tp_discretionary_sell_open_time_block_logs_without_submit(
     monkeypatch.setattr(
         state_handlers,
         "_send_exit_best_ioc",
-        lambda *args, **kwargs: sell_calls.append(args)
-        or {"return_code": "0", "ord_no": "SIOC1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"}
+        ),
     )
 
     stock = {
@@ -34254,8 +34453,9 @@ def test_scalp_preset_tp_hard_stop_passthrough_when_sell_open_time_block_enabled
     monkeypatch.setattr(
         state_handlers,
         "_send_exit_best_ioc",
-        lambda *args, **kwargs: sell_calls.append(args)
-        or {"return_code": "0", "ord_no": "SIOC1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"}
+        ),
     )
 
     stock = {
@@ -34342,8 +34542,9 @@ def test_scalp_preset_tp_soft_stop_override_defers_initial_touch(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_send_exit_best_ioc",
-        lambda *args, **kwargs: sell_calls.append(args)
-        or {"return_code": "0", "ord_no": "SIOC1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"}
+        ),
     )
 
     stock = {
@@ -34505,8 +34706,9 @@ def test_scalp_preset_tp_soft_stop_avg_down_intercepts_before_sell(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_send_exit_best_ioc",
-        lambda *args, **kwargs: sell_calls.append(args)
-        or {"return_code": "0", "ord_no": "SIOC1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -34531,8 +34733,9 @@ def test_scalp_preset_tp_soft_stop_avg_down_intercepts_before_sell(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: process_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "ADD1"},
+        lambda **kwargs: (
+            process_calls.append(kwargs) or {"return_code": "0", "ord_no": "ADD1"}
+        ),
     )
 
     stock = {
@@ -34885,8 +35088,9 @@ def test_scalp_preset_tp_soft_stop_override_recovers_above_trigger_and_resets(
     monkeypatch.setattr(
         state_handlers,
         "_send_exit_best_ioc",
-        lambda *args, **kwargs: sell_calls.append(args)
-        or {"return_code": "0", "ord_no": "SIOC1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"}
+        ),
     )
 
     stock = {
@@ -35102,8 +35306,9 @@ def test_scalp_preset_tp_soft_stop_override_skips_legacy_broker_recovered(monkey
     monkeypatch.setattr(
         state_handlers,
         "_send_exit_best_ioc",
-        lambda *args, **kwargs: sell_calls.append(args)
-        or {"return_code": "0", "ord_no": "SIOC1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"}
+        ),
     )
 
     stock = {
@@ -35230,8 +35435,10 @@ def test_sell_reconciles_partial_entry_qty_before_residual_cancel(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "SELL-PARTIAL-1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(kwargs)
+            or {"return_code": "0", "ord_no": "SELL-PARTIAL-1"}
+        ),
     )
 
     stock = {
@@ -35305,8 +35512,9 @@ def test_terminal_probe_sell_does_not_reexpand_receipt_qty_from_stale_db(monkeyp
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "SELL-PROBE-1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "SELL-PROBE-1"}
+        ),
     )
 
     stock = {
@@ -35370,8 +35578,9 @@ def test_nxt_rising_missed_tp1_submits_half_and_keeps_runner(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "NXT-TP1-1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "NXT-TP1-1"}
+        ),
     )
     now_dt = datetime(2026, 7, 15, 17, 0, 0)
     stock = {
@@ -35436,8 +35645,9 @@ def test_nxt_rising_missed_tp1_defers_without_fresh_bid_depth(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "UNEXPECTED"},
+        lambda *args, **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "UNEXPECTED"}
+        ),
     )
     now_dt = datetime(2026, 7, 15, 17, 0, 0)
     stock = {
@@ -35520,8 +35730,8 @@ def test_nxt_rising_missed_tp1_partial_receipts_restore_holding_runner(monkeypat
     monkeypatch.setattr(
         receipts,
         "emit_pipeline_event",
-        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
-            {"stage": stage, "fields": fields or {}}
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: (
+            emitted.append({"stage": stage, "fields": fields or {}})
         ),
     )
     stock = {
@@ -35606,8 +35816,10 @@ def test_sell_reject_retry_backoff_suppresses_burst(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append((args, kwargs))
-        or {"return_code": "20", "return_msg": "[2000](521790:주문 불가능합니다.)"},
+        lambda *args, **kwargs: (
+            sell_calls.append((args, kwargs))
+            or {"return_code": "20", "return_msg": "[2000](521790:주문 불가능합니다.)"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -35750,8 +35962,9 @@ def test_scalping_sell_after_nxt_close_blocks_order_once(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            sell_calls.append((args, kwargs)) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -35877,8 +36090,9 @@ def test_scalp_preset_tp_hard_stop_grace_delays_exit(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_send_exit_best_ioc",
-        lambda *args, **kwargs: exit_calls.append(args)
-        or {"return_code": "0", "ord_no": "SIOC1"},
+        lambda *args, **kwargs: (
+            exit_calls.append(args) or {"return_code": "0", "ord_no": "SIOC1"}
+        ),
     )
 
     stock = {
@@ -35950,8 +36164,9 @@ def test_scalp_soft_stop_micro_grace_delays_exit(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: exit_calls.append(args)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            exit_calls.append(args) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -36200,8 +36415,9 @@ def test_bad_entry_refined_observe_logs_when_canary_disabled(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append((args, kwargs))
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            sell_calls.append((args, kwargs)) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     stock = {
@@ -36292,8 +36508,9 @@ def test_bad_entry_refined_canary_skips_recovered_peak(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     stock = {
@@ -36444,8 +36661,9 @@ def test_scalp_soft_stop_micro_grace_extension_delays_near_threshold_exit(monkey
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: exit_calls.append(args)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            exit_calls.append(args) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -38315,8 +38533,9 @@ def _install_soft_stop_expert_test_doubles(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: exit_calls.append(args)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda *args, **kwargs: (
+            exit_calls.append(args) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -41611,8 +41830,9 @@ def test_handle_holding_state_blocks_trailing_sell_when_pre_submit_quote_stale(
         monkeypatch.setattr(
             state_handlers.kiwoom_orders,
             "send_smart_sell_order",
-            lambda **kwargs: sell_calls.append(kwargs)
-            or {"return_code": "0", "ord_no": "S1"},
+            lambda **kwargs: (
+                sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+            ),
         )
         monkeypatch.setattr(
             state_handlers,
@@ -41749,8 +41969,9 @@ def test_handle_holding_state_blocks_low_profit_stagnation_sell_when_quote_stale
         monkeypatch.setattr(
             state_handlers.kiwoom_orders,
             "send_smart_sell_order",
-            lambda **kwargs: sell_calls.append(kwargs)
-            or {"return_code": "0", "ord_no": "S1"},
+            lambda **kwargs: (
+                sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+            ),
         )
         monkeypatch.setattr(
             state_handlers,
@@ -41965,8 +42186,9 @@ def test_handle_holding_state_cancels_soft_stop_when_fresh_quote_recovers(
         monkeypatch.setattr(
             state_handlers.kiwoom_orders,
             "send_smart_sell_order",
-            lambda **kwargs: sell_calls.append(kwargs)
-            or {"return_code": "0", "ord_no": "S1"},
+            lambda **kwargs: (
+                sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+            ),
         )
         monkeypatch.setattr(
             state_handlers,
@@ -42071,12 +42293,14 @@ def test_handle_holding_state_defers_trailing_sell_on_executable_recovery(
         monkeypatch.setattr(
             state_handlers,
             "_trailing_pre_submit_executable_recovery_decision",
-            lambda *args, **kwargs: recovery_calls.append((args, kwargs))
-            or {
-                "defer": True,
-                "reason": "executable_recovery_confirmed",
-                "evaluated": True,
-            },
+            lambda *args, **kwargs: (
+                recovery_calls.append((args, kwargs))
+                or {
+                    "defer": True,
+                    "reason": "executable_recovery_confirmed",
+                    "evaluated": True,
+                }
+            ),
         )
         monkeypatch.setattr(
             state_handlers,
@@ -42086,8 +42310,9 @@ def test_handle_holding_state_defers_trailing_sell_on_executable_recovery(
         monkeypatch.setattr(
             state_handlers.kiwoom_orders,
             "send_smart_sell_order",
-            lambda **kwargs: sell_calls.append(kwargs)
-            or {"return_code": "0", "ord_no": "S1"},
+            lambda **kwargs: (
+                sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+            ),
         )
         monkeypatch.setattr(
             state_handlers,
@@ -42247,8 +42472,9 @@ def test_handle_holding_state_clears_profit_stagnation_anchor_below_min_profit(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1)
-        or {"return_code": "0"},
+        lambda *args, **kwargs: (
+            calls.__setitem__("sell", calls["sell"] + 1) or {"return_code": "0"}
+        ),
     )
 
     stock = {
@@ -42312,8 +42538,9 @@ def test_handle_holding_state_submits_mfe_protect_exit_before_soft_stop(monkeypa
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -42386,8 +42613,9 @@ def test_handle_holding_state_blocks_mfe_protect_on_rest_quote_only_recovery(
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -42484,14 +42712,16 @@ def test_handle_holding_state_blocks_negative_mfe_protect_before_late_loss_inter
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_actions.append(kwargs["action"])
-        or {"return_code": "0", "ord_no": "A1"},
+        lambda **kwargs: (
+            add_actions.append(kwargs["action"]) or {"return_code": "0", "ord_no": "A1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -42566,14 +42796,16 @@ def test_handle_holding_state_negative_mfe_protect_stays_holding_after_retry_use
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "A1"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
 
     stock = {
@@ -42642,8 +42874,9 @@ def test_handle_holding_state_negative_mfe_protect_does_not_fall_through_to_sell
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_smart_sell_order",
-        lambda **kwargs: sell_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -43931,14 +44164,16 @@ def test_stop_line_touch_mandatory_avg_down_submits_before_grace(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "can_consider_scale_in",
-        lambda *args, **kwargs: gate_calls.append((args, kwargs))
-        or {"allowed": True, "reason": "ok"},
+        lambda *args, **kwargs: (
+            gate_calls.append((args, kwargs)) or {"allowed": True, "reason": "ok"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "A1"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -44035,8 +44270,9 @@ def test_stop_line_touch_avgdown_blocks_score_50_before_real_submit(monkeypatch)
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "SENTINEL50"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "SENTINEL50"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -44198,8 +44434,9 @@ def test_stop_line_touch_avgdown_rechecks_after_exit_defer_block(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "RECHECK1"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "RECHECK1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -44306,8 +44543,9 @@ def test_stop_line_touch_avgdown_recheck_blocks_when_exit_defer_inactive(monkeyp
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "NOPE"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "NOPE"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -44781,8 +45019,9 @@ def test_soft_stop_line_touch_avg_down_defer_waits_for_extra_dip(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "D1"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "D1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -45023,9 +45262,11 @@ def test_hard_stop_line_touch_avg_down_forbidden_before_real_submit(monkeypatch)
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or (_ for _ in ()).throw(
-            AssertionError("hard stop touch must not submit AVG_DOWN")
+        lambda **kwargs: (
+            add_calls.append(kwargs)
+            or (_ for _ in ()).throw(
+                AssertionError("hard stop touch must not submit AVG_DOWN")
+            )
         ),
     )
     monkeypatch.setattr(
@@ -45110,8 +45351,9 @@ def test_soft_stop_line_touch_avg_down_defer_submits_after_sparse_loop(monkeypat
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "S1"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -45351,8 +45593,9 @@ def test_stop_line_touch_mandatory_avg_down_waits_on_rest_quote_only_recovery(
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "A1"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A1"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -45482,8 +45725,9 @@ def test_stop_line_touch_mandatory_avg_down_uses_fresh_rest_orderbook_confirmati
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "A2"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A2"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -45572,8 +45816,9 @@ def test_stop_line_touch_mandatory_avg_down_bypasses_recent_scale_in_cooldown(
     monkeypatch.setattr(
         state_handlers,
         "_process_scale_in_action",
-        lambda **kwargs: add_calls.append(kwargs)
-        or {"return_code": "0", "ord_no": "A3"},
+        lambda **kwargs: (
+            add_calls.append(kwargs) or {"return_code": "0", "ord_no": "A3"}
+        ),
     )
     monkeypatch.setattr(
         state_handlers,
@@ -46057,8 +46302,10 @@ def test_scalp_trailing_loss_conversion_recheck_is_one_shot_and_rest_bounded(
     monkeypatch.setattr(
         state_handlers,
         "_fetch_rest_orderbook_snapshot_bounded",
-        lambda code, timeout_ms: fetches.append((code, timeout_ms))
-        or ({"best_bid": 2_825, "best_ask": 2_830}, "ok", 12.0),
+        lambda code, timeout_ms: (
+            fetches.append((code, timeout_ms))
+            or ({"best_bid": 2_825, "best_ask": 2_830}, "ok", 12.0)
+        ),
     )
     monkeypatch.setattr(
         state_handlers,

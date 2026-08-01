@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import math
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy
 from src.engine.scalping.entry_adm_bucket_contract import (
     ENTRY_ADM_BUCKET_DIMENSIONS,
     ENTRY_ADM_BUCKET_SCHEMA_VERSION,
@@ -32,6 +34,7 @@ POST_SELL_DIR = DATA_DIR / "post_sell"
 REPORT_SCHEMA_VERSION = 2
 MATRIX_VERSION_PREFIX = "scalp_entry_adm_v1"
 SAMPLE_FLOOR = 20
+SKIP_FOLLOWUP_SAMPLE_FLOOR = 20
 
 ACTION_ORDER = [
     "BUY_NOW",
@@ -68,6 +71,7 @@ RELEVANT_STAGES = {
     "scalp_sim_entry_submit_revalidation_block",
     "scalp_sim_buy_order_assumed_filled",
     "scalp_sim_sell_order_assumed_filled",
+    "entry_ai_price_canary_skip_followup",
 }
 
 PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
@@ -104,6 +108,7 @@ SCORE_CONTEXT_BACKFILL_ELIGIBLE_STAGES = {
     "pre_submit_liquidity_guard_block",
     "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
+    "scalp_sim_entry_ai_price_skip_order",
     "scalp_sim_pre_submit_liquidity_guard_would_block",
     "scalp_sim_pre_submit_liquidity_guard_unknown",
     "scalp_sim_pre_submit_overbought_guard_would_block",
@@ -112,6 +117,7 @@ SCORE_CONTEXT_BACKFILL_ELIGIBLE_STAGES = {
 SCORE_BACKFILL_MAX_PAST_SECONDS = 180.0
 SCORE_BACKFILL_KEY_FIELDS = (
     "sim_record_id",
+    "sim_parent_record_id",
     "candidate_id",
     "record_id",
     "submit_attempt_id",
@@ -792,6 +798,7 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "candidate_id": candidate_id,
         "record_id": _nonempty(event.get("record_id") or fields.get("record_id")),
         "sim_record_id": sim_record_id,
+        "sim_parent_record_id": _nonempty(fields.get("sim_parent_record_id")),
         "stock_code": _nonempty(event.get("stock_code") or fields.get("stock_code")),
         "stock_name": _nonempty(event.get("stock_name") or fields.get("stock_name")),
         "stage": stage,
@@ -801,6 +808,13 @@ def _base_row(event: dict[str, Any]) -> dict[str, Any]:
         "ai_score": _safe_float(raw_score_value, None),
         "score_source_value": _safe_float(raw_score_value, None),
         "ai_action": _nonempty(fields.get("action") or fields.get("ai_action")),
+        "skip_followup_elapsed_sec": _safe_int(fields.get("elapsed_sec"), 0),
+        "skip_followup_mark_price": _safe_float(fields.get("mark_price"), None),
+        "skip_followup_price": _safe_float(fields.get("followup_price"), None),
+        "skip_followup_max_price": _safe_float(fields.get("max_price"), None),
+        "skip_followup_min_price": _safe_float(fields.get("min_price"), None),
+        "skip_followup_mfe_bps": _safe_float(fields.get("mfe_bps"), None),
+        "skip_followup_mae_bps": _safe_float(fields.get("mae_bps"), None),
         "decision_quality_contract_status": _nonempty(
             fields.get("decision_quality_contract_status")
             or fields.get("entry_recheck_contract_status")
@@ -1392,9 +1406,7 @@ def _outcome_join_diagnostic(
     }
     overlap_keys = candidate_keys & evaluation_keys
     sim_eligible_rows = [
-        row
-        for row in aggregate_rows
-        if str(row.get("sim_record_id") or "").strip()
+        row for row in aggregate_rows if str(row.get("sim_record_id") or "").strip()
     ]
     sim_eligible_keys = {
         str(value).strip()
@@ -1519,10 +1531,19 @@ def _parse_event_ts(value: Any) -> datetime | None:
 
 def _score_backfill_keys(row: dict[str, Any]) -> set[str]:
     keys: set[str] = set()
+    stock_code = _nonempty(row.get("stock_code"))
     for key in SCORE_BACKFILL_KEY_FIELDS:
         value = _nonempty(row.get(key))
         if value:
             keys.add(f"{key}:{value}")
+            if stock_code:
+                # A simulator child carries its originating live-pipeline row as
+                # sim_parent_record_id, while the source score row carries the
+                # same identifier as record_id.  Preserve field-specific keys
+                # and add a stock-scoped canonical lineage key so those two
+                # representations can be joined without temporal guesswork or
+                # cross-symbol collisions.
+                keys.add(f"lineage:{stock_code}:{value}")
     return keys
 
 
@@ -1586,7 +1607,7 @@ def _backfill_score_context(
             key_candidates, event_ts=event_ts
         )
         match_type = "exact_key" if best_row is not None else "prior_same_stock_time"
-        if best_row is None:
+        if best_row is None and stage != "scalp_sim_entry_ai_price_skip_order":
             best_row, best_seconds = _prior_score_candidate(
                 scored_by_stock.get(stock_code, []),
                 event_ts=event_ts,
@@ -1613,6 +1634,302 @@ def _backfill_score_context(
         row["score_backfill_abs_seconds"] = round(float(best_seconds or 0.0), 3)
         provenance["score_bucket"] = "backfilled"
         row["entry_adm_bucket_token_recomputed"] = entry_adm_bucket_token(row)
+
+
+def _attach_entry_price_skip_followups(
+    rows: list[dict[str, Any]], followup_rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    followups_by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for followup in followup_rows:
+        for key in _score_backfill_keys(followup):
+            followups_by_key[key].append(followup)
+
+    skip_rows = [
+        row
+        for row in rows
+        if str(row.get("stage") or "") == "scalp_sim_entry_ai_price_skip_order"
+    ]
+    attached_by_interval: Counter[str] = Counter()
+    for row in skip_rows:
+        row_ts = _parse_event_ts(row.get("event_time"))
+        candidates: dict[tuple[str, str], dict[str, Any]] = {}
+        for key in _score_backfill_keys(row):
+            for followup in followups_by_key.get(key, []):
+                if _nonempty(followup.get("stock_code")) != _nonempty(
+                    row.get("stock_code")
+                ):
+                    continue
+                followup_ts = _parse_event_ts(followup.get("event_time"))
+                if row_ts and followup_ts and followup_ts < row_ts:
+                    continue
+                interval = _safe_int(followup.get("skip_followup_elapsed_sec"), 0)
+                if interval not in {30, 90}:
+                    continue
+                candidate_key = (str(interval), str(followup.get("event_time") or ""))
+                candidates[candidate_key] = followup
+        for interval in (30, 90):
+            matching = [
+                followup
+                for (seconds, _), followup in candidates.items()
+                if seconds == str(interval)
+            ]
+            if not matching:
+                continue
+            followup = min(
+                matching,
+                key=lambda item: str(item.get("event_time") or ""),
+            )
+            prefix = f"entry_price_skip_followup_{interval}s"
+            row[f"{prefix}_mfe_bps"] = followup.get("skip_followup_mfe_bps")
+            row[f"{prefix}_mae_bps"] = followup.get("skip_followup_mae_bps")
+            row[f"{prefix}_price"] = followup.get("skip_followup_price")
+            row[f"{prefix}_event_time"] = followup.get("event_time")
+            row[f"{prefix}_source"] = "entry_ai_price_canary_skip_followup"
+            attached_by_interval[f"{interval}s"] += 1
+
+    return {
+        "skip_candidate_count": len(skip_rows),
+        "followup_event_count": len(followup_rows),
+        "attached_by_interval": {
+            "30s": attached_by_interval.get("30s", 0),
+            "90s": attached_by_interval.get("90s", 0),
+        },
+        "coverage_rate_by_interval": {
+            interval: (
+                round(attached_by_interval.get(interval, 0) / len(skip_rows), 4)
+                if skip_rows
+                else 0.0
+            )
+            for interval in ("30s", "90s")
+        },
+        "decision_authority": "report_only_source_quality_observation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def _load_prior_entry_price_skip_rows(
+    target_date: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    policy = clean_baseline_policy()
+    baseline_date = str(
+        policy.get("clean_tuning_baseline_date") or "2026-06-05"
+    ).strip()
+    rows: list[dict[str, Any]] = []
+    source_dates: list[str] = []
+    source_artifacts: list[str] = []
+    excluded_artifacts: list[dict[str, str]] = []
+    selected_paths: dict[str, Path] = {}
+
+    for path in sorted(
+        ADM_REPORT_DIR.glob("scalp_entry_action_decision_matrix_*.json*")
+    ):
+        name = path.name
+        prefix = "scalp_entry_action_decision_matrix_"
+        source_date = name[len(prefix) : len(prefix) + 10]
+        try:
+            source_dt = date.fromisoformat(source_date)
+            target_dt = date.fromisoformat(target_date)
+            baseline_dt = date.fromisoformat(baseline_date)
+        except ValueError:
+            excluded_artifacts.append(
+                {"artifact": str(path), "reason": "invalid_artifact_date"}
+            )
+            continue
+        if not (baseline_dt <= source_dt < target_dt):
+            continue
+        current = selected_paths.get(source_date)
+        if current is None or (current.suffix == ".gz" and path.suffix != ".gz"):
+            selected_paths[source_date] = path
+
+    for source_date, path in sorted(selected_paths.items()):
+        try:
+            with _open_text(path) as handle:
+                payload = json.loads(handle.read())
+        except Exception as exc:
+            excluded_artifacts.append(
+                {
+                    "artifact": str(path),
+                    "reason": f"unreadable_or_invalid_json:{type(exc).__name__}",
+                }
+            )
+            continue
+        report_rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(report_rows, list):
+            excluded_artifacts.append(
+                {"artifact": str(path), "reason": "rows_missing_or_invalid"}
+            )
+            continue
+        source_dates.append(source_date)
+        source_artifacts.append(str(path))
+        for row in report_rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("stage") or "") != "scalp_sim_entry_ai_price_skip_order":
+                continue
+            copied = dict(row)
+            copied["_cumulative_source_date"] = source_date
+            rows.append(copied)
+
+    return rows, {
+        "clean_tuning_baseline_date": baseline_date,
+        "source_dates": source_dates,
+        "source_date_count": len(source_dates),
+        "source_artifacts": source_artifacts,
+        "source_artifact_count": len(source_artifacts),
+        "excluded_artifacts": excluded_artifacts,
+        "excluded_artifact_count": len(excluded_artifacts),
+    }
+
+
+def _finite_followup_value(
+    row: dict[str, Any], prefix: str, suffix: str
+) -> float | None:
+    value = _safe_float(row.get(f"{prefix}_{suffix}"), None)
+    if value is None or not math.isfinite(float(value)):
+        return None
+    return float(value)
+
+
+def _entry_price_skip_followup_cumulative_summary(
+    target_date: str, current_rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    prior_rows, provenance = _load_prior_entry_price_skip_rows(target_date)
+    baseline_date = str(provenance.get("clean_tuning_baseline_date") or "2026-06-05")
+    try:
+        target_allowed = date.fromisoformat(target_date) >= date.fromisoformat(
+            baseline_date
+        )
+    except ValueError:
+        target_allowed = False
+    cumulative_rows = list(prior_rows)
+    for row in current_rows if target_allowed else []:
+        if str(row.get("stage") or "") != "scalp_sim_entry_ai_price_skip_order":
+            continue
+        copied = dict(row)
+        copied["_cumulative_source_date"] = target_date
+        cumulative_rows.append(copied)
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(cumulative_rows):
+        source_date = str(row.get("_cumulative_source_date") or target_date)
+        lineage = next(
+            (
+                _nonempty(row.get(field))
+                for field in (
+                    "sim_record_id",
+                    "candidate_id",
+                    "record_id",
+                    "sim_parent_record_id",
+                )
+                if _nonempty(row.get(field))
+            ),
+            "",
+        )
+        key = "|".join(
+            [
+                source_date,
+                _nonempty(row.get("stock_code")),
+                lineage or f"row-{index}",
+            ]
+        )
+        deduped[key] = row
+
+    interval_summary: dict[str, dict[str, Any]] = {}
+    for interval in (30, 90):
+        prefix = f"entry_price_skip_followup_{interval}s"
+        paired = [
+            row
+            for row in deduped.values()
+            if _finite_followup_value(row, prefix, "mfe_bps") is not None
+            and _finite_followup_value(row, prefix, "mae_bps") is not None
+        ]
+        mfe_values = [
+            float(_finite_followup_value(row, prefix, "mfe_bps") or 0.0)
+            for row in paired
+        ]
+        mae_values = [
+            float(_finite_followup_value(row, prefix, "mae_bps") or 0.0)
+            for row in paired
+        ]
+        interval_summary[f"{interval}s"] = {
+            "mature_paired_sample_count": len(paired),
+            "equal_weight_avg_mfe_bps": (
+                round(sum(mfe_values) / len(mfe_values), 4) if mfe_values else None
+            ),
+            "equal_weight_avg_mae_bps": (
+                round(sum(mae_values) / len(mae_values), 4) if mae_values else None
+            ),
+        }
+
+    primary_sample = int(interval_summary["90s"].get("mature_paired_sample_count") or 0)
+    sample_floor_met = bool(
+        target_allowed and primary_sample >= SKIP_FOLLOWUP_SAMPLE_FLOOR
+    )
+    observed_dates = sorted(
+        {
+            str(row.get("_cumulative_source_date") or "")
+            for row in deduped.values()
+            if any(
+                _finite_followup_value(
+                    row,
+                    f"entry_price_skip_followup_{interval}s",
+                    "mfe_bps",
+                )
+                is not None
+                for interval in (30, 90)
+            )
+        }
+        - {""}
+    )
+    return {
+        "status": (
+            "source_quality_blocked_pre_clean_baseline"
+            if not target_allowed
+            else (
+                "ready_for_offline_counterfactual_review"
+                if sample_floor_met
+                else "collecting_mature_followups"
+            )
+        ),
+        "metric_role": "counterfactual_opportunity_diagnostic",
+        "decision_authority": "report_only_counterfactual_quality_review",
+        "window_policy": "clean_baseline_cumulative_through_target_date",
+        "sample_floor": SKIP_FOLLOWUP_SAMPLE_FLOOR,
+        "sample_floor_basis": "mature_paired_90s_followups",
+        "sample_floor_met": sample_floor_met,
+        "primary_decision_metric": "paired_90s_mfe_mae_bps_diagnostic",
+        "source_quality_gate": (
+            "exact same-symbol lineage join with finite paired MFE/MAE and "
+            "clean-baseline daily ADM artifact"
+        ),
+        "forbidden_uses": [
+            "treat_counterfactual_mfe_as_realized_pnl_or_ev",
+            "runtime_threshold_apply",
+            "order_submit",
+            "provider_route_change",
+            "bot_restart",
+            "real_execution_quality_approval",
+        ],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "max_runtime_apply_count": 0,
+        "candidate_count": len(deduped),
+        "observed_dates": observed_dates,
+        "observed_date_count": len(observed_dates),
+        "intervals": interval_summary,
+        "provenance": {
+            **provenance,
+            "target_date_in_memory": target_date,
+            "target_date_allowed": target_allowed,
+            "target_date_row_count": sum(
+                1
+                for row in current_rows
+                if target_allowed
+                if str(row.get("stage") or "") == "scalp_sim_entry_ai_price_skip_order"
+            ),
+        },
+    }
 
 
 def _is_not_available_bucket(value: str) -> bool:
@@ -1779,7 +2096,9 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     unknown_source_quality_gate = (
         "source_quality_blocker"
         if actionable_unknown_roots
-        else "classified_non_actionable" if unknown_affected_row_count else "pass"
+        else "classified_non_actionable"
+        if unknown_affected_row_count
+        else "pass"
     )
     unknown_recommended_route = (
         "source_quality_workorder"
@@ -1842,10 +2161,26 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     evaluations, eval_summary = _load_sim_evaluations(target_date)
-    raw_rows = [_base_row(event) for event in _iter_relevant_events(target_date)]
+    all_source_rows = [_base_row(event) for event in _iter_relevant_events(target_date)]
+    followup_rows = [
+        row
+        for row in all_source_rows
+        if str(row.get("stage") or "") == "entry_ai_price_canary_skip_followup"
+    ]
+    raw_rows = [
+        row
+        for row in all_source_rows
+        if str(row.get("stage") or "") != "entry_ai_price_canary_skip_followup"
+    ]
     deduped_rows = _dedupe_rows(raw_rows)
     _backfill_score_context(deduped_rows, source_rows=raw_rows)
+    skip_followup_summary = _attach_entry_price_skip_followups(
+        deduped_rows, followup_rows
+    )
     rows = [_apply_outcome(row, evaluations) for row in deduped_rows]
+    skip_followup_cumulative = _entry_price_skip_followup_cumulative_summary(
+        target_date, rows
+    )
 
     prior_summary = _load_prior_adm_bucket_summary(target_date)
     _backfill_adm_lookup_status(rows, prior_summary)
@@ -1942,7 +2277,10 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
     warnings = []
     if aggregate_joined_sample < SAMPLE_FLOOR:
         warnings.append("joined_sample_below_sample_floor")
-    if outcome_join_diagnostic.get("coverage_state") == "source_outcome_underproduction":
+    if (
+        outcome_join_diagnostic.get("coverage_state")
+        == "source_outcome_underproduction"
+    ):
         warnings.append("sim_post_sell_outcome_source_below_sample_floor")
     if outcome_join_diagnostic.get("coverage_state") == "join_contract_gap":
         warnings.append("sim_post_sell_outcome_join_contract_gap")
@@ -2045,6 +2383,8 @@ def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[st
                 [stage, count] for stage, count in prior_missing_top_stages
             ],
             "outcome_join_diagnostic": outcome_join_diagnostic,
+            "entry_price_skip_followup": skip_followup_summary,
+            "entry_price_skip_followup_cumulative": skip_followup_cumulative,
             "unknown_bucket_summary": unknown_summary,
             "status": status,
             "warnings": warnings,
@@ -2078,6 +2418,11 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
         if isinstance(summary.get("unknown_bucket_summary"), dict)
         else {}
     )
+    skip_followup_cumulative = (
+        summary.get("entry_price_skip_followup_cumulative")
+        if isinstance(summary.get("entry_price_skip_followup_cumulative"), dict)
+        else {}
+    )
     lines = [
         f"# Scalp Entry Action Decision Matrix - {report.get('date')}",
         "",
@@ -2108,6 +2453,9 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
         f"- score_source_missing_provenance: `{unknown_summary.get('score_source_missing_provenance') or {}}`",
         f"- adm_source_bucket_used_count: `{unknown_summary.get('adm_source_bucket_used_count', 0)}`",
         f"- recomputed_unknown_count: `{unknown_summary.get('recomputed_unknown_count', 0)}`",
+        f"- entry_price_skip_followup_cumulative_status: `{skip_followup_cumulative.get('status')}`",
+        f"- entry_price_skip_followup_90s_sample/floor: `{(skip_followup_cumulative.get('intervals') or {}).get('90s', {}).get('mature_paired_sample_count', 0)}` / `{skip_followup_cumulative.get('sample_floor')}`",
+        f"- entry_price_skip_followup_sample_floor_met: `{skip_followup_cumulative.get('sample_floor_met')}`",
         "",
         "## Action Summary",
         "| action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |",

@@ -1,12 +1,12 @@
 # 2026-07-31 One Share Threshold Opportunity
 
-- generated_at: 2026-08-01T15:17:01+09:00
+- generated_at: 2026-08-01T21:10:28+09:00
 - window: 2026-06-05 -> 2026-07-31
 - decision_authority: source_only_threshold_opportunity_audit
 - runtime_effect: false
 - allowed_runtime_apply: false
 - forbidden_uses: runtime_threshold_mutation, buy_score_threshold_relaxation_without_preopen_apply, stale_submit_bypass, broker_guard_bypass, order_guard_relaxation, provider_route_change, bot_restart, forced_one_share_success_counting, real_execution_quality_approval
-- ai_review_status: unavailable
+- ai_review_status: parsed
 - source_coverage_status: pass
 - source_coverage_gap_count: 0
 
@@ -22,6 +22,15 @@
 - probe_intent_record_count: 1425
 - actual_submit_observed_count: 387
 - submitted_split_provenance_gap_count: 0
+- probe_to_residual_status: instrumentation_gap
+- probe_to_residual_resolution_count: 38
+- probe_to_residual_resolution_coverage_pct: 67.8571
+- residual_submitted_record_count: 15
+- residual_blocked_record_count: 43
+- residual_not_submitted_record_count: 23
+- residual_not_submitted_source_counts: {"legacy_aborted_phase_fallback": 23}
+- probe_to_residual_unresolved_record_count: 18
+- target_date_probe_to_residual: {"probe_first_submit_provenance_gap_count": 0, "probe_first_submit_with_provenance_count": 5, "probe_first_submitted_count": 5, "residual_blocked_record_count": 5, "residual_not_submitted_record_count": 5, "residual_not_submitted_source_counts": {"legacy_aborted_phase_fallback": 5}, "residual_submitted_record_count": 0, "resolution_count": 5, "resolution_coverage_pct": 100.0, "status": "observed", "unresolved_record_count": 0}
 
 ## Opportunities
 
@@ -82,7 +91,7 @@
 - mapped_family: entry_strength_momentum_recheck
 - runtime_effect: false
 - allowed_runtime_apply: false
-- ai_recommended_disposition: -
+- ai_recommended_disposition: attach_existing_entry_hook
 - evidence:
   - threshold_group=strength_momentum_vpw
   - sample=166

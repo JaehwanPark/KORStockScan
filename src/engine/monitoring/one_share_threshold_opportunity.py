@@ -185,9 +185,8 @@ def _default_output_paths(target_date: str) -> tuple[Path, Path]:
 
 def _is_forced_one_share(row: dict[str, Any]) -> bool:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-    return (
-        row.get("stage") == "rising_missed_one_share_entry"
-        or _boolish(fields.get("rising_missed_one_share_entry_forced"))
+    return row.get("stage") == "rising_missed_one_share_entry" or _boolish(
+        fields.get("rising_missed_one_share_entry_forced")
     )
 
 
@@ -239,15 +238,16 @@ def _record_feature(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "entry_split_probe_bundle_id": fields.get("entry_split_probe_bundle_id"),
         "entry_split_order_variant_id": fields.get("entry_split_order_variant_id"),
-        "entry_split_probe_terminal_outcome": fields.get(
-            "entry_split_probe_terminal_outcome"
+        "entry_split_probe_phase": fields.get("entry_split_probe_phase"),
+        "entry_split_probe_abort_reason": fields.get("entry_split_probe_abort_reason"),
+        "entry_split_probe_terminal_outcome": (
+            fields.get("entry_split_probe_terminal_outcome")
+            or fields.get("prior_probe_residual_outcome")
         ),
     }
 
 
-def _merge_probe_split_provenance(
-    item: dict[str, Any], row: dict[str, Any]
-) -> None:
+def _merge_probe_split_provenance(item: dict[str, Any], row: dict[str, Any]) -> None:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     stage = str(row.get("stage") or "")
     if _boolish(fields.get("actual_order_submitted")) or stage in {
@@ -261,14 +261,57 @@ def _merge_probe_split_provenance(
         or fields.get("entry_split_probe_first_applied")
     ):
         item["entry_split_probe_first_applied_observed"] = True
-    for key in (
-        "entry_split_probe_bundle_id",
-        "entry_split_order_variant_id",
-        "entry_split_probe_terminal_outcome",
+    for key, aliases in (
+        (
+            "entry_split_probe_bundle_id",
+            ("entry_split_probe_bundle_id", "prior_probe_residual_bundle_id"),
+        ),
+        ("entry_split_order_variant_id", ("entry_split_order_variant_id",)),
+        ("entry_split_probe_phase", ("entry_split_probe_phase",)),
+        (
+            "entry_split_probe_abort_reason",
+            (
+                "entry_split_probe_abort_reason",
+                "prior_probe_residual_abort_reason",
+            ),
+        ),
+        (
+            "entry_split_probe_terminal_outcome",
+            (
+                "entry_split_probe_terminal_outcome",
+                "prior_probe_residual_outcome",
+            ),
+        ),
     ):
-        value = fields.get(key)
+        value = next(
+            (
+                fields.get(alias)
+                for alias in aliases
+                if fields.get(alias) not in (None, "", "-")
+            ),
+            None,
+        )
         if value not in (None, "", "-"):
             item[key] = value
+    if stage == "residual_submitted":
+        item["entry_split_residual_submitted_observed"] = True
+    elif stage == "residual_blocked":
+        item["entry_split_residual_blocked_observed"] = True
+
+
+def _residual_not_submitted_source(row: dict[str, Any]) -> str:
+    if (
+        str(row.get("entry_split_probe_terminal_outcome") or "").strip()
+        == "residual_not_submitted"
+    ):
+        return "explicit_terminal_outcome"
+    if (
+        row.get("entry_split_residual_blocked_observed") is True
+        and row.get("entry_split_residual_submitted_observed") is not True
+        and str(row.get("entry_split_probe_phase") or "").strip() == "aborted"
+    ):
+        return "legacy_aborted_phase_fallback"
+    return ""
 
 
 def _classify_threshold(row: dict[str, Any]) -> set[str]:
@@ -753,9 +796,7 @@ def build_report(
     )
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
     if pipeline_paths is None:
-        pipeline_paths = _pipeline_paths(
-            since_date=since_date, until_date=target_date
-        )
+        pipeline_paths = _pipeline_paths(since_date=since_date, until_date=target_date)
     if post_sell_paths is None:
         post_sell_paths = _post_sell_paths(
             since_date=since_date, until_date=target_date
@@ -794,7 +835,9 @@ def build_report(
         row for row in rows if row.get("entry_split_probe_first_applied_observed")
     ]
     variant_rows = [
-        row for row in rows if str(row.get("entry_split_order_variant_id") or "").strip()
+        row
+        for row in rows
+        if str(row.get("entry_split_order_variant_id") or "").strip()
     ]
     submitted_split_provenance_rows = [
         row
@@ -813,30 +856,170 @@ def build_report(
         if str(row.get("entry_split_probe_bundle_id") or "").strip()
         or str(row.get("entry_split_order_variant_id") or "").strip()
     ]
-    probe_first_provenance_gap_count = (
-        len(probe_first_submitted_rows)
-        - len(probe_first_submit_with_provenance_rows)
+    probe_first_provenance_gap_count = len(probe_first_submitted_rows) - len(
+        probe_first_submit_with_provenance_rows
     )
+    residual_submitted_rows = [
+        row
+        for row in probe_first_submit_with_provenance_rows
+        if row.get("entry_split_residual_submitted_observed") is True
+    ]
+    residual_blocked_rows = [
+        row
+        for row in probe_first_submit_with_provenance_rows
+        if row.get("entry_split_residual_blocked_observed") is True
+    ]
+    residual_not_submitted_rows = [
+        row
+        for row in probe_first_submit_with_provenance_rows
+        if _residual_not_submitted_source(row)
+    ]
+    residual_not_submitted_source_counts = Counter(
+        _residual_not_submitted_source(row) for row in residual_not_submitted_rows
+    )
+    resolved_probe_record_ids = {
+        str(row.get("record_id") or "")
+        for row in residual_submitted_rows + residual_not_submitted_rows
+    }
+    unresolved_probe_rows = [
+        row
+        for row in probe_first_submit_with_provenance_rows
+        if str(row.get("record_id") or "") not in resolved_probe_record_ids
+    ]
+    probe_to_residual_resolution_count = len(resolved_probe_record_ids)
+    probe_to_residual_resolution_coverage_pct = (
+        round(
+            probe_to_residual_resolution_count
+            / len(probe_first_submit_with_provenance_rows)
+            * 100.0,
+            4,
+        )
+        if probe_first_submit_with_provenance_rows
+        else None
+    )
+    probe_to_residual_status = (
+        "no_natural_sample"
+        if not probe_first_submitted_rows
+        else (
+            "instrumentation_gap"
+            if probe_first_provenance_gap_count > 0 or unresolved_probe_rows
+            else "observed"
+        )
+    )
+    probe_to_residual_by_entry_date: dict[str, dict[str, Any]] = {}
+    probe_entry_dates = {
+        str(row.get("entry_date") or "")
+        for row in probe_first_submitted_rows
+        if str(row.get("entry_date") or "")
+    }
+    probe_entry_dates.add(target_date)
+    for entry_date in sorted(probe_entry_dates):
+        date_submitted_rows = [
+            row
+            for row in probe_first_submitted_rows
+            if str(row.get("entry_date") or "") == entry_date
+        ]
+        date_provenance_rows = [
+            row
+            for row in date_submitted_rows
+            if str(row.get("entry_split_probe_bundle_id") or "").strip()
+            or str(row.get("entry_split_order_variant_id") or "").strip()
+        ]
+        date_residual_submitted_rows = [
+            row
+            for row in date_provenance_rows
+            if row.get("entry_split_residual_submitted_observed") is True
+        ]
+        date_residual_blocked_rows = [
+            row
+            for row in date_provenance_rows
+            if row.get("entry_split_residual_blocked_observed") is True
+        ]
+        date_residual_not_submitted_rows = [
+            row for row in date_provenance_rows if _residual_not_submitted_source(row)
+        ]
+        date_resolved_record_ids = {
+            str(row.get("record_id") or "")
+            for row in date_residual_submitted_rows + date_residual_not_submitted_rows
+        }
+        date_unresolved_count = sum(
+            1
+            for row in date_provenance_rows
+            if str(row.get("record_id") or "") not in date_resolved_record_ids
+        )
+        date_provenance_gap_count = len(date_submitted_rows) - len(date_provenance_rows)
+        date_status = (
+            "no_natural_sample"
+            if not date_submitted_rows
+            else (
+                "instrumentation_gap"
+                if date_provenance_gap_count > 0 or date_unresolved_count > 0
+                else "observed"
+            )
+        )
+        probe_to_residual_by_entry_date[entry_date] = {
+            "status": date_status,
+            "probe_first_submitted_count": len(date_submitted_rows),
+            "probe_first_submit_with_provenance_count": len(date_provenance_rows),
+            "probe_first_submit_provenance_gap_count": (date_provenance_gap_count),
+            "resolution_count": len(date_resolved_record_ids),
+            "resolution_coverage_pct": (
+                round(
+                    len(date_resolved_record_ids) / len(date_provenance_rows) * 100.0,
+                    4,
+                )
+                if date_provenance_rows
+                else None
+            ),
+            "residual_submitted_record_count": len(date_residual_submitted_rows),
+            "residual_blocked_record_count": len(date_residual_blocked_rows),
+            "residual_not_submitted_record_count": len(
+                date_residual_not_submitted_rows
+            ),
+            "residual_not_submitted_source_counts": dict(
+                sorted(
+                    Counter(
+                        _residual_not_submitted_source(row)
+                        for row in date_residual_not_submitted_rows
+                    ).items()
+                )
+            ),
+            "unresolved_record_count": date_unresolved_count,
+        }
     probe_split_attribution = {
         "status": (
             "no_natural_sample"
             if not rows
-            else "instrumentation_gap"
-            if probe_first_provenance_gap_count > 0
-            else "observed"
+            else (
+                "instrumentation_gap"
+                if probe_first_provenance_gap_count > 0
+                else "observed"
+            )
         ),
         "intent_record_count": len(rows),
         "actual_submit_observed_count": len(submitted_rows),
         "probe_first_observed_count": len(probe_first_rows),
         "entry_split_variant_observed_count": len(variant_rows),
         "submitted_split_provenance_count": len(submitted_split_provenance_rows),
-        "submitted_split_provenance_gap_count": (
-            probe_first_provenance_gap_count
-        ),
+        "submitted_split_provenance_gap_count": (probe_first_provenance_gap_count),
         "probe_first_submitted_count": len(probe_first_submitted_rows),
         "probe_first_submit_with_provenance_count": len(
             probe_first_submit_with_provenance_rows
         ),
+        "probe_to_residual_status": probe_to_residual_status,
+        "probe_to_residual_resolution_count": (probe_to_residual_resolution_count),
+        "probe_to_residual_resolution_coverage_pct": (
+            probe_to_residual_resolution_coverage_pct
+        ),
+        "residual_submitted_record_count": len(residual_submitted_rows),
+        "residual_blocked_record_count": len(residual_blocked_rows),
+        "residual_not_submitted_record_count": len(residual_not_submitted_rows),
+        "residual_not_submitted_source_counts": dict(
+            sorted(residual_not_submitted_source_counts.items())
+        ),
+        "probe_to_residual_unresolved_record_count": len(unresolved_probe_rows),
+        "probe_to_residual_by_entry_date": probe_to_residual_by_entry_date,
+        "target_date_probe_to_residual": probe_to_residual_by_entry_date[target_date],
         "legacy_or_non_split_submit_count": (
             len(submitted_rows) - len(probe_first_submitted_rows)
         ),
@@ -845,6 +1028,22 @@ def build_report(
         "join_owner": "record_id_to_post_sell_recommendation_id",
         "execution_shape_owner": "entry_split_order_plan",
         "scale_in_owner": "scale_in_split_order_plan_avg_down_only",
+        "probe_to_residual_contract": {
+            "metric_role": "real_execution_quality_attribution",
+            "decision_authority": "source_only_probe_residual_attribution",
+            "window_policy": (
+                "record_lineage_from_probe_submit_to_residual_terminal_event"
+            ),
+            "sample_floor": "one_probe_first_submit_with_split_provenance",
+            "primary_decision_metric": ("probe_to_residual_resolution_coverage_pct"),
+            "source_quality_gate": (
+                "record_id_split_bundle_or_variant_and_terminal_event_or_"
+                "legacy_aborted_phase_fallback"
+            ),
+            "forbidden_uses": FORBIDDEN_USES,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "decision_authority": "source_only_probe_split_attribution",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -948,6 +1147,15 @@ def write_outputs(
         f"- probe_intent_record_count: {probe_split.get('intent_record_count')}",
         f"- actual_submit_observed_count: {probe_split.get('actual_submit_observed_count')}",
         f"- submitted_split_provenance_gap_count: {probe_split.get('submitted_split_provenance_gap_count')}",
+        f"- probe_to_residual_status: {probe_split.get('probe_to_residual_status')}",
+        f"- probe_to_residual_resolution_count: {probe_split.get('probe_to_residual_resolution_count')}",
+        f"- probe_to_residual_resolution_coverage_pct: {probe_split.get('probe_to_residual_resolution_coverage_pct')}",
+        f"- residual_submitted_record_count: {probe_split.get('residual_submitted_record_count')}",
+        f"- residual_blocked_record_count: {probe_split.get('residual_blocked_record_count')}",
+        f"- residual_not_submitted_record_count: {probe_split.get('residual_not_submitted_record_count')}",
+        f"- residual_not_submitted_source_counts: {json.dumps(probe_split.get('residual_not_submitted_source_counts') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- probe_to_residual_unresolved_record_count: {probe_split.get('probe_to_residual_unresolved_record_count')}",
+        f"- target_date_probe_to_residual: {json.dumps(probe_split.get('target_date_probe_to_residual') or {}, ensure_ascii=False, sort_keys=True)}",
         "",
         "## Opportunities",
         "",

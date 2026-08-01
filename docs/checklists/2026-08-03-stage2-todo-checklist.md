@@ -48,7 +48,7 @@
 
 - [ ] `[SimProbeIntradayCoverage0803] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-08-03`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-31.json)
-  - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다. one-share source는 미적격 skip을 intent로 세지 않고 actual submit/probe-first/split bundle·variant/post-sell join을 분리한다. Entry ADM은 평가 원천 underproduction과 join-contract gap을 분리하고, overnight는 `observed|no_natural_sample|instrumentation_gap`을 gzip artifact까지 포함해 판정한다.
+  - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다. one-share source는 미적격 skip을 intent로 세지 않고 actual submit/probe-first/split bundle·variant/post-sell join을 분리하며, probe-first submit 이후 `residual_submitted` 이벤트와 `residual_not_submitted` terminal outcome을 record lineage로 결합해 누적 및 `target_date_probe_to_residual` 각각의 `observed|no_natural_sample|instrumentation_gap`, resolution coverage, submitted/blocked/not-submitted/unresolved 건수를 확인한다. terminal outcome 도입 전 artifact는 `residual_blocked + phase=aborted + residual_submitted 미관측`인 경우만 `legacy_aborted_phase_fallback`으로 복원하고 source count를 분리한다. 과거 instrumentation gap을 당일 표본 결함으로 간주하지 않는다. Entry ADM은 평가 원천 underproduction과 join-contract gap을 분리하고, overnight는 `observed|no_natural_sample|instrumentation_gap`을 gzip artifact까지 포함해 판정한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
 
@@ -62,7 +62,7 @@
 
 - [ ] `[EntryAiGateCumulativeSourceJoin0803] entry AI 누적 품질갱신 source join 및 손상일 provenance 보완` (`Due: 2026-08-03`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~20:25`, `Track: ScalpingLogic`)
   - Source: [entry_ai_gate_backtest_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/entry_ai_gate_backtest/entry_ai_gate_backtest_2026-07-31.json), [entry_ai_gate_backtest.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_ai_gate_backtest.py), [missed_entry_counterfactual_2026-07-27.json.gz](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/missed_entry_counterfactual_2026-07-27.json.gz)
-  - 판정 기준: clean baseline 누적 replay에서 missed-entry counterfactual을 동일 `record_id`/candidate lineage의 entry decision snapshot과 결합해 canonical AI action, fresh tick/micro-VWAP, source-quality provenance를 복원한다. producer별 실제 소비일과 의도한 trading-day window를 분리하고, JSON 손상·artifact missing 날짜는 누적 source count에서 제외 사유와 함께 표면화한다. 결합 가능한 원천이 없으면 0표본을 전략 부재가 아니라 `source_contract_not_evaluable`로 닫는다.
+  - 판정 기준: clean baseline 누적 replay에서 missed-entry counterfactual을 동일 `record_id`/candidate lineage의 entry decision snapshot과 결합해 canonical AI action, fresh tick/micro-VWAP, source-quality provenance를 복원한다. producer별 실제 소비일과 의도한 trading-day window를 분리하고, JSON 손상·artifact missing 날짜는 누적 source count에서 제외 사유와 함께 표면화한다. Entry ADM의 `entry_price_skip_followup_cumulative`은 exact same-symbol lineage로 결합된 finite 90초 MFE/MAE가 20건 이상일 때만 offline counterfactual 재검토 준비로 판정하며, 해당 상태만으로 runtime apply나 실현 EV를 승인하지 않는다. 결합 가능한 원천이 없으면 0표본을 전략 부재가 아니라 `source_contract_not_evaluable`로 닫는다.
   - 금지: score-only diagnostic EV, action/micro provenance가 없는 counterfactual, 손상 artifact를 `entry_opportunity_recheck_runtime` 적용 근거로 사용하지 않는다. hard safety, stale/quote, broker/account/order/quantity/cooldown, provider, bot, cap을 변경하거나 우회하지 않는다.
   - 다음 액션: `joined_replay_apply_candidate_0_or_1`, `source_contract_not_evaluable`, `corrupt_date_excluded_with_provenance`, `source_quality_blocked`, `needs_producer_patch` 중 하나로 닫는다.
 
@@ -74,7 +74,7 @@
 
 - [ ] `[ThresholdDailyEVReport0803] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-08-03`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-31.json)
-  - 판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.
+  - 판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다. wrapper에서 OFF인 swing/deep-audit source는 `warning_contract.disabled_not_applicable`로 분리되고, active warning은 중복 제거된 required-missing/quality warning만 남는지 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
 
@@ -86,7 +86,7 @@
 
 - [ ] `[CodeImprovementWorkorderReview0803] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-08-03`, `Slot: POSTCLOSE`, `TimeWindow: 21:15~21:25`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-07-31.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-07-31.md), [code_improvement_workorder_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-31.json)
-  - 판정 기준: selected_order_count=78와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인하고, 비-implement 반복 항목이 `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design` 중 무엇으로 닫혀야 하는지 분리한다.
+  - 판정 기준: 최신 재생성 산출물의 selected order와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인하고, `duplicate_order_warnings=[]`이며 모든 `handoff_closed_root_cause_open` order에 non-null `root_cause_followup_contract.root_cause_signal`, `acceptance_test`, `next_repair_action`, `implementation_only_closure_allowed=false`가 있는지 검증한다. `threshold_cycle_postclose_verification.code_improvement_workorder_contract.status=pass`, `contract_state=declared_and_verified`, required/complete count 일치도 함께 확인한다. 비-implement 반복 항목은 `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design` 중 무엇으로 닫혀야 하는지 분리한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: `implement_now`, `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design`, `already_implemented`, `defer_design`, `reject` 중 하나로 닫는다.
 

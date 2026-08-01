@@ -20,7 +20,7 @@
 - pattern_lab_currentness_status: `pass`
 - pattern_lab_ai_review_status: `pass`
 - producer_gap_discovery_status: `disabled_by_default`
-- pattern_lab_propagation_status: `warning`
+- pattern_lab_propagation_status: `pass`
 - env_generated_at: `2026-07-31T07:35:01`
 - first_bot_start_at: `2026-07-31T07:55:02`
 - first_bot_start_after_env_at: `2026-07-31T07:55:02`
@@ -73,7 +73,7 @@
 - missing_actions: `[]`
 - top_actions: `[{'action': 'WAIT_REQUOTE', 'sample_count': 181, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'SKIP_STALE', 'sample_count': 2, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'BUY_DEFENSIVE', 'sample_count': 28, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'NO_BUY_AI', 'sample_count': 358, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'SKIP_PRE_SUBMIT_SAFETY', 'sample_count': 76, 'joined_sample': 3, 'source_quality_adjusted_ev_pct': -0.0722}]`
 - ready_for_daily_policy_tuning: `False`
-- warnings: `['joined_sample_below_sample_floor', 'unknown_bucket_source_quality_gap']`
+- warnings: `['joined_sample_below_sample_floor']`
 
 ## Institutional Flow Context
 - artifact: `/home/ubuntu/KORStockScan/data/report/institutional_flow_context/institutional_flow_context_2026-07-31.json`
@@ -158,4 +158,4 @@
 - currentness: status=`pass` fail=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-07-31.json`
 - ai_review: status=`pass` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_ai_review/pattern_lab_ai_review_2026-07-31.json`
 - producer_gap_discovery: status=`disabled_by_default` artifact=`-`
-- propagation: status=`warning` fail=`0` warnings=`1` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-07-31.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-07-31.json`

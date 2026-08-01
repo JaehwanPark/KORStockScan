@@ -60,12 +60,16 @@ def test_cumulative_calibration_updates_from_one_exact_trace(tmp_path: Path) -> 
     assert candidate["exact_trace_count"] == 1
     assert candidate["learning_update_floor"]["pass"] is True
     assert candidate["source_quality_adjusted_ev_delta_pct"] == 1.2
-    assert candidate["review_ready_for_prompt_candidate"] is True
+    assert candidate["review_ready_for_prompt_candidate"] is False
+    assert "exact_trace_floor" in candidate["prompt_review_gate"]["blockers"]
+    assert (
+        "independent_source_date_floor" in candidate["prompt_review_gate"]["blockers"]
+    )
     assert report["runtime_effect"] is False
-    assert report["selected_review_candidate"] == "candidate_v1"
+    assert report["selected_review_candidate"] is None
     assert report["legacy_watching_score_smoothing"] == {
         "status": "retired_from_runtime_authority",
-        "replacement": "exact_decision_trace_cumulative_action_outcome_v1",
+        "replacement": "exact_decision_trace_cumulative_action_outcome_v2",
         "numeric_score_ema_used_for_live_decision": False,
         "projection_submitter_removed": True,
         "projection_refresh_removed": True,
@@ -74,6 +78,54 @@ def test_cumulative_calibration_updates_from_one_exact_trace(tmp_path: Path) -> 
         "default_postclose_generation_removed": True,
         "legacy_artifact_role": "explicit_archive_audit_only",
     }
+
+
+def test_prompt_review_candidate_requires_multi_day_bounded_exploration(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for source_date, start in (("2026-07-28", 0), ("2026-07-29", 20)):
+        rows = []
+        for index in range(start, start + 20):
+            is_exposure = index < 5
+            rows.append(
+                {
+                    "decision_trace_id": f"trace-{index}",
+                    "stock_code": f"{index % 10:06d}",
+                    "control_action": "WAIT",
+                    "candidate_action": "BUY" if is_exposure else "WAIT",
+                    "control_decision_value_pct": 0.0,
+                    "candidate_primary_decision_value_pct": (
+                        0.4 if is_exposure else 0.01
+                    ),
+                    "delta_pct": 0.4 if is_exposure else 0.01,
+                    "first_hit": "target",
+                    "candidate_error_taxonomy": [],
+                }
+            )
+        _write_json(
+            paired_dir
+            / f"ai_prompt_detailed_paired_replay_{source_date}_candidate_v2.json",
+            {
+                "target_date": source_date,
+                "runtime_effect": False,
+                "schema_rejected_count": 0,
+                "provider_failed_count": 0,
+                "candidate_provider_none_count": 0,
+                "requests": [{"candidate": {"prompt_version": "candidate_v2"}}],
+                "paired_comparisons": rows,
+            },
+        )
+
+    report = build_report(target_date="2026-07-29", data_root=tmp_path)
+
+    candidate = report["candidate_summaries"][0]
+    assert candidate["source_date_count"] == 2
+    assert candidate["candidate_exposure_count"] == 5
+    assert candidate["candidate_exposure_ev_pct"] == 0.4
+    assert candidate["prompt_review_gate"]["blockers"] == []
+    assert candidate["review_ready_for_prompt_candidate"] is True
+    assert report["selected_review_candidate"] == "candidate_v2"
 
 
 def test_schema_reject_blocks_review_selection_but_keeps_learning(
@@ -112,6 +164,58 @@ def test_schema_reject_blocks_review_selection_but_keeps_learning(
     assert candidate["learning_update_floor"]["pass"] is True
     assert candidate["review_ready_for_prompt_candidate"] is False
     assert report["selected_review_candidate"] is None
+
+
+def test_isolated_schema_reject_does_not_block_bounded_prompt_review(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for day_index, source_date in enumerate(("2026-07-28", "2026-07-29")):
+        rows = []
+        for offset in range(60):
+            index = day_index * 60 + offset
+            is_exposure = index < 6
+            rows.append(
+                {
+                    "decision_trace_id": f"trace-{index}",
+                    "stock_code": f"{index % 12:06d}",
+                    "control_action": "WAIT",
+                    "candidate_action": "BUY" if is_exposure else "WAIT",
+                    "control_decision_value_pct": 0.0,
+                    "candidate_primary_decision_value_pct": (
+                        0.4 if is_exposure else 0.01
+                    ),
+                    "delta_pct": 0.4 if is_exposure else 0.01,
+                    "first_hit": "target",
+                    "candidate_error_taxonomy": [],
+                }
+            )
+        _write_json(
+            paired_dir
+            / f"ai_prompt_detailed_paired_replay_{source_date}_candidate_v3.json",
+            {
+                "target_date": source_date,
+                "runtime_effect": False,
+                "schema_rejected_count": 1 if day_index == 0 else 0,
+                "provider_failed_count": 0,
+                "candidate_provider_none_count": 0,
+                "requests": [{"candidate": {"prompt_version": "candidate_v3"}}],
+                "paired_comparisons": rows,
+            },
+        )
+
+    report = build_report(target_date="2026-07-29", data_root=tmp_path)
+
+    candidate = report["candidate_summaries"][0]
+    assert candidate["schema_rejected_count"] == 1
+    assert candidate["schema_evaluated_count"] == 121
+    assert candidate["schema_rejection_rate_pct"] < 1.0
+    assert (
+        candidate["prompt_review_gate"]["checks"]["schema_rejection_rate_ceiling"]
+        is True
+    )
+    assert candidate["prompt_review_gate"]["blockers"] == []
+    assert candidate["review_ready_for_prompt_candidate"] is True
 
 
 def test_model_comparison_artifact_is_excluded_from_prompt_cumulative_ledger(

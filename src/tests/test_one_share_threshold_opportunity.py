@@ -24,6 +24,28 @@ def _event(
     }
 
 
+def test_residual_not_submitted_source_prefers_explicit_terminal_outcome():
+    assert (
+        mod._residual_not_submitted_source(
+            {
+                "entry_split_probe_terminal_outcome": "residual_not_submitted",
+                "entry_split_residual_blocked_observed": True,
+                "entry_split_probe_phase": "aborted",
+            }
+        )
+        == "explicit_terminal_outcome"
+    )
+    assert (
+        mod._residual_not_submitted_source(
+            {
+                "entry_split_residual_blocked_observed": True,
+                "entry_split_probe_phase": "residual_partial_submitted",
+            }
+        )
+        == ""
+    )
+
+
 def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
     post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
@@ -103,6 +125,19 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
     assert report["ai_review"]["status"] == "unavailable"
     assert report["probe_split_attribution"]["intent_record_count"] == 3
     assert report["probe_split_attribution"]["status"] == "observed"
+    assert report["probe_split_attribution"]["target_date_probe_to_residual"] == {
+        "status": "no_natural_sample",
+        "probe_first_submitted_count": 0,
+        "probe_first_submit_with_provenance_count": 0,
+        "probe_first_submit_provenance_gap_count": 0,
+        "resolution_count": 0,
+        "resolution_coverage_pct": None,
+        "residual_submitted_record_count": 0,
+        "residual_blocked_record_count": 0,
+        "residual_not_submitted_record_count": 0,
+        "residual_not_submitted_source_counts": {},
+        "unresolved_record_count": 0,
+    }
 
 
 def test_forced_reason_on_ineligible_skip_does_not_create_probe_intent(tmp_path):
@@ -173,6 +208,7 @@ def test_probe_split_attribution_flags_submitted_row_without_variant(tmp_path):
     assert attribution["entry_split_variant_observed_count"] == 0
     assert attribution["submitted_split_provenance_gap_count"] == 1
     assert attribution["status"] == "instrumentation_gap"
+    assert attribution["probe_to_residual_status"] == "instrumentation_gap"
     assert report["source_coverage_manifest"]["expected_post_sell_dates"] == [
         "2026-07-01"
     ]
@@ -211,6 +247,152 @@ def test_non_split_submit_is_not_a_probe_provenance_gap(tmp_path):
     assert attribution["probe_first_submitted_count"] == 0
     assert attribution["legacy_or_non_split_submit_count"] == 1
     assert attribution["submitted_split_provenance_gap_count"] == 0
+    assert attribution["probe_to_residual_status"] == "no_natural_sample"
+
+
+def test_probe_to_residual_attribution_joins_submit_and_terminal_outcomes(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {
+                        "rising_missed_one_share_entry_forced": True,
+                        "entry_split_order_probe_first_applied": True,
+                        "entry_split_probe_bundle_id": "bundle-submit",
+                        "entry_split_order_variant_id": "variant-submit",
+                    },
+                ),
+                _event(1, "order_bundle_submitted", {"actual_order_submitted": True}),
+                _event(
+                    1,
+                    "residual_submitted",
+                    {
+                        "actual_order_submitted": True,
+                        "entry_split_probe_bundle_id": "bundle-submit",
+                    },
+                ),
+                _event(
+                    1,
+                    "residual_blocked",
+                    {"entry_split_probe_bundle_id": "bundle-submit"},
+                ),
+                _event(
+                    2,
+                    "rising_missed_one_share_entry",
+                    {
+                        "rising_missed_one_share_entry_forced": True,
+                        "entry_split_order_probe_first_applied": True,
+                        "entry_split_probe_bundle_id": "bundle-abort",
+                        "entry_split_order_variant_id": "variant-abort",
+                    },
+                ),
+                _event(2, "order_bundle_submitted", {"actual_order_submitted": True}),
+                _event(
+                    2,
+                    "residual_blocked",
+                    {
+                        "probe_bundle_id": "bundle-abort",
+                        "entry_split_probe_phase": "aborted",
+                        "entry_split_probe_abort_reason": (
+                            "residual_revalidation_timeout"
+                        ),
+                    },
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text("", encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="none",
+    )
+
+    attribution = report["probe_split_attribution"]
+    assert attribution["probe_to_residual_status"] == "observed"
+    assert attribution["probe_to_residual_resolution_count"] == 2
+    assert attribution["probe_to_residual_resolution_coverage_pct"] == 100.0
+    assert attribution["residual_submitted_record_count"] == 1
+    assert attribution["residual_blocked_record_count"] == 2
+    assert attribution["residual_not_submitted_record_count"] == 1
+    assert attribution["probe_to_residual_unresolved_record_count"] == 0
+    assert attribution["target_date_probe_to_residual"] == {
+        "status": "observed",
+        "probe_first_submitted_count": 2,
+        "probe_first_submit_with_provenance_count": 2,
+        "probe_first_submit_provenance_gap_count": 0,
+        "resolution_count": 2,
+        "resolution_coverage_pct": 100.0,
+        "residual_submitted_record_count": 1,
+        "residual_blocked_record_count": 2,
+        "residual_not_submitted_record_count": 1,
+        "residual_not_submitted_source_counts": {"legacy_aborted_phase_fallback": 1},
+        "unresolved_record_count": 0,
+    }
+    assert attribution["residual_not_submitted_source_counts"] == {
+        "legacy_aborted_phase_fallback": 1
+    }
+    contract = attribution["probe_to_residual_contract"]
+    assert contract["runtime_effect"] is False
+    assert contract["allowed_runtime_apply"] is False
+    assert contract["primary_decision_metric"] == (
+        "probe_to_residual_resolution_coverage_pct"
+    )
+
+
+def test_probe_to_residual_attribution_flags_missing_terminal_event(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {
+                        "rising_missed_one_share_entry_forced": True,
+                        "entry_split_order_probe_first_applied": True,
+                        "entry_split_probe_bundle_id": "bundle-open",
+                        "entry_split_order_variant_id": "variant-open",
+                    },
+                ),
+                _event(1, "order_bundle_submitted", {"actual_order_submitted": True}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text("", encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+        generated_at="fixed",
+        ai_provider="none",
+    )
+
+    attribution = report["probe_split_attribution"]
+    assert attribution["status"] == "observed"
+    assert attribution["probe_to_residual_status"] == "instrumentation_gap"
+    assert attribution["probe_to_residual_resolution_count"] == 0
+    assert attribution["probe_to_residual_resolution_coverage_pct"] == 0.0
+    assert attribution["probe_to_residual_unresolved_record_count"] == 1
+    assert attribution["target_date_probe_to_residual"]["status"] == (
+        "instrumentation_gap"
+    )
+    assert attribution["target_date_probe_to_residual"]["unresolved_record_count"] == 1
 
 
 def test_valid_profit_sample_floor_blocks_incomplete_pnl_order(tmp_path):

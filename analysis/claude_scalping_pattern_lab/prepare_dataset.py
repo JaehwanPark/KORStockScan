@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import csv
 import gzip
 import json
 import logging
@@ -41,7 +40,6 @@ try:
         PIPELINE_EVENT_DIR,
         SEQUENCE_STAGES,
         SERVER_LOCAL,
-        SERVER_REMOTE,
         SNAPSHOT_DIR,
         SPLIT_ENTRY_REBASE_THRESHOLD,
         USE_DUCKDB_PRIMARY,
@@ -55,7 +53,6 @@ except ImportError:  # pragma: no cover - direct script execution
         PIPELINE_EVENT_DIR,
         SEQUENCE_STAGES,
         SERVER_LOCAL,
-        SERVER_REMOTE,
         SNAPSHOT_DIR,
         SPLIT_ENTRY_REBASE_THRESHOLD,
         USE_DUCKDB_PRIMARY,
@@ -65,6 +62,8 @@ try:
     from src.engine.dashboard_data_repository import load_monitor_snapshot_prefer_db
 except Exception:
     load_monitor_snapshot_prefer_db = None
+
+from src.utils.market_day import is_krx_trading_day  # noqa: E402
 
 try:
     from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
@@ -367,15 +366,6 @@ def _parse_performance_tuning(
     for col, src_key in FUNNEL_METRIC_MAP.items():
         row[col] = metrics.get(src_key, 0) or 0
 
-    # liquidity_block_events는 별도 집계 키가 없으면 budget_pass - latency_pass로 추산
-    if row.get("liquidity_block_events", 0) == 0:
-        budget = metrics.get("budget_pass_events", 0) or 0
-        latency_pass = metrics.get("latency_pass_events", 0) or 0
-        latency_block = metrics.get("latency_block_events", 0) or 0
-        submitted = metrics.get("order_bundle_submitted_events", 0) or 0
-        # budget_pass = latency_pass + submitted → liquidity 차단 없음으로 0 처리
-        row["liquidity_block_events"] = 0
-
     return row
 
 
@@ -555,13 +545,21 @@ def build_sequence_fact() -> tuple[pd.DataFrame, dict[str, Any]]:
     print("[prepare] building sequence_fact (streaming JSONL) …")
     all_rows: list[dict] = []
     source_count: dict[str, int] = defaultdict(int)
+    non_trading_source_count: dict[str, int] = defaultdict(int)
     covered_dates: set[str] = set()
-    all_dates = [d.isoformat() for d in _date_range(ANALYSIS_START, ANALYSIS_END)]
+    date_window = _date_range(ANALYSIS_START, ANALYSIS_END)
+    expected_trading_dates = [
+        d.isoformat() for d in date_window if is_krx_trading_day(d)
+    ]
+    expected_trading_date_set = set(expected_trading_dates)
 
-    for d in _date_range(ANALYSIS_START, ANALYSIS_END):
+    for d in date_window:
         ds = d.isoformat()
         rows, source = _load_pipeline_rows(ds)
-        source_count[source] += 1
+        if ds in expected_trading_date_set:
+            source_count[source] += 1
+        elif source != "none":
+            non_trading_source_count[source] += 1
         if source == "none":
             continue
         covered_dates.add(ds)
@@ -573,8 +571,9 @@ def build_sequence_fact() -> tuple[pd.DataFrame, dict[str, Any]]:
     df = pd.DataFrame(all_rows)
     source_meta = {
         "pipeline_source_stats": dict(source_count),
+        "non_trading_pipeline_source_stats": dict(non_trading_source_count),
         "covered_dates": sorted(covered_dates),
-        "expected_dates": all_dates,
+        "expected_dates": expected_trading_dates,
     }
     if df.empty:
         print("  [WARN] sequence_fact is empty")
@@ -669,8 +668,8 @@ def build_quality_report(
         )
 
         lines += [
-            f"| 항목 | 값 |",
-            f"|---|---|",
+            "| 항목 | 값 |",
+            "|---|---|",
             f"| 총 거래수 | {total} |",
             f"| COMPLETED | {completed} |",
             f"| valid_profit_rate | {valid_profit} |",
@@ -745,8 +744,8 @@ def build_quality_report(
         )
 
         lines += [
-            f"| 플래그 | 건수 |",
-            f"|---|---|",
+            "| 플래그 | 건수 |",
+            "|---|---|",
             f"| 총 record 수 | {total_seq} |",
             f"| multi_rebase (split-entry) | {multi_r} |",
             f"| partial_then_expand | {partial_exp} |",
@@ -770,8 +769,13 @@ def build_quality_report(
 
 def write_source_manifest(source_meta: dict[str, Any]) -> None:
     stats = source_meta.get("pipeline_source_stats", {})
+    non_trading_stats = source_meta.get("non_trading_pipeline_source_stats", {})
     covered_dates = source_meta.get("covered_dates", [])
     expected_dates = source_meta.get("expected_dates", [])
+    covered_date_set = {str(item) for item in covered_dates if str(item)}
+    expected_date_set = {str(item) for item in expected_dates if str(item)}
+    missing_expected_dates = sorted(expected_date_set - covered_date_set)
+    observed_non_trading_dates = sorted(covered_date_set - expected_date_set)
     used_sources = {k for k, v in stats.items() if v > 0 and k != "none"}
     if used_sources == {"duckdb"}:
         data_source_mode = "duckdb_primary"
@@ -790,9 +794,15 @@ def write_source_manifest(source_meta: dict[str, Any]) -> None:
         "data_source_mode": data_source_mode,
         "history_coverage_start": covered_dates[0] if covered_dates else None,
         "history_coverage_end": covered_dates[-1] if covered_dates else None,
-        "history_coverage_ok": len(covered_dates) == len(expected_dates)
-        and len(expected_dates) > 0,
+        "history_coverage_ok": bool(expected_date_set) and not missing_expected_dates,
+        "expected_trading_date_count": len(expected_date_set),
+        "covered_expected_trading_date_count": len(
+            expected_date_set & covered_date_set
+        ),
+        "missing_expected_trading_dates": missing_expected_dates,
+        "observed_non_trading_dates": observed_non_trading_dates,
         "local_pipeline_source_stats": stats,
+        "non_trading_pipeline_source_stats": non_trading_stats,
     }
     manifest_path = OUTPUT_DIR / "source_manifest.json"
     manifest_path.write_text(

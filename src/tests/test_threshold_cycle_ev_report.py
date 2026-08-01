@@ -1,8 +1,77 @@
+import gzip
 import json
 
 import pytest
 
 from src.engine import threshold_cycle_ev_report as mod
+
+
+def test_warning_contract_dedupes_and_classifies_disabled_sources():
+    active, contract = mod._warning_contract(
+        [
+            "lifecycle_bucket_discovery:source_contract_drift_warning",
+            "lifecycle_bucket_discovery:source_contract_drift_warning",
+            "swing_strategy_discovery_ev_missing",
+            "producer_gap_discovery_missing",
+            "trade_review_missing",
+        ],
+        disabled_sources={"swing_strategy_discovery_ev", "producer_gap_discovery"},
+    )
+
+    assert active == [
+        "lifecycle_bucket_discovery:source_contract_drift_warning",
+        "trade_review_missing",
+    ]
+    assert contract["raw_warning_count"] == 5
+    assert contract["unique_warning_count"] == 4
+    assert contract["active_warning_count"] == 2
+    assert contract["disabled_not_applicable"] == [
+        "swing_strategy_discovery_ev_missing",
+        "producer_gap_discovery_missing",
+    ]
+    assert contract["required_missing"] == ["trade_review_missing"]
+
+
+def test_warning_contract_rejects_unknown_or_prefix_collision_suppression():
+    active, contract = mod._warning_contract(
+        [
+            "source_quality_blocked_contract_gap",
+            "producer_gap_discovery_missing",
+            "producer_gap_discovery_unrelated_warning",
+        ],
+        disabled_sources={
+            "source_quality_blocked_contract_gap",
+            "producer_gap_discovery",
+        },
+    )
+
+    assert active == [
+        "source_quality_blocked_contract_gap",
+        "producer_gap_discovery_unrelated_warning",
+    ]
+    assert contract["disabled_not_applicable"] == ["producer_gap_discovery_missing"]
+    assert contract["rejected_disabled_sources"] == [
+        "source_quality_blocked_contract_gap"
+    ]
+
+
+def test_load_json_and_daily_sources_accept_gzip_snapshots(tmp_path, monkeypatch):
+    monitor_dir = tmp_path / "monitor_snapshots"
+    monitor_dir.mkdir()
+    for source in ("trade_review", "performance_tuning"):
+        path = monitor_dir / f"{source}_2026-07-31.json.gz"
+        with gzip.open(path, "wt", encoding="utf-8") as handle:
+            json.dump({"metrics": {"source": source}}, handle)
+
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+
+    trade_path = mod.existing_or_gzip_path(monitor_dir / "trade_review_2026-07-31.json")
+    performance_path = mod.existing_or_gzip_path(
+        monitor_dir / "performance_tuning_2026-07-31.json"
+    )
+
+    assert mod._load_json(trade_path)["metrics"]["source"] == "trade_review"
+    assert mod._load_json(performance_path)["metrics"]["source"] == "performance_tuning"
 
 
 def test_scale_in_split_order_summary_preserves_runtime_three_leg_count(
@@ -868,8 +937,9 @@ def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases
     monkeypatch.setattr(
         mod,
         "lifecycle_bucket_discovery_report_path",
-        lambda target_date: report_dir
-        / f"lifecycle_bucket_discovery_{target_date}.json",
+        lambda target_date: (
+            report_dir / f"lifecycle_bucket_discovery_{target_date}.json"
+        ),
     )
 
     summary, artifact, warnings = mod._lifecycle_bucket_discovery_summary("2026-06-26")
@@ -1888,9 +1958,9 @@ def test_microstructure_summary_propagates_clean_baseline_cumulative(
 
     assert source_path == str(json_path)
     assert warnings == []
-    assert summary["opportunity_exploration_funnel"][
-        "unique_entry_opportunity_count"
-    ] == 2
+    assert (
+        summary["opportunity_exploration_funnel"]["unique_entry_opportunity_count"] == 2
+    )
     cumulative = summary["clean_baseline_cumulative_opportunity_exploration"]
     assert cumulative["included_date_count"] == 40
     assert cumulative["source_quality_adjusted_ev_pct"] == 0.31

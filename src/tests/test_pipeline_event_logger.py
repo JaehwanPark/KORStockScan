@@ -391,6 +391,8 @@ def test_emit_pipeline_event_shadow_compaction_keeps_raw_and_writes_producer_sum
     assert manifest["mode"] == "shadow"
     assert manifest["raw_suppression_enabled"] is False
     assert manifest["sample_per_bucket"] == 6
+    assert manifest["coverage_first_event_at"] == payload["emitted_at"][:19]
+    assert manifest["coverage_last_event_at"] == payload["emitted_at"][:19]
 
 
 def test_shadow_compaction_aggregates_identical_high_volume_observation_state(

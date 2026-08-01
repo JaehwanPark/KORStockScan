@@ -2,9 +2,10 @@
 
 ## Summary
 - status: `warning`
-- warning_count: `16`
+- warning_count: `3`
+- warning_contract active/disabled/raw: `3` / `9` / `13`
 - source_quality: status=`warning` allowed=`True`
-- samples real/sim: `26` / `12`
+- samples real/sim: `5` / `12`
 - live_auto_ready_count: `0`
 - primary_verdict: `real_primary_evidence_present`
 
@@ -14,15 +15,15 @@
 - selected_families: `soft_stop_whipsaw_confirmation, entry_split_order_plan, scale_in_split_order_plan, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, holding_decision_context_v1, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, entry_opportunity_recheck_runtime, weak_context_late_entry_guard_runtime, rising_missed_normal_buy_bridge, persistent_operator_overrides_2026_06_26`
 
 ## Daily EV
-- completed: `0` / open: `0`
-- win/loss: `0` / `0` (`0.0`%)
-- avg_profit_rate: `0.0`%
-- realized_pnl_krw: `0`
+- completed: `5` / open: `2`
+- win/loss: `5` / `0` (`100.0`%)
+- avg_profit_rate: `0.56`%
+- realized_pnl_krw: `96087`
 - full_fill_completed_avg_profit_rate: `0.0`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `0` / `0` (`0.0`%)
-- latency pass/block: `0` / `0`
+- budget_pass_to_submitted: `4` / `179` (`2.23`%)
+- latency pass/block: `24` / `115`
 - latency submit routing: `latency_classifier_runtime_semantics_gap`
 - latency recommended action: `reject` (`recovery_count=0 below floor=19`)
 - latency profile generation: `{'mode': 'grid_quantile_search', 'profile_count': 720, 'age_cap_ms': 1500, 'jitter_cap_ms': 1500, 'spread_cap_ratio': 0.012, 'counterfactual_sample_floor': 3, 'recovery_event_floor_ratio': 0.1}`
@@ -30,14 +31,14 @@
 - recovery attempts/cf sample/cf ev: `0` / `0` / `None`%
 - recovered/lost labels: `0` / `0`
 - stale/broker override excluded: `0` / `0`
-- full/partial fill: `0` / `0`
+- full/partial fill: `0` / `4`
 - entry_split_order_plan: status=`pass` candidates=`1` policy=`entry_split_order_plan:2026-07-31:9adfdbe8d9`
 - scale_in_split_order_plan: status=`pass` candidates=`1` policy=`scale_in_split_order_plan:2026-07-31:c91179494131`
 
 ## Holding Exit
-- holding_reviews: `0`
-- exit_signals: `0`
-- holding_review_ms_p95: `0.0`
+- holding_reviews: `115`
+- exit_signals: `6`
+- holding_review_ms_p95: `4156.0`
 
 ## Scalp Simulator
 - authority: `equal_weight` / fill_policy: `signal_inclusive_best_ask_v1`
@@ -52,11 +53,11 @@
 - post_sell_mfe_mae_10m: mfe=`1.15`% / mae=`-8.8973`% / close=`0.758`%
 
 ## Missed Probe Counterfactual
-- book: `-` / role: `-`
-- total/score65_74: `None` / `None`
-- avg_expected_ev: `None`% / score65_74_avg_expected_ev: `None`%
-- actual_order_submitted: `None` / broker_order_forbidden: `None`
-- authority: `-`
+- book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
+- total/score65_74: `32` / `0`
+- avg_expected_ev: `3.0594`% / score65_74_avg_expected_ev: `0.0`%
+- actual_order_submitted: `False` / broker_order_forbidden: `True`
+- authority: `missed_probe_ev_only_not_broker_execution`
 
 ## Scalp Entry ADM
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-07-31.json`
@@ -68,7 +69,7 @@
 - forced_action_counts: `{'-': 645}`
 - missing_actions: `[]`
 - zero_sample_actions: `['BUY_NOW', 'SKIP_SOURCE_QUALITY']`
-- outcome_join_diagnostic: `{'status': 'joined', 'zero_join_reason': '', 'candidate_key_count': 729, 'candidate_key_field_counts': {'candidate_id': 645, 'entry_adm_candidate_id': 0, 'sim_record_id': 75, 'record_id': 227}, 'post_sell_evaluation_rows': 3, 'post_sell_evaluation_join_keys': 6, 'candidate_post_sell_key_overlap_count': 3, 'joined_sample': 3, 'joined_sample_all_rows': 3, 'sample_floor': 20, 'sample_floor_met': False, 'decision_authority': 'source_quality_gap_discovery', 'runtime_effect': False, 'allowed_runtime_apply': False}`
+- outcome_join_diagnostic: `{'status': 'joined', 'zero_join_reason': '', 'candidate_key_count': 729, 'candidate_key_field_counts': {'candidate_id': 645, 'entry_adm_candidate_id': 0, 'sim_record_id': 75, 'record_id': 227}, 'post_sell_evaluation_rows': 3, 'post_sell_evaluation_join_keys': 6, 'sim_outcome_eligible_rows': 75, 'sim_outcome_eligible_key_count': 150, 'sim_eligible_joined_sample': 3, 'sim_eligible_outcome_coverage_rate': 0.04, 'matched_post_sell_evaluation_rows': 3, 'post_sell_evaluation_match_rate': 1.0, 'coverage_state': 'source_outcome_underproduction', 'coverage_reason': 'sim_post_sell_evaluation_underproduction', 'candidate_post_sell_key_overlap_count': 3, 'joined_sample': 3, 'joined_sample_all_rows': 3, 'sample_floor': 20, 'sample_floor_met': False, 'decision_authority': 'source_quality_gap_discovery', 'runtime_effect': False, 'allowed_runtime_apply': False}`
 - top_actions: `[{'action': 'WAIT_REQUOTE', 'sample_count': 181, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'SKIP_STALE', 'sample_count': 2, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'BUY_DEFENSIVE', 'sample_count': 28, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'NO_BUY_AI', 'sample_count': 358, 'joined_sample': 0, 'source_quality_adjusted_ev_pct': 0.0}, {'action': 'SKIP_PRE_SUBMIT_SAFETY', 'sample_count': 76, 'joined_sample': 3, 'source_quality_adjusted_ev_pct': -0.0722}]`
 
 ## Lifecycle Decision Matrix
@@ -131,7 +132,7 @@
 ## Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-07-31.json`
 - fresh: gemini=`False` claude=`True`
-- consensus/orders/family_candidates: `0` / `0` / `0`
+- consensus/orders/family_candidates: `0` / `10` / `0`
 
 ## Swing Pattern Lab Automation
 - artifact: `-`
@@ -161,8 +162,8 @@
 
 ## Pipeline Event Verbosity
 - artifact: `/home/ubuntu/KORStockScan/data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-07-31.json`
-- state: `v2_shadow_pending_flush`
-- recommended_workorder_state: `observe_pending_next_flush`
+- state: `v2_shadow_partial_coverage`
+- recommended_workorder_state: `observe_next_full_coverage_day`
 - high_volume_line_count: `364634`
 - high_volume_byte_share_pct: `90.26`
 - parity_ok: `False`
@@ -183,7 +184,7 @@
 - time_window_regime_counterfactual: status=`missing` artifact=`-`
 - producer_gap_discovery: status=`missing` orders=`0` artifact=`-`
 - stage_hook_workorder_discovery: status=`missing` orders=`0` artifact=`-`
-- propagation: status=`warning` fail=`0` warnings=`1` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-07-31.json`
+- propagation: status=`pass` fail=`0` warnings=`0` artifact=`/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-07-31.json`
 
 ## Swing Runtime Approval
 - request_report: `-`
@@ -196,8 +197,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-07-31.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-07-31.md`
-- selected_order_count: `74`
-- decision_counts: `{'attach_existing_family': 81, 'defer_evidence': 1}`
+- selected_order_count: `78`
+- decision_counts: `{'attach_existing_family': 91, 'design_family_candidate': 3, 'defer_evidence': 1, 'reject': 1}`
 
 ## Approval Requests
 - none
@@ -208,7 +209,7 @@
 ## Calibration Decisions
 ## Code Improvement Top Orders
 - `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
-- `order_conversion_lane_key_lineage_active_arm_0180070855c2b7e5` decision=`attach_existing_family` subsystem=`sim_to_real_conversion_lineage`
+- `order_conversion_lane_submit_drought_submit_drought_broker_receipt` decision=`attach_existing_family` subsystem=`sim_to_real_conversion_lineage`
 - `order_entry_broker_receipt_contract_gap_review` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
 
 - `soft_stop_whipsaw_confirmation`: `adjust_up` sample=`476/10`
@@ -233,19 +234,6 @@
 - `scalping_avg_down_recovery_quality_gate`: `hold_no_edge` sample=`44/rolling_shallow_primary>=10 and rolling_deep_primary>=5`
 
 ## Warnings
-- `trade_review_missing`
-- `performance_tuning_missing`
-- `swing_pattern_lab_automation_missing`
 - `scalp_entry_adm:joined_sample_below_sample_floor`
-- `scalp_entry_adm:unknown_bucket_source_quality_gap`
+- `scalp_entry_adm:sim_post_sell_outcome_source_below_sample_floor`
 - `lifecycle_bucket_discovery:source_contract_drift_warning`
-- `lifecycle_bucket_discovery:source_contract_drift_warning`
-- `swing_strategy_discovery_ev_missing`
-- `swing_lifecycle_decision_matrix_missing`
-- `swing_lifecycle_bucket_discovery_missing`
-- `codebase_performance_workorder_missing`
-- `time_window_regime_counterfactual_missing`
-- `producer_gap_discovery_missing`
-- `stage_hook_workorder_discovery_missing`
-- `stage_hook_runtime_scaffold_missing`
-- `pattern_lab_propagation_audit_warning`

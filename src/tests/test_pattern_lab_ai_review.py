@@ -54,6 +54,13 @@ def test_pattern_lab_ai_review_builds_two_pass_source_only_report(
         report["summary"]["ai_two_pass_review_status"]
         == "disabled_deterministic_review"
     )
+    provenance = report["summary"]["provider_provenance"]
+    assert provenance["requested_provider"] == "none"
+    assert provenance["attempted_provider"] == "none"
+    assert provenance["response_provider"] == "deterministic_fallback"
+    assert provenance["response_model"] is None
+    assert provenance["new_provider_call"] is False
+    assert provenance["provider_response_succeeded"] is False
     assert report["ai_two_pass_review"]["interpretation"]["review_items"]
     assert report["ai_two_pass_review"]["audit"]["status"] == "pass"
     conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
@@ -3439,8 +3446,7 @@ def test_pattern_lab_ai_review_marks_nonpositive_sim_auto_provenance_implemented
                             "sim_auto_nonpositive_ev_top": [
                                 {
                                     "bucket_id": (
-                                        "scale_in:stage_policy:"
-                                        "scale_in_weighted_adm_v1"
+                                        "scale_in:stage_policy:scale_in_weighted_adm_v1"
                                     ),
                                     "classification_state": "sim_auto_approved",
                                     "stage": "scale_in",
@@ -3570,10 +3576,102 @@ def test_pattern_lab_ai_review_refreshes_late_bound_sources_without_provider_cal
 
     assert report["summary"]["provider"] == "openai"
     assert report["summary"]["model"] == "gpt-5.4-mini"
+    assert report["summary"]["provider_provenance"] == {
+        "requested_provider": "openai",
+        "attempted_provider": "openai",
+        "attempted_model": "gpt-5.4-mini",
+        "response_provider": "openai",
+        "response_model": "gpt-5.4-mini",
+        "configured_primary_provider": "openai",
+        "configured_primary_model": "gpt-5.4-mini",
+        "new_provider_call": False,
+        "provider_response_succeeded": True,
+        "response_reused": True,
+        "response_source": "existing_parsed_provider_response",
+        "original_generated_at": "2026-07-22T20:56:49+09:00",
+    }
     assert report["source_provenance_refresh"]["new_provider_call"] is False
     provider_status = report["ai_two_pass_review"]["provider_status"]
     assert provider_status["status"] == "success"
     assert provider_status["source_provenance_refresh"]["provider"] == "openai"
+
+
+def test_pattern_lab_ai_review_refresh_repairs_legacy_bedrock_transport_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    existing_path = (
+        report_dir / "pattern_lab_ai_review" / "pattern_lab_ai_review_2026-07-31.json"
+    )
+    _write_json(
+        existing_path,
+        {
+            "generated_at": "2026-08-01T20:09:12+09:00",
+            "source_provenance_refresh": {
+                "original_generated_at": "2026-08-01T02:00:15+09:00"
+            },
+            "summary": {"fallback_used": False},
+            "ai_two_pass_review": {
+                # Legacy refresh incorrectly replaced the transport with the
+                # requested route even though Bedrock contract evidence won.
+                "provider": "openai",
+                "status": "parsed",
+                "provider_status": {
+                    "provider": "openai",
+                    "status": "success",
+                    "model": "qwen.qwen3-235b-a22b-2507-v1:0",
+                    "primary_provider": "bedrock_qwen3",
+                    "primary_model": "qwen.qwen3-235b-a22b-2507-v1:0",
+                    "bedrock_model_id": "qwen.qwen3-235b-a22b-2507-v1:0",
+                    "bedrock_contract_ok": True,
+                    "failback_used": False,
+                },
+                "interpretation": {"review_items": []},
+                "audit": {
+                    "status": "pass",
+                    "issues": [],
+                    "forbidden_use_violations": [],
+                },
+                "final_conclusions": [
+                    {
+                        "review_id": "transport_provenance",
+                        "domain": "cross_domain",
+                        "final_state": "resolved",
+                        "final_decision": "keep",
+                        "reason": "parsed response retained",
+                        "explicit_gap_type": "",
+                        "auditor_pass": True,
+                        "source_paths": [],
+                    }
+                ],
+            },
+        },
+    )
+
+    monkeypatch.setattr(
+        mod,
+        "_call_openai_ai_review",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("refresh must not call a provider")
+        ),
+    )
+
+    report = mod.refresh_pattern_lab_ai_review_source_provenance("2026-07-31")
+
+    provenance = report["summary"]["provider_provenance"]
+    assert report["summary"]["provider"] == "bedrock_qwen3"
+    assert report["summary"]["model"] == "qwen.qwen3-235b-a22b-2507-v1:0"
+    assert provenance["requested_provider"] == "openai"
+    assert provenance["attempted_provider"] == "bedrock_qwen3"
+    assert provenance["response_provider"] == "bedrock_qwen3"
+    assert provenance["new_provider_call"] is False
+    assert provenance["provider_response_succeeded"] is True
+    assert provenance["original_generated_at"] == "2026-08-01T02:00:15+09:00"
+    assert report["ai_two_pass_review"]["provider_status"]["provider"] == (
+        "bedrock_qwen3"
+    )
 
 
 def test_pattern_lab_ai_review_marks_present_propagation_audit_missing_review_as_implemented():

@@ -198,3 +198,36 @@ def test_propagation_audit_fails_when_workorder_lineage_missing(tmp_path, monkey
     assert all(
         order["runtime_effect"] is False for order in report["code_improvement_orders"]
     )
+
+
+def test_propagation_audit_names_missing_krx_trading_dates(tmp_path, monkeypatch):
+    target_date = "2026-05-15"
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    _seed_propagation_chain(tmp_path, report_dir, target_date)
+    _write_json(
+        report_dir
+        / "scalping_pattern_lab_automation"
+        / f"scalping_pattern_lab_automation_{target_date}.json",
+        {
+            "date": target_date,
+            "runtime_effect": False,
+            "runtime_change": False,
+            "ev_report_summary": {
+                "gemini_enabled": False,
+                "claude_fresh": True,
+                "claude_source_quality_usable": False,
+                "claude_missing_expected_trading_dates": ["2026-05-14"],
+            },
+        },
+    )
+
+    report = mod.build_pattern_lab_propagation_audit(target_date, include_swing=False)
+
+    check = next(
+        item
+        for item in report["checks"]
+        if item["check_id"] == "scalping_claude_source_quality_usable"
+    )
+    assert check["status"] == "warning"
+    assert "2026-05-14" in check["finding"]
+    assert report["runtime_effect"] is False

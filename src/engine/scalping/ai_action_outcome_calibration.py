@@ -25,7 +25,7 @@ from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 KST = ZoneInfo("Asia/Seoul")
 CLEAN_BASELINE_DATE = "2026-06-05"
 SCHEMA = "ai_decision_action_outcome_calibration_v1"
-POLICY_VERSION = "exact_decision_trace_cumulative_action_outcome_v1"
+POLICY_VERSION = "exact_decision_trace_cumulative_action_outcome_v2"
 REPORT_SUBDIR = "ai_decision_action_outcome_calibration"
 PAIRED_SUBDIR = "ai_prompt_detailed_paired_replay"
 OFI_STAGES = {
@@ -74,6 +74,29 @@ OFFLINE_CONTRACT = {
         "bot_restart",
     ],
 }
+
+PROMPT_REVIEW_GATE = {
+    "minimum_exact_trace_count": 30,
+    "minimum_unique_symbol_count": 10,
+    "minimum_independent_source_date_count": 2,
+    "minimum_candidate_exposure_count": 5,
+    "minimum_candidate_exposure_rate_pct": 2.0,
+    "maximum_false_drop_rate_pct": 10.0,
+    "maximum_schema_rejection_rate_pct": 1.0,
+    "require_positive_candidate_ev": True,
+    "require_positive_candidate_exposure_ev": True,
+    "require_positive_ev_delta": True,
+    "require_adverse_first_not_increased": True,
+}
+DOWNSTREAM_RUNTIME_GUARDS = [
+    "separate_runtime_apply_candidate_required",
+    "one_share_probe_first",
+    "fresh_quote_and_stale_conflict_guard",
+    "broker_account_order_quantity_cooldown_guards",
+    "post_probe_direction_and_price_resolver",
+    "hard_protect_emergency_exit_guards",
+    "post_apply_action_outcome_attribution",
+]
 
 
 def _number(value: Any) -> float | None:
@@ -244,6 +267,18 @@ def _transition_summary(
         for row in values
         if str(row.get("candidate_action") or "").upper() in EXPOSURE_ACTIONS
     ]
+    candidate_exposure_values = [
+        value
+        for row in exposure_rows
+        if (
+            value := _number(
+                row.get("candidate_primary_decision_value_pct")
+                if row.get("candidate_primary_decision_value_pct") is not None
+                else row.get("candidate_decision_value_pct")
+            )
+        )
+        is not None
+    ]
     control_adverse = sum(
         str(row.get("first_hit") or "") == "adverse"
         and str(row.get("control_action") or "").upper() in EXPOSURE_ACTIONS
@@ -265,6 +300,12 @@ def _transition_summary(
         if row["candidate_prompt_version"] == candidate_version
     ]
     schema_rejected_count = sum(row["schema_rejected_count"] for row in reports)
+    schema_evaluated_count = len(values) + schema_rejected_count
+    schema_rejection_rate_pct = (
+        (schema_rejected_count / schema_evaluated_count) * 100.0
+        if schema_evaluated_count
+        else 0.0
+    )
     provider_failed_count = sum(row["provider_failed_count"] for row in reports)
     provider_none_count = sum(row["provider_none_count"] for row in reports)
     primary_ev_delta = fmean(delta_values) if delta_values else None
@@ -274,26 +315,63 @@ def _transition_summary(
         else None
     )
     adverse_not_increased = candidate_adverse <= control_adverse
-    review_ready = bool(
-        values
-        and primary_ev_delta is not None
-        and primary_ev_delta > 0
-        and adverse_not_increased
-        and schema_rejected_count == 0
-        and provider_failed_count == 0
-        and provider_none_count == 0
+    unique_symbol_count = len(
+        {str(row.get("stock_code") or "") for row in values if row.get("stock_code")}
     )
+    source_dates = sorted(
+        {str(row.get("source_date")) for row in values if row.get("source_date")}
+    )
+    candidate_ev = fmean(candidate_primary_values) if candidate_primary_values else None
+    candidate_exposure_ev = (
+        fmean(candidate_exposure_values) if candidate_exposure_values else None
+    )
+    candidate_exposure_rate_pct = (
+        (len(exposure_rows) / len(values)) * 100.0 if values else 0.0
+    )
+    false_drop_count = sum(
+        "false_drop"
+        in {str(error) for error in row.get("candidate_error_taxonomy") or []}
+        for row in values
+    )
+    false_drop_rate_pct = (false_drop_count / len(values)) * 100.0 if values else 0.0
+    review_gate_checks = {
+        "exact_trace_floor": len(values)
+        >= PROMPT_REVIEW_GATE["minimum_exact_trace_count"],
+        "unique_symbol_floor": unique_symbol_count
+        >= PROMPT_REVIEW_GATE["minimum_unique_symbol_count"],
+        "independent_source_date_floor": len(source_dates)
+        >= PROMPT_REVIEW_GATE["minimum_independent_source_date_count"],
+        "candidate_exposure_floor": len(exposure_rows)
+        >= PROMPT_REVIEW_GATE["minimum_candidate_exposure_count"],
+        "candidate_exposure_rate_floor": candidate_exposure_rate_pct
+        >= PROMPT_REVIEW_GATE["minimum_candidate_exposure_rate_pct"],
+        "false_drop_rate_ceiling": false_drop_rate_pct
+        <= PROMPT_REVIEW_GATE["maximum_false_drop_rate_pct"],
+        "positive_candidate_ev": candidate_ev is not None and candidate_ev > 0,
+        "positive_candidate_exposure_ev": candidate_exposure_ev is not None
+        and candidate_exposure_ev > 0,
+        "positive_ev_delta": primary_ev_delta is not None and primary_ev_delta > 0,
+        "adverse_first_not_increased": adverse_not_increased,
+        "schema_rejection_rate_ceiling": schema_rejection_rate_pct
+        <= PROMPT_REVIEW_GATE["maximum_schema_rejection_rate_pct"],
+        "provider_transport_clean": provider_failed_count == 0
+        and provider_none_count == 0,
+    }
+    review_ready = bool(values and all(review_gate_checks.values()))
+    review_gate_blockers = [
+        name for name, passed in review_gate_checks.items() if not passed
+    ]
     return {
         "candidate_prompt_version": candidate_version,
         "exact_trace_count": len(values),
-        "unique_symbol_count": len(
-            {
-                str(row.get("stock_code") or "")
-                for row in values
-                if row.get("stock_code")
-            }
-        ),
+        "unique_symbol_count": unique_symbol_count,
+        "source_date_count": len(source_dates),
+        "source_dates": source_dates,
         "candidate_exposure_count": len(exposure_rows),
+        "candidate_exposure_rate_pct": candidate_exposure_rate_pct,
+        "candidate_exposure_ev_pct": candidate_exposure_ev,
+        "false_drop_count": false_drop_count,
+        "false_drop_rate_pct": false_drop_rate_pct,
         "control_source_quality_adjusted_ev_pct": (
             fmean(control_raw_values) if control_raw_values else None
         ),
@@ -330,10 +408,19 @@ def _transition_summary(
         ),
         "action_transition_counts": dict(transitions),
         "schema_rejected_count": schema_rejected_count,
+        "schema_evaluated_count": schema_evaluated_count,
+        "schema_rejection_rate_pct": schema_rejection_rate_pct,
         "provider_failed_count": provider_failed_count,
         "provider_none_count": provider_none_count,
         "adverse_first_exposure_not_increased": adverse_not_increased,
         "review_ready_for_prompt_candidate": review_ready,
+        "prompt_review_gate": {
+            "policy": PROMPT_REVIEW_GATE,
+            "checks": review_gate_checks,
+            "blockers": review_gate_blockers,
+            "alignment": ("bounded_opportunity_exploration_with_downstream_safety"),
+            "required_runtime_conversion_guards": DOWNSTREAM_RUNTIME_GUARDS,
+        },
         "learning_update_floor": {
             "required_exact_trace_rows": 1,
             "observed_exact_trace_rows": len(values),
@@ -673,8 +760,10 @@ def build_report(
     selected = (
         max(
             review_ready,
-            key=lambda row: _number(row.get("candidate_primary_decision_ev_delta_pct"))
-            or float("-inf"),
+            key=lambda row: (
+                _number(row.get("candidate_primary_decision_ev_delta_pct"))
+                or float("-inf")
+            ),
         )
         if review_ready
         else None
@@ -700,6 +789,8 @@ def build_report(
         ),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
         "candidate_count": len(candidates),
+        "prompt_review_gate_policy": PROMPT_REVIEW_GATE,
+        "required_runtime_conversion_guards": DOWNSTREAM_RUNTIME_GUARDS,
         "candidate_summaries": candidates,
         "selected_review_candidate": (
             selected["candidate_prompt_version"] if selected else None
@@ -707,7 +798,7 @@ def build_report(
         "selection_status": (
             "review_candidate_available_no_runtime_authority"
             if selected
-            else "no_candidate_passes_relative_ev_and_contract_gate"
+            else "no_candidate_passes_bounded_exploration_and_ev_gate"
         ),
         "source_reports": source_reports,
         "dedupe_key": "candidate_prompt_version+decision_trace_id",

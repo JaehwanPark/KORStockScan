@@ -214,7 +214,9 @@ def build_pattern_lab_propagation_audit(
             severity=(
                 "source_quality_blocker"
                 if scalping_status == "fail"
-                else "warning" if scalping_status == "warning" else "info"
+                else "warning"
+                if scalping_status == "warning"
+                else "info"
             ),
             finding=scalping_finding,
             source_paths=[scalping_path],
@@ -227,7 +229,9 @@ def build_pattern_lab_propagation_audit(
             severity=(
                 "source_quality_blocker"
                 if claude_status == "fail"
-                else "warning" if claude_status == "warning" else "info"
+                else "warning"
+                if claude_status == "warning"
+                else "info"
             ),
             finding=claude_finding,
             source_paths=[scalping_path],
@@ -242,19 +246,26 @@ def build_pattern_lab_propagation_audit(
         "claude_source_quality_usable",
         True if claude_status == "pass" else None,
     )
+    claude_missing_trading_dates = [
+        str(item)
+        for item in (
+            scalping_summary.get("claude_missing_expected_trading_dates") or []
+        )
+        if str(item)
+    ]
     checks.append(
         _check(
             "scalping_claude_source_quality_usable",
-            status=(
-                "pass"
-                if claude_quality_usable is True
-                else "warning"
-            ),
+            status=("pass" if claude_quality_usable is True else "warning"),
             severity="info" if claude_quality_usable is True else "warning",
             finding=(
                 "history coverage is usable for source-only findings"
                 if claude_quality_usable is True
-                else "timing may be fresh, but incomplete history coverage keeps findings source-quality blocked"
+                else (
+                    "timing is fresh, but incomplete KRX trading-day coverage "
+                    f"missing={claude_missing_trading_dates or ['unresolved']} "
+                    "keeps findings source-quality blocked"
+                )
             ),
             source_paths=[scalping_path],
         )
@@ -270,7 +281,9 @@ def build_pattern_lab_propagation_audit(
                 severity=(
                     "source_quality_blocker"
                     if swing_status == "fail"
-                    else "warning" if swing_status == "warning" else "info"
+                    else "warning"
+                    if swing_status == "warning"
+                    else "info"
                 ),
                 finding=swing_finding,
                 source_paths=[swing_path],

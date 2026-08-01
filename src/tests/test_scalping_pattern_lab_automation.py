@@ -48,6 +48,9 @@ def test_pattern_lab_next_day_completion_is_timing_fresh_but_coverage_can_block(
                 "run_at": "2026-05-09T00:12:00+09:00",
                 "history_coverage_end": "2026-05-08",
                 "history_coverage_ok": False,
+                "expected_trading_date_count": 20,
+                "covered_expected_trading_date_count": 19,
+                "missing_expected_trading_dates": ["2026-05-07"],
             }
         ),
         encoding="utf-8",
@@ -59,6 +62,9 @@ def test_pattern_lab_next_day_completion_is_timing_fresh_but_coverage_can_block(
     assert freshness["timing_fresh"] is True
     assert freshness["source_quality_usable"] is False
     assert freshness["tuning_input_allowed"] is False
+    assert freshness["expected_trading_date_count"] == 20
+    assert freshness["covered_expected_trading_date_count"] == 19
+    assert freshness["missing_expected_trading_dates"] == ["2026-05-07"]
     assert result["findings"] == []
     assert result["rejected_findings"][0]["reason"] == "history_coverage_incomplete"
 

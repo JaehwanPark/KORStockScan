@@ -350,11 +350,24 @@ def _conversion_lane_followup_orders(
         )
         implementation_provenance = None
         if instrumentation_implemented:
+            root_cause_signal = ":".join(
+                part
+                for part in (
+                    "conversion_lane",
+                    blocker_class,
+                    str(blocker.get("blocker_axis") or "").strip(),
+                    str(blocker.get("blocker_resolution_status") or "open").strip(),
+                )
+                if part
+            )
             implementation_provenance = {
                 "implementation_status": "implemented",
                 "implemented_scope": "conversion_lane_blocker_axis_report_provenance",
                 "blocker_axis": blocker.get("blocker_axis"),
                 "blocker_resolution_status": blocker.get("blocker_resolution_status"),
+                "root_cause_signal": root_cause_signal,
+                "root_cause_acceptance_test": blocker.get("acceptance_test"),
+                "root_cause_next_repair_action": blocker.get("next_repair_action"),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "remaining_blocker_is_observation_or_policy_closure": True,
@@ -1858,6 +1871,69 @@ def _root_cause_closure_status_for_order(order: dict[str, Any]) -> str | None:
     return None
 
 
+def _root_cause_followup_contract(
+    order: dict[str, Any], status: str | None
+) -> dict[str, Any] | None:
+    if status not in {
+        "artifact_regeneration_required",
+        "handoff_closed_root_cause_open",
+        "needs_followup_workorder",
+    }:
+        return None
+    provenance = (
+        order.get("implementation_provenance")
+        if isinstance(order.get("implementation_provenance"), dict)
+        else {}
+    )
+    source_report_type = str(order.get("source_report_type") or "unknown_source")
+    improvement_type = str(order.get("improvement_type") or "unknown_gap")
+    blocker_axis = str(
+        order.get("blocker_axis") or provenance.get("blocker_axis") or ""
+    ).strip()
+    blocker_state = str(
+        order.get("blocker_resolution_status")
+        or provenance.get("blocker_resolution_status")
+        or "open"
+    ).strip()
+    signal = str(provenance.get("root_cause_signal") or "").strip()
+    if not signal:
+        signal = ":".join(
+            part
+            for part in (
+                source_report_type,
+                improvement_type,
+                blocker_axis,
+                blocker_state,
+            )
+            if part
+        )
+    acceptance_test = provenance.get("root_cause_acceptance_test") or order.get(
+        "acceptance_test"
+    )
+    if not acceptance_test:
+        acceptance_tests = order.get("acceptance_tests")
+        if isinstance(acceptance_tests, list) and acceptance_tests:
+            acceptance_test = acceptance_tests[0]
+    if not acceptance_test:
+        acceptance_test = (
+            f"a new {source_report_type} artifact records {signal} as resolved and "
+            "the owning verifier passes"
+        )
+    next_repair_action = (
+        provenance.get("root_cause_next_repair_action")
+        or order.get("next_repair_action")
+        or f"collect new evidence for {signal} and re-run the owning verifier"
+    )
+    return {
+        "status": status,
+        "root_cause_signal": signal,
+        "acceptance_test": acceptance_test,
+        "next_repair_action": next_repair_action,
+        "closure_requires_new_evidence": True,
+        "implementation_only_closure_allowed": False,
+    }
+
+
 def _root_cause_open_top(
     orders: list[dict[str, Any]], *, limit: int = 10
 ) -> list[dict[str, Any]]:
@@ -1875,6 +1951,11 @@ def _root_cause_open_top(
             if isinstance(order.get("implementation_provenance"), dict)
             else {}
         )
+        followup_contract = (
+            order.get("root_cause_followup_contract")
+            if isinstance(order.get("root_cause_followup_contract"), dict)
+            else {}
+        )
         ranked.append(
             {
                 "order_id": order.get("order_id"),
@@ -1882,7 +1963,10 @@ def _root_cause_open_top(
                 "source_report_type": order.get("source_report_type"),
                 "threshold_family": order.get("threshold_family"),
                 "implementation_status": order.get("implementation_status"),
-                "root_cause_signal": provenance.get("root_cause_signal"),
+                "root_cause_signal": followup_contract.get("root_cause_signal")
+                or provenance.get("root_cause_signal"),
+                "acceptance_test": followup_contract.get("acceptance_test"),
+                "next_repair_action": followup_contract.get("next_repair_action"),
             }
         )
     ranked.sort(key=lambda item: (str(item.get("status")), str(item.get("order_id"))))
@@ -2363,6 +2447,9 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "parity_contract": item.order.get("parity_contract"),
         "source_bucket_id": item.order.get("source_bucket_id"),
         "conversion_candidate_id": item.order.get("conversion_candidate_id"),
+        "blocker_axis": item.order.get("blocker_axis"),
+        "blocker_resolution_status": item.order.get("blocker_resolution_status"),
+        "next_repair_action": item.order.get("next_repair_action"),
         "conversion_impact_rank": item.order.get("conversion_impact_rank"),
         "remaining_gap_count_before": item.order.get("remaining_gap_count_before"),
         "remaining_gap_count_after_expected": item.order.get(
@@ -2386,8 +2473,10 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "raw_row_exclusion_context": item.order.get("raw_row_exclusion_context"),
         "terminal_disposition": item.order.get("terminal_disposition"),
     }
-    serialized["root_cause_closure_status"] = _root_cause_closure_status_for_order(
-        serialized
+    root_cause_closure_status = _root_cause_closure_status_for_order(serialized)
+    serialized["root_cause_closure_status"] = root_cause_closure_status
+    serialized["root_cause_followup_contract"] = _root_cause_followup_contract(
+        serialized, root_cause_closure_status
     )
     return serialized
 
@@ -3295,7 +3384,9 @@ def _swing_ai_structured_output_eval_contract_status(
     root_cause_hint = (
         "implementation_done"
         if sample_status == "waiting_replay_sample"
-        else "root_cause_closed" if implemented else "needs_followup_workorder"
+        else "root_cause_closed"
+        if implemented
+        else "needs_followup_workorder"
     )
     return {
         "implemented": implemented,
@@ -3611,12 +3702,17 @@ def _lifecycle_ai_context_followup_orders(
     ]
 
 
-def _lifecycle_entry_bucket_order_id(item: dict[str, Any]) -> str:
+def lifecycle_entry_bucket_order_id(item: dict[str, Any]) -> str:
     bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(
+    bucket_key = _slug_with_hash(
         str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
     )
     return f"order_lifecycle_entry_bucket_{bucket_type}_{bucket_key}"
+
+
+def _lifecycle_entry_bucket_order_id(item: dict[str, Any]) -> str:
+    """Backward-compatible wrapper for the entry-bucket workorder ID owner."""
+    return lifecycle_entry_bucket_order_id(item)
 
 
 def _lifecycle_entry_bucket_followup_orders(
@@ -3656,7 +3752,7 @@ def _lifecycle_entry_bucket_followup_orders(
             route = "existing_family"
         orders.append(
             {
-                "order_id": _lifecycle_entry_bucket_order_id(item),
+                "order_id": lifecycle_entry_bucket_order_id(item),
                 "title": f"LDM entry bucket attribution follow-up: {bucket_type}={bucket_key}",
                 "source_report_type": "lifecycle_decision_matrix_entry_bucket_attribution",
                 "lifecycle_stage": "entry",
@@ -8039,6 +8135,7 @@ def build_code_improvement_workorder(
         seen_keys.add(key)
         deduped_orders.append(order)
     orders = deduped_orders
+    collision_warnings = list(dict.fromkeys(collision_warnings))
     recent_reports = _recent_workorder_reports(target_date)
     repeat_counts = _unresolved_repeat_counts(recent_reports)
     structural_repeat_counts = _structural_repeat_history_counts(recent_reports)
@@ -8232,11 +8329,8 @@ def build_code_improvement_workorder(
                             str(item.order.get("order_id"))
                         )
                 continue
-            if (
-                item.decision != "attach_existing_family"
-                and not _is_implemented_status(
-                    _repeat_unresolved_original_status(item.order)
-                )
+            if item.decision != "attach_existing_family" and not _is_implemented_status(
+                _repeat_unresolved_original_status(item.order)
             ):
                 selected_unimplemented_runtime_effect_false_count += 1
                 selected_unimplemented_route_counts[route] = (
@@ -8298,6 +8392,71 @@ def build_code_improvement_workorder(
         )
     )
     root_cause_open_top = _root_cause_open_top(serialized_orders)
+    root_cause_followup_required = [
+        order
+        for order in serialized_orders
+        if str(order.get("root_cause_closure_status") or "").strip()
+        in {
+            "artifact_regeneration_required",
+            "handoff_closed_root_cause_open",
+            "needs_followup_workorder",
+        }
+    ]
+    root_cause_followup_contract_missing_order_ids = [
+        str(order.get("order_id") or "")
+        for order in root_cause_followup_required
+        if not (
+            isinstance(order.get("root_cause_followup_contract"), dict)
+            and order["root_cause_followup_contract"].get("root_cause_signal")
+            and order["root_cause_followup_contract"].get("acceptance_test")
+            and order["root_cause_followup_contract"].get("next_repair_action")
+            and order["root_cause_followup_contract"].get(
+                "closure_requires_new_evidence"
+            )
+            is True
+            and order["root_cause_followup_contract"].get(
+                "implementation_only_closure_allowed"
+            )
+            is False
+        )
+    ]
+    implementation_required_count = selected_decision_counts.get("implement_now", 0)
+    visibility_only_count = selected_terminal_non_implement_runtime_effect_false_count
+    existing_family_attribution_count = sum(
+        1
+        for item in selected
+        if str(item.route or item.order.get("route") or "") == "existing_family"
+        and not _is_terminal_non_implement_status(
+            _terminal_non_implement_status(item) or ""
+        )
+    )
+    other_selected_count = max(
+        0,
+        len(selected)
+        - implementation_required_count
+        - existing_family_attribution_count
+        - visibility_only_count,
+    )
+    operator_workload_summary = {
+        "implementation_required_count": implementation_required_count,
+        "existing_family_attribution_count": existing_family_attribution_count,
+        "visibility_only_count": visibility_only_count,
+        "other_selected_count": other_selected_count,
+        "root_cause_open_count": root_cause_closure_status_counts.get(
+            "handoff_closed_root_cause_open", 0
+        ),
+        "selected_total_count": len(selected),
+        "category_count_reconciled": (
+            implementation_required_count
+            + existing_family_attribution_count
+            + visibility_only_count
+            + other_selected_count
+            == len(selected)
+        ),
+        "runtime_effect_true_count": sum(
+            item.order.get("runtime_effect") is True for item in selected
+        ),
+    }
     report = {
         "schema_version": WORKORDER_SCHEMA_VERSION,
         "date": target_date,
@@ -8480,6 +8639,8 @@ def build_code_improvement_workorder(
             ),
             "selected_order_count": len(selected),
             "non_selected_order_count": len(non_selected),
+            "operator_workload_summary": operator_workload_summary,
+            **operator_workload_summary,
             "source_decision_counts": counts,
             "decision_counts": counts,
             "selected_decision_counts": selected_decision_counts,
@@ -8530,6 +8691,16 @@ def build_code_improvement_workorder(
             ),
             "needs_followup_workorder_count": root_cause_closure_status_counts.get(
                 "needs_followup_workorder", 0
+            ),
+            "root_cause_followup_contract_required_count": len(
+                root_cause_followup_required
+            ),
+            "root_cause_followup_contract_complete_count": (
+                len(root_cause_followup_required)
+                - len(root_cause_followup_contract_missing_order_ids)
+            ),
+            "root_cause_followup_contract_missing_order_ids": (
+                root_cause_followup_contract_missing_order_ids
             ),
             "root_cause_open_top": root_cause_open_top,
             "selected_terminal_non_implement_longstanding_count": selected_terminal_non_implement_longstanding_count,
@@ -8746,6 +8917,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- non_selected_order_count: `{summary.get('non_selected_order_count')}`",
+        f"- operator_workload_summary: `{summary.get('operator_workload_summary')}`",
         f"- source_decision_counts: `{summary.get('source_decision_counts')}`",
         f"- selected_decision_counts: `{summary.get('selected_decision_counts')}`",
         f"- selected_route_counts: `{summary.get('selected_route_counts')}`",
@@ -8769,6 +8941,9 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- handoff_closed_root_cause_open_count: `{summary.get('handoff_closed_root_cause_open_count')}`",
         f"- root_cause_closed_count: `{summary.get('root_cause_closed_count')}`",
         f"- needs_followup_workorder_count: `{summary.get('needs_followup_workorder_count')}`",
+        f"- root_cause_followup_contract_required_count: `{summary.get('root_cause_followup_contract_required_count')}`",
+        f"- root_cause_followup_contract_complete_count: `{summary.get('root_cause_followup_contract_complete_count')}`",
+        f"- root_cause_followup_contract_missing_order_ids: `{summary.get('root_cause_followup_contract_missing_order_ids')}`",
         f"- root_cause_open_top: `{summary.get('root_cause_open_top')}`",
         f"- selected_terminal_non_implement_longstanding_count: `{summary.get('selected_terminal_non_implement_longstanding_count')}`",
         f"- selected_terminal_non_implement_longstanding_order_ids: `{summary.get('selected_terminal_non_implement_longstanding_order_ids')}`",

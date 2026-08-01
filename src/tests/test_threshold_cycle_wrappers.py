@@ -4,6 +4,35 @@ import os
 import subprocess
 
 
+def test_postclose_daily_ev_receives_disabled_report_scope():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert 'EV_SCOPE_ARGS=("${POSTCLOSE_SWING_SCOPE_ARGS[@]}")' in script
+    assert "--disabled-source codebase_performance_workorder" in script
+    assert "--disabled-source time_window_regime_counterfactual" in script
+    assert "--disabled-source producer_gap_discovery" in script
+    assert "--disabled-source stage_hook_workorder_discovery" in script
+    assert "--disabled-source stage_hook_runtime_scaffold" in script
+    assert '--date "$TARGET_DATE" "${EV_SCOPE_ARGS[@]}"' in script
+
+
+def test_claude_pattern_lab_wrapper_requires_explicit_target_date():
+    env = dict(os.environ)
+    env.pop("ANALYSIS_START_DATE", None)
+    env.pop("ANALYSIS_END_DATE", None)
+    result = subprocess.run(
+        ["bash", "analysis/claude_scalping_pattern_lab/run_all.sh"],
+        cwd=".",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "target date is required" in result.stderr
+
+
 def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
@@ -1327,7 +1356,8 @@ def test_run_bot_auto_renews_enabled_allowlist_but_preserves_explicit_off():
         [
             "bash",
             "-c",
-            function_block + """
+            function_block
+            + """
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
 export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED=false
@@ -1534,11 +1564,11 @@ def test_gcp_preopen_push_wrapper_smoke_with_stubbed_ssh_and_scp(tmp_path):
     )
 
     (bin_dir / "ssh").write_text(
-        "#!/usr/bin/env bash\n" f"printf 'ssh %s\\n' \"$*\" >> {log_path}\n" "exit 0\n",
+        f"#!/usr/bin/env bash\nprintf 'ssh %s\\n' \"$*\" >> {log_path}\nexit 0\n",
         encoding="utf-8",
     )
     (bin_dir / "scp").write_text(
-        "#!/usr/bin/env bash\n" f"printf 'scp %s\\n' \"$*\" >> {log_path}\n" "exit 0\n",
+        f"#!/usr/bin/env bash\nprintf 'scp %s\\n' \"$*\" >> {log_path}\nexit 0\n",
         encoding="utf-8",
     )
     os.chmod(bin_dir / "ssh", 0o755)

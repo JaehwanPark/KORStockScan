@@ -7,7 +7,7 @@
 - ai_review_shards: `3` / `5` parsed, reviewed_candidates=`3`
 - surfaced_candidate_count: `52`
 - canonical/legacy buckets: `136` / `311`
-- dual_proposals: deterministic=`324` ai=`3` hybrid_selected=`3`
+- dual_proposals: deterministic=`324` ai=`3` hybrid_selected=`2`
 - absorbed/source_quality_blocker: `200` / `0`
 - lifecycle_flow_parent_granularity: `too_broad` level=`L2_default` parents=`20` target=`30-60`
 - lifecycle_flow_absorbed_children: child=`40` sample=`738` conflict_parents=`0`

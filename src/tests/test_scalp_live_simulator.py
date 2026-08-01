@@ -1428,6 +1428,8 @@ def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkey
         fields for stage, fields in logs if stage == "scalp_sim_entry_ai_price_applied"
     )
     assert sim_applied["runtime_effect"] == "simulated_entry_price_only"
+    assert sim_applied["ai_score"] == 82.0
+    assert sim_applied["current_ai_score"] == 82.0
     pending = next(
         fields
         for stage, fields in logs

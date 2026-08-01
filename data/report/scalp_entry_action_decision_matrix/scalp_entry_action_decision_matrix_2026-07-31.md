@@ -17,16 +17,19 @@
 - action_counts: `{'BUY_DEFENSIVE': 28, 'NO_BUY_AI': 358, 'WAIT_REQUOTE': 181, 'SKIP_PRE_SUBMIT_SAFETY': 76, 'SKIP_STALE': 2}`
 - missing_actions: `[]`
 - zero_sample_actions: `['BUY_NOW', 'SKIP_SOURCE_QUALITY']`
-- unknown_bucket_affected_rows: `11`
-- unknown_dimension_occurrence_count: `11`
+- unknown_bucket_affected_rows: `0`
+- unknown_dimension_occurrence_count: `0`
 - unknown_bucket_not_available_rows: `400`
 - not_available_dimension_occurrence_count: `1417`
-- unknown_bucket_dimension_counts: `{'score_bucket': 11}`
+- unknown_bucket_dimension_counts: `{}`
 - unknown_bucket_not_available_dimension_counts: `{'liquidity_bucket': 400, 'overbought_bucket': 294, 'stale_bucket': 305, 'price_resolution_bucket': 343, 'risk_context_bucket': 75}`
-- score_source_missing_count: `11`
-- score_source_missing_provenance: `{'gap': 'score_bucket_source_score_missing', 'expected_source_fields': ['ai_score', 'ai_score_after_bonus', 'current_ai_score', 'ai_score_raw', 'entry_score', 'score', 'scalp_sim_candidate_window_original_score', 'swing_entry_recovery_gate_score'], 'recommended_resolution': 'join_or_emit_entry_score_before_adm_bucket_decision', 'decision_authority': 'source_quality_gap_discovery', 'runtime_effect': False, 'allowed_runtime_apply': False}`
+- score_source_missing_count: `0`
+- score_source_missing_provenance: `{}`
 - adm_source_bucket_used_count: `245`
-- recomputed_unknown_count: `3040`
+- recomputed_unknown_count: `3029`
+- entry_price_skip_followup_cumulative_status: `collecting_mature_followups`
+- entry_price_skip_followup_90s_sample/floor: `0` / `20`
+- entry_price_skip_followup_sample_floor_met: `False`
 
 ## Action Summary
 | action | sample | joined | sq_adjusted_ev_pct | equal_weight_avg_profit_pct | missed_winner | avoided_loser |
@@ -53,4 +56,4 @@
 
 ## Warnings
 - `joined_sample_below_sample_floor`
-- `unknown_bucket_source_quality_gap`
+- `sim_post_sell_outcome_source_below_sample_floor`

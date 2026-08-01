@@ -184,6 +184,11 @@ def _lab_freshness(
         and coverage_end == target_date
     )
     history_coverage_ok = manifest.get("history_coverage_ok")
+    missing_expected_trading_dates = [
+        str(item)
+        for item in (manifest.get("missing_expected_trading_dates") or [])
+        if str(item)
+    ]
     source_quality_usable = history_coverage_ok is not False
     tuning_input_allowed = timing_fresh and source_quality_usable
     return {
@@ -192,6 +197,14 @@ def _lab_freshness(
         "timing_fresh": timing_fresh,
         "source_quality_usable": source_quality_usable,
         "history_coverage_ok": history_coverage_ok,
+        "expected_trading_date_count": _safe_int(
+            manifest.get("expected_trading_date_count"), 0
+        ),
+        "covered_expected_trading_date_count": _safe_int(
+            manifest.get("covered_expected_trading_date_count"), 0
+        ),
+        "missing_expected_trading_dates": missing_expected_trading_dates,
+        "observed_non_trading_dates": manifest.get("observed_non_trading_dates") or [],
         "tuning_input_allowed": tuning_input_allowed,
         "run_date": run_date or None,
         "coverage_end": coverage_end or None,
@@ -384,8 +397,7 @@ def _load_lab(lab_name: str, lab_dir: Path, target_date: str) -> dict[str, Any]:
                 "lab": lab_name,
                 "reason": (
                     "history_coverage_incomplete"
-                    if freshness["fresh"]
-                    and not freshness["source_quality_usable"]
+                    if freshness["fresh"] and not freshness["source_quality_usable"]
                     else freshness["stale_reason"]
                 ),
                 "manifest": freshness["manifest"],
@@ -787,15 +799,24 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             "gemini_fresh": False,
             "gemini_retired_reason": RETIRED_LABS["gemini"]["reason"],
             "claude_fresh": bool(lab_results[0]["freshness"]["fresh"]),
-            "claude_timing_fresh": bool(
-                lab_results[0]["freshness"]["timing_fresh"]
-            ),
+            "claude_timing_fresh": bool(lab_results[0]["freshness"]["timing_fresh"]),
             "claude_source_quality_usable": bool(
                 lab_results[0]["freshness"]["source_quality_usable"]
             ),
             "claude_tuning_input_allowed": bool(
                 lab_results[0]["freshness"]["tuning_input_allowed"]
             ),
+            "claude_expected_trading_date_count": _safe_int(
+                lab_results[0]["freshness"].get("expected_trading_date_count"), 0
+            ),
+            "claude_covered_expected_trading_date_count": _safe_int(
+                lab_results[0]["freshness"].get("covered_expected_trading_date_count"),
+                0,
+            ),
+            "claude_missing_expected_trading_dates": lab_results[0]["freshness"].get(
+                "missing_expected_trading_dates"
+            )
+            or [],
             "active_labs": [result["lab"] for result in lab_results],
             "consensus_count": len(consensus),
             "auto_family_candidate_count": len(family_candidates),

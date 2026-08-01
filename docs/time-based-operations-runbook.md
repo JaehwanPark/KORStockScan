@@ -337,6 +337,8 @@ Env override는 운영 안전장치 조정이다. 적용/해제 시 runbook 또�
 
 Post-probe P1 capability가 활성화되면 rising-missed를 포함한 모든 probe-first 대상은 동일 경로를 사용한다. `STRONG`은 fill-clamped fresh BBO anchor의 `0/1/2 tick`, `NEUTRAL`은 기존 `0%/-0.3%/-0.8%`, 한 번이라도 `WEAK/UNKNOWN`으로 defer된 뒤 회복한 경우는 기존 `-0.3%/-0.8%` profile만 사용한다. 250ms 간격 재확인은 기존 3초 TTL을 넘지 않으며 끝까지 회복하지 않으면 잔량을 제출하지 않고 1주만 유지한다. 잔량 claim 전 stop/exit, account/order/cooldown/quantity guard를 모두 재확인하고, 각 residual leg 직전에는 fresh BBO·stale/conflict·방향·P1 가격·pre-submit price guard를 다시 확인한다. P1 계약 손상 시 legacy offset으로 fallback하지 않는다. 롤백은 `KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED=false`이며 probe-first 자체를 함께 닫아야 할 때만 `KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED=false`를 추가한다.
 
+장후 `one_share_threshold_opportunity`의 probe 귀속은 정상 잔량 제출을 `residual_submitted` 이벤트에서, 잔량 미제출 종결을 `entry_split_probe_terminal_outcome=residual_not_submitted`에서 record lineage로 결합한다. terminal outcome 도입 전 artifact는 `residual_blocked`, `entry_split_probe_phase=aborted`, residual submit 미관측이 동시에 성립할 때만 `legacy_aborted_phase_fallback`으로 복원하고 source count를 별도 공개한다. probe-first submit 표본이 없으면 `no_natural_sample`, split provenance 또는 두 종결 원천이 빠지면 `instrumentation_gap`, 모든 표본이 종결되면 `observed`로 판정한다. clean-baseline 누적 집계와 `probe_to_residual_by_entry_date`/`target_date_probe_to_residual`을 함께 내보내 계측 도입 전 과거 결손과 당일 신규 표본을 분리한다. 이 집계는 source-only 실행 품질 귀속이며 threshold/runtime/provider/order guard 변경 권한이 없다.
+
 ### Greenfield Real-Env Containment
 
 `greenfield_real_environment_authority`는 full lifecycle bundle이 완성된 경우에만 켠다. `scope=full_lifecycle`인데 policy allowlist가 entry-only이거나 `entry/submit/holding/exit` 중 명시적 policy 또는 `baseline_passthrough`가 없는 stage가 있으면 장중 왜곡 방지를 위해 Greenfield authority와 stage Telegram만 OFF로 내리고 raw event는 보존한다.
@@ -647,6 +649,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.build_code_improvement_workorder --d
 ```
 
 같은 날짜 workorder를 재생성하면 `generation_id`, `source_hash`, `lineage` diff를 먼저 확인한다. 동일 source hash면 같은 snapshot 재실행으로 보고, source hash가 바뀌었으면 postclose 산출물 변화로 새 follow-up이 생긴 것으로 분리한다. LDM `entry_bucket_attribution.code_improvement_workorders`가 존재하면 `lifecycle_decision_matrix_entry_bucket_attribution` order가, `scale_in_bucket_attribution.code_improvement_workorders`가 존재하면 `lifecycle_decision_matrix_scale_in_bucket_attribution` order가 생성되어야 하며, 누락은 postclose verifier fail 사유다.
+
+2026-07-31 이후 workorder는 `duplicate_order_warnings=[]`, selected order ID 유일성, 그리고 open root-cause order마다 완전한 `root_cause_followup_contract`를 필수로 한다. 계약에는 `root_cause_signal`, `acceptance_test`, `next_repair_action`, `closure_requires_new_evidence=true`, `implementation_only_closure_allowed=false`가 있어야 한다. 선언 누락, summary/실제 order count 불일치, ID 충돌 또는 계약 결손은 `threshold_cycle_postclose_verification` fail 사유이며 최종 DONE 전에 보완·재생성해야 한다.
 
 ### 1.1 2-pass 구현 기준
 

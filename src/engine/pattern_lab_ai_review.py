@@ -2580,6 +2580,70 @@ def _followup_represented_by_concrete_orders(
     return True
 
 
+def _response_transport_provenance(
+    provider_status: dict[str, Any],
+    *,
+    requested_provider: str,
+    provided_response: bool,
+) -> tuple[str, str | None]:
+    """Return the actual response transport/model, separate from route intent.
+
+    Older late-bound refreshes overwrote ``provider_status.provider`` with the
+    requested route.  Contract-success fields are therefore stronger evidence
+    when reconstructing provenance from an existing parsed response.
+    """
+
+    requested = str(requested_provider or "none").strip().lower() or "none"
+    if provided_response:
+        response_provider = (
+            str(provider_status.get("response_provider") or requested).strip().lower()
+        )
+    elif (
+        provider_status.get("bedrock_contract_ok") is True
+        and provider_status.get("failback_used") is not True
+    ):
+        response_provider = "bedrock_qwen3"
+    elif (
+        provider_status.get("gemini_contract_ok") is True
+        and provider_status.get("failback_used") is not True
+    ):
+        response_provider = "gemini_3_5_flash"
+    elif provider_status.get("openai_contract_ok") is True:
+        response_provider = "openai"
+    else:
+        response_provider = (
+            str(
+                provider_status.get("response_provider")
+                or provider_status.get("provider")
+                or requested
+            )
+            .strip()
+            .lower()
+        )
+
+    if response_provider == "bedrock_qwen3":
+        response_model = (
+            provider_status.get("bedrock_model_id")
+            or provider_status.get("primary_model")
+            or provider_status.get("model")
+        )
+    elif response_provider == "gemini_3_5_flash":
+        response_model = (
+            provider_status.get("gemini_model")
+            or provider_status.get("primary_model")
+            or provider_status.get("model")
+        )
+    else:
+        response_model = (
+            provider_status.get("response_model")
+            or provider_status.get("model")
+            or (AI_REVIEW_MODEL if response_provider == "openai" else None)
+        )
+    return response_provider or "none", (
+        str(response_model).strip() if response_model else None
+    )
+
+
 def build_pattern_lab_ai_review_report(
     target_date: str,
     *,
@@ -2800,6 +2864,43 @@ def build_pattern_lab_ai_review_report(
         else "pass"
     )
     source_paths = _source_paths(target_date, include_swing=include_swing)
+    transport_provider, transport_model = _response_transport_provenance(
+        provider_status,
+        requested_provider=resolved_provider,
+        provided_response=provided_ai_response,
+    )
+    provider_response_succeeded = ai_status == "parsed"
+    response_provider = (
+        transport_provider if provider_response_succeeded else "deterministic_fallback"
+    )
+    response_model = transport_model if provider_response_succeeded else None
+    report_provider = (
+        response_provider if provider_response_succeeded else resolved_provider
+    )
+    provider_provenance = {
+        "requested_provider": resolved_provider,
+        "attempted_provider": transport_provider,
+        "attempted_model": transport_model,
+        "response_provider": response_provider,
+        "response_model": response_model,
+        "configured_primary_provider": provider_status.get("primary_provider")
+        or resolved_provider,
+        "configured_primary_model": provider_status.get("primary_model")
+        or provider_status.get("model"),
+        "new_provider_call": bool(
+            not provided_ai_response
+            and resolved_provider not in {"none", "off", "false", "0"}
+        ),
+        "provider_response_succeeded": provider_response_succeeded,
+        "response_reused": provided_ai_response,
+        "response_source": (
+            "provided_response"
+            if provided_ai_response
+            else "provider_call"
+            if ai_status == "parsed"
+            else "deterministic_fallback"
+        ),
+    }
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "date": target_date,
@@ -2827,9 +2928,9 @@ def build_pattern_lab_ai_review_report(
         "summary": {
             "status": status,
             "ai_two_pass_review_status": ai_status,
-            "provider": resolved_provider,
-            "model": provider_status.get("model")
-            or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
+            "provider": report_provider,
+            "model": response_model,
+            "provider_provenance": provider_provenance,
             "fallback_used": fallback_used,
             "audit_status": audit.get("status"),
             "ai_review_followup_required": bool(followup_reasons),
@@ -2847,10 +2948,11 @@ def build_pattern_lab_ai_review_report(
             ).get("missing_feedback_source_count"),
         },
         "ai_two_pass_review": {
-            "provider": resolved_provider,
+            "provider": report_provider,
+            "requested_provider": resolved_provider,
             "status": ai_status,
-            "model": provider_status.get("model")
-            or (AI_REVIEW_MODEL if resolved_provider == "openai" else None),
+            "model": response_model,
+            "provider_provenance": provider_provenance,
             "model_tier": (
                 "tier3" if resolved_provider == "openai" else "deterministic_fallback"
             ),
@@ -2893,8 +2995,22 @@ def refresh_pattern_lab_ai_review_source_provenance(
         if isinstance(existing.get("ai_two_pass_review"), dict)
         else {}
     )
-    provider = str(review.get("provider") or "").strip().lower()
-    if provider in {"", "none", "off", "false", "0"}:
+    existing_provider_provenance = (
+        review.get("provider_provenance")
+        if isinstance(review.get("provider_provenance"), dict)
+        else {}
+    )
+    requested_provider = (
+        str(
+            existing_provider_provenance.get("requested_provider")
+            or review.get("requested_provider")
+            or review.get("provider")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    if requested_provider in {"", "none", "off", "false", "0"}:
         raise RuntimeError("existing_pattern_lab_ai_review_provider_missing")
     if str(review.get("status") or "") != "parsed":
         raise RuntimeError("existing_pattern_lab_ai_review_not_parsed")
@@ -2909,21 +3025,35 @@ def refresh_pattern_lab_ai_review_source_provenance(
         if isinstance(review.get("provider_status"), dict)
         else {}
     )
-    original_generated_at = existing.get("generated_at")
+    response_provider, original_response_model = _response_transport_provenance(
+        original_provider_status,
+        requested_provider=requested_provider,
+        provided_response=False,
+    )
+    previous_refresh = (
+        existing.get("source_provenance_refresh")
+        if isinstance(existing.get("source_provenance_refresh"), dict)
+        else {}
+    )
+    original_generated_at = previous_refresh.get(
+        "original_generated_at"
+    ) or existing.get("generated_at")
     existing_summary = (
         existing.get("summary") if isinstance(existing.get("summary"), dict) else {}
     )
     report = build_pattern_lab_ai_review_report(
         target_date,
-        provider=provider,
+        provider=requested_provider,
         ai_raw_response=raw_response,
         include_swing=include_swing,
     )
     refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
     refresh_provenance = {
         "status": "refreshed_from_existing_parsed_provider_response",
-        "provider": provider,
+        "provider": response_provider,
+        "requested_provider": requested_provider,
         "new_provider_call": False,
+        "response_model": original_response_model,
         "original_generated_at": original_generated_at,
         "refreshed_at": refreshed_at,
         "late_bound_sources": [
@@ -2941,16 +3071,36 @@ def refresh_pattern_lab_ai_review_source_provenance(
     )
     refreshed_review["provider_status"] = {
         **original_provider_status,
-        "provider": provider,
+        "provider": response_provider,
         "last_operation_new_provider_call": False,
         "source_provenance_refresh": refresh_provenance,
+    }
+    refreshed_review["model"] = original_response_model
+    refreshed_review["provider"] = response_provider
+    refreshed_review["requested_provider"] = requested_provider
+    refreshed_review["provider_provenance"] = {
+        "requested_provider": requested_provider,
+        "attempted_provider": response_provider,
+        "attempted_model": original_response_model,
+        "response_provider": response_provider,
+        "response_model": original_response_model,
+        "configured_primary_provider": original_provider_status.get("primary_provider")
+        or requested_provider,
+        "configured_primary_model": original_provider_status.get("primary_model")
+        or original_provider_status.get("model"),
+        "new_provider_call": False,
+        "provider_response_succeeded": True,
+        "response_reused": True,
+        "response_source": "existing_parsed_provider_response",
+        "original_generated_at": original_generated_at,
     }
     refreshed_review["source_provenance_refresh"] = refresh_provenance
     report["ai_two_pass_review"] = refreshed_review
     report["source_provenance_refresh"] = refresh_provenance
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    summary["provider"] = provider
-    summary["model"] = original_provider_status.get("model") or summary.get("model")
+    summary["provider"] = response_provider
+    summary["model"] = original_response_model
+    summary["provider_provenance"] = refreshed_review["provider_provenance"]
     summary["fallback_used"] = bool(existing_summary.get("fallback_used"))
     summary["source_provenance_refresh_status"] = refresh_provenance["status"]
     report["summary"] = summary
@@ -2963,6 +3113,11 @@ def refresh_pattern_lab_ai_review_source_provenance(
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    provider_provenance = (
+        summary.get("provider_provenance")
+        if isinstance(summary.get("provider_provenance"), dict)
+        else {}
+    )
     review = (
         report.get("ai_two_pass_review")
         if isinstance(report.get("ai_two_pass_review"), dict)
@@ -2981,6 +3136,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- ai_two_pass_review_status: `{summary.get('ai_two_pass_review_status')}`",
         f"- provider: `{summary.get('provider')}`",
         f"- model: `{summary.get('model') or '-'}`",
+        f"- configured_primary_provider/model: `{provider_provenance.get('configured_primary_provider') or '-'}` / `{provider_provenance.get('configured_primary_model') or '-'}`",
+        f"- response_reused/new_provider_call: `{provider_provenance.get('response_reused')}` / `{provider_provenance.get('new_provider_call')}`",
         f"- fallback_used: `{summary.get('fallback_used')}`",
         f"- audit_status: `{summary.get('audit_status')}`",
         f"- final_conclusion_count: `{summary.get('final_conclusion_count')}`",

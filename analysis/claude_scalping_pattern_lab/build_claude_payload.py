@@ -32,9 +32,6 @@ try:
         MIN_VALID_PROFIT_SAMPLES,
         OUTPUT_DIR,
         PROJECT_ROOT,
-        SOFT_STOP_RULES,
-        TOP_N_PATTERNS,
-        TRAILING_TP_RULES,
     )
 except ImportError:  # pragma: no cover - direct script execution
     from config import (
@@ -43,9 +40,6 @@ except ImportError:  # pragma: no cover - direct script execution
         MIN_VALID_PROFIT_SAMPLES,
         OUTPUT_DIR,
         PROJECT_ROOT,
-        SOFT_STOP_RULES,
-        TOP_N_PATTERNS,
-        TRAILING_TP_RULES,
     )
 from tuning_observability_summary import write_tuning_observability_outputs
 
@@ -122,7 +116,9 @@ def _load_feedback_sources() -> dict:
             "freshness": (
                 "same_day"
                 if source_date == target_date
-                else "latest_available_lte_target" if source_date else "missing"
+                else "latest_available_lte_target"
+                if source_date
+                else "missing"
             ),
             "runtime_effect": False,
             "decision_authority": "source_quality_only",
@@ -587,7 +583,12 @@ def write_run_manifest(
         "history_coverage_start": None,
         "history_coverage_end": None,
         "history_coverage_ok": False,
+        "expected_trading_date_count": 0,
+        "covered_expected_trading_date_count": 0,
+        "missing_expected_trading_dates": [],
+        "observed_non_trading_dates": [],
         "local_pipeline_source_stats": {},
+        "non_trading_pipeline_source_stats": {},
         "inputs": [],
         "outputs": [],
     }
@@ -603,7 +604,12 @@ def write_run_manifest(
                 "history_coverage_start",
                 "history_coverage_end",
                 "history_coverage_ok",
+                "expected_trading_date_count",
+                "covered_expected_trading_date_count",
+                "missing_expected_trading_dates",
+                "observed_non_trading_dates",
                 "local_pipeline_source_stats",
+                "non_trading_pipeline_source_stats",
                 "use_duckdb_primary",
             ]:
                 if key in source_manifest:

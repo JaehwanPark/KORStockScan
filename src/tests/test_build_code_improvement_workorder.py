@@ -184,6 +184,16 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
     assert report["summary"]["selected_decision_counts"] == {"defer_evidence": 2}
     assert report["summary"]["selected_route_counts"] == {"defer_evidence": 2}
     assert report["summary"]["selected_implement_now_route_count"] == 0
+    assert report["summary"]["operator_workload_summary"] == {
+        "implementation_required_count": 0,
+        "existing_family_attribution_count": 0,
+        "visibility_only_count": 0,
+        "other_selected_count": 2,
+        "root_cause_open_count": 0,
+        "selected_total_count": 2,
+        "category_count_reconciled": True,
+        "runtime_effect_true_count": 0,
+    }
     assert report["summary"]["selected_unimplemented_runtime_effect_false_count"] == 2
     assert report["summary"]["selected_unimplemented_route_counts"] == {
         "defer_evidence": 2
@@ -782,7 +792,19 @@ def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementa
     assert order["implementation_provenance"]["implemented_scope"] == (
         "conversion_lane_blocker_axis_report_provenance"
     )
+    assert order["root_cause_closure_status"] == ("handoff_closed_root_cause_open")
+    assert order["root_cause_followup_contract"] == {
+        "status": "handoff_closed_root_cause_open",
+        "root_cause_signal": ("conversion_lane:submit_drought:LATENCY_PRE_SUBMIT:open"),
+        "acceptance_test": "submit drought ledger splits weak contracts",
+        "next_repair_action": "close_submit_drought_latency_pre_submit",
+        "closure_requires_new_evidence": True,
+        "implementation_only_closure_allowed": False,
+    }
     assert order["decision"] == "attach_existing_family"
+    assert report["summary"]["root_cause_followup_contract_required_count"] == 1
+    assert report["summary"]["root_cause_followup_contract_complete_count"] == 1
+    assert report["summary"]["root_cause_followup_contract_missing_order_ids"] == []
     assert (
         report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
     )
@@ -2579,8 +2601,9 @@ def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_
     monkeypatch.setattr(
         mod,
         "_lifecycle_bucket_discovery_report_path",
-        lambda target_date: discovery_dir
-        / f"lifecycle_bucket_discovery_{target_date}.json",
+        lambda target_date: (
+            discovery_dir / f"lifecycle_bucket_discovery_{target_date}.json"
+        ),
     )
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -6852,6 +6875,15 @@ def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected
 
 def test_followup_order_ids_keep_hash_for_long_source_keys():
     prefix = "same_long_source_prefix_" + ("x" * 120)
+    entry_ids = {
+        mod._lifecycle_entry_bucket_order_id(
+            {
+                "bucket_type": "combo_entry_spot",
+                "bucket_key": f"{prefix}_{suffix}",
+            }
+        )
+        for suffix in ("first", "second")
+    }
     ldm_ids = {
         mod._swing_ldm_order_id(
             {
@@ -6883,6 +6915,12 @@ def test_followup_order_ids_keep_hash_for_long_source_keys():
         }
     )
 
+    assert len(entry_ids) == 2
+    assert all(
+        len(order_id.rsplit("_", 1)[-1]) == 8
+        and all(char in "0123456789abcdef" for char in order_id.rsplit("_", 1)[-1])
+        for order_id in entry_ids
+    )
     assert len(ldm_ids) == 2
     assert len({item["order_id"] for item in bucket_orders}) == 2
     assert len({item["order_id"] for item in conversion_orders}) == 2

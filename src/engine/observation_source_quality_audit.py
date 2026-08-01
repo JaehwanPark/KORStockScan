@@ -1621,6 +1621,28 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "scalp_sim_entry_ai_price_skip_order": StageContract(
         required_fields=SCALP_SIM_PROVENANCE_FIELDS
     ),
+    "entry_ai_price_canary_skip_followup": StageContract(
+        required_fields=(
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+            "runtime_effect",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "allowed_runtime_apply",
+            "elapsed_sec",
+            "mark_price",
+            "followup_price",
+            "max_price",
+            "min_price",
+            "mfe_bps",
+            "mae_bps",
+        )
+    ),
     "scalp_sim_entry_submit_revalidation_warning": StageContract(
         required_fields=(
             *SCALP_SIM_PROVENANCE_FIELDS,
@@ -2877,8 +2899,7 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         venue_resolution = _field_text("venue_resolution")
         runtime_event_fail_closed = (
-            venue_resolution
-            == "scanner_runtime_event:explicit_target_venue_missing"
+            venue_resolution == "scanner_runtime_event:explicit_target_venue_missing"
             or venue_resolution.startswith(
                 "scanner_runtime_event:conflicting_explicit_target_venue:"
             )
@@ -3615,7 +3636,9 @@ def _normalized_fields_for_contract(
                 "submitted_receipt_observed"
                 if submitted_bool
                 and normalized.get("broker_order_no") != "unknown_pre_contract"
-                else "unknown_pre_contract" if submitted_bool else "not_submitted"
+                else "unknown_pre_contract"
+                if submitted_bool
+                else "not_submitted"
             )
         normalized.setdefault(
             "broker_receipt_reason",
@@ -5219,7 +5242,9 @@ def _streaming_contract_audit(
         status = (
             "fail"
             if invalid_label_violations
-            else "pass" if not missing_violations and not zero_violations else "warning"
+            else "pass"
+            if not missing_violations and not zero_violations
+            else "warning"
         )
         if status != "pass":
             warnings.append(stage)

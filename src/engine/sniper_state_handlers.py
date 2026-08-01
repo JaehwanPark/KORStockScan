@@ -10127,6 +10127,8 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                     entry_adm_candidate_id=entry_adm_candidate_id,
                     sim_record_id=sim_record_id,
                     sim_parent_record_id=stock.get("id"),
+                    ai_score=current_ai_score,
+                    current_ai_score=current_ai_score,
                     ai_entry_price_canary_action=latency_gate.get(
                         "ai_entry_price_canary_action"
                     ),
@@ -10175,6 +10177,8 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                     entry_adm_candidate_id=entry_adm_candidate_id,
                     sim_record_id=sim_record_id,
                     sim_parent_record_id=stock.get("id"),
+                    ai_score=current_ai_score,
+                    current_ai_score=current_ai_score,
                     original_limit_price=stock.get("target_buy_price")
                     or stock.get("entry_armed_target_buy_price"),
                     adjusted_limit_price=limit_price,
@@ -60507,6 +60511,25 @@ def _maybe_emit_entry_ai_price_skip_followup(
             stock,
             code,
             "entry_ai_price_canary_skip_followup",
+            metric_role="entry_price_skip_counterfactual_observation",
+            decision_authority="report_only_source_quality_observation",
+            window_policy=f"path_dependent_tick_extrema_{interval_sec}s",
+            sample_floor="cumulative_20_mature_followups",
+            primary_decision_metric="mfe_bps",
+            source_quality_gate=(
+                "valid_mark_and_followup_prices_with_continuous_watching_updates"
+            ),
+            forbidden_uses=(
+                "standalone_live_runtime_apply,threshold_mutation,provider_change,"
+                "order_price_or_quantity_change,broker_guard_bypass"
+            ),
+            runtime_effect=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            allowed_runtime_apply=False,
+            entry_adm_candidate_id=stock.get("entry_adm_candidate_id"),
+            sim_record_id=stock.get("sim_record_id"),
+            sim_parent_record_id=stock.get("sim_parent_record_id"),
             elapsed_sec=interval_sec,
             mark_price=mark_price,
             followup_price=curr_price,
@@ -69468,9 +69491,19 @@ def handle_watching_state(
     if now_dt is None:
         now_dt = datetime.now()
     now_t = now_dt.time()
+    curr_price = _safe_int(ws_data.get("curr"), 0)
     _observe_entry_cancel_wait_counterfactuals(
-        stock, code, now_ts=now_ts, curr_price=_safe_int(ws_data.get("curr"), 0)
+        stock, code, now_ts=now_ts, curr_price=curr_price
     )
+
+    # A prior entry-price SKIP owns a 30s/90s report-only counterfactual even
+    # when the current WATCHING pass exits through pause, cooldown, or the
+    # already-alerted guard.  Emit it before those entry-authority returns;
+    # this changes no BUY decision and only closes observation coverage.
+    if curr_price > 0:
+        _maybe_emit_entry_ai_price_skip_followup(
+            stock, code, curr_price=curr_price, now_ts=now_ts
+        )
 
     _log_watching_state_debug(stock, code, radar=radar, ai_engine=ai_engine)
 
@@ -69777,7 +69810,6 @@ def handle_watching_state(
         )
         return
 
-    curr_price = _safe_int(ws_data.get("curr"), 0)
     if curr_price <= 0:
         emit_scanner_watching_runtime_skip(
             stock,
@@ -69787,10 +69819,6 @@ def handle_watching_state(
             ws_data=ws_data,
         )
         return
-    _maybe_emit_entry_ai_price_skip_followup(
-        stock, code, curr_price=curr_price, now_ts=now_ts
-    )
-
     current_vpw = float(ws_data.get("v_pw", 0) or 0)
     fluctuation = float(ws_data.get("fluctuation", 0.0) or 0.0)
     current_ai_score = (
@@ -71460,6 +71488,10 @@ def handle_holding_state(
     if executable_sell_price > 0:
         ws_data = dict(ws_data or {})
         ws_data["executable_sell_price"] = int(executable_sell_price)
+    if curr_p > 0:
+        _maybe_emit_entry_ai_price_skip_followup(
+            stock, code, curr_price=curr_p, now_ts=now_ts
+        )
     if _maybe_auto_exclude_open_loss_holding(
         stock,
         code,

@@ -27,6 +27,9 @@ from src.engine.automation.source_quality_hard_gate import (
     RUNTIME_CANDIDATE_LIST_FIELDS,
     source_quality_preflight_blocked,
 )
+from src.engine.build_code_improvement_workorder import (
+    lifecycle_entry_bucket_order_id,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.threshold_cycle_preopen_apply import (
     runtime_gap_provenance_artifact_path,
@@ -979,11 +982,7 @@ def _slug_with_hash(value: str, *, limit: int = 80) -> str:
 
 
 def _entry_bucket_order_id(item: dict[str, Any]) -> str:
-    bucket_type = _slug(str(item.get("bucket_type") or "bucket"))
-    bucket_key = _slug(
-        str(item.get("bucket_key") or item.get("workorder_id") or "unknown")
-    )
-    return f"order_lifecycle_entry_bucket_{bucket_type}_{bucket_key}"
+    return lifecycle_entry_bucket_order_id(item)
 
 
 def _scale_in_bucket_order_id(item: dict[str, Any]) -> str:
@@ -4667,6 +4666,123 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
     }
 
 
+def _code_improvement_workorder_contract_status(
+    workorder: dict[str, Any], *, target_date: str
+) -> dict[str, Any]:
+    summary = (
+        workorder.get("summary") if isinstance(workorder.get("summary"), dict) else {}
+    )
+    duplicate_warnings = [
+        str(item)
+        for item in (summary.get("duplicate_order_warnings") or [])
+        if str(item)
+    ]
+    contract_declared = any(
+        key in summary
+        for key in (
+            "root_cause_followup_contract_required_count",
+            "root_cause_followup_contract_complete_count",
+            "root_cause_followup_contract_missing_order_ids",
+        )
+    )
+    try:
+        contract_required = date.fromisoformat(target_date) >= date(2026, 7, 31)
+    except ValueError:
+        contract_required = True
+    orders = [
+        item for item in (workorder.get("orders") or []) if isinstance(item, dict)
+    ]
+    order_ids = [str(item.get("order_id") or "").strip() for item in orders]
+    duplicate_order_ids = sorted(
+        order_id
+        for order_id, count in Counter(order_ids).items()
+        if order_id and count > 1
+    )
+    required_orders = [
+        item
+        for item in orders
+        if str(item.get("root_cause_closure_status") or "").strip()
+        in {
+            "artifact_regeneration_required",
+            "handoff_closed_root_cause_open",
+            "needs_followup_workorder",
+        }
+    ]
+    missing_contract_order_ids: list[str] = []
+    for order in required_orders:
+        contract = (
+            order.get("root_cause_followup_contract")
+            if isinstance(order.get("root_cause_followup_contract"), dict)
+            else {}
+        )
+        if not (
+            contract.get("root_cause_signal")
+            and contract.get("acceptance_test")
+            and contract.get("next_repair_action")
+            and contract.get("closure_requires_new_evidence") is True
+            and contract.get("implementation_only_closure_allowed") is False
+        ):
+            missing_contract_order_ids.append(str(order.get("order_id") or ""))
+    issues: list[str] = []
+    if duplicate_warnings:
+        issues.append("code_improvement_workorder_duplicate_order_warning_present")
+    if duplicate_order_ids:
+        issues.append("code_improvement_workorder_duplicate_order_id_present")
+    if contract_required and not contract_declared:
+        issues.append(
+            "code_improvement_workorder_root_cause_followup_contract_not_declared"
+        )
+    if contract_declared:
+        declared_required = _safe_int(
+            summary.get("root_cause_followup_contract_required_count"), -1
+        )
+        declared_complete = _safe_int(
+            summary.get("root_cause_followup_contract_complete_count"), -1
+        )
+        declared_missing = sorted(
+            str(item)
+            for item in (
+                summary.get("root_cause_followup_contract_missing_order_ids") or []
+            )
+            if str(item)
+        )
+        actual_complete = len(required_orders) - len(missing_contract_order_ids)
+        if declared_required != len(required_orders):
+            issues.append(
+                "code_improvement_workorder_root_cause_required_count_mismatch"
+            )
+        if declared_complete != actual_complete:
+            issues.append(
+                "code_improvement_workorder_root_cause_complete_count_mismatch"
+            )
+        if declared_missing != sorted(missing_contract_order_ids):
+            issues.append("code_improvement_workorder_root_cause_missing_ids_mismatch")
+        if missing_contract_order_ids:
+            issues.append(
+                "code_improvement_workorder_root_cause_followup_contract_incomplete"
+            )
+    return {
+        "status": "fail" if issues else "pass",
+        "contract_state": (
+            "declared_and_verified"
+            if contract_declared
+            else "required_but_missing"
+            if contract_required
+            else "legacy_not_declared"
+        ),
+        "issues": sorted(set(issues)),
+        "duplicate_order_warnings": duplicate_warnings,
+        "duplicate_order_ids": duplicate_order_ids,
+        "root_cause_followup_contract_required_count": len(required_orders),
+        "root_cause_followup_contract_complete_count": (
+            len(required_orders) - len(missing_contract_order_ids)
+        ),
+        "root_cause_followup_contract_missing_order_ids": sorted(
+            missing_contract_order_ids
+        ),
+    }
+
+
 def _postclose_not_yet_due(target_date: str) -> bool:
     try:
         parsed = date.fromisoformat(target_date)
@@ -4772,6 +4888,9 @@ def build_threshold_cycle_postclose_verification(
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
     workorder = _load_json(paths["code_improvement_workorder"])
+    workorder_contract = _code_improvement_workorder_contract_status(
+        workorder, target_date=target_date
+    )
     observation_source_quality_audit = _load_json(
         paths["observation_source_quality_audit"]
     )
@@ -5469,6 +5588,12 @@ def build_threshold_cycle_postclose_verification(
         )
         if key in execution_flags and not execution_flags[key]
     ]
+    if (
+        paths["code_improvement_workorder"].exists()
+        and "code_improvement_workorder" not in disabled_stage_flags
+        and workorder_contract.get("status") == "fail"
+    ):
+        log_issues.extend(workorder_contract.get("issues") or [])
     disabled_artifact_labels = {
         (
             "pattern_lab_currentness_audit"
@@ -6346,7 +6471,9 @@ def build_threshold_cycle_postclose_verification(
                     else (
                         "fail"
                         if predecessor_timeouts or strict_log_issues
-                        else "warning" if predecessor_waits else "pass"
+                        else "warning"
+                        if predecessor_waits
+                        else "pass"
                     )
                 )
             ),
@@ -6364,6 +6491,7 @@ def build_threshold_cycle_postclose_verification(
             "status": workorder_snapshot_status,
             "priority_rule": "prefer_generation_id_source_hash_lineage_over_mtime",
         },
+        "code_improvement_workorder_contract": workorder_contract,
         "downstream_links": downstream_links,
         "missing_downstream_links": missing_downstream_links,
         "stale_downstream_links": stale_downstream_links,
