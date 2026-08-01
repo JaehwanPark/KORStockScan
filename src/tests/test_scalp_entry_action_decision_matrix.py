@@ -8,6 +8,31 @@ from src.engine import scalp_entry_adm_runtime as runtime_mod
 from src.engine.scalping import entry_ai_gate as entry_gate_mod
 
 
+def test_main_print_summary_omits_full_rows(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(mod, "ADM_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        mod,
+        "build_scalp_entry_action_decision_matrix_report",
+        lambda target_date: {
+            "report_type": "scalp_entry_action_decision_matrix",
+            "date": target_date,
+            "status": "warning",
+            "runtime_effect": False,
+            "summary": {"total_candidates": 17, "joined_sample": 6},
+            "warnings": ["sample_floor"],
+            "rows": [{"large": "payload"}],
+        },
+    )
+
+    assert mod.main(["--date", "2026-07-31", "--print-summary"]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["total_candidates"] == 17
+    assert output["joined_sample"] == 6
+    assert output["warning_count"] == 1
+    assert "rows" not in output
+
+
 def _write_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

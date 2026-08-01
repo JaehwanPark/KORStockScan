@@ -2493,9 +2493,30 @@ def main(argv: list[str] | None = None) -> int:
         description="Build scalp entry action decision matrix report."
     )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    parser.add_argument(
+        "--print-summary",
+        action="store_true",
+        help="Print a compact completion summary instead of the full report payload.",
+    )
     args = parser.parse_args(argv)
     report = build_scalp_entry_action_decision_matrix_report(args.target_date)
-    print(json.dumps(report, ensure_ascii=False))
+    output = report
+    if args.print_summary:
+        summary = (
+            report.get("summary") if isinstance(report.get("summary"), dict) else {}
+        )
+        json_path, md_path = report_paths(args.target_date)
+        output = {
+            "report_type": report.get("report_type"),
+            "date": report.get("date"),
+            "status": report.get("status"),
+            "total_candidates": summary.get("total_candidates"),
+            "joined_sample": summary.get("joined_sample"),
+            "warning_count": len(report.get("warnings") or []),
+            "runtime_effect": report.get("runtime_effect"),
+            "artifacts": {"json": str(json_path), "markdown": str(md_path)},
+        }
+    print(json.dumps(output, ensure_ascii=False))
     return 0
 
 

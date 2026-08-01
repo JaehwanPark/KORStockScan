@@ -6,6 +6,36 @@ from src.engine import lifecycle_decision_matrix as ldm_mod
 from src.engine.lifecycle.bucket_taxonomy import normalize_lifecycle_bucket
 
 
+def test_main_print_summary_omits_candidates(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        mod,
+        "write_lifecycle_bucket_discovery_report",
+        lambda target_date, **kwargs: {
+            "report_type": "lifecycle_bucket_discovery",
+            "date": target_date,
+            "target_date": target_date,
+            "runtime_effect": False,
+            "summary": {
+                "status": "pass",
+                "candidate_count": 324,
+                "surfaced_candidate_count": 2,
+                "sim_auto_approved_count": 0,
+                "live_auto_apply_ready_count": 0,
+            },
+            "warnings": [],
+            "candidates": [{"large": "payload"}],
+        },
+    )
+
+    assert mod.main(["--date", "2026-07-31", "--print-summary"]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["candidate_count"] == 324
+    assert output["surfaced_candidate_count"] == 2
+    assert "candidates" not in output
+
+
 def _ai_keep_response():
     return {
         "schema_version": 1,

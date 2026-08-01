@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -187,8 +188,65 @@ def test_pipeline_event_summary_profile_isolates_producer_parity_artifacts(tmp_p
     assert len(producer_rows) == 1
     assert default_meta["summary_profile"] == "default"
     assert producer_meta["summary_profile"] == "producer_parity"
+    assert producer_meta["summary_detail_level"] == "counts_only_v1"
+    assert producer_rows[0]["summary_detail_level"] == "counts_only_v1"
+    assert producer_rows[0]["event_count"] == 1
+    for diagnostic_key in (
+        "field_presence_counts",
+        "numeric_stats",
+        "second_counts",
+        "first_raw_offset",
+        "last_raw_offset",
+        "sample_raw_offsets",
+        "sample_events",
+    ):
+        assert diagnostic_key not in producer_rows[0]
     assert default_meta["summary_path"] != producer_meta["summary_path"]
     assert default_meta["manifest_path"] != producer_meta["manifest_path"]
+
+
+def test_producer_parity_profile_rebuilds_legacy_full_detail_manifest(tmp_path):
+    target_date = "2026-05-06"
+    raw_path = tmp_path / f"pipeline_events_{target_date}.jsonl"
+    raw_path.write_text(
+        json.dumps(
+            _event(
+                target_date,
+                "10:00:01",
+                "scalping_scanner_fast_precheck",
+                record_id=1,
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary_dir = tmp_path / "pipeline_event_summaries"
+    _, first_meta = update_and_load_pipeline_event_summaries(
+        raw_path=raw_path,
+        summary_dir=summary_dir,
+        target_date=target_date,
+        reason_labeler=_labeler,
+        summary_stages=PRODUCER_SUMMARY_STAGES,
+        summary_profile="producer_parity",
+    )
+    manifest_path = Path(first_meta["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("summary_detail_level")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    rows, rebuilt_meta = update_and_load_pipeline_event_summaries(
+        raw_path=raw_path,
+        summary_dir=summary_dir,
+        target_date=target_date,
+        reason_labeler=_labeler,
+        summary_stages=PRODUCER_SUMMARY_STAGES,
+        summary_profile="producer_parity",
+    )
+
+    assert rebuilt_meta["rebuilt"] is True
+    assert rebuilt_meta["summary_detail_level"] == "counts_only_v1"
+    assert len(rows) == 1
+    assert "sample_events" not in rows[0]
 
 
 def test_pipeline_event_summary_rejects_unknown_profile(tmp_path):

@@ -885,11 +885,35 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional pipeline_events jsonl/jsonl.gz path",
     )
+    parser.add_argument(
+        "--print-summary",
+        action="store_true",
+        help="Print a compact completion summary instead of the full report payload.",
+    )
     args = parser.parse_args(argv)
     payload = write_report(
         args.date, source_path=Path(args.source_path) if args.source_path else None
     )
-    print(json.dumps(payload, ensure_ascii=False))
+    output = payload
+    if args.print_summary:
+        candidate = (
+            payload.get("calibration_candidate")
+            if isinstance(payload.get("calibration_candidate"), dict)
+            else {}
+        )
+        output = {
+            "family": payload.get("family"),
+            "date": payload.get("date"),
+            "latency_block_count": payload.get("latency_block_count"),
+            "selected_profile_id": payload.get("selected_profile_id"),
+            "calibration_state": candidate.get("calibration_state"),
+            "allowed_runtime_apply": candidate.get("allowed_runtime_apply"),
+            "artifacts": {
+                "json": str(report_json_path(args.date)),
+                "markdown": str(report_md_path(args.date)),
+            },
+        }
+    print(json.dumps(output, ensure_ascii=False))
     return 0
 
 

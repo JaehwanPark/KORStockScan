@@ -3,6 +3,32 @@ import json
 from src.engine import latency_classifier_recommendation as mod
 
 
+def test_main_print_summary_omits_profile_results(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(
+        mod,
+        "write_report",
+        lambda target_date, source_path=None: {
+            "family": "latency_classifier_recommendation",
+            "date": target_date,
+            "latency_block_count": 31,
+            "selected_profile_id": "bounded_1",
+            "calibration_candidate": {
+                "calibration_state": "hold",
+                "allowed_runtime_apply": False,
+            },
+            "profile_results": [{"large": "payload"}],
+        },
+    )
+
+    assert mod.main(["--date", "2026-07-31", "--print-summary"]) == 0
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["latency_block_count"] == 31
+    assert output["allowed_runtime_apply"] is False
+    assert "profile_results" not in output
+
+
 def _event(
     code,
     *,

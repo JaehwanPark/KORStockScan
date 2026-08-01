@@ -18,6 +18,8 @@ IgnorePredicate = Callable[[dict[str, Any]], bool]
 
 SUMMARY_SCHEMA_VERSION = 2
 PRODUCER_SUMMARY_SCHEMA_VERSION = 1
+PRODUCER_PARITY_DETAIL_LEVEL = "counts_only_v1"
+DEFAULT_SUMMARY_DETAIL_LEVEL = "diagnostic_full_v1"
 HIGH_VOLUME_OBSERVATION_STAGES = frozenset(
     {
         "rising_missed_nxt_post_block_price_sample",
@@ -397,6 +399,7 @@ class _SummaryAggregate:
         reason_label: str,
         actual_order_submitted: str,
         sample_per_bucket: int = 6,
+        include_diagnostics: bool = True,
     ) -> None:
         self.bucket_start = bucket_start
         self.bucket_end = bucket_end
@@ -409,6 +412,7 @@ class _SummaryAggregate:
         self.reason_label = reason_label
         self.actual_order_submitted = actual_order_submitted
         self.sample_per_bucket = max(1, min(int(sample_per_bucket or 1), 6))
+        self.include_diagnostics = bool(include_diagnostics)
         self.event_count = 0
         self.first_seen: datetime | None = None
         self.last_seen: datetime | None = None
@@ -432,6 +436,8 @@ class _SummaryAggregate:
         self.last_seen = event.emitted_at
         self.last_record_id = event.record_id
         self.last_raw_offset = event.raw_offset_end
+        if not self.include_diagnostics:
+            return
         self.second_counts[
             event.emitted_at.replace(microsecond=0).isoformat(timespec="seconds")
         ] += 1
@@ -495,20 +501,10 @@ class _SummaryAggregate:
         middle_limit = self.sample_per_bucket - 2
         return ordered[:1] + ordered[1:-1][:middle_limit] + ordered[-1:]
 
-    def to_row(self, *, target_date: str) -> dict[str, Any]:
-        numeric_stats = {}
-        for key, stats in sorted(self.numeric_stats.items()):
-            count = int(stats["count"])
-            numeric_stats[key] = {
-                "count": count,
-                "min": float(stats["min"]),
-                "max": float(stats["max"]),
-                "sum": float(stats["sum"]),
-                "avg": float(stats["sum"]) / count if count else 0.0,
-            }
-        samples = self._sample_events()
-        return {
+    def to_row(self, *, target_date: str, summary_detail_level: str) -> dict[str, Any]:
+        row = {
             "schema_version": SUMMARY_SCHEMA_VERSION,
+            "summary_detail_level": summary_detail_level,
             "target_date": target_date,
             "bucket_start": self.bucket_start.isoformat(timespec="seconds"),
             "bucket_end": self.bucket_end.isoformat(timespec="seconds"),
@@ -529,17 +525,6 @@ class _SummaryAggregate:
             "last_seen": (
                 self.last_seen.isoformat(timespec="seconds") if self.last_seen else None
             ),
-            "first_record_id": self.first_record_id,
-            "last_record_id": self.last_record_id,
-            "field_presence_counts": dict(sorted(self.field_presence_counts.items())),
-            "numeric_stats": numeric_stats,
-            "second_counts": dict(sorted(self.second_counts.items())),
-            "first_raw_offset": self.first_raw_offset,
-            "last_raw_offset": self.last_raw_offset,
-            "sample_raw_offsets": [
-                int(sample.get("raw_offset") or 0) for sample in samples
-            ],
-            "sample_events": samples,
             "metric_role": "ops_volume_diagnostic",
             "decision_authority": "diagnostic_aggregation",
             "runtime_effect": False,
@@ -549,6 +534,37 @@ class _SummaryAggregate:
                 "primary_ev_decision",
             ],
         }
+        if not self.include_diagnostics:
+            return row
+        numeric_stats = {}
+        for key, stats in sorted(self.numeric_stats.items()):
+            count = int(stats["count"])
+            numeric_stats[key] = {
+                "count": count,
+                "min": float(stats["min"]),
+                "max": float(stats["max"]),
+                "sum": float(stats["sum"]),
+                "avg": float(stats["sum"]) / count if count else 0.0,
+            }
+        samples = self._sample_events()
+        row.update(
+            {
+                "first_record_id": self.first_record_id,
+                "last_record_id": self.last_record_id,
+                "field_presence_counts": dict(
+                    sorted(self.field_presence_counts.items())
+                ),
+                "numeric_stats": numeric_stats,
+                "second_counts": dict(sorted(self.second_counts.items())),
+                "first_raw_offset": self.first_raw_offset,
+                "last_raw_offset": self.last_raw_offset,
+                "sample_raw_offsets": [
+                    int(sample.get("raw_offset") or 0) for sample in samples
+                ],
+                "sample_events": samples,
+            }
+        )
+        return row
 
 
 def is_summary_target_stage(stage: str) -> bool:
@@ -678,7 +694,10 @@ def _aggregate_key(event: SummaryEvent) -> tuple[str, ...]:
 
 
 def _new_aggregate(
-    event: SummaryEvent, *, sample_per_bucket: int = 6
+    event: SummaryEvent,
+    *,
+    sample_per_bucket: int = 6,
+    include_diagnostics: bool = True,
 ) -> _SummaryAggregate:
     bucket_start = event.emitted_at.replace(second=0, microsecond=0)
     bucket_end = bucket_start + timedelta(minutes=1)
@@ -694,6 +713,7 @@ def _new_aggregate(
         reason_label=event.reason_label,
         actual_order_submitted=event.actual_order_submitted,
         sample_per_bucket=sample_per_bucket,
+        include_diagnostics=include_diagnostics,
     )
 
 
@@ -730,6 +750,7 @@ def load_summary_rows(
 def _slim_summary_row(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": payload.get("schema_version"),
+        "summary_detail_level": payload.get("summary_detail_level"),
         "target_date": payload.get("target_date"),
         "bucket_start": payload.get("bucket_start"),
         "bucket_end": payload.get("bucket_end"),
@@ -765,6 +786,7 @@ def update_and_load_pipeline_event_summaries(
     summary_stages: frozenset[str] = SUMMARY_STAGES,
     summary_profile: str = "default",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    summary_profile = _safe_str(summary_profile) or "default"
     raw_path = existing_or_gzip_path(raw_path)
     if not raw_path.exists():
         return [], {
@@ -782,6 +804,11 @@ def update_and_load_pipeline_event_summaries(
     is_gzip_raw = raw_path.suffix == ".gz"
     raw_inode = getattr(stat, "st_ino", None)
     manifest = _read_json(manifest_path)
+    summary_detail_level = (
+        PRODUCER_PARITY_DETAIL_LEVEL
+        if summary_profile == "producer_parity"
+        else DEFAULT_SUMMARY_DETAIL_LEVEL
+    )
     raw_offset = int(manifest.get("raw_offset") or 0)
     raw_size = max(int(stat.st_size), raw_offset) if is_gzip_raw else int(stat.st_size)
     stale_summary = (
@@ -789,6 +816,7 @@ def update_and_load_pipeline_event_summaries(
         or str(manifest.get("raw_path") or "") != str(raw_path)
         or int(manifest.get("raw_inode") or -1) != int(raw_inode or -1)
         or set(manifest.get("summary_stages") or ()) != set(summary_stages)
+        or str(manifest.get("summary_detail_level") or "") != summary_detail_level
         or raw_offset > raw_size
         or not summary_path.exists()
     )
@@ -833,7 +861,13 @@ def update_and_load_pipeline_event_summaries(
                 )
                 if event is not None:
                     key = _aggregate_key(event)
-                    aggregate = groups.setdefault(key, _new_aggregate(event))
+                    aggregate = groups.setdefault(
+                        key,
+                        _new_aggregate(
+                            event,
+                            include_diagnostics=(summary_profile != "producer_parity"),
+                        ),
+                    )
                     aggregate.add(event)
                     appended_source_events += 1
             last_good_offset = line_end
@@ -844,7 +878,10 @@ def update_and_load_pipeline_event_summaries(
     if groups:
         with summary_path.open("a", encoding="utf-8") as summary_handle:
             for key in sorted(groups):
-                row = groups[key].to_row(target_date=target_date)
+                row = groups[key].to_row(
+                    target_date=target_date,
+                    summary_detail_level=summary_detail_level,
+                )
                 summary_handle.write(
                     json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
                 )
@@ -863,7 +900,8 @@ def update_and_load_pipeline_event_summaries(
         "raw_size": final_raw_size,
         "summary_path": str(summary_path),
         "manifest_path": str(manifest_path),
-        "summary_profile": _safe_str(summary_profile) or "default",
+        "summary_profile": summary_profile,
+        "summary_detail_level": summary_detail_level,
         "summary_row_count": len(rows),
         "appended_raw_lines": appended_raw_lines,
         "appended_source_events": appended_source_events,
@@ -1007,7 +1045,10 @@ class ProducerSummaryCompactor:
         flush_last_event_at = ""
         with summary_path.open("a", encoding="utf-8") as handle:
             for key in sorted(self._groups):
-                row = self._groups[key].to_row(target_date=safe_date)
+                row = self._groups[key].to_row(
+                    target_date=safe_date,
+                    summary_detail_level=DEFAULT_SUMMARY_DETAIL_LEVEL,
+                )
                 row["schema_version"] = PRODUCER_SUMMARY_SCHEMA_VERSION
                 row["producer_mode"] = self.mode
                 row["source"] = "pipeline_event_logger"

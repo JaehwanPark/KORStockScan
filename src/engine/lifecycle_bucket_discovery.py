@@ -6836,6 +6836,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-suffix")
     parser.add_argument("--output-suffix")
     parser.add_argument(
+        "--print-summary",
+        action="store_true",
+        help="Print a compact completion summary instead of the full report payload.",
+    )
+    parser.add_argument(
         "--ai-review-provider",
         default=os.getenv(
             "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER",
@@ -6852,7 +6857,32 @@ def main(argv: list[str] | None = None) -> int:
         source_suffix=args.source_suffix,
         output_suffix=args.output_suffix,
     )
-    print(json.dumps(report, ensure_ascii=False))
+    output = report
+    if args.print_summary:
+        summary = (
+            report.get("summary") if isinstance(report.get("summary"), dict) else {}
+        )
+        output_key = str(
+            report.get("date")
+            or _artifact_key(target_date, args.output_suffix or args.source_suffix)
+        )
+        output = {
+            "report_type": report.get("report_type"),
+            "date": report.get("date"),
+            "target_date": report.get("target_date"),
+            "status": summary.get("status"),
+            "candidate_count": summary.get("candidate_count"),
+            "surfaced_candidate_count": summary.get("surfaced_candidate_count"),
+            "sim_auto_approved_count": summary.get("sim_auto_approved_count"),
+            "live_auto_apply_ready_count": summary.get("live_auto_apply_ready_count"),
+            "warning_count": len(report.get("warnings") or []),
+            "runtime_effect": report.get("runtime_effect"),
+            "artifacts": {
+                "json": str(discovery_report_path(output_key)),
+                "markdown": str(discovery_markdown_path(output_key)),
+            },
+        }
+    print(json.dumps(output, ensure_ascii=False))
     return 0 if report.get("summary", {}).get("status") == "pass" else 2
 
 

@@ -99,7 +99,21 @@ RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"
 RUN_ENTRY_SPLIT_ORDER_PLAN="${THRESHOLD_CYCLE_RUN_ENTRY_SPLIT_ORDER_PLAN:-true}"
 RUN_SCALE_IN_SPLIT_ORDER_PLAN="${THRESHOLD_CYCLE_RUN_SCALE_IN_SPLIT_ORDER_PLAN:-true}"
 RUN_ENTRY_AI_GATE_BACKTEST="${THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-true}"
-RUN_LIMIT_DOWN_WATCH_REPORT="${THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT:-true}"
+# The report is useful only when the source-only runtime observer produced its
+# candidate/tick provenance.  The postclose cron does not necessarily inherit
+# the bot's PREOPEN runtime env, so target-date candidate-source presence is
+# also accepted as factual evidence that the observer ran.  An explicit report
+# override remains authoritative.
+LIMIT_DOWN_WATCH_CANDIDATE_SOURCE="$PROJECT_DIR/data/report/limit_down_watch_candidate_source/limit_down_watch_candidate_source_${TARGET_DATE}.json"
+if [[ -n "${THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT:-}" ]]; then
+  RUN_LIMIT_DOWN_WATCH_REPORT="$THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT"
+elif [[ "${KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED:-false}" == "true" \
+     || "${KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED:-false}" == "1" \
+     || -s "$LIMIT_DOWN_WATCH_CANDIDATE_SOURCE" ]]; then
+  RUN_LIMIT_DOWN_WATCH_REPORT=true
+else
+  RUN_LIMIT_DOWN_WATCH_REPORT=false
+fi
 RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE:-true}"
 RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"
 RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE:-true}"
@@ -998,7 +1012,7 @@ if [ "$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" = "true" ] || [ "$RUN_ONE_SHARE_THRE
 fi
 if [ "$RUN_SCALP_ENTRY_ADM" = "true" ] || [ "$RUN_SCALP_ENTRY_ADM" = "1" ]; then
   wait_for_postclose_resources "scalp_entry_action_decision_matrix"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_entry_action_decision_matrix --date "$TARGET_DATE"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_entry_action_decision_matrix --date "$TARGET_DATE" --print-summary
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.md" \
@@ -1097,7 +1111,7 @@ if [ "$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT" = "true" ] || [ "$RUN_LDM_HYPOTHESI
 fi
 if [ "$RUN_LIFECYCLE_BUCKET_DISCOVERY" = "true" ] || [ "$RUN_LIFECYCLE_BUCKET_DISCOVERY" = "1" ]; then
   wait_for_postclose_resources "lifecycle_bucket_discovery"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_bucket_discovery --date "$TARGET_DATE"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_bucket_discovery --date "$TARGET_DATE" --print-summary
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.md" \
@@ -1149,7 +1163,8 @@ PY
       if ! run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_bucket_discovery \
         --target-date "$TARGET_DATE" \
         --source-suffix "$lifecycle_bucket_window" \
-        --output-suffix "$lifecycle_bucket_window"; then
+        --output-suffix "$lifecycle_bucket_window" \
+        --print-summary; then
         echo "[threshold-cycle] lifecycle_bucket_discovery_${lifecycle_bucket_window} failed; verifier will fail-closed if required" >&2
         continue
       fi
@@ -1185,7 +1200,7 @@ if [ "$RUN_LATENCY_CLASSIFIER_RECOMMENDATION" = "true" ] || [ "$RUN_LATENCY_CLAS
   if [ "${#SOURCE_ARGS[@]}" -gt 0 ]; then
     latency_args+=("${SOURCE_ARGS[@]}")
   fi
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.latency_classifier_recommendation "${latency_args[@]}"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.latency_classifier_recommendation "${latency_args[@]}" --print-summary
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/latency_classifier_recommendation/latency_classifier_recommendation_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/latency_classifier_recommendation/latency_classifier_recommendation_${TARGET_DATE}.md" \
@@ -1450,11 +1465,41 @@ if [ "$RUN_PATTERN_LAB_AI_REVIEW" = "true" ] || [ "$RUN_PATTERN_LAB_AI_REVIEW" =
   fi
 fi
 if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "1" ]; then
-  wait_for_postclose_resources "pipeline_event_verbosity"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE"
+  pipeline_verbosity_json="$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.json"
+  pipeline_verbosity_md="$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.md"
+  pipeline_verbosity_inputs=(
+    "$RAW_SOURCE"
+    "$PROJECT_DIR/src/engine/pipeline_event_verbosity_report.py"
+    "$PROJECT_DIR/src/engine/pipeline_event_summary.py"
+  )
+  pipeline_producer_summary="$PROJECT_DIR/data/pipeline_event_summaries/pipeline_event_producer_summary_${TARGET_DATE}.jsonl"
+  pipeline_producer_summary_gz="${pipeline_producer_summary}.gz"
+  pipeline_producer_manifest="$PROJECT_DIR/data/pipeline_event_summaries/pipeline_event_producer_summary_manifest_${TARGET_DATE}.json"
+  if [ -s "$pipeline_producer_summary" ]; then
+    pipeline_verbosity_inputs+=("$pipeline_producer_summary")
+  elif [ -s "$pipeline_producer_summary_gz" ]; then
+    pipeline_verbosity_inputs+=("$pipeline_producer_summary_gz")
+  fi
+  if [ -s "$pipeline_producer_manifest" ]; then
+    pipeline_verbosity_inputs+=("$pipeline_producer_manifest")
+  fi
+  pipeline_verbosity_refresh_decision="run"
+  if [ -s "$pipeline_verbosity_md" ] && json_is_valid "$pipeline_verbosity_json"; then
+    pipeline_verbosity_refresh_decision="$(threshold_cycle_ev_refresh_decision \
+      "$pipeline_verbosity_json" \
+      "$pipeline_verbosity_md" \
+      "$FORCE_DUPLICATE_REFRESH" \
+      "${pipeline_verbosity_inputs[@]}")"
+  fi
+  if [ "$pipeline_verbosity_refresh_decision" = "skip" ]; then
+    skip_triggered_step "pipeline_event_verbosity" "verified_artifacts_fresher_than_inputs"
+  else
+    wait_for_postclose_resources "pipeline_event_verbosity"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE"
+  fi
   wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.md" \
+    "$pipeline_verbosity_json" \
+    "$pipeline_verbosity_md" \
     "pipeline_event_verbosity"
 fi
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then

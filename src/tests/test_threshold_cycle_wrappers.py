@@ -16,6 +16,31 @@ def test_postclose_daily_ev_receives_disabled_report_scope():
     assert '--date "$TARGET_DATE" "${EV_SCOPE_ARGS[@]}"' in script
 
 
+def test_postclose_large_reports_use_compact_stdout_and_verified_refresh():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert (
+        'src.engine.scalp_entry_action_decision_matrix --date "$TARGET_DATE" --print-summary'
+        in script
+    )
+    assert (
+        'src.engine.lifecycle_bucket_discovery --date "$TARGET_DATE" --print-summary'
+        in script
+    )
+    assert (
+        'src.engine.latency_classifier_recommendation "${latency_args[@]}" --print-summary'
+        in script
+    )
+    assert "pipeline_verbosity_inputs=(" in script
+    assert '"$PROJECT_DIR/src/engine/pipeline_event_summary.py"' in script
+    assert '"$PROJECT_DIR/src/engine/pipeline_event_verbosity_report.py"' in script
+    assert 'json_is_valid "$pipeline_verbosity_json"' in script
+    assert (
+        'skip_triggered_step "pipeline_event_verbosity" "verified_artifacts_fresher_than_inputs"'
+        in script
+    )
+
+
 def test_claude_pattern_lab_wrapper_requires_explicit_target_date():
     env = dict(os.environ)
     env.pop("ANALYSIS_START_DATE", None)
@@ -463,10 +488,15 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         'RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE:-true}"'
         in script
     )
+    assert 'LIMIT_DOWN_WATCH_CANDIDATE_SOURCE="$PROJECT_DIR/data/report/' in script
+    assert 'limit_down_watch_candidate_source_${TARGET_DATE}.json"' in script
+    assert '[[ -n "${THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT:-}" ]]' in script
     assert (
-        'RUN_LIMIT_DOWN_WATCH_REPORT="${THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT:-true}"'
+        'RUN_LIMIT_DOWN_WATCH_REPORT="$THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT"'
         in script
     )
+    assert '|| -s "$LIMIT_DOWN_WATCH_CANDIDATE_SOURCE"' in script
+    assert "RUN_LIMIT_DOWN_WATCH_REPORT=false" in script
     assert "src.engine.monitoring.limit_down_watch_report" in script
     assert (
         '"$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.json"'
