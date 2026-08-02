@@ -15,6 +15,14 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     )
 
 
+def test_protect_trailing_summary_matches_existing_runtime_guard():
+    assert "기존 적용 유지" in mod._BASELINE_APPLICATION["protect_trailing_smoothing"]
+    assert (
+        mod._SCALPING_GATE_REVIEW["protect_trailing_smoothing"]["gate_review_class"]
+        == "existing_runtime_guard"
+    )
+
+
 def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     env_dir = tmp_path / "runtime_env"

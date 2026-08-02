@@ -8386,6 +8386,34 @@ def test_write_runtime_env_strips_all_retired_runtime_keys(tmp_path, monkeypatch
     assert not any(key in rendered for key in mod.RETIRED_RUNTIME_ENV_KEYS)
 
 
+def test_write_runtime_env_omits_removed_watching_family_from_selected_labels(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+
+    mod._write_runtime_env(
+        "2026-07-20",
+        {
+            "source_date": "2026-07-16",
+            "generated_at": "2026-07-20T08:00:00+09:00",
+            "auto_apply_selected": [
+                {"family": "ai_watching_score_smoothing_report_only"},
+                {"family": "holding_flow_ofi_smoothing"},
+            ],
+        },
+        {},
+    )
+
+    runtime_manifest = json.loads(
+        mod.runtime_env_manifest_path("2026-07-20").read_text(encoding="utf-8")
+    )
+    assert runtime_manifest["selected_families"] == ["holding_flow_ofi_smoothing"]
+    assert runtime_manifest["removed_selected_families_ignored"] == [
+        "ai_watching_score_smoothing_report_only"
+    ]
+
+
 def test_verify_runtime_env_handoff_missing_key(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

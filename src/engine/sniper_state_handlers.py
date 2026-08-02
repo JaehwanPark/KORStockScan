@@ -11305,6 +11305,30 @@ def _median_price(values):
     return (cleaned[mid - 1] + cleaned[mid]) / 2.0
 
 
+def _protect_trailing_smoothing_contract_fields(
+    *,
+    stage: str,
+    runtime_effect: bool,
+) -> dict[str, Any]:
+    """Describe the authority of the already-active trailing confirmation guard."""
+    return {
+        "metric_role": "runtime_exit_confirmation_guard_attribution",
+        "decision_authority": "real_scalping_protect_trailing_confirmation_guard",
+        "window_policy": "same_position_recent_price_samples_with_emergency_bypass",
+        "sample_floor": "configured_protect_trailing_min_samples_and_span",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": f"{stage}_contract_fields_present",
+        "runtime_effect": bool(runtime_effect),
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "standalone_order_submit|runtime_threshold_apply|provider_route_change|"
+            "bot_restart|hard_stop_bypass|emergency_stop_bypass"
+        ),
+    }
+
+
 def _protect_trailing_break_confirmed(
     stock,
     code,
@@ -11379,10 +11403,15 @@ def _protect_trailing_break_confirmed(
         and below_ratio >= below_ratio_min
     )
     if confirmed:
+        runtime_contract = _protect_trailing_smoothing_contract_fields(
+            stage="protect_trailing_smooth_confirmed",
+            runtime_effect=False,
+        )
         _log_holding_pipeline(
             stock,
             code,
             "protect_trailing_smooth_confirmed",
+            **runtime_contract,
             threshold_family="protect_trailing_smoothing",
             exit_rule_candidate="protect_trailing_stop",
             curr_price=curr_price,
@@ -11411,19 +11440,15 @@ def _protect_trailing_break_confirmed(
                 "last_protect_trailing_smooth_hold_log_ts": float(now_ts or time.time())
             },
         )
-        observation_contract = {
-            **_build_observation_contract_fields("ops_volume_diagnostic"),
-            "decision_authority": "protect_trailing_smoothing_observation_only",
-            "source_quality_gate": "protect_trailing_smooth_hold_contract_fields_present",
-        }
+        runtime_contract = _protect_trailing_smoothing_contract_fields(
+            stage="protect_trailing_smooth_hold",
+            runtime_effect=True,
+        )
         _log_holding_pipeline(
             stock,
             code,
             "protect_trailing_smooth_hold",
-            **observation_contract,
-            allowed_runtime_apply=False,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
+            **runtime_contract,
             threshold_family="protect_trailing_smoothing",
             exit_rule_candidate="protect_trailing_stop",
             curr_price=curr_price,
@@ -28445,21 +28470,35 @@ def _holding_flow_exact_correlation_fields(
     flow_result: dict | None = None,
 ) -> dict[str, Any]:
     result = flow_result if isinstance(flow_result, dict) else {}
-    trace_id = str(
-        result.get("ai_decision_trace_id")
-        or stock.get("holding_flow_last_ai_decision_trace_id")
-        or ""
-    )
-    snapshot_id = str(
-        result.get("ai_input_snapshot_id")
-        or result.get("ai_market_snapshot_id")
-        or result.get("ai_decision_snapshot_id")
-        or stock.get("holding_flow_last_ai_input_snapshot_id")
-        or ""
-    )
+    trace_id = _non_placeholder_source_value(result.get("ai_decision_trace_id"))
+    if not trace_id:
+        trace_id = _non_placeholder_source_value(
+            stock.get("holding_flow_last_ai_decision_trace_id")
+        )
+    snapshot_id = ""
+    for candidate in (
+        result.get("ai_input_snapshot_id"),
+        result.get("ai_market_snapshot_id"),
+        result.get("ai_decision_snapshot_id"),
+        stock.get("holding_flow_last_ai_input_snapshot_id"),
+    ):
+        snapshot_id = _non_placeholder_source_value(candidate)
+        if snapshot_id:
+            break
+    snapshot_id_source = "market_snapshot_id" if snapshot_id else ""
+    if not snapshot_id:
+        payload_sha256 = _non_placeholder_source_value(
+            result.get("ai_input_payload_sha256")
+        ) or _non_placeholder_source_value(
+            stock.get("holding_flow_last_ai_input_payload_sha256")
+        )
+        if re.fullmatch(r"[0-9a-fA-F]{64}", payload_sha256):
+            snapshot_id = f"payload_sha256:{payload_sha256}"
+            snapshot_id_source = "input_payload_sha256"
     return {
         "ai_decision_trace_id": trace_id or "-",
         "ai_input_snapshot_id": snapshot_id or "-",
+        "ai_input_snapshot_id_source": snapshot_id_source or "missing",
     }
 
 
@@ -46887,6 +46926,9 @@ def _evaluate_holding_flow_override(
                 or flow_result.get("ai_decision_snapshot_id")
                 or ""
             ),
+            "holding_flow_last_ai_input_payload_sha256": str(
+                flow_result.get("ai_input_payload_sha256") or ""
+            ),
             "holding_flow_last_context_signature": (
                 dict(holding_context.get("flow_signature") or {})
                 if isinstance(holding_context, dict)
@@ -46968,6 +47010,9 @@ def _evaluate_holding_flow_override(
             "forbidden_uses",
         }
     }
+    holding_flow_ai_ops_fields.update(
+        _holding_flow_exact_correlation_fields(stock, flow_result)
+    )
     _log_holding_pipeline(
         stock,
         code,

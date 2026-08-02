@@ -8092,6 +8092,14 @@ def _build_entry_ofi_ai_smoothing_family(events: list[dict]) -> dict:
     return {
         "family": "entry_ofi_ai_smoothing",
         "stage": "entry",
+        "runtime_baseline_active": bool(
+            getattr(
+                TRADING_RULES,
+                "SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED",
+                True,
+            )
+        ),
+        "runtime_authority": "bounded_entry_skip_to_defensive_postprocessor",
         "sample": {
             "raw_skip": len(raw_skip),
             "demoted": len(demoted),
@@ -8128,6 +8136,7 @@ def _build_entry_ofi_ai_smoothing_family(events: list[dict]) -> dict:
         "apply_mode": "manifest_only" if sample_ready else "observe_only",
         "notes": [
             "P2 raw SKIP 중 confidence 80~89와 stale/unhealthy/insufficient 제외 표본만 본다.",
+            "entry OFI는 각 AI 응답의 단일 orderbook snapshot을 판정하며, ofi_persistence_required는 holding 공통 설정 표시일 뿐 entry의 cross-call persistence 권한이 아니다.",
             "추천값은 daily + rolling 방향 일치와 family sample floor가 맞을 때만 manifest 후보로 산출한다.",
             "ThresholdOpsTransition0506 전에는 report/manifest가 runtime env/code를 자동 변경하지 않는다.",
             "SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED 기본 OFF는 유지한다.",
@@ -8932,6 +8941,10 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
     return {
         "family": "protect_trailing_smoothing",
         "stage": "holding_exit",
+        "runtime_baseline_active": bool(
+            getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_ENABLED", True)
+        ),
+        "runtime_authority": "real_scalping_protect_trailing_confirmation_guard",
         "sample": {
             "smooth_hold": len(holds),
             "smooth_confirmed": len(confirmed),
@@ -8945,6 +8958,7 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
         "recommended": recommended,
         "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
         "notes": [
+            "protect_trailing confirmation guard는 기존 런타임에 적용되어 있고, 여기의 apply_mode는 guard ON/OFF가 아니라 파라미터 조정 권한만 뜻한다.",
             "protect_trailing smoothing 값은 장중 자동 변경하지 않고 장후 report와 다음 장전 manifest 후보로만 산출한다.",
             "emergency_pct 이탈은 평탄화 대상이 아니므로 별도 safety로 유지한다.",
             "sample floor 미달이면 추천값은 direction-only이며 리노공업 단일 케이스로 live 재조정하지 않는다.",
@@ -14916,6 +14930,16 @@ def build_daily_threshold_cycle_report(
             "current": family["current"],
             "recommended": family["recommended"],
             "candidate_grid": family.get("candidate_grid", []),
+            **(
+                {"runtime_baseline_active": family["runtime_baseline_active"]}
+                if "runtime_baseline_active" in family
+                else {}
+            ),
+            **(
+                {"runtime_authority": family["runtime_authority"]}
+                if "runtime_authority" in family
+                else {}
+            ),
             **(
                 {"implementation_status": family["implementation_status"]}
                 if "implementation_status" in family

@@ -72,6 +72,23 @@ def _ws():
     }
 
 
+def test_holding_flow_exact_correlation_uses_payload_hash_without_market_snapshot():
+    fields = handlers._holding_flow_exact_correlation_fields(
+        {},
+        {
+            "ai_decision_trace_id": "holding-trace-payload",
+            "ai_input_snapshot_id": "-",
+            "ai_input_payload_sha256": "a" * 64,
+        },
+    )
+
+    assert fields == {
+        "ai_decision_trace_id": "holding-trace-payload",
+        "ai_input_snapshot_id": f"payload_sha256:{'a' * 64}",
+        "ai_input_snapshot_id_source": "input_payload_sha256",
+    }
+
+
 def _trailing_continuation_micro_fields():
     return {
         "holding_flow_micro_estimator_source_state": "fresh_ws_order_flow_delta",

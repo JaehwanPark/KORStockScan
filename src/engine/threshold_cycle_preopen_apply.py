@@ -5459,6 +5459,35 @@ def _write_runtime_env(
     ]
     for key in sorted(env_overrides):
         lines.append(f"export {key}={shlex.quote(str(env_overrides[key]))}")
+    selected_items = [
+        *(manifest.get("auto_apply_selected") or []),
+        *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
+        *((manifest.get("scalp_sim_auto_approval") or {}).get("selected") or []),
+        *(
+            (manifest.get("scalp_sim_scale_in_window_approval") or {}).get("selected")
+            or []
+        ),
+        *((manifest.get("runtime_apply_bridge") or {}).get("selected") or []),
+        *((manifest.get("lifecycle_bucket_discovery") or {}).get("selected") or []),
+        *((manifest.get("swing_sim_auto_approval") or {}).get("selected") or []),
+        *(
+            [manifest.get("entry_cancel_wait_runtime")]
+            if (manifest.get("entry_cancel_wait_runtime") or {}).get("selected")
+            else []
+        ),
+    ]
+    selected_families: list[str] = []
+    removed_selected_families: list[str] = []
+    for item in selected_items:
+        family = str((item or {}).get("family") or "").strip()
+        if not family:
+            continue
+        if family in REMOVED_CALIBRATION_FAMILIES:
+            if family not in removed_selected_families:
+                removed_selected_families.append(family)
+            continue
+        if family not in selected_families:
+            selected_families.append(family)
     runtime_env_path(target_date).write_text("\n".join(lines) + "\n", encoding="utf-8")
     runtime_env_manifest_path(target_date).write_text(
         json.dumps(
@@ -5471,53 +5500,8 @@ def _write_runtime_env(
                 "generated_at": manifest.get("generated_at"),
                 "env_file": str(runtime_env_path(target_date)),
                 "env_overrides": env_overrides,
-                "selected_families": [
-                    item.get("family")
-                    for item in [
-                        *(manifest.get("auto_apply_selected") or []),
-                        *(
-                            (manifest.get("swing_runtime_approval") or {}).get(
-                                "selected"
-                            )
-                            or []
-                        ),
-                        *(
-                            (manifest.get("scalp_sim_auto_approval") or {}).get(
-                                "selected"
-                            )
-                            or []
-                        ),
-                        *(
-                            (
-                                manifest.get("scalp_sim_scale_in_window_approval") or {}
-                            ).get("selected")
-                            or []
-                        ),
-                        *(
-                            (manifest.get("runtime_apply_bridge") or {}).get("selected")
-                            or []
-                        ),
-                        *(
-                            (manifest.get("lifecycle_bucket_discovery") or {}).get(
-                                "selected"
-                            )
-                            or []
-                        ),
-                        *(
-                            (manifest.get("swing_sim_auto_approval") or {}).get(
-                                "selected"
-                            )
-                            or []
-                        ),
-                        *(
-                            [manifest.get("entry_cancel_wait_runtime")]
-                            if (manifest.get("entry_cancel_wait_runtime") or {}).get(
-                                "selected"
-                            )
-                            else []
-                        ),
-                    ]
-                ],
+                "selected_families": selected_families,
+                "removed_selected_families_ignored": removed_selected_families,
             },
             ensure_ascii=False,
             indent=2,

@@ -20589,13 +20589,14 @@ def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     )
     assert (
         hold_fields["decision_authority"]
-        == "protect_trailing_smoothing_observation_only"
+        == "real_scalping_protect_trailing_confirmation_guard"
     )
     assert (
         hold_fields["source_quality_gate"]
         == "protect_trailing_smooth_hold_contract_fields_present"
     )
     assert hold_fields["allowed_runtime_apply"] is False
+    assert hold_fields["runtime_effect"] is True
     assert hold_fields["actual_order_submitted"] is False
     assert hold_fields["broker_order_forbidden"] is True
 
@@ -20713,7 +20714,7 @@ def test_protect_trailing_confirms_sustained_smoothed_break(monkeypatch):
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = None
 
-    calls = {"sell": 0}
+    calls = {"sell": 0, "stages": []}
     monkeypatch.setattr(
         state_handlers,
         "can_consider_scale_in",
@@ -20726,6 +20727,11 @@ def test_protect_trailing_confirms_sustained_smoothed_break(monkeypatch):
             calls.__setitem__("sell", calls["sell"] + 1)
             or {"return_code": "0", "ord_no": "S1"}
         ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: calls["stages"].append((stage, fields)),
     )
 
     stock = {
@@ -20757,6 +20763,17 @@ def test_protect_trailing_confirms_sustained_smoothed_break(monkeypatch):
     )
 
     assert calls["sell"] == 1
+    confirmed_fields = next(
+        fields
+        for stage, fields in calls["stages"]
+        if stage == "protect_trailing_smooth_confirmed"
+    )
+    assert (
+        confirmed_fields["decision_authority"]
+        == "real_scalping_protect_trailing_confirmation_guard"
+    )
+    assert confirmed_fields["runtime_effect"] is False
+    assert confirmed_fields["allowed_runtime_apply"] is False
 
 
 def test_holding_flow_override_candidate_clears_when_exit_candidate_resolves(

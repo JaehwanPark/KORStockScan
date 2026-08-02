@@ -368,6 +368,11 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     assert whipsaw_candidate["window_policy"]["daily_only_allowed"] is False
     protect_trailing = report["threshold_snapshot"]["protect_trailing_smoothing"]
     assert protect_trailing["apply_ready"] is True
+    assert protect_trailing["runtime_baseline_active"] is True
+    assert (
+        protect_trailing["runtime_authority"]
+        == "real_scalping_protect_trailing_confirmation_guard"
+    )
     assert protect_trailing["recommended"]["min_samples"] >= 3
     assert protect_trailing["recommended"]["buffer_pct"] == 1.0
     scalp_trailing = report["threshold_snapshot"]["scalp_trailing_take_profit"]
@@ -3514,6 +3519,11 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
     entry_family = report["threshold_snapshot"]["entry_ofi_ai_smoothing"]
     assert entry_family["apply_ready"] is True
     assert entry_family["apply_mode"] == "manifest_only"
+    assert entry_family["runtime_baseline_active"] is True
+    assert (
+        entry_family["runtime_authority"]
+        == "bounded_entry_skip_to_defensive_postprocessor"
+    )
     assert entry_family["sample"]["demoted"] == 6
     assert entry_family["sample"]["demoted_submitted"] == 6
     assert entry_family["sample"]["demoted_completed"] == 6

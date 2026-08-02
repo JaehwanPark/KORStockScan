@@ -339,17 +339,17 @@ def test_protect_trailing_smooth_hold_contract_passes(monkeypatch, tmp_path):
             _event(
                 "protect_trailing_smooth_hold",
                 {
-                    "metric_role": "ops_volume_diagnostic",
-                    "decision_authority": "protect_trailing_smoothing_observation_only",
-                    "window_policy": "same_day_intraday_events",
-                    "sample_floor": 1,
-                    "primary_decision_metric": "source_quality_gate",
+                    "metric_role": "runtime_exit_confirmation_guard_attribution",
+                    "decision_authority": "real_scalping_protect_trailing_confirmation_guard",
+                    "window_policy": "same_position_recent_price_samples_with_emergency_bypass",
+                    "sample_floor": "configured_protect_trailing_min_samples_and_span",
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
                     "source_quality_gate": "protect_trailing_smooth_hold_contract_fields_present",
-                    "runtime_effect": False,
+                    "runtime_effect": True,
                     "allowed_runtime_apply": False,
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
-                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                    "forbidden_uses": "standalone_order_submit/runtime_threshold_apply/provider_route_change/bot_restart/hard_stop_bypass/emergency_stop_bypass",
                     "threshold_family": "protect_trailing_smoothing",
                     "exit_rule_candidate": "protect_trailing_stop",
                     "curr_price": 10000,
@@ -368,13 +368,50 @@ def test_protect_trailing_smooth_hold_contract_passes(monkeypatch, tmp_path):
                     "peak_profit": "+0.88",
                     "emergency_pct": "-3.00",
                 },
-            )
+            ),
+            _event(
+                "protect_trailing_smooth_confirmed",
+                {
+                    "metric_role": "runtime_exit_confirmation_guard_attribution",
+                    "decision_authority": "real_scalping_protect_trailing_confirmation_guard",
+                    "window_policy": "same_position_recent_price_samples_with_emergency_bypass",
+                    "sample_floor": "configured_protect_trailing_min_samples_and_span",
+                    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                    "source_quality_gate": "protect_trailing_smooth_confirmed_contract_fields_present",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "forbidden_uses": "standalone_order_submit/runtime_threshold_apply/provider_route_change/bot_restart/hard_stop_bypass/emergency_stop_bypass",
+                    "threshold_family": "protect_trailing_smoothing",
+                    "exit_rule_candidate": "protect_trailing_stop",
+                    "curr_price": 9900,
+                    "trailing_stop_price": "9950",
+                    "buffered_stop_price": "9850",
+                    "median_price": "9840",
+                    "sample_count": 4,
+                    "sample_span_sec": 8,
+                    "below_ratio": "0.75",
+                    "min_below_ratio": "0.67",
+                    "window_sec": 20,
+                    "min_span_sec": 8,
+                    "min_samples": 3,
+                    "buffer_pct": "1.00",
+                    "profit_rate": "+0.20",
+                    "peak_profit": "+1.20",
+                    "emergency_pct": "-2.00",
+                },
+            ),
         ],
     )
 
     report = audit.build_observation_source_quality_audit("2026-07-15")
 
     assert report["stage_contracts"]["protect_trailing_smooth_hold"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["protect_trailing_smooth_confirmed"]["status"]
+        == "pass"
+    )
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
 
