@@ -82,6 +82,8 @@ def _payload(endpoint="holding_score"):
             "position_context": {"buy_qty": 1, "buy_price": 100},
             "holding_decision_context": {
                 "schema": "holding_decision_context_v1",
+                "venue": "KRX",
+                "session": "krx_regular",
                 "execution_pnl": {
                     "remaining_qty": 1,
                     "average_entry_price": 100,
@@ -106,6 +108,8 @@ def _payload(endpoint="holding_score"):
         else {
             "entry_candle_context": {
                 "schema": "entry_candle_context_v1",
+                "venue": "KRX",
+                "session": "krx_regular",
                 "input_bundle_version": "scalping_multi_timeframe_context_v1",
                 "bars": [{"t": "11:59", "c": 100, "forming": False}],
             }
@@ -115,6 +119,8 @@ def _payload(endpoint="holding_score"):
         "endpoint": endpoint,
         "payload_sha256": f"payload-{endpoint}",
         "replay_exact": True,
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
         "sanitized_user_input": context,
     }
 

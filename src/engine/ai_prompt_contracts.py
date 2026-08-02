@@ -617,6 +617,12 @@ DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION = "decision_quality_v2_9_antic
 DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION = (
     "decision_quality_v2_9_1_anticipatory"
 )
+DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION = (
+    "decision_quality_v2_10_bounded_opportunity"
+)
+DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION = (
+    "decision_quality_v2_11_clean_continuation_probe"
+)
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -1154,4 +1160,111 @@ def decision_quality_v2_9_1_anticipatory_system_prompt(stage: str) -> str:
         decision_quality_v2_9_anticipatory_system_prompt(stage)
         + "\n\n"
         + _DECISION_QUALITY_V2_9_1_CONTRACT_CLOSURE_RULES
+    )
+
+
+_DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_RULES = """
+V2.10 bounded-opportunity experiment:
+1. These V2.10 rules replace the V2.8/V2.9.1 full-entry BUY restrictions only
+   for the offline one-share probe label described below. All blocking-risk and
+   source-quality rules remain in force. This is an offline paired-replay
+   classifier. BUY means only that a
+   counterfactual one-share passive probe was worth presenting to the unchanged
+   downstream submit guards. It is not a full-entry recommendation, an order,
+   or permission to bypass freshness, spread/depth, broker, account, order,
+   cooldown, quantity, post-probe, holding, exit, or hard-safety guards.
+2. Optimize opportunity-adjusted EV, not certainty and not the number of DROP
+   decisions. A tolerable adverse-first path may still be a useful one-share
+   probe when independent edge dimensions agree and the remaining bounded
+   upside covers downside plus conservative execution cost.
+3. A bounded opportunity exists only when source_mode is fresh_dual or
+   degraded_but_bounded, the quote is executable enough to classify, spread is
+   normal or wide_but_observable, and at least one of these exact conditions is
+   present: eligible anticipatory reversal; structural_edge_floor without
+   blocking overextension; orderly pullback recovery; trusted supportive
+   trigger. Never create an opportunity from one score or buy-pressure ratio.
+4. For a bounded opportunity, BUY may retain adverse_risk=high. High means a
+   one-share exploration risk that downstream guards must still approve;
+   blocking remains an unconditional DROP. Never weaken high or blocking risk
+   to make BUY valid.
+5. For the offline one-share probe only, trigger=confirmed means the bounded
+   opportunity bundle is sufficient to present to downstream guards. It does
+   not claim that a full trend reversal, executable quote, or broker submit is
+   guaranteed. Keep reversal, pullback_recovery, or continuation in setup.
+6. A fresh wide_but_observable spread is adverse execution evidence, not alpha
+   evidence and not an automatic DROP. Keep liquidity=adverse and subtract
+   conservative_execution_cost_pct. Extreme_or_unusable or unavailable spread
+   cannot produce BUY.
+7. Use BUY only when adjusted expected upside divided by adjusted absolute
+   downside is at least 1.00 after conservative execution cost. This is a
+   positive-EV exploration floor for one share, not the 1.25 full-entry floor.
+   Otherwise use WAIT/recovery_required when edge remains but timing is not yet
+   worth a probe, or DROP when edge failed, risk is blocking, or adjusted EV is
+   unfavorable.
+8. source_mode=degraded_but_bounded caps confidence at 60. A high-risk BUY caps
+   confidence at 65. source_mode=unusable, source conflict, venue/session
+   mismatch, stale quote, blocking overextension, and failed structure remain
+   fail-closed.
+9. Keep reason_codes inside the canonical enum and aligned with evidence.trigger.
+   Do not emit key=value tokens. Preserve deterministic risk facts even when
+   choosing BUY.
+10. One sample updates cumulative offline learning, but no sample count grants
+    runtime authority. Runtime effect, prompt promotion, provider/model changes,
+    thresholds, order price/quantity, and bot state remain outside this artifact.
+""".strip()
+
+
+def decision_quality_v2_10_bounded_opportunity_system_prompt(stage: str) -> str:
+    """Return the offline one-share bounded-opportunity candidate prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.10 currently supports entry only")
+    return (
+        decision_quality_v2_9_1_anticipatory_system_prompt(normalized)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_RULES
+    )
+
+
+_DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_RULES = """
+V2.11 clean-continuation one-share probe experiment:
+1. Preserve every V2.10 source-quality, blocker, and downstream-guard rule.
+   This candidate does not delegate failed structure, large sell prints,
+   blocking overextension, stale/conflicting inputs, or extreme spread.
+2. Read clean_continuation_probe from anticipatory_reversal_analysis_v1. Its
+   eligible=true value is deterministic evidence that the same exact payload
+   has fresh candles/quote/tape, normal observable spread, no hard blocker,
+   positive completed 3m/5m/10m returns, structural edge, a shallow completed-
+   bar drawdown, reference reclaim, and at least two independent precursors.
+3. For eligible=true when the truthful after-cost magnitude test in rule 4 also
+   passes, BUY means only "present one passive share to unchanged downstream
+   submit guards." In that case return EDGE/BUY with trigger=confirmed and
+   low/moderate/high but never blocking adverse_risk. Tape can remain mixed or
+   adverse; do not invent supportive tape.
+4. For this narrow clean-continuation cohort, the exploratory after-cost
+   upside/downside magnitude floor is 0.75. Re-estimate both magnitudes from the
+   exact payload; do not copy the floor, fabricate an estimate, or weaken an
+   observed risk. If the evidence genuinely cannot support that floor, return
+   the truthful WAIT or DROP response. It remains a comparable no-exposure
+   result and is charged to clean-continuation missed-opportunity attribution;
+   the semantic gate must not force or fabricate BUY.
+5. eligible=false follows V2.10 without any new BUY permission. A score,
+   buy-pressure ratio, wide spread, or blocker never becomes edge evidence.
+6. Runtime effect, prompt promotion, provider/model changes, thresholds, order
+   price/quantity, broker guards, and bot state remain forbidden. Outcome labels
+   are not present in the candidate input and must never influence the action.
+""".strip()
+
+
+def decision_quality_v2_11_clean_continuation_system_prompt(stage: str) -> str:
+    """Return the offline clean-continuation one-share candidate prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.11 currently supports entry only")
+    return (
+        decision_quality_v2_10_bounded_opportunity_system_prompt(normalized)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_RULES
     )

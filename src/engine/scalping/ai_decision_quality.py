@@ -27,6 +27,8 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
     DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
@@ -34,6 +36,8 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_8_detailed_system_prompt,
     decision_quality_v2_9_anticipatory_system_prompt,
     decision_quality_v2_9_1_anticipatory_system_prompt,
+    decision_quality_v2_10_bounded_opportunity_system_prompt,
+    decision_quality_v2_11_clean_continuation_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
@@ -44,6 +48,7 @@ CONTROL_SCHEMA = "ai_decision_quality_control_v1"
 LABEL_REPORT_SCHEMA = "ai_decision_outcome_labels_v1"
 BASELINE_SCHEMA = "ai_decision_quality_baseline_v1"
 PAIRED_SCHEMA = "ai_prompt_paired_replay_v1"
+DAILY_MATERIALIZATION_SCHEMA = "ai_decision_quality_daily_materialization_v1"
 DETAILED_PAIRED_SCHEMA = "ai_prompt_detailed_paired_replay_v1"
 EXACT_PAYLOAD_ANALYSIS_SCHEMA = "exact_payload_analysis_v1"
 ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA = "anticipatory_reversal_analysis_v1"
@@ -51,6 +56,7 @@ SCORE_CORRELATION_SCHEMA = "ai_score_outcome_correlation_v1"
 RECOVERY_TRIGGER_SCHEMA = "ai_prompt_recovery_trigger_labels_v1"
 REVERSAL_SEQUENCE_SCHEMA = "ai_entry_reversal_sequence_replay_v1"
 REVERSAL_SEQUENCE_CONTEXT_SCHEMA = "entry_reversal_sequence_context_v1"
+PAIRED_OUTCOME_RECOVERY_SCHEMA = "same_trace_paired_outcome_recovery_v1"
 INPUT_BUNDLE_VERSION = "scalping_multi_timeframe_context_v1"
 ENTRY_CONTEXT_SCHEMA = "entry_candle_context_v1"
 HOLDING_CONTEXT_SCHEMA = "holding_decision_context_v1"
@@ -86,6 +92,8 @@ RECOVERY_TRIGGER_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_recovery_trigger"
 REVERSAL_SEQUENCE_REPORT_DIR = DATA_DIR / "report" / "ai_entry_reversal_sequence_replay"
 PAIRED_REPLAY_MIN_ROWS = 30
 PAIRED_REPLAY_MIN_SYMBOLS = 10
+PAIRED_LEARNING_MIN_ROWS = 1
+PAIRED_LEARNING_MIN_SYMBOLS = 1
 PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS = 10
 PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS = 3
 ANTICIPATORY_LEARNING_MIN_ROWS = 1
@@ -93,6 +101,12 @@ ANTICIPATORY_LEARNING_MIN_SYMBOLS = 1
 CANDIDATE_SCHEMA_MAX_ATTEMPTS = 4
 HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
 ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
+BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
+    "bounded_opportunity_offline_semantic_v1"
+)
+BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION = (
+    "bounded_opportunity_fail_safe_repair_v2"
+)
 ANTICIPATORY_SEMANTIC_REPAIR_VERSION = (
     "anticipatory_reversal_contract_closure_repair_v1"
 )
@@ -126,6 +140,28 @@ OFFLINE_CONTRACT = {
         "counterfactual_realized_pnl_merge",
         "bot_restart",
     ],
+}
+
+DECISION_QUALITY_OBJECTIVE = {
+    "objective": (
+        "maximize_cumulative_net_profit_by_exploring_more_positive_edge_"
+        "opportunities_with_tolerable_risk_and_downstream_protection"
+    ),
+    "not_objective": "maximize_drop_wait_or_eliminate_all_risk",
+    "exploration_unit": "one_share_probe_intent_before_existing_submit_guards",
+    "downstream_protection": [
+        "fresh_quote_and_stale_conflict_guard",
+        "broker_account_order_quantity_cooldown_guards",
+        "post_probe_direction_and_price_resolver",
+        "holding_exit_and_hard_safety_guards",
+    ],
+    "success_metrics": [
+        "missed_upside_reduction",
+        "adverse_first_exposure_not_increased",
+        "positive_source_quality_adjusted_exposure_ev_pct",
+        "notional_fill_joined_net_profit_improvement",
+    ],
+    "artifact_generation_is_performance": False,
 }
 
 RECOVERY_TRIGGER_CONTRACT = {
@@ -884,6 +920,7 @@ def build_control_manifest(
     traces: list[dict[str, Any]],
     payloads: list[dict[str, Any]],
     control_prompt_versions: dict[str, str] | None = None,
+    control_signatures: dict[str, dict[str, Any]] | None = None,
     promotion_artifact_path: Path | None = None,
     promotion_source_date: str | None = None,
 ) -> dict[str, Any]:
@@ -898,6 +935,11 @@ def build_control_manifest(
         str(endpoint).strip(): str(version).strip()
         for endpoint, version in (control_prompt_versions or {}).items()
         if str(endpoint).strip() and str(version).strip()
+    }
+    selected_signatures = {
+        str(endpoint).strip(): dict(signature)
+        for endpoint, signature in (control_signatures or {}).items()
+        if str(endpoint).strip() and isinstance(signature, dict)
     }
     for trace in traces:
         payload_hash = str(trace.get("payload_sha256") or "")
@@ -934,6 +976,29 @@ def build_control_manifest(
             and str(trace.get("prompt_version") or "") != selected_prompt_version
         ):
             excluded["control_prompt_version_not_selected"] += 1
+            continue
+        selected_signature = selected_signatures.get(endpoint)
+        observed_signature = {
+            field: trace.get(field)
+            for field in (
+                "prompt_version",
+                "prompt_sha256",
+                "provider_actual",
+                "model",
+                "request_temperature",
+                "request_reasoning_effort",
+            )
+        }
+        observed_signature["response_schema"] = (
+            trace.get("schema_name")
+            or trace.get("response_schema")
+            or "captured_runtime_contract"
+        )
+        if selected_signature and any(
+            observed_signature.get(field) != expected
+            for field, expected in selected_signature.items()
+        ):
+            excluded["control_signature_not_selected"] += 1
             continue
         grouped[
             str(trace.get("endpoint") or trace.get("decision_stage") or "unknown")
@@ -1031,6 +1096,7 @@ def build_control_manifest(
         "promotion_rollover": resolved_promotion_date != target_date,
         "promotion_sha256": _sha256(promotion) if promotion else None,
         "selected_control_prompt_versions": selected_prompt_versions,
+        "selected_control_signatures": selected_signatures,
         "controls": controls,
         "supplemental_semantic_controls": supplemental_controls,
         "supplemental_semantic_control_authority": (
@@ -1045,6 +1111,102 @@ def build_control_manifest(
     }
     manifest["control_manifest_sha256"] = _sha256(manifest)
     return manifest
+
+
+def _latest_exact_control_prompt_versions(
+    *,
+    promotion: dict[str, Any],
+    traces: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Select the latest exact natural prompt version for each endpoint."""
+
+    promoted_at = _parse_ts(promotion.get("promoted_at"))
+    payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
+    selected: dict[str, tuple[datetime, int, str]] = {}
+    for index, trace in enumerate(traces):
+        endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+        prompt_version = str(trace.get("prompt_version") or "").strip()
+        payload_hash = str(trace.get("payload_sha256") or "")
+        payload = payload_by_key.get(
+            (payload_hash, endpoint),
+            payload_by_unique_hash.get(payload_hash, {}),
+        )
+        if (
+            not endpoint
+            or not prompt_version
+            or _exact_trace_payload_findings(
+                trace=trace,
+                payload=payload,
+                promoted_at=promoted_at,
+            )
+        ):
+            continue
+        observed_at = _parse_ts(
+            trace.get("decision_ts")
+            or trace.get("captured_at")
+            or trace.get("timestamp")
+        ) or datetime.min.replace(tzinfo=KST)
+        candidate = (observed_at, index, prompt_version)
+        if endpoint not in selected or candidate[:2] > selected[endpoint][:2]:
+            selected[endpoint] = candidate
+    return {endpoint: value[2] for endpoint, value in sorted(selected.items())}
+
+
+def _latest_exact_control_signatures(
+    *,
+    promotion: dict[str, Any],
+    traces: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Select the latest complete exact runtime signature for each endpoint."""
+
+    promoted_at = _parse_ts(promotion.get("promoted_at"))
+    payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
+    selected: dict[str, tuple[datetime, int, dict[str, Any]]] = {}
+    for index, trace in enumerate(traces):
+        endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+        payload_hash = str(trace.get("payload_sha256") or "")
+        payload = payload_by_key.get(
+            (payload_hash, endpoint),
+            payload_by_unique_hash.get(payload_hash, {}),
+        )
+        signature = {
+            "prompt_version": trace.get("prompt_version"),
+            "prompt_sha256": trace.get("prompt_sha256"),
+            "provider_actual": trace.get("provider_actual"),
+            "model": trace.get("model"),
+            "request_temperature": trace.get("request_temperature"),
+            "request_reasoning_effort": trace.get("request_reasoning_effort"),
+            "response_schema": trace.get("schema_name")
+            or trace.get("response_schema")
+            or "captured_runtime_contract",
+        }
+        if (
+            not endpoint
+            or not all(
+                str(signature.get(field) or "").strip()
+                for field in ("prompt_version", "prompt_sha256", "model")
+            )
+            or _exact_trace_payload_findings(
+                trace=trace,
+                payload=payload,
+                promoted_at=promoted_at,
+            )
+        ):
+            continue
+        observed_at = _parse_ts(
+            trace.get("decision_ts")
+            or trace.get("captured_at")
+            or trace.get("timestamp")
+        ) or datetime.min.replace(tzinfo=KST)
+        candidate = (observed_at, index, signature)
+        if endpoint not in selected or candidate[:2] > selected[endpoint][:2]:
+            selected[endpoint] = candidate
+    return {
+        endpoint: value[2]
+        for endpoint, value in sorted(selected.items())
+    }
 
 
 def annotate_primary_cohort_eligibility(
@@ -2175,6 +2337,24 @@ def _decision_value(action: Any, outcome: float | None) -> float | None:
     return None
 
 
+def _decision_exposure_selected(
+    *,
+    stage: str,
+    action: Any,
+    response: dict[str, Any],
+) -> bool:
+    """Map action or captured live probe intent to offline exposure semantics."""
+
+    if str(action or "").strip().upper() in EXPOSURE_ACTIONS:
+        return True
+    return bool(
+        str(stage or "").strip().lower() == "entry"
+        and response.get("entry_probe_intent") is True
+        and response.get("entry_probe_intent_status")
+        in {None, "", "eligible_wait_probe"}
+    )
+
+
 def build_quality_baseline(
     *, target_date: str, labels: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -3062,6 +3242,37 @@ def build_anticipatory_reversal_analysis_v1(
         and not hard_blockers
         and conservative_execution_cost_pct is not None
     )
+    bounded_edge_facts = {
+        "anticipatory_reversal": eligible,
+        "structural_edge_floor": bool(facts["structural_edge_floor"]),
+        "orderly_pullback_recovery": bool(facts["orderly_pullback_recovery"]),
+        "trusted_supportive_trigger": bool(facts["trusted_supportive_trigger"]),
+    }
+    bounded_opportunity_eligible = bool(
+        any(bounded_edge_facts.values())
+        and not hard_blockers
+        and source_mode in {"fresh_dual", "degraded_but_bounded"}
+        and spread_regime in {"normal", "wide_but_observable"}
+        and conservative_execution_cost_pct is not None
+    )
+    clean_continuation_eligible = bool(
+        source_mode == "fresh_dual"
+        and spread_regime == "normal"
+        and not hard_blockers
+        and facts["structural_edge_floor"]
+        and return_3m is not None
+        and return_3m > 0
+        and return_5m is not None
+        and return_5m > 0
+        and return_10m is not None
+        and return_10m > 0
+        and peak_drawdown is not None
+        and peak_drawdown > -0.5
+        and near_reference_reclaim
+        and precursor_count >= 2
+        and conservative_execution_cost_pct is not None
+        and conservative_execution_cost_pct <= 0.25
+    )
     analysis = {
         "schema": ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA,
         "stage": normalized_stage,
@@ -3112,6 +3323,39 @@ def build_anticipatory_reversal_analysis_v1(
         "execution_policy": (
             "passive_probe_required" if eligible else "no_counterfactual_exposure"
         ),
+        "bounded_opportunity": {
+            "eligible_for_one_share_probe": bounded_opportunity_eligible,
+            "qualifying_edge_facts": bounded_edge_facts,
+            "execution_policy": (
+                "passive_probe_required"
+                if bounded_opportunity_eligible
+                else "no_counterfactual_exposure"
+            ),
+            "accepted_adverse_risk": ["low", "moderate", "high"],
+            "blocking_risk_allowed": False,
+            "after_cost_reward_risk_floor": 1.0,
+            "downstream_submit_guards_required": True,
+            "runtime_effect": False,
+        },
+        "clean_continuation_probe": {
+            "eligible": clean_continuation_eligible,
+            "execution_policy": (
+                "passive_probe_required"
+                if clean_continuation_eligible
+                else "no_counterfactual_exposure"
+            ),
+            "required_source_mode": "fresh_dual",
+            "required_spread_regime": "normal",
+            "hard_blockers_allowed": False,
+            "required_completed_return_windows_min": [3, 5, 10],
+            "minimum_independent_precursors": 2,
+            "minimum_peak_drawdown_pct_exclusive": -0.5,
+            "maximum_execution_cost_pct": 0.25,
+            "after_cost_reward_risk_floor": 0.75,
+            "downstream_submit_guards_required": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "confidence_cap": 60 if source_mode == "degraded_but_bounded" else 75,
         "learning_contract": {
             "update_floor_rows": ANTICIPATORY_LEARNING_MIN_ROWS,
@@ -3490,11 +3734,22 @@ def validate_replay_candidate_response(
     )
     candidate = request.get("candidate")
     candidate = candidate if isinstance(candidate, dict) else {}
-    if (
-        candidate.get("semantic_validator_version")
-        != ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
-    ):
+    semantic_validator_version = str(
+        candidate.get("semantic_validator_version") or ""
+    )
+    if semantic_validator_version not in {
+        ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION,
+        BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION,
+    }:
         return errors
+    bounded_opportunity_contract = (
+        semantic_validator_version
+        == BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+    )
+    clean_continuation_contract = bool(
+        str(candidate.get("prompt_version") or "")
+        == f"{DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION}_entry"
+    )
     if stage != "entry":
         return [*errors, "anticipatory_stage_unsupported"]
     analysis = request.get("anticipatory_reversal_analysis")
@@ -3509,6 +3764,8 @@ def validate_replay_candidate_response(
     setup = str(evidence.get("setup") or "").strip().lower()
     tape = str(evidence.get("tape") or "").strip().lower()
     liquidity = str(evidence.get("liquidity") or "").strip().lower()
+    adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
+    trigger = str(evidence.get("trigger") or "").strip().lower()
     source_mode = str(analysis.get("source_mode") or "")
     spread = analysis.get("spread")
     spread = spread if isinstance(spread, dict) else {}
@@ -3531,8 +3788,172 @@ def validate_replay_candidate_response(
         and confidence > confidence_cap
     ):
         semantic_errors.append("anticipatory_degraded_confidence_above_cap")
-    if spread.get("regime") == "wide_but_observable" and liquidity != "adverse":
+    if (
+        source_mode != "unusable"
+        and spread.get("regime") == "wide_but_observable"
+        and liquidity != "adverse"
+    ):
         semantic_errors.append("anticipatory_wide_spread_liquidity_not_adverse")
+
+    if bounded_opportunity_contract:
+        bounded = analysis.get("bounded_opportunity")
+        bounded = bounded if isinstance(bounded, dict) else {}
+        clean_continuation = analysis.get("clean_continuation_probe")
+        clean_continuation = (
+            clean_continuation
+            if isinstance(clean_continuation, dict)
+            else {}
+        )
+        if not bounded:
+            return [*errors, *semantic_errors, "bounded_opportunity_contract_missing"]
+        if clean_continuation_contract and not clean_continuation:
+            return [
+                *errors,
+                *semantic_errors,
+                "clean_continuation_probe_contract_missing",
+            ]
+        cost_pct = _number(execution_cost.get("conservative_execution_cost_pct"))
+        upside = _number(response.get("expected_upside_pct"))
+        downside = _number(response.get("expected_downside_pct"))
+        after_cost_ratio = (
+            max(0.0, upside - cost_pct) / abs(downside - cost_pct)
+            if cost_pct is not None
+            and upside is not None
+            and downside is not None
+            and downside < 0
+            else None
+        )
+        clean_continuation_eligible = bool(
+            clean_continuation_contract
+            and clean_continuation.get("eligible") is True
+        )
+        after_cost_floor = 0.75 if clean_continuation_eligible else 1.0
+        if action == "BUY":
+            adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
+            trigger = str(evidence.get("trigger") or "").strip().lower()
+            if bounded.get("eligible_for_one_share_probe") is not True:
+                semantic_errors.append("bounded_opportunity_buy_not_eligible")
+            if bounded.get("execution_policy") != "passive_probe_required":
+                semantic_errors.append("bounded_opportunity_passive_probe_required")
+            if setup not in {"continuation", "pullback_recovery", "reversal"}:
+                semantic_errors.append("bounded_opportunity_setup_invalid")
+            if adverse_risk not in {"low", "moderate", "high"}:
+                semantic_errors.append("bounded_opportunity_risk_not_bounded")
+            if trigger != "confirmed":
+                semantic_errors.append("bounded_opportunity_trigger_not_confirmed")
+            if (
+                adverse_risk == "high"
+                and confidence is not None
+                and confidence > 65
+            ):
+                semantic_errors.append("bounded_opportunity_high_risk_confidence_cap")
+            if (
+                cost_pct is None
+                or upside is None
+                or downside is None
+                or downside >= 0
+            ):
+                semantic_errors.append(
+                    "bounded_opportunity_after_cost_reward_risk_unavailable"
+                )
+            else:
+                adjusted_upside = max(0.0, upside - cost_pct)
+                adjusted_downside = downside - cost_pct
+                if adjusted_upside / abs(adjusted_downside) < after_cost_floor:
+                    semantic_errors.append(
+                        "bounded_opportunity_after_cost_reward_risk_below_floor"
+                    )
+            if not semantic_errors:
+                relaxable = {
+                    "entry_buy_adverse_risk_too_high",
+                    "entry_buy_reward_risk_below_floor",
+                    "entry_orderly_pullback_recovery_misclassified",
+                    "entry_bounded_reversal_probe_misclassified",
+                    "entry_thin_tape_sample_overstated",
+                    "entry_adverse_distribution_misclassified",
+                }
+                if spread.get("regime") == "wide_but_observable":
+                    relaxable.add("entry_ask_wall_wide_spread_misclassified")
+                errors = [error for error in errors if error not in relaxable]
+        elif (
+            action == "WAIT"
+            and bounded.get("eligible_for_one_share_probe") is True
+            and edge_state == "EDGE"
+            and setup in {"continuation", "pullback_recovery", "reversal"}
+            and str(evidence.get("positive_edge") or "")
+            in {"moderate", "strong"}
+            and str(evidence.get("adverse_risk") or "")
+            in {"low", "moderate", "high"}
+            and str(evidence.get("trigger") or "")
+            in {"recovery_required", "confirmed"}
+            and (
+                str(evidence.get("trigger") or "") == "recovery_required"
+                or after_cost_ratio is None
+                or after_cost_ratio < 1.0
+            )
+        ):
+            # A candidate that lost after-cost BUY eligibility may retain the
+            # deterministic bounded edge as WAIT.  This is no-exposure offline
+            # attribution, not a relaxation of submit or broker guards.
+            errors = [
+                error
+                for error in errors
+                if error
+                not in {
+                    "entry_adverse_distribution_misclassified",
+                    "entry_ask_wall_wide_spread_misclassified",
+                    "entry_wait_requires_recovery_trigger",
+                    "entry_trusted_supportive_trigger_misclassified",
+                }
+            ]
+        elif (
+            action == "DROP"
+            and bounded.get("eligible_for_one_share_probe") is True
+            and edge_state == "EDGE"
+            and setup in {"continuation", "pullback_recovery", "reversal"}
+            and adverse_risk == "high"
+            and liquidity == "adverse"
+            and trigger == "confirmed"
+            and after_cost_ratio is not None
+            and after_cost_ratio >= after_cost_floor
+        ):
+            # High risk is tolerated by the offline one-share experiment but it
+            # does not compel exposure. Preserve the model's truthful DROP and
+            # charge it to no-exposure/missed-opportunity attribution instead of
+            # treating conservative abstention as a malformed response.
+            errors = [
+                error
+                for error in errors
+                if error
+                not in {
+                    "entry_edge_drop_requires_failed_blocking_or_unfavorable",
+                    "entry_thin_tape_sample_overstated",
+                    "entry_adverse_distribution_misclassified",
+                    "entry_orderly_pullback_recovery_misclassified",
+                    "entry_bounded_reversal_probe_misclassified",
+                    "entry_ask_wall_wide_spread_misclassified",
+                }
+            ]
+        hard_blockers = [
+            str(value) for value in analysis.get("hard_blockers") or [] if value
+        ]
+        if hard_blockers and action == "DROP" and adverse_risk == "blocking":
+            # A deterministic hard blocker owns the final no-exposure action.
+            # Exact-candle facts may still describe an early reversal or orderly
+            # pullback, but they must not force WAIT after the blocker has been
+            # preserved as DROP.  Base EDGE/DROP validation still requires a
+            # failed trigger, blocking risk, or unfavorable reward/risk.
+            errors = [
+                error
+                for error in errors
+                if error
+                not in {
+                    "entry_adverse_distribution_misclassified",
+                    "entry_orderly_pullback_recovery_misclassified",
+                    "entry_bounded_reversal_probe_misclassified",
+                }
+            ]
+        return list(dict.fromkeys([*errors, *semantic_errors]))
 
     reversal_buy = action == "BUY" and setup == "reversal"
     if action == "BUY" and setup != "reversal":
@@ -3771,6 +4192,290 @@ def repair_anticipatory_candidate_response(
     return repaired, list(dict.fromkeys(repairs))
 
 
+def repair_bounded_opportunity_candidate_response(
+    request: dict[str, Any],
+    response: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Close V2.10 semantic conflicts without creating probe exposure.
+
+    This deterministic offline adapter may preserve an EDGE as WAIT or demote an
+    invalid BUY to WAIT/DROP.  It never promotes a non-BUY response to BUY and it
+    never changes numeric upside/downside estimates.
+    """
+
+    candidate = request.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    if (
+        candidate.get("semantic_validator_version")
+        != BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+        or candidate.get("semantic_repair_version")
+        != BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION
+        or str(request.get("stage") or "") != "entry"
+    ):
+        return dict(response), []
+    analysis = request.get("anticipatory_reversal_analysis")
+    analysis = analysis if isinstance(analysis, dict) else {}
+    source_mode = str(analysis.get("source_mode") or "")
+    repaired = json.loads(json.dumps(response))
+    repairs: list[str] = []
+
+    def set_value(container: dict[str, Any], key: str, value: Any, reason: str) -> None:
+        if container.get(key) != value:
+            container[key] = value
+            repairs.append(reason)
+
+    if source_mode == "degraded_but_bounded":
+        cap = int(_number(analysis.get("confidence_cap")) or 60)
+        confidence = _number(repaired.get("confidence"))
+        if confidence is not None and confidence > cap:
+            repaired["confidence"] = cap
+            repairs.append("degraded_source_confidence_clamped")
+    if source_mode == "unusable":
+        safe_response = {
+            "edge_state": "INSUFFICIENT_DATA",
+            "action": "WAIT",
+            "expected_upside_pct": None,
+            "expected_downside_pct": None,
+            "confidence": 0,
+            "reason_codes": ["insufficient_core_data"],
+            "evidence": {
+                "trend": "insufficient",
+                "liquidity": "insufficient",
+                "tape": "insufficient",
+                "risk": "insufficient",
+                "uncertainty": "high",
+                "setup": "insufficient",
+                "positive_edge": "insufficient",
+                "adverse_risk": "insufficient",
+                "trigger": "insufficient",
+            },
+        }
+        if repaired != safe_response:
+            repaired = safe_response
+            repairs.append("unusable_source_fail_closed_wait")
+        return repaired, repairs
+
+    evidence = repaired.get("evidence")
+    if not isinstance(evidence, dict):
+        return repaired, repairs
+    facts = _entry_contract_facts(request.get("exact_payload"))
+    bounded = analysis.get("bounded_opportunity")
+    bounded = bounded if isinstance(bounded, dict) else {}
+    clean_continuation = analysis.get("clean_continuation_probe")
+    clean_continuation = (
+        clean_continuation if isinstance(clean_continuation, dict) else {}
+    )
+    execution_cost = analysis.get("execution_cost")
+    execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
+    cost_pct = _number(execution_cost.get("conservative_execution_cost_pct"))
+    upside = _number(repaired.get("expected_upside_pct"))
+    downside = _number(repaired.get("expected_downside_pct"))
+    after_cost_ratio = (
+        max(0.0, upside - cost_pct) / abs(downside - cost_pct)
+        if cost_pct is not None
+        and upside is not None
+        and downside is not None
+        and downside < 0
+        else None
+    )
+    clean_continuation_contract = bool(
+        str(candidate.get("prompt_version") or "")
+        == f"{DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION}_entry"
+        and clean_continuation.get("eligible") is True
+    )
+    after_cost_floor = 0.75 if clean_continuation_contract else 1.0
+
+    if facts["structural_edge_floor"]:
+        set_value(repaired, "edge_state", "EDGE", "structural_edge_floor")
+        if evidence.get("positive_edge") not in {"moderate", "strong"}:
+            set_value(evidence, "positive_edge", "moderate", "structural_edge_strength")
+
+    if facts["bounded_reversal_probe_candidate"]:
+        set_value(repaired, "edge_state", "EDGE", "bounded_reversal_edge")
+        set_value(repaired, "action", "WAIT", "bounded_reversal_wait")
+        set_value(evidence, "setup", "reversal", "bounded_reversal_setup")
+        if evidence.get("positive_edge") not in {"moderate", "strong"}:
+            set_value(evidence, "positive_edge", "moderate", "bounded_reversal_strength")
+        if evidence.get("adverse_risk") not in {"low", "moderate", "high"}:
+            set_value(evidence, "adverse_risk", "high", "bounded_reversal_risk")
+        set_value(
+            evidence,
+            "trigger",
+            "recovery_required",
+            "bounded_reversal_trigger",
+        )
+    elif facts["orderly_pullback_recovery"]:
+        set_value(repaired, "edge_state", "EDGE", "orderly_pullback_edge")
+        set_value(repaired, "action", "WAIT", "orderly_pullback_wait")
+        set_value(evidence, "setup", "pullback_recovery", "orderly_pullback_setup")
+        if evidence.get("positive_edge") not in {"moderate", "strong"}:
+            set_value(evidence, "positive_edge", "moderate", "orderly_pullback_strength")
+        if evidence.get("adverse_risk") not in {"low", "moderate", "high"}:
+            set_value(evidence, "adverse_risk", "high", "orderly_pullback_risk")
+        set_value(
+            evidence,
+            "trigger",
+            "recovery_required",
+            "orderly_pullback_trigger",
+        )
+
+    if facts["trusted_supportive_trigger"]:
+        set_value(repaired, "edge_state", "EDGE", "trusted_trigger_edge")
+        if evidence.get("positive_edge") not in {"moderate", "strong"}:
+            set_value(evidence, "positive_edge", "moderate", "trusted_trigger_strength")
+        set_value(evidence, "tape", "supportive", "trusted_trigger_tape")
+        set_value(evidence, "trigger", "confirmed", "trusted_trigger_state")
+        if repaired.get("action") == "WAIT":
+            set_value(repaired, "action", "DROP", "trusted_trigger_wait_removed")
+
+    if facts["blocking_overextension"]:
+        set_value(repaired, "action", "DROP", "blocking_overextension_action")
+        set_value(evidence, "adverse_risk", "blocking", "blocking_overextension_risk")
+    spread = analysis.get("spread")
+    spread = spread if isinstance(spread, dict) else {}
+    bounded_wide_spread = bool(
+        facts["ask_wall_wide_spread"]
+        and spread.get("regime") == "wide_but_observable"
+        and bounded.get("eligible_for_one_share_probe") is True
+    )
+    if facts["ask_wall_wide_spread"]:
+        set_value(evidence, "liquidity", "adverse", "ask_wall_liquidity")
+        if facts["orderly_pullback_recovery"] or (
+            bounded_wide_spread and repaired.get("action") in {"BUY", "WAIT"}
+        ):
+            set_value(evidence, "adverse_risk", "high", "ask_wall_bounded_high_risk")
+        else:
+            set_value(evidence, "adverse_risk", "blocking", "ask_wall_blocking_risk")
+            if repaired.get("action") == "BUY":
+                set_value(repaired, "action", "DROP", "ask_wall_buy_removed")
+
+    hard_blockers = [str(value) for value in analysis.get("hard_blockers") or []]
+    if hard_blockers:
+        if repaired.get("action") in {"BUY", "WAIT"}:
+            set_value(repaired, "action", "DROP", "deterministic_hard_blocker_drop")
+        set_value(
+            evidence,
+            "adverse_risk",
+            "blocking",
+            "deterministic_hard_blocker_risk",
+        )
+        if not facts["trusted_supportive_trigger"]:
+            set_value(
+                evidence,
+                "trigger",
+                "failed",
+                "deterministic_hard_blocker_trigger",
+            )
+
+    if repaired.get("action") == "BUY":
+        adverse_risk = str(evidence.get("adverse_risk") or "")
+        bounded_buy_valid = bool(
+            bounded.get("eligible_for_one_share_probe") is True
+            and bounded.get("execution_policy") == "passive_probe_required"
+            and adverse_risk in {"low", "moderate", "high"}
+            and str(evidence.get("trigger") or "") == "confirmed"
+            and after_cost_ratio is not None
+            and after_cost_ratio >= after_cost_floor
+        )
+        if not bounded_buy_valid:
+            if adverse_risk == "blocking":
+                set_value(repaired, "action", "DROP", "invalid_probe_buy_dropped")
+            else:
+                set_value(repaired, "action", "WAIT", "invalid_probe_buy_waited")
+                if not facts["trusted_supportive_trigger"]:
+                    set_value(
+                        evidence,
+                        "trigger",
+                        "recovery_required",
+                        "invalid_probe_recovery_required",
+                    )
+                if adverse_risk not in {"low", "moderate", "high"}:
+                    set_value(evidence, "adverse_risk", "high", "invalid_probe_risk")
+
+    edge_state = str(repaired.get("edge_state") or "")
+    action = str(repaired.get("action") or "")
+    trigger = str(evidence.get("trigger") or "")
+    if edge_state == "NO_EDGE":
+        set_value(repaired, "action", "DROP", "no_edge_action")
+        if evidence.get("positive_edge") not in {"none", "weak"}:
+            set_value(evidence, "positive_edge", "none", "no_edge_strength")
+        if evidence.get("setup") not in {"no_setup", "not_applicable"}:
+            set_value(evidence, "setup", "no_setup", "no_edge_setup")
+    elif edge_state == "EDGE" and evidence.get("positive_edge") not in {
+        "moderate",
+        "strong",
+    }:
+        set_value(evidence, "positive_edge", "moderate", "edge_strength")
+    if (
+        action == "WAIT"
+        and trigger != "recovery_required"
+        and not (
+            facts["trusted_supportive_trigger"]
+            and trigger == "confirmed"
+            and (after_cost_ratio is None or after_cost_ratio < 1.0)
+        )
+    ):
+        set_value(evidence, "trigger", "recovery_required", "wait_trigger_alignment")
+    if action == "WAIT" and evidence.get("adverse_risk") in {
+        "blocking",
+        "insufficient",
+    }:
+        set_value(evidence, "adverse_risk", "high", "wait_nonblocking_risk")
+
+    edge_state = str(repaired.get("edge_state") or "")
+    trigger = str(evidence.get("trigger") or "")
+    reason_codes = [
+        str(value)
+        for value in repaired.get("reason_codes") or []
+        if str(value) in DECISION_QUALITY_V2_REASON_CODES
+    ]
+    mutually_owned = {
+        "recovery_trigger_confirmed",
+        "recovery_trigger_required",
+        "recovery_trigger_failed",
+        "structural_edge_without_trigger",
+        "edge_positive",
+        "edge_absent",
+        "no_positive_edge",
+        "risk_reward_favorable",
+        "risk_reward_unfavorable",
+    }
+    reason_codes = [code for code in reason_codes if code not in mutually_owned]
+    trigger_code = {
+        "confirmed": "recovery_trigger_confirmed",
+        "recovery_required": "recovery_trigger_required",
+        "failed": "recovery_trigger_failed",
+    }.get(trigger)
+    favorable = after_cost_ratio is not None and after_cost_ratio >= 1.0
+    mandatory_codes = [
+        trigger_code,
+        "edge_positive" if edge_state == "EDGE" else "edge_absent",
+        "risk_reward_favorable" if favorable else "risk_reward_unfavorable",
+    ]
+    if facts["ask_wall_wide_spread"]:
+        mandatory_codes.extend(("ask_wall_adverse", "liquidity_adverse"))
+    if facts["adverse_distribution_no_edge"]:
+        mandatory_codes.extend(("distribution_adverse", "volume_confirmation_missing"))
+    mandatory_codes = [
+        code
+        for code in dict.fromkeys(mandatory_codes)
+        if code is not None
+    ]
+    optional_codes = [
+        code
+        for code in dict.fromkeys(reason_codes)
+        if code not in mandatory_codes
+    ]
+    normalized_codes = [
+        *mandatory_codes,
+        *optional_codes[: max(0, 8 - len(mandatory_codes))],
+    ]
+    if repaired.get("reason_codes") != normalized_codes:
+        repaired["reason_codes"] = normalized_codes
+        repairs.append("reason_code_evidence_alignment")
+    return repaired, list(dict.fromkeys(repairs))
+
+
 def _prompt_v2_openai_schema(stage: str) -> dict[str, Any]:
     normalized_stage = str(stage or "").strip().lower()
     actions = sorted(STAGE_ACTIONS.get(normalized_stage, set()))
@@ -3966,6 +4671,14 @@ def execute_openai_prompt_v2_candidate(
     ]
     if correction_errors:
         correction_rules = []
+        bounded_opportunity_candidate = bool(
+            candidate.get("semantic_validator_version")
+            == BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+        )
+        clean_continuation_candidate = bool(
+            str(candidate.get("prompt_version") or "")
+            == f"{DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION}_entry"
+        )
         if "expected_edge_values_required" in correction_errors:
             correction_rules.append(
                 "EDGE or NO_EDGE requires numeric expected_upside_pct and "
@@ -3981,14 +4694,33 @@ def execute_openai_prompt_v2_candidate(
                 "INSUFFICIENT_DATA requires null upside and downside"
             )
         if any(error.startswith("entry_") for error in correction_errors):
-            correction_rules.append(
-                "For entry: NO_EDGE requires DROP; INSUFFICIENT_DATA requires WAIT "
-                "with all four edge/risk evidence fields set to insufficient; EDGE "
-                "BUY requires a confirmed trigger, low/moderate adverse risk, and "
-                "reward/risk >= 1.25; EDGE WAIT requires recovery_required and "
-                "non-blocking risk; EDGE DROP requires failed trigger, blocking "
-                "risk, or reward/risk below 1.25"
-            )
+            if bounded_opportunity_candidate:
+                correction_rules.append(
+                    (
+                        "For the V2.11 clean_continuation_probe eligible cohort, "
+                        "EDGE/BUY requires trigger=confirmed, non-blocking "
+                        "low/moderate/high adverse risk, and truthful after-cost "
+                        "reward/risk >=0.75. For other rows keep the V2.10 >=1.00 "
+                        "floor. Downstream guards remain mandatory"
+                        if clean_continuation_candidate
+                        else "For the V2.10 offline one-share probe only, EDGE/BUY "
+                        "requires the deterministic bounded_opportunity contract "
+                        "to be eligible, trigger=confirmed, adverse_risk "
+                        "low/moderate/high but never blocking, and after-cost "
+                        "reward/risk >=1.00. Preserve high risk and adverse "
+                        "wide-spread liquidity; downstream guards remain mandatory"
+                    )
+                )
+            else:
+                correction_rules.append(
+                    "For entry: NO_EDGE requires DROP; INSUFFICIENT_DATA requires "
+                    "WAIT with all four edge/risk evidence fields set to "
+                    "insufficient; EDGE BUY requires a confirmed trigger, "
+                    "low/moderate adverse risk, and reward/risk >= 1.25; EDGE WAIT "
+                    "requires recovery_required and non-blocking risk; EDGE DROP "
+                    "requires failed trigger, blocking risk, or reward/risk below "
+                    "1.25"
+                )
         if "entry_no_edge_requires_drop" in correction_errors:
             correction_rules.append(
                 "Set action=DROP for NO_EDGE, with positive_edge none/weak and "
@@ -4013,16 +4745,34 @@ def execute_openai_prompt_v2_candidate(
             )
         if "entry_buy_adverse_risk_too_high" in correction_errors:
             correction_rules.append(
-                "BUY cannot carry high or blocking adverse risk. Preserve the "
-                "observed risk: use DROP with blocking risk or unfavorable numeric "
-                "reward/risk, or WAIT only when the trigger is recovery_required "
-                "and risk is non-blocking"
+                (
+                    "V2.10 offline bounded-opportunity BUY may retain high adverse "
+                    "risk with confidence <=65 when the one-share probe contract "
+                    "is eligible; blocking risk still requires DROP"
+                    if bounded_opportunity_candidate
+                    else "BUY cannot carry high or blocking adverse risk. Preserve "
+                    "the observed risk: use DROP with blocking risk or unfavorable "
+                    "numeric reward/risk, or WAIT only when the trigger is "
+                    "recovery_required and risk is non-blocking"
+                )
             )
         if "entry_buy_reward_risk_below_floor" in correction_errors:
             correction_rules.append(
-                "Do not retain BUY when expected_upside_pct divided by the absolute "
-                "strictly negative expected_downside_pct is below 1.25. Use DROP "
-                "with risk_reward_unfavorable, or return a supported non-BUY state"
+                (
+                    "For V2.10 offline bounded-opportunity BUY, subtract the "
+                    "conservative execution cost and require adjusted reward/risk "
+                    + (
+                        ">=0.75 only when clean_continuation_probe.eligible=true; "
+                        "otherwise require >=1.00"
+                        if clean_continuation_candidate
+                        else ">=1.00; the inherited 1.25 full-entry floor does not apply"
+                    )
+                    if bounded_opportunity_candidate
+                    else "Do not retain BUY when expected_upside_pct divided by the "
+                    "absolute strictly negative expected_downside_pct is below "
+                    "1.25. Use DROP with risk_reward_unfavorable, or return a "
+                    "supported non-BUY state"
+                )
             )
         if (
             "entry_edge_drop_requires_failed_blocking_or_unfavorable"
@@ -4104,11 +4854,42 @@ def execute_openai_prompt_v2_candidate(
             )
         if any(error.startswith("anticipatory_") for error in correction_errors):
             correction_rules.append(
-                "For setup=reversal follow anticipatory_reversal_analysis_v1. "
-                "BUY only when eligible_for_counterfactual_probe=true, use "
-                "passive-probe semantics, keep wide-but-observable liquidity "
-                "adverse, honor the degraded confidence cap, and require "
-                "reward/risk >=1.25 after conservative execution cost"
+                (
+                    "Follow anticipatory_reversal_analysis_v1 source, spread, and "
+                    "confidence facts. Under V2.10 use its bounded_opportunity "
+                    "eligibility and adjusted reward/risk >=1.00; do not fall back "
+                    "to the V2.9 reversal-only 1.25 floor"
+                    if bounded_opportunity_candidate
+                    else "For setup=reversal follow "
+                    "anticipatory_reversal_analysis_v1. BUY only when "
+                    "eligible_for_counterfactual_probe=true, use passive-probe "
+                    "semantics, keep wide-but-observable liquidity adverse, honor "
+                    "the degraded confidence cap, and require reward/risk >=1.25 "
+                    "after conservative execution cost"
+                )
+            )
+        if any(
+            error.startswith("bounded_opportunity_") for error in correction_errors
+        ):
+            correction_rules.append(
+                "For V2.10, BUY is an offline one-share passive-probe label only. "
+                "It requires bounded_opportunity.eligible_for_one_share_probe=true, "
+                "normal or wide_but_observable spread, setup continuation, "
+                "pullback_recovery, or reversal, confirmed bounded-opportunity "
+                "trigger, non-blocking risk, and adjusted reward/risk >=1.00. "
+                "Keep wide spread adverse and do not weaken high risk"
+            )
+        if any(
+            error.startswith("clean_continuation_probe_")
+            for error in correction_errors
+        ):
+            correction_rules.append(
+                "For V2.11, clean_continuation_probe.eligible=true is the narrow "
+                "deterministic no-blocker cohort selected for one-share "
+                "exploration. Return EDGE/BUY with trigger=confirmed and "
+                "non-blocking low/moderate/high risk only when your truthful "
+                "after-cost magnitude ratio is >=0.75. Do not alter exact facts "
+                "or claim that downstream submit guards have passed"
             )
         if any(error.startswith("holding_") for error in correction_errors):
             correction_rules.append(
@@ -4141,6 +4922,11 @@ def execute_openai_prompt_v2_candidate(
         )
     started = time.perf_counter()
     client = OpenAI(api_key=keys[key_index], max_retries=0)
+    response_schema_name = re.sub(
+        r"[^A-Za-z0-9_-]",
+        "_",
+        str(candidate.get("prompt_version") or DECISION_QUALITY_V2_PROMPT_VERSION),
+    )[:64]
     response_kwargs: dict[str, Any] = {
         "model": model,
         "instructions": instructions,
@@ -4148,7 +4934,7 @@ def execute_openai_prompt_v2_candidate(
         "text": {
             "format": {
                 "type": "json_schema",
-                "name": f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{stage}",
+                "name": response_schema_name,
                 "strict": True,
                 "schema": _prompt_v2_openai_schema(stage),
             },
@@ -4389,6 +5175,18 @@ def prepare_paired_replay_requests(
                     "captured_action": trace.get("action"),
                     "captured_score": trace.get("score"),
                     "captured_reason": trace.get("reason"),
+                    "captured_edge_state": trace.get(
+                        "decision_quality_model_edge_state"
+                    ),
+                    "captured_evidence": trace.get(
+                        "decision_quality_model_evidence"
+                    ),
+                    "captured_entry_probe_intent": trace.get(
+                        "entry_probe_intent"
+                    ),
+                    "captured_entry_probe_intent_status": trace.get(
+                        "entry_probe_intent_status"
+                    ),
                 },
                 "candidate": candidate,
                 "outcome_join_key": label.get("label_id"),
@@ -4412,19 +5210,321 @@ def prepare_paired_replay_requests(
                 if _normalize_stock_code(row.get("stock_code"))
             }
         )
-        sample_floor_pass = (
+        promotion_evidence_pass = (
             len(rows) >= PAIRED_REPLAY_MIN_ROWS
             and symbol_count >= PAIRED_REPLAY_MIN_SYMBOLS
+        )
+        learning_update_pass = (
+            len(rows) >= PAIRED_LEARNING_MIN_ROWS
+            and symbol_count >= PAIRED_LEARNING_MIN_SYMBOLS
         )
         for row in rows:
             row["sample_floor"] = {
                 "decision_rows": len(rows),
                 "unique_symbols": symbol_count,
-                "required_decision_rows": PAIRED_REPLAY_MIN_ROWS,
-                "required_unique_symbols": PAIRED_REPLAY_MIN_SYMBOLS,
-                "pass": sample_floor_pass,
+                "required_decision_rows": PAIRED_LEARNING_MIN_ROWS,
+                "required_unique_symbols": PAIRED_LEARNING_MIN_SYMBOLS,
+                "pass": learning_update_pass,
+                "floor_role": "cumulative_learning_update_only",
+                "promotion_authority": False,
+                "promotion_evidence_floor": {
+                    "decision_rows": len(rows),
+                    "unique_symbols": symbol_count,
+                    "required_decision_rows": PAIRED_REPLAY_MIN_ROWS,
+                    "required_unique_symbols": PAIRED_REPLAY_MIN_SYMBOLS,
+                    "pass": promotion_evidence_pass,
+                },
             }
     return requests
+
+
+def recover_same_trace_outcome_labels_from_paired_reports(
+    *,
+    target_date: str,
+    labels: list[dict[str, Any]],
+    traces: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+    report_paths: list[Path],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Recover primary-horizon outcomes without reconstructing exact inputs.
+
+    This is an explicit offline replay compatibility path for a historical day
+    whose route-qualified completed-bar label materialization is no longer
+    reproducible from the retained raw window.  Only the outcome summary from a
+    prior same-trace paired report is reused.  The current immutable exact trace
+    and payload stores still own candidate input preparation.
+    """
+
+    trace_by_id = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in traces
+        if isinstance(row, dict) and row.get("decision_trace_id")
+    }
+    payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
+    current_by_trace: dict[str, dict[str, Any]] = {}
+    label_order: list[str] = []
+    anonymous_labels: list[dict[str, Any]] = []
+    for row in labels:
+        trace_id = str(row.get("decision_trace_id") or "")
+        if not trace_id:
+            anonymous_labels.append(row)
+            continue
+        if trace_id not in current_by_trace:
+            label_order.append(trace_id)
+        current_by_trace[trace_id] = row
+
+    excluded = Counter()
+    source_metadata: list[dict[str, Any]] = []
+    candidates_by_trace: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    for raw_path in report_paths:
+        path = Path(raw_path).resolve()
+        try:
+            raw_bytes = path.read_bytes()
+            report = json.loads(raw_bytes)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            excluded["source_report_unreadable"] += 1
+            source_metadata.append(
+                {
+                    "path": str(path),
+                    "status": "rejected_source_report_unreadable",
+                }
+            )
+            continue
+        if not isinstance(report, dict):
+            excluded["source_report_not_object"] += 1
+            source_metadata.append(
+                {
+                    "path": str(path),
+                    "status": "rejected_source_report_not_object",
+                }
+            )
+            continue
+        source_hash = hashlib.sha256(raw_bytes).hexdigest()
+        source_meta = {
+            "path": str(path),
+            "sha256": source_hash,
+            "target_date": report.get("target_date"),
+            "outcome_price_source": report.get("outcome_price_source"),
+            "paired_comparable_count": report.get("paired_comparable_count"),
+        }
+        comparisons = report.get("paired_comparisons")
+        comparisons = comparisons if isinstance(comparisons, list) else []
+        authority_valid = (
+            target_date >= "2026-06-05"
+            and report.get("schema") in {PAIRED_SCHEMA, DETAILED_PAIRED_SCHEMA}
+            and report.get("target_date") == target_date
+            and report.get("runtime_effect") is False
+            and report.get("allowed_runtime_apply") is False
+            and report.get("actual_order_submitted") is False
+            and report.get("broker_order_forbidden") is True
+            and report.get("source_quality_gate")
+            == OFFLINE_CONTRACT["source_quality_gate"]
+            and report.get("paired_comparable_count") == len(comparisons)
+            and len(comparisons) > 0
+            and "kiwoom_completed_1m"
+            in str(report.get("outcome_price_source") or "")
+        )
+        if not authority_valid:
+            excluded["source_report_contract_invalid"] += 1
+            source_meta["status"] = "rejected_source_report_contract_invalid"
+            source_metadata.append(source_meta)
+            continue
+
+        requests_by_trace = {
+            str(row.get("decision_trace_id") or ""): row
+            for row in report.get("requests") or []
+            if isinstance(row, dict) and row.get("decision_trace_id")
+        }
+        route_provenance = [
+            row
+            for row in report.get("price_source_provenance") or []
+            if isinstance(row, dict)
+            and str(row.get("source_quality_status") or "").startswith("pass")
+            and not row.get("fetch_error")
+        ]
+        accepted_from_source = 0
+        for comparison in comparisons:
+            if not isinstance(comparison, dict):
+                excluded["comparison_not_object"] += 1
+                continue
+            trace_id = str(comparison.get("decision_trace_id") or "")
+            source_request = requests_by_trace.get(trace_id)
+            trace = trace_by_id.get(trace_id)
+            if not source_request or not trace:
+                excluded["same_trace_not_available"] += 1
+                continue
+            stage = _stage(comparison.get("stage"), trace.get("decision_stage"))
+            horizon = PRIMARY_HORIZON_BY_STAGE.get(stage)
+            payload_hash = str(trace.get("payload_sha256") or "")
+            endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+            payload = payload_by_key.get(
+                (payload_hash, endpoint), payload_by_unique_hash.get(payload_hash)
+            )
+            current_exact_payload_sha256 = (
+                _sha256(_replay_exact_payload(payload.get("sanitized_user_input")))
+                if isinstance(payload, dict)
+                else ""
+            )
+            if (
+                not horizon
+                or trace.get("payload_replay_exact") is not True
+                or not payload
+                or payload.get("replay_exact") is not True
+                or str(source_request.get("payload_sha256") or "") != payload_hash
+                or str(source_request.get("source_exact_payload_sha256") or "")
+                != current_exact_payload_sha256
+                or source_request.get("candidate_exact_payload_sha256")
+                not in (None, "", current_exact_payload_sha256)
+            ):
+                excluded["exact_trace_payload_contract_mismatch"] += 1
+                continue
+            stock_code = _normalize_stock_code(
+                comparison.get("stock_code") or source_request.get("stock_code")
+            )
+            venue = _venue(comparison.get("effective_venue"))
+            session = _session(comparison.get("session_bucket"))
+            if (
+                not stock_code
+                or venue != _venue(source_request.get("effective_venue"))
+                or venue != _venue(trace.get("effective_venue"))
+                or session != _session(source_request.get("session_bucket"))
+                or session != _session(trace.get("session_bucket"))
+            ):
+                excluded["same_route_contract_mismatch"] += 1
+                continue
+            route_pass = any(
+                _normalize_stock_code(row.get("stock_code")) == stock_code
+                and _venue(row.get("effective_venue")) == venue
+                and _session(row.get("session_bucket")) == session
+                for row in route_provenance
+            )
+            if not route_pass:
+                excluded["route_price_provenance_missing"] += 1
+                continue
+            outcome = _number(comparison.get("outcome_return_pct"))
+            mfe = _number(comparison.get("outcome_mfe_pct"))
+            mae = _number(comparison.get("outcome_mae_pct"))
+            if outcome is None or mfe is None or mae is None:
+                excluded["primary_outcome_metric_missing"] += 1
+                continue
+            metric = {
+                "end_return_pct": outcome,
+                "mfe_pct": mfe,
+                "mae_pct": mae,
+                "first_hit": comparison.get("first_hit"),
+                "entry_path_first_hit": comparison.get("entry_path_first_hit"),
+                "entry_path_target_pct": comparison.get("entry_path_target_pct"),
+                "entry_path_adverse_pct": comparison.get("entry_path_adverse_pct"),
+                "profit_opportunity_threshold_pct": comparison.get(
+                    "profit_opportunity_threshold_pct"
+                ),
+                "profit_opportunity_observed": comparison.get(
+                    "profit_opportunity_observed"
+                ),
+                "profit_opportunity_hit_at": comparison.get(
+                    "profit_opportunity_hit_at"
+                ),
+                "below_reference_excursion_at": comparison.get(
+                    "below_reference_excursion_at"
+                ),
+                "profit_opportunity_sequence": comparison.get(
+                    "profit_opportunity_sequence"
+                ),
+                "pre_profit_mae_pct": comparison.get("pre_profit_mae_pct"),
+            }
+            candidates_by_trace[trace_id].append(
+                {
+                    "schema": "ai_decision_outcome_label_v1",
+                    "label_id": source_request.get("outcome_join_key")
+                    or f"{trace_id}:recovered-primary",
+                    "decision_trace_id": trace_id,
+                    "decision_stage": stage,
+                    "decision_ts": trace.get("decision_ts"),
+                    "stock_code": stock_code,
+                    "effective_venue": trace.get("effective_venue"),
+                    "session_bucket": trace.get("session_bucket"),
+                    "action": comparison.get("control_action"),
+                    "label_status": "partial",
+                    "matured_horizons_min": [int(horizon.removesuffix("m"))],
+                    "pending_horizons_min": [
+                        value
+                        for value in HORIZONS_MIN
+                        if value != int(horizon.removesuffix("m"))
+                    ],
+                    "horizon_metrics": {horizon: metric},
+                    "source_quality_status": "pass",
+                    "invalid_reasons": [],
+                    "primary_cohort_eligible": True,
+                    "outcome_recovery": {
+                        "schema": PAIRED_OUTCOME_RECOVERY_SCHEMA,
+                        "source_report_path": str(path),
+                        "source_report_sha256": source_hash,
+                        "source_outcome_price_source": report.get(
+                            "outcome_price_source"
+                        ),
+                        "same_trace_payload_hash_confirmed": True,
+                        "same_venue_session_confirmed": True,
+                        "outcome_only_reuse": True,
+                        "exact_payload_reconstructed": False,
+                    },
+                    **OFFLINE_CONTRACT,
+                }
+            )
+            accepted_from_source += 1
+        source_meta["status"] = "accepted_outcome_evidence_source"
+        source_meta["accepted_comparison_count"] = accepted_from_source
+        source_metadata.append(source_meta)
+
+    recovered_count = 0
+    replaced_current_count = 0
+    current_metric_conflict_count = 0
+    for trace_id, recovered_rows in candidates_by_trace.items():
+        current = current_by_trace.get(trace_id)
+        metric_hashes = {
+            _sha256(_primary_metric(row)) for row in recovered_rows if _primary_metric(row)
+        }
+        if len(metric_hashes) != 1:
+            excluded["conflicting_recovered_outcome"] += 1
+            continue
+        recovered = recovered_rows[0]
+        if isinstance(current, dict) and _primary_metric(current) is not None:
+            replaced_current_count += 1
+            if _sha256(_primary_metric(current)) not in metric_hashes:
+                current_metric_conflict_count += 1
+        if trace_id not in current_by_trace:
+            label_order.append(trace_id)
+        current_by_trace[trace_id] = recovered
+        recovered_count += 1
+
+    merged = anonymous_labels + [
+        current_by_trace[trace_id]
+        for trace_id in label_order
+        if trace_id in current_by_trace
+    ]
+    metadata = {
+        "schema": PAIRED_OUTCOME_RECOVERY_SCHEMA,
+        "status": (
+            "recovered_same_trace_primary_outcomes"
+            if recovered_count
+            else "no_primary_outcome_recovered"
+        ),
+        "target_date": target_date,
+        "requested_source_report_count": len(report_paths),
+        "accepted_source_report_count": sum(
+            row.get("status") == "accepted_outcome_evidence_source"
+            for row in source_metadata
+        ),
+        "recovered_label_count": recovered_count,
+        "replaced_current_label_count": replaced_current_count,
+        "current_primary_metric_conflict_count": current_metric_conflict_count,
+        "excluded_counts": dict(excluded),
+        "sources": source_metadata,
+        "outcome_only_reuse": True,
+        "exact_payload_reconstructed": False,
+        **OFFLINE_CONTRACT,
+    }
+    return merged, metadata
 
 
 def prepare_detailed_paired_replay_requests(
@@ -4440,6 +5540,8 @@ def prepare_detailed_paired_replay_requests(
         DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
         DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
         DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
     }
     if candidate_prompt_version not in supported_prompt_versions:
         raise ValueError("unsupported_detailed_candidate_prompt_version")
@@ -4480,6 +5582,8 @@ def prepare_detailed_paired_replay_requests(
         if candidate_prompt_version in {
             DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
             DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
         }:
             anticipatory_analysis = build_anticipatory_reversal_analysis_v1(
                 exact_payload,
@@ -4488,12 +5592,27 @@ def prepare_detailed_paired_replay_requests(
             candidate_input[ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA] = (
                 anticipatory_analysis
             )
-            prompt = (
-                decision_quality_v2_9_1_anticipatory_system_prompt(stage)
-                if candidate_prompt_version
+            if (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION
+            ):
+                prompt = decision_quality_v2_11_clean_continuation_system_prompt(
+                    stage
+                )
+            elif (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION
+            ):
+                prompt = decision_quality_v2_10_bounded_opportunity_system_prompt(
+                    stage
+                )
+            elif (
+                candidate_prompt_version
                 == DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION
-                else decision_quality_v2_9_anticipatory_system_prompt(stage)
-            )
+            ):
+                prompt = decision_quality_v2_9_1_anticipatory_system_prompt(stage)
+            else:
+                prompt = decision_quality_v2_9_anticipatory_system_prompt(stage)
         elif candidate_prompt_version == DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION:
             prompt = decision_quality_v2_8_detailed_system_prompt(stage)
         else:
@@ -4550,7 +5669,13 @@ def prepare_detailed_paired_replay_requests(
                         ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
                     ),
                     "semantic_validator_version": (
-                        ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
+                        BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+                        if candidate_prompt_version
+                        in {
+                            DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+                            DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
+                        }
+                        else ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
                     ),
                     "exposure_semantics": ("offline_counterfactual_passive_probe_only"),
                     "learning_sample_floor": {
@@ -4568,13 +5693,31 @@ def prepare_detailed_paired_replay_requests(
                 candidate["semantic_repair_version"] = (
                     ANTICIPATORY_SEMANTIC_REPAIR_VERSION
                 )
+            elif (
+                candidate_prompt_version
+                in {
+                    DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
+                }
+            ):
+                candidate["semantic_repair_version"] = (
+                    BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION
+                )
         candidate["contract_sha256"] = _candidate_contract_sha256(candidate)
         sample_floor = request.get("sample_floor")
         sample_floor = sample_floor if isinstance(sample_floor, dict) else {}
         if anticipatory_analysis is not None:
+            promotion_evidence_floor = sample_floor.get(
+                "promotion_evidence_floor"
+            )
+            promotion_evidence_floor = (
+                dict(promotion_evidence_floor)
+                if isinstance(promotion_evidence_floor, dict)
+                else dict(sample_floor)
+            )
             sample_floor = {
                 **sample_floor,
-                "promotion_evidence_floor": dict(sample_floor),
+                "promotion_evidence_floor": promotion_evidence_floor,
                 "required_decision_rows": ANTICIPATORY_LEARNING_MIN_ROWS,
                 "required_unique_symbols": ANTICIPATORY_LEARNING_MIN_SYMBOLS,
                 "pass": True,
@@ -4686,8 +5829,21 @@ def run_paired_replay(
                 break
         if candidate_errors and not provider_failed:
             repaired_response, semantic_repairs = (
-                repair_anticipatory_candidate_response(request, candidate_response)
+                repair_bounded_opportunity_candidate_response(
+                    request, candidate_response
+                )
             )
+            semantic_repair_version = (
+                BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION
+                if semantic_repairs
+                else ANTICIPATORY_SEMANTIC_REPAIR_VERSION
+            )
+            if not semantic_repairs:
+                repaired_response, semantic_repairs = (
+                    repair_anticipatory_candidate_response(
+                        request, candidate_response
+                    )
+                )
             if semantic_repairs:
                 repaired_errors = validate_replay_candidate_response(
                     request,
@@ -4704,9 +5860,7 @@ def run_paired_replay(
                             "provider": "deterministic_offline_adapter",
                             "provider_none": False,
                             "runtime_effect": False,
-                            "semantic_repair_version": (
-                                ANTICIPATORY_SEMANTIC_REPAIR_VERSION
-                            ),
+                            "semantic_repair_version": semantic_repair_version,
                             "repairs": list(semantic_repairs),
                         },
                     }
@@ -4819,6 +5973,36 @@ def run_paired_replay_parallel(
         )
     )
     return results
+
+
+def _semantic_repair_provenance_matches(
+    result: dict[str, Any], request: dict[str, Any]
+) -> bool:
+    """Require cached deterministic repairs to match the current contract."""
+
+    repairs = [str(value) for value in result.get("candidate_semantic_repairs") or []]
+    if not repairs:
+        return True
+    expected_version = str(
+        ((request.get("candidate") or {}).get("semantic_repair_version")) or ""
+    )
+    if not expected_version:
+        return False
+    adapter_attempts = [
+        attempt
+        for attempt in result.get("candidate_attempts") or []
+        if isinstance(attempt, dict)
+        and (attempt.get("provider_provenance") or {}).get("provider")
+        == "deterministic_offline_adapter"
+    ]
+    if len(adapter_attempts) != 1:
+        return False
+    provenance = adapter_attempts[0].get("provider_provenance") or {}
+    recorded_repairs = [str(value) for value in provenance.get("repairs") or []]
+    return bool(
+        provenance.get("semantic_repair_version") == expected_version
+        and recorded_repairs == repairs
+    )
 
 
 def _anticipatory_cumulative_learning_summary(
@@ -4960,12 +6144,20 @@ def build_paired_replay_report(
         outcome = _number(preferred.get("end_return_pct"))
         if outcome is None:
             continue
-        control_action = str(
-            (result.get("control_response") or {}).get("action") or ""
-        ).upper()
-        candidate_action = str(
-            (result.get("candidate_response") or {}).get("action") or ""
-        ).upper()
+        control_response = result.get("control_response") or {}
+        control_response = (
+            control_response if isinstance(control_response, dict) else {}
+        )
+        candidate_response = result.get("candidate_response") or {}
+        candidate_response = (
+            candidate_response if isinstance(candidate_response, dict) else {}
+        )
+        control_action = str(control_response.get("action") or "").upper()
+        candidate_action = str(candidate_response.get("action") or "").upper()
+        comparison_stage = _stage(
+            result.get("stage"),
+            label.get("decision_stage") if isinstance(label, dict) else None,
+        )
 
         control_value = _decision_value(control_action, outcome)
         candidate_value = _decision_value(candidate_action, outcome)
@@ -4983,18 +6175,46 @@ def build_paired_replay_report(
         )
         execution_cost = anticipatory_analysis.get("execution_cost")
         execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
+        clean_continuation = anticipatory_analysis.get(
+            "clean_continuation_probe"
+        )
+        clean_continuation = (
+            clean_continuation if isinstance(clean_continuation, dict) else {}
+        )
         execution_cost_contract_applied = bool(
             candidate_contract.get("exposure_semantics")
             == "offline_counterfactual_passive_probe_only"
         )
-        candidate_execution_cost_pct = (
+        control_exposure_selected = _decision_exposure_selected(
+            stage=comparison_stage,
+            action=control_action,
+            response=control_response,
+        )
+        candidate_exposure_selected = _decision_exposure_selected(
+            stage=comparison_stage,
+            action=candidate_action,
+            response=candidate_response,
+        )
+        control_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
-            if execution_cost_contract_applied and candidate_action in EXPOSURE_ACTIONS
+            if execution_cost_contract_applied and control_exposure_selected
             else 0.0 if execution_cost_contract_applied else None
         )
+        candidate_execution_cost_pct = (
+            _number(execution_cost.get("conservative_execution_cost_pct"))
+            if execution_cost_contract_applied and candidate_exposure_selected
+            else 0.0 if execution_cost_contract_applied else None
+        )
+        control_primary_value = (
+            (outcome if control_exposure_selected else 0.0)
+            - (control_execution_cost_pct or 0.0)
+            if execution_cost_contract_applied
+            else control_value
+        )
         candidate_execution_cost_adjusted_value = (
-            candidate_value - candidate_execution_cost_pct
-            if candidate_execution_cost_pct is not None
+            (outcome if candidate_exposure_selected else 0.0)
+            - (candidate_execution_cost_pct or 0.0)
+            if execution_cost_contract_applied
             else candidate_value
         )
         primary_candidate_value = (
@@ -5006,10 +6226,6 @@ def build_paired_replay_report(
         mae = _number(preferred.get("mae_pct"))
         first_hit = str(preferred.get("first_hit") or "")
         entry_path_first_hit = str(preferred.get("entry_path_first_hit") or "")
-        comparison_stage = _stage(
-            result.get("stage"),
-            label.get("decision_stage") if isinstance(label, dict) else None,
-        )
         profit_opportunity_observed = preferred.get("profit_opportunity_observed")
         if profit_opportunity_observed is None:
             profit_opportunity_observed = bool(
@@ -5062,21 +6278,31 @@ def build_paired_replay_report(
                 "candidate_action": candidate_action,
                 "outcome_return_pct": outcome,
                 "control_decision_value_pct": control_value,
+                "control_primary_decision_value_pct": control_primary_value,
                 "candidate_decision_value_pct": candidate_value,
+                "control_exposure_selected": control_exposure_selected,
+                "candidate_exposure_selected": candidate_exposure_selected,
+                "control_entry_probe_intent": (
+                    control_response.get("entry_probe_intent") is True
+                ),
                 "candidate_execution_cost_contract_applied": (
                     execution_cost_contract_applied
                 ),
+                "control_execution_cost_pct": control_execution_cost_pct,
                 "candidate_execution_cost_pct": candidate_execution_cost_pct,
+                "conservative_execution_cost_pct": _number(
+                    execution_cost.get("conservative_execution_cost_pct")
+                ),
                 "candidate_execution_cost_adjusted_decision_value_pct": (
                     candidate_execution_cost_adjusted_value
                 ),
                 "candidate_primary_decision_value_pct": primary_candidate_value,
-                "delta_pct": primary_candidate_value - control_value,
+                "delta_pct": primary_candidate_value - control_primary_value,
                 "control_missed_upside": (
-                    control_action in NO_EXPOSURE_ACTIONS and outcome > 0
+                    not control_exposure_selected and outcome > 0
                 ),
                 "candidate_missed_upside": (
-                    candidate_action in NO_EXPOSURE_ACTIONS and outcome > 0
+                    not candidate_exposure_selected and outcome > 0
                 ),
                 "outcome_mfe_pct": mfe,
                 "outcome_mae_pct": mae,
@@ -5096,6 +6322,9 @@ def build_paired_replay_report(
                 "profit_opportunity_sequence": profit_opportunity_sequence,
                 "pre_profit_mae_pct": pre_profit_mae,
                 "candidate_error_taxonomy": candidate_errors,
+                "clean_continuation_probe_eligible": (
+                    clean_continuation.get("eligible") is True
+                ),
             }
         )
     rejected = sum(row.get("status") != "pass" for row in results)
@@ -5122,6 +6351,9 @@ def build_paired_replay_report(
         ].append(row)
     for (stage, venue, session), rows in sorted(grouped.items()):
         bucket_control_ev = fmean(row["control_decision_value_pct"] for row in rows)
+        bucket_control_primary_ev = fmean(
+            row["control_primary_decision_value_pct"] for row in rows
+        )
         bucket_candidate_ev = fmean(row["candidate_decision_value_pct"] for row in rows)
         bucket_candidate_primary_ev = fmean(
             row["candidate_primary_decision_value_pct"] for row in rows
@@ -5145,28 +6377,28 @@ def build_paired_replay_report(
             for row in rows
         )
         bucket_control_adverse_exposure = sum(
-            row["first_hit"] == "adverse" and row["control_action"] in EXPOSURE_ACTIONS
+            row["first_hit"] == "adverse" and row["control_exposure_selected"]
             for row in rows
         )
         bucket_candidate_adverse_exposure = sum(
             row["first_hit"] == "adverse"
-            and row["candidate_action"] in EXPOSURE_ACTIONS
+            and row["candidate_exposure_selected"]
             for row in rows
         )
         bucket_control_tight_stop_adverse_exposure = sum(
             row["stage"] == "entry"
             and row["entry_path_first_hit"] == "adverse_first"
-            and row["control_action"] in EXPOSURE_ACTIONS
+            and row["control_exposure_selected"]
             for row in rows
         )
         bucket_candidate_tight_stop_adverse_exposure = sum(
             row["stage"] == "entry"
             and row["entry_path_first_hit"] == "adverse_first"
-            and row["candidate_action"] in EXPOSURE_ACTIONS
+            and row["candidate_exposure_selected"]
             for row in rows
         )
         bucket_exposure_rows = [
-            row for row in rows if row["candidate_action"] in EXPOSURE_ACTIONS
+            row for row in rows if row["candidate_exposure_selected"]
         ]
         bucket_exposure_symbols = {
             str(row.get("stock_code") or "")
@@ -5202,6 +6434,7 @@ def build_paired_replay_report(
                 "session_bucket": session,
                 "sample_count": len(rows),
                 "control_source_quality_adjusted_ev_pct": bucket_control_ev,
+                "control_primary_decision_ev_pct": bucket_control_primary_ev,
                 "candidate_source_quality_adjusted_ev_pct": bucket_candidate_ev,
                 "candidate_execution_cost_adjusted_ev_pct": (
                     bucket_execution_cost_adjusted_ev
@@ -5245,6 +6478,11 @@ def build_paired_replay_report(
         if comparable_rows
         else None
     )
+    control_primary_ev = (
+        fmean(row["control_primary_decision_value_pct"] for row in comparable_rows)
+        if comparable_rows
+        else None
+    )
     candidate_ev = (
         fmean(row["candidate_decision_value_pct"] for row in comparable_rows)
         if comparable_rows
@@ -5283,27 +6521,27 @@ def build_paired_replay_report(
         for row in comparable_rows
     )
     control_adverse_first_exposure_count = sum(
-        row["first_hit"] == "adverse" and row["control_action"] in EXPOSURE_ACTIONS
+        row["first_hit"] == "adverse" and row["control_exposure_selected"]
         for row in comparable_rows
     )
     candidate_adverse_first_exposure_count = sum(
-        row["first_hit"] == "adverse" and row["candidate_action"] in EXPOSURE_ACTIONS
+        row["first_hit"] == "adverse" and row["candidate_exposure_selected"]
         for row in comparable_rows
     )
     control_tight_stop_adverse_first_exposure_count = sum(
         row["stage"] == "entry"
         and row["entry_path_first_hit"] == "adverse_first"
-        and row["control_action"] in EXPOSURE_ACTIONS
+        and row["control_exposure_selected"]
         for row in comparable_rows
     )
     candidate_tight_stop_adverse_first_exposure_count = sum(
         row["stage"] == "entry"
         and row["entry_path_first_hit"] == "adverse_first"
-        and row["candidate_action"] in EXPOSURE_ACTIONS
+        and row["candidate_exposure_selected"]
         for row in comparable_rows
     )
     candidate_exposure_rows = [
-        row for row in comparable_rows if row["candidate_action"] in EXPOSURE_ACTIONS
+        row for row in comparable_rows if row["candidate_exposure_selected"]
     ]
     candidate_exposure_symbol_count = len(
         {
@@ -5401,6 +6639,76 @@ def build_paired_replay_report(
             "and drawdown-before-profit are evaluated separately."
         ),
     }
+    clean_continuation_rows = [
+        row
+        for row in comparable_rows
+        if row["clean_continuation_probe_eligible"]
+    ]
+    clean_continuation_exposure_rows = [
+        row for row in clean_continuation_rows if row["candidate_exposure_selected"]
+    ]
+    clean_continuation_probe_summary = {
+        "schema": "clean_continuation_probe_attribution_v1",
+        "eligible_decision_count": len(clean_continuation_rows),
+        "eligible_unique_symbol_count": len(
+            {
+                str(row.get("stock_code") or "")
+                for row in clean_continuation_rows
+                if row.get("stock_code")
+            }
+        ),
+        "candidate_exposure_decision_count": len(
+            clean_continuation_exposure_rows
+        ),
+        "candidate_not_exposed_decision_count": (
+            len(clean_continuation_rows) - len(clean_continuation_exposure_rows)
+        ),
+        "candidate_exposure_coverage_pct": (
+            len(clean_continuation_exposure_rows)
+            / len(clean_continuation_rows)
+            * 100.0
+            if clean_continuation_rows
+            else None
+        ),
+        "candidate_exposure_unique_symbol_count": len(
+            {
+                str(row.get("stock_code") or "")
+                for row in clean_continuation_exposure_rows
+                if row.get("stock_code")
+            }
+        ),
+        "eligible_cohort_after_cost_ev_pct": (
+            fmean(
+                row["outcome_return_pct"]
+                - (row["conservative_execution_cost_pct"] or 0.0)
+                for row in clean_continuation_rows
+            )
+            if clean_continuation_rows
+            else None
+        ),
+        "candidate_selected_after_cost_ev_pct": (
+            fmean(
+                row["candidate_primary_decision_value_pct"]
+                for row in clean_continuation_exposure_rows
+            )
+            if clean_continuation_exposure_rows
+            else None
+        ),
+        "profit_opportunity_count": sum(
+            row["profit_opportunity_observed"] for row in clean_continuation_rows
+        ),
+        "adverse_first_exposure_count": sum(
+            row["first_hit"] == "adverse"
+            or row["entry_path_first_hit"] == "adverse_first"
+            for row in clean_continuation_exposure_rows
+        ),
+        "metric_role": "ai_decision_quality_opportunity_cohort_attribution",
+        "decision_authority": "offline_replay_and_attribution_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
     quality_checks = {
         "all_pairs_comparable": bool(requests)
         and len(comparable_rows) == len(requests),
@@ -5434,6 +6742,8 @@ def build_paired_replay_report(
         status = "candidate_rejected_no_runtime_apply"
     elif not requests:
         status = "sample_floor_keep_collecting"
+    elif not results:
+        status = "paired_replay_requests_ready_candidate_not_executed"
     elif quality_gate_pass:
         status = "paired_replay_complete_candidate_quality_pass_offline_only"
     else:
@@ -5480,24 +6790,34 @@ def build_paired_replay_report(
         "status": status,
         "request_count": len(requests),
         "result_count": len(results),
+        "candidate_execution_performed": bool(results),
         "schema_rejected_count": schema_rejected,
         "provider_failed_count": provider_failed,
         "missing_result_count": missing_result_count,
         "paired_comparable_count": len(comparable_rows),
         "control_source_quality_adjusted_ev_pct": control_ev,
+        "control_primary_decision_ev_pct": control_primary_ev,
         "candidate_source_quality_adjusted_ev_pct": candidate_ev,
         "candidate_execution_cost_adjusted_ev_pct": (
             candidate_execution_cost_adjusted_ev
         ),
         "candidate_primary_decision_ev_pct": candidate_primary_ev,
         "candidate_primary_decision_metric": (
-            "candidate_execution_cost_adjusted_ev_pct"
+            "probe_intent_and_execution_cost_adjusted_ev_pct"
             if execution_cost_contract_applied
             else "source_quality_adjusted_ev_pct"
         ),
+        "control_entry_probe_intent_count": sum(
+            row["control_entry_probe_intent"] for row in comparable_rows
+        ),
         "candidate_execution_cost_observed_count": sum(
             row["candidate_execution_cost_pct"] is not None
-            and row["candidate_action"] in EXPOSURE_ACTIONS
+            and row["candidate_exposure_selected"]
+            for row in comparable_rows
+        ),
+        "control_execution_cost_observed_count": sum(
+            row["control_execution_cost_pct"] is not None
+            and row["control_exposure_selected"]
             for row in comparable_rows
         ),
         "candidate_execution_cost_total_pct": (
@@ -5557,6 +6877,7 @@ def build_paired_replay_report(
         ),
         "candidate_action_counts": dict(candidate_action_counter),
         "candidate_drop_outcome_trajectory": candidate_drop_trajectory,
+        "clean_continuation_probe_summary": clean_continuation_probe_summary,
         "candidate_edge_state_counts": dict(
             Counter(
                 str(
@@ -5578,6 +6899,198 @@ def build_paired_replay_report(
         "results": results,
         **OFFLINE_CONTRACT,
     }
+
+
+def _attach_paired_preparation_metadata(
+    report: dict[str, Any],
+    *,
+    prepared_requests: list[dict[str, Any]],
+    accepted_requests: list[dict[str, Any]],
+    outcome_price_source: str,
+    outcome_price_source_requested: str,
+    price_source_provenance: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Attach the shared request-floor and outcome-source preparation contract."""
+
+    floor_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for request in prepared_requests:
+        key = (
+            str(request.get("stage") or "unknown"),
+            str(request.get("effective_venue") or "UNKNOWN"),
+            str(request.get("session_bucket") or "UNKNOWN"),
+        )
+        floor_groups[key] = dict(request.get("sample_floor") or {})
+    report["prepared_request_count"] = len(prepared_requests)
+    report["sample_floor_excluded_request_count"] = len(prepared_requests) - len(
+        accepted_requests
+    )
+    report["sample_floor_buckets"] = [
+        {
+            "stage": key[0],
+            "effective_venue": key[1],
+            "session_bucket": key[2],
+            **value,
+        }
+        for key, value in sorted(floor_groups.items())
+    ]
+    report["outcome_price_source"] = outcome_price_source
+    report["outcome_price_source_requested"] = outcome_price_source_requested
+    report["price_source_provenance"] = price_source_provenance
+    return report
+
+
+def build_daily_materialization_reports(
+    *,
+    target_date: str,
+    promotion: dict[str, Any],
+    traces: list[dict[str, Any]],
+    payloads: list[dict[str, Any]],
+    labels: list[dict[str, Any]],
+    label_report: dict[str, Any],
+    outcome_price_source: str,
+    outcome_price_source_requested: str,
+    price_source_provenance: list[dict[str, Any]],
+    promotion_artifact_path: Path | None = None,
+    promotion_source_date: str | None = None,
+) -> dict[str, Any]:
+    """Build the daily Exact V2 quality chain without candidate API execution."""
+
+    control_prompt_versions = _latest_exact_control_prompt_versions(
+        promotion=promotion,
+        traces=traces,
+        payloads=payloads,
+    )
+    control_signatures = _latest_exact_control_signatures(
+        promotion=promotion,
+        traces=traces,
+        payloads=payloads,
+    )
+    control = build_control_manifest(
+        target_date=target_date,
+        promotion=promotion,
+        traces=traces,
+        payloads=payloads,
+        control_prompt_versions=control_prompt_versions,
+        control_signatures=control_signatures,
+        promotion_artifact_path=promotion_artifact_path,
+        promotion_source_date=promotion_source_date,
+    )
+    baseline = build_quality_baseline(target_date=target_date, labels=labels)
+    baseline["outcome_price_source"] = outcome_price_source
+    baseline["outcome_price_source_requested"] = outcome_price_source_requested
+    baseline["price_source_provenance"] = price_source_provenance
+
+    prepared_requests = prepare_paired_replay_requests(
+        control_manifest=control,
+        traces=traces,
+        payloads=payloads,
+        labels=labels,
+    )
+    accepted_requests = [
+        request
+        for request in prepared_requests
+        if (request.get("sample_floor") or {}).get("pass") is True
+    ]
+    paired = build_paired_replay_report(
+        target_date=target_date,
+        requests=accepted_requests,
+        results=[],
+        labels=labels,
+    )
+    _attach_paired_preparation_metadata(
+        paired,
+        prepared_requests=prepared_requests,
+        accepted_requests=accepted_requests,
+        outcome_price_source=outcome_price_source,
+        outcome_price_source_requested=outcome_price_source_requested,
+        price_source_provenance=price_source_provenance,
+    )
+    paired["candidate_execution_performed"] = False
+    paired["candidate_execution_authority"] = (
+        "explicit_offline_execute_candidate_only"
+    )
+    paired["decision_quality_objective"] = dict(DECISION_QUALITY_OBJECTIVE)
+
+    reports = {
+        "control": control,
+        "mature": label_report,
+        "baseline": baseline,
+        "paired": paired,
+    }
+    validation_errors = validate_daily_materialization_reports(
+        target_date=target_date,
+        reports=reports,
+    )
+    if validation_errors:
+        raise RuntimeError(
+            "daily_exact_quality_chain_contract_invalid:"
+            + ",".join(validation_errors)
+        )
+    return {
+        "schema": DAILY_MATERIALIZATION_SCHEMA,
+        "target_date": target_date,
+        "generated_at": datetime.now(KST).isoformat(),
+        "status": "daily_exact_quality_chain_prepared",
+        "write_order": ["control", "mature", "baseline", "paired"],
+        "candidate_execution_performed": False,
+        "decision_quality_objective": dict(DECISION_QUALITY_OBJECTIVE),
+        "reports": reports,
+        "contract_validation": "pass",
+        "summary": {
+            "control_status": control.get("status"),
+            "label_status": label_report.get("status"),
+            "label_counts": label_report.get("summary"),
+            "baseline_status": baseline.get("status"),
+            "baseline_eligible_sample_count": baseline.get(
+                "eligible_sample_count"
+            ),
+            "paired_status": paired.get("status"),
+            "paired_prepared_request_count": paired.get(
+                "prepared_request_count"
+            ),
+            "paired_accepted_request_count": paired.get("request_count"),
+        },
+        **OFFLINE_CONTRACT,
+    }
+
+
+def validate_daily_materialization_reports(
+    *,
+    target_date: str,
+    reports: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Validate daily artifact identity and report-only authority isolation."""
+
+    expected_schemas = {
+        "control": CONTROL_SCHEMA,
+        "mature": LABEL_REPORT_SCHEMA,
+        "baseline": BASELINE_SCHEMA,
+        "paired": PAIRED_SCHEMA,
+    }
+    errors: list[str] = []
+    for name, expected_schema in expected_schemas.items():
+        report = reports.get(name)
+        if not isinstance(report, dict):
+            errors.append(f"{name}_missing")
+            continue
+        if report.get("schema") != expected_schema:
+            errors.append(f"{name}_schema_invalid")
+        if report.get("target_date") != target_date:
+            errors.append(f"{name}_target_date_mismatch")
+        for field, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+            ("broker_order_forbidden", True),
+        ):
+            if report.get(field) is not expected:
+                errors.append(f"{name}_{field}_invalid")
+    paired = reports.get("paired") or {}
+    if paired.get("candidate_execution_performed") is not False:
+        errors.append("paired_candidate_execution_performed")
+    if paired.get("results"):
+        errors.append("paired_candidate_results_not_empty")
+    return errors
 
 
 def build_detailed_three_way_comparison(
@@ -7898,6 +9411,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mode",
         choices=(
             "control",
+            "postclose",
             "mature",
             "baseline",
             "paired",
@@ -7953,6 +9467,8 @@ def main(argv: list[str] | None = None) -> int:
             DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
             DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
             DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
         ),
         default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     )
@@ -7962,6 +9478,19 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Offline detailed-replay model override. It creates a separate "
             "model-comparison artifact and never changes runtime routing."
+        ),
+    )
+    parser.add_argument(
+        "--outcome-recovery-report",
+        action="append",
+        default=[],
+        type=Path,
+        help=(
+            "Explicit prior same-date paired report whose route-qualified "
+            "same-trace primary outcome owns recovery from a retained raw-window "
+            "gap. It replaces a conflicting regenerated label for that trace. "
+            "Valid only in detailed offline replay; exact payloads are never "
+            "reconstructed from the report."
         ),
     )
     parser.add_argument("--write", action="store_true")
@@ -7979,6 +9508,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--candidate-model requires --mode detailed")
     if args.candidate_model and not args.execute_candidate:
         parser.error("--candidate-model requires --execute-candidate")
+    if args.outcome_recovery_report and args.mode != "detailed":
+        parser.error("--outcome-recovery-report requires --mode detailed")
     if args.candidate_max_new_requests < 0:
         parser.error("--candidate-max-new-requests must be zero or positive")
     if args.candidate_max_new_requests and not args.execute_candidate:
@@ -8149,6 +9680,54 @@ def main(argv: list[str] | None = None) -> int:
         if args.mode == "mature":
             report = label_report
             path = label_report_path(args.date)
+        elif args.mode == "postclose":
+            materialization = build_daily_materialization_reports(
+                target_date=args.date,
+                promotion=promotion,
+                traces=sources["traces"],
+                payloads=sources["payloads"],
+                labels=labels,
+                label_report=label_report,
+                outcome_price_source=effective_outcome_price_source,
+                outcome_price_source_requested=args.outcome_price_source,
+                price_source_provenance=price_source_provenance,
+                promotion_artifact_path=promotion_artifact_path,
+                promotion_source_date=promotion_source_date,
+            )
+            if args.write:
+                reports = materialization["reports"]
+                _atomic_write_json(control_path(args.date), reports["control"])
+                _atomic_write_json(label_report_path(args.date), reports["mature"])
+                _atomic_write_json(baseline_path(args.date), reports["baseline"])
+                _atomic_write_json(paired_path(args.date), reports["paired"])
+                written_reports = {
+                    "control": _load_json(control_path(args.date)),
+                    "mature": _load_json(label_report_path(args.date)),
+                    "baseline": _load_json(baseline_path(args.date)),
+                    "paired": _load_json(paired_path(args.date)),
+                }
+                write_validation_errors = validate_daily_materialization_reports(
+                    target_date=args.date,
+                    reports=written_reports,
+                )
+                if write_validation_errors:
+                    raise RuntimeError(
+                        "daily_exact_quality_chain_write_validation_failed:"
+                        + ",".join(write_validation_errors)
+                    )
+            printable = {
+                key: value
+                for key, value in materialization.items()
+                if key != "reports"
+            }
+            printable["artifact_paths"] = {
+                "control": str(control_path(args.date)),
+                "mature": str(label_report_path(args.date)),
+                "baseline": str(baseline_path(args.date)),
+                "paired": str(paired_path(args.date)),
+            }
+            print(json.dumps(printable, ensure_ascii=False))
+            return 0
         elif args.mode == "baseline":
             report = build_quality_baseline(target_date=args.date, labels=labels)
             report["outcome_price_source"] = effective_outcome_price_source
@@ -8211,11 +9790,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             path = reversal_sequence_path(args.date)
         else:
+            replay_labels = labels
+            outcome_recovery: dict[str, Any] | None = None
+            if args.outcome_recovery_report:
+                replay_labels, outcome_recovery = (
+                    recover_same_trace_outcome_labels_from_paired_reports(
+                        target_date=args.date,
+                        labels=labels,
+                        traces=sources["traces"],
+                        payloads=sources["payloads"],
+                        report_paths=args.outcome_recovery_report,
+                    )
+                )
             prepared_requests = prepare_paired_replay_requests(
                 control_manifest=_load_json(control_path(args.date)),
                 traces=sources["traces"],
                 payloads=sources["payloads"],
-                labels=labels,
+                labels=replay_labels,
             )
             if args.mode == "detailed":
                 prepared_requests = prepare_detailed_paired_replay_requests(
@@ -8311,6 +9902,12 @@ def main(argv: list[str] | None = None) -> int:
                     == request_by_pair[str(row.get("paired_replay_id") or "")].get(
                         "anticipatory_reversal_analysis_sha256"
                     )
+                    and _semantic_repair_provenance_matches(
+                        row,
+                        request_by_pair[
+                            str(row.get("paired_replay_id") or "")
+                        ],
+                    )
                     and _successful_candidate_result_model(row)
                     == str(
                         (
@@ -8355,6 +9952,14 @@ def main(argv: list[str] | None = None) -> int:
                         "action": control.get("captured_action"),
                         "score": control.get("captured_score"),
                         "reason": control.get("captured_reason"),
+                        "edge_state": control.get("captured_edge_state"),
+                        "evidence": control.get("captured_evidence"),
+                        "entry_probe_intent": control.get(
+                            "captured_entry_probe_intent"
+                        ),
+                        "entry_probe_intent_status": control.get(
+                            "captured_entry_probe_intent_status"
+                        ),
                         "result_source": "captured_natural_control",
                     }
 
@@ -8384,7 +9989,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_date=args.date,
                 requests=requests,
                 results=results,
-                labels=labels,
+                labels=replay_labels,
             )
             if args.mode == "detailed":
                 report["schema"] = DETAILED_PAIRED_SCHEMA
@@ -8392,6 +9997,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.detailed_candidate_version in {
                     DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
                     DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
                 }:
                     report["supplemental_analysis_schema"] = (
                         ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
@@ -8421,36 +10028,26 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if isinstance(replay_reconstruction, dict):
                     report["replay_input_reconstruction"] = dict(replay_reconstruction)
+                if outcome_recovery is not None:
+                    report["outcome_recovery"] = outcome_recovery
             if args.execute_candidate:
                 report["existing_result_reuse_count"] = existing_result_reuse_count
                 report["new_candidate_execution_count"] = new_candidate_execution_count
                 report["deferred_candidate_execution_count"] = (
                     deferred_candidate_execution_count
                 )
-            floor_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
-            for request in prepared_requests:
-                key = (
-                    str(request.get("stage") or "unknown"),
-                    str(request.get("effective_venue") or "UNKNOWN"),
-                    str(request.get("session_bucket") or "UNKNOWN"),
+            _attach_paired_preparation_metadata(
+                report,
+                prepared_requests=prepared_requests,
+                accepted_requests=requests,
+                outcome_price_source=effective_outcome_price_source,
+                outcome_price_source_requested=args.outcome_price_source,
+                price_source_provenance=price_source_provenance,
+            )
+            if outcome_recovery is not None:
+                report["outcome_price_source"] = (
+                    "current_labels_with_prior_same_trace_paired_outcome_recovery"
                 )
-                floor_groups[key] = dict(request.get("sample_floor") or {})
-            report["prepared_request_count"] = len(prepared_requests)
-            report["sample_floor_excluded_request_count"] = len(
-                prepared_requests
-            ) - len(requests)
-            report["sample_floor_buckets"] = [
-                {
-                    "stage": key[0],
-                    "effective_venue": key[1],
-                    "session_bucket": key[2],
-                    **value,
-                }
-                for key, value in sorted(floor_groups.items())
-            ]
-            report["outcome_price_source"] = effective_outcome_price_source
-            report["outcome_price_source_requested"] = args.outcome_price_source
-            report["price_source_provenance"] = price_source_provenance
             path = (
                 detailed_paired_path(
                     args.date,

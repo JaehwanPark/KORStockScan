@@ -8,6 +8,7 @@ from src.engine.ai_response_contracts import (
 def test_ai_response_schema_registry_covers_required_endpoints():
     assert set(AI_RESPONSE_SCHEMA_REGISTRY) == {
         "entry_v1",
+        "decision_quality_v2_7_entry",
         "entry_price_v1",
         "holding_exit_v1",
         "holding_score_v2",

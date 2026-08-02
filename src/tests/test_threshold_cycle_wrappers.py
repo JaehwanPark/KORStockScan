@@ -599,6 +599,40 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "optional microstructure_reaction_context artifact wait failed" in script
 
 
+def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibration():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION:-true}"'
+        in script
+    )
+    materialization_idx = script.index(
+        "src.engine.scalping.ai_decision_quality"
+    )
+    calibration_idx = script.index(
+        "src.engine.scalping.ai_action_outcome_calibration"
+    )
+    materialization_block = script[materialization_idx:calibration_idx]
+
+    assert materialization_idx < calibration_idx
+    assert '--mode postclose' in materialization_block
+    assert '--write' in materialization_block
+    assert '--execute-candidate' not in materialization_block
+    for artifact in (
+        "ai_decision_quality_control_${TARGET_DATE}.json",
+        "ai_decision_outcome_labels_${TARGET_DATE}.json",
+        "ai_decision_quality_baseline_${TARGET_DATE}.json",
+        "ai_prompt_paired_replay_${TARGET_DATE}.json",
+    ):
+        assert artifact in materialization_block
+    assert (
+        "ai_decision_quality_daily_materialization="
+        "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" in script
+    )
+
+
 def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
