@@ -19,10 +19,19 @@ from urllib.request import Request, urlopen
 
 APP_NAME = "SamsungPriceWidget"
 POLL_INTERVAL_MS = 10_000
-WINDOW_SIZE = "190x170"
+WINDOW_SIZE = "190x182"
 ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
 CHART_WIDTH = 174
-CHART_HEIGHT = 46
+CHART_HEIGHT = 34
+
+ADVISORY_STATES = {
+    "DATA_WAIT",
+    "WATCH",
+    "ENTRY_CAUTION",
+    "ENTRY_READY",
+    "NO_CHASE",
+    "AVOID",
+}
 
 
 def default_config_path() -> Path:
@@ -79,6 +88,33 @@ class Quote:
     market_venue: str
     market_cohort: str
     market_session: str
+    advisory_state: str
+    entry_price_low: int | None
+    entry_price_high: int | None
+    advisory_reasons: tuple[str, ...]
+    advisory_unmet_conditions: tuple[str, ...]
+    external_risk_level: str
+    external_quality: str
+
+
+def _optional_positive_int(value: object, *, field: str) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid_{field}") from exc
+    if parsed <= 0:
+        raise ValueError(f"invalid_{field}")
+    return parsed
+
+
+def _string_tuple(value: object, *, field: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"invalid_{field}")
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 def parse_quote_payload(payload: object) -> Quote:
@@ -136,6 +172,73 @@ def parse_quote_payload(payload: object) -> Quote:
         if len(time_kst) != 5 or time_kst[2] != ":" or close <= 0:
             raise ValueError("invalid_minute_chart")
         minute_chart.append((time_kst, close))
+
+    advisory_payload = payload.get("advisory")
+    advisory_state = "DATA_WAIT"
+    entry_price_low = None
+    entry_price_high = None
+    advisory_reasons: tuple[str, ...] = ()
+    advisory_unmet_conditions: tuple[str, ...] = ()
+    external_risk_level = "DATA_LIMITED"
+    external_quality = "UNAVAILABLE"
+    if advisory_payload is not None:
+        if not isinstance(advisory_payload, dict):
+            raise ValueError("invalid_advisory")
+        if (
+            advisory_payload.get("authority") != "widget_advisory_only"
+            or advisory_payload.get("runtime_effect") is not False
+            or advisory_payload.get("actual_order_submitted") is not False
+            or advisory_payload.get("broker_order_forbidden") is not True
+        ):
+            raise ValueError("invalid_advisory_authority")
+        advisory_state = str(advisory_payload.get("state") or "DATA_WAIT").strip()
+        if advisory_state not in ADVISORY_STATES:
+            raise ValueError("invalid_advisory_state")
+        entry_price_low = _optional_positive_int(
+            advisory_payload.get("entry_price_low"), field="entry_price_low"
+        )
+        entry_price_high = _optional_positive_int(
+            advisory_payload.get("entry_price_high"), field="entry_price_high"
+        )
+        if (
+            entry_price_low is not None
+            and entry_price_high is not None
+            and entry_price_high < entry_price_low
+        ):
+            raise ValueError("invalid_entry_price_range")
+        advisory_reasons = _string_tuple(
+            advisory_payload.get("reasons"), field="advisory_reasons"
+        )
+        advisory_unmet_conditions = _string_tuple(
+            advisory_payload.get("unmet_conditions"),
+            field="advisory_unmet_conditions",
+        )
+        external_risk = advisory_payload.get("external_risk") or {}
+        if not isinstance(external_risk, dict):
+            raise ValueError("invalid_external_risk")
+        external_risk_level = str(external_risk.get("level") or "DATA_LIMITED").strip()
+        if external_risk_level not in {
+            "CLEAR",
+            "CAUTION",
+            "HOLD",
+            "DATA_LIMITED",
+        }:
+            raise ValueError("invalid_external_risk")
+        external_points = advisory_payload.get("external_points") or {}
+        if isinstance(external_points, dict) and external_points:
+            qualities = {
+                str(point.get("quality") or "UNAVAILABLE")
+                for point in external_points.values()
+                if isinstance(point, dict)
+            }
+            if "STALE" in qualities:
+                external_quality = "STALE"
+            elif "UNAVAILABLE" in qualities:
+                external_quality = "PARTIAL"
+            elif "BEST_EFFORT_DELAYED" in qualities:
+                external_quality = "DELAYED"
+            elif qualities == {"MARKET_CLOSED"}:
+                external_quality = "MARKET_CLOSED"
     return Quote(
         current_price=price,
         day_low_delta=low_delta,
@@ -147,7 +250,29 @@ def parse_quote_payload(payload: object) -> Quote:
         market_venue=market_venue,
         market_cohort=market_cohort,
         market_session=market_session,
+        advisory_state=advisory_state,
+        entry_price_low=entry_price_low,
+        entry_price_high=entry_price_high,
+        advisory_reasons=advisory_reasons,
+        advisory_unmet_conditions=advisory_unmet_conditions,
+        external_risk_level=external_risk_level,
+        external_quality=external_quality,
     )
+
+
+def primary_advisory_reason(quote: Quote) -> str:
+    prefer_unmet = quote.advisory_state in {"DATA_WAIT", "WATCH"}
+    primary = (
+        quote.advisory_unmet_conditions if prefer_unmet else quote.advisory_reasons
+    )
+    secondary = (
+        quote.advisory_reasons if prefer_unmet else quote.advisory_unmet_conditions
+    )
+    if primary:
+        return primary[0]
+    if secondary:
+        return secondary[0]
+    return "data_wait"
 
 
 def fetch_current_price(settings: WidgetSettings, *, timeout_sec: int = 10) -> Quote:
@@ -175,8 +300,8 @@ class SamsungPriceWidget:
 
         root.title("삼성전자 10초")
         root.geometry(WINDOW_SIZE)
-        root.minsize(190, 170)
-        root.maxsize(190, 170)
+        root.minsize(190, 182)
+        root.maxsize(190, 182)
         root.attributes("-topmost", True)
         root.configure(bg="#1e2430")
         root.protocol("WM_DELETE_WINDOW", root.destroy)
@@ -218,6 +343,24 @@ class SamsungPriceWidget:
             anchor="w",
         )
         self.trend_label.pack(fill="x")
+        self.advisory_label = tk.Label(
+            frame,
+            text="진입 조언: 데이터 대기",
+            fg="#aab7c8",
+            bg="#1e2430",
+            font=("Malgun Gothic", 8, "bold"),
+            anchor="w",
+        )
+        self.advisory_label.pack(fill="x")
+        self.advisory_detail_label = tk.Label(
+            frame,
+            text="근거 — · 외부 DATA",
+            fg="#8fa2b7",
+            bg="#1e2430",
+            font=("Malgun Gothic", 7),
+            anchor="w",
+        )
+        self.advisory_detail_label.pack(fill="x")
         self.delta_label = tk.Label(
             frame,
             text="직전: —",
@@ -243,7 +386,7 @@ class SamsungPriceWidget:
             font=("Malgun Gothic", 7),
             anchor="w",
         )
-        self.status_label.pack(fill="x", pady=(7, 0))
+        self.status_label.pack(fill="x", pady=(2, 0))
 
     def start(self) -> None:
         problem = validate_settings(self.settings)
@@ -263,7 +406,8 @@ class SamsungPriceWidget:
         try:
             quote = fetch_current_price(self.settings)
         except Exception as exc:  # keep the last successful price visible
-            self.root.after(0, lambda: self._apply_error(str(exc)))
+            message = str(exc)
+            self.root.after(0, lambda message=message: self._apply_error(message))
         else:
             self.root.after(0, lambda: self._apply_quote(quote))
 
@@ -312,6 +456,7 @@ class SamsungPriceWidget:
             )
         )
         self.trend_label.configure(text=trend_text, fg=trend_color)
+        self._apply_advisory(quote)
         self._draw_minute_chart(quote.minute_chart)
         if previous is None:
             self.delta_label.configure(text="직전: —", fg="#aab7c8")
@@ -333,6 +478,86 @@ class SamsungPriceWidget:
             fg="#8fa2b7",
         )
         self._finish_cycle()
+
+    def _apply_advisory(self, quote: Quote) -> None:
+        state_labels = {
+            "DATA_WAIT": "데이터 대기",
+            "WATCH": "관찰",
+            "ENTRY_CAUTION": "조건부 진입",
+            "ENTRY_READY": "진입 적합",
+            "NO_CHASE": "추격 금지",
+            "AVOID": "진입 회피",
+        }
+        state_colors = {
+            "DATA_WAIT": "#8fa2b7",
+            "WATCH": "#f5c26b",
+            "ENTRY_CAUTION": "#ffb86c",
+            "ENTRY_READY": "#ff6b6b",
+            "NO_CHASE": "#f5c26b",
+            "AVOID": "#5ca9ff",
+        }
+        range_text = ""
+        if quote.entry_price_low is not None and quote.entry_price_high is not None:
+            if quote.entry_price_low == quote.entry_price_high:
+                range_text = f" · {quote.entry_price_low:,}원"
+            else:
+                range_text = (
+                    f" · {quote.entry_price_low:,}~{quote.entry_price_high:,}원"
+                )
+        self.advisory_label.configure(
+            text=f"{state_labels[quote.advisory_state]}{range_text}",
+            fg=state_colors[quote.advisory_state],
+        )
+        reason_labels = {
+            "low_structure_confirmed": "저점지지",
+            "vwap_or_resistance_reclaimed": "VWAP회복",
+            "rebound_volume_confirmed": "반등거래량",
+            "three_five_minute_not_down": "3·5분방어",
+            "relative_strength_not_weak": "상대강도",
+            "spread_within_two_ticks": "호가양호",
+            "price_more_than_30bp_above_support": "과열추격",
+            "confirmed_support_broken": "지지이탈",
+            "minimum_bars_not_met": "관측축적",
+            "completed_bars_missing": "분봉대기",
+            "completed_bar_stale": "분봉지연",
+            "bbo_stale": "호가지연",
+            "quote_stale": "현재가지연",
+            "regular_flow_unavailable": "수급지연",
+            "foreign_and_program_flow_not_improving": "수급약화",
+            "premarket_vwap_not_recovered": "프리VWAP미회복",
+            "external_risk_hold": "외부위험",
+            "relative_strength_unavailable": "상대데이터대기",
+            "relative_strength_weak": "상대약세",
+            "confirmed_support_missing": "지지대기",
+            "entry_range_not_available_without_chasing": "추천범위없음",
+            "recent_rest_prints_descending": "체결하락",
+            "awaiting_second_10s_confirmation": "2회확인중",
+            "collector_snapshot_missing_or_stale": "수집기대기",
+            "previous_day_ohlc_missing": "전일데이터대기",
+            "bbo_missing_or_crossed": "호가대기",
+        }
+        source_reason = primary_advisory_reason(quote)
+        reason_text = reason_labels.get(source_reason, source_reason[:14])
+        external_labels = {
+            "CLEAR": "외부양호",
+            "CAUTION": "외부주의",
+            "HOLD": "외부보류",
+            "DATA_LIMITED": "외부지연",
+        }
+        quality_labels = {
+            "DELAYED": "/DLY",
+            "STALE": "/STALE",
+            "PARTIAL": "/PART",
+            "MARKET_CLOSED": "/CLOSED",
+            "UNAVAILABLE": "",
+        }
+        self.advisory_detail_label.configure(
+            text=(
+                f"{reason_text} · {external_labels[quote.external_risk_level]}"
+                f"{quality_labels[quote.external_quality]}"
+            ),
+            fg="#8fa2b7",
+        )
 
     def _draw_minute_chart(self, minute_chart: tuple[tuple[str, int], ...]) -> None:
         canvas = self.chart_canvas

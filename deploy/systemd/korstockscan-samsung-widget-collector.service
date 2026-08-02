@@ -1,0 +1,19 @@
+[Unit]
+Description=KORStockScan Samsung Widget Read-Only Advisory Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.samsung_widget_advisory --interval-sec 10
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

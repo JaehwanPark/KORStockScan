@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Samsung Widget Advisory Evaluation After NXT Close
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 20:10:00 Asia/Seoul
+Persistent=true
+Unit=korstockscan-samsung-widget-evaluation.service
+
+[Install]
+WantedBy=timers.target

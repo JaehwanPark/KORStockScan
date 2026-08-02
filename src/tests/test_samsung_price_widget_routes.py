@@ -23,6 +23,10 @@ class _MissingReturnCodeResponse(_FakeResponse):
 
 def _client(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY", "widget-secret")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH",
+        "/tmp/korstockscan-test-no-widget-snapshot.json",
+    )
     app = Flask(__name__)
     app.register_blueprint(routes.samsung_price_widget_bp)
     return app.test_client()
@@ -113,7 +117,7 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
     assert response.get_json()["quote_request_code"] == "005930"
     assert response.get_json()["token_mode"] == "shared_cache_only"
     assert response.get_json()["minute_trends"] == {
-        "1m": "up",
+        "1m": "unavailable",
         "3m": "unavailable",
         "5m": "unavailable",
     }
@@ -122,12 +126,10 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
     assert captured["calls"][0]["headers"]["authorization"] == "Bearer TOKEN"
     assert captured["calls"][0]["json"] == {"stk_cd": "005930"}
     assert captured["calls"][0]["timeout"] == 5
-    assert captured["calls"][1]["headers"]["api-id"] == "ka10080"
-    assert captured["calls"][1]["json"] == {
-        "stk_cd": "005930",
-        "tic_scope": "1",
-        "upd_stkpc_tp": "1",
-    }
+    assert len(captured["calls"]) == 1
+    assert response.get_json()["advisory"]["state"] == "DATA_WAIT"
+    assert response.get_json()["advisory"]["session"] == "KRX_REGULAR"
+    assert response.get_json()["advisory"]["runtime_effect"] is False
 
 
 def test_samsung_widget_uses_nxt_route_after_krx_close(monkeypatch):
@@ -167,10 +169,8 @@ def test_samsung_widget_uses_nxt_route_after_krx_close(monkeypatch):
     assert response.get_json()["market_venue"] == "NXT"
     assert response.get_json()["market_session"] == "nxt_aftermarket"
     assert response.get_json()["quote_request_code"] == "005930_NX"
-    assert [call["json"]["stk_cd"] for call in captured] == [
-        "005930_NX",
-        "005930_NX",
-    ]
+    assert response.get_json()["advisory"]["session"] == "NXT_AFTERMARKET"
+    assert [call["json"]["stk_cd"] for call in captured] == ["005930_NX"]
 
 
 def test_samsung_widget_uses_nxt_route_during_premarket(monkeypatch):
@@ -211,10 +211,55 @@ def test_samsung_widget_uses_nxt_route_during_premarket(monkeypatch):
     assert response.get_json()["market_cohort"] == "PREMARKET_KRX_LIKE"
     assert response.get_json()["market_session"] == "krx_like_premarket"
     assert response.get_json()["quote_request_code"] == "005930_NX"
-    assert [call["json"]["stk_cd"] for call in captured] == [
-        "005930_NX",
-        "005930_NX",
-    ]
+    assert response.get_json()["advisory"]["session"] == "NXT_PREMARKET"
+    assert [call["json"]["stk_cd"] for call in captured] == ["005930_NX"]
+
+
+def test_samsung_widget_serves_fresh_collector_snapshot_without_token_call(
+    monkeypatch, tmp_path
+):
+    client = _client(monkeypatch)
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    monkeypatch.setattr(routes, "_now_kst", lambda: now)
+    snapshot_path = tmp_path / "widget-snapshot.json"
+    snapshot_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": 1,
+                "status": "ok",
+                "symbol": "005930",
+                "current_price": 100_000,
+                "observed_at_kst": now.isoformat(),
+                "token_mode": "shared_cache_only",
+                "market_venue": "KRX",
+                "market_cohort": "KRX",
+                "quote_request_code": "005930",
+                "advisory": {
+                    "state": "ENTRY_READY",
+                    "session": "KRX_REGULAR",
+                    "authority": "widget_advisory_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH", str(snapshot_path))
+
+    def fail_if_token_read(*args, **kwargs):
+        raise AssertionError("fresh collector snapshot must not read a token")
+
+    monkeypatch.setattr(
+        routes.kiwoom_utils, "get_cached_kiwoom_token", fail_if_token_read
+    )
+    response = client.get(
+        "/api/widget/samsung-price",
+        headers={"X-KORStockScan-Widget-Key": "widget-secret"},
+    )
+    assert response.status_code == 200
+    assert response.get_json()["advisory"]["state"] == "ENTRY_READY"
 
 
 def test_quote_route_uses_nxt_only_during_nxt_premarket():

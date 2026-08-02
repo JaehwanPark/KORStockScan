@@ -1,0 +1,944 @@
+from __future__ import annotations
+
+import json
+import threading
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+from src.engine.monitoring import samsung_widget_advisory as advisory
+from src.engine.monitoring import samsung_widget_contract as contract
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def test_kiwoom_signed_price_is_normalized_to_absolute_price():
+    assert advisory._positive_int("-262500") == 262_500
+    assert advisory._positive_int("+262500") == 262_500
+
+
+def _bars(start: datetime, closes: list[int]) -> list[advisory.MinuteBar]:
+    result = []
+    for index, close in enumerate(closes):
+        source_time = (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S")
+        open_price = close - 100 if index % 2 == 0 else close + 50
+        result.append(
+            advisory.MinuteBar(
+                source_time=source_time,
+                open=open_price,
+                high=max(open_price, close) + 50,
+                low=min(open_price, close) - 50,
+                close=close,
+                volume=1_500 if close > open_price else 1_000,
+            )
+        )
+    return result
+
+
+def _external(change_by_key=None, quality="BEST_EFFORT_DELAYED"):
+    change_by_key = change_by_key or {}
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST).isoformat()
+    return {
+        key: advisory.ExternalPoint(
+            key=key,
+            ticker=ticker,
+            value=100.0,
+            change_15m_pct=change_by_key.get(key, 0.0),
+            observed_at=now,
+            received_at=now,
+            age_sec=30,
+            provider="yahoo_best_effort",
+            quality=quality,
+            market_state="OPEN",
+        )
+        for key, ticker in advisory.YahooExternalMarketProvider.TICKERS.items()
+    }
+
+
+def _ready_input(current_price=100_400, bbo_age=0.0):
+    now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
+    bars = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [
+            100_000,
+            99_900,
+            100_100,
+            100_000,
+            100_200,
+            100_100,
+            100_300,
+            100_200,
+            100_400,
+            current_price,
+        ],
+    )
+    return {
+        "observed_at": now,
+        "context": advisory.session_context(now),
+        "current_price": current_price,
+        "bars": bars,
+        "bbo": {
+            "best_bid": current_price - 100,
+            "best_ask": current_price,
+            "age_sec": bbo_age,
+        },
+        "previous_day": {
+            "date": "20260731",
+            "open": 99_000,
+            "high": 102_000,
+            "low": 98_000,
+            "close": 100_000,
+        },
+        "relative": {
+            "samsung_change_pct": 1.0,
+            "sk_hynix_change_pct": 0.8,
+            "kospi_change_pct": 0.5,
+        },
+        "external_points": _external(),
+        "flow": {
+            "status": "OBSERVED",
+            "live_for_current_session": True,
+            "foreign_nonworsening": True,
+            "program_nonworsening": True,
+        },
+    }
+
+
+def test_session_context_separates_nxt_krx_and_transition_windows():
+    assert (
+        advisory.session_context(datetime(2026, 8, 3, 8, 10, tzinfo=KST)).name
+        == "NXT_PREMARKET"
+    )
+    assert (
+        advisory.session_context(datetime(2026, 8, 3, 8, 55, tzinfo=KST)).name
+        == "SESSION_TRANSITION"
+    )
+    assert (
+        advisory.session_context(datetime(2026, 8, 3, 9, 3, tzinfo=KST)).name
+        == "KRX_REGULAR"
+    )
+    assert (
+        advisory.session_context(datetime(2026, 8, 3, 15, 35, tzinfo=KST)).name
+        == "SESSION_TRANSITION"
+    )
+    assert (
+        advisory.session_context(datetime(2026, 8, 3, 15, 45, tzinfo=KST)).name
+        == "NXT_AFTERMARKET"
+    )
+    assert (
+        advisory.session_context(datetime(2026, 8, 2, 9, 10, tzinfo=KST)).name
+        == "CLOSED"
+    )
+
+
+def test_completed_bars_exclude_forming_and_cross_session_rows():
+    rows = [
+        {
+            "cntr_tm": "20260803085900",
+            "open_pric": "99,000",
+            "high_pric": "99,100",
+            "low_pric": "98,900",
+            "cur_prc": "99,050",
+            "trde_qty": "100",
+        },
+        {
+            "cntr_tm": "20260803090000",
+            "open_pric": "100,000",
+            "high_pric": "100,200",
+            "low_pric": "99,900",
+            "cur_prc": "100,100",
+            "trde_qty": "200",
+        },
+        {
+            "cntr_tm": "20260803090100",
+            "open_pric": "100,100",
+            "high_pric": "100,300",
+            "low_pric": "100,000",
+            "cur_prc": "100,200",
+            "trde_qty": "300",
+        },
+    ]
+    bars = advisory.completed_session_bars(
+        rows,
+        observed_at=datetime(2026, 8, 3, 9, 1, 30, tzinfo=KST),
+        session_start=advisory.KRX_START,
+    )
+    assert [bar.source_time for bar in bars] == ["20260803090000"]
+
+
+def test_completed_bars_respect_explicit_session_end():
+    rows = [
+        {
+            "cntr_tm": source_time,
+            "open_pric": "100000",
+            "high_pric": "100100",
+            "low_pric": "99900",
+            "cur_prc": "100000",
+            "trde_qty": "100",
+        }
+        for source_time in ("20260803084900", "20260803090000")
+    ]
+
+    bars = advisory.completed_session_bars(
+        rows,
+        observed_at=datetime(2026, 8, 3, 9, 10, tzinfo=KST),
+        session_start=advisory.NXT_PREMARKET_START,
+        session_end=advisory.NXT_PREMARKET_END,
+    )
+
+    assert [bar.source_time for bar in bars] == ["20260803084900"]
+
+
+def test_daily_anchor_rejects_cache_not_refreshed_for_current_trade_date():
+    now = datetime(2026, 8, 4, 9, 10, tzinfo=KST)
+    rows = [
+        {
+            "dt": "20260803",
+            "open_pric": "100000",
+            "high_pric": "101000",
+            "low_pric": "99000",
+            "cur_prc": "100500",
+        }
+    ]
+
+    assert (
+        advisory._current_daily_anchor(
+            rows, observed_at=now, cache_fetch_day="20260803"
+        )
+        == {}
+    )
+    assert (
+        advisory._current_daily_anchor(
+            rows, observed_at=now, cache_fetch_day="20260804"
+        )["date"]
+        == "20260803"
+    )
+
+
+def test_domestic_ready_requires_two_consecutive_observations():
+    raw = advisory.evaluate_advisory(**_ready_input())
+    assert raw["raw_state"] == "ENTRY_READY"
+    assert raw["entry_price_low"] == 100_300
+    assert raw["entry_price_high"] == 100_300
+    assert (
+        raw["derived"]["confirmed_support"]
+        % advisory.get_tick_size(raw["derived"]["confirmed_support"])
+        == 0
+    )
+    assert raw["trigger_price"] % advisory.get_tick_size(raw["trigger_price"]) == 0
+    assert raw["authority"] == "widget_advisory_only"
+    assert raw["runtime_effect"] is False
+    assert raw["derived"]["higher_high_and_low"] is True
+
+    filter_ = advisory.AdvisoryPromotionFilter()
+    first = filter_.apply(raw)
+    second = filter_.apply(raw)
+    assert first["state"] == "WATCH"
+    assert second["state"] == "ENTRY_READY"
+
+
+def test_promotion_filter_keeps_caution_until_ready_is_confirmed():
+    caution = advisory.evaluate_advisory(
+        **{
+            **_ready_input(),
+            "external_points": _external({"NQ": -0.5}),
+        }
+    )
+    ready = advisory.evaluate_advisory(**_ready_input())
+    filter_ = advisory.AdvisoryPromotionFilter()
+
+    assert filter_.apply(caution)["state"] == "WATCH"
+    assert filter_.apply(caution)["state"] == "ENTRY_CAUTION"
+    assert filter_.apply(ready)["state"] == "ENTRY_CAUTION"
+    assert filter_.apply(ready)["state"] == "ENTRY_READY"
+
+
+def test_promotion_filter_applies_ready_to_caution_demotion_immediately():
+    ready = advisory.evaluate_advisory(**_ready_input())
+    caution = advisory.evaluate_advisory(
+        **{
+            **_ready_input(),
+            "external_points": _external({"NQ": -0.5}),
+        }
+    )
+    filter_ = advisory.AdvisoryPromotionFilter()
+    filter_.apply(ready)
+    filter_.apply(ready)
+
+    assert filter_.apply(caution)["state"] == "ENTRY_CAUTION"
+
+
+def test_promotion_confirmation_does_not_cross_session_or_trading_day():
+    regular = advisory.evaluate_advisory(**_ready_input())
+    filter_ = advisory.AdvisoryPromotionFilter()
+    assert filter_.apply(regular)["state"] == "WATCH"
+    assert filter_.apply(regular)["state"] == "ENTRY_READY"
+
+    aftermarket_time = datetime(2026, 8, 3, 15, 45, 5, tzinfo=KST)
+    aftermarket = {
+        **regular,
+        "session": "NXT_AFTERMARKET",
+        "observed_at": aftermarket_time.isoformat(),
+    }
+    assert filter_.apply(aftermarket)["state"] == "WATCH"
+    assert filter_.apply(aftermarket)["state"] == "ENTRY_READY"
+
+    next_day = {
+        **regular,
+        "observed_at": datetime(2026, 8, 4, 9, 10, 5, tzinfo=KST).isoformat(),
+    }
+    assert filter_.apply(next_day)["state"] == "WATCH"
+
+
+def test_promotion_filter_restores_widget_only_state_across_collector_restart():
+    ready = advisory.evaluate_advisory(**_ready_input())
+    first_filter = advisory.AdvisoryPromotionFilter()
+    first_filter.apply(ready)
+    confirmed = first_filter.apply(ready)
+
+    restored_filter = advisory.AdvisoryPromotionFilter()
+    assert restored_filter.restore(confirmed) is True
+    assert restored_filter.apply(ready)["state"] == "ENTRY_READY"
+
+
+def test_premarket_auxiliary_can_only_downgrade_before_0930():
+    inputs = _ready_input(current_price=100_400)
+    before_time = datetime(2026, 8, 3, 9, 29, 55, tzinfo=KST)
+    inputs["observed_at"] = before_time
+    inputs["context"] = advisory.session_context(before_time)
+    inputs["bars"] = _bars(
+        datetime(2026, 8, 3, 9, 20, tzinfo=KST),
+        [bar.close for bar in inputs["bars"]],
+    )
+    inputs["external_points"] = {
+        key: advisory.ExternalPoint(
+            **{
+                **point.__dict__,
+                "observed_at": before_time.isoformat(),
+                "received_at": before_time.isoformat(),
+            }
+        )
+        for key, point in inputs["external_points"].items()
+    }
+    inputs["premarket"] = {
+        "status": "OBSERVED",
+        "date": "2026-08-03",
+        "vwap": 100_500,
+        "market_venue": "NXT",
+    }
+
+    before_expiry = advisory.evaluate_advisory(**inputs)
+    after_time = datetime(2026, 8, 3, 9, 30, 5, tzinfo=KST)
+    after_expiry = advisory.evaluate_advisory(
+        **{
+            **inputs,
+            "observed_at": after_time,
+            "context": advisory.session_context(after_time),
+        }
+    )
+
+    assert before_expiry["state"] == "ENTRY_CAUTION"
+    assert "premarket_vwap_not_recovered" in before_expiry["unmet_conditions"]
+    assert before_expiry["provenance"]["premarket_context"] == "APPLIED_AUXILIARY"
+    assert after_expiry["state"] == "ENTRY_READY"
+    assert after_expiry["provenance"]["premarket_context"] == "EXPIRED_0930"
+    assert after_expiry["derived"]["premarket_auxiliary"] is None
+
+
+def test_live_regular_flow_joint_weakness_only_downgrades_ready():
+    inputs = _ready_input()
+    inputs["flow"] = {
+        "status": "OBSERVED",
+        "live_for_current_session": True,
+        "foreign_nonworsening": False,
+        "program_nonworsening": False,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert "foreign_and_program_flow_not_improving" in result["unmet_conditions"]
+
+
+def test_regular_flow_gap_caps_otherwise_ready_signal_at_caution():
+    inputs = _ready_input()
+    inputs["flow"] = {
+        "status": "UNAVAILABLE",
+        "live_for_current_session": False,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert "regular_flow_unavailable" in result["unmet_conditions"]
+
+
+def test_regular_flow_partial_source_is_not_labeled_fully_observed():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    flow = advisory._parse_flow(
+        {
+            "opmr_invsr_trde_chart": [
+                {"tm": "090000", "frgnr_invsr": "-100"},
+                {"tm": "091000", "frgnr_invsr": "-50"},
+            ]
+        },
+        {},
+        context=advisory.session_context(now),
+        observed_at=now,
+    )
+
+    assert flow["status"] == "PARTIAL"
+    assert flow["foreign_available"] is True
+    assert flow["program_available"] is False
+
+
+def test_regular_flow_old_source_clock_is_labeled_stale():
+    now = datetime(2026, 8, 3, 9, 20, tzinfo=KST)
+    flow = advisory._parse_flow(
+        {
+            "opmr_invsr_trde_chart": [
+                {"tm": "090000", "frgnr_invsr": "-100"},
+                {"tm": "091000", "frgnr_invsr": "-50"},
+            ]
+        },
+        {
+            "stk_tm_prm_trde_trnsn": [
+                {
+                    "tm": "091000",
+                    "prm_netprps_amt": "100",
+                    "prm_netprps_amt_irds": "10",
+                }
+            ]
+        },
+        context=advisory.session_context(now),
+        observed_at=now,
+    )
+
+    assert flow["status"] == "STALE"
+    assert flow["source_age_sec"] == 600.0
+
+
+def test_regular_relative_strength_requires_both_peer_and_kospi_inputs():
+    inputs = _ready_input()
+    inputs["relative"] = {
+        "samsung_change_pct": 1.0,
+        "sk_hynix_change_pct": None,
+        "kospi_change_pct": 0.5,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "WATCH"
+    assert "relative_strength_unavailable" in result["unmet_conditions"]
+
+
+def test_nxt_relative_strength_does_not_require_closed_krx_index():
+    context = advisory.session_context(datetime(2026, 8, 3, 15, 45, tzinfo=KST))
+
+    ok, issues = advisory._relative_quality(
+        {
+            "samsung_change_pct": 1.0,
+            "sk_hynix_change_pct": 0.8,
+            "kospi_change_pct": None,
+        },
+        context,
+    )
+
+    assert ok is True
+    assert issues == []
+
+
+def test_advisory_validity_is_short_and_capped_by_session_end():
+    inputs = _ready_input()
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["valid_until"] == "2026-08-03T09:11:05+09:00"
+
+    inputs["observed_at"] = datetime(2026, 8, 3, 15, 29, 30, tzinfo=KST)
+    inputs["context"] = advisory.session_context(inputs["observed_at"])
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["valid_until"] == "2026-08-03T15:30:00+09:00"
+
+
+def test_frozen_aftermarket_flow_is_provenance_not_live_downgrade():
+    now = datetime(2026, 8, 3, 15, 45, tzinfo=KST)
+    result = advisory._freeze_regular_flow(
+        {
+            "status": "OBSERVED",
+            "foreign_nonworsening": False,
+            "program_nonworsening": False,
+            "observed_at": "2026-08-03T15:29:00+09:00",
+            "source_session": "KRX_REGULAR",
+            "live_for_current_session": True,
+        },
+        now,
+    )
+
+    assert result["status"] == "FROZEN_REGULAR_SESSION"
+    assert result["live_for_current_session"] is False
+    assert result["source_session"] == "KRX_REGULAR"
+    assert result["last_live_observed_at"] == "2026-08-03T15:29:00+09:00"
+
+
+def test_regular_flow_cache_must_match_current_trade_date():
+    cached = {"observed_at": "2026-08-03T15:29:00+09:00"}
+
+    assert advisory._observation_is_same_day(
+        cached, datetime(2026, 8, 3, 15, 45, tzinfo=KST)
+    )
+    assert not advisory._observation_is_same_day(
+        cached, datetime(2026, 8, 4, 15, 45, tzinfo=KST)
+    )
+
+
+def test_chasing_more_than_30bp_is_rejected():
+    inputs = _ready_input(current_price=102_000)
+    inputs["bbo"] = {"best_bid": 101_800, "best_ask": 101_900, "age_sec": 0}
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["state"] == "NO_CHASE"
+    assert result["entry_price_low"] is None
+
+
+def test_confirmed_support_break_is_immediate_avoid():
+    inputs = _ready_input()
+    inputs["current_price"] = 99_000
+    inputs["bbo"] = {"best_bid": 98_900, "best_ask": 99_000, "age_sec": 0}
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "AVOID"
+    assert result["entry_price_low"] is None
+
+
+def test_stale_bbo_fails_closed_before_advisory():
+    result = advisory.evaluate_advisory(**_ready_input(bbo_age=21.0))
+    assert result["state"] == "DATA_WAIT"
+    assert "bbo_stale" in result["source_quality"]["issues"]
+
+
+def test_negative_bbo_age_is_rejected_as_invalid_freshness():
+    result = advisory.evaluate_advisory(**_ready_input(bbo_age=-1.0))
+    assert result["state"] == "DATA_WAIT"
+    assert "bbo_stale" in result["source_quality"]["issues"]
+
+
+def test_stale_rest_quote_fails_closed_before_advisory():
+    inputs = _ready_input()
+    inputs["quote_age_sec"] = 21.0
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["state"] == "DATA_WAIT"
+    assert "quote_stale" in result["source_quality"]["issues"]
+
+
+def test_external_risk_can_downgrade_or_hold_but_not_promote():
+    caution = advisory.evaluate_external_risk(_external({"NQ": -0.5}))
+    hold = advisory.evaluate_external_risk(_external({"NQ": -0.5, "MU": -0.9}))
+    severe = advisory.evaluate_external_risk(_external({"USDKRW": 0.6}))
+    assert caution["level"] == "CAUTION"
+    assert hold["level"] == "HOLD"
+    assert severe["level"] == "HOLD"
+    assert caution["positive_promotion_forbidden"] is True
+
+
+def test_market_closed_micron_is_not_misclassified_as_stale_or_adverse():
+    points = _external({"MU": -5.0})
+    mu = points["MU"]
+    points["MU"] = advisory.ExternalPoint(
+        **{
+            **mu.__dict__,
+            "quality": "MARKET_CLOSED",
+            "market_state": "MARKET_CLOSED",
+            "age_sec": 10_000,
+        }
+    )
+    result = advisory.evaluate_external_risk(points)
+    assert result["level"] == "CLEAR"
+    assert "MU" not in result["adverse"]
+    assert "MU" not in result["stale"]
+
+
+def test_micron_market_state_respects_nyse_holiday_calendar():
+    assert not advisory._mu_extended_market_open(
+        datetime(2026, 7, 3, 23, 0, tzinfo=KST)
+    )
+    assert advisory._mu_extended_market_open(datetime(2026, 7, 2, 23, 0, tzinfo=KST))
+
+
+def test_external_stale_caps_domestic_ready_at_caution():
+    inputs = _ready_input()
+    inputs["external_points"] = _external(quality="STALE")
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["external_risk"]["level"] == "DATA_LIMITED"
+
+
+def test_external_total_gap_caps_domestic_ready_at_caution():
+    inputs = _ready_input()
+    inputs["external_points"] = {}
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["external_risk"]["unavailable"] == ["NQ", "MU", "USDKRW"]
+
+
+def test_cached_external_observation_becomes_stale_as_wall_clock_advances():
+    inputs = _ready_input()
+    old_time = (inputs["observed_at"] - timedelta(minutes=6)).isoformat()
+    inputs["external_points"] = {
+        key: advisory.ExternalPoint(
+            **{
+                **point.__dict__,
+                "observed_at": old_time,
+                "quality": "BEST_EFFORT_DELAYED",
+                "age_sec": 10,
+            }
+        )
+        for key, point in _external().items()
+    }
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["external_risk"]["level"] == "DATA_LIMITED"
+    assert result["external_points"]["NQ"]["quality"] == "STALE"
+
+
+def test_external_hold_removes_entry_price_range():
+    inputs = _ready_input()
+    inputs["external_points"] = _external({"NQ": -0.9})
+    result = advisory.evaluate_advisory(**inputs)
+    assert result["state"] == "WATCH"
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+    assert "external_risk_hold" in result["unmet_conditions"]
+
+
+def test_yahoo_provider_labels_data_best_effort_not_realtime():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    index = pd.date_range(
+        now.astimezone(ZoneInfo("UTC")) - timedelta(minutes=19),
+        periods=20,
+        freq="1min",
+    )
+    frame = pd.DataFrame({"Close": range(100, 120)}, index=index)
+
+    provider = advisory.YahooExternalMarketProvider(downloader=lambda **_: frame)
+    point = provider._fetch_one("NQ", "NQ=F", now)
+
+    assert point.provider == "yahoo_best_effort"
+    assert point.quality == "BEST_EFFORT_DELAYED"
+    assert point.change_15m_pct is not None
+
+
+def test_yahoo_provider_requires_actual_15_minute_history():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    index = pd.date_range(
+        now.astimezone(ZoneInfo("UTC")) - timedelta(minutes=9),
+        periods=10,
+        freq="1min",
+    )
+    frame = pd.DataFrame({"Close": range(100, 110)}, index=index)
+
+    point = advisory.YahooExternalMarketProvider(
+        downloader=lambda **_: frame
+    )._fetch_one("NQ", "NQ=F", now)
+
+    assert point.quality == "UNAVAILABLE"
+    assert point.change_15m_pct is None
+    assert point.reason == "insufficient_15m_history"
+
+
+def test_yahoo_provider_fetches_independent_sources_concurrently():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    index = pd.date_range(
+        now.astimezone(ZoneInfo("UTC")) - timedelta(minutes=19),
+        periods=20,
+        freq="1min",
+    )
+    frame = pd.DataFrame({"Close": range(100, 120)}, index=index)
+    barrier = threading.Barrier(3)
+    thread_ids: set[int] = set()
+
+    def downloader(**_):
+        thread_ids.add(threading.get_ident())
+        barrier.wait(timeout=1)
+        return frame
+
+    points = advisory.YahooExternalMarketProvider(downloader=downloader).fetch(now)
+
+    assert set(points) == {"NQ", "MU", "USDKRW"}
+    assert len(thread_ids) == 3
+
+
+def test_yahoo_provider_isolates_unexpected_single_source_failure(monkeypatch):
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    provider = advisory.YahooExternalMarketProvider(downloader=lambda **_: None)
+
+    def fetch_one(key, ticker, observed_at):
+        if key == "MU":
+            raise ValueError("malformed_source")
+        return _external()[key]
+
+    monkeypatch.setattr(provider, "_fetch_one", fetch_one)
+    points = provider.fetch(now)
+
+    assert points["NQ"].quality == "BEST_EFFORT_DELAYED"
+    assert points["MU"].quality == "UNAVAILABLE"
+    assert points["MU"].reason == "ValueError"
+    assert points["USDKRW"].quality == "BEST_EFFORT_DELAYED"
+
+
+def test_spread_tick_count_handles_exchange_price_band_boundary():
+    assert advisory._spread_tick_count(199_900, 200_000) == 1
+    assert advisory._spread_tick_count(199_800, 200_500) == 3
+
+
+def test_snapshot_freshness_uses_collector_observed_time():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    assert contract.snapshot_is_fresh(
+        {"status": "ok", "observed_at_kst": (now - timedelta(seconds=20)).isoformat()},
+        now=now,
+    )
+    assert not contract.snapshot_is_fresh(
+        {"status": "ok", "observed_at_kst": (now - timedelta(seconds=26)).isoformat()},
+        now=now,
+    )
+    assert not contract.snapshot_is_fresh(
+        {"status": "ok", "observed_at_kst": "2026-08-03T09:10:00"},
+        now=now,
+    )
+
+
+def test_observation_recorder_writes_only_state_transition_and_minute_summary(
+    tmp_path,
+):
+    recorder = advisory.ObservationRecorder(tmp_path)
+    start = datetime(2026, 8, 3, 9, 10, 1, tzinfo=KST)
+
+    def payload(state):
+        return {
+            "observed_at_kst": start.isoformat(),
+            "current_price": 100_000,
+            "market_venue": "KRX",
+            "market_session": "KRX_REGULAR",
+            "advisory": {"state": state},
+            "observation": {"latest_completed_bar": None},
+        }
+
+    recorder.record(payload("WATCH"), start)
+    recorder.record(payload("WATCH"), start + timedelta(seconds=10))
+    recorder.record(payload("ENTRY_CAUTION"), start + timedelta(seconds=20))
+    recorder.record(payload("ENTRY_CAUTION"), start + timedelta(minutes=1))
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "samsung_widget_advisory_20260803.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    assert [row["observation_kind"] for row in rows] == [
+        "state_transition",
+        "state_transition",
+        "minute_summary",
+    ]
+    assert rows[1]["previous_advisory_state"] == "WATCH"
+
+    restarted = advisory.ObservationRecorder(tmp_path)
+    restarted.record(payload("ENTRY_CAUTION"), start + timedelta(minutes=1, seconds=10))
+    rows_after_same_state = (
+        (tmp_path / "samsung_widget_advisory_20260803.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert len(rows_after_same_state) == 3
+
+    restarted.record(payload("ENTRY_READY"), start + timedelta(minutes=1, seconds=20))
+    rows_after_change = [
+        json.loads(line)
+        for line in (tmp_path / "samsung_widget_advisory_20260803.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(rows_after_change) == 4
+    assert rows_after_change[-1]["previous_advisory_state"] == "ENTRY_CAUTION"
+
+
+def test_collector_uses_only_read_only_market_data_and_cached_token(
+    monkeypatch, tmp_path
+):
+    now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
+    )
+
+    def fail_if_issued(*args, **kwargs):
+        raise AssertionError("collector must never issue or refresh a token")
+
+    monkeypatch.setattr(advisory.kiwoom_utils, "get_kiwoom_token", fail_if_issued)
+    monkeypatch.setattr(
+        advisory.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://api.example.test{path}",
+    )
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"return_code": 0, **self.payload}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, *, headers, json, timeout):
+            self.calls.append((headers["api-id"], url, json, timeout))
+            api_id = headers["api-id"]
+            if api_id == "ka10001":
+                return Response(
+                    {
+                        "cur_prc": "100400",
+                        "low_pric": "99800",
+                        "flu_rt": "1.00" if json["stk_cd"] == "005930" else "0.80",
+                    }
+                )
+            if api_id == "ka10004":
+                return Response(
+                    {
+                        "buy_fpr_bid": "100300",
+                        "sel_fpr_bid": "100400",
+                        "buy_fpr_req": "1000",
+                        "sel_fpr_req": "1200",
+                        "bid_req_base_tm": "091005",
+                    }
+                )
+            if api_id == "ka10003":
+                return Response(
+                    {
+                        "cntr_infr": [
+                            {"cur_prc": "100400"},
+                            {"cur_prc": "100300"},
+                            {"cur_prc": "100300"},
+                        ]
+                    }
+                )
+            if api_id == "ka10080":
+                closes = [
+                    100000,
+                    99900,
+                    100100,
+                    100000,
+                    100200,
+                    100100,
+                    100300,
+                    100200,
+                    100400,
+                    100400,
+                ]
+                return Response(
+                    {
+                        "stk_min_pole_chart_qry": [
+                            {
+                                "cntr_tm": (
+                                    datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+                                    + timedelta(minutes=index)
+                                ).strftime("%Y%m%d%H%M%S"),
+                                "open_pric": str(close - 100),
+                                "high_pric": str(close + 50),
+                                "low_pric": str(close - 150),
+                                "cur_prc": str(close),
+                                "trde_qty": "1000",
+                            }
+                            for index, close in enumerate(closes)
+                        ]
+                    }
+                )
+            if api_id == "ka10081":
+                return Response(
+                    {
+                        "stk_dt_pole_chart_qry": [
+                            {
+                                "dt": "20260731",
+                                "open_pric": "99000",
+                                "high_pric": "102000",
+                                "low_pric": "98000",
+                                "cur_prc": "100000",
+                            }
+                        ]
+                    }
+                )
+            if api_id == "ka20001":
+                return Response({"flu_rt": "0.50"})
+            if api_id == "ka10064":
+                return Response(
+                    {
+                        "opmr_invsr_trde_chart": [
+                            {"tm": "090000", "frgnr_invsr": "-100"},
+                            {"tm": "091000", "frgnr_invsr": "-50"},
+                        ]
+                    }
+                )
+            if api_id == "ka90008":
+                return Response(
+                    {
+                        "stk_tm_prm_trde_trnsn": [
+                            {
+                                "tm": "091000",
+                                "prm_netprps_amt": "100",
+                                "prm_netprps_amt_irds": "10",
+                            }
+                        ]
+                    }
+                )
+            raise AssertionError(f"unexpected api-id: {api_id}")
+
+    class ExternalProvider:
+        def fetch(self, observed_at):
+            return _external()
+
+    request_session = FakeSession()
+    snapshot_path = tmp_path / "snapshot.json"
+    collector = advisory.SamsungWidgetCollector(
+        snapshot_path=snapshot_path,
+        observation_dir=tmp_path / "observations",
+        external_provider=ExternalProvider(),
+        request_session=request_session,
+    )
+    payload = collector.collect_once(now)
+
+    assert payload["status"] == "ok"
+    assert payload["market_session"] == "krx_or_closed"
+    assert payload["advisory"]["session"] == "KRX_REGULAR"
+    assert payload["advisory"]["authority"] == "widget_advisory_only"
+    assert payload["advisory"]["broker_order_forbidden"] is True
+    assert snapshot_path.exists()
+    assert {call[0] for call in request_session.calls} == {
+        "ka10001",
+        "ka10003",
+        "ka10004",
+        "ka10064",
+        "ka10080",
+        "ka10081",
+        "ka20001",
+        "ka90008",
+    }
+    assert all(
+        "order" not in call[1] and "acnt" not in call[1]
+        for call in request_session.calls
+    )
+
+
+def test_read_only_client_blocks_non_market_data_before_network_call():
+    class FailSession:
+        def post(self, *args, **kwargs):
+            raise AssertionError("forbidden request must not reach the network")
+
+    client = advisory.KiwoomReadOnlyClient("TOKEN", session=FailSession())
+
+    try:
+        client.post("/api/dostk/acnt", "kt00001", {})
+    except RuntimeError as exc:
+        assert str(exc).startswith("forbidden_widget_kiwoom_request")
+    else:
+        raise AssertionError("account request was not blocked")

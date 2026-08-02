@@ -102,6 +102,92 @@ def test_widget_payload_parser_preserves_premarket_venue():
     assert quote.market_session == "krx_like_premarket"
 
 
+def test_widget_payload_parser_accepts_safe_advisory_contract():
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 221500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "ENTRY_CAUTION",
+                "entry_price_low": 221000,
+                "entry_price_high": 221500,
+                "reasons": ["vwap_or_resistance_reclaimed"],
+                "unmet_conditions": [],
+                "external_risk": {"level": "CAUTION"},
+                "external_points": {"NQ": {"quality": "BEST_EFFORT_DELAYED"}},
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+
+    assert quote.advisory_state == "ENTRY_CAUTION"
+    assert quote.entry_price_low == 221000
+    assert quote.external_risk_level == "CAUTION"
+    assert quote.external_quality == "DELAYED"
+
+
+def test_widget_watch_detail_prefers_blocker_over_passed_reason():
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 221500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "WATCH",
+                "reasons": ["low_structure_confirmed"],
+                "unmet_conditions": ["relative_strength_weak"],
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+
+    assert widget.primary_advisory_reason(quote) == "relative_strength_weak"
+
+
+def test_widget_payload_parser_rejects_runtime_effect_advisory():
+    with pytest.raises(ValueError, match="invalid_advisory_authority"):
+        widget.parse_quote_payload(
+            {
+                "status": "ok",
+                "current_price": 221500,
+                "minute_chart": [],
+                "advisory": {
+                    "state": "ENTRY_READY",
+                    "authority": "widget_advisory_only",
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            }
+        )
+
+
+def test_widget_payload_parser_rejects_negative_advisory_price():
+    with pytest.raises(ValueError, match="invalid_entry_price_low"):
+        widget.parse_quote_payload(
+            {
+                "status": "ok",
+                "current_price": 221500,
+                "minute_chart": [],
+                "advisory": {
+                    "state": "ENTRY_CAUTION",
+                    "entry_price_low": -221000,
+                    "authority": "widget_advisory_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

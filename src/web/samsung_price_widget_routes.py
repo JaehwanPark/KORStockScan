@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import requests
 from flask import Blueprint, jsonify, request
 
+from src.engine.monitoring import samsung_widget_contract
 from src.engine.sniper_config import CONF
 from src.utils import kiwoom_utils
 
@@ -24,6 +25,7 @@ samsung_price_widget_bp = Blueprint("samsung_price_widget", __name__)
 _WIDGET_ACCESS_KEY_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY"
 _WIDGET_ACCESS_KEY_FILE_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY_FILE"
 _WIDGET_ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
+_WIDGET_SNAPSHOT_PATH_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH"
 _SAMSUNG_CODE = "005930"
 _SAMSUNG_NAME = "삼성전자"
 _REQUEST_TIMEOUT_SEC = 5
@@ -163,6 +165,8 @@ def _classify_minute_trend(completed: list[tuple[str, int]]) -> tuple[str, str |
 
 
 def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
+    if (path, api_id) != ("/api/dostk/stkinfo", "ka10001"):
+        return None
     try:
         response = requests.post(
             kiwoom_utils.get_api_url(path),
@@ -219,17 +223,101 @@ def _error_response(reason: str, status_code: int):
     return response
 
 
+def _snapshot_path() -> Path:
+    configured = os.getenv(_WIDGET_SNAPSHOT_PATH_ENV, "").strip()
+    return (
+        Path(configured)
+        if configured
+        else samsung_widget_contract.DEFAULT_SNAPSHOT_PATH
+    )
+
+
+def _fresh_collector_snapshot(observed_at: datetime) -> dict | None:
+    payload = samsung_widget_contract.load_snapshot(_snapshot_path())
+    if not samsung_widget_contract.snapshot_is_fresh(payload, now=observed_at):
+        return None
+    current_context = samsung_widget_contract.session_context(observed_at)
+    if not current_context.active:
+        return None
+    if (
+        payload.get("schema_version") != samsung_widget_contract.SNAPSHOT_SCHEMA_VERSION
+        or payload.get("symbol") != _SAMSUNG_CODE
+        or _parse_positive_price(payload.get("current_price")) is None
+        or payload.get("token_mode") != "shared_cache_only"
+        or payload.get("market_venue") != current_context.market_venue
+        or payload.get("market_cohort") != current_context.market_cohort
+        or payload.get("quote_request_code") != current_context.request_code
+    ):
+        return None
+    advisory = payload.get("advisory")
+    if not isinstance(advisory, dict):
+        return None
+    if (
+        advisory.get("authority") != samsung_widget_contract.ADVISORY_AUTHORITY
+        or advisory.get("session") != current_context.name
+        or advisory.get("runtime_effect") is not False
+        or advisory.get("actual_order_submitted") is not False
+        or advisory.get("broker_order_forbidden") is not True
+    ):
+        return None
+    return payload
+
+
+def _fallback_advisory(observed_at: datetime, market_session: str) -> dict:
+    return {
+        "state": "DATA_WAIT",
+        "raw_state": "DATA_WAIT",
+        "session": market_session,
+        "entry_price_low": None,
+        "entry_price_high": None,
+        "trigger": None,
+        "trigger_price": None,
+        "invalidation": None,
+        "invalidation_price": None,
+        "reasons": [],
+        "unmet_conditions": ["collector_snapshot_missing_or_stale"],
+        "valid_until": observed_at.replace(
+            hour=20, minute=0, second=0, microsecond=0
+        ).isoformat(),
+        "observed_at": observed_at.isoformat(),
+        "source_quality": {
+            "status": "BLOCKED",
+            "issues": ["collector_snapshot_missing_or_stale"],
+        },
+        "external_risk": {
+            "level": "DATA_LIMITED",
+            "adverse": [],
+            "severe": [],
+            "stale": [],
+            "unavailable": ["NQ", "MU", "USDKRW"],
+            "positive_promotion_forbidden": True,
+        },
+        "provenance": {"source": "direct_quote_fallback_only"},
+        "authority": samsung_widget_contract.ADVISORY_AUTHORITY,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "metric_contract": samsung_widget_contract.METRIC_CONTRACT,
+    }
+
+
 @samsung_price_widget_bp.get("/api/widget/samsung-price")
 def get_samsung_price():
-    """Return a single fresh ka10001 quote without issuing or refreshing a token."""
+    """Return the fresh collector snapshot or a quote-only safe fallback."""
     if not _authorized_request():
         return _error_response("unauthorized", 401)
+
+    observed_at = _now_kst()
+    collector_snapshot = _fresh_collector_snapshot(observed_at)
+    if collector_snapshot is not None:
+        result = jsonify(collector_snapshot)
+        result.headers["Cache-Control"] = "no-store"
+        return result
 
     token = kiwoom_utils.get_cached_kiwoom_token(CONF)
     if not token:
         return _error_response("shared_token_unavailable", 503)
 
-    observed_at = _now_kst()
     request_code, market_venue, market_session = _quote_route_for_observed_at(
         observed_at
     )
@@ -262,20 +350,10 @@ def get_samsung_price():
         if day_low_delta is not None and day_low_price > 0
         else None
     )
-    chart_payload = _kiwoom_post(
-        token,
-        path="/api/dostk/chart",
-        api_id="ka10080",
-        payload={"stk_cd": request_code, "tic_scope": "1", "upd_stkpc_tp": "1"},
-    )
-    completed_minute_closes = _completed_minute_closes(
-        (chart_payload or {}).get("stk_min_pole_chart_qry"),
-        observed_at=observed_at,
-        limit=_MINUTE_CHART_BAR_COUNT,
-        session_start=session_start,
-    )
-    minute_trends, minute_trend_at = _classify_minute_trends(completed_minute_closes)
-    minute_trend = minute_trends["1m"]
+    completed_minute_closes: list[tuple[str, int]] = []
+    minute_trends = {"1m": "unavailable", "3m": "unavailable", "5m": "unavailable"}
+    minute_trend_at = None
+    minute_trend = "unavailable"
 
     result = jsonify(
         {
@@ -316,8 +394,12 @@ def get_samsung_price():
             "market_session": market_session,
             "minute_session_start_kst": session_start.strftime("%H:%M"),
             "quote_request_code": request_code,
-            "source": f"kiwoom_ka10001_{market_venue.lower()}",
+            "source": f"kiwoom_ka10001_{market_venue.lower()}_quote_only_fallback",
             "token_mode": "shared_cache_only",
+            "advisory": _fallback_advisory(
+                observed_at,
+                samsung_widget_contract.session_context(observed_at).name,
+            ),
         }
     )
     result.headers["Cache-Control"] = "no-store"

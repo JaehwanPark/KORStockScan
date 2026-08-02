@@ -1,11 +1,17 @@
 # Samsung Price Widget for Windows
 
-`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 170
+`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 182
 pixels) that shows Samsung Electronics (`005930`) current price, the difference
 from the previous successful 10-second query, today's low-price distance, and
 the completed-close direction over 1-, 3-, and 5-minute horizons on one compact
 line. It also draws a compact 20-minute line chart from completed one-minute
-closes; no additional graph is created for the three trend horizons.
+closes; no additional graph is created for the three trend horizons. A compact
+advisory line shows the entry state, tick-normalized price range, primary
+reason, and external-risk quality.
+
+The implementation contract, state-machine order, formulas, known limits, and
+external-auditor checklist are documented in
+[`docs/audit-reports/2026-08-02-samsung-widget-advisory-external-audit-brief.md`](../../docs/audit-reports/2026-08-02-samsung-widget-advisory-external-audit-brief.md).
 
 The current-price query and previous-price delta refresh every 10 seconds;
 the trend and chart remain based on completed one-minute candles. During the
@@ -20,6 +26,10 @@ never issues, refreshes, revokes, exports, or logs a Kiwoom bearer token. When
 the cache is missing, near expiry, expired, or rejected, it fails closed and
 the widget keeps the last successful price with an `AWS 토큰 대기` status. It
 does not access an account, place/cancel orders, or restart/control the bot.
+The advisory contract is pinned to `authority=widget_advisory_only`,
+`runtime_effect=false`, `actual_order_submitted=false`, and
+`broker_order_forbidden=true`; the Windows client rejects an advisory that
+violates any of those fields.
 
 ## AWS setup
 
@@ -37,10 +47,59 @@ attach that file to `korstockscan-gunicorn.service` through a systemd drop-in,
 then run `sudo systemctl restart korstockscan-gunicorn`. This restarts the web
 API process only; it is separate from the trading-bot service.
 
+Install the independent read-only collector without restarting the trading
+bot:
+
+```bash
+sudo cp deploy/systemd/korstockscan-samsung-widget-collector.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now korstockscan-samsung-widget-collector
+```
+
+It writes an atomic snapshot to
+`data/runtime/samsung_widget_advisory_snapshot.json`. Gunicorn serves a fresh
+snapshot without calling Kiwoom. If the snapshot is missing or older than 25
+seconds, the route calls only `ka10001` to keep the price visible and returns
+`DATA_WAIT`; it does not synthesize an entry advisory from partial data. Only
+state changes and one observation per completed minute are recorded. JSONL
+older than 30 days is deleted.
+
+The optional daily evaluator runs after the NXT close and materializes mature
+1/3/5/10/20/30/60-minute MFE/MAE plus target/adverse first-hit observations.
+Daily compact reports remain available after minute JSONL retention cleanup,
+and the rolling artifact declares whether the 60-trading-day floor has been
+met. It is counterfactual observation only and never aggregates with realized
+PnL or changes a runtime threshold. Historical pipeline events that lack the
+same-session completed OHLCV, BBO, venue, and exact advisory payload are
+source-quality-ineligible for state-machine replay rather than being silently
+normalized into the 60-day sample.
+
+```bash
+sudo cp deploy/systemd/korstockscan-samsung-widget-evaluation.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now korstockscan-samsung-widget-evaluation.timer
+```
+
 The route is `GET /api/widget/samsung-price` and requires the matching
-`X-KORStockScan-Widget-Key` request header. It uses only `POST
-/api/dostk/stkinfo`, `api-id: ka10001`, `stk_cd: 005930`, and the `cur_prc`
-response field.
+`X-KORStockScan-Widget-Key` request header. The quote-only fallback uses `POST
+/api/dostk/stkinfo`, `api-id: ka10001`. The collector uses read-only
+market-data TRs `ka10001`, `ka10003`, `ka10004`, `ka10064`, `ka10080`,
+`ka10081`, `ka20001`, and `ka90008`; it never calls auth, account, order,
+cancel, or bot-control endpoints.
+
+The advisory is deterministic, not an AI score or trading hard gate. Dynamic
+levels come from prior-day OHLC, session VWAP/opening range, confirmed recent
+support/resistance, completed-bar price/volume structure, fresh BBO, and
+Samsung relative performance versus SK Hynix and KOSPI. Yahoo `NQ=F`, `MU`,
+and `KRW=X` data is explicitly labeled `yahoo_best_effort` and
+`BEST_EFFORT_DELAYED`; it is not represented as licensed real-time data.
+Favorable external data cannot create an entry signal. Adverse external data
+can downgrade or hold an otherwise domestic-qualified advisory.
+NXT premarket context is auxiliary-only through 09:30 KST and is then removed;
+it cannot create `ENTRY_READY`. In the NXT aftermarket, the latest regular-KRX
+foreign/program flow is labeled `FROZEN_REGULAR_SESSION` and is never presented
+as live aftermarket flow. Each advisory expires after 60 seconds or at the
+current session close, whichever arrives first, and never later than 20:00 KST.
 
 ## Windows installation
 
@@ -60,12 +119,13 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
 
 ## Official Kiwoom reference gate
 
-- Retrieved: `2026-07-31T11:45:32+09:00`
+- Retrieved and verified: `2026-08-02T22:53:30+09:00`
 - Upstream: `Kiwoom-Securities/Kiwoom-REST-API`
   `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
-- Inspected: `kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`,
-  `examples/국내주식/차트/get_domestic_stock_minute_chart.py`,
-  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/core/client.py`,
+- Inspected: `kiwoom_docs/종목정보.md`, `kiwoom_docs/시세.md`,
+  `kiwoom_docs/차트.md`, `kiwoom_docs/업종.md`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
+  `kiwoom/core/client.py`,
   `postman/kiwoom-openapi.postman_collection.json`, and the local
   `docs/kiwoom-api-data-contract.md`.
 - Contract used: real `https://api.kiwoom.com`, `POST /api/dostk/stkinfo`,
