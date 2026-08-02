@@ -139,6 +139,20 @@ def _string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
+def advisory_range_text(quote: Quote) -> str:
+    """Render a range only for actionable states and explain its absence."""
+    if quote.entry_price_low is not None and quote.entry_price_high is not None:
+        if quote.entry_price_low == quote.entry_price_high:
+            return f" · {quote.entry_price_low:,}원"
+        return f" · {quote.entry_price_low:,}~{quote.entry_price_high:,}원"
+    return {
+        "DATA_WAIT": " · 가격대기",
+        "WATCH": " · 가격대기",
+        "NO_CHASE": " · 범위이탈",
+        "AVOID": " · 범위없음",
+    }.get(quote.advisory_state, "")
+
+
 def parse_quote_payload(
     payload: object, *, received_at: datetime | None = None
 ) -> Quote:
@@ -587,14 +601,7 @@ class SamsungPriceWidget:
             "NO_CHASE": "#f5c26b",
             "AVOID": "#5ca9ff",
         }
-        range_text = ""
-        if quote.entry_price_low is not None and quote.entry_price_high is not None:
-            if quote.entry_price_low == quote.entry_price_high:
-                range_text = f" · {quote.entry_price_low:,}원"
-            else:
-                range_text = (
-                    f" · {quote.entry_price_low:,}~{quote.entry_price_high:,}원"
-                )
+        range_text = advisory_range_text(quote)
         self.advisory_label.configure(
             text=f"{state_labels[quote.advisory_state]}{range_text}",
             fg=state_colors[quote.advisory_state],

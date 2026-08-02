@@ -218,9 +218,15 @@ source-quality 및 완전한 권장가격 범위를 별도로 확인한다.
 `tactical_support`는 현재가 이하 structural support와 세션 VWAP 중 높은 값,
 `session_anchor`는 프리/정규/장후 비교용 전일 또는 당일 KRX OHLC/VWAP다.
 anchor는 `AVOID`나 추천가격의 직접 support로 승격되지 않는다.
+단일 pivot이나 허용오차 아래로 무너진 두 번째 저점은 `candidate_support`로만
+기록하며 `structural_support`로 승격하지 않는다. 이때 상태는 source 결손을 뜻하는
+`DATA_WAIT`가 아니라 구조 확인 전인 `WATCH`이고 추천가격은 생성하지 않는다.
+두 pivot은 최소 한 봉 이상 떨어지고 그 사이 가격이 1틱 이상 반등해야 retest로
+인정한다. 단순 동일저가 plateau의 인접 pivot은 지지 재시험으로 확정하지 않는다.
 
 ```text
-structural_support = tick_floor(valid pivot/retest support)
+candidate_support = latest pivot or 3+3 structure low (observation only)
+structural_support = tick_floor(retest-held or higher-high-and-low support)
 tactical_support = tick_floor(max(structural_support, session VWAP <= current))
 invalidation = structural_support - 1 exchange tick
 trigger = tick_floor(max(reclaimed VWAP, recent resistance, prior close))
@@ -255,11 +261,11 @@ entry_high = min(best_ask, tactical_support + 2 exchange ticks)
 | 우선순위 | 조건 | 결과 |
 |---:|---|---|
 | 1 | 필수 source-quality 차단 | `DATA_WAIT` |
-| 2 | support 미생성 | `DATA_WAIT` |
+| 2 | confirmed support 미생성 | `WATCH`, 후보 support만 관측 |
 | 3 | confirmed support 하향 이탈 | `AVOID` |
-| 4 | support 대비 0.3% 초과 추격 | `NO_CHASE` |
-| 5 | spread 2틱 초과 또는 최신 체결 하락 veto | `WATCH` |
-| 6 | 국내 6개 core 중 하나 실패 | `WATCH` |
+| 4 | 최신 체결 하락 또는 실시간 반전 veto | `WATCH` |
+| 5 | 국내 6개 core 중 하나 실패 | `WATCH`, 최초 blocker 표시 |
+| 6 | 국내 6개 core 통과 후 support 대비 0.3% 초과 추격 | `NO_CHASE` |
 | 7 | 국내 core 통과 + 외부 `HOLD` | `WATCH`, 가격범위 제거 |
 | 8 | 국내 core 통과 + 보조 risk/gap | `ENTRY_CAUTION` |
 | 9 | 국내 core 통과 + 보조 위험 없음 | `ENTRY_READY` |
@@ -270,6 +276,8 @@ spread다. `ENTRY_CAUTION`과 `ENTRY_READY`로의 상향 전이는 같은 거래
 즉시 적용한다.
 
 모든 조언은 60초, 현재 세션 종료, 당일 20:00 중 가장 이른 시각에 만료된다.
+Windows 화면은 비진입 상태에 빈 문자열 대신 `가격대기`, `범위이탈`, `범위없음`을
+표시한다. 이는 권장가격을 합성하는 대체 경로가 아니라 가격 미생성 사유 표시다.
 
 ## 10. API·화면 계약
 

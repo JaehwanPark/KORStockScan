@@ -170,6 +170,35 @@ def test_widget_watch_detail_prefers_blocker_over_passed_reason():
     quote = widget.parse_quote_payload(payload, received_at=now)
 
     assert widget.primary_advisory_reason(quote) == "relative_strength_weak"
+    assert widget.advisory_range_text(quote) == " · 가격대기"
+
+
+def test_widget_explains_nonactionable_price_range_absence():
+    expected = {
+        "DATA_WAIT": " · 가격대기",
+        "WATCH": " · 가격대기",
+        "NO_CHASE": " · 범위이탈",
+        "AVOID": " · 범위없음",
+    }
+    for state, label in expected.items():
+        payload, now = _fresh_advisory_payload(
+            {
+                "status": "ok",
+                "current_price": 221_500,
+                "minute_chart": [],
+                "advisory": {
+                    "state": state,
+                    "authority": "widget_advisory_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            }
+        )
+
+        quote = widget.parse_quote_payload(payload, received_at=now)
+
+        assert widget.advisory_range_text(quote) == label
 
 
 def test_widget_rejects_stale_actionable_advisory():

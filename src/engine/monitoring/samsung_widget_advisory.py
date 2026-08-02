@@ -421,7 +421,10 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
     higher_high = False
     higher_high_and_low = False
     retest_held = False
+    retest_rebound_confirmed = False
     confirmed_support: int | None = None
+    candidate_support: int | None = None
+    support_confirmation = "unconfirmed"
     latest_structure_low: int | None = None
     if len(recent) >= 6:
         prior_window = recent[-6:-3]
@@ -431,23 +434,37 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
         latest_structure_low = latest_low
         prior_high = max(bar.high for bar in prior_window)
         latest_high = max(bar.high for bar in latest_window)
-        higher_low = latest_low >= prior_low
+        higher_low = latest_low > prior_low
         higher_high = latest_high > prior_high
         higher_high_and_low = higher_low and higher_high
     if len(pivots) >= 2:
         first_index, first_low = pivots[-2]
         second_index, second_low = pivots[-1]
+        candidate_support = second_low
         tolerance = max(get_tick_size(second_low), round(second_low * 0.001))
+        between_tests = recent[first_index + 1 : second_index]
+        retest_rebound_confirmed = bool(
+            between_tests
+            and max(bar.high for bar in between_tests)
+            >= move_price_by_ticks(first_low, 1)
+        )
         retest_held = (
-            second_index > first_index
+            second_index >= first_index + 2
+            and retest_rebound_confirmed
             and second_low >= first_low - tolerance
             and recent[-1].close > second_low
         )
-        confirmed_support = second_low
+        if retest_held:
+            confirmed_support = second_low
+            support_confirmation = "retest_held"
     elif pivots:
-        confirmed_support = pivots[-1][1]
-    elif higher_high_and_low and latest_structure_low is not None:
+        candidate_support = pivots[-1][1]
+
+    if confirmed_support is None and higher_high_and_low and latest_structure_low:
         confirmed_support = latest_structure_low
+        support_confirmation = "higher_high_and_low"
+    if candidate_support is None:
+        candidate_support = latest_structure_low
 
     resistance_rows = recent[:-2] if len(recent) >= 5 else recent[:-1]
     recent_resistance = (
@@ -458,7 +475,10 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
         "higher_high": higher_high,
         "higher_high_and_low": higher_high_and_low,
         "retest_held": retest_held,
+        "retest_rebound_confirmed": retest_rebound_confirmed,
         "confirmed_support": confirmed_support,
+        "candidate_support": candidate_support,
+        "support_confirmation": support_confirmation,
         "recent_resistance": recent_resistance,
     }
 
@@ -1167,6 +1187,12 @@ def evaluate_advisory(
         if isinstance(raw_structural_support, int) and raw_structural_support > 0
         else None
     )
+    raw_candidate_support = structure.get("candidate_support")
+    candidate_support = (
+        clamp_price_to_tick(raw_candidate_support)
+        if isinstance(raw_candidate_support, int) and raw_candidate_support > 0
+        else None
+    )
     tactical_candidates = [
         value
         for value in (structural_support, vwap)
@@ -1242,7 +1268,32 @@ def evaluate_advisory(
             reasons.append("premarket_aux_supportive")
 
     if structural_support is None:
-        base["unmet_conditions"] = ["confirmed_support_missing", *unmet]
+        base.update(
+            {
+                "state": "WATCH",
+                "raw_state": "WATCH",
+                "reasons": reasons,
+                "unmet_conditions": list(
+                    dict.fromkeys(["confirmed_support_missing", *unmet])
+                ),
+                "derived": {
+                    "session_vwap": vwap,
+                    "confirmed_support": None,
+                    "candidate_support": candidate_support,
+                    "support_confirmation": structure["support_confirmation"],
+                    "session_anchor": session_anchor,
+                    "recent_resistance": recent_resistance,
+                    "minute_trends": trends,
+                    "higher_low": structure["higher_low"],
+                    "higher_high": structure["higher_high"],
+                    "higher_high_and_low": structure["higher_high_and_low"],
+                    "retest_held": structure["retest_held"],
+                    "retest_rebound_confirmed": structure["retest_rebound_confirmed"],
+                    **volume_meta,
+                },
+                "flow": flow,
+            }
+        )
         return base
     invalidation = move_price_by_ticks(structural_support, -1)
     if current_price <= invalidation or current_price < structural_support:
@@ -1255,10 +1306,25 @@ def evaluate_advisory(
                 "reasons": ["confirmed_support_broken"],
                 "unmet_conditions": list(dict.fromkeys(unmet)),
                 "derived": {
+                    "session_vwap": vwap,
                     "confirmed_support": structural_support,
                     "structural_support": structural_support,
+                    "candidate_support": candidate_support,
+                    "support_confirmation": structure["support_confirmation"],
                     "tactical_support": tactical_support,
                     "session_anchor": session_anchor,
+                    "recent_resistance": recent_resistance,
+                    "distance_from_structural_support_pct": round(
+                        ((current_price - structural_support) / structural_support)
+                        * 100,
+                        4,
+                    ),
+                    "minute_trends": trends,
+                    "higher_low": structure["higher_low"],
+                    "higher_high": structure["higher_high"],
+                    "higher_high_and_low": structure["higher_high_and_low"],
+                    "retest_held": structure["retest_held"],
+                    "retest_rebound_confirmed": structure["retest_rebound_confirmed"],
                 },
                 "flow": flow,
             }
@@ -1292,6 +1358,8 @@ def evaluate_advisory(
                 "session_vwap": vwap,
                 "confirmed_support": structural_support,
                 "structural_support": structural_support,
+                "candidate_support": candidate_support,
+                "support_confirmation": structure["support_confirmation"],
                 "tactical_support": tactical_support,
                 "session_anchor": session_anchor,
                 "recent_resistance": recent_resistance,
@@ -1314,17 +1382,14 @@ def evaluate_advisory(
                 "higher_high": structure["higher_high"],
                 "higher_high_and_low": structure["higher_high_and_low"],
                 "retest_held": structure["retest_held"],
+                "retest_rebound_confirmed": structure["retest_rebound_confirmed"],
                 "premarket_auxiliary": (premarket if premarket_aux_applied else None),
                 **volume_meta,
             },
             "flow": flow,
         }
     )
-    if structural_chase_pct > 0.3 or tactical_chase_pct > 0.3:
-        base["state"] = base["raw_state"] = "NO_CHASE"
-        base["reasons"] = ["price_more_than_30bp_above_support"]
-        return base
-    if not spread_ok or recent_trade_negative_veto or live_reversal_veto:
+    if recent_trade_negative_veto or live_reversal_veto:
         base["state"] = base["raw_state"] = "WATCH"
         if recent_trade_negative_veto:
             base["unmet_conditions"].append("recent_rest_prints_descending")
@@ -1333,32 +1398,37 @@ def evaluate_advisory(
         return base
 
     all_core_passed = all(core_checks.values())
-    if all_core_passed:
-        entry_low = max(tactical_support, best_bid)
-        entry_high = min(best_ask, move_price_by_ticks(tactical_support, 2))
-        if entry_high < entry_low:
-            base["state"] = base["raw_state"] = "NO_CHASE"
-            base["reasons"] = ["entry_range_not_available_without_chasing"]
-            return base
-        base["entry_price_low"] = entry_low
-        base["entry_price_high"] = entry_high
-        if external_risk["level"] == "HOLD":
-            base["state"] = base["raw_state"] = "WATCH"
-            base["entry_price_low"] = None
-            base["entry_price_high"] = None
-            base["unmet_conditions"].append("external_risk_hold")
-        elif (
-            external_risk["level"] in {"CAUTION", "DATA_LIMITED"}
-            or flow_negative
-            or flow_data_limited
-            or premarket_aux_weak
-        ):
-            base["state"] = base["raw_state"] = "ENTRY_CAUTION"
-        else:
-            base["state"] = base["raw_state"] = "ENTRY_READY"
+    if not all_core_passed:
+        base["state"] = base["raw_state"] = "WATCH"
         return base
 
-    base["state"] = base["raw_state"] = "WATCH"
+    if structural_chase_pct > 0.3 or tactical_chase_pct > 0.3:
+        base["state"] = base["raw_state"] = "NO_CHASE"
+        base["reasons"] = ["price_more_than_30bp_above_support"]
+        return base
+
+    entry_low = max(tactical_support, best_bid)
+    entry_high = min(best_ask, move_price_by_ticks(tactical_support, 2))
+    if entry_high < entry_low:
+        base["state"] = base["raw_state"] = "NO_CHASE"
+        base["reasons"] = ["entry_range_not_available_without_chasing"]
+        return base
+    base["entry_price_low"] = entry_low
+    base["entry_price_high"] = entry_high
+    if external_risk["level"] == "HOLD":
+        base["state"] = base["raw_state"] = "WATCH"
+        base["entry_price_low"] = None
+        base["entry_price_high"] = None
+        base["unmet_conditions"].append("external_risk_hold")
+    elif (
+        external_risk["level"] in {"CAUTION", "DATA_LIMITED"}
+        or flow_negative
+        or flow_data_limited
+        or premarket_aux_weak
+    ):
+        base["state"] = base["raw_state"] = "ENTRY_CAUTION"
+    else:
+        base["state"] = base["raw_state"] = "ENTRY_READY"
     return base
 
 

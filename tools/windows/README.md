@@ -108,6 +108,13 @@ as live aftermarket flow. Each advisory expires after 60 seconds or at the
 current session close, whichever arrives first, and never later than 20:00 KST.
 The window always says `관측용/자동주문 아님`; `ENTRY_READY` and
 `ENTRY_CAUTION` are rendered as softer observation labels, not order commands.
+Only those two actionable states can display a recommended price range. `WATCH`
+and `DATA_WAIT` show `가격대기`, `NO_CHASE` shows `범위이탈`, and `AVOID` shows
+`범위없음`; the widget never fabricates a price while a setup condition is
+missing. A single pivot remains candidate provenance and is not treated as
+confirmed support until a held retest or a higher-high-and-higher-low structure
+is complete. A held retest requires a separating bar and at least a one-tick
+intermediate rebound, so adjacent equal-low plateau pivots do not qualify.
 The 1/3/5-minute labels describe completed-bar direction; they do not predict
 the next price. Their neutral bands are exchange-tick, session, and recent-
 volatility adjusted. The compact detail line separately identifies confirmed-

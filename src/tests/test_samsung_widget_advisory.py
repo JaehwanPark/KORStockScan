@@ -174,6 +174,73 @@ def test_session_vwap_uses_hlc3_volume_weighting_and_hlc3_fallback():
     assert advisory._session_vwap(zero_volume) == 120
 
 
+def test_structure_does_not_promote_single_unconfirmed_pivot_to_support():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    lows = [100_000, 99_000, 100_000, 101_000, 102_000, 103_000]
+    highs = [105_000, 106_000, 107_000, 106_000, 106_500, 106_800]
+    bars = [
+        advisory.MinuteBar(
+            (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S"),
+            low + 500,
+            high,
+            low,
+            low + 1_000,
+            1_000,
+        )
+        for index, (low, high) in enumerate(zip(lows, highs))
+    ]
+
+    structure = advisory._structure_features(bars)
+
+    assert structure["candidate_support"] == 99_000
+    assert structure["confirmed_support"] is None
+    assert structure["support_confirmation"] == "unconfirmed"
+
+
+def test_structure_does_not_confirm_failed_lower_retest():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    lows = [100_000, 99_000, 100_000, 97_000, 99_000, 100_000]
+    bars = [
+        advisory.MinuteBar(
+            (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S"),
+            low + 500,
+            105_000,
+            low,
+            low + 1_000,
+            1_000,
+        )
+        for index, low in enumerate(lows)
+    ]
+
+    structure = advisory._structure_features(bars)
+
+    assert structure["candidate_support"] == 97_000
+    assert structure["retest_held"] is False
+    assert structure["confirmed_support"] is None
+
+
+def test_structure_rejects_adjacent_flat_low_as_retest():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    lows = [101_000, 100_000, 100_000, 101_000, 101_000]
+    bars = [
+        advisory.MinuteBar(
+            (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S"),
+            low + 500,
+            102_000,
+            low,
+            low + 500,
+            1_000,
+        )
+        for index, low in enumerate(lows)
+    ]
+
+    structure = advisory._structure_features(bars)
+
+    assert structure["retest_rebound_confirmed"] is False
+    assert structure["retest_held"] is False
+    assert structure["confirmed_support"] is None
+
+
 def test_session_context_separates_nxt_krx_and_transition_windows():
     assert (
         advisory.session_context(datetime(2026, 8, 3, 8, 10, tzinfo=KST)).name
@@ -725,6 +792,47 @@ def test_chasing_more_than_30bp_is_rejected():
     assert result["entry_price_low"] is None
 
 
+def test_core_blocker_is_reported_before_no_chase():
+    inputs = _ready_input(current_price=102_000)
+    inputs["bbo"] = {"best_bid": 101_800, "best_ask": 101_900, "age_sec": 0}
+    inputs["relative"] = {
+        "samsung_change_pct": -2.0,
+        "sk_hynix_change_pct": 0.5,
+        "kospi_change_pct": 0.5,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "WATCH"
+    assert "relative_strength_not_weak" in result["unmet_conditions"]
+    assert "price_more_than_30bp_above_support" not in result["reasons"]
+
+
+def test_missing_confirmed_support_is_watch_with_candidate_provenance(monkeypatch):
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            "higher_low": False,
+            "higher_high": False,
+            "higher_high_and_low": False,
+            "retest_held": False,
+            "retest_rebound_confirmed": False,
+            "confirmed_support": None,
+            "candidate_support": 100_100,
+            "support_confirmation": "unconfirmed",
+            "recent_resistance": 100_300,
+        },
+    )
+
+    result = advisory.evaluate_advisory(**_ready_input())
+
+    assert result["state"] == "WATCH"
+    assert "confirmed_support_missing" in result["unmet_conditions"]
+    assert result["derived"]["candidate_support"] == 100_100
+    assert result["derived"]["confirmed_support"] is None
+
+
 def test_confirmed_support_break_is_immediate_avoid():
     inputs = _ready_input()
     inputs["current_price"] = 99_000
@@ -733,6 +841,9 @@ def test_confirmed_support_break_is_immediate_avoid():
     result = advisory.evaluate_advisory(**inputs)
 
     assert result["state"] == "AVOID"
+    assert result["derived"]["session_vwap"] is not None
+    assert result["derived"]["support_confirmation"] != "unconfirmed"
+    assert "distance_from_structural_support_pct" in result["derived"]
 
 
 def test_exact_invalidation_boundary_is_immediate_avoid():
