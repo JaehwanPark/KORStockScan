@@ -134,7 +134,9 @@ from src.engine.scalping.rising_missed_one_share_entry import (
     evaluate_rising_missed_normal_buy_bridge,
     evaluate_rising_missed_one_share_entry,
     evaluate_rising_missed_tp1_candidate,
+    freeze_scout_ai_parent_fields,
     is_forced_rising_missed_one_share_entry,
+    scout_ai_execution_attribution_fields,
 )
 from src.engine.scalping.adverse_micro_recovery_observer import (
     consume_due_checkpoints as consume_adverse_micro_recovery_checkpoints,
@@ -12819,6 +12821,11 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         if _is_scanner_watching_runtime_observation_target(stock)
         else {}
     )
+    scout_attribution_fields = scout_ai_execution_attribution_fields(
+        stock,
+        stage=stage,
+        actual_order_submitted=fields.get("actual_order_submitted"),
+    )
     merged_fields = _canonicalize_rising_missed_venue_fields(
         {
             **_scanner_promotion_correlation_fields(stock),
@@ -12826,8 +12833,20 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             **_scalping_sizing_state_fields(stock),
             **scanner_venue_fields,
             **fields,
+            **scout_attribution_fields,
         }
     )
+    if scout_attribution_fields:
+        parent_trace_id = str(
+            scout_attribution_fields.get("scout_ai_parent_decision_trace_id") or ""
+        ).strip()
+        parent_snapshot_id = str(
+            scout_attribution_fields.get("scout_ai_parent_snapshot_id") or ""
+        ).strip()
+        if parent_trace_id not in {"", "-"}:
+            merged_fields.setdefault("ai_decision_trace_id", parent_trace_id)
+        if parent_snapshot_id not in {"", "-"}:
+            merged_fields.setdefault("ai_input_snapshot_id", parent_snapshot_id)
     _remember_scanner_terminal_block(stock, stage, merged_fields)
     emit_pipeline_event(
         "ENTRY_PIPELINE",
@@ -18953,6 +18972,13 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     if _holding_stage_needs_probe_residual_causality(stage):
         for key, value in _probe_residual_scale_in_causal_fields(stock).items():
             fields.setdefault(key, value)
+    fields.update(
+        scout_ai_execution_attribution_fields(
+            stock,
+            stage=stage,
+            actual_order_submitted=fields.get("actual_order_submitted"),
+        )
+    )
     record_id = stock.get("id")
     emit_pipeline_event(
         "HOLDING_PIPELINE",
@@ -64948,6 +64974,7 @@ def _maybe_submit_rising_missed_one_share_entry(
         set_fields={
             "rising_missed_one_share_entry_forced": True,
             "rising_missed_one_share_scout": True,
+            **freeze_scout_ai_parent_fields(stock),
             "rising_missed_scout_upgrade_pending": True,
             "rising_missed_scout_started_at": runtime.get("now_ts"),
             "forced_entry_qty": forced_entry_qty,

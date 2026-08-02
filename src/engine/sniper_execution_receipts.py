@@ -21,6 +21,9 @@ from src.engine.scalping.early_volatility_partial_tp import (
     EarlyTPRuntimeLedger,
 )
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
+from src.engine.scalping.rising_missed_one_share_entry import (
+    scout_ai_execution_attribution_fields,
+)
 from src.engine.sniper_entry_state import (
     get_terminal_entry_order,
     move_orders_to_terminal,
@@ -193,6 +196,22 @@ def _probe_observation_contract_fields(stock: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
+_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS = (
+    "rising_missed_one_share_entry_forced",
+    "rising_missed_one_share_scout",
+    "forced_entry_reason",
+    "entry_split_probe_bundle_id",
+    "entry_split_probe_exit_bundle_id",
+    "rising_missed_scout_parent_ai_decision_trace_id",
+    "rising_missed_scout_parent_ai_snapshot_id",
+    "rising_missed_scout_parent_ai_action",
+    "rising_missed_scout_parent_ai_score",
+    "rising_missed_scout_parent_ai_result_source",
+    "rising_missed_scout_parent_ai_contract_status",
+    "rising_missed_scout_parent_ai_prompt_version",
+    "rising_missed_scout_parent_ai_probe_intent",
+    "rising_missed_scout_parent_ai_probe_intent_status",
+)
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "buy_execution_notified",
     "buy_price",
@@ -212,6 +231,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "swing_live_order_dry_run",
 )
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
+    *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "actual_order_submitted",
     "broker_order_forbidden",
     "buy_price",
@@ -491,6 +511,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "rising_missed_scout_upgraded",
 )
 _SELL_COMPLETE_RESET_KEYS = (
+    *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "pending_sell_msg",
     "sell_odno",
     "sell_ord_no",
@@ -1766,6 +1787,11 @@ def _handle_scalp_revive_sell_execution(
                 or "MANUAL",
                 revive=True,
                 new_watch_id=int(new_watch_id or 0),
+                **scout_ai_execution_attribution_fields(
+                    target_stock,
+                    stage="sell_completed",
+                    actual_order_submitted=True,
+                ),
             )
             try:
                 record_post_sell_candidate(
@@ -2843,6 +2869,11 @@ def _update_db_for_sell(
                 ),
                 effective_venue=receipt_snapshot.get("last_sell_execution_cohort", "-"),
                 actual_order_submitted=True,
+                **scout_ai_execution_attribution_fields(
+                    receipt_snapshot,
+                    stage="sell_completed",
+                    actual_order_submitted=True,
+                ),
                 broker_order_forbidden=False,
                 no_scale_in_counterfactual_profit_pct=receipt_snapshot.get(
                     "no_scale_in_counterfactual_profit_pct", "-"
@@ -3337,6 +3368,11 @@ def _handle_entry_buy_execution(
                 broker_order_forbidden=False,
                 runtime_effect=True,
                 **_probe_observation_contract_fields(target_stock),
+                **scout_ai_execution_attribution_fields(
+                    target_stock,
+                    stage="probe_filled",
+                    actual_order_submitted=True,
+                ),
             )
             if _probe_fill_continuation_callback is not None:
                 threading.Thread(
@@ -3630,6 +3666,11 @@ def _handle_entry_buy_execution(
         ),
         holding_ai_score_seeded_from_entry=holding_ai_seeded,
         **_probe_venue_provenance_fields(target_stock),
+        **scout_ai_execution_attribution_fields(
+            target_stock,
+            stage="holding_started",
+            actual_order_submitted=True,
+        ),
     )
 
     buy_receipt_snapshot = _receipt_snapshot(target_stock, _BUY_RECEIPT_SNAPSHOT_KEYS)

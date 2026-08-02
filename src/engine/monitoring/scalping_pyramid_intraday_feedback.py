@@ -7,6 +7,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.engine.scalping.rising_missed_one_share_entry import (
+    SCOUT_AI_ATTRIBUTION_SCHEMA,
+)
+
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
@@ -183,6 +187,61 @@ def _is_one_share_plan_event(row: dict[str, Any]) -> bool:
     )
 
 
+def _update_scout_ai_execution_attribution(
+    item: dict[str, Any], row: dict[str, Any]
+) -> None:
+    fields = _fields(row)
+    if (
+        str(fields.get("scout_ai_attribution_schema") or "").strip()
+        != SCOUT_AI_ATTRIBUTION_SCHEMA
+    ):
+        return
+    incoming_trace_id = str(
+        fields.get("scout_ai_parent_decision_trace_id") or ""
+    ).strip()
+    current_trace_id = str(
+        item.get("scout_ai_parent_decision_trace_id") or ""
+    ).strip()
+    if (
+        current_trace_id not in {"", "-"}
+        and incoming_trace_id not in {"", "-"}
+        and current_trace_id != incoming_trace_id
+    ):
+        item["scout_ai_attribution_conflict"] = True
+        item.setdefault("scout_ai_attribution_conflicting_trace_ids", []).append(
+            incoming_trace_id
+        )
+        return
+    for key in (
+        "scout_ai_attribution_schema",
+        "scout_ai_attribution_status",
+        "scout_ai_parent_decision_trace_id",
+        "scout_ai_parent_snapshot_id",
+        "scout_ai_parent_action",
+        "scout_ai_parent_score",
+        "scout_ai_parent_result_source",
+        "scout_ai_parent_contract_status",
+        "scout_ai_parent_prompt_version",
+        "scout_ai_parent_probe_intent",
+        "scout_ai_parent_probe_intent_status",
+        "scout_ai_action_used_as_submit_authority",
+        "scout_ai_parent_actual_order_submitted",
+        "scout_submission_authority",
+        "scout_ai_runtime_relationship",
+        "scout_probe_bundle_id",
+        "scout_attribution_source_quality_gate",
+    ):
+        if fields.get(key) not in (None, ""):
+            item[key] = fields.get(key)
+    stage = str(row.get("stage") or fields.get("scout_execution_stage") or "").strip()
+    stages = item.setdefault("scout_ai_attribution_lifecycle_stages", [])
+    if stage and stage not in stages:
+        stages.append(stage)
+    if _boolish(fields.get("scout_attribution_actual_order_submitted")):
+        item["scout_ai_attribution_real_submission_seen"] = True
+    item.setdefault("scout_ai_attribution_conflict", False)
+
+
 def _one_share_record(row: dict[str, Any]) -> dict[str, Any]:
     fields = _fields(row)
     item = {
@@ -218,6 +277,7 @@ def _one_share_record(row: dict[str, Any]) -> dict[str, Any]:
         "scale_in_blocker_namespace": "ONE_SHARE_PYRAMID_BACKTEST",
     }
     _update_venue_provenance(item, row)
+    _update_scout_ai_execution_attribution(item, row)
     return item
 
 
@@ -226,6 +286,13 @@ _REAL_ENTRY_LIFECYCLE_STAGES = {
     "probe_submitted",
     "holding_started",
     "entry_order_cancel_confirmed",
+    "sell_completed",
+}
+_SCOUT_AI_ATTRIBUTION_REQUIRED_CLOSED_STAGES = {
+    "probe_submitted",
+    "probe_filled",
+    "order_bundle_submitted",
+    "holding_started",
     "sell_completed",
 }
 
@@ -277,6 +344,7 @@ def _update_real_entry_lifecycle(item: dict[str, Any], row: dict[str, Any]) -> N
     if stage not in _REAL_ENTRY_LIFECYCLE_STAGES:
         return
     fields = _fields(row)
+    _update_scout_ai_execution_attribution(item, row)
     _update_venue_provenance(item, row)
     item["first_observed_ts"] = _earlier_event_time(
         item.get("first_observed_ts"), row.get("emitted_at")
@@ -849,6 +917,7 @@ def _pyramid_submit_record(row: dict[str, Any]) -> dict[str, Any]:
 
 def _update_snapshot(item: dict[str, Any], row: dict[str, Any]) -> None:
     fields = _fields(row)
+    _update_scout_ai_execution_attribution(item, row)
     profit_rate = _safe_float(fields.get("profit_rate"))
     peak_profit = _safe_float(fields.get("peak_profit"))
     observed_peak = (
@@ -2036,6 +2105,7 @@ def _micro_vwap_provenance_unusable_count(items: list[dict[str, Any]]) -> int:
 
 def _update_sell(item: dict[str, Any], row: dict[str, Any]) -> None:
     fields = _fields(row)
+    _update_scout_ai_execution_attribution(item, row)
     final_profit = _safe_float(fields.get("profit_rate"))
     if final_profit is None:
         return
@@ -2218,8 +2288,44 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         str(item.get("canonical_expansion_outcome_label") or "expansion_not_observed")
         for item in rows
     )
+    closed_attribution_rows = [
+        item for item in rows if str(item.get("final_stage") or "") == "sell_completed"
+    ]
+    closed_attribution_complete = [
+        item
+        for item in closed_attribution_rows
+        if item.get("scout_ai_attribution_status") == "linked_frozen_parent"
+        and not item.get("scout_ai_attribution_conflict")
+        and _SCOUT_AI_ATTRIBUTION_REQUIRED_CLOSED_STAGES.issubset(
+            set(item.get("scout_ai_attribution_lifecycle_stages") or [])
+        )
+    ]
     return {
         "one_share_event_count": len(rows),
+        "scout_ai_attribution_linked_count": sum(
+            1
+            for item in rows
+            if item.get("scout_ai_attribution_status") == "linked_frozen_parent"
+            and not item.get("scout_ai_attribution_conflict")
+        ),
+        "scout_ai_attribution_incomplete_count": sum(
+            1
+            for item in rows
+            if item.get("scout_ai_attribution_status")
+            != "linked_frozen_parent"
+        ),
+        "scout_ai_attribution_conflict_count": sum(
+            1 for item in rows if item.get("scout_ai_attribution_conflict")
+        ),
+        "scout_ai_attribution_closed_full_lifecycle_count": len(
+            closed_attribution_complete
+        ),
+        "scout_ai_attribution_closed_incomplete_lifecycle_count": (
+            len(closed_attribution_rows) - len(closed_attribution_complete)
+        ),
+        "scout_ai_attribution_open_pending_lifecycle_count": (
+            len(rows) - len(closed_attribution_rows)
+        ),
         "one_share_closed_count": len(closed),
         "one_share_pyramid_opportunity_count": len(opportunity_rows),
         "one_share_pyramid_missed_upside_count": len(missed),
@@ -2702,6 +2808,8 @@ def build_report(
             _update_real_entry_lifecycle(lifecycle_item, row)
         if _is_one_share_plan_event(row):
             one_share_plans[key] = _one_share_record(row)
+        if key in one_share_plans:
+            _update_scout_ai_execution_attribution(one_share_plans[key], row)
         if _is_one_share_event(row):
             one_share = _one_share_record(row)
             planned = one_share_plans.get(key) or {}
@@ -2727,11 +2835,15 @@ def build_report(
             ):
                 if planned.get(plan_key) not in (None, ""):
                     one_share[plan_key] = planned[plan_key]
+            for plan_key, plan_value in planned.items():
+                if plan_key.startswith("scout_") and plan_value not in (None, ""):
+                    one_share[plan_key] = plan_value
             one_share["one_share_plan_ts"] = planned.get("first_one_share_ts")
             one_share["one_share_actual_stage"] = row.get("stage")
             item = one_share_records.setdefault(key, one_share)
             item.update({k: v for k, v in one_share.items() if v not in (None, "")})
         if key in one_share_records:
+            _update_scout_ai_execution_attribution(one_share_records[key], row)
             _update_venue_provenance(one_share_records[key], row)
             _update_probe_residual_observation(one_share_records[key], row)
             recovery_candidate = _post_probe_hard_abort_recovery_candidate_record(

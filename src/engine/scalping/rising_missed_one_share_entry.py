@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 FORCED_ENTRY_REASON = "rising_missed_one_share_entry"
+SCOUT_AI_ATTRIBUTION_SCHEMA = "rising_missed_scout_ai_execution_attribution_v1"
+SCOUT_SUBMISSION_AUTHORITY = "rising_missed_submit_guard"
 BLOCK_FEATURE_DISABLED = "feature_disabled"
 BLOCK_NOT_CANDIDATE = "not_rising_missed_candidate"
 BLOCK_CLASS_NOT_ELIGIBLE = "rising_missed_class_not_one_share_eligible"
@@ -1026,6 +1028,175 @@ def is_forced_rising_missed_one_share_entry(
         ).strip()
         == FORCED_ENTRY_REASON
     )
+
+
+def freeze_scout_ai_parent_fields(stock: dict[str, Any] | None) -> dict[str, Any]:
+    """Freeze the entry AI parent before the independent scout lifecycle starts.
+
+    The exact AI decision trace remains immutable and has no order authority.  These
+    runtime fields preserve which decision the bounded scout guard observed so later
+    fill and sell receipts cannot accidentally attach a newer AI result.
+    """
+
+    source = stock if isinstance(stock, dict) else {}
+    return {
+        "rising_missed_scout_parent_ai_decision_trace_id": str(
+            source.get("last_watching_ai_decision_trace_id") or ""
+        ).strip(),
+        "rising_missed_scout_parent_ai_snapshot_id": str(
+            source.get("last_watching_ai_snapshot_id") or ""
+        ).strip(),
+        "rising_missed_scout_parent_ai_action": str(
+            source.get("last_watching_ai_action") or ""
+        )
+        .strip()
+        .upper(),
+        "rising_missed_scout_parent_ai_score": _safe_float(
+            source.get("last_watching_ai_score"), 0.0
+        ),
+        "rising_missed_scout_parent_ai_result_source": str(
+            source.get("last_watching_ai_result_source") or ""
+        ).strip(),
+        "rising_missed_scout_parent_ai_contract_status": str(
+            source.get("last_watching_ai_attempt_contract_status") or ""
+        )
+        .strip()
+        .lower(),
+        "rising_missed_scout_parent_ai_prompt_version": str(
+            source.get("last_watching_ai_probe_intent_prompt_version") or ""
+        ).strip(),
+        "rising_missed_scout_parent_ai_probe_intent": bool(
+            source.get("last_watching_ai_probe_intent")
+        ),
+        "rising_missed_scout_parent_ai_probe_intent_status": str(
+            source.get("last_watching_ai_probe_intent_status") or ""
+        ).strip(),
+    }
+
+
+def scout_ai_execution_attribution_fields(
+    stock: dict[str, Any] | None,
+    *,
+    stage: str,
+    actual_order_submitted: Any = False,
+) -> dict[str, Any]:
+    """Return provenance-only linkage for an independent one-share scout event."""
+
+    source = stock if isinstance(stock, dict) else {}
+    forced = bool(
+        source.get("rising_missed_one_share_entry_forced")
+        or source.get("rising_missed_one_share_scout")
+        or str(source.get("forced_entry_reason") or "").strip()
+        == FORCED_ENTRY_REASON
+    )
+    if not forced:
+        return {}
+
+    frozen = freeze_scout_ai_parent_fields(source)
+    trace_id = str(
+        source.get("rising_missed_scout_parent_ai_decision_trace_id")
+        or frozen["rising_missed_scout_parent_ai_decision_trace_id"]
+        or ""
+    ).strip()
+    snapshot_id = str(
+        source.get("rising_missed_scout_parent_ai_snapshot_id")
+        or frozen["rising_missed_scout_parent_ai_snapshot_id"]
+        or ""
+    ).strip()
+    action = (
+        str(
+            source.get("rising_missed_scout_parent_ai_action")
+            or frozen["rising_missed_scout_parent_ai_action"]
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    score = _safe_float(
+        source.get(
+            "rising_missed_scout_parent_ai_score",
+            frozen["rising_missed_scout_parent_ai_score"],
+        ),
+        0.0,
+    )
+    probe_bundle_id = str(
+        source.get("entry_split_probe_bundle_id")
+        or source.get("entry_split_probe_exit_bundle_id")
+        or ""
+    ).strip()
+    if trace_id and snapshot_id and action and probe_bundle_id:
+        status = "linked_frozen_parent"
+    elif trace_id and snapshot_id and action:
+        status = "linked_parent_pending_probe_bundle"
+    else:
+        status = "parent_provenance_incomplete"
+    relationship = (
+        f"independent_bounded_exploration_after_ai_{action.lower()}"
+        if action
+        else "independent_bounded_exploration_parent_action_missing"
+    )
+    return {
+        "scout_ai_attribution_schema": SCOUT_AI_ATTRIBUTION_SCHEMA,
+        "scout_ai_attribution_status": status,
+        "scout_ai_parent_decision_trace_id": trace_id or "-",
+        "scout_ai_parent_snapshot_id": snapshot_id or "-",
+        "scout_ai_parent_action": action or "NOT_EVALUATED",
+        "scout_ai_parent_score": score,
+        "scout_ai_parent_result_source": str(
+            source.get("rising_missed_scout_parent_ai_result_source")
+            or frozen["rising_missed_scout_parent_ai_result_source"]
+            or "-"
+        ),
+        "scout_ai_parent_contract_status": str(
+            source.get("rising_missed_scout_parent_ai_contract_status")
+            or frozen["rising_missed_scout_parent_ai_contract_status"]
+            or "unreported"
+        ),
+        "scout_ai_parent_prompt_version": str(
+            source.get("rising_missed_scout_parent_ai_prompt_version")
+            or frozen["rising_missed_scout_parent_ai_prompt_version"]
+            or "-"
+        ),
+        "scout_ai_parent_probe_intent": bool(
+            source.get("rising_missed_scout_parent_ai_probe_intent")
+            or frozen["rising_missed_scout_parent_ai_probe_intent"]
+        ),
+        "scout_ai_parent_probe_intent_status": str(
+            source.get("rising_missed_scout_parent_ai_probe_intent_status")
+            or frozen["rising_missed_scout_parent_ai_probe_intent_status"]
+            or "not_reported"
+        ),
+        "scout_ai_action_used_as_submit_authority": False,
+        "scout_ai_parent_actual_order_submitted": False,
+        "scout_submission_authority": SCOUT_SUBMISSION_AUTHORITY,
+        "scout_ai_runtime_relationship": relationship,
+        "scout_probe_bundle_id": probe_bundle_id or "-",
+        "scout_execution_stage": str(stage or "unknown"),
+        "scout_attribution_actual_order_submitted": _field_present(
+            actual_order_submitted
+        ),
+        "scout_attribution_metric_role": "execution_decision_provenance",
+        "scout_attribution_decision_authority": (
+            "forensics_only_no_runtime_decision_change"
+        ),
+        "scout_attribution_window_policy": (
+            "same_frozen_entry_ai_trace_probe_bundle_and_position_cycle"
+        ),
+        "scout_attribution_sample_floor": "one_linked_scout_lifecycle",
+        "scout_attribution_primary_decision_metric": (
+            "scout_parent_trace_lifecycle_link_status"
+        ),
+        "scout_attribution_source_quality_gate": (
+            "frozen_trace_snapshot_action_and_same_probe_bundle"
+        ),
+        "scout_attribution_runtime_effect": False,
+        "scout_attribution_allowed_runtime_apply": False,
+        "scout_attribution_broker_order_forbidden": True,
+        "scout_attribution_forbidden_uses": (
+            "standalone_buy|ai_action_mutation|threshold_change|provider_change|"
+            "order_price_or_quantity_change|broker_guard_bypass|hard_safety_bypass"
+        ),
+    }
 
 
 def collapse_to_one_share_order(
