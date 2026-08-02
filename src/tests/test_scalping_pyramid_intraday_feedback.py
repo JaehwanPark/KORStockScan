@@ -1530,6 +1530,225 @@ def test_partial_submitted_direction_defer_is_not_soft_abort():
     assert item["residual_scale_in_recheck_allowed"] is False
 
 
+def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_candidate(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-03.jsonl"
+    recovery_contract = {
+        "probe_bundle_id": "bundle-recovery",
+        "recovery_evaluation_seen": True,
+        "recovery_state": "STRONG",
+        "recovery_reason": "post_hard_abort_recovery_confirmed",
+        "recovery_eligible": True,
+        "recovery_source_quality_blockers": "-",
+        "recovery_positive_groups": "price,signed_tape,tick_impulse,micro_vwap",
+        "recovery_negative_groups": "-",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": (
+            "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+        ),
+        "profit_rate": 1.2,
+        "peak_profit": 1.2,
+        "current_ai_score": 72,
+        "buy_pressure_10t": 75,
+        "tick_aggressor_trusted_count": 5,
+        "tick_aggressor_pressure_usable": True,
+        "tick_acceleration_ratio": 1.3,
+        "curr_vs_micro_vwap_bp": 20,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+    }
+    rows = [
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_qty": 12,
+                "actual_order_submitted": False,
+                "effective_venue": "PREMARKET_KRX_LIKE",
+                "entry_split_order_leg_count": 3,
+                "entry_split_order_qty_weight_min": 0.4,
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-recovery",
+                "fill_qty": 1,
+                "fill_price": 10000,
+                "effective_venue": "PREMARKET_KRX_LIKE",
+            },
+            emitted_at="2026-08-03T09:00:00+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "residual_blocked",
+            {
+                "probe_bundle_id": "bundle-recovery",
+                "reason": "fresh_ai_drop_veto",
+                "entry_split_probe_scale_in_recheck_allowed": False,
+            },
+            emitted_at="2026-08-03T09:00:01+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "post_probe_hard_abort_recovery_observed",
+            {
+                **recovery_contract,
+                "recovery_evidence_signature": "recovery-a",
+                "recovery_confirmation_count": 1,
+                "recovery_confirmation_ready": False,
+            },
+            emitted_at="2026-08-03T09:00:02+09:00",
+        ),
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "post_probe_hard_abort_recovery_observed",
+            {
+                **recovery_contract,
+                "recovery_evidence_signature": "recovery-b",
+                "recovery_confirmation_count": 2,
+                "recovery_confirmation_ready": True,
+            },
+            emitted_at="2026-08-03T09:00:02.300000+09:00",
+        ),
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "stat_action_decision_snapshot",
+            {"profit_rate": 3.0, "peak_profit": 3.0},
+            emitted_at="2026-08-03T09:00:05+09:00",
+        ),
+        _event(
+            701,
+            "123456",
+            "recovery-winner",
+            "sell_completed",
+            {"profit_rate": 2.5, "peak_profit": 3.0},
+            emitted_at="2026-08-03T09:01:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["post_probe_real_confirmation_ready"] is False
+    assert item["post_probe_hard_abort_recovery_confirmation_ready"] is True
+    assert item["post_probe_real_outcome_label"] == (
+        "profitable_zero_fill_recovery_confirmation_ready"
+    )
+    assert item["canonical_expansion_outcome_label"] == (
+        "expansion_recovery_missed_upside_confirmation_ready"
+    )
+    assert item["normal_winner_expansion_candidate_seen"] is True
+    assert item["normal_winner_expansion_blocker_reason"] == (
+        "post_hard_abort_recovery_source_only"
+    )
+    assert item["normal_winner_expansion_label"] == "realized_incremental_winner"
+    assert item["runtime_effect"] is False
+    assert item["actual_order_submitted"] is False
+    assert report["summary"]["post_hard_abort_recovery_confirmation_ready_count"] == 1
+    assert report["summary"]["canonical_expansion_missed_upside_count"] == 1
+
+
+def test_profitable_hard_abort_without_recovery_is_not_labeled_correct_block(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-03.jsonl"
+    rows = [
+        _event(
+            702,
+            "654321",
+            "unevaluated-winner",
+            "rising_missed_one_share_entry",
+            {
+                "forced_entry_qty": 10,
+                "actual_order_submitted": False,
+                "effective_venue": "KRX",
+            },
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            702,
+            "654321",
+            "unevaluated-winner",
+            "probe_filled",
+            {
+                "probe_bundle_id": "bundle-unevaluated",
+                "fill_qty": 1,
+                "fill_price": 10000,
+                "effective_venue": "KRX",
+            },
+            emitted_at="2026-08-03T09:00:00+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            702,
+            "654321",
+            "unevaluated-winner",
+            "residual_blocked",
+            {
+                "probe_bundle_id": "bundle-unevaluated",
+                "reason": "fresh_ai_drop_veto",
+                "entry_split_probe_scale_in_recheck_allowed": False,
+            },
+            emitted_at="2026-08-03T09:00:01+09:00",
+            pipeline="ENTRY_PIPELINE",
+        ),
+        _event(
+            702,
+            "654321",
+            "unevaluated-winner",
+            "sell_completed",
+            {"profit_rate": 2.0, "peak_profit": 3.0},
+            emitted_at="2026-08-03T09:01:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-03", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    item = report["one_share_pyramid_opportunity_rows"][0]
+
+    assert item["post_probe_real_outcome_label"] == (
+        "profitable_zero_fill_recovery_evaluation_not_run"
+    )
+    assert item["canonical_expansion_outcome_label"] == (
+        "expansion_recovery_evaluation_not_run"
+    )
+    assert item["canonical_expansion_outcome_label"] != (
+        "expansion_correctly_not_expanded_no_confirmation"
+    )
+    assert report["summary"][
+        "post_hard_abort_recovery_evaluation_not_run_profitable_count"
+    ] == 1
+
+
 def test_probe_residual_fill_uses_exact_bundle_terminal_not_later_buy_qty(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [

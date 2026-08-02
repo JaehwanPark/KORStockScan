@@ -18940,7 +18940,12 @@ def _holding_stage_needs_probe_residual_causality(stage: str) -> bool:
     normalized = str(stage or "").strip().lower()
     return normalized == "stat_action_decision_snapshot" or any(
         token in normalized
-        for token in ("scale_in", "reversal_add", "shallow_source_gap")
+        for token in (
+            "scale_in",
+            "reversal_add",
+            "shallow_source_gap",
+            "post_probe_hard_abort_recovery",
+        )
     )
 
 
@@ -23263,6 +23268,290 @@ def _emit_bad_entry_refined_candidate(
         ),
     )
     stock["_bad_entry_refined_candidate_logged_key"] = logged_key
+
+
+def _observe_post_probe_hard_abort_recovery(
+    stock: dict,
+    code: str,
+    *,
+    strategy: str,
+    curr_price: int,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    now_ts: float,
+) -> dict | None:
+    """Observe a later recovery after a terminal hard probe abort.
+
+    This producer is deliberately source-only.  It must never reopen the
+    residual bundle, clear a scale-in prohibition, or submit an order.  The
+    report consumer uses two fresh, version-distinct observations to measure
+    whether a separate future scale-in policy could have captured a normal
+    winner after the original residual decision had already closed.
+    """
+
+    if not _is_scalp_strategy(strategy):
+        return None
+    if (
+        str(stock.get("entry_split_probe_terminal_outcome") or "").strip()
+        != "residual_not_submitted"
+        or not bool(stock.get("entry_split_probe_scale_in_forbidden"))
+        or bool(stock.get("entry_split_probe_scale_in_recheck_allowed"))
+    ):
+        return None
+    terminal_at = _safe_float(stock.get("entry_split_probe_terminal_at"), 0.0)
+    if terminal_at <= 0 or float(now_ts) < terminal_at:
+        return None
+    bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+    observed_bundle_id = str(
+        stock.get("_post_probe_hard_abort_recovery_bundle_id") or ""
+    ).strip()
+    if bundle_id != observed_bundle_id:
+        for state_key in tuple(stock):
+            if state_key.startswith("_post_probe_hard_abort_recovery_"):
+                stock.pop(state_key, None)
+        stock["_post_probe_hard_abort_recovery_bundle_id"] = bundle_id
+
+    conflicts = list(_entry_exit_authority_conflict_fields(stock))
+    if _has_open_pending_entry_orders(stock):
+        conflicts.append("pending_entry_orders")
+    if stock.get("pending_add_order") or stock.get("pending_add_ord_no"):
+        conflicts.append("pending_add_order")
+    raw_features = stock.get("last_reversal_features")
+    raw_features = raw_features if isinstance(raw_features, dict) else {}
+    features = _scale_in_feature_contract_defaults(raw_features)
+    quality = reversal_feature_source_quality(raw_features)
+    feature_extracted_at = _safe_float(quality.get("feature_extracted_at"), 0.0)
+
+    source_blockers: list[str] = []
+    if conflicts:
+        source_blockers.append("order_or_exit_authority_conflict")
+    if _safe_int(stock.get("buy_qty"), 0) <= 0:
+        source_blockers.append("position_qty_invalid")
+    if not raw_features:
+        source_blockers.append("feature_context_missing")
+    if str(quality.get("reversal_feature_source_quality") or "").lower() != "usable":
+        source_blockers.append("reversal_feature_source_quality_unusable")
+    if bool(quality.get("reversal_feature_stale")):
+        source_blockers.append("reversal_feature_stale")
+    quote_stale_value = quality.get("quote_stale")
+    tick_stale_value = quality.get("tick_context_stale")
+    if _truthy_field(quote_stale_value):
+        source_blockers.append("quote_stale")
+    elif str(quote_stale_value).strip().lower() in {
+        "none",
+        "",
+        "-",
+        "unknown",
+        "missing",
+    }:
+        source_blockers.append("quote_freshness_unproven")
+    if _truthy_field(tick_stale_value):
+        source_blockers.append("tick_context_stale")
+    elif str(tick_stale_value).strip().lower() in {
+        "none",
+        "",
+        "-",
+        "unknown",
+        "missing",
+    }:
+        source_blockers.append("tick_freshness_unproven")
+    if feature_extracted_at <= 0:
+        source_blockers.append("feature_version_missing")
+
+    pressure_usable = _truthy_field(features.get("tick_aggressor_pressure_usable"))
+    trusted_count = _safe_int(features.get("tick_aggressor_trusted_count"), 0)
+    micro_available = _truthy_field(features.get("micro_vwap_available"))
+    candle_fresh = _truthy_field(features.get("minute_candle_window_fresh"))
+    if not pressure_usable or trusted_count < 3:
+        source_blockers.append("signed_tape_unusable")
+    if not micro_available or not candle_fresh:
+        source_blockers.append("micro_vwap_unusable")
+
+    buy_price = _safe_float(stock.get("buy_price"), 0.0)
+    if buy_price <= 0:
+        source_blockers.append("average_price_invalid")
+    buy_pressure = _safe_float(features.get("buy_pressure_10t"), 50.0)
+    tick_accel = _safe_float(features.get("tick_acceleration_ratio"), 0.0)
+    micro_vwap_bp = _safe_float(features.get("curr_vs_micro_vwap_bp"), 0.0)
+    large_sell = _truthy_field(features.get("large_sell_print_detected"))
+
+    positive_groups: list[str] = []
+    negative_groups: list[str] = []
+    if buy_price > 0 and curr_price >= buy_price and profit_rate >= 0.0:
+        positive_groups.append("price")
+    else:
+        negative_groups.append("price")
+    if pressure_usable and trusted_count >= 3:
+        if buy_pressure >= 60.0:
+            positive_groups.append("signed_tape")
+        elif buy_pressure < 50.0:
+            negative_groups.append("signed_tape")
+    if tick_accel >= 1.0:
+        positive_groups.append("tick_impulse")
+    elif tick_accel < 0.8:
+        negative_groups.append("tick_impulse")
+    if micro_available and candle_fresh:
+        if micro_vwap_bp >= 0.0:
+            positive_groups.append("micro_vwap")
+        else:
+            negative_groups.append("micro_vwap")
+    if large_sell:
+        negative_groups.append("large_sell")
+
+    non_price_positive_count = len(
+        {group for group in positive_groups if group != "price"}
+    )
+    eligible = bool(
+        not source_blockers
+        and "price" in positive_groups
+        and non_price_positive_count >= 2
+        and not negative_groups
+    )
+    state = "STRONG" if eligible else ("SOURCE_BLOCKED" if source_blockers else "WEAK")
+    reason = (
+        "post_hard_abort_recovery_confirmed"
+        if eligible
+        else (
+            "source_quality_blocked:" + ",".join(source_blockers)
+            if source_blockers
+            else "recovery_groups_insufficient_or_negative"
+        )
+    )
+    signature_payload = {
+        "feature_extracted_at": round(feature_extracted_at, 6),
+        "curr_price": int(curr_price or 0),
+        "buy_pressure": round(buy_pressure, 4),
+        "tick_accel": round(tick_accel, 4),
+        "micro_vwap_bp": round(micro_vwap_bp, 4),
+        "large_sell": large_sell,
+        "state": state,
+    }
+    evidence_signature = hashlib.sha256(
+        json.dumps(signature_payload, sort_keys=True).encode("ascii")
+    ).hexdigest()[:20]
+
+    previous_state = str(
+        stock.get("_post_probe_hard_abort_recovery_state") or ""
+    )
+    previous_accepted_signature = str(
+        stock.get("_post_probe_hard_abort_recovery_accepted_signature") or ""
+    )
+    previous_reason = str(
+        stock.get("_post_probe_hard_abort_recovery_reason") or ""
+    )
+    previous_accepted_at = _safe_float(
+        stock.get("_post_probe_hard_abort_recovery_accepted_at"), 0.0
+    )
+    confirmation_count = max(
+        0,
+        _safe_int(stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0),
+    )
+    accepted = False
+    if eligible:
+        if previous_state != "STRONG":
+            confirmation_count = 1
+            accepted = True
+        elif confirmation_count >= 2:
+            confirmation_count = 2
+        elif (
+            evidence_signature != previous_accepted_signature
+            and float(now_ts) - previous_accepted_at >= 0.25
+        ):
+            confirmation_count += 1
+            accepted = True
+    else:
+        confirmation_count = 0
+
+    should_emit = bool(accepted or state != previous_state or reason != previous_reason)
+    stock["_post_probe_hard_abort_recovery_state"] = state
+    stock["_post_probe_hard_abort_recovery_signature"] = evidence_signature
+    stock["_post_probe_hard_abort_recovery_reason"] = reason
+    stock["_post_probe_hard_abort_recovery_confirmation_count"] = confirmation_count
+    if accepted:
+        stock["_post_probe_hard_abort_recovery_accepted_at"] = float(now_ts)
+        stock["_post_probe_hard_abort_recovery_accepted_signature"] = (
+            evidence_signature
+        )
+    elif not eligible:
+        stock.pop("_post_probe_hard_abort_recovery_accepted_signature", None)
+        stock.pop("_post_probe_hard_abort_recovery_accepted_at", None)
+    if not should_emit:
+        return {
+            "state": state,
+            "eligible": eligible,
+            "confirmation_count": confirmation_count,
+            "emitted": False,
+        }
+
+    _log_holding_pipeline(
+        stock,
+        code,
+        "post_probe_hard_abort_recovery_observed",
+        probe_bundle_id=stock.get("entry_split_probe_bundle_id") or "-",
+        recovery_evaluation_seen=True,
+        recovery_state=state,
+        recovery_reason=reason,
+        recovery_eligible=eligible,
+        recovery_observation_accepted=accepted,
+        recovery_confirmation_count=confirmation_count,
+        recovery_confirmation_required_count=2,
+        recovery_confirmation_min_spacing_ms=250,
+        recovery_confirmation_ready=confirmation_count >= 2,
+        recovery_evidence_signature=evidence_signature,
+        recovery_positive_groups=",".join(positive_groups) or "-",
+        recovery_negative_groups=",".join(negative_groups) or "-",
+        recovery_source_quality_blockers=",".join(source_blockers) or "-",
+        profit_rate=f"{float(profit_rate):+.2f}",
+        peak_profit=f"{float(peak_profit):+.2f}",
+        current_ai_score=f"{float(current_ai_score):.0f}",
+        curr_price=int(curr_price or 0),
+        buy_price=f"{buy_price:.2f}",
+        held_sec=int(held_sec or 0),
+        buy_pressure_10t=buy_pressure,
+        tick_acceleration_ratio=tick_accel,
+        curr_vs_micro_vwap_bp=micro_vwap_bp,
+        large_sell_print_detected=large_sell,
+        tick_aggressor_trusted_count=trusted_count,
+        tick_aggressor_pressure_usable=pressure_usable,
+        micro_vwap_available=micro_available,
+        minute_candle_window_fresh=candle_fresh,
+        reversal_feature_source_quality=quality.get(
+            "reversal_feature_source_quality", "missing"
+        ),
+        reversal_feature_stale=bool(quality.get("reversal_feature_stale")),
+        reversal_feature_stale_reason=quality.get(
+            "reversal_feature_stale_reason", "-"
+        ),
+        feature_extracted_at=feature_extracted_at,
+        active_exit_conflict_fields=",".join(conflicts) or "-",
+        metric_role="bounded_tunable_scale_in_counterfactual",
+        decision_authority=(
+            "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+        ),
+        window_policy="same_position_cycle_terminal_hard_abort_to_sell",
+        sample_floor="rolling_closed_source_quality_valid_recovery_candidates_ge_20",
+        primary_decision_metric="notional_weighted_ev_pct",
+        source_quality_gate=(
+            "fresh_quote_tick_tape_micro_and_same_probe_terminal_cycle"
+        ),
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        forbidden_uses=(
+            "standalone_scale_in_submit|residual_guard_bypass|ai_guard_bypass|"
+            "source_quality_bypass|account_order_quantity_cooldown_bypass|"
+            "threshold_mutation|provider_route_change|position_cap_release|bot_restart"
+        ),
+    )
+    return {
+        "state": state,
+        "eligible": eligible,
+        "confirmation_count": confirmation_count,
+        "emitted": True,
+    }
 
 
 def _build_soft_stop_expert_decision(
@@ -73423,6 +73712,17 @@ def handle_holding_state(
             peak_profit=peak_profit,
             current_ai_score=current_ai_score,
             held_sec=held_sec,
+        )
+        _observe_post_probe_hard_abort_recovery(
+            stock,
+            code,
+            strategy=strategy,
+            curr_price=curr_p,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            now_ts=now_ts,
         )
 
         open_reclaim_near_ai_exit = (

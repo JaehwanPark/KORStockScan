@@ -425,6 +425,15 @@ def _canonical_expansion_outcome_label(item: dict[str, Any]) -> str:
         "profitable_zero_fill_no_confirmation": (
             "expansion_correctly_not_expanded_no_confirmation"
         ),
+        "profitable_zero_fill_recovery_confirmation_ready": (
+            "expansion_recovery_missed_upside_confirmation_ready"
+        ),
+        "profitable_zero_fill_recovery_not_confirmed": (
+            "expansion_correctly_not_expanded_recovery_not_confirmed"
+        ),
+        "profitable_zero_fill_recovery_evaluation_not_run": (
+            "expansion_recovery_evaluation_not_run"
+        ),
         "loss_or_flat_zero_fill_confirmation_ready": (
             "expansion_confirmation_false_positive_loss_or_flat"
         ),
@@ -745,6 +754,54 @@ def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _post_probe_hard_abort_recovery_candidate_record(
+    row: dict[str, Any],
+) -> dict[str, Any] | None:
+    if str(row.get("stage") or "") != _POST_PROBE_HARD_ABORT_RECOVERY_STAGE:
+        return None
+    fields = _fields(row)
+    if not (
+        _boolish(fields.get("recovery_eligible"))
+        and _boolish(fields.get("recovery_confirmation_ready"))
+        and not _boolish(fields.get("runtime_effect"))
+        and not _boolish(fields.get("actual_order_submitted"))
+        and _boolish(fields.get("broker_order_forbidden"))
+        and str(fields.get("decision_authority") or "").strip()
+        == "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+    ):
+        return None
+    return {
+        "record_id": str(row.get("record_id") or "").strip(),
+        "stock_code": row.get("stock_code"),
+        "stock_name": row.get("stock_name"),
+        "first_observed_ts": row.get("emitted_at"),
+        "source_stage": row.get("stage"),
+        "scale_in_arm": "PYRAMID",
+        "scale_in_blocker_reason": "post_hard_abort_recovery_source_only",
+        "scale_in_blocker_namespace": "POST_PROBE_HARD_ABORT_RECOVERY",
+        "profit_rate": _safe_float(fields.get("profit_rate")),
+        "peak_profit": _safe_float(fields.get("peak_profit")),
+        "current_ai_score": _safe_float(fields.get("current_ai_score")),
+        "buy_pressure_10t": _safe_float(fields.get("buy_pressure_10t")),
+        "tick_aggressor_trusted_count": _safe_float(
+            fields.get("tick_aggressor_trusted_count")
+        ),
+        "tick_aggressor_pressure_usable": _optional_boolish(
+            fields.get("tick_aggressor_pressure_usable")
+        ),
+        "tick_acceleration_ratio": _safe_float(
+            fields.get("tick_acceleration_ratio")
+        ),
+        "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
+        "micro_vwap_available": _optional_boolish(
+            fields.get("micro_vwap_available")
+        ),
+        "minute_candle_window_fresh": _optional_boolish(
+            fields.get("minute_candle_window_fresh")
+        ),
+    }
+
+
 def _is_pyramid_submit_event(row: dict[str, Any]) -> bool:
     stage = str(row.get("stage") or "").lower()
     if not any(token in stage for token in ("submit", "submitted", "receipt")):
@@ -918,6 +975,7 @@ _PROBE_DIRECTION_STAGES = {
     "probe_continuation_deferred",
     "residual_planned",
 }
+_POST_PROBE_HARD_ABORT_RECOVERY_STAGE = "post_probe_hard_abort_recovery_observed"
 _SOFT_RESIDUAL_ABORT_REASONS = {
     "residual_leg_direction_deferred",
     "residual_revalidation_timeout",
@@ -1072,6 +1130,64 @@ def _update_probe_residual_observation(
         item["pyramid_evaluation_seen"] = True
         item["pyramid_evaluation_count"] = (
             int(item.get("pyramid_evaluation_count") or 0) + 1
+        )
+    if stage == _POST_PROBE_HARD_ABORT_RECOVERY_STAGE:
+        item["post_probe_hard_abort_recovery_evaluation_seen"] = True
+        item["post_probe_hard_abort_recovery_evaluation_count"] = (
+            int(item.get("post_probe_hard_abort_recovery_evaluation_count") or 0)
+            + 1
+        )
+        source_blockers = {
+            token.strip()
+            for token in str(
+                fields.get("recovery_source_quality_blockers") or ""
+            ).split(",")
+            if token.strip() and token.strip() != "-"
+        }
+        decision_authority = str(fields.get("decision_authority") or "").strip()
+        contract_blockers = set(source_blockers)
+        if decision_authority != (
+            "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+        ):
+            contract_blockers.add("decision_authority_invalid")
+        if _boolish(fields.get("runtime_effect")):
+            contract_blockers.add("runtime_effect_not_false")
+        if _boolish(fields.get("actual_order_submitted")):
+            contract_blockers.add("actual_order_submitted_not_false")
+        if not _boolish(fields.get("broker_order_forbidden")):
+            contract_blockers.add("broker_order_forbidden_not_true")
+        evidence_signature = str(
+            fields.get("recovery_evidence_signature") or ""
+        ).strip()
+        if not evidence_signature:
+            contract_blockers.add("evidence_signature_missing")
+        observed_epoch = _event_epoch(row.get("emitted_at"))
+        item.setdefault("post_probe_hard_abort_recovery_observations", []).append(
+            {
+                "observed_at": row.get("emitted_at"),
+                "observed_epoch": observed_epoch,
+                "eligible": bool(
+                    _boolish(fields.get("recovery_eligible"))
+                    and not contract_blockers
+                ),
+                "evidence_signature": evidence_signature,
+                "source_quality_blockers": sorted(contract_blockers),
+            }
+        )
+        item["post_probe_hard_abort_recovery_latest_state"] = str(
+            fields.get("recovery_state") or "-"
+        )
+        item["post_probe_hard_abort_recovery_latest_reason"] = str(
+            fields.get("recovery_reason") or "-"
+        )
+        item["post_probe_hard_abort_recovery_event_confirmation_max_count"] = max(
+            int(
+                item.get(
+                    "post_probe_hard_abort_recovery_event_confirmation_max_count"
+                )
+                or 0
+            ),
+            int(_safe_float(fields.get("recovery_confirmation_count"), 0) or 0),
         )
     if stage not in _PROBE_RESIDUAL_STAGES:
         return
@@ -1326,10 +1442,82 @@ def _finalize_post_probe_real_confirmation(item: dict[str, Any]) -> None:
     item.pop("post_probe_real_confirmation_observations", None)
 
 
+def _finalize_post_probe_hard_abort_recovery(item: dict[str, Any]) -> None:
+    observations = [
+        observation
+        for observation in item.get("post_probe_hard_abort_recovery_observations")
+        or []
+        if isinstance(observation, dict)
+        and _safe_float(observation.get("observed_epoch"), None) is not None
+    ]
+    observations.sort(
+        key=lambda observation: float(observation.get("observed_epoch") or 0.0)
+    )
+    terminal_epoch = _event_epoch(item.get("probe_bundle_terminal_at"))
+    final_epoch = _event_epoch(item.get("final_ts"))
+    confirmation_count = 0
+    max_count = 0
+    last_accepted_epoch: float | None = None
+    last_signature = ""
+    ready_at = None
+    excluded_count = 0
+    valid_window_evaluation_count = 0
+    source_quality_blockers: set[str] = set()
+    for observation in observations:
+        observed_epoch = float(observation["observed_epoch"])
+        if (terminal_epoch is not None and observed_epoch < terminal_epoch) or (
+            final_epoch is not None and observed_epoch > final_epoch
+        ):
+            excluded_count += 1
+            continue
+        valid_window_evaluation_count += 1
+        source_quality_blockers.update(
+            str(blocker)
+            for blocker in observation.get("source_quality_blockers") or []
+            if str(blocker)
+        )
+        if not bool(observation.get("eligible")):
+            confirmation_count = 0
+            last_accepted_epoch = None
+            last_signature = ""
+            continue
+        signature = str(observation.get("evidence_signature") or "").strip()
+        if confirmation_count <= 0:
+            confirmation_count = 1
+            last_accepted_epoch = observed_epoch
+            last_signature = signature
+        elif (
+            last_accepted_epoch is not None
+            and observed_epoch - last_accepted_epoch >= 0.25
+            and signature
+            and signature != last_signature
+        ):
+            confirmation_count += 1
+            last_accepted_epoch = observed_epoch
+            last_signature = signature
+        max_count = max(max_count, confirmation_count)
+        if confirmation_count >= 2 and ready_at is None:
+            ready_at = observation.get("observed_at")
+    item["post_probe_hard_abort_recovery_confirmation_max_count"] = max_count
+    item["post_probe_hard_abort_recovery_confirmation_required_count"] = 2
+    item["post_probe_hard_abort_recovery_confirmation_min_spacing_ms"] = 250
+    item["post_probe_hard_abort_recovery_confirmation_ready"] = max_count >= 2
+    item["post_probe_hard_abort_recovery_confirmation_ready_at"] = ready_at
+    item["post_probe_hard_abort_recovery_excluded_observation_count"] = excluded_count
+    item["post_probe_hard_abort_recovery_valid_window_evaluation_count"] = (
+        valid_window_evaluation_count
+    )
+    item["post_probe_hard_abort_recovery_source_quality_blockers"] = sorted(
+        source_quality_blockers
+    )
+    item.pop("post_probe_hard_abort_recovery_observations", None)
+
+
 def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
     if not item.get("probe_residual_observation_seen"):
         return
     _finalize_post_probe_real_confirmation(item)
+    _finalize_post_probe_hard_abort_recovery(item)
     final_profit = _safe_float(item.get("final_profit_rate"), None)
     confirmation_ready = bool(
         int(item.get("post_probe_real_confirmation_max_count") or 0) >= 2
@@ -1442,11 +1630,23 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
     elif item.get("residual_zero_fill") is not True:
         label = "not_zero_fill"
     elif final_profit is not None and final_profit > 0:
-        label = (
-            "profitable_zero_fill_confirmation_ready"
-            if confirmation_ready
-            else "profitable_zero_fill_no_confirmation"
-        )
+        if confirmation_ready:
+            label = "profitable_zero_fill_confirmation_ready"
+        elif (
+            item.get("residual_hard_or_capacity_abort")
+            and not runtime_confirmation_ready
+        ):
+            if item.get("post_probe_hard_abort_recovery_confirmation_ready"):
+                label = "profitable_zero_fill_recovery_confirmation_ready"
+            elif int(
+                item.get("post_probe_hard_abort_recovery_valid_window_evaluation_count")
+                or 0
+            ) > 0:
+                label = "profitable_zero_fill_recovery_not_confirmed"
+            else:
+                label = "profitable_zero_fill_recovery_evaluation_not_run"
+        else:
+            label = "profitable_zero_fill_no_confirmation"
     else:
         label = (
             "loss_or_flat_zero_fill_confirmation_ready"
@@ -1470,7 +1670,11 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
         )
     item["post_probe_runtime_outcome_label"] = runtime_label
     item["residual_missed_upside_candidate"] = bool(
-        label == "profitable_zero_fill_confirmation_ready"
+        label
+        in {
+            "profitable_zero_fill_confirmation_ready",
+            "profitable_zero_fill_recovery_confirmation_ready",
+        }
     )
     item["runtime_confirmation_missed_upside_candidate"] = bool(
         label == "profitable_zero_fill_no_confirmation" and runtime_confirmation_ready
@@ -1967,6 +2171,9 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         in {
             "profitable_zero_fill_confirmation_ready",
             "profitable_zero_fill_no_confirmation",
+            "profitable_zero_fill_recovery_confirmation_ready",
+            "profitable_zero_fill_recovery_not_confirmed",
+            "profitable_zero_fill_recovery_evaluation_not_run",
             "loss_or_flat_zero_fill_confirmation_ready",
             "loss_or_flat_zero_fill_no_confirmation",
         }
@@ -2045,7 +2252,26 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             1
             for item in post_probe_closed
             if item.get("post_probe_real_outcome_label")
-            == "profitable_zero_fill_confirmation_ready"
+            in {
+                "profitable_zero_fill_confirmation_ready",
+                "profitable_zero_fill_recovery_confirmation_ready",
+            }
+        ),
+        "post_hard_abort_recovery_evaluation_seen_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_hard_abort_recovery_evaluation_seen")
+        ),
+        "post_hard_abort_recovery_confirmation_ready_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_hard_abort_recovery_confirmation_ready")
+        ),
+        "post_hard_abort_recovery_evaluation_not_run_profitable_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_real_outcome_label")
+            == "profitable_zero_fill_recovery_evaluation_not_run"
         ),
         "probe_residual_realized_loss_or_flat_confirmation_ready_count": sum(
             1
@@ -2059,10 +2285,16 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         + canonical_label_counts.get("expansion_missed_upside_threshold_crossed", 0)
         + canonical_label_counts.get(
             "expansion_missed_upside_runtime_confirmed_source_quality_disputed", 0
+        )
+        + canonical_label_counts.get(
+            "expansion_recovery_missed_upside_confirmation_ready", 0
         ),
         "canonical_expansion_source_quality_valid_missed_upside_count": (
             canonical_label_counts.get("expansion_missed_upside_confirmation_ready", 0)
             + canonical_label_counts.get("expansion_missed_upside_threshold_crossed", 0)
+            + canonical_label_counts.get(
+                "expansion_recovery_missed_upside_confirmation_ready", 0
+            )
         ),
         "post_probe_runtime_confirmation_source_quality_disputed_count": sum(
             1
@@ -2502,6 +2734,13 @@ def build_report(
         if key in one_share_records:
             _update_venue_provenance(one_share_records[key], row)
             _update_probe_residual_observation(one_share_records[key], row)
+            recovery_candidate = _post_probe_hard_abort_recovery_candidate_record(
+                row
+            )
+            if recovery_candidate:
+                _update_normal_winner_expansion_candidate(
+                    one_share_records[key], recovery_candidate, row
+                )
         blocked = _pyramid_blocked_record(row)
         if blocked:
             accepted_for_lifecycle = True
@@ -2594,6 +2833,14 @@ def build_report(
     for key, item in one_share_records.items():
         _finalize_probe_residual_observation(item)
         _finalize_probe_residual_real_outcome(item)
+        if (
+            item.get("normal_winner_expansion_blocker_reason")
+            == "post_hard_abort_recovery_source_only"
+            and not item.get("post_probe_hard_abort_recovery_confirmation_ready")
+        ):
+            for field_name in tuple(item):
+                if field_name.startswith("normal_winner_expansion_"):
+                    item.pop(field_name, None)
         _finalize_normal_winner_expansion(item)
         legacy_feedback_label = _feedback_label(item)
         item["pyramid_feedback_label"] = legacy_feedback_label
@@ -2612,6 +2859,7 @@ def build_report(
                 "expansion_missed_upside_confirmation_ready",
                 "expansion_missed_upside_threshold_crossed",
                 "expansion_missed_upside_runtime_confirmed_source_quality_disputed",
+                "expansion_recovery_missed_upside_confirmation_ready",
             }
         )
         item["actual_order_submitted"] = bool(item.get("pyramid_submit_seen"))
@@ -2736,13 +2984,29 @@ def build_report(
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
+        "post_hard_abort_recovery_metric_contract": {
+            "metric_role": "bounded_tunable_scale_in_counterfactual",
+            "decision_authority": (
+                "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+            ),
+            "window_policy": "same_position_cycle_terminal_hard_abort_to_sell",
+            "sample_floor": (
+                "rolling_closed_source_quality_valid_recovery_candidates_ge_20"
+            ),
+            "primary_decision_metric": "notional_weighted_ev_pct",
+            "source_quality_gate": (
+                "fresh_quote_tick_tape_micro_and_same_probe_terminal_cycle"
+            ),
+            "forbidden_uses": FORBIDDEN_USES,
+        },
         "normal_winner_expansion_metric_contract": {
             "metric_role": "bounded_tunable_scale_in_counterfactual",
             "decision_authority": (
                 "source_only_normal_winner_expansion_attribution_no_runtime_mutation"
             ),
             "window_policy": (
-                "same_day_probe_fill_to_first_positive_pyramid_evaluation_to_sell"
+                "same_day_probe_fill_or_terminal_hard_abort_to_first_source_quality_"
+                "valid_positive_scale_in_evaluation_to_sell"
             ),
             "sample_floor": "rolling_closed_source_quality_valid_candidates_ge_20",
             "primary_decision_metric": "notional_weighted_ev_pct",
@@ -2867,6 +3131,10 @@ def build_report(
                     "normal_winner_expansion_incremental_final_profit_pct",
                     "normal_winner_expansion_label",
                     "normal_winner_expansion_probe_confirmation_signature",
+                    "post_probe_hard_abort_recovery_evaluation_seen",
+                    "post_probe_hard_abort_recovery_confirmation_max_count",
+                    "post_probe_hard_abort_recovery_confirmation_ready",
+                    "post_probe_hard_abort_recovery_confirmation_ready_at",
                     "probe_direction_evaluation_count",
                     "probe_direction_strong_evaluation_count",
                     "probe_direction_max_consecutive_strong_count",
@@ -2929,6 +3197,9 @@ def write_outputs(
         f"- probe_residual_realized_loss_or_flat_zero_fill_count: {summary.get('probe_residual_realized_loss_or_flat_zero_fill_count')}",
         f"- probe_residual_realized_winner_confirmation_ready_count: {summary.get('probe_residual_realized_winner_confirmation_ready_count')}",
         f"- probe_residual_realized_loss_or_flat_confirmation_ready_count: {summary.get('probe_residual_realized_loss_or_flat_confirmation_ready_count')}",
+        f"- post_hard_abort_recovery_evaluation_seen_count: {summary.get('post_hard_abort_recovery_evaluation_seen_count')}",
+        f"- post_hard_abort_recovery_confirmation_ready_count: {summary.get('post_hard_abort_recovery_confirmation_ready_count')}",
+        f"- post_hard_abort_recovery_evaluation_not_run_profitable_count: {summary.get('post_hard_abort_recovery_evaluation_not_run_profitable_count')}",
         f"- canonical_expansion_missed_upside_count: {summary.get('canonical_expansion_missed_upside_count')}",
         f"- canonical_expansion_source_quality_valid_missed_upside_count: {summary.get('canonical_expansion_source_quality_valid_missed_upside_count')}",
         f"- post_probe_runtime_confirmation_source_quality_disputed_count: {summary.get('post_probe_runtime_confirmation_source_quality_disputed_count')}",
@@ -2976,6 +3247,8 @@ def write_outputs(
             "confirmation_ready={post_probe_real_confirmation_ready} "
             "runtime_confirmation_ready={post_probe_runtime_confirmation_ready} "
             "confirmation_alignment={post_probe_confirmation_contract_alignment} "
+            "recovery_evaluation_seen={post_probe_hard_abort_recovery_evaluation_seen} "
+            "recovery_confirmation_ready={post_probe_hard_abort_recovery_confirmation_ready} "
             "confirmation_source_quality_blockers={post_probe_real_confirmation_source_quality_blockers} "
             "first_leg_qty={post_probe_counterfactual_first_leg_qty} "
             "first_leg_profit_proxy_krw={post_probe_counterfactual_first_leg_profit_proxy_krw}".format(
@@ -3008,6 +3281,14 @@ def write_outputs(
                     ),
                     "post_probe_confirmation_contract_alignment": item.get(
                         "post_probe_confirmation_contract_alignment"
+                    ),
+                    "post_probe_hard_abort_recovery_evaluation_seen": bool(
+                        item.get("post_probe_hard_abort_recovery_evaluation_seen")
+                    ),
+                    "post_probe_hard_abort_recovery_confirmation_ready": bool(
+                        item.get(
+                            "post_probe_hard_abort_recovery_confirmation_ready"
+                        )
                     ),
                     "post_probe_real_confirmation_source_quality_blockers": (
                         ",".join(

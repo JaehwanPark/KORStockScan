@@ -16320,6 +16320,146 @@ def test_scale_in_observation_carries_terminal_probe_residual_causality(
     )
 
 
+def test_post_probe_hard_abort_recovery_is_source_only_and_never_reopens_guard(
+    monkeypatch,
+):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    base_ts = time.time()
+    stock = {
+        "id": 99,
+        "name": "RECOVERY",
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": "123456-hard-abort",
+        "entry_split_probe_terminal_at": base_ts - 1.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_terminal_abort_reason": "fresh_ai_drop_veto",
+        "entry_split_probe_terminal_direction_state": "HARD_NEGATIVE",
+        "entry_split_probe_scale_in_forbidden": True,
+        "entry_split_probe_scale_in_recheck_allowed": False,
+        "probe_expand_forbidden": True,
+        "entry_split_probe_residual_expand_forbidden": True,
+        "_post_probe_hard_abort_recovery_bundle_id": "older-cycle",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 2,
+        "last_reversal_features": {
+            "buy_pressure_10t": 72.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 1.2,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 80,
+            "quote_stale": False,
+            "quote_age_ms": 50,
+            "feature_extracted_at": base_ts,
+        },
+    }
+
+    first = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10100,
+        profit_rate=1.0,
+        peak_profit=1.0,
+        current_ai_score=70,
+        held_sec=10,
+        now_ts=base_ts,
+    )
+    stock["last_reversal_features"]["feature_extracted_at"] = base_ts + 0.3
+    stock["last_reversal_features"]["curr_vs_micro_vwap_bp"] = 13.0
+    second = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10110,
+        profit_rate=1.1,
+        peak_profit=1.1,
+        current_ai_score=71,
+        held_sec=11,
+        now_ts=base_ts + 0.3,
+    )
+
+    assert first == {
+        "state": "STRONG",
+        "eligible": True,
+        "confirmation_count": 1,
+        "emitted": True,
+    }
+    assert second["confirmation_count"] == 2
+    assert logs[-1][0] == "post_probe_hard_abort_recovery_observed"
+    assert logs[-1][1]["recovery_confirmation_ready"] is True
+    assert logs[-1][1]["runtime_effect"] is False
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+
+
+def test_post_probe_hard_abort_recovery_resets_on_negative_group(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    base_ts = time.time()
+    stock = {
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "entry_split_probe_terminal_at": base_ts - 1.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_scale_in_forbidden": True,
+        "entry_split_probe_scale_in_recheck_allowed": False,
+        "last_reversal_features": {
+            "buy_pressure_10t": 45.0,
+            "tick_aggressor_trusted_count": 4,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 0.7,
+            "curr_vs_micro_vwap_bp": -5.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts,
+            "large_sell_print_detected": True,
+        },
+    }
+
+    result = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=9990,
+        profit_rate=-0.1,
+        peak_profit=0.0,
+        current_ai_score=70,
+        held_sec=10,
+        now_ts=base_ts,
+    )
+
+    assert result["state"] == "WEAK"
+    assert result["eligible"] is False
+    assert result["confirmation_count"] == 0
+    assert "large_sell" in logs[-1][1]["recovery_negative_groups"]
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+
+
 def test_add_count_increment_once_on_partial_fills(monkeypatch):
     # Prepare execution receipts environment
     receipts.ACTIVE_TARGETS = []
