@@ -105,6 +105,75 @@ def _ready_input(current_price=100_400, bbo_age=0.0):
     }
 
 
+def test_trend_band_treats_single_high_price_tick_as_flat():
+    bars = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [262_000, 262_000, 262_000, 262_000, 262_500],
+    )
+
+    details = advisory.analyze_trends(bars, session_name="KRX_REGULAR")
+
+    assert details["1m"]["tick_size"] == 500
+    assert details["1m"]["flat_band_price"] >= 500
+    assert details["1m"]["state"] == "flat"
+
+
+def test_trend_analysis_requires_fit_and_consistency_for_up_state():
+    monotonic = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [100_000, 100_100, 100_200, 100_300, 100_400, 100_500],
+    )
+    noisy = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [100_000, 100_700, 99_900, 100_800, 100_000, 100_900],
+    )
+
+    monotonic_details = advisory.analyze_trends(monotonic, session_name="KRX_REGULAR")
+    noisy_details = advisory.analyze_trends(noisy, session_name="KRX_REGULAR")
+
+    assert monotonic_details["5m"]["state"] == "up"
+    assert monotonic_details["5m"]["regression_r2"] >= 0.4
+    assert noisy_details["5m"]["state"] == "flat"
+
+
+def test_nxt_trend_band_is_more_conservative_than_regular_session():
+    bars = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [100_000, 100_100, 100_200, 100_300],
+    )
+
+    regular = advisory.analyze_trends(bars, session_name="KRX_REGULAR")
+    premarket = advisory.analyze_trends(bars, session_name="NXT_PREMARKET")
+
+    assert regular["3m"]["state"] == "up"
+    assert premarket["3m"]["state"] == "flat"
+    assert premarket["3m"]["flat_band_price"] > regular["3m"]["flat_band_price"]
+
+
+def test_trend_assessment_keeps_setup_state_distinct_and_prioritizes_downside():
+    stable = advisory._trend_assessment({"3m": "flat", "5m": "flat"})
+    partial_down = advisory._trend_assessment({"3m": "down", "5m": "unavailable"})
+
+    assert stable["state"] == "TREND_STABLE"
+    assert stable["setup_ready_is_distinct"] is True
+    assert stable["future_prediction"] is False
+    assert partial_down["state"] == "TREND_DOWN"
+
+
+def test_session_vwap_uses_hlc3_volume_weighting_and_hlc3_fallback():
+    bars = [
+        advisory.MinuteBar("20260803090000", 100, 130, 90, 110, 1),
+        advisory.MinuteBar("20260803090100", 120, 160, 100, 130, 3),
+    ]
+    zero_volume = [
+        advisory.MinuteBar(bar.source_time, bar.open, bar.high, bar.low, bar.close, 0)
+        for bar in bars
+    ]
+
+    assert advisory._session_vwap(bars) == 125
+    assert advisory._session_vwap(zero_volume) == 120
+
+
 def test_session_context_separates_nxt_krx_and_transition_windows():
     assert (
         advisory.session_context(datetime(2026, 8, 3, 8, 10, tzinfo=KST)).name
@@ -128,6 +197,10 @@ def test_session_context_separates_nxt_krx_and_transition_windows():
     )
     assert (
         advisory.session_context(datetime(2026, 8, 2, 9, 10, tzinfo=KST)).name
+        == "CLOSED"
+    )
+    assert (
+        advisory.session_context(datetime(2026, 5, 1, 9, 10, tzinfo=KST)).name
         == "CLOSED"
     )
 
@@ -216,6 +289,21 @@ def test_daily_anchor_rejects_cache_not_refreshed_for_current_trade_date():
     )
 
 
+def test_daily_anchor_rejects_stale_non_previous_trading_day_row():
+    now = datetime(2026, 8, 4, 9, 10, tzinfo=KST)
+    rows = [
+        {
+            "dt": "20260731",
+            "open_pric": "100000",
+            "high_pric": "101000",
+            "low_pric": "99000",
+            "cur_prc": "100500",
+        }
+    ]
+
+    assert advisory._parse_previous_day(rows, now) == {}
+
+
 def test_domestic_ready_requires_two_consecutive_observations():
     raw = advisory.evaluate_advisory(**_ready_input())
     assert raw["raw_state"] == "ENTRY_READY"
@@ -235,7 +323,27 @@ def test_domestic_ready_requires_two_consecutive_observations():
     first = filter_.apply(raw)
     second = filter_.apply(raw)
     assert first["state"] == "WATCH"
+    assert first["entry_price_low"] is None
+    assert first["entry_price_high"] is None
     assert second["state"] == "ENTRY_READY"
+
+
+def test_promotion_filter_requires_temporally_consecutive_observations():
+    raw = advisory.evaluate_advisory(**_ready_input())
+    filter_ = advisory.AdvisoryPromotionFilter()
+
+    first = filter_.apply(raw)
+    delayed = {
+        **raw,
+        "observed_at": (
+            datetime.fromisoformat(raw["observed_at"]) + timedelta(seconds=30)
+        ).isoformat(),
+    }
+    second = filter_.apply(delayed)
+
+    assert first["state"] == "WATCH"
+    assert second["state"] == "WATCH"
+    assert second["confirmation_streak"] == 1
 
 
 def test_promotion_filter_keeps_caution_until_ready_is_confirmed():
@@ -358,7 +466,22 @@ def test_live_regular_flow_joint_weakness_only_downgrades_ready():
     result = advisory.evaluate_advisory(**inputs)
 
     assert result["state"] == "ENTRY_CAUTION"
-    assert "foreign_and_program_flow_not_improving" in result["unmet_conditions"]
+    assert "foreign_or_program_flow_not_improving" in result["unmet_conditions"]
+
+
+def test_either_live_regular_flow_weakness_downgrades_ready():
+    inputs = _ready_input()
+    inputs["flow"] = {
+        "status": "OBSERVED",
+        "live_for_current_session": True,
+        "foreign_nonworsening": True,
+        "program_nonworsening": False,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert "foreign_or_program_flow_not_improving" in result["unmet_conditions"]
 
 
 def test_regular_flow_gap_caps_otherwise_ready_signal_at_caution():
@@ -419,6 +542,33 @@ def test_regular_flow_old_source_clock_is_labeled_stale():
     assert flow["source_age_sec"] == 600.0
 
 
+def test_regular_flow_requires_each_source_clock_to_be_fresh():
+    now = datetime(2026, 8, 3, 9, 20, tzinfo=KST)
+    flow = advisory._parse_flow(
+        {
+            "opmr_invsr_trde_chart": [
+                {"tm": "090000", "frgnr_invsr": "-100"},
+                {"tm": "091900", "frgnr_invsr": "-50"},
+            ]
+        },
+        {
+            "stk_tm_prm_trde_trnsn": [
+                {
+                    "tm": "091000",
+                    "prm_netprps_amt": "100",
+                    "prm_netprps_amt_irds": "10",
+                }
+            ]
+        },
+        context=advisory.session_context(now),
+        observed_at=now,
+    )
+
+    assert flow["status"] == "STALE"
+    assert flow["foreign_source_age_sec"] == 60.0
+    assert flow["program_source_age_sec"] == 600.0
+
+
 def test_regular_relative_strength_requires_both_peer_and_kospi_inputs():
     inputs = _ready_input()
     inputs["relative"] = {
@@ -441,6 +591,45 @@ def test_nxt_relative_strength_does_not_require_closed_krx_index():
             "samsung_change_pct": 1.0,
             "sk_hynix_change_pct": 0.8,
             "kospi_change_pct": None,
+        },
+        context,
+    )
+
+    assert ok is True
+    assert issues == []
+
+
+def test_same_window_relative_weakness_is_negative_veto_only():
+    context = advisory.session_context(datetime(2026, 8, 3, 9, 20, tzinfo=KST))
+    relative = {
+        "samsung_change_pct": 1.0,
+        "sk_hynix_change_pct": 0.8,
+        "kospi_change_pct": 0.5,
+        "same_window": {
+            "sk_hynix": {
+                "5m": {"relative_return_pct_point": -0.7},
+            },
+            "kospi": {
+                "5m": {"relative_return_pct_point": 0.1},
+            },
+        },
+    }
+
+    ok, issues = advisory._relative_quality(relative, context)
+
+    assert ok is False
+    assert issues == ["relative_strength_weak"]
+
+
+def test_missing_same_window_relative_data_does_not_add_a_new_block():
+    context = advisory.session_context(datetime(2026, 8, 3, 9, 3, tzinfo=KST))
+
+    ok, issues = advisory._relative_quality(
+        {
+            "samsung_change_pct": 1.0,
+            "sk_hynix_change_pct": 0.8,
+            "kospi_change_pct": 0.5,
+            "same_window": {},
         },
         context,
     )
@@ -480,6 +669,43 @@ def test_frozen_aftermarket_flow_is_provenance_not_live_downgrade():
     assert result["last_live_observed_at"] == "2026-08-03T15:29:00+09:00"
 
 
+def test_same_day_stale_regular_flow_can_be_recovered_as_aftermarket_frozen():
+    now = datetime(2026, 8, 3, 15, 45, tzinfo=KST)
+    recovered = advisory._parse_flow(
+        {
+            "opmr_invsr_trde_chart": [
+                {"tm": "152800", "frgnr_invsr": "-100"},
+                {"tm": "153000", "frgnr_invsr": "-50"},
+            ]
+        },
+        {
+            "stk_tm_prm_trde_trnsn": [
+                {
+                    "tm": "153000",
+                    "prm_netprps_amt": "100",
+                    "prm_netprps_amt_irds": "10",
+                }
+            ]
+        },
+        context=advisory.session_context(datetime(2026, 8, 3, 9, 1, tzinfo=KST)),
+        observed_at=now,
+    )
+
+    assert recovered["status"] == "STALE"
+    assert advisory._regular_flow_recoverable_for_aftermarket(recovered, now)
+
+
+def test_previous_day_regular_flow_is_not_recovered_for_aftermarket():
+    now = datetime(2026, 8, 4, 15, 45, tzinfo=KST)
+    flow = {
+        "foreign_available": True,
+        "program_available": True,
+        "source_observed_at": "2026-08-03T15:30:00+09:00",
+    }
+
+    assert not advisory._regular_flow_recoverable_for_aftermarket(flow, now)
+
+
 def test_regular_flow_cache_must_match_current_trade_date():
     cached = {"observed_at": "2026-08-03T15:29:00+09:00"}
 
@@ -507,13 +733,120 @@ def test_confirmed_support_break_is_immediate_avoid():
     result = advisory.evaluate_advisory(**inputs)
 
     assert result["state"] == "AVOID"
+
+
+def test_exact_invalidation_boundary_is_immediate_avoid():
+    baseline = advisory.evaluate_advisory(**_ready_input())
+    invalidation = baseline["invalidation_price"]
+    inputs = _ready_input()
+    inputs["current_price"] = invalidation
+    inputs["bbo"] = {
+        "best_bid": advisory.move_price_by_ticks(invalidation, -1),
+        "best_ask": invalidation,
+        "age_sec": 0,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "AVOID"
     assert result["entry_price_low"] is None
+
+
+def test_quote_bbo_incoherence_blocks_advisory():
+    inputs = _ready_input()
+    inputs["bbo"] = {"best_bid": 99_000, "best_ask": 99_100, "age_sec": 0}
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "DATA_WAIT"
+    assert "quote_bbo_inconsistent" in result["source_quality"]["issues"]
+
+
+def test_volume_confirmation_requires_both_bar_directions():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = [
+        advisory.MinuteBar(
+            (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S"),
+            100_000,
+            100_200,
+            99_900,
+            100_100,
+            1_000,
+        )
+        for index in range(8)
+    ]
+
+    passed, metadata = advisory._volume_confirmation(bars)
+
+    assert passed is False
+    assert metadata["rising_volume_sample_count"] == 8
+    assert metadata["falling_volume_sample_count"] == 0
+    assert metadata["volume_minimum_composition_met"] is False
+
+
+def test_collector_scope_change_clears_session_local_caches(tmp_path):
+    collector = advisory.SamsungWidgetCollector(
+        snapshot_path=tmp_path / "snapshot.json",
+        observation_dir=tmp_path / "observations",
+    )
+    premarket_now = datetime(2026, 8, 3, 8, 10, tzinfo=KST)
+    collector._activate_scope(premarket_now, advisory.session_context(premarket_now))
+    collector._minute_cache = {"scope": "premarket"}
+    collector._relative_cache = {"scope": "premarket"}
+
+    regular_now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    collector._activate_scope(regular_now, advisory.session_context(regular_now))
+
+    assert collector._minute_cache == {}
+    assert collector._relative_cache == {}
+    assert collector._active_scope_key == (
+        "2026-08-03",
+        "KRX_REGULAR",
+        "KRX",
+        "005930",
+    )
 
 
 def test_stale_bbo_fails_closed_before_advisory():
     result = advisory.evaluate_advisory(**_ready_input(bbo_age=21.0))
     assert result["state"] == "DATA_WAIT"
     assert "bbo_stale" in result["source_quality"]["issues"]
+
+
+def test_live_price_reversal_with_ask_pressure_is_immediate_negative_veto():
+    inputs = _ready_input()
+    inputs["current_price"] = 100_200
+    inputs["bbo"] = {
+        "best_bid": 100_100,
+        "best_ask": 100_200,
+        "best_bid_qty": 1_000,
+        "best_ask_qty": 2_000,
+        "age_sec": 0,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "WATCH"
+    assert result["live_reversal"]["veto"] is True
+    assert "live_price_reversal_with_ask_pressure" in result["unmet_conditions"]
+
+
+def test_future_completed_bar_time_conflict_fails_closed():
+    inputs = _ready_input()
+    future_bar = inputs["bars"][-1]
+    inputs["bars"][-1] = advisory.MinuteBar(
+        "20260803091100",
+        future_bar.open,
+        future_bar.high,
+        future_bar.low,
+        future_bar.close,
+        future_bar.volume,
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "DATA_WAIT"
+    assert "completed_bar_time_conflict" in result["source_quality"]["issues"]
 
 
 def test_negative_bbo_age_is_rejected_as_invalid_freshness():
@@ -706,6 +1039,32 @@ def test_snapshot_freshness_uses_collector_observed_time():
     )
 
 
+def test_actionable_snapshot_contract_rejects_expired_inner_advisory():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    context = contract.session_context(now)
+    raw = advisory.evaluate_advisory(**_ready_input())
+    raw["valid_until"] = (now - timedelta(seconds=1)).isoformat()
+
+    assert not contract.advisory_contract_is_valid(
+        raw,
+        snapshot_observed_at=now,
+        context=context,
+    )
+
+
+def test_snapshot_contract_rejects_invalid_trend_prediction_authority():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    context = contract.session_context(now)
+    raw = advisory.evaluate_advisory(**_ready_input())
+    raw["trend_assessment"]["future_prediction"] = True
+
+    assert not contract.advisory_contract_is_valid(
+        raw,
+        snapshot_observed_at=now,
+        context=context,
+    )
+
+
 def test_observation_recorder_writes_only_state_transition_and_minute_summary(
     tmp_path,
 ):
@@ -870,6 +1229,25 @@ def test_collector_uses_only_read_only_market_data_and_cached_token(
                 )
             if api_id == "ka20001":
                 return Response({"flu_rt": "0.50"})
+            if api_id == "ka20005":
+                return Response(
+                    {
+                        "inds_min_pole_qry": [
+                            {
+                                "cntr_tm": (
+                                    datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+                                    + timedelta(minutes=index)
+                                ).strftime("%Y%m%d%H%M%S"),
+                                "open_pric": str(300_000 + index * 100),
+                                "high_pric": str(300_100 + index * 100),
+                                "low_pric": str(299_900 + index * 100),
+                                "cur_prc": str(300_000 + index * 100),
+                                "trde_qty": "1000",
+                            }
+                            for index in range(10)
+                        ]
+                    }
+                )
             if api_id == "ka10064":
                 return Response(
                     {
@@ -921,6 +1299,7 @@ def test_collector_uses_only_read_only_market_data_and_cached_token(
         "ka10080",
         "ka10081",
         "ka20001",
+        "ka20005",
         "ka90008",
     }
     assert all(
@@ -942,3 +1321,20 @@ def test_read_only_client_blocks_non_market_data_before_network_call():
         assert str(exc).startswith("forbidden_widget_kiwoom_request")
     else:
         raise AssertionError("account request was not blocked")
+
+
+def test_collector_local_request_budget_reserves_mandatory_quote_and_bbo_calls():
+    budget = advisory.ReadOnlyRequestBudget(max_requests_per_minute=4)
+
+    budget.acquire(optional=True)
+    budget.acquire(optional=True)
+    try:
+        budget.acquire(optional=True)
+    except RuntimeError as exc:
+        assert str(exc) == "widget_request_budget_exhausted"
+    else:
+        raise AssertionError("optional request consumed the mandatory reserve")
+
+    budget.acquire(optional=False)
+    budget.acquire(optional=False)
+    assert budget.snapshot()["remaining_requests"] == 0

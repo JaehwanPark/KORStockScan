@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -28,6 +31,7 @@ from src.engine.monitoring.samsung_widget_contract import (
     ADVISORY_AUTHORITY,
     DEFAULT_OBSERVATION_DIR,
     DEFAULT_SNAPSHOT_PATH,
+    KRX_END,
     KRX_START,
     KST,
     METRIC_CONTRACT,
@@ -40,10 +44,13 @@ from src.engine.monitoring.samsung_widget_contract import (
     SK_HYNIX_CODE,
     SNAPSHOT_SCHEMA_VERSION,
     SessionContext,
+    advisory_contract_is_valid,
     as_kst as _as_kst,
     legacy_market_session,
     load_snapshot,
+    previous_krx_trading_date,
     session_context,
+    snapshot_observed_at,
     snapshot_is_fresh,
 )
 from src.engine.sniper_config import CONF
@@ -58,6 +65,18 @@ NEW_YORK = ZoneInfo("America/New_York")
 NYSE_HOLIDAYS = holidays.NYSE()
 EXTERNAL_STALE_SEC = 300
 FLOW_STALE_SEC = 300
+COLLECTOR_REQUESTS_PER_MINUTE = 36
+
+TREND_R2_MIN = 0.40
+TREND_DIRECTIONAL_CONSISTENCY_MIN = 0.60
+TREND_VOLATILITY_LOOKBACK_BARS = 12
+TREND_VOLATILITY_MULTIPLIER = 1.25
+TREND_TICK_MULTIPLIERS = {
+    "NXT_PREMARKET": {1: 2, 3: 3, 5: 4},
+    "KRX_REGULAR": {1: 1, 3: 2, 5: 3},
+    "NXT_AFTERMARKET": {1: 2, 3: 3, 5: 4},
+}
+RELATIVE_UNDERPERFORMANCE_LIMIT_PCT = 0.50
 
 EXTERNAL_THRESHOLDS = {
     "NQ": -0.40,
@@ -73,6 +92,7 @@ READ_ONLY_KIWOOM_REQUESTS = frozenset(
         ("/api/dostk/chart", "ka10064"),
         ("/api/dostk/chart", "ka10080"),
         ("/api/dostk/chart", "ka10081"),
+        ("/api/dostk/chart", "ka20005"),
         ("/api/dostk/sect", "ka20001"),
         ("/api/dostk/mrkcond", "ka90008"),
     }
@@ -140,7 +160,7 @@ def completed_session_bars(
     session_end: datetime_time | None = None,
     limit: int = 120,
 ) -> list[MinuteBar]:
-    """Normalize current-session completed ka10080 one-minute bars."""
+    """Normalize current-session completed stock/index one-minute bars."""
     if not isinstance(rows, list):
         return []
     now = _as_kst(observed_at)
@@ -197,37 +217,156 @@ def _contiguous_window(bars: list[MinuteBar], count: int) -> list[MinuteBar]:
     return window
 
 
-def classify_trends(bars: list[MinuteBar]) -> dict[str, str]:
-    result: dict[str, str] = {}
+def _trend_tick_multiplier(session_name: str, horizon: int) -> int:
+    session_multipliers = TREND_TICK_MULTIPLIERS.get(
+        session_name, TREND_TICK_MULTIPLIERS["KRX_REGULAR"]
+    )
+    return session_multipliers[horizon]
+
+
+def _linear_trend_metrics(closes: list[int]) -> tuple[float, float]:
+    """Return least-squares slope and R-squared for completed closes."""
+    count = len(closes)
+    if count < 2:
+        return 0.0, 0.0
+    x_mean = (count - 1) / 2
+    y_mean = sum(closes) / count
+    x_variance = sum((index - x_mean) ** 2 for index in range(count))
+    if x_variance <= 0:
+        return 0.0, 0.0
+    slope = (
+        sum((index - x_mean) * (price - y_mean) for index, price in enumerate(closes))
+        / x_variance
+    )
+    total_variance = sum((price - y_mean) ** 2 for price in closes)
+    if total_variance <= 0:
+        return slope, 0.0
+    residual = sum(
+        (price - (y_mean + slope * (index - x_mean))) ** 2
+        for index, price in enumerate(closes)
+    )
+    return slope, max(0.0, min(1.0, 1.0 - residual / total_variance))
+
+
+def analyze_trends(
+    bars: list[MinuteBar], *, session_name: str = "KRX_REGULAR"
+) -> dict[str, dict[str, Any]]:
+    """Describe confirmed-bar direction without claiming future prediction.
+
+    The neutral band is at least one session/horizon-specific tick allowance and
+    widens with recent realized one-minute volatility.  Net direction alone is
+    insufficient: slope, fit, and directional consistency must agree.
+    """
+    recent_bars = bars[-TREND_VOLATILITY_LOOKBACK_BARS:]
+    recent_changes = [
+        abs(current.close - previous.close)
+        for previous, current in zip(recent_bars, recent_bars[1:])
+    ]
+    recent_median_abs_change = float(median(recent_changes)) if recent_changes else 0.0
+    result: dict[str, dict[str, Any]] = {}
     for horizon in (1, 3, 5):
+        key = f"{horizon}m"
         window = _contiguous_window(bars, horizon + 1)
         if not window:
-            result[f"{horizon}m"] = "unavailable"
+            result[key] = {
+                "state": "unavailable",
+                "horizon_minutes": horizon,
+                "basis": "completed_contiguous_1m_closes",
+            }
             continue
         closes = [bar.close for bar in window]
-        change = closes[-1] - closes[0]
-        flat_band = max(1, round(closes[-1] * 0.0005))
-        center = (len(closes) - 1) / 2
-        slope = sum((index - center) * price for index, price in enumerate(closes))
-        if abs(change) <= flat_band:
-            trend = "flat"
-        elif change > flat_band and slope > 0:
-            trend = "up"
-        elif change < -flat_band and slope < 0:
-            trend = "down"
+        net_change = closes[-1] - closes[0]
+        tick_size = get_tick_size(closes[-1])
+        tick_multiplier = _trend_tick_multiplier(session_name, horizon)
+        raw_band = max(
+            tick_size * tick_multiplier,
+            recent_median_abs_change * TREND_VOLATILITY_MULTIPLIER,
+        )
+        flat_band = max(tick_size, int(math.ceil(raw_band / tick_size) * tick_size))
+        slope, regression_r2 = _linear_trend_metrics(closes)
+        deltas = [current - previous for previous, current in zip(closes, closes[1:])]
+        direction = 1 if net_change > 0 else -1 if net_change < 0 else 0
+        directional_consistency = (
+            sum(1 for change in deltas if change * direction > 0) / len(deltas)
+            if direction and deltas
+            else 0.0
+        )
+        minimum_abs_slope = flat_band / max(1, horizon) * 0.5
+        common_confirmation = bool(
+            regression_r2 >= TREND_R2_MIN
+            and directional_consistency >= TREND_DIRECTIONAL_CONSISTENCY_MIN
+        )
+        if net_change > flat_band and slope > minimum_abs_slope and common_confirmation:
+            state = "up"
+        elif (
+            net_change < -flat_band
+            and slope < -minimum_abs_slope
+            and common_confirmation
+        ):
+            state = "down"
         else:
-            trend = "flat"
-        result[f"{horizon}m"] = trend
+            state = "flat"
+        result[key] = {
+            "state": state,
+            "horizon_minutes": horizon,
+            "basis": "completed_contiguous_1m_closes",
+            "session": session_name,
+            "tick_size": tick_size,
+            "tick_multiplier": tick_multiplier,
+            "flat_band_price": flat_band,
+            "recent_median_abs_change": round(recent_median_abs_change, 4),
+            "net_change": net_change,
+            "net_change_bps": round((net_change / closes[0]) * 10_000, 4),
+            "slope_price_per_minute": round(slope, 4),
+            "minimum_abs_slope": round(minimum_abs_slope, 4),
+            "regression_r2": round(regression_r2, 4),
+            "directional_consistency": round(directional_consistency, 4),
+        }
     return result
 
 
+def classify_trends(
+    bars: list[MinuteBar], *, session_name: str = "KRX_REGULAR"
+) -> dict[str, str]:
+    return {
+        key: str(detail.get("state") or "unavailable")
+        for key, detail in analyze_trends(bars, session_name=session_name).items()
+    }
+
+
+def _trend_assessment(trends: dict[str, str]) -> dict[str, Any]:
+    medium = trends.get("3m", "unavailable")
+    slow = trends.get("5m", "unavailable")
+    if "down" in {medium, slow}:
+        state = "TREND_DOWN"
+    elif "unavailable" in {medium, slow}:
+        state = "TREND_DATA_WAIT"
+    elif medium == slow == "up":
+        state = "TREND_UP"
+    elif medium == slow == "flat":
+        state = "TREND_STABLE"
+    else:
+        state = "TREND_MIXED"
+    return {
+        "state": state,
+        "basis": "confirmed_completed_3m_5m_direction",
+        "future_prediction": False,
+        "setup_ready_is_distinct": True,
+    }
+
+
 def _session_vwap(bars: list[MinuteBar]) -> int | None:
+    typical_prices = [(bar.high + bar.low + bar.close) / 3 for bar in bars]
     weighted_volume = sum(bar.volume for bar in bars if bar.volume > 0)
     if weighted_volume > 0:
-        value = sum(bar.close * bar.volume for bar in bars if bar.volume > 0)
+        value = sum(
+            typical_price * bar.volume
+            for bar, typical_price in zip(bars, typical_prices)
+            if bar.volume > 0
+        )
         return int(round(value / weighted_volume))
-    if bars:
-        return int(round(sum(bar.close for bar in bars) / len(bars)))
+    if typical_prices:
+        return int(round(sum(typical_prices) / len(typical_prices)))
     return None
 
 
@@ -246,7 +385,23 @@ def _premarket_context(bars: list[MinuteBar], observed_at: datetime) -> dict[str
         "low": min(bar.low for bar in bars),
         "last_close": bars[-1].close,
         "completed_bar_count": len(bars),
-        "minute_trends": classify_trends(bars),
+        "minute_trends": classify_trends(bars, session_name="NXT_PREMARKET"),
+    }
+
+
+def _session_anchor(bars: list[MinuteBar], observed_at: datetime) -> dict[str, Any]:
+    if not bars:
+        return {}
+    return {
+        "status": "OBSERVED",
+        "date": _as_kst(observed_at).date().isoformat(),
+        "observed_at": _as_kst(observed_at).isoformat(),
+        "open": bars[0].open,
+        "high": max(bar.high for bar in bars),
+        "low": min(bar.low for bar in bars),
+        "close": bars[-1].close,
+        "vwap": _session_vwap(bars),
+        "completed_bar_count": len(bars),
     }
 
 
@@ -267,11 +422,13 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
     higher_high_and_low = False
     retest_held = False
     confirmed_support: int | None = None
+    latest_structure_low: int | None = None
     if len(recent) >= 6:
         prior_window = recent[-6:-3]
         latest_window = recent[-3:]
         prior_low = min(bar.low for bar in prior_window)
         latest_low = min(bar.low for bar in latest_window)
+        latest_structure_low = latest_low
         prior_high = max(bar.high for bar in prior_window)
         latest_high = max(bar.high for bar in latest_window)
         higher_low = latest_low >= prior_low
@@ -289,8 +446,8 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
         confirmed_support = second_low
     elif pivots:
         confirmed_support = pivots[-1][1]
-    elif recent:
-        confirmed_support = min(bar.low for bar in recent[-3:])
+    elif higher_high_and_low and latest_structure_low is not None:
+        confirmed_support = latest_structure_low
 
     resistance_rows = recent[:-2] if len(recent) >= 5 else recent[:-1]
     recent_resistance = (
@@ -314,12 +471,17 @@ def _volume_confirmation(
     falling = [bar.volume for bar in recent if bar.close < bar.open and bar.volume > 0]
     rising_avg = sum(rising) / len(rising) if rising else None
     falling_avg = sum(falling) / len(falling) if falling else None
-    if rising_avg is None:
-        rebound_confirmed = False
-    elif falling_avg is None:
-        rebound_confirmed = True
-    else:
-        rebound_confirmed = rising_avg >= falling_avg
+    zero_volume_count = sum(bar.volume <= 0 for bar in recent)
+    zero_volume_ratio = zero_volume_count / len(recent) if recent else 1.0
+    minimum_composition_met = (
+        len(rising) >= 2 and len(falling) >= 1 and zero_volume_ratio <= 0.25
+    )
+    rebound_confirmed = bool(
+        minimum_composition_met
+        and rising_avg is not None
+        and falling_avg is not None
+        and rising_avg >= falling_avg
+    )
     pivots = _pivot_lows(recent)
     first_test_volume = None
     retest_volume = None
@@ -338,6 +500,11 @@ def _volume_confirmation(
         "first_test_volume": first_test_volume,
         "retest_volume": retest_volume,
         "retest_volume_contracted": retest_volume_contracted,
+        "rising_volume_sample_count": len(rising),
+        "falling_volume_sample_count": len(falling),
+        "zero_volume_count": zero_volume_count,
+        "zero_volume_ratio": round(zero_volume_ratio, 4),
+        "volume_minimum_composition_met": minimum_composition_met,
     }
 
 
@@ -625,28 +792,32 @@ def _parse_previous_day(rows: object, observed_at: datetime) -> dict[str, Any]:
     if not isinstance(rows, list):
         return {}
     today = _as_kst(observed_at).strftime("%Y%m%d")
-    candidates = []
+    expected_date = previous_krx_trading_date(_as_kst(observed_at).date())
+    expected_source_date = expected_date.strftime("%Y%m%d")
     for row in rows:
         if not isinstance(row, dict):
             continue
         source_date = str(row.get("dt") or "").strip()
-        if len(source_date) != 8 or not source_date.isdigit() or source_date >= today:
+        if (
+            len(source_date) != 8
+            or not source_date.isdigit()
+            or source_date >= today
+            or source_date != expected_source_date
+        ):
             continue
         close = _positive_int(row.get("cur_prc"))
         high = _positive_int(row.get("high_pric"))
         low = _positive_int(row.get("low_pric"))
         open_price = _positive_int(row.get("open_pric"))
         if all((close, high, low, open_price)):
-            candidates.append(
-                {
-                    "date": source_date,
-                    "open": open_price,
-                    "high": high,
-                    "low": low,
-                    "close": close,
-                }
-            )
-    return max(candidates, key=lambda row: row["date"], default={})
+            return {
+                "date": source_date,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+            }
+    return {}
 
 
 def _current_daily_anchor(
@@ -657,6 +828,68 @@ def _current_daily_anchor(
     if cache_fetch_day != day_key:
         return {}
     return _parse_previous_day(rows, observed_at)
+
+
+def _aligned_window_returns(
+    primary_bars: list[MinuteBar], comparison_bars: list[MinuteBar]
+) -> dict[str, dict[str, Any]]:
+    """Return exact timestamp-aligned 3/5/15-minute close returns."""
+    primary_by_time = {bar.source_time: bar.close for bar in primary_bars}
+    comparison_by_time = {bar.source_time: bar.close for bar in comparison_bars}
+    common_times = sorted(set(primary_by_time).intersection(comparison_by_time))
+    result: dict[str, dict[str, Any]] = {}
+    for horizon in (3, 5, 15):
+        required_count = horizon + 1
+        times = common_times[-required_count:]
+        if len(times) < required_count:
+            continue
+        try:
+            parsed_times = [datetime.strptime(value, "%Y%m%d%H%M%S") for value in times]
+        except ValueError:
+            continue
+        if any(
+            int((current - previous).total_seconds()) != 60
+            for previous, current in zip(parsed_times, parsed_times[1:])
+        ):
+            continue
+        primary_start = primary_by_time[times[0]]
+        comparison_start = comparison_by_time[times[0]]
+        if primary_start <= 0 or comparison_start <= 0:
+            continue
+        primary_return = (
+            (primary_by_time[times[-1]] - primary_start) / primary_start
+        ) * 100
+        comparison_return = (
+            (comparison_by_time[times[-1]] - comparison_start) / comparison_start
+        ) * 100
+        result[f"{horizon}m"] = {
+            "samsung_return_pct": round(primary_return, 4),
+            "comparison_return_pct": round(comparison_return, 4),
+            "relative_return_pct_point": round(primary_return - comparison_return, 4),
+            "window_start": times[0],
+            "window_end": times[-1],
+        }
+    return result
+
+
+def _same_window_relative_snapshot(
+    samsung_bars: list[MinuteBar],
+    peer_bars: list[MinuteBar],
+    kospi_bars: list[MinuteBar],
+) -> dict[str, Any]:
+    return {
+        "same_window": {
+            "sk_hynix": _aligned_window_returns(samsung_bars, peer_bars),
+            "kospi": _aligned_window_returns(samsung_bars, kospi_bars),
+        },
+        "same_window_basis": "timestamp_aligned_completed_1m_closes",
+        "same_window_authority": "negative_relative_weakness_veto_only",
+        "same_window_sources": {
+            "samsung": "kiwoom_ka10080_completed_1m",
+            "sk_hynix": "kiwoom_ka10080_completed_1m",
+            "kospi": "kiwoom_ka20005_completed_1m_index_x100",
+        },
+    }
 
 
 def _relative_quality(
@@ -677,7 +910,73 @@ def _relative_quality(
         for value in comparisons
         if value is not None and samsung_change < value - 0.5
     ]
-    return not weak_against, ([] if not weak_against else ["relative_strength_weak"])
+    same_window = relative.get("same_window")
+    same_window_weak = False
+    if isinstance(same_window, dict):
+        comparison_names = (
+            ("sk_hynix", "kospi") if context.name == "KRX_REGULAR" else ("sk_hynix",)
+        )
+        for comparison_name in comparison_names:
+            windows = same_window.get(comparison_name)
+            if not isinstance(windows, dict):
+                continue
+            # Prefer the broadest available intraday window. Missing optional
+            # minute data does not create a new positive or blocking authority.
+            for horizon in ("15m", "5m", "3m"):
+                row = windows.get(horizon)
+                if not isinstance(row, dict):
+                    continue
+                relative_return = _signed_float(row.get("relative_return_pct_point"))
+                if (
+                    relative_return is not None
+                    and relative_return < -RELATIVE_UNDERPERFORMANCE_LIMIT_PCT
+                ):
+                    same_window_weak = True
+                break
+    passed = not weak_against and not same_window_weak
+    return passed, ([] if passed else ["relative_strength_weak"])
+
+
+def _live_reversal_veto(
+    *,
+    current_price: int,
+    bars: list[MinuteBar],
+    bbo: dict[str, Any],
+    trend_details: dict[str, dict[str, Any]],
+) -> tuple[bool, dict[str, Any]]:
+    """Use the forming-price impulse only as an immediate negative veto."""
+    one_minute = trend_details.get("1m") or {}
+    last_completed_close = bars[-1].close if bars else None
+    reversal_band = _positive_int(one_minute.get("flat_band_price"))
+    if reversal_band is None and last_completed_close:
+        reversal_band = get_tick_size(last_completed_close)
+    best_bid_qty = _positive_int(bbo.get("best_bid_qty"))
+    best_ask_qty = _positive_int(bbo.get("best_ask_qty"))
+    ask_to_bid_ratio = (
+        best_ask_qty / best_bid_qty
+        if best_bid_qty is not None and best_ask_qty is not None
+        else None
+    )
+    negative_impulse = bool(
+        last_completed_close is not None
+        and reversal_band is not None
+        and current_price <= last_completed_close - reversal_band
+    )
+    ask_pressure = bool(ask_to_bid_ratio is not None and ask_to_bid_ratio >= 1.5)
+    veto = negative_impulse and ask_pressure
+    return veto, {
+        "veto": veto,
+        "authority": "negative_veto_only",
+        "positive_promotion_forbidden": True,
+        "last_completed_close": last_completed_close,
+        "current_price": current_price,
+        "reversal_band": reversal_band,
+        "negative_impulse": negative_impulse,
+        "ask_pressure": ask_pressure,
+        "ask_to_bid_qty_ratio": (
+            round(ask_to_bid_ratio, 4) if ask_to_bid_ratio is not None else None
+        ),
+    }
 
 
 def _source_quality(
@@ -688,6 +987,7 @@ def _source_quality(
     bbo: dict[str, Any],
     previous_day: dict[str, Any],
     quote_age_sec: float,
+    current_price: int,
 ) -> dict[str, Any]:
     issues: list[str] = []
     if not context.active or context.start is None:
@@ -700,7 +1000,9 @@ def _source_quality(
         )
         age = (_as_kst(observed_at) - last_bar).total_seconds()
         max_age = 120 if context.name == "KRX_REGULAR" else 180
-        if age > max_age:
+        if age < -2:
+            issues.append("completed_bar_time_conflict")
+        elif age > max_age:
             issues.append("completed_bar_stale")
     else:
         issues.append("completed_bars_missing")
@@ -715,6 +1017,11 @@ def _source_quality(
         issues.append("bbo_missing_or_crossed")
     elif bbo_age is None or bbo_age < 0 or bbo_age > 20:
         issues.append("bbo_stale")
+    elif current_price > 0:
+        coherent_low = move_price_by_ticks(best_bid, -1)
+        coherent_high = move_price_by_ticks(best_ask, 1)
+        if not coherent_low <= current_price <= coherent_high:
+            issues.append("quote_bbo_inconsistent")
     return {
         "status": "PASS" if not issues else "BLOCKED",
         "issues": issues,
@@ -750,12 +1057,14 @@ def evaluate_advisory(
     flow: dict[str, Any] | None = None,
     recent_trade_negative_veto: bool = False,
     premarket: dict[str, Any] | None = None,
+    regular_session: dict[str, Any] | None = None,
     quote_age_sec: float = 0.0,
     quote_received_at: str | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic widget-only advisory without score/AI authority."""
     flow = flow or {}
     premarket = premarket or {}
+    regular_session = regular_session or {}
     source_quality = _source_quality(
         observed_at=observed_at,
         context=context,
@@ -763,9 +1072,22 @@ def evaluate_advisory(
         bbo=bbo,
         previous_day=previous_day,
         quote_age_sec=quote_age_sec,
+        current_price=current_price,
     )
     external_points = _age_external_points(external_points, observed_at)
     external_risk = evaluate_external_risk(external_points)
+    trend_details = analyze_trends(bars, session_name=context.name)
+    trends = {
+        key: str(detail.get("state") or "unavailable")
+        for key, detail in trend_details.items()
+    }
+    trend_assessment = _trend_assessment(trends)
+    live_reversal_veto, live_reversal = _live_reversal_veto(
+        current_price=current_price,
+        bars=bars,
+        bbo=bbo,
+        trend_details=trend_details,
+    )
     now = _as_kst(observed_at)
     premarket_same_day = premarket.get("date") == now.date().isoformat()
     premarket_aux_applied = bool(
@@ -808,6 +1130,10 @@ def evaluate_advisory(
         "external_points": {
             key: asdict(point) for key, point in external_points.items()
         },
+        "trend_assessment": trend_assessment,
+        "trend_details": trend_details,
+        "live_reversal": live_reversal,
+        "relative_strength": relative,
         "provenance": {
             "market_venue": context.market_venue,
             "market_cohort": context.market_cohort,
@@ -816,6 +1142,7 @@ def evaluate_advisory(
             "premarket_context": premarket_provenance,
             "quote_received_at": quote_received_at,
             "quote_age_sec": round(quote_age_sec, 3),
+            "session_vwap_method": "hlc3_volume_weighted_with_hlc3_fallback",
         },
         "authority": ADVISORY_AUTHORITY,
         "runtime_effect": False,
@@ -826,7 +1153,6 @@ def evaluate_advisory(
     if source_quality["status"] != "PASS":
         return base
 
-    trends = classify_trends(bars)
     structure = _structure_features(bars)
     vwap = _session_vwap(bars)
     volume_ok, volume_meta = _volume_confirmation(bars)
@@ -835,21 +1161,23 @@ def evaluate_advisory(
     best_ask = int(bbo["best_ask"])
     spread_ticks = _spread_tick_count(best_bid, best_ask)
 
-    support_candidates = [
+    raw_structural_support = structure.get("confirmed_support")
+    structural_support = (
+        clamp_price_to_tick(raw_structural_support)
+        if isinstance(raw_structural_support, int) and raw_structural_support > 0
+        else None
+    )
+    tactical_candidates = [
         value
-        for value in (
-            structure.get("confirmed_support"),
-            vwap if vwap is not None and vwap <= current_price else None,
-            (
-                previous_day.get("low")
-                if previous_day.get("low") and previous_day["low"] <= current_price
-                else None
-            ),
-        )
-        if isinstance(value, int) and value > 0
+        for value in (structural_support, vwap)
+        if isinstance(value, int) and 0 < value <= current_price
     ]
-    raw_support = max(support_candidates, default=None)
-    support = clamp_price_to_tick(raw_support) if raw_support is not None else None
+    tactical_support = (
+        clamp_price_to_tick(max(tactical_candidates)) if tactical_candidates else None
+    )
+    session_anchor = (
+        regular_session if context.name == "NXT_AFTERMARKET" else previous_day
+    )
     recent_resistance = structure.get("recent_resistance")
     structure_ok = bool(structure["higher_high_and_low"] or structure["retest_held"])
     reclaim_ok = bool(
@@ -885,11 +1213,12 @@ def evaluate_advisory(
         context.name == "KRX_REGULAR"
         and flow.get("status") == "OBSERVED"
         and flow.get("live_for_current_session") is True
-        and not flow.get("foreign_nonworsening")
-        and not flow.get("program_nonworsening")
+        and (
+            not flow.get("foreign_nonworsening") or not flow.get("program_nonworsening")
+        )
     )
     if flow_negative:
-        unmet.append("foreign_and_program_flow_not_improving")
+        unmet.append("foreign_or_program_flow_not_improving")
     flow_data_limited = bool(
         context.name == "KRX_REGULAR"
         and (
@@ -912,17 +1241,44 @@ def evaluate_advisory(
         else:
             reasons.append("premarket_aux_supportive")
 
-    if support is None:
+    if structural_support is None:
         base["unmet_conditions"] = ["confirmed_support_missing", *unmet]
         return base
-    invalidation = move_price_by_ticks(support, -1)
+    invalidation = move_price_by_ticks(structural_support, -1)
+    if current_price <= invalidation or current_price < structural_support:
+        base.update(
+            {
+                "state": "AVOID",
+                "raw_state": "AVOID",
+                "invalidation": "confirmed_support_break",
+                "invalidation_price": invalidation,
+                "reasons": ["confirmed_support_broken"],
+                "unmet_conditions": list(dict.fromkeys(unmet)),
+                "derived": {
+                    "confirmed_support": structural_support,
+                    "structural_support": structural_support,
+                    "tactical_support": tactical_support,
+                    "session_anchor": session_anchor,
+                },
+                "flow": flow,
+            }
+        )
+        return base
+    if tactical_support is None:
+        base["unmet_conditions"] = ["tactical_support_missing", *unmet]
+        return base
     trigger_candidates = [
         value
-        for value in (vwap, recent_resistance, previous_day.get("close"))
+        for value in (vwap, recent_resistance, session_anchor.get("close"))
         if isinstance(value, int) and value > 0 and value <= current_price
     ]
-    trigger_price = clamp_price_to_tick(max(trigger_candidates, default=support))
-    chase_pct = ((current_price - support) / support) * 100 if support else 0.0
+    trigger_price = clamp_price_to_tick(
+        max(trigger_candidates, default=tactical_support)
+    )
+    structural_chase_pct = (
+        (current_price - structural_support) / structural_support
+    ) * 100
+    tactical_chase_pct = ((current_price - tactical_support) / tactical_support) * 100
 
     base.update(
         {
@@ -934,7 +1290,10 @@ def evaluate_advisory(
             "unmet_conditions": list(dict.fromkeys(unmet)),
             "derived": {
                 "session_vwap": vwap,
-                "confirmed_support": support,
+                "confirmed_support": structural_support,
+                "structural_support": structural_support,
+                "tactical_support": tactical_support,
+                "session_anchor": session_anchor,
                 "recent_resistance": recent_resistance,
                 "previous_day": previous_day,
                 "opening_range_high": max(
@@ -944,8 +1303,13 @@ def evaluate_advisory(
                     bar.low for bar in bars[: context.minimum_bars]
                 ),
                 "spread_ticks": spread_ticks,
-                "chase_pct": round(chase_pct, 4),
+                "chase_pct": round(max(structural_chase_pct, tactical_chase_pct), 4),
+                "structural_chase_pct": round(structural_chase_pct, 4),
+                "tactical_chase_pct": round(tactical_chase_pct, 4),
                 "minute_trends": trends,
+                "minute_trend_details": trend_details,
+                "trend_assessment": trend_assessment,
+                "live_reversal": live_reversal,
                 "higher_low": structure["higher_low"],
                 "higher_high": structure["higher_high"],
                 "higher_high_and_low": structure["higher_high_and_low"],
@@ -956,24 +1320,22 @@ def evaluate_advisory(
             "flow": flow,
         }
     )
-    if current_price < invalidation:
-        base["state"] = base["raw_state"] = "AVOID"
-        base["reasons"] = ["confirmed_support_broken"]
-        return base
-    if chase_pct > 0.3:
+    if structural_chase_pct > 0.3 or tactical_chase_pct > 0.3:
         base["state"] = base["raw_state"] = "NO_CHASE"
         base["reasons"] = ["price_more_than_30bp_above_support"]
         return base
-    if not spread_ok or recent_trade_negative_veto:
+    if not spread_ok or recent_trade_negative_veto or live_reversal_veto:
         base["state"] = base["raw_state"] = "WATCH"
         if recent_trade_negative_veto:
             base["unmet_conditions"].append("recent_rest_prints_descending")
+        if live_reversal_veto:
+            base["unmet_conditions"].append("live_price_reversal_with_ask_pressure")
         return base
 
     all_core_passed = all(core_checks.values())
     if all_core_passed:
-        entry_low = max(support, best_bid)
-        entry_high = min(best_ask, move_price_by_ticks(support, 2))
+        entry_low = max(tactical_support, best_bid)
+        entry_high = min(best_ask, move_price_by_ticks(tactical_support, 2))
         if entry_high < entry_low:
             base["state"] = base["raw_state"] = "NO_CHASE"
             base["reasons"] = ["entry_range_not_available_without_chasing"]
@@ -1005,12 +1367,14 @@ class AdvisoryPromotionFilter:
 
     ACTIONABLE = {"ENTRY_CAUTION", "ENTRY_READY"}
     ACTIONABLE_RANK = {"ENTRY_CAUTION": 1, "ENTRY_READY": 2}
+    MAX_CONFIRMATION_GAP_SEC = 25.0
 
     def __init__(self) -> None:
         self._scope_key: str | None = None
         self._last_raw_state: str | None = None
         self._streak = 0
         self._visible_state = "DATA_WAIT"
+        self._last_observed_at: datetime | None = None
 
     @staticmethod
     def _scope_for(advisory: dict[str, Any]) -> str:
@@ -1028,17 +1392,49 @@ class AdvisoryPromotionFilter:
             streak = max(1, int(advisory.get("confirmation_streak") or 1))
         except (TypeError, ValueError):
             return False
+        try:
+            observed_at = datetime.fromisoformat(str(advisory.get("observed_at") or ""))
+        except (TypeError, ValueError):
+            return False
+        if observed_at.tzinfo is None:
+            return False
         self._scope_key = self._scope_for(advisory)
         self._last_raw_state = raw_state
         self._streak = streak
         self._visible_state = visible_state
+        self._last_observed_at = _as_kst(observed_at)
         return True
+
+    def reset(self) -> None:
+        self._scope_key = None
+        self._last_raw_state = None
+        self._streak = 0
+        self._visible_state = "DATA_WAIT"
+        self._last_observed_at = None
 
     def apply(self, advisory: dict[str, Any]) -> dict[str, Any]:
         result = json.loads(json.dumps(advisory, ensure_ascii=False))
         scope_key = self._scope_for(result)
+        try:
+            observed_at = datetime.fromisoformat(str(result.get("observed_at") or ""))
+        except (TypeError, ValueError):
+            observed_at = None
+        if observed_at is not None and observed_at.tzinfo is not None:
+            observed_at = _as_kst(observed_at)
+        else:
+            observed_at = None
         if scope_key != self._scope_key:
             self._scope_key = scope_key
+            self._last_raw_state = None
+            self._streak = 0
+            self._visible_state = "DATA_WAIT"
+            self._last_observed_at = None
+        elif self._last_observed_at is not None and (
+            observed_at is None
+            or (observed_at - self._last_observed_at).total_seconds() < 0
+            or (observed_at - self._last_observed_at).total_seconds()
+            > self.MAX_CONFIRMATION_GAP_SEC
+        ):
             self._last_raw_state = None
             self._streak = 0
             self._visible_state = "DATA_WAIT"
@@ -1064,23 +1460,67 @@ class AdvisoryPromotionFilter:
             result.setdefault("unmet_conditions", []).append(
                 "awaiting_second_10s_confirmation"
             )
+            if result["state"] == "WATCH":
+                result["entry_price_low"] = None
+                result["entry_price_high"] = None
         else:
             self._visible_state = raw_state
             result["state"] = raw_state
+        self._last_observed_at = observed_at
         result["confirmation_streak"] = self._streak
         return result
+
+
+def _regular_flow_recoverable_for_aftermarket(
+    flow: dict[str, Any], observed_at: datetime
+) -> bool:
+    """Accept a complete same-day KRX close snapshot as frozen provenance."""
+    if not flow.get("foreign_available") or not flow.get("program_available"):
+        return False
+    now = _as_kst(observed_at)
+    source_times: list[datetime] = []
+    for field in ("foreign_source_observed_at", "program_source_observed_at"):
+        try:
+            source_time = datetime.fromisoformat(str(flow.get(field) or ""))
+        except (TypeError, ValueError):
+            return False
+        if source_time.tzinfo is None:
+            return False
+        source_times.append(_as_kst(source_time))
+    return all(
+        source_time.date() == now.date()
+        and source_time <= now
+        and source_time.time().replace(tzinfo=None) <= KRX_END
+        for source_time in source_times
+    )
 
 
 class KiwoomReadOnlyClient:
     """Small exact-contract REST client with no auth lifecycle mutation."""
 
-    def __init__(self, token: str, *, session: requests.Session | None = None) -> None:
+    def __init__(
+        self,
+        token: str,
+        *,
+        session: requests.Session | None = None,
+        budget: "ReadOnlyRequestBudget | None" = None,
+    ) -> None:
         self.token = token
         self.session = session or requests.Session()
+        self.budget = budget
 
-    def post(self, path: str, api_id: str, payload: dict[str, str]) -> dict[str, Any]:
+    def post(
+        self,
+        path: str,
+        api_id: str,
+        payload: dict[str, str],
+        *,
+        optional: bool = False,
+    ) -> dict[str, Any]:
         if (path, api_id) not in READ_ONLY_KIWOOM_REQUESTS:
             raise RuntimeError(f"forbidden_widget_kiwoom_request:{api_id}:{path}")
+        if self.budget is not None:
+            self.budget.acquire(optional=optional)
         response = self.session.post(
             kiwoom_utils.get_api_url(path),
             headers={
@@ -1091,6 +1531,8 @@ class KiwoomReadOnlyClient:
             json=payload,
             timeout=(5, 10),
         )
+        if getattr(response, "status_code", None) == 429 and self.budget is not None:
+            self.budget.note_rate_limited()
         response.raise_for_status()
         data = response.json()
         try:
@@ -1100,6 +1542,49 @@ class KiwoomReadOnlyClient:
         if return_code != 0:
             raise RuntimeError(f"{api_id}_rejected_{return_code}")
         return data
+
+
+class ReadOnlyRequestBudget:
+    """Collector-local budget; it never mutates the trading bot limiter."""
+
+    def __init__(self, max_requests_per_minute: int = COLLECTOR_REQUESTS_PER_MINUTE):
+        self.max_requests_per_minute = max(3, int(max_requests_per_minute))
+        self._requests: deque[float] = deque()
+        self._cooldown_until = 0.0
+        self.total_request_count = 0
+        self.rate_limit_count = 0
+
+    def _prune(self, now: float) -> None:
+        while self._requests and now - self._requests[0] >= 60.0:
+            self._requests.popleft()
+
+    def acquire(self, *, optional: bool) -> None:
+        now = time.monotonic()
+        self._prune(now)
+        if now < self._cooldown_until:
+            raise RuntimeError("widget_kiwoom_429_cooldown")
+        reserve = 2 if optional else 0
+        if len(self._requests) >= self.max_requests_per_minute - reserve:
+            raise RuntimeError("widget_request_budget_exhausted")
+        self._requests.append(now)
+        self.total_request_count += 1
+
+    def note_rate_limited(self) -> None:
+        self.rate_limit_count += 1
+        self._cooldown_until = max(self._cooldown_until, time.monotonic() + 30.0)
+
+    def snapshot(self) -> dict[str, int]:
+        now = time.monotonic()
+        self._prune(now)
+        return {
+            "max_requests_per_minute": self.max_requests_per_minute,
+            "requests_in_last_minute": len(self._requests),
+            "remaining_requests": max(
+                0, self.max_requests_per_minute - len(self._requests)
+            ),
+            "total_request_count": self.total_request_count,
+            "rate_limit_count": self.rate_limit_count,
+        }
 
 
 def _parse_bbo(payload: dict[str, Any], observed_at: datetime) -> dict[str, Any]:
@@ -1129,6 +1614,17 @@ def _recent_trade_negative_veto(payload: dict[str, Any]) -> bool:
     # Official ka10003 is newest first.  This is a negative veto only; an
     # ascending sequence never creates positive entry authority.
     return len(prices) == 3 and prices[0] < prices[1] < prices[2]
+
+
+def _intraday_source_time(value: object, observed_at: datetime) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw.isdigit() or len(raw) not in {4, 6}:
+        return None
+    try:
+        clock = datetime.strptime(raw.ljust(6, "0"), "%H%M%S").time()
+    except ValueError:
+        return None
+    return datetime.combine(_as_kst(observed_at).date(), clock, tzinfo=KST)
 
 
 def _parse_flow(
@@ -1181,34 +1677,46 @@ def _parse_flow(
         or (program_delta is not None and program_delta >= 0)
     )
     program_available = program_net is not None or program_delta is not None
-    latest_source_clock = max(
-        (
-            str(row.get("tm") or "").strip()
-            for row in [*investor_rows, *program_rows]
-            if str(row.get("tm") or "").strip()
-        ),
-        default="",
+    foreign_source_time = _intraday_source_time(
+        investor_rows[-1].get("tm") if investor_rows else None, observed_at
     )
-    source_observed_at = None
-    if latest_source_clock.isdigit() and len(latest_source_clock) in {4, 6}:
-        normalized_clock = latest_source_clock.ljust(6, "0")
-        try:
-            source_observed_at = datetime.combine(
-                _as_kst(observed_at).date(),
-                datetime.strptime(normalized_clock, "%H%M%S").time(),
-                tzinfo=KST,
-            ).isoformat()
-        except ValueError:
-            source_observed_at = None
-    if foreign_available and program_available and source_observed_at is not None:
-        source_time = datetime.fromisoformat(source_observed_at)
-        source_age_sec = (_as_kst(observed_at) - source_time).total_seconds()
-        status = "OBSERVED" if 0 <= source_age_sec <= FLOW_STALE_SEC else "STALE"
+    program_source_time = _intraday_source_time(
+        program_rows[-1].get("tm") if program_rows else None, observed_at
+    )
+    foreign_source_age_sec = (
+        (_as_kst(observed_at) - foreign_source_time).total_seconds()
+        if foreign_source_time is not None
+        else None
+    )
+    program_source_age_sec = (
+        (_as_kst(observed_at) - program_source_time).total_seconds()
+        if program_source_time is not None
+        else None
+    )
+    both_sources_fresh = bool(
+        foreign_available
+        and program_available
+        and foreign_source_age_sec is not None
+        and program_source_age_sec is not None
+        and 0 <= foreign_source_age_sec <= FLOW_STALE_SEC
+        and 0 <= program_source_age_sec <= FLOW_STALE_SEC
+    )
+    source_times = [
+        value
+        for value in (foreign_source_time, program_source_time)
+        if value is not None
+    ]
+    source_observed_at = max(source_times).isoformat() if source_times else None
+    source_age_sec = (
+        max(foreign_source_age_sec, program_source_age_sec)
+        if foreign_source_age_sec is not None and program_source_age_sec is not None
+        else None
+    )
+    if foreign_available and program_available:
+        status = "OBSERVED" if both_sources_fresh else "STALE"
     elif investor_rows or program_rows:
-        source_age_sec = None
         status = "PARTIAL"
     else:
-        source_age_sec = None
         status = "UNAVAILABLE"
     return {
         "status": status,
@@ -1221,6 +1729,22 @@ def _parse_flow(
         "program_delta_amount": program_delta,
         "observed_at": _as_kst(observed_at).isoformat(),
         "source_observed_at": source_observed_at,
+        "foreign_source_observed_at": (
+            foreign_source_time.isoformat() if foreign_source_time else None
+        ),
+        "program_source_observed_at": (
+            program_source_time.isoformat() if program_source_time else None
+        ),
+        "foreign_source_age_sec": (
+            round(foreign_source_age_sec, 3)
+            if foreign_source_age_sec is not None
+            else None
+        ),
+        "program_source_age_sec": (
+            round(program_source_age_sec, 3)
+            if program_source_age_sec is not None
+            else None
+        ),
         "source_age_sec": (
             round(source_age_sec, 3) if source_age_sec is not None else None
         ),
@@ -1364,25 +1888,58 @@ class SamsungWidgetCollector:
         self.snapshot_path = snapshot_path
         self.external_provider = external_provider or YahooExternalMarketProvider()
         self.request_session = request_session
+        self.request_budget = ReadOnlyRequestBudget()
         self.promotion_filter = AdvisoryPromotionFilter()
         self.recorder = ObservationRecorder(observation_dir)
         self._minute_cache: dict[str, Any] = {}
         self._relative_cache: dict[str, Any] = {}
+        self._relative_window_cache: dict[str, Any] = {}
         self._flow_cache: dict[str, Any] = {}
         self._external_cache: dict[str, ExternalPoint] = {}
         self._daily_cache: dict[str, Any] = {}
         self._premarket_cache: dict[str, Any] = {}
         self._regular_flow_cache: dict[str, Any] = {}
+        self._regular_session_cache: dict[str, Any] = {}
+        self._active_scope_key: tuple[str, str, str, str] | None = None
         self._last_minute_fetch = ""
+        self._last_relative_minute_fetch = ""
         self._last_relative_fetch = 0.0
         self._last_flow_fetch = 0.0
         self._last_external_fetch = 0.0
         self._last_daily_fetch = ""
         self._last_premarket_recovery_attempt = 0.0
         self._last_aftermarket_flow_recovery_attempt = 0.0
+        self._last_aftermarket_anchor_recovery_attempt = 0.0
         self._optional_gaps: list[dict[str, str]] = []
         self._external_fetch_error: str | None = None
         self._promotion_state_restore_attempted = False
+
+    @staticmethod
+    def _scope_key(
+        observed_at: datetime, context: SessionContext
+    ) -> tuple[str, str, str, str]:
+        return (
+            _as_kst(observed_at).date().isoformat(),
+            context.name,
+            context.market_venue,
+            context.request_code,
+        )
+
+    def _activate_scope(self, observed_at: datetime, context: SessionContext) -> None:
+        scope_key = self._scope_key(observed_at, context)
+        if scope_key == self._active_scope_key:
+            return
+        self._active_scope_key = scope_key
+        self._minute_cache = {}
+        self._relative_cache = {}
+        self._relative_window_cache = {}
+        self._flow_cache = {}
+        self._last_minute_fetch = ""
+        self._last_relative_minute_fetch = ""
+        self._last_relative_fetch = 0.0
+        self._last_flow_fetch = 0.0
+        self._promotion_state_restore_attempted = False
+        self.promotion_filter.reset()
 
     @staticmethod
     def _peer_request_code(context: SessionContext) -> str:
@@ -1392,7 +1949,9 @@ class SamsungWidgetCollector:
         token = kiwoom_utils.get_cached_kiwoom_token(CONF)
         if not token:
             raise RuntimeError("shared_token_unavailable")
-        return KiwoomReadOnlyClient(token, session=self.request_session)
+        return KiwoomReadOnlyClient(
+            token, session=self.request_session, budget=self.request_budget
+        )
 
     def _optional_post(
         self,
@@ -1402,7 +1961,7 @@ class SamsungWidgetCollector:
         payload: dict[str, str],
     ) -> dict[str, Any]:
         try:
-            return client.post(path, api_id, payload)
+            return client.post(path, api_id, payload, optional=True)
         except Exception as exc:
             self._optional_gaps.append({"api_id": api_id, "reason": type(exc).__name__})
             return {}
@@ -1419,6 +1978,9 @@ class SamsungWidgetCollector:
         advisory = payload.get("advisory") or {}
         if not isinstance(advisory, dict):
             return
+        persisted_observed_at = snapshot_observed_at(payload)
+        if persisted_observed_at is None:
+            return
         if (
             payload.get("schema_version") != SNAPSHOT_SCHEMA_VERSION
             or payload.get("symbol") != SAMSUNG_CODE
@@ -1426,18 +1988,22 @@ class SamsungWidgetCollector:
             or payload.get("market_cohort") != context.market_cohort
             or payload.get("quote_request_code") != context.request_code
             or payload.get("token_mode") != "shared_cache_only"
-            or advisory.get("authority") != ADVISORY_AUTHORITY
-            or advisory.get("session") != context.name
-            or advisory.get("runtime_effect") is not False
-            or advisory.get("actual_order_submitted") is not False
-            or advisory.get("broker_order_forbidden") is not True
+            or not advisory_contract_is_valid(
+                advisory,
+                snapshot_observed_at=persisted_observed_at,
+                context=context,
+                evaluated_at=observed_at,
+            )
         ):
             return
         self.promotion_filter.restore(advisory)
 
     def collect_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
+        cycle_started = time.monotonic()
+        request_count_before = self.request_budget.total_request_count
         now = _as_kst(observed_at or _now_kst())
         context = session_context(now)
+        self._activate_scope(now, context)
         self._optional_gaps = []
         self._external_fetch_error = None
         if not context.active:
@@ -1513,8 +2079,45 @@ class SamsungWidgetCollector:
             session_start=context.start,
             session_end=context.end,
         )
+        if minute_key != self._last_relative_minute_fetch:
+            peer_minute_payload = self._optional_post(
+                client,
+                "/api/dostk/chart",
+                "ka10080",
+                {
+                    "stk_cd": self._peer_request_code(context),
+                    "tic_scope": "1",
+                    "upd_stkpc_tp": "1",
+                },
+            )
+            peer_bars = completed_session_bars(
+                peer_minute_payload.get("stk_min_pole_chart_qry"),
+                observed_at=now,
+                session_start=context.start,
+                session_end=context.end,
+            )
+            kospi_bars: list[MinuteBar] = []
+            if context.name == "KRX_REGULAR":
+                kospi_minute_payload = self._optional_post(
+                    client,
+                    "/api/dostk/chart",
+                    "ka20005",
+                    {"inds_cd": "001", "tic_scope": "1"},
+                )
+                kospi_bars = completed_session_bars(
+                    kospi_minute_payload.get("inds_min_pole_qry"),
+                    observed_at=now,
+                    session_start=context.start,
+                    session_end=context.end,
+                )
+            self._relative_window_cache = _same_window_relative_snapshot(
+                bars, peer_bars, kospi_bars
+            )
+            self._last_relative_minute_fetch = minute_key
         if context.name == "NXT_PREMARKET" and bars:
             self._premarket_cache = _premarket_context(bars, now)
+        elif context.name == "KRX_REGULAR" and bars:
+            self._regular_session_cache = _session_anchor(bars, now)
 
         day_key = now.strftime("%Y%m%d")
         if self._regular_flow_cache and not _observation_is_same_day(
@@ -1565,6 +2168,27 @@ class SamsungWidgetCollector:
             observed_at=now,
             cache_fetch_day=self._last_daily_fetch,
         )
+        if (
+            context.name == "NXT_AFTERMARKET"
+            and self._regular_session_cache.get("date") != now.date().isoformat()
+            and epoch - self._last_aftermarket_anchor_recovery_attempt >= 60
+        ):
+            regular_minute_payload = self._optional_post(
+                client,
+                "/api/dostk/chart",
+                "ka10080",
+                {"stk_cd": SAMSUNG_CODE, "tic_scope": "1", "upd_stkpc_tp": "1"},
+            )
+            regular_bars = completed_session_bars(
+                regular_minute_payload.get("stk_min_pole_chart_qry"),
+                observed_at=now,
+                session_start=KRX_START,
+                session_end=KRX_END,
+                limit=400,
+            )
+            if regular_bars:
+                self._regular_session_cache = _session_anchor(regular_bars, now)
+            self._last_aftermarket_anchor_recovery_attempt = epoch
 
         if epoch - self._last_relative_fetch >= 30 or not self._relative_cache:
             peer = self._optional_post(
@@ -1586,10 +2210,13 @@ class SamsungWidgetCollector:
                 "samsung_change_pct": _signed_float(quote.get("flu_rt")),
                 "sk_hynix_change_pct": _signed_float(peer.get("flu_rt")),
                 "kospi_change_pct": kospi_change,
+                **self._relative_window_cache,
                 "observed_at": now.isoformat(),
                 "market_venue": context.market_venue,
             }
             self._last_relative_fetch = epoch
+        elif self._relative_window_cache:
+            self._relative_cache.update(self._relative_window_cache)
 
         if epoch - self._last_flow_fetch >= 60 or not self._flow_cache:
             investor_payload = None
@@ -1655,7 +2282,7 @@ class SamsungWidgetCollector:
                         context=regular_context,
                         observed_at=now,
                     )
-                    if recovered_flow.get("status") == "OBSERVED":
+                    if _regular_flow_recoverable_for_aftermarket(recovered_flow, now):
                         self._regular_flow_cache = recovered_flow
                     self._last_aftermarket_flow_recovery_attempt = epoch
                 if self._regular_flow_cache:
@@ -1693,6 +2320,7 @@ class SamsungWidgetCollector:
             flow=self._flow_cache,
             recent_trade_negative_veto=_recent_trade_negative_veto(trade_payload),
             premarket=self._premarket_cache,
+            regular_session=self._regular_session_cache,
             quote_age_sec=quote_age_sec,
             quote_received_at=_as_kst(quote_received_at).isoformat(),
         )
@@ -1705,6 +2333,7 @@ class SamsungWidgetCollector:
         )
         advisory["source_quality"]["auxiliary_gaps"] = list(self._optional_gaps)
         advisory["provenance"]["external_fetch_error"] = self._external_fetch_error
+        advisory["provenance"]["cache_scope"] = list(self._active_scope_key or ())
         day_low = _positive_int(quote.get("low_pric"))
         day_low_delta = (
             current_price - day_low
@@ -1716,7 +2345,11 @@ class SamsungWidgetCollector:
             if day_low_delta is not None and day_low
             else None
         )
-        trends = classify_trends(bars)
+        trend_details = analyze_trends(bars, session_name=context.name)
+        trends = {
+            key: str(detail.get("state") or "unavailable")
+            for key, detail in trend_details.items()
+        }
         payload = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "status": "ok",
@@ -1728,9 +2361,11 @@ class SamsungWidgetCollector:
             "day_low_delta_pct": day_low_delta_pct,
             "minute_trend": trends.get("1m", "unavailable"),
             "minute_trends": trends,
-            "minute_trend_basis": "2_completed_contiguous_1m_closes",
+            "minute_trend_details": trend_details,
+            "trend_assessment": _trend_assessment(trends),
+            "minute_trend_basis": "tick_volatility_adjusted_completed_1m_closes",
             "minute_trends_basis": (
-                "1m_3m_5m_completed_contiguous_1m_close_horizons_5bp_flat_band"
+                "1m_3m_5m_completed_contiguous_closes_session_tick_volatility_band"
             ),
             "minute_chart_basis": "20_completed_1m_closes",
             "minute_chart": [
@@ -1759,6 +2394,15 @@ class SamsungWidgetCollector:
                 "latest_completed_bar": asdict(bars[-1]) if bars else None,
                 "raw_10s_persistence_forbidden": True,
             },
+            "collector_metrics": {
+                "cycle_elapsed_ms": round((time.monotonic() - cycle_started) * 1000, 3),
+                "cycle_kiwoom_request_count": (
+                    self.request_budget.total_request_count - request_count_before
+                ),
+                **self.request_budget.snapshot(),
+                "scope": list(self._active_scope_key or ()),
+                "authority": "widget_collector_local_only",
+            },
             "advisory": advisory,
         }
         _atomic_write_json(self.snapshot_path, payload)
@@ -1767,6 +2411,7 @@ class SamsungWidgetCollector:
 
     def write_failure(self, reason: str, observed_at: datetime | None = None) -> None:
         now = _as_kst(observed_at or _now_kst())
+        self.promotion_filter.reset()
         payload = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "status": "unavailable",

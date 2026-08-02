@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 APP_NAME = "SamsungPriceWidget"
 POLL_INTERVAL_MS = 10_000
+LOCAL_ADVISORY_MAX_AGE_SEC = 25
 WINDOW_SIZE = "190x182"
 ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
 CHART_WIDTH = 174
@@ -31,6 +32,13 @@ ADVISORY_STATES = {
     "ENTRY_READY",
     "NO_CHASE",
     "AVOID",
+}
+TREND_ASSESSMENT_STATES = {
+    "TREND_DATA_WAIT",
+    "TREND_UP",
+    "TREND_STABLE",
+    "TREND_MIXED",
+    "TREND_DOWN",
 }
 
 
@@ -89,12 +97,26 @@ class Quote:
     market_cohort: str
     market_session: str
     advisory_state: str
+    trend_assessment_state: str
     entry_price_low: int | None
     entry_price_high: int | None
     advisory_reasons: tuple[str, ...]
     advisory_unmet_conditions: tuple[str, ...]
     external_risk_level: str
     external_quality: str
+    observed_at: datetime | None
+    advisory_observed_at: datetime | None
+    advisory_valid_until: datetime | None
+
+
+def _aware_datetime(value: object, *, field: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid_{field}") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"invalid_{field}")
+    return parsed
 
 
 def _optional_positive_int(value: object, *, field: str) -> int | None:
@@ -117,7 +139,9 @@ def _string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
-def parse_quote_payload(payload: object) -> Quote:
+def parse_quote_payload(
+    payload: object, *, received_at: datetime | None = None
+) -> Quote:
     if not isinstance(payload, dict) or payload.get("status") != "ok":
         raise ValueError("quote_unavailable")
     value = payload.get("current_price")
@@ -175,12 +199,16 @@ def parse_quote_payload(payload: object) -> Quote:
 
     advisory_payload = payload.get("advisory")
     advisory_state = "DATA_WAIT"
+    trend_assessment_state = "TREND_DATA_WAIT"
     entry_price_low = None
     entry_price_high = None
     advisory_reasons: tuple[str, ...] = ()
     advisory_unmet_conditions: tuple[str, ...] = ()
     external_risk_level = "DATA_LIMITED"
     external_quality = "UNAVAILABLE"
+    observed_at = None
+    advisory_observed_at = None
+    advisory_valid_until = None
     if advisory_payload is not None:
         if not isinstance(advisory_payload, dict):
             raise ValueError("invalid_advisory")
@@ -194,6 +222,14 @@ def parse_quote_payload(payload: object) -> Quote:
         advisory_state = str(advisory_payload.get("state") or "DATA_WAIT").strip()
         if advisory_state not in ADVISORY_STATES:
             raise ValueError("invalid_advisory_state")
+        trend_assessment = advisory_payload.get("trend_assessment") or {}
+        if not isinstance(trend_assessment, dict):
+            raise ValueError("invalid_trend_assessment")
+        trend_assessment_state = str(
+            trend_assessment.get("state") or "TREND_DATA_WAIT"
+        ).strip()
+        if trend_assessment_state not in TREND_ASSESSMENT_STATES:
+            raise ValueError("invalid_trend_assessment")
         entry_price_low = _optional_positive_int(
             advisory_payload.get("entry_price_low"), field="entry_price_low"
         )
@@ -206,6 +242,54 @@ def parse_quote_payload(payload: object) -> Quote:
             and entry_price_high < entry_price_low
         ):
             raise ValueError("invalid_entry_price_range")
+        is_actionable = advisory_state in {"ENTRY_CAUTION", "ENTRY_READY"}
+        if is_actionable and (entry_price_low is None or entry_price_high is None):
+            raise ValueError("invalid_actionable_entry_price_range")
+        if not is_actionable and (
+            entry_price_low is not None or entry_price_high is not None
+        ):
+            raise ValueError("invalid_non_actionable_entry_price_range")
+        observed_at = _aware_datetime(
+            payload.get("observed_at_kst"), field="observed_at_kst"
+        )
+        advisory_observed_at = _aware_datetime(
+            advisory_payload.get("observed_at"), field="advisory_observed_at"
+        )
+        advisory_valid_until = _aware_datetime(
+            advisory_payload.get("valid_until"), field="advisory_valid_until"
+        )
+        if abs((observed_at - advisory_observed_at).total_seconds()) > 1.0:
+            raise ValueError("advisory_observed_at_mismatch")
+        local_received_at = received_at or datetime.now().astimezone()
+        local_received_at = local_received_at.astimezone(observed_at.tzinfo)
+        age_sec = (local_received_at - observed_at).total_seconds()
+        if age_sec < -2 or age_sec > LOCAL_ADVISORY_MAX_AGE_SEC:
+            raise ValueError("stale_advisory_snapshot")
+        if advisory_valid_until < local_received_at:
+            raise ValueError("expired_advisory")
+        expected_sessions = {
+            ("NXT", "PREMARKET_KRX_LIKE", "krx_like_premarket"): {"NXT_PREMARKET"},
+            ("KRX", "KRX", "krx_or_closed"): {
+                "KRX_REGULAR",
+                "SESSION_TRANSITION",
+                "CLOSED",
+            },
+            ("NXT", "NXT", "nxt_aftermarket"): {"NXT_AFTERMARKET"},
+        }.get((market_venue, market_cohort, market_session))
+        if (
+            expected_sessions is None
+            or advisory_payload.get("session") not in expected_sessions
+            or (
+                is_actionable
+                and advisory_payload.get("session")
+                not in {"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET"}
+            )
+            or (
+                advisory_payload.get("session") in {"SESSION_TRANSITION", "CLOSED"}
+                and advisory_state != "DATA_WAIT"
+            )
+        ):
+            raise ValueError("advisory_session_mismatch")
         advisory_reasons = _string_tuple(
             advisory_payload.get("reasons"), field="advisory_reasons"
         )
@@ -251,12 +335,16 @@ def parse_quote_payload(payload: object) -> Quote:
         market_cohort=market_cohort,
         market_session=market_session,
         advisory_state=advisory_state,
+        trend_assessment_state=trend_assessment_state,
         entry_price_low=entry_price_low,
         entry_price_high=entry_price_high,
         advisory_reasons=advisory_reasons,
         advisory_unmet_conditions=advisory_unmet_conditions,
         external_risk_level=external_risk_level,
         external_quality=external_quality,
+        observed_at=observed_at,
+        advisory_observed_at=advisory_observed_at,
+        advisory_valid_until=advisory_valid_until,
     )
 
 
@@ -288,7 +376,7 @@ def fetch_current_price(settings: WidgetSettings, *, timeout_sec: int = 10) -> Q
         raise RuntimeError(f"HTTP {exc.code}") from exc
     except (URLError, OSError, ValueError) as exc:
         raise RuntimeError("연결 실패") from exc
-    return parse_quote_payload(payload)
+    return parse_quote_payload(payload, received_at=datetime.now().astimezone())
 
 
 class SamsungPriceWidget:
@@ -297,6 +385,7 @@ class SamsungPriceWidget:
         self.settings = settings
         self.previous_price: int | None = None
         self.inflight = False
+        self.last_success_at: datetime | None = None
 
         root.title("삼성전자 10초")
         root.geometry(WINDOW_SIZE)
@@ -310,7 +399,7 @@ class SamsungPriceWidget:
         frame.pack(fill="both", expand=True)
         tk.Label(
             frame,
-            text="삼성전자 005930 · 10초 갱신",
+            text="삼성 005930 · 관측용/자동주문 아님",
             fg="#dfe7f3",
             bg="#1e2430",
             font=("Malgun Gothic", 8, "bold"),
@@ -394,6 +483,7 @@ class SamsungPriceWidget:
             self.status_label.configure(text=problem, fg="#ffb86c")
             return
         self._refresh()
+        self.root.after(1_000, self._watchdog)
 
     def _refresh(self) -> None:
         if self.inflight:
@@ -412,6 +502,7 @@ class SamsungPriceWidget:
             self.root.after(0, lambda: self._apply_quote(quote))
 
     def _apply_quote(self, quote: Quote) -> None:
+        self.last_success_at = datetime.now().astimezone()
         current_price = quote.current_price
         previous = self.previous_price
         self.previous_price = current_price
@@ -483,8 +574,8 @@ class SamsungPriceWidget:
         state_labels = {
             "DATA_WAIT": "데이터 대기",
             "WATCH": "관찰",
-            "ENTRY_CAUTION": "조건부 진입",
-            "ENTRY_READY": "진입 적합",
+            "ENTRY_CAUTION": "조건부분(관측)",
+            "ENTRY_READY": "조건충족(관측)",
             "NO_CHASE": "추격 금지",
             "AVOID": "진입 회피",
         }
@@ -531,6 +622,7 @@ class SamsungPriceWidget:
             "confirmed_support_missing": "지지대기",
             "entry_range_not_available_without_chasing": "추천범위없음",
             "recent_rest_prints_descending": "체결하락",
+            "live_price_reversal_with_ask_pressure": "실시간반전",
             "awaiting_second_10s_confirmation": "2회확인중",
             "collector_snapshot_missing_or_stale": "수집기대기",
             "previous_day_ohlc_missing": "전일데이터대기",
@@ -551,9 +643,17 @@ class SamsungPriceWidget:
             "MARKET_CLOSED": "/CLOSED",
             "UNAVAILABLE": "",
         }
+        trend_labels = {
+            "TREND_DATA_WAIT": "추세대기",
+            "TREND_UP": "확정봉상승",
+            "TREND_STABLE": "확정봉안정",
+            "TREND_MIXED": "확정봉혼조",
+            "TREND_DOWN": "확정봉하락",
+        }
         self.advisory_detail_label.configure(
             text=(
-                f"{reason_text} · {external_labels[quote.external_risk_level]}"
+                f"{trend_labels[quote.trend_assessment_state]} · {reason_text} · "
+                f"{external_labels[quote.external_risk_level]}"
                 f"{quality_labels[quote.external_quality]}"
             ),
             fg="#8fa2b7",
@@ -612,8 +712,39 @@ class SamsungPriceWidget:
         )
 
     def _apply_error(self, message: str) -> None:
-        self.status_label.configure(text=f"{message} · AWS 토큰 대기", fg="#ffb86c")
+        self._clear_advisory_for_stale()
+        age_text = self._last_success_age_text()
+        self.status_label.configure(
+            text=f"{message} · 마지막 성공 {age_text}", fg="#ffb86c"
+        )
         self._finish_cycle()
+
+    def _last_success_age_text(self) -> str:
+        if self.last_success_at is None:
+            return "없음"
+        age_sec = max(
+            0, int((datetime.now().astimezone() - self.last_success_at).total_seconds())
+        )
+        return f"{age_sec}초 전"
+
+    def _clear_advisory_for_stale(self) -> None:
+        self.advisory_label.configure(text="데이터 대기", fg="#8fa2b7")
+        self.advisory_detail_label.configure(
+            text="신호 만료 · 관측용/자동주문 아님", fg="#8fa2b7"
+        )
+
+    def _watchdog(self) -> None:
+        if self.last_success_at is not None:
+            age_sec = (
+                datetime.now().astimezone() - self.last_success_at
+            ).total_seconds()
+            if age_sec > LOCAL_ADVISORY_MAX_AGE_SEC:
+                self._clear_advisory_for_stale()
+                self.status_label.configure(
+                    text=f"응답 지연 · 마지막 성공 {int(age_sec)}초 전",
+                    fg="#ffb86c",
+                )
+        self.root.after(1_000, self._watchdog)
 
     def _finish_cycle(self) -> None:
         self.inflight = False

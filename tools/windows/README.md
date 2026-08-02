@@ -25,7 +25,9 @@ uses only the existing `data/runtime/kiwoom_token_cache.json` shared cache and
 never issues, refreshes, revokes, exports, or logs a Kiwoom bearer token. When
 the cache is missing, near expiry, expired, or rejected, it fails closed and
 the widget keeps the last successful price with an `AWS 토큰 대기` status. It
-does not access an account, place/cancel orders, or restart/control the bot.
+immediately removes any prior entry state and price range; a 25-second local
+watchdog also expires advisory colors and shows the last-success age. It does
+not access an account, place/cancel orders, or restart/control the bot.
 The advisory contract is pinned to `authority=widget_advisory_only`,
 `runtime_effect=false`, `actual_order_submitted=false`, and
 `broker_order_forbidden=true`; the Windows client rejects an advisory that
@@ -73,6 +75,10 @@ PnL or changes a runtime threshold. Historical pipeline events that lack the
 same-session completed OHLCV, BBO, venue, and exact advisory payload are
 source-quality-ineligible for state-machine replay rather than being silently
 normalized into the 60-day sample.
+Actionable rows with invalid widget authority, runtime flags, timestamps,
+source quality, venue/session, or entry ranges are counted by exclusion reason
+and do not enter MFE/MAE. A normal timer run after 20:00 evaluates that day; a
+`Persistent` catch-up before 20:00 evaluates the previous Korean trading day.
 
 ```bash
 sudo cp deploy/systemd/korstockscan-samsung-widget-evaluation.{service,timer} /etc/systemd/system/
@@ -84,7 +90,7 @@ The route is `GET /api/widget/samsung-price` and requires the matching
 `X-KORStockScan-Widget-Key` request header. The quote-only fallback uses `POST
 /api/dostk/stkinfo`, `api-id: ka10001`. The collector uses read-only
 market-data TRs `ka10001`, `ka10003`, `ka10004`, `ka10064`, `ka10080`,
-`ka10081`, `ka20001`, and `ka90008`; it never calls auth, account, order,
+`ka10081`, `ka20001`, `ka20005`, and `ka90008`; it never calls auth, account, order,
 cancel, or bot-control endpoints.
 
 The advisory is deterministic, not an AI score or trading hard gate. Dynamic
@@ -100,6 +106,14 @@ it cannot create `ENTRY_READY`. In the NXT aftermarket, the latest regular-KRX
 foreign/program flow is labeled `FROZEN_REGULAR_SESSION` and is never presented
 as live aftermarket flow. Each advisory expires after 60 seconds or at the
 current session close, whichever arrives first, and never later than 20:00 KST.
+The window always says `관측용/자동주문 아님`; `ENTRY_READY` and
+`ENTRY_CAUTION` are rendered as softer observation labels, not order commands.
+The 1/3/5-minute labels describe completed-bar direction; they do not predict
+the next price. Their neutral bands are exchange-tick, session, and recent-
+volatility adjusted. The compact detail line separately identifies confirmed-
+bar `UP`, `STABLE`, `MIXED`, or `DOWN`, so a stable setup is not mislabeled as
+an upward forecast. A forming-price downside reversal plus ask-side pressure can
+only veto an advisory; a positive impulse cannot promote one.
 
 ## Windows installation
 
@@ -131,12 +145,18 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
 - Contract used: real `https://api.kiwoom.com`, `POST /api/dostk/stkinfo`,
   `authorization: Bearer ...`, `api-id: ka10001`, body `{"stk_cd":"005930"}`;
   quote value `cur_prc`.
+- Trend-review recheck: `2026-08-03T00:04:04+09:00`, same upstream SHA.
+  KOSPI same-window reads use `POST /api/dostk/chart`, `api-id: ka20005`,
+  body `{"inds_cd":"001","tic_scope":"1"}`, and response list
+  `inds_min_pole_qry` with 100x integer index values and `cntr_tm` provenance.
 
 The endpoint uses `ka10001.low_pric` for today's low and `ka10080` with
 `tic_scope: "1"` for completed one-minute closes. It derives 1-, 3-, and
 5-minute trends locally from contiguous completed closes, requires the
-net-change and linear slope direction to agree, and treats movement within
-5 basis points as flat. A missing minute makes that horizon unavailable, and
+net-change, least-squares slope, R-squared, and directional consistency to
+agree. The flat band is the larger of a session/horizon tick allowance and
+1.25 times recent median absolute one-minute movement. A missing minute makes
+that horizon unavailable, and
 the trend window cannot cross PRE (`08:00`), KRX (`09:00`), or NXT aftermarket
 (`15:40`) session starts. Both official request contracts accept `005930_NX`
 for NXT, while KRX uses `005930`.

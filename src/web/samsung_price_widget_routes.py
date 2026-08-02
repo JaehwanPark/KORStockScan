@@ -8,9 +8,11 @@ or bot-process control path.
 from __future__ import annotations
 
 import hmac
+import math
 import os
 from datetime import datetime, time as datetime_time
 from pathlib import Path
+from statistics import median
 from zoneinfo import ZoneInfo
 
 import requests
@@ -18,6 +20,7 @@ from flask import Blueprint, jsonify, request
 
 from src.engine.monitoring import samsung_widget_contract
 from src.engine.sniper_config import CONF
+from src.trading.order.tick_utils import get_tick_size
 from src.utils import kiwoom_utils
 
 samsung_price_widget_bp = Blueprint("samsung_price_widget", __name__)
@@ -31,7 +34,7 @@ _SAMSUNG_NAME = "삼성전자"
 _REQUEST_TIMEOUT_SEC = 5
 _MINUTE_CHART_BAR_COUNT = 20
 _MINUTE_TREND_HORIZONS = (1, 3, 5)
-_MINUTE_TREND_FLAT_BAND_RATE = 0.0005
+_MINUTE_TREND_TICK_MULTIPLIERS = {1: 1, 3: 2, 5: 3}
 _NXT_PREMARKET_START = datetime_time(hour=8)
 _NXT_PREMARKET_END = datetime_time(hour=8, minute=50)
 _KRX_SESSION_START = datetime_time(hour=9)
@@ -129,16 +132,57 @@ def _classify_horizon_trend(
     closes = [price for _, price in window]
     latest_time = window[-1][0]
     net_change = closes[-1] - closes[0]
-    flat_band = max(1, round(closes[-1] * _MINUTE_TREND_FLAT_BAND_RATE))
-    center = (len(closes) - 1) / 2
-    slope_numerator = sum(
-        (index - center) * price for index, price in enumerate(closes)
+    tick_size = get_tick_size(closes[-1])
+    recent_prices = [price for _, price in completed[-12:]]
+    recent_changes = [
+        abs(current - previous)
+        for previous, current in zip(recent_prices, recent_prices[1:])
+    ]
+    median_change = float(median(recent_changes)) if recent_changes else 0.0
+    raw_band = max(
+        tick_size * _MINUTE_TREND_TICK_MULTIPLIERS[horizon_minutes],
+        median_change * 1.25,
     )
+    flat_band = max(tick_size, int(math.ceil(raw_band / tick_size) * tick_size))
+    center = (len(closes) - 1) / 2
+    x_variance = sum((index - center) ** 2 for index in range(len(closes)))
+    y_mean = sum(closes) / len(closes)
+    slope = sum(
+        (index - center) * (price - y_mean) for index, price in enumerate(closes)
+    ) / max(x_variance, 1)
+    total_variance = sum((price - y_mean) ** 2 for price in closes)
+    residual = sum(
+        (price - (y_mean + slope * (index - center))) ** 2
+        for index, price in enumerate(closes)
+    )
+    regression_r2 = (
+        max(0.0, min(1.0, 1.0 - residual / total_variance))
+        if total_variance > 0
+        else 0.0
+    )
+    direction = 1 if net_change > 0 else -1 if net_change < 0 else 0
+    deltas = [current - previous for previous, current in zip(closes, closes[1:])]
+    consistency = (
+        sum(1 for change in deltas if change * direction > 0) / len(deltas)
+        if direction and deltas
+        else 0.0
+    )
+    minimum_slope = flat_band / max(1, horizon_minutes) * 0.5
     if abs(net_change) <= flat_band:
         return "flat", latest_time
-    if net_change > flat_band and slope_numerator > 0:
+    if (
+        net_change > flat_band
+        and slope > minimum_slope
+        and regression_r2 >= 0.40
+        and consistency >= 0.60
+    ):
         return "up", latest_time
-    if net_change < -flat_band and slope_numerator < 0:
+    if (
+        net_change < -flat_band
+        and slope < -minimum_slope
+        and regression_r2 >= 0.40
+        and consistency >= 0.60
+    ):
         return "down", latest_time
     return "flat", latest_time
 
@@ -239,6 +283,9 @@ def _fresh_collector_snapshot(observed_at: datetime) -> dict | None:
     current_context = samsung_widget_contract.session_context(observed_at)
     if not current_context.active:
         return None
+    persisted_observed_at = samsung_widget_contract.snapshot_observed_at(payload)
+    if persisted_observed_at is None:
+        return None
     if (
         payload.get("schema_version") != samsung_widget_contract.SNAPSHOT_SCHEMA_VERSION
         or payload.get("symbol") != _SAMSUNG_CODE
@@ -250,14 +297,11 @@ def _fresh_collector_snapshot(observed_at: datetime) -> dict | None:
     ):
         return None
     advisory = payload.get("advisory")
-    if not isinstance(advisory, dict):
-        return None
-    if (
-        advisory.get("authority") != samsung_widget_contract.ADVISORY_AUTHORITY
-        or advisory.get("session") != current_context.name
-        or advisory.get("runtime_effect") is not False
-        or advisory.get("actual_order_submitted") is not False
-        or advisory.get("broker_order_forbidden") is not True
+    if not samsung_widget_contract.advisory_contract_is_valid(
+        advisory,
+        snapshot_observed_at=persisted_observed_at,
+        context=current_context,
+        evaluated_at=observed_at,
     ):
         return None
     return payload
@@ -366,9 +410,9 @@ def get_samsung_price():
             "day_low_delta_pct": day_low_delta_pct,
             "minute_trend": minute_trend,
             "minute_trends": minute_trends,
-            "minute_trend_basis": "2_completed_contiguous_1m_closes",
+            "minute_trend_basis": "collector_unavailable_quote_only",
             "minute_trends_basis": (
-                "1m_3m_5m_completed_contiguous_1m_close_horizons_5bp_flat_band"
+                "collector_unavailable_no_advisory_trend_synthesized"
             ),
             "minute_chart_basis": "20_completed_1m_closes",
             "minute_chart": [

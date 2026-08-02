@@ -9,5 +9,11 @@ Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
 ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.samsung_widget_advisory_evaluation --write
+Nice=10
+CPUQuota=20%
+MemoryMax=512M
+TasksMax=64
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 NoNewPrivileges=true
 PrivateTmp=true

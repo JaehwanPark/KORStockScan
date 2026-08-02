@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from flask import Flask
@@ -220,6 +220,7 @@ def test_samsung_widget_serves_fresh_collector_snapshot_without_token_call(
 ):
     client = _client(monkeypatch)
     now = datetime(2026, 8, 3, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    snapshot_time = now - timedelta(seconds=10)
     monkeypatch.setattr(routes, "_now_kst", lambda: now)
     snapshot_path = tmp_path / "widget-snapshot.json"
     snapshot_path.write_text(
@@ -229,14 +230,20 @@ def test_samsung_widget_serves_fresh_collector_snapshot_without_token_call(
                 "status": "ok",
                 "symbol": "005930",
                 "current_price": 100_000,
-                "observed_at_kst": now.isoformat(),
+                "observed_at_kst": snapshot_time.isoformat(),
                 "token_mode": "shared_cache_only",
                 "market_venue": "KRX",
                 "market_cohort": "KRX",
                 "quote_request_code": "005930",
                 "advisory": {
                     "state": "ENTRY_READY",
+                    "raw_state": "ENTRY_READY",
                     "session": "KRX_REGULAR",
+                    "entry_price_low": 99_900,
+                    "entry_price_high": 100_000,
+                    "observed_at": snapshot_time.isoformat(),
+                    "valid_until": (snapshot_time + timedelta(seconds=60)).isoformat(),
+                    "source_quality": {"status": "PASS", "issues": []},
                     "authority": "widget_advisory_only",
                     "runtime_effect": False,
                     "actual_order_submitted": False,
@@ -260,6 +267,46 @@ def test_samsung_widget_serves_fresh_collector_snapshot_without_token_call(
     )
     assert response.status_code == 200
     assert response.get_json()["advisory"]["state"] == "ENTRY_READY"
+
+
+def test_samsung_widget_rejects_snapshot_with_expired_inner_advisory(
+    monkeypatch, tmp_path
+):
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    snapshot_path = tmp_path / "widget-snapshot.json"
+    snapshot_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": 1,
+                "status": "ok",
+                "symbol": "005930",
+                "current_price": 100_000,
+                "observed_at_kst": now.isoformat(),
+                "token_mode": "shared_cache_only",
+                "market_venue": "KRX",
+                "market_cohort": "KRX",
+                "quote_request_code": "005930",
+                "advisory": {
+                    "state": "ENTRY_READY",
+                    "raw_state": "ENTRY_READY",
+                    "session": "KRX_REGULAR",
+                    "entry_price_low": 99_900,
+                    "entry_price_high": 100_000,
+                    "observed_at": now.isoformat(),
+                    "valid_until": (now - timedelta(seconds=1)).isoformat(),
+                    "source_quality": {"status": "PASS", "issues": []},
+                    "authority": "widget_advisory_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH", str(snapshot_path))
+
+    assert routes._fresh_collector_snapshot(now) is None
 
 
 def test_quote_route_uses_nxt_only_during_nxt_premarket():
@@ -340,7 +387,7 @@ def test_minute_chart_and_trend_use_completed_bars_and_exclude_forming_bar():
         ("20260728100100", 70500),
         ("20260728100200", 71000),
     ]
-    assert trend == "up"
+    assert trend == "flat"
     assert trend_at == "20260728100200"
 
 
@@ -351,7 +398,7 @@ def test_minute_trends_classify_contiguous_1m_3m_5m_horizons():
 
     trends, trend_at = routes._classify_minute_trends(completed)
 
-    assert trends == {"1m": "up", "3m": "up", "5m": "up"}
+    assert trends == {"1m": "flat", "3m": "up", "5m": "up"}
     assert trend_at == "20260728100600"
 
 
@@ -365,7 +412,7 @@ def test_minute_trends_mark_gapped_horizons_unavailable():
 
     trends, trend_at = routes._classify_minute_trends(completed)
 
-    assert trends == {"1m": "up", "3m": "unavailable", "5m": "unavailable"}
+    assert trends == {"1m": "flat", "3m": "unavailable", "5m": "unavailable"}
     assert trend_at == "20260728100400"
 
 
@@ -398,7 +445,7 @@ def test_completed_minute_closes_do_not_cross_session_start():
         ("20260728154000", 70_200),
         ("20260728154100", 70_300),
     ]
-    assert trends == {"1m": "up", "3m": "unavailable", "5m": "unavailable"}
+    assert trends == {"1m": "flat", "3m": "unavailable", "5m": "unavailable"}
 
 
 def test_minute_trend_uses_flat_band_for_small_net_change():

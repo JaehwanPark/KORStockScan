@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,19 @@ assert _SPEC and _SPEC.loader
 widget = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = widget
 _SPEC.loader.exec_module(widget)
+
+
+def _fresh_advisory_payload(payload: dict) -> tuple[dict, datetime]:
+    now = datetime.now().astimezone()
+    payload["observed_at_kst"] = now.isoformat()
+    advisory = payload["advisory"]
+    advisory["observed_at"] = now.isoformat()
+    advisory["valid_until"] = (now + timedelta(seconds=60)).isoformat()
+    advisory["session"] = "KRX_REGULAR"
+    payload.setdefault("market_venue", "KRX")
+    payload.setdefault("market_cohort", "KRX")
+    payload.setdefault("market_session", "krx_or_closed")
+    return payload, now
 
 
 def test_widget_payload_parser_accepts_positive_current_price():
@@ -103,7 +117,7 @@ def test_widget_payload_parser_preserves_premarket_venue():
 
 
 def test_widget_payload_parser_accepts_safe_advisory_contract():
-    quote = widget.parse_quote_payload(
+    payload, now = _fresh_advisory_payload(
         {
             "status": "ok",
             "current_price": 221500,
@@ -114,6 +128,10 @@ def test_widget_payload_parser_accepts_safe_advisory_contract():
                 "entry_price_high": 221500,
                 "reasons": ["vwap_or_resistance_reclaimed"],
                 "unmet_conditions": [],
+                "trend_assessment": {
+                    "state": "TREND_STABLE",
+                    "future_prediction": False,
+                },
                 "external_risk": {"level": "CAUTION"},
                 "external_points": {"NQ": {"quality": "BEST_EFFORT_DELAYED"}},
                 "authority": "widget_advisory_only",
@@ -123,15 +141,17 @@ def test_widget_payload_parser_accepts_safe_advisory_contract():
             },
         }
     )
+    quote = widget.parse_quote_payload(payload, received_at=now)
 
     assert quote.advisory_state == "ENTRY_CAUTION"
+    assert quote.trend_assessment_state == "TREND_STABLE"
     assert quote.entry_price_low == 221000
     assert quote.external_risk_level == "CAUTION"
     assert quote.external_quality == "DELAYED"
 
 
 def test_widget_watch_detail_prefers_blocker_over_passed_reason():
-    quote = widget.parse_quote_payload(
+    payload, now = _fresh_advisory_payload(
         {
             "status": "ok",
             "current_price": 221500,
@@ -147,8 +167,77 @@ def test_widget_watch_detail_prefers_blocker_over_passed_reason():
             },
         }
     )
+    quote = widget.parse_quote_payload(payload, received_at=now)
 
     assert widget.primary_advisory_reason(quote) == "relative_strength_weak"
+
+
+def test_widget_rejects_stale_actionable_advisory():
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 221500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "ENTRY_READY",
+                "entry_price_low": 221000,
+                "entry_price_high": 221500,
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    stale = now - timedelta(seconds=26)
+    payload["observed_at_kst"] = stale.isoformat()
+    payload["advisory"]["observed_at"] = stale.isoformat()
+
+    with pytest.raises(ValueError, match="stale_advisory_snapshot"):
+        widget.parse_quote_payload(payload, received_at=now)
+
+
+def test_widget_rejects_session_mismatched_advisory():
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 221500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "WATCH",
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    payload["advisory"]["session"] = "NXT_AFTERMARKET"
+
+    with pytest.raises(ValueError, match="advisory_session_mismatch"):
+        widget.parse_quote_payload(payload, received_at=now)
+
+
+def test_widget_accepts_nonactionable_transition_session():
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 221500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "DATA_WAIT",
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    payload["advisory"]["session"] = "SESSION_TRANSITION"
+
+    quote = widget.parse_quote_payload(payload, received_at=now)
+
+    assert quote.advisory_state == "DATA_WAIT"
 
 
 def test_widget_payload_parser_rejects_runtime_effect_advisory():
@@ -179,6 +268,26 @@ def test_widget_payload_parser_rejects_negative_advisory_price():
                 "advisory": {
                     "state": "ENTRY_CAUTION",
                     "entry_price_low": -221000,
+                    "authority": "widget_advisory_only",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+            }
+        )
+
+
+def test_widget_payload_parser_rejects_unconfirmed_watch_price_range():
+    with pytest.raises(ValueError, match="invalid_non_actionable_entry_price_range"):
+        widget.parse_quote_payload(
+            {
+                "status": "ok",
+                "current_price": 221500,
+                "minute_chart": [],
+                "advisory": {
+                    "state": "WATCH",
+                    "entry_price_low": 221000,
+                    "entry_price_high": 221500,
                     "authority": "widget_advisory_only",
                     "runtime_effect": False,
                     "actual_order_submitted": False,
