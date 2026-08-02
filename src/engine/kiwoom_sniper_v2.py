@@ -6818,17 +6818,20 @@ def _scanner_scheduler_register_revived_watch_on_fresh_ws(
             **venue_fields,
             "record_id": record_id,
         }
+    scheduler_route_enabled = _scanner_scheduler_enabled_for_venue(
+        venue_fields["effective_venue"]
+    )
     generation = _register_scanner_scheduler_generation(
         scheduler,
         payload=promotion_payload,
         target=target,
         attach_epoch=float(now_epoch),
     )
-    if generation is None:
+    if generation is None and scheduler_route_enabled:
         # The quote was valid, but a transient scheduler-capacity or
         # registration guard can still reject the attach. Keep the post-sell
-        # barrier armed so the watcher cannot fall into an unowned legacy
-        # evaluation path and can retry after scheduler reconciliation.
+        # barrier armed so the watcher cannot fall outside the selected
+        # scheduler route and can retry after scheduler reconciliation.
         with ENTRY_LOCK:
             target["_scalp_revive_min_quote_ts"] = revive_epoch
     return generation
@@ -7677,6 +7680,19 @@ def _scanner_pipeline_stock_snapshot(stock_value):
             "scanner_promotion_reason",
             "scanner_promotion_emitted_epoch",
             "source_signature",
+            # Deferred observation events are emitted from this compact copy.
+            # Preserve the attach-time venue contract so queue/heavy-eval
+            # telemetry does not degrade to UNKNOWN after the live target has
+            # already resolved its cohort.  These fields are observation-only
+            # and are not copied back into runtime state.
+            "venue",
+            "effective_venue",
+            "venue_resolution",
+            "venue_source_quality_status",
+            "venue_unknown_reviewed_reason",
+            "market_session_bucket",
+            "rising_missed_effective_venue",
+            "rising_missed_market_session_bucket",
             "entry_armed_at_epoch",
             "added_time",
             "current_price_observed",

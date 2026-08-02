@@ -200,6 +200,65 @@ def test_revived_watch_does_not_register_from_rest_only_recovery(monkeypatch):
     assert scheduler.current_generation("002990") is None
 
 
+def test_revived_watch_legacy_route_does_not_rearm_quote_barrier(monkeypatch):
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_mode",
+        "legacy",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sniper.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sniper,
+        "_emit_scanner_scheduler_event",
+        lambda **kwargs: None,
+    )
+    scheduler = sniper.ScannerRuntimeScheduler(max_active=16)
+    stock = {
+        "id": 8,
+        "code": "002990",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "_scalp_revive_min_quote_ts": 1000.0,
+        "last_watching_ai_action": "WAIT",
+    }
+    ws_data, barrier_fields = sniper._discard_pre_revive_scanner_snapshot(
+        stock,
+        {
+            "curr": 13_950,
+            "last_ws_update_ts": 1000.1,
+            "last_realtime_type_ts": {"0B": 1000.1},
+        },
+        now_ts=1000.2,
+    )
+
+    generation = sniper._scanner_scheduler_register_revived_watch_on_fresh_ws(
+        scheduler,
+        stock,
+        ws_data,
+        revive_quote_barrier_fields=barrier_fields,
+        now_epoch=1000.2,
+    )
+
+    assert generation is None
+    assert scheduler.current_generation("002990") is None
+    assert "_scalp_revive_min_quote_ts" not in stock
+    assert stock["scanner_promotion_reason"] == "post_sell_revive_fresh_ws"
+    assert stock["current_price_observed"] == 13_950
+    assert "last_watching_ai_action" not in stock
+    assert stock["_scanner_scheduler_registration_reason"] == (
+        "venue_not_selected_legacy_route"
+    )
+
+
 def test_revived_watch_rearms_quote_barrier_when_scheduler_attach_is_rejected(
     monkeypatch,
 ):

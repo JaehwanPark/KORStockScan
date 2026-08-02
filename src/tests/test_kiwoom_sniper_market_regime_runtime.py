@@ -2568,6 +2568,14 @@ def test_scanner_pipeline_stock_snapshot_preserves_positive_promotion_context():
             "scanner_promotion_reason": "price_jump_start_acceleration",
             "scanner_promotion_emitted_epoch": "2000.000",
             "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            "venue": "PREMARKET_KRX_LIKE",
+            "effective_venue": "PREMARKET_KRX_LIKE",
+            "venue_resolution": "consistent_explicit:payload.effective_venue,payload.venue",
+            "venue_source_quality_status": "pass",
+            "venue_unknown_reviewed_reason": "not_applicable",
+            "market_session_bucket": "krx_like_premarket",
+            "rising_missed_effective_venue": "PREMARKET_KRX_LIKE",
+            "rising_missed_market_session_bucket": "krx_like_premarket",
             "entry_armed_at_epoch": 2000.0,
             "added_time": 2000.0,
             "current_price_observed": 20500,
@@ -2583,6 +2591,10 @@ def test_scanner_pipeline_stock_snapshot_preserves_positive_promotion_context():
     assert snapshot["comparable_flu_delta_since_first_seen"] == "1.10"
     assert snapshot["current_price_observed"] == 20500
     assert snapshot["cntr_str"] == "145.5"
+    assert snapshot["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert snapshot["market_session_bucket"] == "krx_like_premarket"
+    assert snapshot["venue_source_quality_status"] == "pass"
+    assert snapshot["rising_missed_effective_venue"] == "PREMARKET_KRX_LIKE"
     assert "_scanner_fast_precheck_result" not in snapshot
 
 
