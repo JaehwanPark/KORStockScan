@@ -98,11 +98,6 @@ DATED_RUNTIME_AUTO_RENEW_SPECS=(
     "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ACTIVE_DATE"
     "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE"
     "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ACTIVE_DATE"
-    "KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED:KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE"
-    "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED:KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ACTIVE_DATE"
-    "KORSTOCKSCAN_EARLY_VOLATILITY_TP_NXT_ENABLED:KORSTOCKSCAN_EARLY_VOLATILITY_TP_NXT_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED:KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE"
-    "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED:KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE"
 )
 
 renew_enabled_dated_runtime_overrides() {
@@ -150,6 +145,33 @@ record_enabled_dated_runtime_provenance() {
     echo "📌 dated runtime 자동연장 provenance: target_date=${target_date} active_count=${active_count}"
 }
 
+entry_split_daily_contract_allows_override() {
+    local enabled_key="$1"
+    local active_date="$2"
+    local baseline_policy_file="${KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE:-}"
+
+    if ! korstockscan_env_true "${KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED:-}"; then
+        return 1
+    fi
+    if [ "${KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE:-}" != "DAILY" ]; then
+        return 1
+    fi
+    if [ -z "$baseline_policy_file" ] || [ ! -f "$baseline_policy_file" ]; then
+        return 1
+    fi
+    case "$enabled_key" in
+        KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED)
+            [ -z "$active_date" ] || [ "$active_date" = "DAILY" ]
+            ;;
+        KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED)
+            [ "$active_date" = "DAILY" ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 disable_expired_dated_runtime_overrides() {
     local target_date="$1"
     local spec enabled_key active_date_key dependency_enabled_key enabled_value active_date dependency_value
@@ -193,7 +215,8 @@ disable_expired_dated_runtime_overrides() {
             continue
         fi
         active_date="${!active_date_key:-}"
-        if [ -z "$active_date" ] || [ "$active_date" != "$target_date" ]; then
+        if [ "$active_date" != "$target_date" ] && \
+            ! entry_split_daily_contract_allows_override "$enabled_key" "$active_date"; then
             printf -v "$enabled_key" '%s' "false"
             export "$enabled_key"
             echo "⏳ dated operator runtime override 만료 처리: ${enabled_key} active_date=${active_date:-missing} target_date=${target_date}"

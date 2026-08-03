@@ -8369,6 +8369,60 @@ def test_verify_runtime_env_handoff_ignores_removed_watching_smoothing_contract(
     assert result["selected_families"] == []
 
 
+def test_verify_runtime_env_handoff_preserves_prefiltered_removed_family_provenance(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-20",
+                "selected_families": [],
+                "removed_selected_families_ignored": [
+                    "ai_watching_score_smoothing_report_only"
+                ],
+                "env_overrides": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-20")
+
+    assert result["status"] == "pass"
+    assert result["removed_selected_families_ignored"] == [
+        "ai_watching_score_smoothing_report_only"
+    ]
+    assert result["selected_families"] == []
+
+
+def test_verify_runtime_env_handoff_verifies_selected_pyramid_quality_gate(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-20",
+                "selected_families": ["scalping_pyramid_quality_gate"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1"
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-07-20")
+
+    assert result["status"] == "pass"
+    assert result["unverified_selected_families"] == []
+
+
 def test_write_runtime_env_strips_all_retired_runtime_keys(tmp_path, monkeypatch):
     runtime_dir = tmp_path / "runtime_env"
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)

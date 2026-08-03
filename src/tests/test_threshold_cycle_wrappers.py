@@ -1409,7 +1409,7 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     ) > script.index('. "$OPERATOR_RUNTIME_OVERRIDES"')
 
 
-def test_run_bot_auto_renews_enabled_allowlist_but_preserves_explicit_off():
+def test_run_bot_auto_renews_allowlisted_override_without_renewing_removed_family():
     script = Path("src/run_bot.sh").read_text(encoding="utf-8")
     function_block = script[
         script.index("korstockscan_env_true()") : script.index(
@@ -1420,11 +1420,10 @@ def test_run_bot_auto_renews_enabled_allowlist_but_preserves_explicit_off():
         [
             "bash",
             "-c",
-            function_block
-            + """
+            function_block + """
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
-export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED=false
+export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED=true
 export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE=2026-07-30
 renew_enabled_dated_runtime_overrides 2026-07-31 >/dev/null
 record_enabled_dated_runtime_provenance 2026-07-31 >/dev/null
@@ -1440,7 +1439,81 @@ printf '%s|%s|%s|%s\\n' \
         check=True,
     )
 
-    assert result.stdout.strip() == "2026-07-31|false|2026-07-30|1"
+    assert result.stdout.strip() == "2026-07-31|true|2026-07-30|1"
+
+
+def test_run_bot_preserves_existing_daily_entry_split_contract_and_disables_expired_guard(
+    tmp_path,
+):
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    function_block = script[
+        script.index("korstockscan_env_true()") : script.index(
+            "verify_threshold_runtime_env_handoff()"
+        )
+    ]
+    policy_path = tmp_path / "entry_split_policy.json"
+    policy_path.write_text("{}\n", encoding="utf-8")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function_block + f"""
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={policy_path}
+export KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED=true
+unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE
+export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED=true
+export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE=DAILY
+export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED=true
+export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE=2026-07-30
+disable_expired_dated_runtime_overrides 2026-08-03 >/dev/null
+printf '%s|%s|%s\n' \
+  "$KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED" \
+  "$KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED" \
+  "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED"
+""",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "true|true|false"
+
+
+def test_run_bot_disables_daily_entry_split_when_baseline_policy_is_missing(tmp_path):
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    function_block = script[
+        script.index("korstockscan_env_true()") : script.index(
+            "verify_threshold_runtime_env_handoff()"
+        )
+    ]
+    missing_policy_path = tmp_path / "missing.json"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function_block + f"""
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
+export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={missing_policy_path}
+export KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED=true
+unset KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE
+export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED=true
+export KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE=DAILY
+disable_expired_dated_runtime_overrides 2026-08-03 >/dev/null
+printf '%s|%s\n' \
+  "$KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED" \
+  "$KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED"
+""",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "false|false"
 
 
 def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():

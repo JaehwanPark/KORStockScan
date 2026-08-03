@@ -4008,6 +4008,9 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     "score65_74_recovery_probe": [
         "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED",
     ],
+    "scalping_pyramid_quality_gate": [
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT",
+    ],
     "scalp_sim_candidate_window_expansion": [
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED",
     ],
@@ -4718,10 +4721,17 @@ def verify_runtime_env_handoff(
         for item in (manifest.get("selected_families") or [])
         if isinstance(item, str) and item.strip()
     ]
+    manifest_removed_selected_families = [
+        str(item)
+        for item in (manifest.get("removed_selected_families_ignored") or [])
+        if isinstance(item, str) and item.strip()
+    ]
     removed_selected_families = sorted(
-        family
-        for family in raw_selected_families
-        if family in REMOVED_CALIBRATION_FAMILIES
+        {
+            family
+            for family in (raw_selected_families + manifest_removed_selected_families)
+            if family in REMOVED_CALIBRATION_FAMILIES
+        }
     )
     selected_families = [
         family
