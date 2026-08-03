@@ -600,26 +600,20 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
 
 
 def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibration():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert (
         'RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION:-true}"'
         in script
     )
-    materialization_idx = script.index(
-        "src.engine.scalping.ai_decision_quality"
-    )
-    calibration_idx = script.index(
-        "src.engine.scalping.ai_action_outcome_calibration"
-    )
+    materialization_idx = script.index("src.engine.scalping.ai_decision_quality")
+    calibration_idx = script.index("src.engine.scalping.ai_action_outcome_calibration")
     materialization_block = script[materialization_idx:calibration_idx]
 
     assert materialization_idx < calibration_idx
-    assert '--mode postclose' in materialization_block
-    assert '--write' in materialization_block
-    assert '--execute-candidate' not in materialization_block
+    assert "--mode postclose" in materialization_block
+    assert "--write" in materialization_block
+    assert "--execute-candidate" not in materialization_block
     for artifact in (
         "ai_decision_quality_control_${TARGET_DATE}.json",
         "ai_decision_outcome_labels_${TARGET_DATE}.json",
@@ -1500,6 +1494,36 @@ printf '%s\\n' "$KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE"
     )
 
     assert result.stdout.strip() == "2026-07-30"
+
+
+def test_run_bot_expiry_uses_tp1_source_gap_relief_own_active_date():
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    function_block = script[
+        script.index("korstockscan_env_true()") : script.index(
+            "verify_threshold_runtime_env_handoff()"
+        )
+    ]
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function_block + """
+export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
+export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-08-03
+export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED=true
+export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE=2026-08-02
+disable_expired_dated_runtime_overrides 2026-08-03 >/dev/null
+printf '%s|%s\n' \
+  "$KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED" \
+  "$KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED"
+""",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "true|false"
 
 
 def test_run_bot_preserves_existing_daily_entry_split_contract_and_disables_expired_guard(

@@ -1800,6 +1800,9 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
         fill_price=10010,
         fill_qty=1,
         order_no="P0",
+        broker_route="SOR",
+        broker_route_resolution="explicit_request",
+        effective_venue="KRX",
         ai_action_at_submit="WAIT",
         ai_result_source_at_submit="live",
         ai_confirmed_at_submit=99.8,
@@ -1854,6 +1857,13 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     assert recovered_stock["entry_split_probe_wait_contract_at_submit"] is True
     assert recovered_stock["entry_split_probe_ai_result_source_at_submit"] == "live"
     assert recovered_stock["entry_split_probe_ai_confirmed_at_submit"] == 99.8
+    assert recovered_stock["entry_execution_broker_route"] == "SOR"
+    assert (
+        recovered_stock["entry_execution_broker_route_resolution"] == "explicit_request"
+    )
+    assert recovered_stock["entry_execution_route_recorded_at"] == 100.0
+    assert recovered_stock["effective_venue"] == "KRX"
+    assert recovered_stock["entry_execution_cohort"] == "KRX"
     assert (
         recovered_stock["entry_split_probe_ai_action_source_at_submit"]
         == "latest_stock_ai"
@@ -1883,6 +1893,193 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
         is True
     )
     assert state["bundles"]["123456-probe-restart"]["probe_expand_forbidden"] is True
+
+
+def test_probe_recovered_execution_provenance_rejects_unconfirmed_requested_route():
+    fields = split_plan._probe_recovered_execution_provenance(
+        {
+            "dmst_stex_tp": "SOR",
+            "effective_venue": "UNKNOWN",
+            "submitted_at": 100.0,
+        }
+    )
+
+    assert fields == {}
+
+
+def test_probe_runtime_restart_backfills_provenance_for_already_hydrated_bundle(
+    monkeypatch, tmp_path
+):
+    runtime_path = tmp_path / "probe_runtime.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", runtime_path)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_ENABLED", "true")
+    now = datetime(2026, 8, 3, 11, 32, tzinfo=timezone(timedelta(hours=9)))
+    bundle_id = "123456-probe-already-hydrated"
+    split_plan._write_probe_runtime_state(
+        {
+            "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+            "target_date": "2026-08-03",
+            "submitted_bundle_count": 1,
+            "circuit_open": False,
+            "circuit_reason": "",
+            "bundles": {
+                bundle_id: {
+                    "bundle_id": bundle_id,
+                    "phase": "aborted",
+                    "code": "123456",
+                    "broker_route": "SOR",
+                    "broker_route_resolution": "broker_response",
+                    "effective_venue": "KRX",
+                    "submitted_at": 100.0,
+                }
+            },
+        }
+    )
+    stock = {
+        "code": "123456",
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": bundle_id,
+        "effective_venue": "KRX",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {
+        "recovered": True,
+        "reason": "already_hydrated_provenance_restored",
+        "phase": "aborted",
+    }
+    assert stock["entry_execution_broker_route"] == "SOR"
+    assert stock["entry_execution_broker_route_resolution"] == "broker_response"
+    assert stock["entry_execution_route_recorded_at"] == 100.0
+    assert stock["entry_execution_cohort"] == "KRX"
+
+
+def test_probe_runtime_restart_does_not_mix_existing_route_with_bundle_provenance(
+    monkeypatch, tmp_path
+):
+    runtime_path = tmp_path / "probe_runtime.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", runtime_path)
+    now = datetime(2026, 8, 3, 11, 32, tzinfo=timezone(timedelta(hours=9)))
+    bundle_id = "123456-probe-existing-route"
+    split_plan._write_probe_runtime_state(
+        {
+            "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+            "target_date": "2026-08-03",
+            "submitted_bundle_count": 1,
+            "circuit_open": False,
+            "circuit_reason": "",
+            "bundles": {
+                bundle_id: {
+                    "bundle_id": bundle_id,
+                    "phase": "aborted",
+                    "code": "123456",
+                    "broker_route": "SOR",
+                    "broker_route_resolution": "broker_response",
+                    "effective_venue": "KRX",
+                    "submitted_at": 100.0,
+                }
+            },
+        }
+    )
+    stock = {
+        "code": "123456",
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": bundle_id,
+        "entry_execution_broker_route": "NXT",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {"recovered": False, "reason": "already_hydrated"}
+    assert stock["entry_execution_broker_route"] == "NXT"
+    assert "entry_execution_broker_route_resolution" not in stock
+    assert "entry_execution_cohort" not in stock
+
+
+def test_probe_runtime_restart_rejects_hydrated_bundle_code_mismatch(
+    monkeypatch, tmp_path
+):
+    runtime_path = tmp_path / "probe_runtime.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", runtime_path)
+    now = datetime(2026, 8, 3, 11, 32, tzinfo=timezone(timedelta(hours=9)))
+    bundle_id = "654321-probe-mismatched"
+    split_plan._write_probe_runtime_state(
+        {
+            "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+            "target_date": "2026-08-03",
+            "submitted_bundle_count": 1,
+            "circuit_open": False,
+            "circuit_reason": "",
+            "bundles": {
+                bundle_id: {
+                    "bundle_id": bundle_id,
+                    "phase": "aborted",
+                    "code": "654321",
+                    "broker_route": "SOR",
+                    "effective_venue": "KRX",
+                }
+            },
+        }
+    )
+    stock = {
+        "code": "123456",
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": bundle_id,
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {"recovered": False, "reason": "hydrated_bundle_code_mismatch"}
+    assert "entry_execution_broker_route" not in stock
+
+
+def test_probe_runtime_restart_backfills_hydrated_immutable_contract(
+    monkeypatch, tmp_path
+):
+    runtime_path = tmp_path / "probe_runtime.json"
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", runtime_path)
+    now = datetime(2026, 8, 3, 11, 32, tzinfo=timezone(timedelta(hours=9)))
+    bundle_id = "123456-probe-contract"
+    split_plan._write_probe_runtime_state(
+        {
+            "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+            "target_date": "2026-08-03",
+            "submitted_bundle_count": 1,
+            "circuit_open": False,
+            "circuit_reason": "",
+            "bundles": {
+                bundle_id: {
+                    "bundle_id": bundle_id,
+                    "phase": "aborted",
+                    "code": "123456",
+                    "wait_contract_at_submit": True,
+                    "terminal_abort_detail_reason": (
+                        "timeout_wait_confirmation_not_reached"
+                    ),
+                }
+            },
+        }
+    )
+    stock = {
+        "code": "123456",
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": bundle_id,
+        "entry_execution_broker_route": "KRX",
+    }
+
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+
+    assert result == {
+        "recovered": True,
+        "reason": "already_hydrated_contract_restored",
+        "phase": "aborted",
+    }
+    assert stock["entry_split_probe_wait_contract_at_submit"] is True
+    assert (
+        stock["entry_split_probe_terminal_abort_detail_reason"]
+        == "timeout_wait_confirmation_not_reached"
+    )
 
 
 def test_probe_runtime_restart_clears_pending_recheck_without_opening_circuit(

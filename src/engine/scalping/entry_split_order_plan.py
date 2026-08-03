@@ -229,6 +229,30 @@ def probe_runtime_state_snapshot(*, now: datetime | None = None) -> dict[str, An
         return dict(_load_probe_runtime_state(target_date))
 
 
+def _probe_recovered_execution_provenance(
+    bundle: dict[str, Any],
+) -> dict[str, Any]:
+    """Restore only broker-confirmed entry provenance from a persisted bundle."""
+
+    broker_route = str(bundle.get("broker_route") or "").strip().upper()
+    effective_venue = str(bundle.get("effective_venue") or "").strip().upper()
+    if broker_route not in {"KRX", "NXT", "SOR"}:
+        return {}
+    fields: dict[str, Any] = {
+        "entry_execution_broker_route": broker_route,
+        "entry_execution_broker_route_resolution": str(
+            bundle.get("broker_route_resolution") or "persisted_probe_bundle"
+        ).strip(),
+        "entry_execution_route_recorded_at": (
+            bundle.get("submitted_at") or bundle.get("filled_at")
+        ),
+    }
+    if effective_venue in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
+        fields["effective_venue"] = effective_venue
+        fields["entry_execution_cohort"] = effective_venue
+    return {key: value for key, value in fields.items() if value not in (None, "")}
+
+
 def recover_probe_runtime_bundle_for_stock(
     stock: dict[str, Any], *, now: datetime | None = None
 ) -> dict[str, Any]:
@@ -244,7 +268,60 @@ def recover_probe_runtime_bundle_for_stock(
     actual_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
     if not code or actual_qty <= 0:
         return {"recovered": False, "reason": "no_live_holding"}
-    if str(stock.get("entry_split_probe_bundle_id") or "").strip():
+    hydrated_bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+    if hydrated_bundle_id:
+        target_date = _kst_date(now)
+        with _PROBE_RUNTIME_STATE_LOCK:
+            payload = _load_probe_runtime_state(target_date)
+            bundle = dict((payload.get("bundles") or {}).get(hydrated_bundle_id) or {})
+        stock_code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
+        bundle_code = str(bundle.get("code") or "").strip()[:6]
+        if bundle and stock_code and bundle_code and stock_code != bundle_code:
+            return {"recovered": False, "reason": "hydrated_bundle_code_mismatch"}
+        recovered_provenance = (
+            _probe_recovered_execution_provenance(bundle)
+            if stock.get("entry_execution_broker_route") in (None, "")
+            else {}
+        )
+        missing_provenance = {
+            key: value
+            for key, value in recovered_provenance.items()
+            if stock.get(key) in (None, "")
+        }
+        recovered_contract: dict[str, Any] = {}
+        if "wait_contract_at_submit" in bundle:
+            recovered_contract["entry_split_probe_wait_contract_at_submit"] = (
+                _safe_bool(bundle.get("wait_contract_at_submit"))
+            )
+        abort_detail_reason = str(
+            bundle.get("terminal_abort_detail_reason") or ""
+        ).strip()
+        if abort_detail_reason:
+            recovered_contract.update(
+                {
+                    "entry_split_probe_abort_detail_reason": abort_detail_reason,
+                    "entry_split_probe_terminal_abort_detail_reason": (
+                        abort_detail_reason
+                    ),
+                }
+            )
+        missing_contract = {
+            key: value
+            for key, value in recovered_contract.items()
+            if stock.get(key) in (None, "")
+        }
+        if missing_provenance or missing_contract:
+            stock.update(missing_provenance)
+            stock.update(missing_contract)
+            return {
+                "recovered": True,
+                "reason": (
+                    "already_hydrated_provenance_restored"
+                    if missing_provenance
+                    else "already_hydrated_contract_restored"
+                ),
+                "phase": str(bundle.get("phase") or "unknown"),
+            }
         return {"recovered": False, "reason": "already_hydrated"}
     target_date = _kst_date(now)
     with _PROBE_RUNTIME_STATE_LOCK:
@@ -425,6 +502,7 @@ def recover_probe_runtime_bundle_for_stock(
                     ],
                     "entry_requested_qty": actual_qty,
                     "requested_buy_qty": actual_qty,
+                    **_probe_recovered_execution_provenance(bundle),
                 }
             )
             return {
@@ -621,6 +699,7 @@ def recover_probe_runtime_bundle_for_stock(
             ),
             "entry_requested_qty": actual_qty if soft_abort else requested_qty,
             "requested_buy_qty": actual_qty if soft_abort else requested_qty,
+            **_probe_recovered_execution_provenance(bundle),
         }
         if "wait_contract_at_submit" in bundle:
             recovery_fields["entry_split_probe_wait_contract_at_submit"] = _safe_bool(
