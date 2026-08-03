@@ -1765,7 +1765,7 @@ class GPTSniperEngine:
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
         adapter_version = (
-            "decision_quality_v2_7_probe_entry_v7"
+            "decision_quality_v2_7_probe_entry_v8"
             if probe_prompt_selected
             else "decision_quality_v2_7_entry_v5"
         )
@@ -1797,6 +1797,7 @@ class GPTSniperEngine:
             payload,
             stage="entry",
             exact_payload=exact_payload,
+            enforce_live_probe_contract=probe_prompt_selected,
         )
         repair_fields = {
             "decision_quality_contract_repair_applied": False,
@@ -1832,20 +1833,16 @@ class GPTSniperEngine:
                 )
                 if (
                     str(repaired.get("edge_state") or "").strip().upper() == "EDGE"
-                    and str(
-                        stage_wait_evidence.get("positive_edge") or ""
-                    ).strip().lower()
+                    and str(stage_wait_evidence.get("positive_edge") or "")
+                    .strip()
+                    .lower()
                     == "weak"
-                    and str(
-                        stage_wait_evidence.get("trigger") or ""
-                    ).strip().lower()
+                    and str(stage_wait_evidence.get("trigger") or "").strip().lower()
                     == "recovery_required"
                 ):
                     stage_wait_evidence["positive_edge"] = "moderate"
                     repaired["evidence"] = stage_wait_evidence
-                    repair_codes.append(
-                        "non_buy_stage_wait_edge_strength_aligned"
-                    )
+                    repair_codes.append("non_buy_stage_wait_edge_strength_aligned")
             valid_reason_codes = []
             invalid_reason_codes = []
             non_buy_reason_code_aliases = {
@@ -2170,6 +2167,7 @@ class GPTSniperEngine:
                 repaired,
                 stage="entry",
                 exact_payload=exact_payload,
+                enforce_live_probe_contract=probe_prompt_selected,
             )
             deterministic_fact_errors = {
                 "entry_no_edge_strength_invalid",
@@ -2235,6 +2233,7 @@ class GPTSniperEngine:
                 repaired,
                 stage="entry",
                 exact_payload=exact_payload,
+                enforce_live_probe_contract=probe_prompt_selected,
             )
             if "entry_bounded_reversal_probe_misclassified" in interim_errors and str(
                 repaired.get("action") or ""
@@ -2284,10 +2283,97 @@ class GPTSniperEngine:
                 repaired["reason_codes"] = repaired_reason_codes
                 repair_codes.append("non_buy_bounded_reversal_probe_aligned")
 
+            interim_errors = validate_candidate_response(
+                repaired,
+                stage="entry",
+                exact_payload=exact_payload,
+                enforce_live_probe_contract=probe_prompt_selected,
+            )
+            if "entry_early_session_probe_misclassified" in interim_errors and str(
+                repaired.get("action") or ""
+            ).strip().upper() in {"WAIT", "DROP"}:
+                evidence = (
+                    dict(repaired.get("evidence") or {})
+                    if isinstance(repaired.get("evidence"), dict)
+                    else {}
+                )
+                repaired["edge_state"] = "EDGE"
+                repaired["action"] = "WAIT"
+                evidence.update(
+                    {
+                        "trend": "supportive",
+                        "setup": "continuation",
+                        "positive_edge": "moderate",
+                        "adverse_risk": "high",
+                        "trigger": "recovery_required",
+                    }
+                )
+                if str(evidence.get("risk") or "").lower() not in {
+                    "low",
+                    "medium",
+                    "high",
+                }:
+                    evidence["risk"] = "high"
+                repaired["evidence"] = evidence
+                exact_analysis = build_exact_payload_analysis_v1(
+                    exact_payload,
+                    stage="entry",
+                    live_entry=True,
+                )
+                exact_liquidity = exact_analysis.get("executable_liquidity")
+                exact_liquidity = (
+                    exact_liquidity if isinstance(exact_liquidity, dict) else {}
+                )
+                exact_liquidity_state = str(
+                    exact_liquidity.get("state") or "mixed"
+                ).lower()
+                if exact_liquidity_state in {"supportive", "mixed", "adverse"}:
+                    evidence["liquidity"] = exact_liquidity_state
+                repaired_reason_codes = [
+                    code
+                    for code in repaired.get("reason_codes") or []
+                    if code
+                    not in {
+                        "edge_absent",
+                        "no_positive_edge",
+                        "recovery_trigger_confirmed",
+                        "recovery_trigger_failed",
+                        "setup_invalidated",
+                        "distribution_adverse",
+                        "volume_confirmation_missing",
+                    }
+                ]
+                if str(evidence.get("tape") or "").lower() != "adverse":
+                    repaired_reason_codes = [
+                        code for code in repaired_reason_codes if code != "tape_adverse"
+                    ]
+                if str(evidence.get("tape") or "").lower() != "supportive":
+                    repaired_reason_codes = [
+                        code
+                        for code in repaired_reason_codes
+                        if code != "tape_supportive"
+                    ]
+                if exact_liquidity_state not in {"adverse", "blocking"}:
+                    repaired_reason_codes = [
+                        code
+                        for code in repaired_reason_codes
+                        if code not in {"liquidity_adverse", "ask_wall_adverse"}
+                    ]
+                for code in (
+                    "edge_positive",
+                    "structural_edge_without_trigger",
+                    "recovery_trigger_required",
+                ):
+                    if code not in repaired_reason_codes:
+                        repaired_reason_codes.append(code)
+                repaired["reason_codes"] = repaired_reason_codes[:8]
+                repair_codes.append("non_buy_early_session_probe_aligned")
+
             repaired_errors = validate_candidate_response(
                 repaired,
                 stage="entry",
                 exact_payload=exact_payload,
+                enforce_live_probe_contract=probe_prompt_selected,
             )
             if repair_codes and not repaired_errors:
                 payload = repaired

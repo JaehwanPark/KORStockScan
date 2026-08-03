@@ -2874,7 +2874,98 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
     assert result["entry_probe_intent_actual_order_submitted"] is False
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v7"
+        == "decision_quality_v2_7_probe_entry_v8"
+    )
+
+
+def test_decision_quality_v2_7_repairs_early_session_drop_to_guarded_wait_probe():
+    engine = _build_engine()
+    exact_payload = {
+        "current": {"price": 14900, "fluctuation_pct": 13.91},
+        "features": {
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "entry_momentum_status": "flat",
+            "buy_pressure_10t": 93.33,
+            "net_aggressive_delta_10t": 156,
+            "tick_aggressor_trusted_count": 10,
+            "tick_aggressor_pressure_usable": True,
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh_computed",
+            "tick_accel_source": "same_second_burst_10ticks",
+            "spread_bp": 40.27,
+            "top1_bid_notional": 536_400,
+            "top1_ask_notional": 4_246_500,
+            "top3_bid_notional": 14_870_200,
+            "top3_ask_notional": 11_145_200,
+            "would_fill_now": False,
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 13,
+            "structure": {
+                "returns_pct": {"1": 1.717, "3": 7.5527, "5": 7.6308, "10": 6.8543},
+                "slopes_pct_per_bar": {
+                    "1": 1.717,
+                    "3": 2.2952,
+                    "5": 2.1971,
+                    "10": 0.5737,
+                },
+                "peak_drawdown_pct": -0.2694,
+                "high_direction": "up_or_flat",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 3.937,
+                "volume_direction_alignment": "bullish_confirmed",
+                "regime": "breakout",
+                "alignment": "positive",
+            },
+        },
+    }
+
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.0,
+            "expected_downside_pct": -1.2,
+            "confidence": 78,
+            "reason_codes": [
+                "edge_absent",
+                "liquidity_adverse",
+                "setup_invalidated",
+            ],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "adverse",
+                "tape": "supportive",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "blocking",
+                "trigger": "not_applicable",
+            },
+        },
+        exact_payload=exact_payload,
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["action"] == "WAIT"
+    assert result["edge_state"] == "EDGE"
+    assert result["evidence"]["setup"] == "continuation"
+    assert result["evidence"]["adverse_risk"] == "high"
+    assert result["evidence"]["trigger"] == "recovery_required"
+    assert result["entry_probe_intent"] is True
+    assert result["entry_probe_intent_submit_guard_required"] is True
+    assert result["entry_probe_intent_actual_order_submitted"] is False
+    assert "non_buy_early_session_probe_aligned" in (
+        result["decision_quality_contract_repair_codes"]
+    )
+    assert (
+        result["decision_quality_live_adapter"]
+        == "decision_quality_v2_7_probe_entry_v8"
     )
 
 
@@ -4374,7 +4465,7 @@ def test_decision_quality_v2_7_completes_adverse_distribution_non_buy_reason():
     ]
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v7"
+        == "decision_quality_v2_7_probe_entry_v8"
     )
 
 
@@ -4461,7 +4552,7 @@ def test_decision_quality_v2_7_repairs_non_buy_reason_code_conflict():
     ]
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v7"
+        == "decision_quality_v2_7_probe_entry_v8"
     )
 
 
@@ -4557,7 +4648,7 @@ def test_decision_quality_v2_7_repairs_stage_wait_alias_without_buy_authority():
         "non_buy_stage_wait_edge_strength_aligned",
     ]
     assert result["decision_quality_live_adapter"] == (
-        "decision_quality_v2_7_probe_entry_v7"
+        "decision_quality_v2_7_probe_entry_v8"
     )
 
 

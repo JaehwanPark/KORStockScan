@@ -1022,6 +1022,15 @@ Bounded early-probe decision rules:
    distribution/reversal evidence is present, overextension is blocking, or
    expected reward/risk is unfavorable after execution cost. A wide spread is
    execution risk only and is never positive evidence.
+8. Missing 20m or 60m horizons early in a session are unavailable, not negative.
+   early_session_structural_edge_floor=true preserves EDGE from the available
+   completed 1m/3m/5m/10m structure. early_session_probe_candidate=true requires
+   EDGE/WAIT with setup=continuation, trigger=recovery_required, and non-blocking
+   adverse risk. It is only a one-share probe intent candidate for unchanged
+   downstream submit guards; never convert it directly to BUY. Treat
+   executable_liquidity.execution_cost_state separately from
+   directional_depth_state. An observable spread may raise execution cost but
+   must not erase supportive or mixed directional depth.
 """.strip()
 
 
@@ -1181,8 +1190,9 @@ V2.10 bounded-opportunity experiment:
    degraded_but_bounded, the quote is executable enough to classify, spread is
    normal or wide_but_observable, and at least one of these exact conditions is
    present: eligible anticipatory reversal; structural_edge_floor without
-   blocking overextension; orderly pullback recovery; trusted supportive
-   trigger. Never create an opportunity from one score or buy-pressure ratio.
+   blocking overextension; early_session_probe_candidate; orderly pullback
+   recovery; trusted supportive trigger. Never create an opportunity from one
+   score or buy-pressure ratio.
 4. For a bounded opportunity, BUY may retain adverse_risk=high. High means a
    one-share exploration risk that downstream guards must still approve;
    blocking remains an unconditional DROP. Never weaken high or blocking risk

@@ -2781,6 +2781,221 @@ def test_entry_candidate_rejects_thin_tape_over_adverse_completed_distribution()
     assert analysis["observation_contract"]["runtime_effect"] is False
 
 
+def test_early_session_available_horizons_preserve_continuation_edge_and_depth():
+    exact_payload = {
+        "current": {"price": 14900, "fluctuation_pct": 13.91},
+        "features": {
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "entry_momentum_status": "flat",
+            "buy_pressure_10t": 93.33,
+            "net_aggressive_delta_10t": 156,
+            "tick_aggressor_trusted_count": 10,
+            "tick_aggressor_pressure_usable": True,
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh_computed",
+            "tick_accel_source": "same_second_burst_10ticks",
+            "spread_bp": 40.27,
+            "top1_bid_notional": 536_400,
+            "top1_ask_notional": 4_246_500,
+            "top3_bid_notional": 14_870_200,
+            "top3_ask_notional": 11_145_200,
+            "fillability_score": 38,
+            "would_fill_now": False,
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 13,
+            "structure": {
+                "returns_pct": {"1": 1.717, "3": 7.5527, "5": 7.6308, "10": 6.8543},
+                "slopes_pct_per_bar": {
+                    "1": 1.717,
+                    "3": 2.2952,
+                    "5": 2.1971,
+                    "10": 0.5737,
+                },
+                "peak_drawdown_pct": -0.2694,
+                "high_direction": "up_or_flat",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 3.937,
+                "volume_direction_alignment": "bullish_confirmed",
+                "regime": "breakout",
+                "alignment": "positive",
+            },
+        },
+    }
+
+    facts = quality._entry_contract_facts(exact_payload)
+    analysis = quality.build_exact_payload_analysis_v1(exact_payload, stage="entry")
+
+    assert facts["long_horizon_structural_edge_floor"] is False
+    assert facts["early_session_structural_edge_floor"] is True
+    assert facts["structural_edge_floor"] is True
+    assert facts["early_session_probe_candidate"] is True
+    assert analysis["completed_structure"]["phase"] == "continuation"
+    assert analysis["completed_structure"]["structural_edge"] == "moderate"
+    assert analysis["completed_structure"]["structural_edge_policy_version"] == (
+        "session_available_horizons_v2"
+    )
+    assert analysis["trigger_state"] == "recovery_required"
+    assert analysis["executable_liquidity"]["state"] == "mixed"
+    assert analysis["executable_liquidity"]["directional_depth_state"] == "mixed"
+    assert analysis["executable_liquidity"]["execution_cost_state"] == "observable"
+
+    rejected_drop = {
+        "edge_state": "NO_EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.0,
+        "expected_downside_pct": -1.2,
+        "confidence": 78,
+        "reason_codes": ["edge_absent", "liquidity_adverse"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "adverse",
+            "tape": "supportive",
+            "risk": "high",
+            "uncertainty": "medium",
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "blocking",
+            "trigger": "not_applicable",
+        },
+    }
+    errors = quality.validate_candidate_response(
+        rejected_drop,
+        stage="entry",
+        exact_payload=exact_payload,
+        enforce_live_probe_contract=True,
+    )
+    assert "entry_structural_edge_floor_misclassified" in errors
+    assert "entry_early_session_probe_misclassified" in errors
+
+
+def test_three_bar_early_probe_requires_bounded_cost_and_independent_support():
+    exact_payload = {
+        "current": {"price": 145900, "fluctuation_pct": 7.6},
+        "features": {
+            "entry_order_flow_status": "neutral",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "entry_momentum_status": "accelerating",
+            "buy_pressure_10t": 58.33,
+            "net_aggressive_delta_10t": 14,
+            "tick_aggressor_trusted_count": 10,
+            "tick_aggressor_pressure_usable": True,
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh_computed",
+            "tick_accel_source": "same_second_burst_10ticks",
+            "spread_bp": 47.98,
+            "top1_bid_notional": 21_447_300,
+            "top1_ask_notional": 291_800,
+            "top3_bid_notional": 37_204_500,
+            "top3_ask_notional": 1_459_000,
+            "would_fill_now": True,
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 3,
+            "structure": {
+                "returns_pct": {"1": 1.8336},
+                "slopes_pct_per_bar": {"1": 1.8336, "3": 1.2784},
+                "peak_drawdown_pct": -0.1383,
+                "high_direction": "up_or_flat",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 1.567,
+                "volume_direction_alignment": "not_available",
+                "regime": "range",
+                "alignment": "neutral",
+            },
+        },
+    }
+
+    facts = quality._entry_contract_facts(exact_payload)
+    analysis = quality.build_exact_payload_analysis_v1(exact_payload, stage="entry")
+
+    assert facts["structural_edge_floor"] is False
+    assert facts["early_session_probe_candidate"] is True
+    assert analysis["completed_structure"]["phase"] == "early_continuation_probe"
+    assert analysis["trigger_state"] == "recovery_required"
+    assert analysis["executable_liquidity"]["state"] == "supportive"
+    assert analysis["executable_liquidity"]["directional_depth_state"] == "supportive"
+    assert analysis["executable_liquidity"]["execution_cost_state"] == "observable"
+
+    offline_buy = {
+        "edge_state": "EDGE",
+        "action": "BUY",
+        "expected_upside_pct": 2.0,
+        "expected_downside_pct": -1.0,
+        "confidence": 70,
+        "reason_codes": [
+            "edge_positive",
+            "continuation_supported",
+            "recovery_trigger_confirmed",
+        ],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "supportive",
+            "tape": "mixed",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    assert (
+        "entry_early_session_probe_misclassified"
+        not in quality.validate_candidate_response(
+            offline_buy,
+            stage="entry",
+            exact_payload=exact_payload,
+        )
+    )
+    assert (
+        "entry_early_session_probe_misclassified"
+        in quality.validate_candidate_response(
+            offline_buy,
+            stage="entry",
+            exact_payload=exact_payload,
+            enforce_live_probe_contract=True,
+        )
+    )
+
+    too_wide = {
+        **exact_payload,
+        "features": {**exact_payload["features"], "spread_bp": 50.01},
+    }
+    assert (
+        quality._entry_contract_facts(too_wide)["early_session_probe_candidate"]
+        is False
+    )
+
+    negative_prior_close = {
+        **exact_payload,
+        "current": {**exact_payload["current"], "fluctuation_pct": -0.01},
+    }
+    assert (
+        quality._entry_contract_facts(negative_prior_close)[
+            "early_session_probe_candidate"
+        ]
+        is False
+    )
+
+    adverse_tape = {
+        **exact_payload,
+        "features": {
+            **exact_payload["features"],
+            "entry_order_flow_status": "adverse",
+        },
+    }
+    assert (
+        quality._entry_contract_facts(adverse_tape)["early_session_probe_candidate"]
+        is False
+    )
+
+
 def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
     exact_payload = {
         "current": {"price": 10000},

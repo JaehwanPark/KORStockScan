@@ -3160,7 +3160,53 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     positive_slope_count = sum(
         (_window_value(slopes, horizon) or 0) > 0 for horizon in structural_horizons
     )
-    structural_edge_floor = positive_return_count >= 3 and positive_slope_count >= 2
+    long_horizon_structural_edge_floor = bool(
+        positive_return_count >= 3 and positive_slope_count >= 2
+    )
+    completed_bar_count = int(_number(context.get("completed_bar_count")) or 0)
+    if completed_bar_count <= 0:
+        completed_bar_count = sum(
+            isinstance(row, dict) and not bool(row.get("forming", False))
+            for row in context.get("bars") or []
+        )
+    early_horizons = (1, 3, 5, 10)
+    available_early_returns = [
+        value
+        for horizon in early_horizons
+        if (value := _window_value(returns, horizon)) is not None
+    ]
+    available_early_slopes = [
+        value
+        for horizon in early_horizons
+        if (value := _window_value(slopes, horizon)) is not None
+    ]
+    regime = str(structure.get("regime") or "").lower()
+    alignment = str(structure.get("alignment") or "").lower()
+    peak_drawdown = _number(structure.get("peak_drawdown_pct"))
+    high_direction = str(structure.get("high_direction") or "").lower()
+    low_direction = str(structure.get("low_direction") or "").lower()
+    volume_ratio = _number(structure.get("volume_ratio"))
+    volume_alignment = str(structure.get("volume_direction_alignment") or "").lower()
+    early_session_structural_edge_floor = bool(
+        completed_bar_count >= 10
+        and len(available_early_returns) >= 3
+        and sum(value > 0 for value in available_early_returns) >= 3
+        and not any(value <= -0.5 for value in available_early_returns)
+        and len(available_early_slopes) >= 3
+        and sum(value > 0 for value in available_early_slopes) >= 3
+        and regime in {"breakout", "trend", "continuation"}
+        and alignment == "positive"
+        and high_direction in {"up", "up_or_flat"}
+        and low_direction in {"up", "up_or_flat"}
+        and peak_drawdown is not None
+        and peak_drawdown > -1.5
+        and volume_ratio is not None
+        and volume_ratio >= 1.0
+        and volume_alignment != "price_volume_divergence"
+    )
+    structural_edge_floor = bool(
+        long_horizon_structural_edge_floor or early_session_structural_edge_floor
+    )
     features = payload.get("features")
     features = features if isinstance(features, dict) else {}
     current = payload.get("current")
@@ -3197,8 +3243,6 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and ma5_bp >= 80
         and tape_status != "supportive"
     )
-    regime = str(structure.get("regime") or "").lower()
-    alignment = str(structure.get("alignment") or "").lower()
     latest_recovery = (_window_value(returns, 1) or 0) > 0 or (
         _window_value(returns, 3) or 0
     ) > 0
@@ -3254,10 +3298,6 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and quote_fresh
         and tick_fresh
     )
-    peak_drawdown = _number(structure.get("peak_drawdown_pct"))
-    high_direction = str(structure.get("high_direction") or "").lower()
-    volume_ratio = _number(structure.get("volume_ratio"))
-    volume_alignment = str(structure.get("volume_direction_alignment") or "").lower()
     adverse_distribution_no_edge = bool(
         not structural_edge_floor
         and return_5m is not None
@@ -3283,8 +3323,45 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and top1_ask_notional is not None
         and top1_ask_notional / top1_bid_notional >= 5
     )
+    early_short_structure = bool(
+        3 <= completed_bar_count < 10
+        and (_window_value(returns, 1) or 0) > 0
+        and (_window_value(slopes, 1) or 0) > 0
+        and (_window_value(slopes, 3) or 0) > 0
+        and high_direction in {"up", "up_or_flat"}
+        and low_direction in {"up", "up_or_flat"}
+        and peak_drawdown is not None
+        and peak_drawdown > -0.75
+        and volume_ratio is not None
+        and volume_ratio >= 1.2
+        and volume_alignment != "price_volume_divergence"
+    )
+    early_session_probe_candidate = bool(
+        (early_session_structural_edge_floor or early_short_structure)
+        and not blocking_overextension
+        and not ask_wall_wide_spread
+        and daily_runup is not None
+        and 0 <= daily_runup < 15.0
+        and spread_bp is not None
+        and 0 <= spread_bp <= 50.0
+        and tape_status in {"supportive", "neutral", "mixed"}
+        and buy_pressure is not None
+        and buy_pressure >= 55.0
+        and net_aggressive_delta is not None
+        and net_aggressive_delta > 0
+        and trusted_tape_usable
+        and trusted_tick_count is not None
+        and trusted_tick_count >= 10
+        and not thin_tape_sample
+        and quote_fresh
+        and tick_fresh
+        and large_sell_print_absent
+    )
     return {
         "structural_edge_floor": structural_edge_floor,
+        "long_horizon_structural_edge_floor": long_horizon_structural_edge_floor,
+        "early_session_structural_edge_floor": early_session_structural_edge_floor,
+        "early_session_probe_candidate": early_session_probe_candidate,
         "blocking_overextension": blocking_overextension,
         "orderly_pullback_recovery": orderly_pullback_recovery,
         "bounded_reversal_probe_candidate": bounded_reversal_probe_candidate,
@@ -3366,20 +3443,52 @@ def build_exact_payload_analysis_v1(
         and top1_bid_notional > 0
         else None
     )
+    top3_bid_notional = _number(features.get("top3_bid_notional"))
+    top3_ask_notional = _number(features.get("top3_ask_notional"))
+    top3_ask_to_bid_ratio = (
+        top3_ask_notional / top3_bid_notional
+        if top3_ask_notional is not None
+        and top3_bid_notional is not None
+        and top3_bid_notional > 0
+        else None
+    )
+    would_fill_now = features.get("would_fill_now")
+    if facts.get("ask_wall_wide_spread"):
+        directional_depth_state = "blocking"
+    elif top3_ask_to_bid_ratio is not None and top3_ask_to_bid_ratio >= 2.0:
+        directional_depth_state = "adverse"
+    elif (
+        top3_ask_to_bid_ratio is not None
+        and top3_ask_to_bid_ratio <= 1.0
+        and (top1_ask_to_bid_ratio is None or top1_ask_to_bid_ratio <= 1.5)
+    ):
+        directional_depth_state = "supportive"
+    elif (
+        would_fill_now is True
+        and top1_ask_to_bid_ratio is not None
+        and top1_ask_to_bid_ratio <= 1.5
+    ):
+        directional_depth_state = "supportive"
+    else:
+        directional_depth_state = "mixed"
+    if spread_bp is None:
+        execution_cost_state = "insufficient"
+    elif spread_bp <= 15:
+        execution_cost_state = "low"
+    elif spread_bp <= 50:
+        execution_cost_state = "observable"
+    elif spread_bp <= 150 and features.get("quote_fresh_for_entry") is True:
+        execution_cost_state = "wide_but_observable"
+    else:
+        execution_cost_state = "extreme_or_unusable"
     if facts.get("ask_wall_wide_spread"):
         liquidity_state = "blocking"
     elif spread_bp is None:
         liquidity_state = "insufficient"
-    elif spread_bp >= 30 or (
-        top1_ask_to_bid_ratio is not None and top1_ask_to_bid_ratio >= 2
-    ):
+    elif execution_cost_state == "extreme_or_unusable":
         liquidity_state = "adverse"
-    elif spread_bp <= 15 and (
-        top1_ask_to_bid_ratio is None or top1_ask_to_bid_ratio <= 1.5
-    ):
-        liquidity_state = "supportive"
     else:
-        liquidity_state = "mixed"
+        liquidity_state = directional_depth_state
     volume_ratio = _number(structure.get("volume_ratio"))
     volume_alignment = str(
         structure.get("volume_direction_alignment") or "unknown"
@@ -3412,6 +3521,9 @@ def build_exact_payload_analysis_v1(
         structural_edge = "moderate"
     elif facts.get("structural_edge_floor"):
         structure_phase = "pullback"
+        structural_edge = "moderate"
+    elif facts.get("early_session_probe_candidate"):
+        structure_phase = "early_continuation_probe"
         structural_edge = "moderate"
     elif (
         (normalized_returns["5m"] or 0) < 0
@@ -3458,6 +3570,8 @@ def build_exact_payload_analysis_v1(
         trigger_state = "confirmed"
     elif facts.get("orderly_pullback_recovery"):
         trigger_state = "recovery_required"
+    elif facts.get("early_session_probe_candidate"):
+        trigger_state = "recovery_required"
     elif not tape_sample_sufficient:
         trigger_state = "insufficient_tape_confirmation"
     else:
@@ -3484,6 +3598,14 @@ def build_exact_payload_analysis_v1(
             "low_direction": structure.get("low_direction"),
             "regime": structure.get("regime"),
             "alignment": structure.get("alignment"),
+            "structural_edge_policy_version": ("session_available_horizons_v2"),
+            "long_horizon_structural_edge_floor": facts.get(
+                "long_horizon_structural_edge_floor"
+            ),
+            "early_session_structural_edge_floor": facts.get(
+                "early_session_structural_edge_floor"
+            ),
+            "early_session_probe_candidate": facts.get("early_session_probe_candidate"),
         },
         "volume_confirmation": {
             "state": volume_state,
@@ -3502,12 +3624,17 @@ def build_exact_payload_analysis_v1(
         },
         "executable_liquidity": {
             "state": liquidity_state,
+            "directional_depth_state": directional_depth_state,
+            "execution_cost_state": execution_cost_state,
             "spread_bp": spread_bp,
             "top1_bid_notional": top1_bid_notional,
             "top1_ask_notional": top1_ask_notional,
             "top1_ask_to_bid_ratio": top1_ask_to_bid_ratio,
+            "top3_bid_notional": top3_bid_notional,
+            "top3_ask_notional": top3_ask_notional,
+            "top3_ask_to_bid_ratio": top3_ask_to_bid_ratio,
             "fillability_score": _number(features.get("fillability_score")),
-            "would_fill_now": features.get("would_fill_now"),
+            "would_fill_now": would_fill_now,
         },
         "program_flow": {
             "net_qty": program_net_qty,
@@ -3764,6 +3891,7 @@ def build_anticipatory_reversal_analysis_v1(
     bounded_edge_facts = {
         "anticipatory_reversal": eligible,
         "structural_edge_floor": bool(facts["structural_edge_floor"]),
+        "early_session_probe_candidate": bool(facts["early_session_probe_candidate"]),
         "orderly_pullback_recovery": bool(facts["orderly_pullback_recovery"]),
         "trusted_supportive_trigger": bool(facts["trusted_supportive_trigger"]),
     }
@@ -3994,6 +4122,7 @@ def validate_candidate_response(
     *,
     stage: str,
     exact_payload: Any = None,
+    enforce_live_probe_contract: bool = False,
 ) -> list[str]:
     errors: list[str] = []
     normalized_stage = str(stage or "").strip().lower()
@@ -4164,6 +4293,19 @@ def validate_candidate_response(
                     or adverse_risk not in {"low", "moderate", "high"}
                 ):
                     errors.append("entry_bounded_reversal_probe_misclassified")
+            if (
+                enforce_live_probe_contract
+                and contract_facts["early_session_probe_candidate"]
+            ):
+                if (
+                    edge_state != "EDGE"
+                    or positive_edge not in {"moderate", "strong"}
+                    or setup != "continuation"
+                    or trigger != "recovery_required"
+                    or action != "WAIT"
+                    or adverse_risk not in {"low", "moderate", "high"}
+                ):
+                    errors.append("entry_early_session_probe_misclassified")
             if contract_facts["trusted_supportive_trigger"]:
                 # WAIT remains a non-exposure candidate signal.  Trusted tape
                 # may justify a recovery-required probe candidate while the
