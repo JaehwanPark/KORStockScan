@@ -7992,6 +7992,18 @@ class GPTSniperEngine:
         provider_called=False,
     ):
         reason_text = str(reason or result_source or "holding_score_unusable")
+        contract_fields = dict(
+            input_contract_fields
+            or {
+                "ai_input_schema": "holding_score_v2",
+                "ai_input_contract_mode": "structured_json",
+                "ai_input_build_fallback": "not_built",
+            }
+        )
+        # A neutral result never reaches _call_openai_safe, which normally
+        # supplies the transport endpoint.  Keep a provider-neutral trace
+        # endpoint invariant so future fail-closed callers cannot split it.
+        contract_fields.setdefault("ai_trace_endpoint_name", "holding_score")
         payload = {
             "action": "HOLD",
             "score": 50,
@@ -8029,12 +8041,7 @@ class GPTSniperEngine:
             cache_hit=False,
             cache_mode="miss",
             result_source=result_source,
-            input_contract_fields=input_contract_fields
-            or {
-                "ai_input_schema": "holding_score_v2",
-                "ai_input_contract_mode": "structured_json",
-                "ai_input_build_fallback": "not_built",
-            },
+            input_contract_fields=contract_fields,
         )
 
     def evaluate_scalping_holding_score(
@@ -8061,6 +8068,12 @@ class GPTSniperEngine:
             holding_context=snapshot_context,
         )
         input_contract_fields = {
+            # Keep the logical endpoint stable even when exact-input preflight
+            # blocks before _call_openai_safe can attach transport metadata.
+            # Without this field, fail-closed rows are recorded under the
+            # prompt type (scalping_holding_score) while successful rows use
+            # holding_score, splitting one producer contract in consumers.
+            "ai_trace_endpoint_name": "holding_score",
             "ai_input_schema": "holding_score_v2",
             "ai_input_contract_mode": "structured_json",
             "ai_input_build_fallback": "not_built",

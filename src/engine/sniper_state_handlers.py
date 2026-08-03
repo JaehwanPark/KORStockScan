@@ -22262,6 +22262,10 @@ def _record_holding_score_upstream_preflight_trace(
         "ai_decision_outcome_eligible": False,
     }
     input_contract_fields = {
+        # This path intentionally stops before the AI engine.  Preserve the
+        # same canonical endpoint as live holding-score calls so trace and
+        # quality consumers do not interpret it as a second producer.
+        "ai_trace_endpoint_name": "holding_score",
         "ai_trace_stock_code": code,
         "ai_trace_record_id": target.get("id"),
         "ai_trace_position_cycle_id": target.get("position_cycle_id"),

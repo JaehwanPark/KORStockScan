@@ -234,6 +234,11 @@ STAGE_ALIASES = {
     "exit": "exit",
     "overnight": "overnight",
 }
+ENDPOINT_ALIASES = {
+    # Historical fail-closed holding rows were recorded with the prompt type
+    # before the provider transport could attach the logical endpoint.
+    "scalping_holding_score": "holding_score",
+}
 
 REASON_EVIDENCE_KEYS = (
     "trend",
@@ -829,6 +834,11 @@ def _stage(value: Any, endpoint: Any = None) -> str:
     return "unknown"
 
 
+def _trace_endpoint(trace: dict[str, Any]) -> str:
+    value = str(trace.get("endpoint") or trace.get("decision_stage") or "").strip()
+    return ENDPOINT_ALIASES.get(value.lower(), value)
+
+
 def _exact_trace_payload_findings(
     *,
     trace: dict[str, Any],
@@ -979,7 +989,7 @@ def build_control_manifest(
     }
     for trace in traces:
         payload_hash = str(trace.get("payload_sha256") or "")
-        endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+        endpoint = _trace_endpoint(trace)
         payload = payload_by_key.get(
             (payload_hash, endpoint),
             payload_by_unique_hash.get(payload_hash, {}),
@@ -1161,7 +1171,7 @@ def _latest_exact_control_prompt_versions(
     payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
     selected: dict[str, tuple[datetime, int, str]] = {}
     for index, trace in enumerate(traces):
-        endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+        endpoint = _trace_endpoint(trace)
         prompt_version = str(trace.get("prompt_version") or "").strip()
         payload_hash = str(trace.get("payload_sha256") or "")
         payload = payload_by_key.get(
@@ -1201,7 +1211,7 @@ def _latest_exact_control_signatures(
     payload_by_key, payload_by_unique_hash = _payload_indexes(payloads)
     selected: dict[str, tuple[datetime, int, dict[str, Any]]] = {}
     for index, trace in enumerate(traces):
-        endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+        endpoint = _trace_endpoint(trace)
         payload_hash = str(trace.get("payload_sha256") or "")
         payload = payload_by_key.get(
             (payload_hash, endpoint),
@@ -1274,7 +1284,7 @@ def annotate_primary_cohort_eligibility(
         else:
             trace = trace_rows[0]
             payload_hash = str(trace.get("payload_sha256") or "")
-            endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+            endpoint = _trace_endpoint(trace)
             payload = payload_by_key.get(
                 (payload_hash, endpoint),
                 payload_by_unique_hash.get(payload_hash, {}),
@@ -5121,7 +5131,7 @@ def prepare_paired_replay_requests(
         trace_id = str(trace.get("decision_trace_id") or "")
         label = label_by_trace.get(trace_id)
         payload_hash = str(trace.get("payload_sha256") or "")
-        endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+        endpoint = _trace_endpoint(trace)
         payload = payload_by_key.get(
             (payload_hash, endpoint),
             payload_by_unique_hash.get(payload_hash),
@@ -5364,7 +5374,7 @@ def recover_same_trace_outcome_labels_from_paired_reports(
             stage = _stage(comparison.get("stage"), trace.get("decision_stage"))
             horizon = PRIMARY_HORIZON_BY_STAGE.get(stage)
             payload_hash = str(trace.get("payload_sha256") or "")
-            endpoint = str(trace.get("endpoint") or trace.get("decision_stage") or "")
+            endpoint = _trace_endpoint(trace)
             payload = payload_by_key.get(
                 (payload_hash, endpoint), payload_by_unique_hash.get(payload_hash)
             )

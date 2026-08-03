@@ -1219,6 +1219,33 @@ def test_no_provider_decision_still_has_trace_without_order_authority(
     assert not trace._outcome_path(trace._date_text()).exists()
 
 
+def test_no_provider_holding_trace_uses_canonical_logical_endpoint(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "action": "HOLD",
+            "provider_called": False,
+            "ai_trace_endpoint_name": "holding_score",
+            "ai_trace_stock_code": "005930",
+            "ai_input_preflight_status": "blocked",
+            "ai_input_preflight_allowed": False,
+        },
+        prompt_type="scalping_holding_score",
+        prompt_version="holding_score_v2",
+        result_source="input_preflight_blocked",
+        provider_called=False,
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["endpoint"] == "holding_score"
+    assert row["prompt_type"] == "scalping_holding_score"
+    assert row["provider_called"] is False
+    assert row["provider_actual"] is None
+
+
 def test_string_false_preflight_contract_cannot_create_outcome_label(
     monkeypatch, tmp_path
 ):

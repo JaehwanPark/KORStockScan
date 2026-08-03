@@ -10,6 +10,18 @@ from src.engine.scalping import ai_decision_quality as quality
 KST = ZoneInfo("Asia/Seoul")
 
 
+def test_legacy_holding_prompt_endpoint_is_consumed_as_holding_score():
+    assert (
+        quality._trace_endpoint(
+            {
+                "endpoint": "scalping_holding_score",
+                "decision_stage": "holding_score",
+            }
+        )
+        == "holding_score"
+    )
+
+
 def test_load_jsonl_reads_verified_gzip_archive(tmp_path):
     plain_path = tmp_path / "pipeline_events_2026-07-29.jsonl"
     with gzip.open(f"{plain_path}.gz", "wt", encoding="utf-8") as handle:

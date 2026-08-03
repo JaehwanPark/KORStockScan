@@ -1307,6 +1307,10 @@ def test_holding_score_preflight_stale_tick_skips_live_ai_call(monkeypatch):
     assert trace_kwargs["result_source"] == "input_preflight_blocked"
     assert trace_kwargs["provider_called"] is False
     assert (
+        trace_kwargs["input_contract_fields"]["ai_trace_endpoint_name"]
+        == "holding_score"
+    )
+    assert (
         trace_kwargs["input_contract_fields"][
             "ai_trace_canonical_context_capture_status"
         ]

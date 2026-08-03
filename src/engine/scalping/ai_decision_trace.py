@@ -1470,7 +1470,12 @@ def record_ai_decision_trace(
                 "ai_input_snapshot_id",
                 "ai_market_snapshot_id",
             ),
-            "endpoint": _optional(merged, "openai_endpoint_name") or prompt_type,
+            "endpoint": _optional(
+                merged,
+                "ai_trace_endpoint_name",
+                "openai_endpoint_name",
+            )
+            or prompt_type,
             "provider_expected": _optional(
                 merged,
                 "holding_context_provider_expected",

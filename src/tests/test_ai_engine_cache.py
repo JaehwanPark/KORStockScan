@@ -447,6 +447,7 @@ def test_disabled_holding_forensic_candidate_does_not_unblock_live_preflight(
 
     assert result["ai_result_source"] == "input_preflight_blocked"
     assert result["provider_called"] is False
+    assert result["ai_trace_endpoint_name"] == "holding_score"
     assert captured["holding_context"] is forensic_context
     assert captured["call_inputs"]["ws_data"] is ws_data
     assert captured["call_inputs"]["position_ctx"] is position_ctx
@@ -3177,6 +3178,7 @@ def test_holding_score_lock_contention_waits_before_neutral_score50(monkeypatch)
     assert result["score"] == 50
     assert result["holding_score_effective_usable"] is False
     assert result["ai_result_source"] == "lock_contention"
+    assert result["ai_trace_endpoint_name"] == "holding_score"
     assert result["ai_fallback_score_50"] is True
     assert result["ai_retry_attempted"] is True
     assert result["ai_retry_result"] == "lock_contention_retry_exhausted"
