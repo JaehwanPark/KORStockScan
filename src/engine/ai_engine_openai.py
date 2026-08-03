@@ -1811,6 +1811,8 @@ class GPTSniperEngine:
                 "STAGE_WAIT": "WAIT",
                 "STAGE_DROP": "DROP",
                 "STAGE-SPECIFIC ACTION=DROP": "DROP",
+                "STAGE-SPECIFIC DROP": "DROP",
+                "STAGE_DECISION_DROP": "DROP",
             }
             normalized_action_alias = non_buy_action_aliases.get(model_action)
             if normalized_action_alias is not None:
@@ -1955,6 +1957,32 @@ class GPTSniperEngine:
                 and evidence_trigger in requirement[0]
                 and bool(valid_reason_code_set & requirement[1])
                 for code in invalid_reason_codes
+            )
+            trigger_state_unconfirmed_is_redundant = invalid_reason_codes == [
+                "trigger_state_unconfirmed"
+            ] and (
+                (
+                    evidence_trigger == "recovery_required"
+                    and "recovery_trigger_required" in valid_reason_code_set
+                )
+                or (
+                    evidence_trigger in {"failed", "not_applicable"}
+                    and bool(
+                        valid_reason_code_set
+                        & {
+                            "ask_wall_adverse",
+                            "distribution_adverse",
+                            "edge_absent",
+                            "liquidity_adverse",
+                            "no_positive_edge",
+                            "tape_adverse",
+                        }
+                    )
+                )
+            )
+            invalid_reason_codes_are_redundant = (
+                invalid_reason_codes_are_redundant
+                or trigger_state_unconfirmed_is_redundant
             )
             if (
                 "reason_codes_invalid" in contract_errors

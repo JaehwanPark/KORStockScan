@@ -1345,12 +1345,14 @@ def load_pipeline_price_and_lifecycle_rows(
         venue = str(
             fields.get("effective_venue")
             or fields.get("ai_market_snapshot_effective_venue")
+            or fields.get("holding_context_venue")
             or fields.get("market_venue")
             or ""
         ).upper()
         session = str(
             fields.get("session_bucket")
             or fields.get("ai_market_snapshot_session_bucket")
+            or fields.get("holding_context_session")
             or fields.get("market_session_bucket")
             or fields.get("rising_missed_market_session_bucket")
             or ""
@@ -1742,6 +1744,8 @@ def _pipeline_event_price_source_quality(
     freshness evidence and keeps stale/conflicted observations fail-closed.
     """
 
+    if _holding_pipeline_price_contract_fresh(fields):
+        return "event_observed_holding_exact"
     candidate = {"source_quality": explicit_source_quality}
     if _price_source_usable(candidate):
         return explicit_source_quality
@@ -1778,6 +1782,67 @@ def _pipeline_event_price_source_quality(
     return "event_observed" if affirmative_freshness else explicit_source_quality
 
 
+def _holding_pipeline_price_contract_fresh(fields: dict[str, Any]) -> bool:
+    """Accept only evaluated holding rows with a complete fresh broker/BBO contract."""
+
+    if str(fields.get("ai_prompt_type") or "").strip() != "scalping_holding_score":
+        return False
+    if (
+        str(fields.get("holding_context_schema") or "").strip()
+        != HOLDING_CONTEXT_SCHEMA
+    ):
+        return False
+    if str(fields.get("ai_result_source") or "").strip().lower() != "live":
+        return False
+    if (
+        str(fields.get("ai_decision_evaluation_status") or "").strip().lower()
+        != "evaluated"
+    ):
+        return False
+    if _bool(fields.get("holding_score_preflight_blocked")):
+        return False
+    if str(
+        fields.get("holding_score_preflight_source_quality") or ""
+    ).strip().lower() not in {"fresh", "fresh_consistent", "partial"}:
+        return False
+    if str(
+        fields.get("holding_context_source_quality_status") or ""
+    ).strip().lower() not in {"fresh", "fresh_consistent", "partial"}:
+        return False
+    if fields.get("holding_context_blockers") not in ([], (), "", "[]"):
+        return False
+    candle_route_conflicts = _number(
+        fields.get("holding_context_candle_route_conflict_count")
+    )
+    if candle_route_conflicts is None or candle_route_conflicts != 0:
+        return False
+    if not all(
+        _bool(fields.get(key))
+        for key in (
+            "holding_context_bbo_fresh",
+            "holding_context_position_valid",
+            "holding_context_order_consistent",
+        )
+    ):
+        return False
+    if "quote_stale" not in fields or "tick_context_stale" not in fields:
+        return False
+    if _bool(fields.get("quote_stale")) or _bool(fields.get("tick_context_stale")):
+        return False
+    quote_age_ms = _number(
+        fields.get("holding_context_quote_age_ms")
+        if fields.get("holding_context_quote_age_ms") is not None
+        else fields.get("quote_age_ms")
+    )
+    best_bid = _number(fields.get("holding_context_best_bid"))
+    return bool(
+        quote_age_ms is not None
+        and 0 <= quote_age_ms <= 3_000
+        and best_bid is not None
+        and best_bid > 0
+    )
+
+
 def _pipeline_event_observed_price(fields: dict[str, Any]) -> float | None:
     """Select the price owned by the same freshness fact used for qualification."""
 
@@ -1790,7 +1855,9 @@ def _pipeline_event_observed_price(fields: dict[str, Any]) -> float | None:
         .strip()
         .lower()
     )
-    if _bool(fields.get("scanner_promotion_price_ws_fresh")) and not _bool(
+    if _holding_pipeline_price_contract_fresh(fields):
+        selected_keys = ("holding_context_best_bid",)
+    elif _bool(fields.get("scanner_promotion_price_ws_fresh")) and not _bool(
         fields.get("scanner_promotion_price_conflict")
     ):
         selected_keys = (

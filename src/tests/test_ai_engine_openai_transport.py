@@ -3592,7 +3592,12 @@ def test_decision_quality_v2_7_repairs_trusted_wait_positive_downside_sign():
 
 @pytest.mark.parametrize(
     "model_action",
-    ["STAGE_DROP", "STAGE-SPECIFIC ACTION=DROP"],
+    [
+        "STAGE_DROP",
+        "STAGE-SPECIFIC ACTION=DROP",
+        "STAGE-SPECIFIC DROP",
+        "STAGE_DECISION_DROP",
+    ],
 )
 def test_decision_quality_v2_7_repairs_known_stage_drop_aliases(model_action):
     engine = _build_engine()
@@ -3624,6 +3629,69 @@ def test_decision_quality_v2_7_repairs_known_stage_drop_aliases(model_action):
     assert result["decision_quality_contract_status"] == "pass"
     assert result["decision_quality_contract_repair_codes"] == [
         "non_buy_stage_drop_action_alias_normalized"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("action", "edge_state", "trigger", "reason_codes"),
+    [
+        (
+            "WAIT",
+            "EDGE",
+            "recovery_required",
+            [
+                "edge_positive",
+                "recovery_trigger_required",
+                "trigger_state_unconfirmed",
+            ],
+        ),
+        (
+            "DROP",
+            "NO_EDGE",
+            "not_applicable",
+            [
+                "no_positive_edge",
+                "distribution_adverse",
+                "trigger_state_unconfirmed",
+            ],
+        ),
+    ],
+)
+def test_decision_quality_v2_7_removes_redundant_unconfirmed_trigger_token(
+    action, edge_state, trigger, reason_codes
+):
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": edge_state,
+            "action": action,
+            "expected_upside_pct": 0.8 if action == "WAIT" else 0.1,
+            "expected_downside_pct": -0.8,
+            "confidence": 68,
+            "reason_codes": reason_codes,
+            "evidence": {
+                "trend": "supportive" if action == "WAIT" else "adverse",
+                "liquidity": "mixed" if action == "WAIT" else "adverse",
+                "tape": "supportive" if action == "WAIT" else "adverse",
+                "risk": "medium" if action == "WAIT" else "high",
+                "uncertainty": "medium",
+                "setup": "reversal" if action == "WAIT" else "no_setup",
+                "positive_edge": "moderate" if action == "WAIT" else "none",
+                "adverse_risk": "high",
+                "trigger": trigger,
+            },
+        },
+        exact_payload=(
+            _trusted_supportive_wait_exact_payload() if action == "WAIT" else {}
+        ),
+    )
+
+    assert result["action"] == action
+    assert result["decision_quality_model_action"] == action
+    assert result["decision_quality_contract_status"] == "pass"
+    assert "trigger_state_unconfirmed" not in result["reason_codes"]
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_invalid_reason_codes_removed"
     ]
 
 

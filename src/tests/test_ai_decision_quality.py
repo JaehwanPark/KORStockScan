@@ -5,6 +5,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from src.engine.scalping import ai_decision_quality as quality
 
 KST = ZoneInfo("Asia/Seoul")
@@ -1661,6 +1663,105 @@ def test_pipeline_loader_qualifies_fresh_contract_price_and_normalizes_session()
         },
         prices[1],
     )
+
+
+def test_pipeline_loader_qualifies_fresh_evaluated_holding_exact_bid():
+    prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+        [
+            {
+                "emitted_at": "2026-08-03T14:26:32.790850",
+                "stock_code": "001740",
+                "stage": "ai_holding_review",
+                "fields": {
+                    "ai_prompt_type": "scalping_holding_score",
+                    "holding_context_schema": quality.HOLDING_CONTEXT_SCHEMA,
+                    "ai_result_source": "live",
+                    "ai_decision_evaluation_status": "evaluated",
+                    "holding_score_preflight_blocked": False,
+                    "holding_score_preflight_source_quality": "fresh",
+                    "holding_context_venue": "KRX",
+                    "holding_context_session": "krx_regular",
+                    "holding_context_quote_age_ms": 823.769,
+                    "holding_context_bbo_fresh": True,
+                    "holding_context_source_quality_status": "partial",
+                    "holding_context_blockers": "[]",
+                    "holding_context_candle_route_conflict_count": 0,
+                    "holding_context_position_valid": True,
+                    "holding_context_order_consistent": True,
+                    "holding_context_best_bid": 7040,
+                    "holding_context_best_ask": 7090,
+                    "quote_stale": False,
+                    "tick_context_stale": False,
+                },
+            }
+        ]
+    )
+
+    assert prices == [
+        {
+            "timestamp": "2026-08-03T14:26:32+09:00",
+            "stock_code": "001740",
+            "price": 7040.0,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "event_observed_holding_exact",
+            "high": 7040.0,
+            "low": 7040.0,
+            "close": 7040.0,
+        }
+    ]
+    assert lifecycle == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"holding_context_schema": "legacy_holding_context"},
+        {"holding_score_preflight_blocked": True},
+        {"holding_context_blockers": '["route_conflict"]'},
+        {"holding_context_candle_route_conflict_count": 1},
+        {"holding_context_position_valid": False},
+        {"holding_context_order_consistent": False},
+        {"holding_context_quote_age_ms": 3000.001},
+        {"quote_stale": True},
+        {"tick_context_stale": True},
+    ],
+)
+def test_pipeline_loader_rejects_blocked_or_stale_holding_price(overrides):
+    fields = {
+        "ai_prompt_type": "scalping_holding_score",
+        "holding_context_schema": quality.HOLDING_CONTEXT_SCHEMA,
+        "ai_result_source": "live",
+        "ai_decision_evaluation_status": "evaluated",
+        "holding_score_preflight_blocked": False,
+        "holding_score_preflight_source_quality": "fresh",
+        "holding_context_venue": "KRX",
+        "holding_context_session": "krx_regular",
+        "holding_context_quote_age_ms": 800,
+        "holding_context_bbo_fresh": True,
+        "holding_context_source_quality_status": "partial",
+        "holding_context_blockers": "[]",
+        "holding_context_candle_route_conflict_count": 0,
+        "holding_context_position_valid": True,
+        "holding_context_order_consistent": True,
+        "holding_context_best_bid": 7040,
+        "quote_stale": False,
+        "tick_context_stale": False,
+    }
+    fields.update(overrides)
+
+    prices, _lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+        [
+            {
+                "emitted_at": "2026-08-03T14:26:32+09:00",
+                "stock_code": "001740",
+                "stage": "ai_holding_review",
+                "fields": fields,
+            }
+        ]
+    )
+
+    assert prices == []
 
 
 def test_pipeline_loader_never_treats_unrealized_holding_pnl_as_realized():
