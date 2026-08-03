@@ -1202,6 +1202,54 @@ def test_no_provider_decision_still_has_trace_without_order_authority(
     assert row["actual_order_authority"] is False
     assert row["broker_order_forbidden"] is True
     assert row["venue_consistent"] is None
+    assert row["outcome_label_eligible"] is False
+    assert row["outcome_label_exclusion_reasons"] == [
+        "input_preflight_blocked",
+        "input_preflight_not_allowed",
+        "provider_not_called",
+    ]
+    assert fields["ai_decision_outcome_label_status"] == (
+        "not_applicable_input_preflight_blocked"
+    )
+    assert fields["ai_decision_outcome_label_exclusion_reasons"] == [
+        "input_preflight_blocked",
+        "input_preflight_not_allowed",
+        "provider_not_called",
+    ]
+    assert not trace._outcome_path(trace._date_text()).exists()
+
+
+def test_string_false_preflight_contract_cannot_create_outcome_label(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    fields = trace.record_ai_decision_trace(
+        {
+            "action": "EXIT",
+            "provider_called": False,
+            "ai_market_snapshot_stock_code": "005930",
+            "ai_input_preflight_status": "partial",
+            "ai_input_preflight_allowed": "False",
+        },
+        prompt_type="holding_exit_flow",
+        prompt_version="flow_v1",
+        result_source="input_preflight_blocked",
+        provider_called=False,
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["input_preflight_allowed"] is False
+    assert row["outcome_label_eligible"] is False
+    assert row["outcome_label_exclusion_reasons"] == [
+        "input_preflight_blocked",
+        "input_preflight_not_allowed",
+        "provider_not_called",
+    ]
+    assert fields["ai_decision_outcome_label_status"] == (
+        "not_applicable_input_preflight_blocked"
+    )
+    assert not trace._outcome_path(trace._date_text()).exists()
 
 
 def test_final_trace_redacts_provider_echoed_credentials(monkeypatch, tmp_path):
@@ -1251,6 +1299,9 @@ def test_rejected_physical_attempt_has_trace_without_outcome_label(
 
     trace_row = _rows(trace._trace_path(trace._date_text()))[0]
     assert trace_row["outcome_label_eligible"] is False
+    assert trace_row["outcome_label_exclusion_reasons"] == [
+        "explicit_ai_decision_outcome_ineligible"
+    ]
     assert trace_row["attempt"] == 1
     assert trace_row["attempt_final"] is False
     assert trace_row["semantic_errors"] == ["reason_non_ascii"]
@@ -1458,7 +1509,7 @@ def test_cache_trace_separates_provider_call_from_decision_origin(
 ):
     _enable(monkeypatch, tmp_path)
 
-    trace.record_ai_decision_trace(
+    fields = trace.record_ai_decision_trace(
         {
             "action": "WAIT",
             "provider_called": False,
@@ -1475,6 +1526,38 @@ def test_cache_trace_separates_provider_call_from_decision_origin(
     row = _rows(trace._trace_path(trace._date_text()))[0]
     assert row["provider_actual"] is None
     assert row["provider_decision_origin"] == "openai"
+    assert row["outcome_label_eligible"] is False
+    assert row["outcome_label_exclusion_reasons"] == ["provider_not_called"]
+    assert fields["ai_decision_outcome_label_status"] == (
+        "not_applicable_provider_not_called"
+    )
+    assert not trace._outcome_path(trace._date_text()).exists()
+
+
+def test_string_false_provider_flag_cannot_create_outcome_label(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+
+    fields = trace.record_ai_decision_trace(
+        {
+            "action": "WAIT",
+            "provider_called": "False",
+            "cache_hit": True,
+            "ai_trace_stock_code": "005930",
+        },
+        prompt_type="scalping_entry",
+        prompt_version="entry_v1",
+        result_source="cache",
+    )
+
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["provider_called"] is False
+    assert row["outcome_label_eligible"] is False
+    assert fields["ai_decision_outcome_label_status"] == (
+        "not_applicable_provider_not_called"
+    )
+    assert not trace._outcome_path(trace._date_text()).exists()
 
 
 def test_bedrock_trace_separates_requested_and_actual_model(monkeypatch, tmp_path):

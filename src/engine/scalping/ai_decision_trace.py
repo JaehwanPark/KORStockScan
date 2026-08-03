@@ -554,6 +554,19 @@ def _safe_number(value: Any) -> int | float | None:
     return int(number) if number.is_integer() else number
 
 
+def _safe_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
 def _normalize_stock_code(value: Any) -> str:
     text = str(value or "").strip().upper()
     match = re.search(r"(?<!\d)(\d{6})(?!\d)", text)
@@ -1317,11 +1330,21 @@ def record_ai_decision_trace(
         else:
             request_capture_status = "missing"
         if provider_called is None:
-            provider_called = bool(
+            raw_provider_called = (
                 payload.get("provider_called")
                 if "provider_called" in payload
                 else str(result_source or "") == "live"
             )
+            normalized_provider_called = _safe_bool(raw_provider_called)
+            provider_called = (
+                normalized_provider_called
+                if normalized_provider_called is not None
+                else bool(raw_provider_called)
+            )
+        else:
+            normalized_provider_called = _safe_bool(provider_called)
+            if normalized_provider_called is not None:
+                provider_called = normalized_provider_called
         timeout_like = _timeout_like_decision_failure(merged, result_source)
         if (
             timeout_like
@@ -1334,6 +1357,36 @@ def record_ai_decision_trace(
             and str(result_source or "").strip().lower()
             in {"timeout", "exception", "error"}
             else str(result_source or "-")
+        )
+        preflight_status = str(
+            _optional(merged, "ai_input_preflight_status") or ""
+        ).strip().lower()
+        preflight_allowed = (
+            _safe_bool(merged.get("ai_input_preflight_allowed"))
+            if "ai_input_preflight_allowed" in merged
+            else None
+        )
+        outcome_label_exclusion_reasons: list[str] = []
+        if not bool(provider_called):
+            outcome_label_exclusion_reasons.append("provider_not_called")
+        requested_outcome_eligible = _safe_bool(
+            merged.get("ai_decision_outcome_eligible", True)
+        )
+        if requested_outcome_eligible is False:
+            outcome_label_exclusion_reasons.append(
+                "explicit_ai_decision_outcome_ineligible"
+            )
+        if preflight_allowed is False:
+            outcome_label_exclusion_reasons.append("input_preflight_not_allowed")
+        if preflight_status in {
+            "blocked",
+            "fail",
+            "failed",
+            "source_quality_blocked",
+        } or normalized_result_source == "input_preflight_blocked":
+            outcome_label_exclusion_reasons.append("input_preflight_blocked")
+        outcome_label_exclusion_reasons = sorted(
+            set(outcome_label_exclusion_reasons)
         )
         stage = _decision_stage(prompt_type, decision_stage)
         reference_price_type = _optional(merged, "ai_trace_reference_price_type")
@@ -1683,11 +1736,7 @@ def record_ai_decision_trace(
             "input_preflight_mode": _optional(
                 merged, "ai_input_runtime_preflight_mode"
             ),
-            "input_preflight_allowed": (
-                bool(merged.get("ai_input_preflight_allowed"))
-                if "ai_input_preflight_allowed" in merged
-                else None
-            ),
+            "input_preflight_allowed": preflight_allowed,
             "position_reconciliation_mode": _optional(
                 merged, "ai_input_preflight_position_reconciliation_mode"
             ),
@@ -1725,9 +1774,8 @@ def record_ai_decision_trace(
             "target_pct": _safe_number(_optional(merged, "ai_trace_target_pct")),
             "adverse_pct": _safe_number(_optional(merged, "ai_trace_adverse_pct")),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
-            "outcome_label_eligible": bool(
-                merged.get("ai_decision_outcome_eligible", True)
-            ),
+            "outcome_label_eligible": not outcome_label_exclusion_reasons,
+            "outcome_label_exclusion_reasons": outcome_label_exclusion_reasons,
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
@@ -1832,8 +1880,23 @@ def record_ai_decision_trace(
             "ai_decision_outcome_label_status": (
                 "pending"
                 if trace_row["outcome_label_eligible"]
-                else "not_applicable_rejected_attempt"
+                else (
+                    "not_applicable_input_preflight_blocked"
+                    if any(
+                        reason.startswith("input_preflight_")
+                        for reason in trace_row["outcome_label_exclusion_reasons"]
+                    )
+                    else (
+                        "not_applicable_provider_not_called"
+                        if "provider_not_called"
+                        in trace_row["outcome_label_exclusion_reasons"]
+                        else "not_applicable_rejected_attempt"
+                    )
+                )
             ),
+            "ai_decision_outcome_label_exclusion_reasons": trace_row[
+                "outcome_label_exclusion_reasons"
+            ],
         }
     except Exception as exc:
         log_error(f"[AI_DECISION_TRACE] decision append failed: {exc}")
