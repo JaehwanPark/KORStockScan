@@ -1203,6 +1203,74 @@ def test_real_pre_submit_ws_snapshot_refresh_uses_fresh_ws_manager_snapshot(
     assert refreshed["pre_submit_ws_snapshot_refresh_latest_price"] == 10_020
 
 
+def test_entry_opportunity_recheck_refresh_uses_post_ai_quote_and_ticks(monkeypatch):
+    refreshed_ws = {
+        "curr": 10_020,
+        "last_ws_update_ts": time.time(),
+        "recent_trade_ticks": [{"price": 10_020, "time": "120001"}],
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *args: (
+            refreshed_ws,
+            {
+                "pre_submit_ws_snapshot_refresh_applied": True,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+                "pre_submit_ws_snapshot_refresh_age_ms": 42.0,
+                "pre_submit_ws_snapshot_refresh_best_bid": 10_010,
+                "pre_submit_ws_snapshot_refresh_best_ask": 10_020,
+                "pre_submit_ws_snapshot_refresh_latest_price": 10_020,
+            },
+        ),
+    )
+
+    ws, ticks, fields = state_handlers._refresh_entry_opportunity_recheck_inputs(
+        "123456",
+        "SCALPING",
+        {"curr": 10_000},
+        [{"price": 10_000, "time": "115958"}],
+    )
+
+    assert ws is refreshed_ws
+    assert ticks == refreshed_ws["recent_trade_ticks"]
+    assert fields["entry_opportunity_recheck_quote_refresh_applied"] is True
+    assert fields["entry_opportunity_recheck_quote_refresh_age_ms"] == 42.0
+    assert (
+        fields["entry_opportunity_recheck_tick_refresh_source"]
+        == "refreshed_ws_recent_trade_ticks"
+    )
+
+
+def test_entry_opportunity_recheck_refresh_does_not_pair_new_quote_with_old_ticks(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *args: (
+            {"curr": 10_020, "last_ws_update_ts": time.time()},
+            {
+                "pre_submit_ws_snapshot_refresh_applied": True,
+                "pre_submit_ws_snapshot_refresh_reason": "latest_ws_snapshot_fresh",
+            },
+        ),
+    )
+
+    _, ticks, fields = state_handlers._refresh_entry_opportunity_recheck_inputs(
+        "123456",
+        "SCALPING",
+        {"curr": 10_000},
+        [{"price": 10_000, "time": "115958"}],
+    )
+
+    assert ticks == []
+    assert (
+        fields["entry_opportunity_recheck_tick_refresh_source"]
+        == "refreshed_ws_ticks_missing"
+    )
+
+
 def test_pre_submit_effective_quote_fields_mark_stale_ai_recovered_by_ws_refresh():
     fields = state_handlers._pre_submit_effective_quote_log_fields(
         latency_gate={

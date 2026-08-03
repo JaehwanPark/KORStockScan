@@ -97,8 +97,10 @@ def test_submit_authority_refreshes_scout_parent_to_current_wait_probe() -> None
     )
 
     assert refreshed["rising_missed_scout_parent_ai_action"] == "WAIT"
+    assert refreshed["rising_missed_scout_parent_ai_score"] == 65
     assert fields["scout_ai_parent_decision_trace_id"] == "trace-wait-probe"
     assert fields["scout_ai_parent_snapshot_id"] == "snapshot-wait-probe"
+    assert fields["scout_ai_parent_score"] == 65
     assert fields["scout_ai_parent_probe_intent"] is True
     assert fields["scout_ai_parent_probe_intent_status"] == "eligible_wait_probe"
 

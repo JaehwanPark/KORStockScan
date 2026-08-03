@@ -1765,7 +1765,7 @@ class GPTSniperEngine:
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
         adapter_version = (
-            "decision_quality_v2_7_probe_entry_v6"
+            "decision_quality_v2_7_probe_entry_v7"
             if probe_prompt_selected
             else "decision_quality_v2_7_entry_v5"
         )
@@ -2082,6 +2082,48 @@ class GPTSniperEngine:
                 if aligned_reason_codes != repaired.get("reason_codes"):
                     repaired["reason_codes"] = aligned_reason_codes
                     repair_codes.append("non_buy_conflicting_trigger_reason_removed")
+            if (
+                "entry_insufficient_evidence_invalid" in contract_errors
+                and str(repaired.get("action") or "").strip().upper() == "WAIT"
+                and str(repaired.get("edge_state") or "").strip().upper()
+                == "INSUFFICIENT_DATA"
+            ):
+                for key in ("positive_edge", "adverse_risk", "trigger", "setup"):
+                    evidence[key] = "insufficient"
+                repaired["evidence"] = evidence
+                repair_codes.append("non_buy_insufficient_evidence_aligned")
+            wait_reason_codes = [
+                str(code) for code in repaired.get("reason_codes") or []
+            ]
+            if (
+                str(repaired.get("action") or "").strip().upper() == "WAIT"
+                and str(repaired.get("edge_state") or "").strip().upper() == "EDGE"
+                and str(evidence.get("trigger") or "").strip().lower() == "confirmed"
+                and "structural_edge_without_trigger" in wait_reason_codes
+                and bool(
+                    {
+                        "entry_trigger_reason_evidence_conflict",
+                        "entry_wait_requires_recovery_trigger",
+                        "entry_trusted_supportive_trigger_misclassified",
+                    }
+                    & set(contract_errors)
+                )
+            ):
+                evidence["trigger"] = "recovery_required"
+                repaired["evidence"] = evidence
+                wait_reason_codes = [
+                    code
+                    for code in wait_reason_codes
+                    if code
+                    not in {
+                        "recovery_trigger_confirmed",
+                        "recovery_trigger_failed",
+                    }
+                ]
+                if "recovery_trigger_required" not in wait_reason_codes:
+                    wait_reason_codes.append("recovery_trigger_required")
+                repaired["reason_codes"] = wait_reason_codes[:8]
+                repair_codes.append("non_buy_wait_recovery_trigger_aligned")
             if (
                 "evidence_tape_invalid" in contract_errors
                 and str(repaired.get("action") or "").strip().upper()

@@ -48577,6 +48577,66 @@ def _extract_buy_recovery_probe_features(
     }
 
 
+def _refresh_entry_opportunity_recheck_inputs(
+    code: str,
+    strategy: str,
+    ws_data: dict | None,
+    recent_ticks: list | None,
+) -> tuple[dict, list, dict]:
+    """Rebase a post-AI recheck on the latest usable WS snapshot.
+
+    The Entry AI response may take several seconds.  Reusing the pre-call quote
+    and tape here makes a healthy live feed look stale and defeats the bounded
+    recheck before its existing submit guards can evaluate it.  This helper
+    deliberately reuses the pre-submit freshness owner; an unavailable/stale
+    refresh remains fail-closed, and refreshed quotes never inherit old ticks.
+    """
+
+    refreshed_ws, refresh_fields = _pre_submit_refresh_real_ws_snapshot(
+        code,
+        ws_data,
+        strategy,
+    )
+    refresh_applied = bool(refresh_fields.get("pre_submit_ws_snapshot_refresh_applied"))
+    refreshed_ticks = refreshed_ws.get("recent_trade_ticks")
+    if isinstance(refreshed_ticks, list) and refreshed_ticks:
+        effective_ticks = list(refreshed_ticks)
+        tick_source = "refreshed_ws_recent_trade_ticks"
+    elif refresh_applied:
+        # A fresh quote must not be paired with the pre-AI tape.  Empty ticks
+        # keep the downstream microstructure quality guard fail-closed.
+        effective_ticks = []
+        tick_source = "refreshed_ws_ticks_missing"
+    else:
+        effective_ticks = list(recent_ticks or [])
+        tick_source = "original_call_ticks_no_refresh"
+
+    fields = {
+        "entry_opportunity_recheck_quote_refresh_applied": refresh_applied,
+        "entry_opportunity_recheck_quote_refresh_reason": refresh_fields.get(
+            "pre_submit_ws_snapshot_refresh_reason", "unknown"
+        ),
+        "entry_opportunity_recheck_quote_refresh_age_ms": refresh_fields.get(
+            "pre_submit_ws_snapshot_refresh_age_ms"
+        ),
+        "entry_opportunity_recheck_quote_refresh_best_bid": refresh_fields.get(
+            "pre_submit_ws_snapshot_refresh_best_bid", 0
+        ),
+        "entry_opportunity_recheck_quote_refresh_best_ask": refresh_fields.get(
+            "pre_submit_ws_snapshot_refresh_best_ask", 0
+        ),
+        "entry_opportunity_recheck_quote_refresh_latest_price": refresh_fields.get(
+            "pre_submit_ws_snapshot_refresh_latest_price", 0
+        ),
+        "entry_opportunity_recheck_tick_refresh_source": tick_source,
+        "entry_opportunity_recheck_tick_refresh_count": len(effective_ticks),
+        "entry_opportunity_recheck_freshness_basis": (
+            "post_ai_latest_ws_manager_or_current_fresh_snapshot"
+        ),
+    }
+    return refreshed_ws, effective_ticks, fields
+
+
 def _buy_recovery_probe_tick_pressure_usable(probe: dict | None) -> bool:
     probe = probe if isinstance(probe, dict) else {}
     return bool(
@@ -53966,6 +54026,10 @@ def _handle_watching_strategy_branch(
                                     else []
                                 ),
                             )
+                            if trusted_result:
+                                # Keep scout/recheck attribution on the exact AI
+                                # decision that just became runtime authority.
+                                _refresh_rising_missed_scout_ai_parent_provenance(stock)
                             feature_probe = _extract_buy_recovery_probe_features(
                                 ai_engine,
                                 ws_data,
@@ -55464,10 +55528,20 @@ def _handle_watching_strategy_branch(
                 if blocked_ai_score_candidate and entry_score_role_gate.get(
                     "entry_score_usable_for_recheck"
                 ):
-                    recheck_feature_probe = _extract_buy_recovery_probe_features(
-                        ai_engine,
+                    (
+                        recheck_ws_data,
+                        recheck_recent_ticks,
+                        recheck_refresh_fields,
+                    ) = _refresh_entry_opportunity_recheck_inputs(
+                        code,
+                        strategy,
                         ws_data,
                         recent_ticks,
+                    )
+                    recheck_feature_probe = _extract_buy_recovery_probe_features(
+                        ai_engine,
+                        recheck_ws_data,
+                        recheck_recent_ticks,
                         recent_candles,
                     )
                     recheck_micro_guard = _score65_74_recovery_probe_micro_guard(
@@ -55496,7 +55570,7 @@ def _handle_watching_strategy_branch(
                         if isinstance((ai_decision or {}).get("evidence"), dict)
                         else {}
                     )
-                    ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
+                    ws_age_sec = _get_ws_snapshot_age_sec(recheck_ws_data)
                     ws_age_ms = (
                         int(round(float(ws_age_sec) * 1000.0))
                         if ws_age_sec is not None
@@ -55509,7 +55583,7 @@ def _handle_watching_strategy_branch(
                         ai_score=current_ai_score,
                         ai_action=current_ai_action,
                         ws_age_ms=ws_age_ms,
-                        latency_state=(ws_data or {}).get("latency_state"),
+                        latency_state=(recheck_ws_data or {}).get("latency_state"),
                         source_stage="blocked_ai_score",
                         source_reason="entry_policy_no_buy_score_prior",
                         ai_contract_status=(ai_decision or {}).get(
@@ -55550,6 +55624,7 @@ def _handle_watching_strategy_branch(
                             "entry_opportunity_recheck_large_sell_print": _truthy_field(
                                 (recheck_feature_probe or {}).get("large_sell_print")
                             ),
+                            **recheck_refresh_fields,
                         },
                         state=_ENTRY_OPPORTUNITY_RECHECK_STATE,
                         today=now_dt.date().isoformat(),

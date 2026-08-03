@@ -2874,7 +2874,7 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
     assert result["entry_probe_intent_actual_order_submitted"] is False
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v6"
+        == "decision_quality_v2_7_probe_entry_v7"
     )
 
 
@@ -3470,6 +3470,88 @@ def _trusted_supportive_wait_exact_payload(*, ask_wall: bool = False):
             }
         },
     }
+
+
+def test_decision_quality_v2_7_repairs_observed_insufficient_wait_evidence():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "INSUFFICIENT_DATA",
+            "action": "WAIT",
+            "expected_upside_pct": None,
+            "expected_downside_pct": None,
+            "confidence": 48,
+            "reason_codes": [
+                "insufficient_core_data",
+                "tape_sample_insufficient",
+                "completed_bars_missing",
+                "source_stale",
+            ],
+            "evidence": {
+                "trend": "insufficient",
+                "liquidity": "adverse",
+                "tape": "insufficient",
+                "risk": "high",
+                "uncertainty": "high",
+                "setup": "insufficient",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "insufficient",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["entry_probe_intent"] is False
+    assert result["evidence"]["positive_edge"] == "insufficient"
+    assert result["evidence"]["adverse_risk"] == "insufficient"
+    assert result["decision_quality_model_evidence"]["positive_edge"] == "none"
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_insufficient_evidence_aligned"
+    ]
+
+
+def test_decision_quality_v2_7_repairs_observed_wait_trigger_contradiction():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "EDGE",
+            "action": "WAIT",
+            "expected_upside_pct": 1.8,
+            "expected_downside_pct": -1.0,
+            "confidence": 62,
+            "reason_codes": [
+                "structural_edge_without_trigger",
+                "liquidity_adverse",
+                "risk_reward_unfavorable",
+            ],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "adverse",
+                "tape": "supportive",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "continuation",
+                "positive_edge": "moderate",
+                "adverse_risk": "high",
+                "trigger": "confirmed",
+            },
+        },
+        exact_payload=_trusted_supportive_wait_exact_payload(),
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["evidence"]["trigger"] == "recovery_required"
+    assert "recovery_trigger_required" in result["reason_codes"]
+    assert result["entry_probe_intent"] is True
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_wait_recovery_trigger_aligned"
+    ]
 
 
 def test_decision_quality_v2_7_keeps_trusted_supportive_wait_probe_candidate():
@@ -4292,7 +4374,7 @@ def test_decision_quality_v2_7_completes_adverse_distribution_non_buy_reason():
     ]
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v6"
+        == "decision_quality_v2_7_probe_entry_v7"
     )
 
 
@@ -4379,7 +4461,7 @@ def test_decision_quality_v2_7_repairs_non_buy_reason_code_conflict():
     ]
     assert (
         result["decision_quality_live_adapter"]
-        == "decision_quality_v2_7_probe_entry_v6"
+        == "decision_quality_v2_7_probe_entry_v7"
     )
 
 
@@ -4475,7 +4557,7 @@ def test_decision_quality_v2_7_repairs_stage_wait_alias_without_buy_authority():
         "non_buy_stage_wait_edge_strength_aligned",
     ]
     assert result["decision_quality_live_adapter"] == (
-        "decision_quality_v2_7_probe_entry_v6"
+        "decision_quality_v2_7_probe_entry_v7"
     )
 
 
