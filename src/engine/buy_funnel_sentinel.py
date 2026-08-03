@@ -38,6 +38,7 @@ ENTRY_STAGES = {
     "order_bundle_submitted",
 }
 HOLDING_STAGES = {"holding_started"}
+SOURCE_HANDOFF_STAGES = {"prev_close_gainer_entry_ai_handoff"}
 UPSTREAM_BLOCK_STAGES = {
     "blocked_ai_score",
     "ai_score_50_buy_hold_override",
@@ -86,8 +87,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 5
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 7
+EVENT_CACHE_SCHEMA_VERSION = 6
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 8
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -273,6 +274,7 @@ def _payload_to_cache_row(
     if not (
         stage in ENTRY_STAGES
         or stage in HOLDING_STAGES
+        or stage in SOURCE_HANDOFF_STAGES
         or stage in PROBE_BUNDLE_LIFECYCLE_STAGES
         or stage in AI_TERMINAL_ATTRIBUTION_STAGES
         or stage in BLOCKER_STAGES
@@ -500,6 +502,55 @@ def _attempt_key(event: PipelineEvent) -> str:
     if event.stock_code:
         return f"code:{event.stock_code}"
     return f"name:{event.stock_name}"
+
+
+def _stage_unique_key(event: PipelineEvent) -> str:
+    """Use producer-owned promotion identity for source-handoff funnel rows."""
+
+    if event.stage in SOURCE_HANDOFF_STAGES:
+        counting_status = _safe_str(
+            event.fields.get("market_gainer_handoff_counting_status")
+        )
+        counting_key = _safe_str(event.fields.get("market_gainer_handoff_counting_key"))
+        if counting_status == "first_unique_promotion_handoff" and counting_key:
+            return f"scanner_promotion:{counting_key}"
+    return _attempt_key(event)
+
+
+def _market_gainer_handoff_summary(events: list[PipelineEvent]) -> dict[str, Any]:
+    handoffs = [event for event in events if event.stage in SOURCE_HANDOFF_STAGES]
+    proven_keys = [
+        _safe_str(event.fields.get("market_gainer_handoff_counting_key"))
+        for event in handoffs
+        if _safe_str(event.fields.get("market_gainer_handoff_counting_status"))
+        == "first_unique_promotion_handoff"
+        and _safe_str(event.fields.get("market_gainer_handoff_counting_key"))
+    ]
+    unique_keys = set(proven_keys)
+    attempt_only_count = sum(
+        1
+        for event in handoffs
+        if _safe_str(event.fields.get("market_gainer_handoff_counting_status"))
+        != "first_unique_promotion_handoff"
+    )
+    return {
+        "raw_event_count": len(handoffs),
+        "unique_scanner_promotion_count": len(unique_keys),
+        "duplicate_proven_promotion_event_count": max(
+            0,
+            len(proven_keys) - len(unique_keys),
+        ),
+        "promotion_id_missing_attempt_count": attempt_only_count,
+        "counting_status": (
+            "unique_promotion_count_ready"
+            if handoffs and attempt_only_count == 0
+            else (
+                "promotion_id_gap_present"
+                if handoffs
+                else "no_natural_source_handoff_sample"
+            )
+        ),
+    }
 
 
 def _is_blocker_stage(stage: str) -> bool:
@@ -920,7 +971,11 @@ def _summarize_events(
                 summary_blocker_counter[label] += count
     stage_unique_counts = {
         stage: len(
-            {_attempt_key(event) for event in lossless_scoped if event.stage == stage}
+            {
+                _stage_unique_key(event)
+                for event in lossless_scoped
+                if event.stage == stage
+            }
         )
         for stage in sorted(set(stage_event_counts) | ENTRY_STAGES | HOLDING_STAGES)
     }
@@ -1051,6 +1106,7 @@ def _summarize_events(
         else None
     )
     economic_participation = _economic_submit_participation(lossless_scoped)
+    market_gainer_handoff = _market_gainer_handoff_summary(lossless_scoped)
 
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
@@ -1060,6 +1116,7 @@ def _summarize_events(
         "summary_event_count": summary_event_count,
         "latest_event_at": latest_event_at,
         "economic_participation": economic_participation,
+        "market_gainer_handoff": market_gainer_handoff,
         "stage_events": dict(sorted(stage_event_counts.items())),
         "stage_unique": stage_unique_counts,
         "blocker_top": [

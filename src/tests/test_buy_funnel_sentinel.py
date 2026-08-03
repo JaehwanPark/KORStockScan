@@ -53,6 +53,56 @@ def test_previous_trading_day_skips_20260505_holiday(monkeypatch, tmp_path):
     assert sentinel.previous_trading_day_with_events("2026-05-06") == "2026-05-04"
 
 
+def test_prev_close_gainer_handoff_uses_unique_scanner_promotion_identity(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for hhmmss, promotion_id, status, record_id in (
+        ("10:00:00", "PROMO-A", "first_unique_promotion_handoff", 1),
+        ("10:00:01", "PROMO-A", "first_unique_promotion_handoff", 1),
+        ("10:00:02", "PROMO-B", "first_unique_promotion_handoff", 1),
+        ("10:00:03", "unproven", "promotion_id_missing_attempt_only", 2),
+    ):
+        rows.append(
+            _event(
+                "2026-05-06",
+                hhmmss,
+                "prev_close_gainer_entry_ai_handoff",
+                record_id=record_id,
+                fields={
+                    "market_gainer_handoff_counting_key": promotion_id,
+                    "market_gainer_handoff_counting_status": status,
+                    "metric_role": "funnel_count",
+                },
+            )
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        use_cache=True,
+        use_summary=True,
+    )
+
+    session = report["current"]["session"]
+    assert session["stage_events"]["prev_close_gainer_entry_ai_handoff"] == 4
+    assert session["stage_unique"]["prev_close_gainer_entry_ai_handoff"] == 3
+    assert session["market_gainer_handoff"] == {
+        "raw_event_count": 4,
+        "unique_scanner_promotion_count": 2,
+        "duplicate_proven_promotion_event_count": 1,
+        "promotion_id_missing_attempt_count": 1,
+        "counting_status": "promotion_id_gap_present",
+    }
+    assert (
+        report["event_load"]["cache_schema_version"]
+        == sentinel.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION
+    )
+
+
 def test_upstream_ai_threshold_classification_uses_previous_day_baseline(
     monkeypatch, tmp_path
 ):
