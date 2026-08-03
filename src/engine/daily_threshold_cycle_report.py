@@ -3321,9 +3321,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 else {}
             ),
             "opportunity_exploration_funnel": (
-                microstructure_reaction_summary.get(
-                    "opportunity_exploration_funnel"
-                )
+                microstructure_reaction_summary.get("opportunity_exploration_funnel")
                 if isinstance(
                     microstructure_reaction_summary.get(
                         "opportunity_exploration_funnel"
@@ -8953,14 +8951,20 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
                 round(_avg(profit_values) or 0.0, 4) if profit_values else None
             ),
         },
-        "apply_ready": sample_ready,
+        "sample_ready": sample_ready,
+        "ev_edge_ready": False,
+        "candidate_readiness": (
+            "sample_ready_but_no_ev_edge" if sample_ready else "hold_sample"
+        ),
+        "apply_ready": False,
         "current": current,
         "recommended": recommended,
-        "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
+        "apply_mode": "report_only_calibration",
         "notes": [
             "protect_trailing confirmation guard는 기존 런타임에 적용되어 있고, 여기의 apply_mode는 guard ON/OFF가 아니라 파라미터 조정 권한만 뜻한다.",
             "protect_trailing smoothing 값은 장중 자동 변경하지 않고 장후 report와 다음 장전 manifest 후보로만 산출한다.",
             "emergency_pct 이탈은 평탄화 대상이 아니므로 별도 safety로 유지한다.",
+            "표본 준비와 EV edge 준비를 분리하며, holding-exit source의 eligible_for_live_review가 false이면 apply 후보를 만들지 않는다.",
             "sample floor 미달이면 추천값은 direction-only이며 리노공업 단일 케이스로 live 재조정하지 않는다.",
         ],
     }
@@ -10318,6 +10322,21 @@ def _calibration_state_for_family(
     ready = (
         bool(family.get("apply_ready")) if sample_ready is None else bool(sample_ready)
     )
+    if output_family == "protect_trailing_smoothing":
+        evaluated = _safe_int(source_metrics.get("evaluated_trailing"), 0) or 0
+        qualifying = _safe_int(source_metrics.get("qualifying_cohort_count"), 0) or 0
+        eligible = source_metrics.get("eligible_for_live_review") is True
+        if sample_count < sample_floor or not ready:
+            return (
+                "hold_sample",
+                f"protect trailing sample floor 미달({sample_count}/{sample_floor}); confirmation guard 값 유지",
+            )
+        if not eligible or qualifying <= 0:
+            return (
+                "hold_no_edge",
+                "protect trailing 표본은 준비됐지만 EV live-review edge가 없음"
+                f"(evaluated={evaluated}, qualifying={qualifying}, eligible={eligible}); 값 유지",
+            )
     if output_family == "holding_exit_decision_matrix_advisory":
         family_sample = (
             family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -11218,6 +11237,22 @@ def _build_calibration_candidates(
             sample_count = max(_family_sample_count(family), source_sample_count)
         sample_floor = int(metadata.get("sample_floor") or 0)
         source_ready = source_sample_count >= sample_floor
+        if output_family == "protect_trailing_smoothing":
+            source_metrics["sample_ready"] = sample_count >= sample_floor
+            source_metrics["ev_edge_ready"] = bool(
+                source_metrics.get("eligible_for_live_review") is True
+                and (_safe_int(source_metrics.get("qualifying_cohort_count"), 0) or 0)
+                > 0
+            )
+            source_metrics["candidate_readiness"] = (
+                "ev_edge_ready"
+                if source_metrics["ev_edge_ready"]
+                else (
+                    "sample_ready_but_no_ev_edge"
+                    if source_metrics["sample_ready"]
+                    else "hold_sample"
+                )
+            )
         if output_family == "score65_74_recovery_probe":
             score_min = _safe_int(current.get("min_score"), 60) or 60
             score_max = _safe_int(current.get("max_score"), 74) or 74
@@ -11404,6 +11439,8 @@ def _build_calibration_candidates(
                 recommended = dict(recommended)
                 recommended.update(source_recommended)
         sample_ready = bool(family.get("apply_ready")) or source_ready
+        if output_family == "protect_trailing_smoothing":
+            sample_ready = sample_count >= sample_floor
         calibration_state, calibration_reason = _calibration_state_for_family(
             output_family,
             family,
@@ -11505,6 +11542,13 @@ def _build_calibration_candidates(
             "runtime_change": False,
             "runtime_change_reason": "장중 자동 mutation 금지; 다음 장전 승인된 family만 bounded apply 대상",
         }
+        if output_family == "protect_trailing_smoothing":
+            candidate["sample_ready"] = bool(source_metrics.get("sample_ready"))
+            candidate["ev_edge_ready"] = bool(source_metrics.get("ev_edge_ready"))
+            candidate["candidate_readiness"] = source_metrics.get("candidate_readiness")
+            candidate["threshold_version"] = (
+                f"{output_family}:{candidate['apply_mode']}:{sample_floor_status}"
+            )
         if output_family == "market_regime_continuous_thresholds":
             candidate["apply_mode"] = "manifest_only"
             candidate["runtime_change_reason"] = (
@@ -11772,6 +11816,25 @@ def _refresh_candidate_from_primary_window(
         else candidate.get("source_metrics")
     )
     source_metrics = source_metrics if isinstance(source_metrics, dict) else {}
+    sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
+    if family == "protect_trailing_smoothing":
+        source_metrics = dict(source_metrics)
+        source_metrics["sample_ready"] = bool(
+            primary_ready and primary_sample_count >= sample_floor
+        )
+        source_metrics["ev_edge_ready"] = bool(
+            source_metrics.get("eligible_for_live_review") is True
+            and (_safe_int(source_metrics.get("qualifying_cohort_count"), 0) or 0) > 0
+        )
+        source_metrics["candidate_readiness"] = (
+            "ev_edge_ready"
+            if source_metrics["ev_edge_ready"]
+            else (
+                "sample_ready_but_no_ev_edge"
+                if source_metrics["sample_ready"]
+                else "hold_sample"
+            )
+        )
     state, reason = _calibration_state_for_family(
         family,
         family_like,
@@ -11780,7 +11843,6 @@ def _refresh_candidate_from_primary_window(
         sample_count=primary_sample_count,
         sample_ready=primary_ready,
     )
-    sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
     sample_floor_status = _sample_floor_status_for_candidate_state(
         state,
         primary_sample_count,
@@ -11830,8 +11892,16 @@ def _refresh_candidate_from_primary_window(
             "decision_sample_window": primary_window,
         }
     )
+    if family == "protect_trailing_smoothing":
+        candidate.update(
+            {
+                "sample_ready": bool(source_metrics.get("sample_ready")),
+                "ev_edge_ready": bool(source_metrics.get("ev_edge_ready")),
+                "candidate_readiness": source_metrics.get("candidate_readiness"),
+            }
+        )
     if primary_source_metrics:
-        candidate["source_metrics"] = primary_source_metrics
+        candidate["source_metrics"] = source_metrics
 
 
 def _build_window_policy_resolution(
@@ -14930,6 +15000,11 @@ def build_daily_threshold_cycle_report(
             "current": family["current"],
             "recommended": family["recommended"],
             "candidate_grid": family.get("candidate_grid", []),
+            **{
+                key: family[key]
+                for key in ("sample_ready", "ev_edge_ready", "candidate_readiness")
+                if key in family
+            },
             **(
                 {"runtime_baseline_active": family["runtime_baseline_active"]}
                 if "runtime_baseline_active" in family
@@ -14966,6 +15041,11 @@ def build_daily_threshold_cycle_report(
             "current": family["current"],
             "recommended": family["recommended"],
             "notes": family["notes"],
+            **{
+                key: family[key]
+                for key in ("sample_ready", "ev_edge_ready", "candidate_readiness")
+                if key in family
+            },
         }
         for family in families
     ]

@@ -367,7 +367,11 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     assert whipsaw_candidate["sample_window"] == "rolling_10d_with_daily_guard"
     assert whipsaw_candidate["window_policy"]["daily_only_allowed"] is False
     protect_trailing = report["threshold_snapshot"]["protect_trailing_smoothing"]
-    assert protect_trailing["apply_ready"] is True
+    assert protect_trailing["sample_ready"] is True
+    assert protect_trailing["ev_edge_ready"] is False
+    assert protect_trailing["candidate_readiness"] == "sample_ready_but_no_ev_edge"
+    assert protect_trailing["apply_ready"] is False
+    assert protect_trailing["apply_mode"] == "report_only_calibration"
     assert protect_trailing["runtime_baseline_active"] is True
     assert (
         protect_trailing["runtime_authority"]
@@ -375,6 +379,19 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     )
     assert protect_trailing["recommended"]["min_samples"] >= 3
     assert protect_trailing["recommended"]["buffer_pct"] == 1.0
+    protect_trailing_candidate = next(
+        item
+        for item in report["calibration_candidates"]
+        if item["family"] == "protect_trailing_smoothing"
+    )
+    assert protect_trailing_candidate["calibration_state"] == "hold_no_edge"
+    assert protect_trailing_candidate["apply_mode"] == "report_only_calibration"
+    assert protect_trailing_candidate["sample_ready"] is True
+    assert protect_trailing_candidate["ev_edge_ready"] is False
+    assert (
+        protect_trailing_candidate["candidate_readiness"]
+        == "sample_ready_but_no_ev_edge"
+    )
     scalp_trailing = report["threshold_snapshot"]["scalp_trailing_take_profit"]
     assert scalp_trailing["sample"]["weak_borderline"] == 1
     assert scalp_trailing["sample"]["would_hold_if_weak_limit_plus_10bp"] == 1
@@ -1418,7 +1435,7 @@ def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_de
                     },
                     "sample_ready": False,
                 }
-            }
+            },
         }
     }
 
@@ -4528,6 +4545,17 @@ def test_window_policy_registry_recomputes_candidate_from_ready_rolling_snapshot
         ]
     }
     cumulative = {
+        "calibration_source_bundle_by_window": {
+            "rolling_10d": {
+                "source_metrics": {
+                    "trailing": {
+                        "evaluated_trailing": 20,
+                        "qualifying_cohort_count": 1,
+                        "eligible_for_live_review": True,
+                    }
+                }
+            }
+        },
         "threshold_snapshot_by_window": {
             "rolling_10d": {
                 "protect_trailing_smoothing": {
@@ -4536,8 +4564,8 @@ def test_window_policy_registry_recomputes_candidate_from_ready_rolling_snapshot
                     "current": {"window_sec": 20},
                     "recommended": {"window_sec": 30},
                 }
-            }
-        }
+            },
+        },
     }
 
     report_mod.apply_window_policy_registry_to_report(report, cumulative)
@@ -4547,7 +4575,39 @@ def test_window_policy_registry_recomputes_candidate_from_ready_rolling_snapshot
     assert candidate["sample_count"] == 20
     assert candidate["decision_sample_window"] == "rolling_10d"
     assert candidate["apply_mode"] == "calibrated_apply_candidate"
+    assert candidate["sample_ready"] is True
+    assert candidate["ev_edge_ready"] is True
+    assert candidate["candidate_readiness"] == "ev_edge_ready"
+    assert candidate["source_metrics"]["sample_ready"] is True
+    assert candidate["source_metrics"]["ev_edge_ready"] is True
+    assert candidate["source_metrics"]["candidate_readiness"] == "ev_edge_ready"
     assert report["window_policy_audit"]["issue_counts"] == {}
+
+
+def test_protect_trailing_sample_ready_without_ev_edge_stays_report_only():
+    family = {
+        "apply_ready": False,
+        "sample_ready": True,
+        "current": {"window_sec": 20},
+        "recommended": {"window_sec": 30},
+    }
+    metadata = report_mod.CALIBRATION_FAMILY_METADATA["protect_trailing_smoothing"]
+
+    state, reason = report_mod._calibration_state_for_family(
+        "protect_trailing_smoothing",
+        family,
+        metadata,
+        source_metrics={
+            "evaluated_trailing": 117,
+            "qualifying_cohort_count": 0,
+            "eligible_for_live_review": False,
+        },
+        sample_count=117,
+        sample_ready=True,
+    )
+
+    assert state == "hold_no_edge"
+    assert "표본은 준비됐지만 EV live-review edge가 없음" in reason
 
 
 def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sample_is_empty():

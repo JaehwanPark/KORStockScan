@@ -324,10 +324,75 @@ def test_ofi_action_adjustment_joins_exact_trace_outcome_from_first_row(
 
     ledger = report["ofi_action_outcome_calibration"]
     assert ledger["mature_outcome_row_count"] == 1
+    assert ledger["mature_effective_transition_outcome_row_count"] == 1
+    assert ledger["effective_transition_row_count"] == 1
+    assert ledger["no_change_control_row_count"] == 0
     assert ledger["learning_update_floor"]["pass"] is True
     assert ledger["source_quality_adjusted_ev_delta_pct"] == 0.8
     assert ledger["raw_to_final_transition_counts"] == {"EXIT->HOLD": 1}
     assert report["ofi_smoothing_audit"]["status"] == "pass"
+
+
+def test_ofi_no_change_exact_outcome_is_control_not_learning_evidence(
+    tmp_path: Path,
+) -> None:
+    paired_path = (
+        tmp_path
+        / "report"
+        / "ai_prompt_detailed_paired_replay"
+        / "ai_prompt_detailed_paired_replay_2026-07-30_candidate_v1.json"
+    )
+    _write_json(
+        paired_path,
+        {
+            "target_date": "2026-07-30",
+            "runtime_effect": False,
+            "requests": [{"candidate": {"prompt_version": "candidate_v1"}}],
+            "paired_comparisons": [
+                {
+                    "decision_trace_id": "holding-control-1",
+                    "control_action": "EXIT",
+                    "candidate_action": "EXIT",
+                    "outcome_return_pct": 0.8,
+                    "outcome_mfe_pct": 1.0,
+                    "outcome_mae_pct": -0.2,
+                    "first_hit": "target",
+                }
+            ],
+        },
+    )
+    pipeline_path = tmp_path / "pipeline_events" / "pipeline_events_2026-07-30.jsonl"
+    _write_pipeline(
+        pipeline_path,
+        [
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "stock_code": "005930",
+                "fields": {
+                    "smoothing_action": "NO_CHANGE",
+                    "raw_flow_action": "EXIT",
+                    "final_flow_action": "EXIT",
+                    "ai_decision_trace_id": "holding-control-1",
+                    "ai_input_snapshot_id": "snapshot-control-1",
+                },
+            }
+        ],
+    )
+
+    ledger = build_report(target_date="2026-07-30", data_root=tmp_path)[
+        "ofi_action_outcome_calibration"
+    ]
+
+    assert ledger["schema"] == "ofi_exact_trace_action_outcome_calibration_v2"
+    assert ledger["status"] == "sample_floor_keep_collecting"
+    assert ledger["mature_outcome_row_count"] == 1
+    assert ledger["mature_effective_transition_outcome_row_count"] == 0
+    assert ledger["effective_transition_row_count"] == 0
+    assert ledger["no_change_control_row_count"] == 1
+    assert ledger["no_change_control_outcome_status_counts"] == {"mature": 1}
+    assert ledger["raw_to_final_transition_counts"] == {}
+    assert ledger["source_quality_adjusted_ev_delta_pct"] is None
+    assert ledger["learning_update_floor"]["pass"] is False
 
 
 def test_ofi_unlinked_events_are_preserved_as_audit_exclusions(

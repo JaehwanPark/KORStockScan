@@ -26,6 +26,7 @@ KST = ZoneInfo("Asia/Seoul")
 CLEAN_BASELINE_DATE = "2026-06-05"
 SCHEMA = "ai_decision_action_outcome_calibration_v1"
 POLICY_VERSION = "exact_decision_trace_cumulative_action_outcome_v2"
+OFI_LEDGER_SCHEMA = "ofi_exact_trace_action_outcome_calibration_v2"
 REPORT_SUBDIR = "ai_decision_action_outcome_calibration"
 PAIRED_SUBDIR = "ai_prompt_detailed_paired_replay"
 OFI_STAGES = {
@@ -571,6 +572,12 @@ def _attach_ofi_outcome(
     row["ofi_action_adjustment_delta_pct"] = final_value - raw_value
 
 
+def _is_effective_ofi_transition(row: dict[str, Any]) -> bool:
+    raw_action = str(row.get("raw_action") or "").strip().upper()
+    final_action = str(row.get("final_action") or "").strip().upper()
+    return bool(raw_action and final_action and raw_action != final_action)
+
+
 def _current_ofi_outcome_rows(
     pipeline_path: Path,
     *,
@@ -679,7 +686,7 @@ def build_ofi_action_outcome_calibration(
     for row in rows:
         trace_id = str(row.get("decision_trace_id") or "")
         _attach_ofi_outcome(row, outcome_by_trace.get(trace_id))
-    mature_rows = [
+    comparable_mature_rows = [
         row
         for row in rows
         if row.get("outcome_status") == "mature"
@@ -689,26 +696,50 @@ def build_ofi_action_outcome_calibration(
     not_comparable_rows = [
         row for row in rows if row.get("outcome_status") == "mature_not_comparable"
     ]
-    deltas = [float(row["ofi_action_adjustment_delta_pct"]) for row in mature_rows]
+    effective_transition_rows = [
+        row for row in rows if _is_effective_ofi_transition(row)
+    ]
+    no_change_control_rows = [
+        row for row in rows if not _is_effective_ofi_transition(row)
+    ]
+    mature_effective_rows = [
+        row for row in comparable_mature_rows if _is_effective_ofi_transition(row)
+    ]
+    pending_effective_rows = [
+        row for row in pending_rows if _is_effective_ofi_transition(row)
+    ]
+    not_comparable_effective_rows = [
+        row for row in not_comparable_rows if _is_effective_ofi_transition(row)
+    ]
+    deltas = [
+        float(row["ofi_action_adjustment_delta_pct"]) for row in mature_effective_rows
+    ]
     return {
-        "schema": "ofi_exact_trace_action_outcome_calibration_v1",
+        "schema": OFI_LEDGER_SCHEMA,
         "status": (
             "cumulative_learning_updated"
-            if mature_rows
+            if mature_effective_rows
             else (
                 "exact_trace_rows_waiting_for_mature_outcome"
-                if pending_rows
+                if pending_effective_rows
                 else (
                     "mature_outcome_not_comparable_keep_collecting"
-                    if not_comparable_rows
+                    if not_comparable_effective_rows
                     else "sample_floor_keep_collecting"
                 )
             )
         ),
         "exact_trace_row_count": len(rows),
-        "mature_outcome_row_count": len(mature_rows),
+        "effective_transition_row_count": len(effective_transition_rows),
+        "no_change_control_row_count": len(no_change_control_rows),
+        "mature_outcome_row_count": len(comparable_mature_rows),
+        "mature_effective_transition_outcome_row_count": len(mature_effective_rows),
         "pending_outcome_row_count": len(pending_rows),
+        "pending_effective_transition_outcome_row_count": len(pending_effective_rows),
         "mature_not_comparable_outcome_row_count": len(not_comparable_rows),
+        "mature_not_comparable_effective_transition_outcome_row_count": len(
+            not_comparable_effective_rows
+        ),
         "mature_not_comparable_reason_counts": dict(
             Counter(
                 str(row.get("outcome_not_comparable_reason") or "unknown")
@@ -718,7 +749,19 @@ def build_ofi_action_outcome_calibration(
         "raw_to_final_transition_counts": dict(
             Counter(
                 f"{row.get('raw_action')}->{row.get('final_action')}"
-                for row in mature_rows
+                for row in mature_effective_rows
+            )
+        ),
+        "effective_transition_lane_counts": dict(
+            Counter(
+                f"{row.get('stage')}:{row.get('raw_action')}->{row.get('final_action')}"
+                for row in effective_transition_rows
+            )
+        ),
+        "no_change_control_outcome_status_counts": dict(
+            Counter(
+                str(row.get("outcome_status") or "unknown")
+                for row in no_change_control_rows
             )
         ),
         "smoothing_action_counts": dict(
@@ -731,9 +774,11 @@ def build_ofi_action_outcome_calibration(
         "current_date_exclusion_counts": dict(exclusions),
         "learning_update_floor": {
             "required_mature_exact_trace_rows": 1,
-            "observed_mature_exact_trace_rows": len(mature_rows),
-            "pass": bool(mature_rows),
-            "role": "cumulative_learning_update_only",
+            "observed_mature_exact_trace_rows": len(mature_effective_rows),
+            "required_mature_effective_transition_rows": 1,
+            "observed_mature_effective_transition_rows": len(mature_effective_rows),
+            "pass": bool(mature_effective_rows),
+            "role": "effective_transition_cumulative_learning_update_only",
         },
         "runtime_authority_expansion_allowed": False,
         "rows": rows,
