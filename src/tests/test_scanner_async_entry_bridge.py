@@ -577,6 +577,8 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
     assert stock["last_watching_ai_score"] == 64.0
     assert stock["last_watching_ai_snapshot_id"] == "aims-pass"
     assert stock["last_watching_ai_attempt_trusted"] is True
+    assert stock["last_watching_ai_attempt_decision_trace_id"] == "aidt-pass"
+    assert stock["last_watching_ai_attempt_probe_intent"] is True
     assert stock["last_watching_ai_probe_intent"] is True
     assert stock["last_watching_ai_probe_intent_status"] == "eligible_wait_probe"
     assert (

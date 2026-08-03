@@ -5914,6 +5914,98 @@ def _boolish_true(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _trusted_entry_wait_probe_intent(
+    ai_decision: dict | None,
+    *,
+    trusted_result: bool,
+    model_action: str,
+) -> bool:
+    """Return a probe intent only for the canonical trusted WAIT contract."""
+
+    decision = ai_decision if isinstance(ai_decision, dict) else {}
+    return bool(
+        trusted_result
+        and str(model_action or "").strip().upper() == "WAIT"
+        and str(decision.get("entry_probe_intent_status") or "").strip().lower()
+        == "eligible_wait_probe"
+        and _boolish_true(decision.get("entry_probe_intent"))
+    )
+
+
+def _entry_ai_recheck_probe_state_fields(
+    ai_decision: dict | None,
+    *,
+    action: str,
+    score: float,
+    completed_at: float,
+) -> dict:
+    """Bind a recheck's probe intent to its exact trace for submit consumers."""
+
+    decision = ai_decision if isinstance(ai_decision, dict) else {}
+    normalized_action = str(action or "").strip().upper()
+    result_source = str(decision.get("ai_result_source") or "live").strip().lower()
+    transport_timeout = result_source == "timeout" or bool(
+        decision.get("openai_timeout_like")
+        or decision.get("openai_http_timeout_budget_exhausted")
+    )
+    parse_ok = decision.get("ai_parse_ok", decision.get("parse_ok", True))
+    contract_status = (
+        str(decision.get("decision_quality_contract_status") or "").strip().lower()
+    )
+    trace_id = str(decision.get("ai_decision_trace_id") or "")
+    snapshot_id = str(
+        decision.get("ai_decision_snapshot_id")
+        or decision.get("ai_input_snapshot_id")
+        or decision.get("ai_market_snapshot_id")
+        or ""
+    )
+    trusted_result = bool(
+        result_source in {"live", "prior_valid"}
+        and not transport_timeout
+        and parse_ok is not False
+        and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
+        and normalized_action in {"BUY", "WAIT", "DROP"}
+        and _safe_float(score, 0.0) > 0.0
+        and trace_id
+    )
+    probe_intent = _trusted_entry_wait_probe_intent(
+        decision,
+        trusted_result=trusted_result,
+        model_action=normalized_action,
+    )
+    fields = {
+        "last_watching_ai_attempt_action": normalized_action or "NOT_EVALUATED",
+        "last_watching_ai_attempt_model_action": normalized_action or "NOT_EVALUATED",
+        "last_watching_ai_attempt_score": float(_safe_float(score, 0.0)),
+        "last_watching_ai_attempt_completed_at": float(completed_at),
+        "last_watching_ai_attempt_result_source": result_source,
+        "last_watching_ai_attempt_evaluation_status": (
+            "evaluated" if trusted_result else "not_evaluated_provider_or_contract"
+        ),
+        "last_watching_ai_attempt_trusted": trusted_result,
+        "last_watching_ai_attempt_snapshot_id": snapshot_id,
+        "last_watching_ai_attempt_decision_trace_id": trace_id,
+        "last_watching_ai_attempt_probe_intent": probe_intent,
+        "last_watching_ai_attempt_probe_intent_status": str(
+            decision.get("entry_probe_intent_status") or "not_reported"
+        ),
+    }
+    if trusted_result:
+        fields.update(
+            {
+                "last_watching_ai_probe_intent": probe_intent,
+                "last_watching_ai_probe_intent_status": str(
+                    decision.get("entry_probe_intent_status") or "not_reported"
+                ),
+                "last_watching_ai_probe_intent_prompt_version": str(
+                    decision.get("entry_probe_intent_prompt_version") or ""
+                ),
+                "last_watching_ai_probe_intent_submit_guard_required": True,
+            }
+        )
+    return fields
+
+
 def _is_scalp_sim_ai_budget_target(
     stock: dict | None, strategy: str | None = None
 ) -> bool:
@@ -33730,7 +33822,21 @@ def _entry_ai_submit_authority_fields(
     fresh_drop_veto = bool(
         action_contract_enforced and fresh_prior and normalized_action == "drop"
     )
-    wait_probe_intent = bool(stock.get("last_watching_ai_probe_intent"))
+    wait_probe_intent_trace_aligned = bool(
+        authoritative_action_source == "latest_stock_ai"
+        and stock_attempt_trusted
+        and _boolish_true(stock.get("last_watching_ai_attempt_probe_intent"))
+        and str(stock.get("last_watching_ai_attempt_probe_intent_status") or "")
+        .strip()
+        .lower()
+        == "eligible_wait_probe"
+        and _boolish_true(stock.get("last_watching_ai_probe_intent"))
+        and str(stock.get("last_watching_ai_probe_intent_status") or "").strip().lower()
+        == "eligible_wait_probe"
+    )
+    wait_probe_intent = bool(
+        normalized_action == "wait" and wait_probe_intent_trace_aligned
+    )
     wait_observation_only_veto = bool(
         rising_missed_scout_contract
         and fresh_prior
@@ -33815,6 +33921,9 @@ def _entry_ai_submit_authority_fields(
             wait_observation_only_veto
         ),
         "entry_ai_submit_authority_wait_probe_intent": bool(wait_probe_intent),
+        "entry_ai_submit_authority_wait_probe_intent_trace_aligned": bool(
+            wait_probe_intent_trace_aligned
+        ),
         "entry_ai_submit_authority_latest_attempt_trusted": bool(stock_attempt_trusted),
         "entry_ai_submit_authority_zero_score_drop_trusted": bool(
             selected_zero_score_drop_trusted
@@ -34838,6 +34947,18 @@ def _retry_entry_ai_submit_authority_before_block(
             and action in {"BUY", "WAIT", "DROP"}
             and score > 0.0
         )
+        decision_trace_id = str(ai_decision.get("ai_decision_trace_id") or "")
+        decision_snapshot_id = str(
+            ai_decision.get("ai_decision_snapshot_id")
+            or ai_decision.get("ai_input_snapshot_id")
+            or ai_decision.get("ai_market_snapshot_id")
+            or ""
+        )
+        probe_intent = _trusted_entry_wait_probe_intent(
+            ai_decision,
+            trusted_result=trusted_result,
+            model_action=model_action,
+        )
         attempt_state_fields = {
             "last_watching_ai_attempt_action": action,
             "last_watching_ai_attempt_model_action": model_action,
@@ -34846,6 +34967,12 @@ def _retry_entry_ai_submit_authority_before_block(
             "last_watching_ai_attempt_result_source": result_source,
             "last_watching_ai_attempt_evaluation_status": (decision_evaluation_status),
             "last_watching_ai_attempt_trusted": trusted_result,
+            "last_watching_ai_attempt_snapshot_id": decision_snapshot_id,
+            "last_watching_ai_attempt_decision_trace_id": decision_trace_id,
+            "last_watching_ai_attempt_probe_intent": probe_intent,
+            "last_watching_ai_attempt_probe_intent_status": str(
+                ai_decision.get("entry_probe_intent_status") or "not_reported"
+            ),
         }
         trusted_state_fields = (
             {
@@ -34855,18 +34982,20 @@ def _retry_entry_ai_submit_authority_before_block(
                 "last_watching_ai_reason": reason,
                 "last_watching_ai_confirmed_at": ai_response_completed_at,
                 "last_watching_ai_result_source": result_source,
-                "last_watching_ai_snapshot_id": (
-                    ai_decision.get("ai_decision_snapshot_id")
-                    or ai_decision.get("ai_input_snapshot_id")
-                    or ai_decision.get("ai_market_snapshot_id")
-                ),
-                "last_watching_ai_decision_trace_id": (
-                    ai_decision.get("ai_decision_trace_id") or ""
-                ),
+                "last_watching_ai_snapshot_id": decision_snapshot_id,
+                "last_watching_ai_decision_trace_id": decision_trace_id,
                 "last_watching_ai_source_quality_fields": source_quality_fields,
                 "last_watching_ai_call_trigger_reason": (
                     "pre_submit_entry_ai_authority_retry"
                 ),
+                "last_watching_ai_probe_intent": probe_intent,
+                "last_watching_ai_probe_intent_status": str(
+                    ai_decision.get("entry_probe_intent_status") or "not_reported"
+                ),
+                "last_watching_ai_probe_intent_prompt_version": str(
+                    ai_decision.get("entry_probe_intent_prompt_version") or ""
+                ),
+                "last_watching_ai_probe_intent_submit_guard_required": True,
             }
             if trusted_result
             else {}
@@ -34980,6 +35109,16 @@ def _retry_entry_ai_submit_authority_before_block(
                 "pre_submit_entry_ai_authority_retry_model_action": model_action,
                 "pre_submit_entry_ai_authority_retry_evaluation_status": (
                     decision_evaluation_status
+                ),
+                "pre_submit_entry_ai_authority_retry_probe_intent": probe_intent,
+                "pre_submit_entry_ai_authority_retry_probe_intent_status": str(
+                    ai_decision.get("entry_probe_intent_status") or "not_reported"
+                ),
+                "pre_submit_entry_ai_authority_retry_decision_trace_id": (
+                    decision_trace_id
+                ),
+                "pre_submit_entry_ai_authority_retry_snapshot_id": (
+                    decision_snapshot_id
                 ),
             }
         )
@@ -53575,6 +53714,20 @@ def _handle_watching_strategy_branch(
                                 and str(action or "").upper() in {"BUY", "WAIT", "DROP"}
                                 and ai_score > 0.0
                             )
+                            decision_trace_id = str(
+                                ai_decision.get("ai_decision_trace_id") or ""
+                            )
+                            decision_snapshot_id = str(
+                                ai_decision.get("ai_decision_snapshot_id")
+                                or ai_decision.get("ai_input_snapshot_id")
+                                or ai_decision.get("ai_market_snapshot_id")
+                                or ""
+                            )
+                            probe_intent = _trusted_entry_wait_probe_intent(
+                                ai_decision,
+                                trusted_result=trusted_result,
+                                model_action=model_action,
+                            )
                             ai_source_quality_fields = (
                                 _build_tick_source_quality_log_fields(ai_decision)
                             )
@@ -53605,6 +53758,17 @@ def _handle_watching_strategy_branch(
                                     decision_evaluation_status
                                 ),
                                 "last_watching_ai_attempt_trusted": trusted_result,
+                                "last_watching_ai_attempt_snapshot_id": (
+                                    decision_snapshot_id
+                                ),
+                                "last_watching_ai_attempt_decision_trace_id": (
+                                    decision_trace_id
+                                ),
+                                "last_watching_ai_attempt_probe_intent": probe_intent,
+                                "last_watching_ai_attempt_probe_intent_status": str(
+                                    ai_decision.get("entry_probe_intent_status")
+                                    or "not_reported"
+                                ),
                             }
                             if transport_timeout:
                                 retry_delay_sec = max(
@@ -53645,16 +53809,26 @@ def _handle_watching_strategy_branch(
                                     ),
                                     "last_watching_ai_result_source": result_source,
                                     "last_watching_ai_snapshot_id": (
-                                        ai_decision.get("ai_decision_snapshot_id")
-                                        or ai_decision.get("ai_input_snapshot_id")
-                                        or ai_decision.get("ai_market_snapshot_id")
+                                        decision_snapshot_id
                                     ),
                                     "last_watching_ai_decision_trace_id": (
-                                        ai_decision.get("ai_decision_trace_id") or ""
+                                        decision_trace_id
                                     ),
                                     "last_watching_ai_source_quality_fields": (
                                         ai_source_quality_fields
                                     ),
+                                    "last_watching_ai_probe_intent": probe_intent,
+                                    "last_watching_ai_probe_intent_status": str(
+                                        ai_decision.get("entry_probe_intent_status")
+                                        or "not_reported"
+                                    ),
+                                    "last_watching_ai_probe_intent_prompt_version": str(
+                                        ai_decision.get(
+                                            "entry_probe_intent_prompt_version"
+                                        )
+                                        or ""
+                                    ),
+                                    "last_watching_ai_probe_intent_submit_guard_required": True,
                                 }
                                 if trusted_result
                                 else {}
@@ -54011,6 +54185,12 @@ def _handle_watching_strategy_branch(
                                     _mutate_stock_state(
                                         stock,
                                         set_fields={
+                                            **_entry_ai_recheck_probe_state_fields(
+                                                recheck_decision,
+                                                action=recheck_action,
+                                                score=recheck_score,
+                                                completed_at=recheck_completed_at,
+                                            ),
                                             "last_watching_ai_action": recheck_action,
                                             "last_watching_ai_score": recheck_score,
                                             "last_watching_ai_score_raw": recheck_score,
@@ -54299,6 +54479,12 @@ def _handle_watching_strategy_branch(
                                 _mutate_stock_state(
                                     stock,
                                     set_fields={
+                                        **_entry_ai_recheck_probe_state_fields(
+                                            recheck_decision,
+                                            action=recheck_action,
+                                            score=recheck_score,
+                                            completed_at=recheck_completed_at,
+                                        ),
                                         "last_watching_ai_action": recheck_action,
                                         "last_watching_ai_score": recheck_score,
                                         "last_watching_ai_score_raw": recheck_score,
@@ -63892,10 +64078,10 @@ def _record_scanner_entry_ai_attempt(
         or ""
     )
     decision_trace_id = ai_decision.get("ai_decision_trace_id") or ""
-    probe_intent = bool(
-        trusted
-        and normalized_action == "WAIT"
-        and _boolish_true(ai_decision.get("entry_probe_intent"))
+    probe_intent = _trusted_entry_wait_probe_intent(
+        ai_decision,
+        trusted_result=trusted,
+        model_action=normalized_action,
     )
     attempt_fields = {
         "last_watching_ai_attempt_action": stored_action,

@@ -4201,17 +4201,27 @@ def test_rising_missed_scout_wait_requires_explicit_probe_intent(monkeypatch):
         "last_watching_ai_decision_trace_id": "trace-wait",
         "last_watching_ai_attempt_decision_trace_id": "trace-wait",
         "last_watching_ai_attempt_trusted": True,
+        "last_watching_ai_attempt_probe_intent_status": "eligible_wait_probe",
+        "last_watching_ai_probe_intent_status": "eligible_wait_probe",
     }
 
     observation_only = state_handlers._entry_ai_submit_authority_fields(
         strategy="SCALPING",
-        stock={**base_stock, "last_watching_ai_probe_intent": False},
+        stock={
+            **base_stock,
+            "last_watching_ai_attempt_probe_intent": False,
+            "last_watching_ai_probe_intent": False,
+        },
         latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
         latency_signal_score=65.0,
     )
     probe = state_handlers._entry_ai_submit_authority_fields(
         strategy="SCALPING",
-        stock={**base_stock, "last_watching_ai_probe_intent": True},
+        stock={
+            **base_stock,
+            "last_watching_ai_attempt_probe_intent": True,
+            "last_watching_ai_probe_intent": True,
+        },
         latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
         latency_signal_score=65.0,
     )
@@ -4221,6 +4231,88 @@ def test_rising_missed_scout_wait_requires_explicit_probe_intent(monkeypatch):
     assert observation_only["entry_ai_submit_authority_wait_probe_required"] is False
     assert probe["blocked"] is False
     assert probe["entry_ai_submit_authority_wait_probe_required"] is True
+    assert probe["entry_ai_submit_authority_wait_probe_intent_trace_aligned"] is True
+
+
+def test_rising_missed_scout_rejects_stale_probe_intent_from_other_trace(monkeypatch):
+    now_ts = 1_784_778_400.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "false")
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "rising_missed_one_share_entry_forced": True,
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_score": 65.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 0.1,
+            "last_watching_ai_decision_trace_id": "trace-current",
+            "last_watching_ai_attempt_decision_trace_id": "trace-prior",
+            "last_watching_ai_attempt_trusted": True,
+            "last_watching_ai_attempt_probe_intent": True,
+            "last_watching_ai_attempt_probe_intent_status": "eligible_wait_probe",
+            "last_watching_ai_probe_intent": True,
+            "last_watching_ai_probe_intent_status": "eligible_wait_probe",
+        },
+        latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
+        latency_signal_score=65.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["reason"] == "fresh_ai_wait_observation_only_probe_veto"
+    assert decision["entry_ai_submit_authority_wait_probe_intent"] is False
+    assert (
+        decision["entry_ai_submit_authority_wait_probe_intent_trace_aligned"] is False
+    )
+
+
+def test_entry_ai_recheck_probe_state_binds_eligible_wait_to_exact_trace():
+    fields = state_handlers._entry_ai_recheck_probe_state_fields(
+        {
+            "action": "WAIT",
+            "score": 66,
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+            "ai_decision_trace_id": "trace-recheck-wait",
+            "ai_decision_snapshot_id": "snapshot-recheck-wait",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "entry_probe_intent_prompt_version": "decision_quality_v2_7_probe_v1",
+        },
+        action="WAIT",
+        score=66.0,
+        completed_at=1_784_778_400.0,
+    )
+
+    assert fields["last_watching_ai_attempt_trusted"] is True
+    assert fields["last_watching_ai_attempt_decision_trace_id"] == (
+        "trace-recheck-wait"
+    )
+    assert fields["last_watching_ai_attempt_probe_intent"] is True
+    assert fields["last_watching_ai_probe_intent"] is True
+
+
+def test_entry_ai_recheck_probe_state_rejects_missing_trace():
+    fields = state_handlers._entry_ai_recheck_probe_state_fields(
+        {
+            "action": "WAIT",
+            "score": 66,
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+        },
+        action="WAIT",
+        score=66.0,
+        completed_at=1_784_778_400.0,
+    )
+
+    assert fields["last_watching_ai_attempt_trusted"] is False
+    assert fields["last_watching_ai_attempt_probe_intent"] is False
+    assert "last_watching_ai_probe_intent" not in fields
 
 
 def test_entry_ai_submit_authority_latest_fresh_drop_overrides_stale_buy_context(
@@ -4730,6 +4822,11 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
                 "reason": "fresh pre-submit retry",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                "ai_decision_trace_id": "trace-retry-wait-probe",
+                "ai_decision_snapshot_id": "snapshot-retry-wait-probe",
+                "entry_probe_intent": True,
+                "entry_probe_intent_status": "eligible_wait_probe",
+                "entry_probe_intent_prompt_version": ("decision_quality_v2_7_probe_v1"),
             }
 
     monkeypatch.setattr(state_handlers.time, "time", lambda: clock["now"])
@@ -4759,6 +4856,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
         "name": "retry",
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
+        "rising_missed_one_share_entry_forced": True,
     }
     before = state_handlers._entry_ai_submit_authority_fields(
         strategy="SCALPING",
@@ -4792,10 +4890,33 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert before["blocked"] is True
     assert retry["pre_submit_entry_ai_authority_retry_attempted"] is True
     assert retry["pre_submit_entry_ai_authority_retry_success"] is True
+    assert retry["pre_submit_entry_ai_authority_retry_probe_intent"] is True
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_probe_intent_status"]
+        == "eligible_wait_probe"
+    )
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_decision_trace_id"]
+        == "trace-retry-wait-probe"
+    )
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_snapshot_id"]
+        == "snapshot-retry-wait-probe"
+    )
     assert stock["last_watching_ai_result_source"] == "live"
     assert stock["last_watching_ai_confirmed_at"] == response_completed_at
+    assert stock["last_watching_ai_probe_intent"] is True
+    assert stock["last_watching_ai_probe_intent_status"] == "eligible_wait_probe"
+    assert stock["last_watching_ai_attempt_probe_intent"] is True
+    assert stock["last_watching_ai_attempt_trusted"] is True
+    assert (
+        stock["last_watching_ai_attempt_decision_trace_id"]
+        == stock["last_watching_ai_decision_trace_id"]
+    )
     assert after["blocked"] is False
     assert after["entry_ai_submit_authority_fresh_prior"] is True
+    assert after["entry_ai_submit_authority_wait_probe_intent"] is True
+    assert after["entry_ai_submit_authority_wait_probe_required"] is True
     assert logs[-1][0] == "ai_confirmed"
     assert (
         logs[-1][1]["ai_call_trigger_reason"] == "pre_submit_entry_ai_authority_retry"
