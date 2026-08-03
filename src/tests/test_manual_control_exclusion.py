@@ -125,6 +125,31 @@ def test_manual_control_exclusion_remove_preserves_manual_operator_row(
     )
 
 
+def test_manual_control_exclusion_generic_remove_preserves_auto_row(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    original = "950160 # auto_open_loss KRX_OPEN profit=-29.72% stop=-5.00%\n"
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code(
+        "950160",
+        reason="periodic_sync_completed_no_broker_holding",
+    )
+
+    assert result.removed is False
+    assert (
+        result.reason == "manual_control_auto_exclusion_average_price_release_required"
+    )
+    assert path.read_text(encoding="utf-8") == original
+    assert (
+        manual_control_exclusion.evaluate_manual_control_exclusion("950160").excluded
+        is True
+    )
+
+
 def test_manual_control_exclusion_manual_operator_vetoes_duplicate_auto_row_removal(
     monkeypatch, tmp_path
 ):

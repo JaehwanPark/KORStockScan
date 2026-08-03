@@ -307,6 +307,7 @@ def remove_manual_control_exclusion_code(
 
         removed = False
         manual_operator_protected = False
+        auto_exclusion_protected = False
         output_lines: list[str] = []
         for line in original_text.splitlines():
             uncommented, comment = _split_line_comment(line)
@@ -317,6 +318,11 @@ def remove_manual_control_exclusion_code(
 
             if _manual_operator_exclusion_source_from_comment(comment):
                 manual_operator_protected = True
+                output_lines.append(line)
+                continue
+
+            if _auto_exclusion_source_from_comment(comment):
+                auto_exclusion_protected = True
                 output_lines.append(line)
                 continue
 
@@ -333,6 +339,14 @@ def remove_manual_control_exclusion_code(
                 False,
                 norm_code,
                 "manual_control_exclusion_manual_operator_protected",
+                str(path),
+            )
+
+        if auto_exclusion_protected:
+            return ManualControlExclusionRemoval(
+                False,
+                norm_code,
+                "manual_control_auto_exclusion_average_price_release_required",
                 str(path),
             )
 
