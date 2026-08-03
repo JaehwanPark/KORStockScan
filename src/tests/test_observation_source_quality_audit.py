@@ -557,6 +557,37 @@ def test_observation_source_quality_audit_accepts_early_accel_provenance(
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
 
+def test_observation_source_quality_audit_accepts_fail_closed_early_accel_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    fields = _early_accel_contract_fields()
+    fields.update(
+        {
+            "skip_reason": "micro_vwap_unusable",
+            "micro_vwap_available": False,
+            "minute_candle_context_quality": "unavailable",
+            "minute_candle_window_fresh": False,
+            "minute_candle_latest_age_ms": 0,
+            "micro_vwap_usable": False,
+        }
+    )
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event("early_accel_recheck_evaluated", fields),
+            _event("early_accel_recheck_skipped", fields),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
+    assert report["stage_contracts"]["early_accel_recheck_skipped"]["status"] == "pass"
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+
+
 def test_ai_confirmed_terminal_no_budget_contract_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(

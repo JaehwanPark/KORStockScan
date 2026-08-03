@@ -5757,6 +5757,15 @@ def test_canonical_wait_probe_handoff_precedes_legacy_first_ai_wait(monkeypatch)
     assert not handlers._canonical_wait_probe_handoff_active(
         {**decision, "evidence": {"trigger": "hold"}}
     )
+    assert not handlers._canonical_wait_probe_handoff_active(
+        {
+            **decision,
+            "evidence": {
+                "trigger": "recovery_required",
+                "adverse_risk": "blocking",
+            },
+        }
+    )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "false")
     assert not handlers._canonical_wait_probe_handoff_active(decision)
 
@@ -6954,6 +6963,40 @@ def test_score65_74_recovery_probe_reuse_guard_preserves_source_provenance(monke
     assert decision["tick_aggressor_pressure_usable"] is True
 
 
+def test_score65_74_recovery_probe_reuse_guard_blocks_missing_tick_provenance(
+    monkeypatch,
+):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _score65_74_recovery_probe_reuse_guard(
+        {
+            "score65_74_recovery_probe_last_buy_pressure": 84.0,
+            "score65_74_recovery_probe_last_tick_accel": 1.5,
+            "score65_74_recovery_probe_last_micro_vwap_bp": 24.0,
+            "score65_74_recovery_probe_last_micro_vwap_available": True,
+            "score65_74_recovery_probe_last_minute_candle_context_quality": "fresh_bar_window",
+            "score65_74_recovery_probe_last_minute_candle_window_fresh": True,
+            "score65_74_recovery_probe_last_minute_candle_latest_age_ms": 8000,
+            "score65_74_recovery_probe_last_tick_aggressor_trusted_count": 0,
+            "score65_74_recovery_probe_last_tick_aggressor_pressure_usable": False,
+        },
+        "011070",
+        {"curr": 10500},
+        now_ts=1_000.0,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["score65_74_recovery_probe_skip_reason"] == (
+        "source_quality_hard_block"
+    )
+
+
 def test_score65_74_recovery_probe_success_contract_fields_close_forbidden_authority():
     fields = _score65_74_recovery_probe_success_contract_fields()
 
@@ -6985,6 +7028,12 @@ def test_score65_74_recovery_probe_reuse_guard_blocks_stale_armed_cancel_cooldow
             "score65_74_recovery_probe_last_buy_pressure": 80.0,
             "score65_74_recovery_probe_last_tick_accel": 1.5,
             "score65_74_recovery_probe_last_micro_vwap_bp": 2.0,
+            "score65_74_recovery_probe_last_micro_vwap_available": True,
+            "score65_74_recovery_probe_last_minute_candle_context_quality": "fresh_bar_window",
+            "score65_74_recovery_probe_last_minute_candle_window_fresh": True,
+            "score65_74_recovery_probe_last_minute_candle_latest_age_ms": 8000,
+            "score65_74_recovery_probe_last_tick_aggressor_trusted_count": 6,
+            "score65_74_recovery_probe_last_tick_aggressor_pressure_usable": True,
         },
         "011070",
         {"curr": 1050000},

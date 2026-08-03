@@ -3962,7 +3962,19 @@ def _blocked_observation_records_fail_closed_source_gap(
         )
     if stage == "score65_74_recovery_probe_blocked":
         reason = str(fields.get("score65_74_recovery_probe_skip_reason") or "").lower()
-        return "source_quality" in reason or "unusable" in reason or "stale" in reason
+        return any(
+            token in reason
+            for token in ("source_quality", "unusable", "unavailable", "missing", "stale")
+        )
+    if stage in {
+        "early_accel_recheck_evaluated",
+        "early_accel_recheck_skipped",
+    }:
+        reason = str(fields.get("skip_reason") or "").lower()
+        return any(
+            token in reason
+            for token in ("source_quality", "unusable", "unavailable", "missing", "stale")
+        )
     if stage == "adverse_fill_observed":
         return not _contract_bool(fields.get("feature_valid"), True)
     if stage not in {

@@ -607,6 +607,26 @@ def test_early_accel_strong_bundle_recheck_failure_class_is_canonical():
     )
 
 
+def test_early_accel_strong_bundle_recheck_revokes_older_probe_on_blocking_risk():
+    assert state_handlers._early_accel_strong_bundle_recheck_revokes_probe_intent(
+        {
+            "action": "WAIT",
+            "entry_probe_intent": False,
+            "evidence": {"adverse_risk": "blocking"},
+        }
+    )
+    assert state_handlers._early_accel_strong_bundle_recheck_revokes_probe_intent(
+        {"action": "DROP", "evidence": {"adverse_risk": "high"}}
+    )
+    assert not state_handlers._early_accel_strong_bundle_recheck_revokes_probe_intent(
+        {
+            "action": "WAIT",
+            "entry_probe_intent": True,
+            "evidence": {"adverse_risk": "high"},
+        }
+    )
+
+
 def test_ai_numeric_consistency_pre_recheck_fields_are_contract_values(monkeypatch):
     monkeypatch.setattr(state_handlers, "_rule_bool", lambda key, default=False: False)
     decision = state_handlers._resolve_ai_numeric_consistency_recheck(

@@ -42450,6 +42450,22 @@ def _early_accel_strong_bundle_recheck_failure_class(recheck_action: str) -> str
     return "non_buy_action"
 
 
+def _early_accel_strong_bundle_recheck_revokes_probe_intent(
+    recheck_decision: dict | None,
+) -> bool:
+    """Let a newer explicit risk verdict revoke an older WAIT probe intent."""
+
+    decision = recheck_decision if isinstance(recheck_decision, dict) else {}
+    action = str(decision.get("action") or "WAIT").strip().upper()
+    evidence = (
+        decision.get("evidence")
+        if isinstance(decision.get("evidence"), dict)
+        else {}
+    )
+    adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
+    return bool(action == "DROP" or adverse_risk == "blocking")
+
+
 def _first_safe_float(default: float, *values) -> float:
     for value in values:
         parsed = _safe_float(value, None)
@@ -48411,6 +48427,7 @@ def _canonical_wait_probe_handoff_active(
         decision.get("evidence") if isinstance(decision.get("evidence"), dict) else {}
     )
     recovery_trigger = str(evidence.get("trigger") or "").strip().lower()
+    adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
     return bool(
         action == "WAIT"
         and contract_status == "pass"
@@ -48418,6 +48435,7 @@ def _canonical_wait_probe_handoff_active(
         and _truthy_field(decision.get("entry_probe_intent"))
         and probe_status == "eligible_wait_probe"
         and recovery_trigger == "recovery_required"
+        and adverse_risk != "blocking"
         and _entry_opportunity_recheck_wait_probe_owner_active(now_ts=now_ts)
     )
 
@@ -48620,6 +48638,12 @@ def _score65_74_recovery_probe_reuse_guard(
             "score65_74_recovery_probe_last_tick_aggressor_pressure_usable"
         ),
     }
+    if _buy_recovery_probe_source_quality_hard_block(probe):
+        return {
+            **_score65_74_recovery_probe_micro_guard(probe),
+            "allowed": False,
+            "score65_74_recovery_probe_skip_reason": "source_quality_hard_block",
+        }
     return _score65_74_recovery_probe_repeat_guard(
         stock,
         code,
@@ -53872,63 +53896,85 @@ def _handle_watching_strategy_branch(
                                         "recheck_count": recheck_attempt_count,
                                     }
                                 )
-                                if recheck_action == "BUY":
+                                recheck_wait_probe_handoff = (
+                                    _canonical_wait_probe_handoff_active(
+                                        recheck_decision,
+                                        ai_action=recheck_action,
+                                        now_ts=now_ts,
+                                    )
+                                )
+                                probe_intent_revoked = (
+                                    _early_accel_strong_bundle_recheck_revokes_probe_intent(
+                                        recheck_decision
+                                    )
+                                )
+                                early_accel_strong_bundle_recheck[
+                                    "wait_probe_handoff"
+                                ] = recheck_wait_probe_handoff
+                                early_accel_strong_bundle_recheck[
+                                    "probe_intent_revoked"
+                                ] = probe_intent_revoked
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        "last_watching_ai_action": recheck_action,
+                                        "last_watching_ai_score": recheck_score,
+                                        "last_watching_ai_score_raw": recheck_score,
+                                        "last_watching_ai_reason": str(
+                                            recheck_decision.get("reason")
+                                            or early_accel_recheck_reason
+                                            or ""
+                                        )[:240],
+                                        "last_watching_ai_confirmed_at": recheck_completed_at,
+                                        "last_watching_ai_result_source": str(
+                                            recheck_decision.get("ai_result_source")
+                                            or "live"
+                                        ).lower(),
+                                        "last_watching_ai_snapshot_id": (
+                                            recheck_decision.get(
+                                                "ai_decision_snapshot_id"
+                                            )
+                                            or recheck_decision.get(
+                                                "ai_input_snapshot_id"
+                                            )
+                                            or recheck_decision.get(
+                                                "ai_market_snapshot_id"
+                                            )
+                                        ),
+                                        "last_watching_ai_decision_trace_id": (
+                                            recheck_decision.get(
+                                                "ai_decision_trace_id"
+                                            )
+                                            or ""
+                                        ),
+                                        "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
+                                            recheck_decision
+                                        ),
+                                    },
+                                )
+                                ai_call_trigger_reason = (
+                                    "early_accel_strong_bundle_recheck"
+                                )
+                                ai_decision = dict(recheck_decision or {})
+                                action = recheck_action
+                                ai_score = recheck_score
+                                raw_ai_score = recheck_score
+                                reason = str(
+                                    ai_decision.get("reason") or reason or ""
+                                )
+                                if recheck_action == "BUY" or recheck_wait_probe_handoff:
                                     early_accel_strong_bundle_recheck[
                                         "recheck_failure_class"
                                     ] = "not_applicable"
+                                    if recheck_wait_probe_handoff:
+                                        early_accel_strong_bundle_recheck[
+                                            "skip_reason"
+                                        ] = "recheck_wait_probe_handoff"
                                     _log_early_accel_strong_bundle_recheck(
                                         stock,
                                         code,
                                         "early_accel_strong_bundle_recheck_corrected",
                                         early_accel_strong_bundle_recheck,
-                                    )
-                                    _mutate_stock_state(
-                                        stock,
-                                        set_fields={
-                                            "last_watching_ai_action": recheck_action,
-                                            "last_watching_ai_score": recheck_score,
-                                            "last_watching_ai_score_raw": recheck_score,
-                                            "last_watching_ai_reason": str(
-                                                recheck_decision.get("reason")
-                                                or early_accel_recheck_reason
-                                                or ""
-                                            )[:240],
-                                            "last_watching_ai_confirmed_at": recheck_completed_at,
-                                            "last_watching_ai_result_source": str(
-                                                recheck_decision.get("ai_result_source")
-                                                or "live"
-                                            ).lower(),
-                                            "last_watching_ai_snapshot_id": (
-                                                recheck_decision.get(
-                                                    "ai_decision_snapshot_id"
-                                                )
-                                                or recheck_decision.get(
-                                                    "ai_input_snapshot_id"
-                                                )
-                                                or recheck_decision.get(
-                                                    "ai_market_snapshot_id"
-                                                )
-                                            ),
-                                            "last_watching_ai_decision_trace_id": (
-                                                recheck_decision.get(
-                                                    "ai_decision_trace_id"
-                                                )
-                                                or ""
-                                            ),
-                                            "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
-                                                recheck_decision
-                                            ),
-                                        },
-                                    )
-                                    ai_call_trigger_reason = (
-                                        "early_accel_strong_bundle_recheck"
-                                    )
-                                    ai_decision = dict(recheck_decision or {})
-                                    action = recheck_action
-                                    ai_score = recheck_score
-                                    raw_ai_score = recheck_score
-                                    reason = str(
-                                        ai_decision.get("reason") or reason or ""
                                     )
                                 else:
                                     early_accel_strong_bundle_recheck["skip_reason"] = (
