@@ -10258,6 +10258,79 @@ def test_rising_missed_nxt_post_block_sampler_caps_active_evaluations(monkeypatc
     assert skipped["fields"]["rising_missed_nxt_post_block_sampler_active_count"] == 1
 
 
+def test_rising_missed_nxt_post_block_sampler_coalesces_repeated_causal_block(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 7, 14, 16, 30, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-14",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_MAX_ACTIVE", "1"
+    )
+    published = []
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event", lambda *args, **kwargs: None)
+
+    def register(evaluation_id, reason, *, promotion_id=""):
+        return state_handlers._register_rising_missed_nxt_post_block_sampler(
+            {"name": "NXT COALESCE", "scanner_promotion_id": promotion_id},
+            "123473",
+            {
+                "rising_missed_tp1_evaluation_id": evaluation_id,
+                "rising_missed_market_session_bucket": "nxt_entry_window",
+                "rising_missed_effective_venue": "NXT",
+                "rising_missed_tp1_effective_price": 10000,
+                "source_block_stage": "tp1_selector",
+                "source_block_reason": reason,
+            },
+            now_ts=start_ts + (1 if evaluation_id.endswith("2") else 0),
+        )
+
+    assert register("nxt-coalesce-1", "tp1_micro_ws_unavailable") is True
+    assert register("nxt-coalesce-2", "tp1_micro_ws_unavailable") is True
+    assert len(state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) == 1
+    canonical = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[
+        "nxt-coalesce-1"
+    ]
+    assert canonical["coalesced_registration_count"] == 1
+    assert canonical["coalesced_latest_evaluation_id"] == "nxt-coalesce-2"
+    assert len(published) == 1
+    persisted = json.loads(
+        state_handlers.RISING_MISSED_NXT_POST_BLOCK_SAMPLER_STATE_PATH.read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["active_samplers"][0]["coalesced_registration_count"] == 1
+    assert (
+        persisted["active_samplers"][0]["coalesced_latest_evaluation_id"]
+        == "nxt-coalesce-2"
+    )
+
+    assert register("nxt-distinct-1", "different_reason") is False
+
+    state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.clear()
+    published.clear()
+    assert register(
+        "nxt-promotion-1", "first_reason", promotion_id="promotion-1"
+    ) is True
+    assert register(
+        "nxt-promotion-2", "different_reason", promotion_id="promotion-1"
+    ) is True
+    assert len(state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) == 1
+    assert len(published) == 1
+
+
 def test_rising_missed_nxt_post_block_sampler_restores_state_and_subscription(
     monkeypatch,
 ):
@@ -10325,6 +10398,68 @@ def test_rising_missed_nxt_post_block_sampler_restores_state_and_subscription(
         ]
         is True
     )
+
+
+def test_rising_missed_nxt_post_block_sampler_restore_coalesces_duplicate_state(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 7, 14, 16, 30, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-14",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_MAX_ACTIVE", "1"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event", lambda *args, **kwargs: None)
+    base = {
+        "stock_code": "123475",
+        "stock_name": "NXT RESTORE COALESCE",
+        "market_session_bucket": "nxt_entry_window",
+        "effective_venue": "NXT",
+        "source_block_stage": "tp1_selector",
+        "source_block_reason": "tp1_micro_ws_unavailable",
+        "entry_price": 10000,
+        "registered_at": start_ts,
+        "expires_at": start_ts + 1200,
+    }
+    state_handlers.RISING_MISSED_NXT_POST_BLOCK_SAMPLER_STATE_PATH.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "active_date": "2026-07-14",
+                "active_samplers": [
+                    {**base, "evaluation_id": "nxt-restore-duplicate-1"},
+                    {
+                        **base,
+                        "evaluation_id": "nxt-restore-duplicate-2",
+                        "registered_at": start_ts + 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored_count = state_handlers._restore_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts + 2
+    )
+
+    assert restored_count == 1
+    assert len(state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) == 1
+    restored = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[
+        "nxt-restore-duplicate-1"
+    ]
+    assert restored["coalesced_registration_count"] == 1
+    assert restored["coalesced_latest_evaluation_id"] == "nxt-restore-duplicate-2"
 
 
 def test_rising_missed_nxt_post_block_sampler_does_not_restore_expired_state(

@@ -66,6 +66,55 @@ def _trusted_pressure(fields):
     return out
 
 
+def test_holding_pipeline_stable_block_logging_is_bounded_and_preserves_changes(
+    monkeypatch,
+):
+    emitted = []
+    times = iter((100.0, 101.0, 102.0, 117.0))
+    monkeypatch.setenv("KORSTOCKSCAN_HOLDING_PIPELINE_STABLE_BLOCK_LOG_INTERVAL_SEC", "15")
+    monkeypatch.setattr(handlers.time, "time", lambda: next(times))
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    stock = {"id": 1, "name": "테스트"}
+    base = {
+        "fast_exit_broker_route": "KRX",
+        "fast_exit_execution_cohort": "OUTSIDE_SUPPORTED_SESSION",
+        "fast_exit_route_guard_reason": "krx_only_outside_krx_regular_session",
+        "fast_exit_route_source_quality_blocked": False,
+    }
+
+    handlers._log_holding_pipeline(
+        stock, "001740", "scalp_fast_exit_venue_blocked", **base
+    )
+    handlers._log_holding_pipeline(
+        stock, "001740", "scalp_fast_exit_venue_blocked", **base
+    )
+    handlers._log_holding_pipeline(
+        stock,
+        "001740",
+        "scalp_fast_exit_venue_blocked",
+        **{**base, "fast_exit_execution_cohort": "NXT_AFTERMARKET"},
+    )
+    handlers._log_holding_pipeline(
+        stock,
+        "001740",
+        "scalp_fast_exit_venue_blocked",
+        **{**base, "fast_exit_execution_cohort": "NXT_AFTERMARKET"},
+    )
+
+    assert len(emitted) == 3
+    first_fields = emitted[0][1]["fields"]
+    changed_fields = emitted[1][1]["fields"]
+    resumed_fields = emitted[2][1]["fields"]
+    assert first_fields["holding_pipeline_stable_block_suppressed_count"] == 0
+    assert changed_fields["holding_pipeline_stable_block_signature_changed"] is True
+    assert changed_fields["holding_pipeline_stable_block_suppressed_count"] == 1
+    assert resumed_fields["holding_pipeline_stable_block_suppressed_count"] == 0
+
+
 def test_reversal_add_runtime_supply_context_rejects_untrusted_pressure():
     context = _reversal_add_runtime_supply_context(
         {

@@ -25,6 +25,63 @@ def _write_pipeline_events(tmp_path, target_date: str, rows: list[dict]) -> None
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def test_load_entry_events_streams_and_excludes_non_entry_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-08-03"
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "HOLDING_PIPELINE",
+                "stage": "holding_ws_freshness_blocked",
+                "stock_name": "제외",
+                "stock_code": "001740",
+                "fields": {},
+                "emitted_at": "2026-08-03T15:50:00",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "budget_pass",
+                "stock_name": "포함",
+                "stock_code": "005930",
+                "record_id": 1,
+                "fields": {"qty": 1},
+                "emitted_at": "2026-08-03T15:50:00.500000",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "wait65_79_ev_candidate",
+                "stock_name": "포함",
+                "stock_code": "005930",
+                "record_id": 1,
+                "fields": {"action": "WAIT"},
+                "emitted_at": "2026-08-03T15:50:01",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "scalping_scanner_heavy_eval_completion",
+                "stock_name": "비후보",
+                "stock_code": "000660",
+                "record_id": 2,
+                "fields": {},
+                "emitted_at": "2026-08-03T15:50:02",
+                "emitted_date": target_date,
+            },
+        ],
+    )
+
+    events = report_mod._load_entry_events(target_date)
+
+    assert [(event.code, event.stage) for event in events] == [
+        ("005930", "budget_pass"),
+        ("005930", "wait65_79_ev_candidate"),
+    ]
+
+
 def test_wait6579_minute_forward_source_quality_marks_truncated_ka10080_window_partial():
     quality = report_mod._minute_forward_source_quality(
         {"bars": 10},

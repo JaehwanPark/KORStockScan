@@ -14318,6 +14318,57 @@ def _persist_rising_missed_nxt_post_block_samplers() -> None:
         log_error(f"[RISING_MISSED_NXT_POST_BLOCK] state persist failed: {exc}")
 
 
+def _rising_missed_nxt_post_block_sampler_causal_key(
+    sampler: dict[str, Any],
+) -> str:
+    stock_code = str(sampler.get("stock_code") or "").strip()[:6]
+    promotion_id = str(sampler.get("scanner_promotion_id") or "").strip()
+    if promotion_id:
+        return f"promotion:{stock_code}:{promotion_id}"
+    source_block_stage = str(
+        sampler.get("source_block_stage") or "tp1_selector"
+    ).strip()
+    source_block_reason = str(
+        sampler.get("source_block_reason") or "not_evaluated"
+    ).strip()
+    return f"block:{stock_code}:{source_block_stage}:{source_block_reason}"
+
+
+def _coalesce_rising_missed_nxt_post_block_sampler(
+    existing: dict[str, Any],
+    incoming: dict[str, Any],
+    *,
+    observed_ts: float,
+) -> None:
+    """Merge repeated causal observations without extending the first horizon."""
+
+    incoming_evaluation_id = str(incoming.get("evaluation_id") or "").strip()
+    existing["coalesced_registration_count"] = (
+        _safe_int(existing.get("coalesced_registration_count"), 0) + 1
+    )
+    existing["coalesced_latest_evaluation_id"] = incoming_evaluation_id or "-"
+    existing["coalesced_latest_registered_at"] = float(observed_ts)
+    existing["coalesced_latest_source_block_stage"] = str(
+        incoming.get("source_block_stage") or "tp1_selector"
+    )
+    existing["coalesced_latest_source_block_reason"] = str(
+        incoming.get("source_block_reason") or "not_evaluated"
+    )
+    incoming_entry_price = _safe_float(incoming.get("entry_price"), 0.0)
+    if incoming_entry_price > 0:
+        existing["coalesced_latest_entry_price"] = incoming_entry_price
+        original_entry_price = _safe_float(existing.get("entry_price"), 0.0)
+        existing["coalesced_latest_entry_price_delta_pct"] = (
+            round(
+                ((incoming_entry_price - original_entry_price) / original_entry_price)
+                * 100.0,
+                6,
+            )
+            if original_entry_price > 0
+            else None
+        )
+
+
 def _restore_rising_missed_nxt_post_block_samplers(
     *, now_ts: float | None = None
 ) -> int:
@@ -14350,8 +14401,6 @@ def _restore_rising_missed_nxt_post_block_samplers(
     max_active = _rising_missed_nxt_post_block_sampler_max_active()
     with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
         for raw in raw_samplers:
-            if len(_RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) >= max_active:
-                break
             if not isinstance(raw, dict):
                 continue
             evaluation_id = str(raw.get("evaluation_id") or "").strip()
@@ -14382,6 +14431,26 @@ def _restore_rising_missed_nxt_post_block_samplers(
                     normalized_value if math.isfinite(normalized_value) else None
                 )
             if evaluation_id in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS:
+                continue
+            causal_key = _rising_missed_nxt_post_block_sampler_causal_key(sampler)
+            causal_existing = next(
+                (
+                    item
+                    for item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.values()
+                    if _safe_float(item.get("expires_at"), 0.0) > observed_ts
+                    and _rising_missed_nxt_post_block_sampler_causal_key(item)
+                    == causal_key
+                ),
+                None,
+            )
+            if causal_existing is not None:
+                _coalesce_rising_missed_nxt_post_block_sampler(
+                    causal_existing,
+                    sampler,
+                    observed_ts=observed_ts,
+                )
+                continue
+            if len(_RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) >= max_active:
                 continue
             _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[evaluation_id] = sampler
             restored.append(sampler)
@@ -14470,6 +14539,19 @@ def _emit_rising_missed_nxt_post_block_sampler_event(
             "rising_missed_nxt_post_block_source_block_residual_submitted_leg_count": (
                 _safe_int(sampler.get("source_block_residual_submitted_leg_count"), 0)
             ),
+            "rising_missed_nxt_post_block_scanner_promotion_id": sampler.get(
+                "scanner_promotion_id"
+            )
+            or "-",
+            "rising_missed_nxt_post_block_causal_key": (
+                _rising_missed_nxt_post_block_sampler_causal_key(sampler)
+            ),
+            "rising_missed_nxt_post_block_coalesced_registration_count": (
+                _safe_int(sampler.get("coalesced_registration_count"), 0)
+            ),
+            "rising_missed_nxt_post_block_coalesced_latest_evaluation_id": (
+                sampler.get("coalesced_latest_evaluation_id") or "-"
+            ),
             **fields,
         },
     )
@@ -14537,6 +14619,11 @@ def _register_rising_missed_nxt_post_block_sampler(
         "source_block_residual_submitted_leg_count": _safe_int(
             fields.get("source_block_residual_submitted_leg_count"), 0
         ),
+        "scanner_promotion_id": str(
+            fields.get("scanner_promotion_id")
+            or (stock or {}).get("scanner_promotion_id")
+            or ""
+        ).strip(),
         "entry_price": float(entry_price or 0.0),
         "registered_at": observed_ts,
         "expires_at": observed_ts + horizon_sec,
@@ -14565,19 +14652,47 @@ def _register_rising_missed_nxt_post_block_sampler(
         return False
 
     max_active_reached = False
+    causal_sampler_coalesced = False
     active_count = 0
     with _RISING_MISSED_NXT_POST_BLOCK_SAMPLER_LOCK:
         if evaluation_id in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS:
             return True
+        expired_evaluation_ids = [
+            key
+            for key, item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.items()
+            if _safe_float(item.get("expires_at"), 0.0) <= observed_ts
+        ]
+        for expired_evaluation_id in expired_evaluation_ids:
+            _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.pop(expired_evaluation_id, None)
+        causal_key = _rising_missed_nxt_post_block_sampler_causal_key(sampler)
+        causal_existing = next(
+            (
+                item
+                for item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.values()
+                if _rising_missed_nxt_post_block_sampler_causal_key(item) == causal_key
+            ),
+            None,
+        )
+        if causal_existing is not None:
+            _coalesce_rising_missed_nxt_post_block_sampler(
+                causal_existing,
+                sampler,
+                observed_ts=observed_ts,
+            )
+            causal_sampler_coalesced = True
         active_count = sum(
             1
             for item in _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.values()
             if _safe_float(item.get("expires_at"), 0.0) > observed_ts
         )
-        if active_count >= _rising_missed_nxt_post_block_sampler_max_active():
-            max_active_reached = True
-        else:
-            _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[evaluation_id] = sampler
+        if not causal_sampler_coalesced:
+            if active_count >= _rising_missed_nxt_post_block_sampler_max_active():
+                max_active_reached = True
+            else:
+                _RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[evaluation_id] = sampler
+    if causal_sampler_coalesced:
+        _persist_rising_missed_nxt_post_block_samplers()
+        return True
     if max_active_reached:
         _emit_rising_missed_nxt_post_block_sampler_event(
             sampler,
@@ -19046,7 +19161,98 @@ def _holding_stage_needs_probe_residual_causality(stage: str) -> bool:
     )
 
 
+_HOLDING_PIPELINE_STABLE_BLOCK_SIGNATURE_KEYS = {
+    "scalp_fast_exit_venue_blocked": (
+        "fast_exit_broker_route",
+        "fast_exit_execution_cohort",
+        "fast_exit_route_guard_reason",
+        "fast_exit_route_source_quality_blocked",
+    ),
+    "holding_ws_freshness_blocked": (
+        "holding_ws_freshness_block_reason",
+        "holding_ws_recovery_action",
+        "holding_ws_recovery_outcome",
+        "holding_ws_repair_cycle_state",
+    ),
+}
+
+
+def _holding_pipeline_stable_block_log_decision(
+    stock: dict | None,
+    stage: str,
+    fields: dict | None,
+    *,
+    now_ts: float | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """Bound unchanged blocker telemetry without changing holding decisions."""
+
+    signature_keys = _HOLDING_PIPELINE_STABLE_BLOCK_SIGNATURE_KEYS.get(
+        str(stage or "")
+    )
+    if not signature_keys or not isinstance(stock, dict):
+        return True, {}
+    observed_at = float(time.time() if now_ts is None else now_ts)
+    interval_sec = max(
+        1.0,
+        min(
+            60.0,
+            _rule_float("HOLDING_PIPELINE_STABLE_BLOCK_LOG_INTERVAL_SEC", 15.0),
+        ),
+    )
+    source_fields = fields if isinstance(fields, dict) else {}
+    signature = "|".join(
+        f"{key}={source_fields.get(key, '-')}" for key in signature_keys
+    )
+    state_key = "_holding_pipeline_stable_block_log_state"
+    with ENTRY_LOCK:
+        state = stock.get(state_key)
+        if not isinstance(state, dict):
+            state = {}
+            stock[state_key] = state
+        stage_state = state.get(str(stage))
+        if not isinstance(stage_state, dict):
+            stage_state = {}
+            state[str(stage)] = stage_state
+        previous_signature = str(stage_state.get("signature") or "")
+        previous_logged_at = _safe_float(stage_state.get("logged_at"), 0.0)
+        signature_unchanged = bool(previous_signature == signature)
+        if (
+            signature_unchanged
+            and previous_logged_at > 0
+            and observed_at - previous_logged_at < interval_sec
+        ):
+            stage_state["suppressed_count"] = (
+                _safe_int(stage_state.get("suppressed_count"), 0) + 1
+            )
+            return False, {}
+        suppressed_count = _safe_int(stage_state.get("suppressed_count"), 0)
+        stage_state.update(
+            {
+                "signature": signature,
+                "logged_at": observed_at,
+                "suppressed_count": 0,
+            }
+        )
+    return True, {
+        "holding_pipeline_stable_block_log_throttled": True,
+        "holding_pipeline_stable_block_log_interval_sec": interval_sec,
+        "holding_pipeline_stable_block_signature": signature,
+        "holding_pipeline_stable_block_signature_changed": bool(
+            previous_signature and not signature_unchanged
+        ),
+        "holding_pipeline_stable_block_suppressed_count": suppressed_count,
+    }
+
+
 def _log_holding_pipeline(stock, code, stage, **fields):
+    should_emit, throttle_fields = _holding_pipeline_stable_block_log_decision(
+        stock,
+        stage,
+        fields,
+    )
+    if not should_emit:
+        return
+    fields.update(throttle_fields)
     if _holding_stage_needs_probe_residual_causality(stage):
         for key, value in _probe_residual_scale_in_causal_fields(stock).items():
             fields.setdefault(key, value)

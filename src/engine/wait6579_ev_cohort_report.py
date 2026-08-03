@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,7 +16,7 @@ from src.engine.scalping.position_sizing_allocator import (
     resolve_scalping_allocation,
 )
 from src.utils.constants import DATA_DIR, TRADING_RULES
-from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto, read_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.logger import log_error
 
 WAIT6579_EV_COHORT_SCHEMA_VERSION = 2
@@ -59,6 +60,7 @@ _PREFLIGHT_STAGES = {
     *_ORDER_FAIL_STAGES,
 }
 _PREFLIGHT_STAGE_MARKERS = tuple(f'"stage": "{stage}"' for stage in _PREFLIGHT_STAGES)
+_RAW_STOCK_CODE_PATTERN = re.compile(r'"stock_code"\s*:\s*"([^"\\]+)"')
 
 
 @dataclass
@@ -74,10 +76,6 @@ class EntryEvent:
 
 def _pipeline_events_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-
-
-def _load_jsonl(path: Path) -> list[dict]:
-    return read_jsonl(path)
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -411,30 +409,80 @@ def _truthy(value) -> bool:
 
 
 def _load_entry_events(target_date: str) -> list[EntryEvent]:
-    rows = _load_jsonl(_pipeline_events_path(target_date))
+    path = existing_or_gzip_path(_pipeline_events_path(target_date))
     events: list[EntryEvent] = []
-    for row in rows:
-        if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
-            continue
-        fields = {
-            str(key): str(value) for key, value in dict(row.get("fields") or {}).items()
-        }
-        if _is_early_accel_recheck_retry(fields):
-            continue
-        code = str(row.get("stock_code") or "").strip()[:6]
-        if not code:
-            continue
-        events.append(
-            EntryEvent(
-                emitted_at=str(row.get("emitted_at") or ""),
-                signal_date=str(row.get("emitted_date") or target_date),
-                name=str(row.get("stock_name") or ""),
-                code=code,
-                stage=str(row.get("stage") or ""),
-                record_id=str(row.get("record_id") or row.get("id") or ""),
-                fields=fields,
+    if not path.exists():
+        return events
+
+    pipeline_markers = (
+        '"pipeline":"ENTRY_PIPELINE"',
+        '"pipeline": "ENTRY_PIPELINE"',
+    )
+    candidate_stage_markers = (
+        f'"stage":"{_WAIT6579_STAGE}"',
+        f'"stage": "{_WAIT6579_STAGE}"',
+    )
+    candidate_codes: set[str] = set()
+    with open_text_auto(path) as handle:
+        for raw in handle:
+            if not any(marker in raw for marker in candidate_stage_markers):
+                continue
+            try:
+                row = json.loads(raw)
+            except Exception:
+                continue
+            if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
+                continue
+            if str(row.get("stage") or "").strip() != _WAIT6579_STAGE:
+                continue
+            code = str(row.get("stock_code") or "").strip()[:6]
+            if code:
+                candidate_codes.add(code)
+    if not candidate_codes:
+        return events
+
+    with open_text_auto(path) as handle:
+        for raw in handle:
+            # The daily pipeline source can be multiple gigabytes.  Reject
+            # non-entry and non-candidate rows before JSON decoding.  The
+            # first pass discovers only WAIT65~79 candidate symbols; this
+            # second pass retains every ENTRY stage for those symbols so the
+            # attempt reconstruction remains equivalent without retaining
+            # the day's unrelated high-volume scanner telemetry.
+            if not any(marker in raw for marker in pipeline_markers):
+                continue
+            raw_code_match = _RAW_STOCK_CODE_PATTERN.search(raw)
+            if (
+                raw_code_match is None
+                or raw_code_match.group(1).strip()[:6] not in candidate_codes
+            ):
+                continue
+            try:
+                row = json.loads(raw)
+            except Exception:
+                continue
+            if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
+                continue
+            fields = {
+                str(key): str(value)
+                for key, value in dict(row.get("fields") or {}).items()
+            }
+            if _is_early_accel_recheck_retry(fields):
+                continue
+            code = str(row.get("stock_code") or "").strip()[:6]
+            if not code or code not in candidate_codes:
+                continue
+            events.append(
+                EntryEvent(
+                    emitted_at=str(row.get("emitted_at") or ""),
+                    signal_date=str(row.get("emitted_date") or target_date),
+                    name=str(row.get("stock_name") or ""),
+                    code=code,
+                    stage=str(row.get("stage") or ""),
+                    record_id=str(row.get("record_id") or row.get("id") or ""),
+                    fields=fields,
+                )
             )
-        )
     events.sort(
         key=lambda item: (
             _parse_event_dt(item.emitted_at) or datetime.min,
