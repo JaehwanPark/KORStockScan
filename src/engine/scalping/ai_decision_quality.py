@@ -306,6 +306,9 @@ EVIDENCE_VALUES = {
 MUTUALLY_EXCLUSIVE_REASON_CODE_GROUPS = (
     {"edge_positive", "edge_absent", "no_positive_edge"},
     {"risk_reward_favorable", "risk_reward_unfavorable"},
+    {"trend_supportive", "trend_adverse"},
+    {"liquidity_supportive", "liquidity_adverse"},
+    {"tape_supportive", "tape_adverse"},
     {
         "recovery_trigger_confirmed",
         "recovery_trigger_required",
@@ -337,6 +340,26 @@ def resolve_candidate_reason_code_conflicts(
     edge_state = str(response.get("edge_state") or "").strip().upper()
     positive_edge = str(evidence.get("positive_edge") or "").strip().lower()
     trigger = str(evidence.get("trigger") or "").strip().lower()
+    directional_preference = {
+        "supportive": "supportive",
+        "adverse": "adverse",
+        # A mixed or insufficient evidence axis supports neither directional
+        # label.  Non-BUY normalization may remove both labels while retaining
+        # the model's original list in decision-quality provenance.
+        "mixed": "remove_all",
+        "insufficient": "remove_all",
+    }
+
+    def _directional_reason_preference(axis: str) -> str | None:
+        direction = directional_preference.get(
+            str(evidence.get(axis) or "").strip().lower()
+        )
+        if direction == "remove_all":
+            return direction
+        if direction in {"supportive", "adverse"}:
+            return f"{axis}_{direction}"
+        return None
+
     edge_preferred = None
     if edge_state == "EDGE" and positive_edge in {"moderate", "strong"}:
         edge_preferred = "edge_positive"
@@ -347,6 +370,15 @@ def resolve_candidate_reason_code_conflicts(
     preferred_by_group = {
         frozenset({"edge_positive", "edge_absent", "no_positive_edge"}): edge_preferred,
         frozenset({"risk_reward_favorable", "risk_reward_unfavorable"}): None,
+        frozenset({"trend_supportive", "trend_adverse"}): (
+            _directional_reason_preference("trend")
+        ),
+        frozenset({"liquidity_supportive", "liquidity_adverse"}): (
+            _directional_reason_preference("liquidity")
+        ),
+        frozenset({"tape_supportive", "tape_adverse"}): (
+            _directional_reason_preference("tape")
+        ),
         frozenset(
             {
                 "recovery_trigger_confirmed",
@@ -384,7 +416,13 @@ def resolve_candidate_reason_code_conflicts(
             continue
         preferred = preferred_by_group.get(frozenset(group))
         candidates = {resolved[index] for index in indexes}
-        if preferred is None or preferred not in candidates:
+        if preferred is None:
+            continue
+        if preferred == "remove_all":
+            resolved = [code for code in resolved if code not in group]
+            changed = True
+            continue
+        if preferred not in candidates:
             continue
         keep = preferred
         kept = False

@@ -4030,6 +4030,57 @@ def test_decision_quality_v2_7_repairs_non_buy_reason_code_conflict():
     )
 
 
+def test_decision_quality_v2_7_repairs_directional_reason_conflicts_from_evidence():
+    engine = _build_engine()
+    model_reason_codes = [
+        "edge_absent",
+        "distribution_adverse",
+        "liquidity_adverse",
+        "liquidity_supportive",
+        "tape_supportive",
+        "tape_adverse",
+    ]
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.0,
+            "expected_downside_pct": -0.8,
+            "confidence": 76,
+            "reason_codes": model_reason_codes,
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "not_applicable",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["reason_codes"] == [
+        "edge_absent",
+        "distribution_adverse",
+        "liquidity_adverse",
+    ]
+    assert result["decision_quality_model_reason_codes"] == model_reason_codes
+    assert result["decision_quality_contract_repair_applied"] is True
+    assert result["decision_quality_contract_repair_codes"] == [
+        "non_buy_reason_code_conflicts_resolved"
+    ]
+    assert result["decision_quality_contract_original_errors"] == [
+        "reason_codes_conflict"
+    ]
+
+
 def test_decision_quality_v2_7_repairs_stage_wait_alias_without_buy_authority():
     engine = _build_engine()
     result = engine._normalize_decision_quality_entry_result(

@@ -2074,6 +2074,41 @@ def test_entry_candidate_rejects_trigger_reason_evidence_conflict():
         ]
 
 
+def test_entry_candidate_rejects_directional_reason_code_conflicts():
+    base = {
+        "edge_state": "NO_EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.2,
+        "expected_downside_pct": -0.8,
+        "confidence": 78,
+        "reason_codes": ["edge_absent"],
+        "evidence": {
+            "trend": "adverse",
+            "liquidity": "adverse",
+            "tape": "mixed",
+            "risk": "high",
+            "uncertainty": "medium",
+            "setup": "no_setup",
+            "positive_edge": "weak",
+            "adverse_risk": "high",
+            "trigger": "not_applicable",
+        },
+    }
+
+    for supportive, adverse in (
+        ("trend_supportive", "trend_adverse"),
+        ("liquidity_supportive", "liquidity_adverse"),
+        ("tape_supportive", "tape_adverse"),
+    ):
+        response = {
+            **base,
+            "reason_codes": ["edge_absent", supportive, adverse],
+        }
+        assert quality.validate_candidate_response(response, stage="entry") == [
+            "reason_codes_conflict"
+        ]
+
+
 def test_entry_candidate_contract_separates_structural_edge_and_adverse_risk():
     exact_payload = {
         "current": {"fluctuation_pct": 8.0},
