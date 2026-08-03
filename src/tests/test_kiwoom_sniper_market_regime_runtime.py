@@ -4411,6 +4411,90 @@ def test_runtime_iteration_targets_prioritizes_due_rising_recheck():
     assert [target["id"] for target in ordered] == ["due_recheck", "evaluated_positive"]
 
 
+def test_runtime_iteration_targets_prioritizes_market_gainer_awaiting_first_ai(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
+    )
+    targets = [
+        {
+            "id": "due_recheck",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1450.0,
+            "_scanner_last_full_eval_epoch": 1510.0,
+            "_scanner_rising_cooldown_recheck_after_epoch": 1599.0,
+            "price_delta_since_first_seen_pct": "3.00",
+        },
+        {
+            "id": "market_gainer_awaiting_ai",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "source_signature": "PREV_CLOSE_GAINER,VALUE_TOP",
+            "scanner_promotion_emitted_epoch": 1500.0,
+            "entry_armed_at_epoch": 1500.0,
+            "_scanner_last_full_eval_epoch": 1550.0,
+            "_scanner_last_heavy_eval_attempt_epoch": 1550.0,
+            "price_delta_since_first_seen_pct": "0.50",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
+
+    assert [target["id"] for target in ordered] == [
+        "market_gainer_awaiting_ai",
+        "due_recheck",
+    ]
+
+
+def test_runtime_iteration_targets_releases_market_gainer_after_evaluated_ai(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
+    )
+    targets = [
+        {
+            "id": "market_gainer_evaluated",
+            "code": "000001",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "source_signature": "PREV_CLOSE_GAINER",
+            "scanner_promotion_emitted_epoch": 1500.0,
+            "entry_armed_at_epoch": 1500.0,
+            "_scanner_last_full_eval_epoch": 1550.0,
+            "last_watching_ai_attempt_completed_at": 1551.0,
+            "last_watching_ai_attempt_result_source": "live",
+            "last_watching_ai_attempt_evaluation_status": "evaluated",
+            "price_delta_since_first_seen_pct": "3.00",
+        },
+        {
+            "id": "due_recheck",
+            "code": "000002",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "entry_armed_at_epoch": 1450.0,
+            "_scanner_last_full_eval_epoch": 1510.0,
+            "_scanner_rising_cooldown_recheck_after_epoch": 1599.0,
+            "price_delta_since_first_seen_pct": "0.50",
+        },
+    ]
+
+    ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
+
+    assert [target["id"] for target in ordered] == [
+        "due_recheck",
+        "market_gainer_evaluated",
+    ]
+
+
 def test_runtime_iteration_targets_prioritizes_due_latency_direct_recheck():
     targets = [
         {
@@ -9879,7 +9963,7 @@ def test_scanner_queue_lag_eviction_reallocates_after_repeated_lag(monkeypatch):
     assert event_fields["queue_lag_anchor_field"] == "entry_armed_at_epoch"
 
 
-def test_market_gainer_reserved_watch_retains_until_first_heavy_eval(monkeypatch):
+def test_market_gainer_reserved_watch_retains_until_first_evaluated_ai(monkeypatch):
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
     )
@@ -9913,7 +9997,7 @@ def test_market_gainer_reserved_watch_retains_until_first_heavy_eval(monkeypatch
         assert decision["retention_active"] is True
         assert (
             decision["market_gainer_first_eval_retention_reason"]
-            == "awaiting_first_heavy_eval_or_ai_terminal"
+            == "awaiting_first_ai_evaluated"
         )
         assert decision["actual_order_submitted"] is False
         assert decision["broker_order_forbidden"] is True
@@ -9923,9 +10007,52 @@ def test_market_gainer_reserved_watch_retains_until_first_heavy_eval(monkeypatch
         target,
         now_ts=1067.0,
     )
+    assert released["retention_active"] is True
+    assert released["market_gainer_first_eval_retention_reason"] == (
+        "heavy_eval_observed_awaiting_first_ai_evaluated"
+    )
+
+    target.update(
+        {
+            "last_watching_ai_attempt_completed_at": 1068.0,
+            "last_watching_ai_attempt_result_source": "live",
+            "last_watching_ai_attempt_evaluation_status": "evaluated",
+        }
+    )
+    released = kiwoom_sniper_v2._market_gainer_first_eval_retention(
+        target,
+        now_ts=1069.0,
+    )
     assert released["retention_active"] is False
     assert released["market_gainer_first_eval_retention_reason"] == (
-        "first_heavy_eval_observed"
+        "first_ai_evaluated_observed"
+    )
+
+
+def test_market_gainer_reserved_watch_keeps_preflight_blocked_attempt(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
+    )
+    target = _scanner_watch_stock(
+        source_signature="PREV_CLOSE_GAINER",
+        scanner_promotion_emitted_epoch=1000.0,
+        _scanner_last_heavy_eval_attempt_epoch=1010.0,
+        last_watching_ai_attempt_completed_at=1011.0,
+        last_watching_ai_attempt_result_source="input_preflight_blocked",
+        last_watching_ai_attempt_evaluation_status=(
+            "not_evaluated_provider_or_preflight"
+        ),
+    )
+
+    decision = kiwoom_sniper_v2._market_gainer_first_eval_retention(
+        target,
+        now_ts=1012.0,
+    )
+
+    assert decision["retention_active"] is True
+    assert decision["market_gainer_first_ai_evaluated_observed"] is False
+    assert decision["market_gainer_first_eval_retention_reason"] == (
+        "heavy_eval_observed_awaiting_first_ai_evaluated"
     )
 
 

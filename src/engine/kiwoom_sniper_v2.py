@@ -66,11 +66,11 @@ from src.engine.scalping.rising_missed_selection_prior import (
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
     LIMIT_DOWN_ROTATION,
-    MARKET_GAINER_SOURCE,
     OPENING_ROTATION,
     RISING_MISSED,
     classify_owner as classify_watch_budget_owner,
     limits as watch_budget_limits,
+    market_gainer_first_ai_retention,
     normalize_owner as normalize_watch_budget_owner,
     owner_allowances as watch_budget_owner_allowances,
     slot_type as watch_budget_slot_type,
@@ -3838,98 +3838,9 @@ def _reset_scanner_ws_backoff_watch_retention(target) -> None:
 
 
 def _market_gainer_first_eval_retention(target, *, now_ts) -> dict:
-    """Protect a reserved market-gainer slot until first evaluation, bounded by TTL.
+    """Compatibility wrapper for the shared first-evaluated-AI contract."""
 
-    This is observation-capacity ownership only. It never makes stale data
-    eligible, calls a provider, or bypasses submit and broker safety.
-    """
-
-    target = target if isinstance(target, dict) else {}
-    source_tokens = {
-        token.strip().upper()
-        for token in str(
-            target.get("source_signature")
-            or target.get("scanner_source_signature")
-            or ""
-        )
-        .replace("|", ",")
-        .split(",")
-        if token.strip()
-    }
-    if MARKET_GAINER_SOURCE not in source_tokens:
-        return {
-            "market_gainer_first_eval_retention_applicable": False,
-            "retention_active": False,
-        }
-    anchor_epoch = _safe_float(
-        target.get("scanner_promotion_emitted_epoch")
-        or target.get("entry_armed_at_epoch"),
-        0.0,
-    )
-    if anchor_epoch <= 0:
-        return {
-            "market_gainer_first_eval_retention_applicable": True,
-            "retention_active": False,
-            "market_gainer_first_eval_retention_reason": "promotion_anchor_missing",
-        }
-    max_sec = max(
-        1.0,
-        min(
-            600.0,
-            _safe_float(
-                os.getenv(
-                    "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC"
-                ),
-                180.0,
-            ),
-        ),
-    )
-    heavy_eval_epoch = _safe_float(
-        target.get("_scanner_last_heavy_eval_attempt_epoch"), 0.0
-    )
-    ai_attempt_epoch = max(
-        _safe_float(target.get("last_watching_ai_attempt_completed_at"), 0.0),
-        _safe_float(target.get("last_watching_ai_confirmed_at"), 0.0),
-    )
-    heavy_eval_observed = heavy_eval_epoch >= anchor_epoch
-    ai_terminal_observed = ai_attempt_epoch >= anchor_epoch
-    age_sec = max(0.0, float(now_ts) - anchor_epoch)
-    retention_active = bool(
-        age_sec < max_sec and not heavy_eval_observed and not ai_terminal_observed
-    )
-    if heavy_eval_observed:
-        reason = "first_heavy_eval_observed"
-    elif ai_terminal_observed:
-        reason = "first_ai_terminal_observed"
-    elif age_sec >= max_sec:
-        reason = "bounded_retention_expired"
-    else:
-        reason = "awaiting_first_heavy_eval_or_ai_terminal"
-    return {
-        "market_gainer_first_eval_retention_applicable": True,
-        "retention_active": retention_active,
-        "retention_reason": reason,
-        "market_gainer_first_eval_retention_reason": reason,
-        "market_gainer_first_eval_retention_age_sec": round(age_sec, 3),
-        "market_gainer_first_eval_retention_max_sec": round(max_sec, 3),
-        "market_gainer_first_eval_retention_anchor_epoch": f"{anchor_epoch:.3f}",
-        "market_gainer_first_eval_retention_heavy_eval_observed": heavy_eval_observed,
-        "market_gainer_first_eval_retention_ai_terminal_observed": ai_terminal_observed,
-        "metric_role": "scanner_observation_capacity",
-        "decision_authority": "market_gainer_reserved_watch_retention_only",
-        "window_policy": "promotion_to_first_heavy_eval_or_ai_terminal_bounded",
-        "sample_floor": "one_reserved_market_gainer_promotion",
-        "primary_decision_metric": "first_ai_reach_rate",
-        "source_quality_gate": "existing_runtime_source_quality_guards_unchanged",
-        "forbidden_uses": (
-            "stale_submit_bypass,heavy_eval_eligibility_bypass,provider_route_change,"
-            "score_or_threshold_change,order_price_or_quantity_change,"
-            "broker_guard_bypass,position_cap_release"
-        ),
-        "runtime_effect": retention_active,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
+    return market_gainer_first_ai_retention(target, now_ts=float(now_ts))
 
 
 def _scanner_queue_lag_eviction_allowed_before_recovery(
@@ -5747,6 +5658,18 @@ def _runtime_iteration_targets(targets, now_ts):
             pending_recheck = _scanner_strength_recheck_pending(target, now_ts=now_ts)
             rising_recheck = _scanner_rising_recheck_pending(target, now_ts=now_ts)
             cooldown_waiting = _scanner_cooldown_recheck_waiting(target, now_ts=now_ts)
+            first_ai_retention = market_gainer_first_ai_retention(
+                target,
+                now_ts=float(now_ts),
+            )
+            first_ai_priority_active = bool(
+                first_ai_retention.get("market_gainer_first_ai_priority_active")
+                and not cooldown_waiting
+            )
+            first_ai_retention_age_sec = _safe_float(
+                first_ai_retention.get("market_gainer_first_eval_retention_age_sec"),
+                0.0,
+            )
             positive_delta = _scanner_positive_delta_value(target)
             selection_delta = rising_missed_selection_rank_delta(target)
             watch_budget_score = _scanner_common_watch_budget_priority_score(target)
@@ -5762,10 +5685,15 @@ def _runtime_iteration_targets(targets, now_ts):
                 scheduler_rank,
                 scheduler_deadline if scheduler_rank == 0 else float("inf"),
                 (
-                    2
+                    3
                     if cooldown_waiting
-                    else (0 if pending_recheck or rising_recheck else 1)
+                    else (
+                        0
+                        if first_ai_priority_active
+                        else (1 if pending_recheck or rising_recheck else 2)
+                    )
                 ),
+                -first_ai_retention_age_sec if first_ai_priority_active else 0.0,
                 owner_rank,
                 under_10000_priority,
                 -watch_budget_score,

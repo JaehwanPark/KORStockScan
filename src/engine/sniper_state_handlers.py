@@ -156,6 +156,7 @@ from src.engine.scalping.position_sizing_allocator import (
 from src.engine.scalping.rising_missed_selection_prior import (
     rising_missed_selection_prior_fields,
 )
+from src.engine.scalping.watch_budget import market_gainer_first_ai_retention
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.sniper_entry_latency import (
@@ -17271,6 +17272,10 @@ def _scanner_runtime_queue_lag_fields(
     loop_started_epoch: float,
 ) -> dict[str, Any]:
     scanner_fields = _scanner_promotion_correlation_fields(stock)
+    first_ai_retention = market_gainer_first_ai_retention(
+        stock,
+        now_ts=float(now_ts),
+    )
     added_time = _safe_float(stock.get("added_time"), 0.0)
     armed_time = _safe_float(stock.get("entry_armed_at_epoch"), 0.0)
     anchor_time = armed_time or added_time
@@ -17332,6 +17337,24 @@ def _scanner_runtime_queue_lag_fields(
         or "not_applicable_entry_armed_at_epoch",
         "added_time": stock.get("added_time") or "not_applicable_added_time",
         "observed_epoch": f"{float(now_ts):.3f}",
+        "market_gainer_first_ai_priority_active": bool(
+            first_ai_retention.get("market_gainer_first_ai_priority_active")
+        ),
+        "market_gainer_first_eval_retention_reason": first_ai_retention.get(
+            "market_gainer_first_eval_retention_reason",
+            "not_applicable",
+        ),
+        "market_gainer_first_eval_retention_age_sec": first_ai_retention.get(
+            "market_gainer_first_eval_retention_age_sec",
+            0.0,
+        ),
+        "market_gainer_first_eval_retention_max_sec": first_ai_retention.get(
+            "market_gainer_first_eval_retention_max_sec",
+            0.0,
+        ),
+        "market_gainer_first_ai_evaluated_observed": bool(
+            first_ai_retention.get("market_gainer_first_ai_evaluated_observed")
+        ),
         **_scanner_rising_relief_observation_fields(stock),
     }
 
@@ -34911,6 +34934,7 @@ def _retry_entry_ai_submit_authority_before_block(
         result_source = (
             str(ai_decision.get("ai_result_source") or "live").strip().lower()
         )
+        contract_status = _entry_ai_contract_status(ai_decision)
         transport_timeout = result_source == "timeout" or bool(
             ai_decision.get("openai_timeout_like")
             or ai_decision.get("openai_http_timeout_budget_exhausted")
@@ -34937,10 +34961,7 @@ def _retry_entry_ai_submit_authority_before_block(
             result_source in {"live", "prior_valid"}
             and not transport_timeout
             and bool(ai_decision.get("ai_parse_ok", True))
-            and str(ai_decision.get("decision_quality_contract_status") or "")
-            .strip()
-            .lower()
-            not in {"semantic_rejected", "schema_semantic_rejected"}
+            and contract_status not in {"semantic_rejected", "schema_semantic_rejected"}
             and action in {"BUY", "WAIT", "DROP"}
             and score > 0.0
         )
@@ -34962,6 +34983,7 @@ def _retry_entry_ai_submit_authority_before_block(
             "last_watching_ai_attempt_score": float(score or 0.0),
             "last_watching_ai_attempt_completed_at": ai_response_completed_at,
             "last_watching_ai_attempt_result_source": result_source,
+            "last_watching_ai_attempt_contract_status": contract_status,
             "last_watching_ai_attempt_evaluation_status": (decision_evaluation_status),
             "last_watching_ai_attempt_trusted": trusted_result,
             "last_watching_ai_attempt_snapshot_id": decision_snapshot_id,
@@ -35101,6 +35123,9 @@ def _retry_entry_ai_submit_authority_before_block(
                 ),
                 "pre_submit_entry_ai_authority_retry_result_source": result_source
                 or "-",
+                "pre_submit_entry_ai_authority_retry_contract_status": (
+                    contract_status
+                ),
                 "pre_submit_entry_ai_authority_retry_score": f"{score:.1f}",
                 "pre_submit_entry_ai_authority_retry_action": action or "not_evaluated",
                 "pre_submit_entry_ai_authority_retry_model_action": model_action,
@@ -53765,6 +53790,7 @@ def _handle_watching_strategy_branch(
                             result_source = str(
                                 ai_decision.get("ai_result_source") or "live"
                             ).lower()
+                            contract_status = _entry_ai_contract_status(ai_decision)
                             transport_timeout = result_source == "timeout" or bool(
                                 ai_decision.get("openai_timeout_like")
                                 or ai_decision.get(
@@ -53789,12 +53815,7 @@ def _handle_watching_strategy_branch(
                                 result_source in {"live", "prior_valid"}
                                 and not transport_timeout
                                 and bool(ai_decision.get("ai_parse_ok", True))
-                                and str(
-                                    ai_decision.get("decision_quality_contract_status")
-                                    or ""
-                                )
-                                .strip()
-                                .lower()
+                                and contract_status
                                 not in {
                                     "semantic_rejected",
                                     "schema_semantic_rejected",
@@ -53841,6 +53862,9 @@ def _handle_watching_strategy_branch(
                                 ),
                                 "last_watching_ai_attempt_result_source": (
                                     result_source
+                                ),
+                                "last_watching_ai_attempt_contract_status": (
+                                    contract_status
                                 ),
                                 "last_watching_ai_attempt_evaluation_status": (
                                     decision_evaluation_status
@@ -64135,6 +64159,16 @@ def _recent_scanner_entry_ai_reuse_fields(
     }
 
 
+def _entry_ai_contract_status(decision: dict | None) -> str:
+    """Normalize the semantic-contract result for downstream provenance."""
+
+    source = decision if isinstance(decision, dict) else {}
+    return (
+        str(source.get("decision_quality_contract_status") or "").strip().lower()
+        or "unreported"
+    )
+
+
 def _record_scanner_entry_ai_attempt(
     stock: dict,
     *,
@@ -64167,9 +64201,7 @@ def _record_scanner_entry_ai_attempt(
             else "not_evaluated_provider_or_preflight"
         )
     )
-    contract_status = (
-        str(ai_decision.get("decision_quality_contract_status") or "").strip().lower()
-    )
+    contract_status = _entry_ai_contract_status(ai_decision)
     parse_ok = ai_decision.get("parse_ok")
     contract_valid_zero_score_drop = bool(
         normalized_action == "DROP"

@@ -42,6 +42,137 @@ def _source_tokens(value: Any) -> frozenset[str]:
     return frozenset(str(item).strip().upper() for item in values if str(item).strip())
 
 
+def _safe_epoch(value: Any) -> float:
+    try:
+        epoch = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return epoch if epoch > 0.0 else 0.0
+
+
+def market_gainer_first_ai_retention(
+    target: dict[str, Any] | None,
+    *,
+    now_ts: float,
+    max_sec: float | None = None,
+) -> dict[str, Any]:
+    """Protect a reserved market-gainer row until its first evaluated AI result.
+
+    Heavy scanner evaluation is only a producer step and must not close the
+    reservation by itself. A provider/preflight failure also remains pending;
+    the reservation closes only after an evaluated live/prior-valid AI result
+    or the bounded TTL. This controls WATCHING capacity and ordering only.
+    """
+
+    target = target if isinstance(target, dict) else {}
+    source_signature = target.get("source_signature") or target.get(
+        "scanner_source_signature"
+    )
+    if MARKET_GAINER_SOURCE not in _source_tokens(source_signature):
+        return {
+            "market_gainer_first_eval_retention_applicable": False,
+            "retention_active": False,
+            "market_gainer_first_ai_priority_active": False,
+        }
+
+    anchor_epoch = _safe_epoch(
+        target.get("scanner_promotion_emitted_epoch")
+        or target.get("entry_armed_at_epoch")
+    )
+    if anchor_epoch <= 0.0:
+        return {
+            "market_gainer_first_eval_retention_applicable": True,
+            "retention_active": False,
+            "market_gainer_first_ai_priority_active": False,
+            "market_gainer_first_eval_retention_reason": "promotion_anchor_missing",
+        }
+
+    if max_sec is None:
+        raw_max_sec = os.getenv(
+            "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC"
+        )
+        try:
+            max_sec = float(raw_max_sec) if str(raw_max_sec or "").strip() else 180.0
+        except (TypeError, ValueError):
+            max_sec = 180.0
+    try:
+        normalized_max_sec = float(max_sec)
+    except (TypeError, ValueError):
+        normalized_max_sec = 180.0
+    bounded_max_sec = max(1.0, min(normalized_max_sec, 600.0))
+    heavy_eval_epoch = _safe_epoch(target.get("_scanner_last_heavy_eval_attempt_epoch"))
+    attempt_epoch = _safe_epoch(target.get("last_watching_ai_attempt_completed_at"))
+    confirmed_epoch = _safe_epoch(target.get("last_watching_ai_confirmed_at"))
+    attempt_result_source = (
+        str(
+            target.get("last_watching_ai_attempt_result_source")
+            or target.get("last_watching_ai_result_source")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    attempt_evaluation_status = (
+        str(target.get("last_watching_ai_attempt_evaluation_status") or "")
+        .strip()
+        .lower()
+    )
+    ai_evaluated_observed = bool(
+        confirmed_epoch >= anchor_epoch
+        or (
+            attempt_epoch >= anchor_epoch
+            and attempt_evaluation_status == "evaluated"
+            and attempt_result_source in {"live", "prior_valid"}
+        )
+    )
+    heavy_eval_observed = heavy_eval_epoch >= anchor_epoch
+    age_sec = max(0.0, float(now_ts) - anchor_epoch)
+    retention_active = bool(age_sec < bounded_max_sec and not ai_evaluated_observed)
+    if ai_evaluated_observed:
+        reason = "first_ai_evaluated_observed"
+    elif age_sec >= bounded_max_sec:
+        reason = "bounded_retention_expired"
+    elif heavy_eval_observed:
+        reason = "heavy_eval_observed_awaiting_first_ai_evaluated"
+    else:
+        reason = "awaiting_first_ai_evaluated"
+    return {
+        "market_gainer_first_eval_retention_applicable": True,
+        "retention_active": retention_active,
+        "retention_reason": reason,
+        "market_gainer_first_eval_retention_reason": reason,
+        "market_gainer_first_ai_priority_active": retention_active,
+        "market_gainer_first_eval_retention_age_sec": round(age_sec, 3),
+        "market_gainer_first_eval_retention_max_sec": round(bounded_max_sec, 3),
+        "market_gainer_first_eval_retention_anchor_epoch": f"{anchor_epoch:.3f}",
+        "market_gainer_first_eval_retention_heavy_eval_observed": (heavy_eval_observed),
+        "market_gainer_first_eval_retention_ai_terminal_observed": (
+            ai_evaluated_observed
+        ),
+        "market_gainer_first_ai_evaluated_observed": ai_evaluated_observed,
+        "market_gainer_first_ai_attempt_result_source": (
+            attempt_result_source or "not_observed"
+        ),
+        "market_gainer_first_ai_attempt_evaluation_status": (
+            attempt_evaluation_status or "not_observed"
+        ),
+        "metric_role": "scanner_observation_capacity",
+        "decision_authority": "market_gainer_reserved_watch_retention_only",
+        "window_policy": "promotion_to_first_evaluated_ai_result_bounded",
+        "sample_floor": "one_reserved_market_gainer_promotion",
+        "primary_decision_metric": "first_ai_reach_rate",
+        "source_quality_gate": "existing_runtime_source_quality_guards_unchanged",
+        "forbidden_uses": (
+            "stale_submit_bypass,heavy_eval_eligibility_bypass,provider_route_change,"
+            "score_or_threshold_change,order_price_or_quantity_change,"
+            "broker_guard_bypass,position_cap_release"
+        ),
+        "runtime_effect": retention_active,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def normalize_owner(value: Any, *, default: str = GENERAL_SCALPING) -> str:
     owner = str(value or "").strip().lower()
     if owner in VALID_OWNERS:

@@ -4822,6 +4822,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
                 "reason": "fresh pre-submit retry",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                "decision_quality_contract_status": "pass",
                 "ai_decision_trace_id": "trace-retry-wait-probe",
                 "ai_decision_snapshot_id": "snapshot-retry-wait-probe",
                 "entry_probe_intent": True,
@@ -4909,6 +4910,8 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert stock["last_watching_ai_probe_intent_status"] == "eligible_wait_probe"
     assert stock["last_watching_ai_attempt_probe_intent"] is True
     assert stock["last_watching_ai_attempt_trusted"] is True
+    assert stock["last_watching_ai_attempt_contract_status"] == "pass"
+    assert retry["pre_submit_entry_ai_authority_retry_contract_status"] == "pass"
     assert (
         stock["last_watching_ai_attempt_decision_trace_id"]
         == stock["last_watching_ai_decision_trace_id"]
@@ -9119,16 +9122,11 @@ def test_rising_missed_decision_input_normalizes_ws_spread_and_fresh_features(
     assert fields["rising_missed_tp1_micro_vwap_source"] == (
         "last_watching_ai_feature_probe"
     )
-    assert fields["rising_missed_tp1_micro_unavailable_reason"] == (
-        "estimator_warmup"
-    )
+    assert fields["rising_missed_tp1_micro_unavailable_reason"] == ("estimator_warmup")
     assert fields["rising_missed_tp1_micro_unavailable_class"] == (
         "expected_estimator_warmup"
     )
-    assert (
-        fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"]
-        is False
-    )
+    assert fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"] is False
 
 
 def test_rising_missed_decision_input_observes_nxt_trade_quiet_without_changing_readiness(
@@ -9191,19 +9189,14 @@ def test_rising_missed_decision_input_observes_nxt_trade_quiet_without_changing_
     assert fields["rising_missed_nxt_micro_state"] == "fresh_trade_quiet"
     assert fields["rising_missed_tp1_input_ready"] is False
     assert fields["rising_missed_tp1_input_reason"] == "tp1_micro_ws_unavailable"
-    assert fields["rising_missed_tp1_micro_unavailable_reason"] == (
-        "trade_unavailable"
-    )
+    assert fields["rising_missed_tp1_micro_unavailable_reason"] == ("trade_unavailable")
     assert fields["rising_missed_tp1_micro_unavailable_class"] == (
         "external_ws_input_gap"
     )
     assert fields["rising_missed_tp1_micro_unavailable_owner"] == (
         "kiwoom_ws_0b_source_quality"
     )
-    assert (
-        fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"]
-        is False
-    )
+    assert fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"] is False
 
 
 def test_rising_missed_tp1_micro_unavailable_fields_marks_stale_estimator_internal():
@@ -9228,9 +9221,7 @@ def test_rising_missed_tp1_micro_unavailable_fields_marks_stale_estimator_intern
     assert fields["rising_missed_tp1_micro_unavailable_owner"] == (
         "rising_missed_micro_estimator"
     )
-    assert (
-        fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"] is True
-    )
+    assert fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"] is True
     assert fields["rising_missed_tp1_micro_unavailable_runtime_effect"] is False
 
 
@@ -9666,9 +9657,7 @@ def test_rising_missed_decision_input_resolver_defers_without_budget_cache(monke
     assert (
         fields["rising_missed_tp1_resolver_envelope_result"] == "rest_budget_deferred"
     )
-    assert (
-        "rising_missed_tp1_micro_unavailable_code_defect_candidate" not in fields
-    )
+    assert "rising_missed_tp1_micro_unavailable_code_defect_candidate" not in fields
 
 
 def test_rising_missed_decision_input_consumes_scanner_cache_when_rest_budget_exhausted(
@@ -10514,7 +10503,9 @@ def test_rising_missed_nxt_post_block_sampler_coalesces_repeated_causal_block(
             publish=lambda name, payload: published.append((name, payload))
         ),
     )
-    monkeypatch.setattr(state_handlers, "emit_pipeline_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers, "emit_pipeline_event", lambda *args, **kwargs: None
+    )
 
     def register(evaluation_id, reason, *, promotion_id=""):
         return state_handlers._register_rising_missed_nxt_post_block_sampler(
@@ -10534,9 +10525,7 @@ def test_rising_missed_nxt_post_block_sampler_coalesces_repeated_causal_block(
     assert register("nxt-coalesce-1", "tp1_micro_ws_unavailable") is True
     assert register("nxt-coalesce-2", "tp1_micro_ws_unavailable") is True
     assert len(state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) == 1
-    canonical = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS[
-        "nxt-coalesce-1"
-    ]
+    canonical = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS["nxt-coalesce-1"]
     assert canonical["coalesced_registration_count"] == 1
     assert canonical["coalesced_latest_evaluation_id"] == "nxt-coalesce-2"
     assert len(published) == 1
@@ -10555,12 +10544,13 @@ def test_rising_missed_nxt_post_block_sampler_coalesces_repeated_causal_block(
 
     state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS.clear()
     published.clear()
-    assert register(
-        "nxt-promotion-1", "first_reason", promotion_id="promotion-1"
-    ) is True
-    assert register(
-        "nxt-promotion-2", "different_reason", promotion_id="promotion-1"
-    ) is True
+    assert (
+        register("nxt-promotion-1", "first_reason", promotion_id="promotion-1") is True
+    )
+    assert (
+        register("nxt-promotion-2", "different_reason", promotion_id="promotion-1")
+        is True
+    )
     assert len(state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS) == 1
     assert len(published) == 1
 
@@ -10653,7 +10643,9 @@ def test_rising_missed_nxt_post_block_sampler_restore_coalesces_duplicate_state(
         "EVENT_BUS",
         SimpleNamespace(publish=lambda *_args, **_kwargs: None),
     )
-    monkeypatch.setattr(state_handlers, "emit_pipeline_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        state_handlers, "emit_pipeline_event", lambda *args, **kwargs: None
+    )
     base = {
         "stock_code": "123475",
         "stock_name": "NXT RESTORE COALESCE",

@@ -71,7 +71,9 @@ def test_holding_pipeline_stable_block_logging_is_bounded_and_preserves_changes(
 ):
     emitted = []
     times = iter((100.0, 101.0, 102.0, 117.0))
-    monkeypatch.setenv("KORSTOCKSCAN_HOLDING_PIPELINE_STABLE_BLOCK_LOG_INTERVAL_SEC", "15")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_HOLDING_PIPELINE_STABLE_BLOCK_LOG_INTERVAL_SEC", "15"
+    )
     monkeypatch.setattr(handlers.time, "time", lambda: next(times))
     monkeypatch.setattr(
         handlers,
@@ -4408,7 +4410,7 @@ def test_emit_scanner_runtime_queue_lag_fills_contract_fields(monkeypatch):
         "scanner_promotion_id": "SCANPROM-000039-1000000",
         "scanner_promotion_emitted_epoch": "1000.000",
         "scanner_promotion_reason": "price_jump_start_acceleration",
-        "source_signature": "PRICE_JUMP_START",
+        "source_signature": "PREV_CLOSE_GAINER,PRICE_JUMP_START",
         "_scanner_fast_precheck_fields": {
             "effective_venue": "KRX",
             "venue": "KRX",
@@ -4465,6 +4467,12 @@ def test_emit_scanner_runtime_queue_lag_fills_contract_fields(monkeypatch):
     assert fields["queue_emit_epoch"] == "1012.345"
     assert fields["runtime_record_id"] == 79
     assert fields["entry_armed_at_epoch"] == 1000.0
+    assert fields["market_gainer_first_ai_priority_active"] is True
+    assert fields["market_gainer_first_eval_retention_reason"] == (
+        "awaiting_first_ai_evaluated"
+    )
+    assert fields["market_gainer_first_eval_retention_age_sec"] == 12.345
+    assert fields["market_gainer_first_ai_evaluated_observed"] is False
 
 
 def test_emit_scanner_runtime_queue_lag_throttles(monkeypatch):
