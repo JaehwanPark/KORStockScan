@@ -4472,6 +4472,7 @@ def test_runtime_iteration_targets_releases_market_gainer_after_evaluated_ai(
             "last_watching_ai_attempt_completed_at": 1551.0,
             "last_watching_ai_attempt_result_source": "live",
             "last_watching_ai_attempt_evaluation_status": "evaluated",
+            "last_watching_ai_attempt_trusted": True,
             "price_delta_since_first_seen_pct": "3.00",
         },
         {
@@ -10017,6 +10018,8 @@ def test_market_gainer_reserved_watch_retains_until_first_evaluated_ai(monkeypat
             "last_watching_ai_attempt_completed_at": 1068.0,
             "last_watching_ai_attempt_result_source": "live",
             "last_watching_ai_attempt_evaluation_status": "evaluated",
+            "last_watching_ai_attempt_contract_status": "pass",
+            "last_watching_ai_attempt_trusted": True,
         }
     )
     released = kiwoom_sniper_v2._market_gainer_first_eval_retention(
@@ -10042,6 +10045,7 @@ def test_market_gainer_reserved_watch_keeps_preflight_blocked_attempt(monkeypatc
         last_watching_ai_attempt_evaluation_status=(
             "not_evaluated_provider_or_preflight"
         ),
+        last_watching_ai_attempt_trusted=False,
     )
 
     decision = kiwoom_sniper_v2._market_gainer_first_eval_retention(
@@ -10053,6 +10057,35 @@ def test_market_gainer_reserved_watch_keeps_preflight_blocked_attempt(monkeypatc
     assert decision["market_gainer_first_ai_evaluated_observed"] is False
     assert decision["market_gainer_first_eval_retention_reason"] == (
         "heavy_eval_observed_awaiting_first_ai_evaluated"
+    )
+
+
+def test_market_gainer_reserved_watch_keeps_semantic_rejected_live_attempt(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
+    )
+    target = _scanner_watch_stock(
+        source_signature="PREV_CLOSE_GAINER",
+        scanner_promotion_emitted_epoch=1000.0,
+        _scanner_last_heavy_eval_attempt_epoch=1010.0,
+        last_watching_ai_attempt_completed_at=1011.0,
+        last_watching_ai_attempt_result_source="live",
+        last_watching_ai_attempt_evaluation_status="evaluated",
+        last_watching_ai_attempt_contract_status="semantic_rejected",
+        last_watching_ai_attempt_trusted=False,
+    )
+
+    decision = kiwoom_sniper_v2._market_gainer_first_eval_retention(
+        target,
+        now_ts=1012.0,
+    )
+
+    assert decision["retention_active"] is True
+    assert decision["market_gainer_first_ai_evaluated_observed"] is False
+    assert decision["market_gainer_first_ai_attempt_contract_status"] == (
+        "semantic_rejected"
     )
 
 

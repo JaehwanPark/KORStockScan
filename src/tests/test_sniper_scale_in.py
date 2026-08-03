@@ -4291,6 +4291,7 @@ def test_entry_ai_recheck_probe_state_binds_eligible_wait_to_exact_trace():
         "trace-recheck-wait"
     )
     assert fields["last_watching_ai_attempt_probe_intent"] is True
+    assert fields["last_watching_ai_attempt_contract_status"] == "pass"
     assert fields["last_watching_ai_probe_intent"] is True
 
 

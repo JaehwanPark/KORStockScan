@@ -5980,6 +5980,9 @@ def _entry_ai_recheck_probe_state_fields(
         "last_watching_ai_attempt_score": float(_safe_float(score, 0.0)),
         "last_watching_ai_attempt_completed_at": float(completed_at),
         "last_watching_ai_attempt_result_source": result_source,
+        "last_watching_ai_attempt_contract_status": (
+            contract_status or "unreported"
+        ),
         "last_watching_ai_attempt_evaluation_status": (
             "evaluated" if trusted_result else "not_evaluated_provider_or_contract"
         ),

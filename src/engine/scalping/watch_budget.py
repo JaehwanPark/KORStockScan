@@ -50,6 +50,14 @@ def _safe_epoch(value: Any) -> float:
     return epoch if epoch > 0.0 else 0.0
 
 
+def _boolish_true(value: Any) -> bool:
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def market_gainer_first_ai_retention(
     target: dict[str, Any] | None,
     *,
@@ -117,12 +125,24 @@ def market_gainer_first_ai_retention(
         .strip()
         .lower()
     )
+    attempt_contract_status = (
+        str(target.get("last_watching_ai_attempt_contract_status") or "")
+        .strip()
+        .lower()
+    )
+    attempt_trusted_value = target.get("last_watching_ai_attempt_trusted")
+    attempt_trusted = (
+        _boolish_true(attempt_trusted_value)
+        if attempt_trusted_value is not None
+        else False
+    )
     ai_evaluated_observed = bool(
         confirmed_epoch >= anchor_epoch
         or (
             attempt_epoch >= anchor_epoch
             and attempt_evaluation_status == "evaluated"
             and attempt_result_source in {"live", "prior_valid"}
+            and attempt_trusted
         )
     )
     heavy_eval_observed = heavy_eval_epoch >= anchor_epoch
@@ -156,6 +176,10 @@ def market_gainer_first_ai_retention(
         "market_gainer_first_ai_attempt_evaluation_status": (
             attempt_evaluation_status or "not_observed"
         ),
+        "market_gainer_first_ai_attempt_contract_status": (
+            attempt_contract_status or "not_observed"
+        ),
+        "market_gainer_first_ai_attempt_trusted": attempt_trusted,
         "metric_role": "scanner_observation_capacity",
         "decision_authority": "market_gainer_reserved_watch_retention_only",
         "window_policy": "promotion_to_first_evaluated_ai_result_bounded",
