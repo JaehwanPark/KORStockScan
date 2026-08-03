@@ -4255,6 +4255,16 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         ),
         "dependency_enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED",
     },
+    {
+        "family": "rising_missed_ai_action_guard",
+        "enabled_key": "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE",
+    },
+    {
+        "family": "scalp_fast_exit_guard",
+        "enabled_key": "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED",
+        "active_date_key": "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE",
+    },
 )
 
 

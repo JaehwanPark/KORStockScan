@@ -18900,6 +18900,11 @@ def _probe_residual_scale_in_causal_fields(
             stock.get("entry_split_probe_terminal_outcome") or "residual_not_submitted"
         ),
         "prior_probe_residual_abort_reason": abort_reason or "-",
+        "prior_probe_residual_abort_detail_reason": (
+            stock.get("entry_split_probe_terminal_abort_detail_reason")
+            or stock.get("entry_split_probe_abort_detail_reason")
+            or "-"
+        ),
         "prior_probe_residual_direction_state": (
             stock.get("entry_split_probe_terminal_direction_state") or "UNKNOWN"
         ),
@@ -36784,6 +36789,14 @@ def _entry_split_probe_observation_contract_fields(
             "entry_split_probe_abort_reason": (
                 stock.get("entry_split_probe_abort_reason") or "-"
             ),
+            "entry_split_probe_abort_detail_reason": (
+                stock.get("entry_split_probe_abort_detail_reason") or "-"
+            ),
+            "entry_split_probe_wait_contract_at_submit": bool(
+                _truthy_field(
+                    stock.get("entry_split_probe_wait_contract_at_submit", False)
+                )
+            ),
             "probe_confirmation_count": max(
                 0, _safe_int(stock.get("probe_confirmation_count"), 0)
             ),
@@ -36923,6 +36936,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_ai_result_source_at_submit",
     "entry_split_probe_ai_confirmed_at_submit",
     "entry_split_probe_ai_action_source_at_submit",
+    "entry_split_probe_wait_contract_at_submit",
     "entry_split_probe_ai_decision_trace_id",
     "probe_confirmation_count",
     "probe_confirmation_last_at",
@@ -36942,6 +36956,7 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_terminal_at",
     "entry_split_probe_terminal_outcome",
     "entry_split_probe_terminal_abort_reason",
+    "entry_split_probe_terminal_abort_detail_reason",
     "entry_split_probe_terminal_direction_state",
     "entry_split_probe_terminal_direction_reason",
     "entry_split_probe_terminal_continuation_action",
@@ -36978,6 +36993,20 @@ def _post_probe_source_epoch(value: Any) -> float:
     if observed_at > 10_000_000_000:
         observed_at /= 1000.0
     return round(observed_at, 6) if observed_at > 0 else 0.0
+
+
+def _wait_probe_contract_at_submit(stock: dict, *, now_ts: float) -> bool:
+    """Use the immutable submit contract instead of a mutable dated env."""
+
+    if "entry_split_probe_wait_contract_at_submit" in stock:
+        return _truthy_field(stock.get("entry_split_probe_wait_contract_at_submit"))
+    return bool(
+        _rising_missed_ai_action_guard_active(now_ts=now_ts)
+        and str(stock.get("entry_split_probe_ai_action_at_submit") or "")
+        .strip()
+        .upper()
+        == "WAIT"
+    )
 
 
 def _advance_wait_probe_confirmation(
@@ -37549,8 +37578,8 @@ def _post_probe_direction_fields(
         and submit_ai_action_age_sec <= max(0.1, float(max_context_age_sec))
     )
     wait_probe_origin = bool(
-        _rising_missed_ai_action_guard_active(now_ts=observed_now)
-        and submit_ai_action == "WAIT"
+        submit_ai_action == "WAIT"
+        and _wait_probe_contract_at_submit(stock, now_ts=observed_now)
     )
     if latest_ai_fresh and latest_ai_action == "DROP":
         ai_action = latest_ai_action
@@ -38081,6 +38110,30 @@ def _abort_entry_split_probe_residual(
         reason == "residual_revalidation_timeout"
         and last_direction_reason in source_quality_timeout_reasons
     )
+    timeout_cause = "-"
+    if reason == "residual_revalidation_timeout":
+        if last_direction_reason in {
+            "post_probe_ai_action_not_fresh",
+            "post_probe_nxt_ai_veto_not_fresh",
+        }:
+            timeout_cause = "timeout_ai_authority_expired"
+        elif last_direction_reason in {
+            "post_probe_stale_or_conflicted_fresh_quote",
+            "post_probe_fresh_bbo_unavailable",
+        }:
+            timeout_cause = "timeout_quote_source_conflict"
+        elif "negative_group" in last_direction_reason:
+            timeout_cause = "timeout_negative_group_persisted"
+        elif last_direction_reason in {
+            "post_probe_wait_positive_confirmation_required",
+            "post_probe_stale_wait_positive_confirmation_required",
+            "post_probe_second_strong_confirmation_required",
+        }:
+            timeout_cause = "timeout_wait_confirmation_not_reached"
+        elif source_quality_timeout:
+            timeout_cause = "timeout_source_quality_unrecovered"
+        else:
+            timeout_cause = "timeout_revalidation_not_completed"
     effective_venue = (
         str(
             stock.get("rising_missed_effective_venue")
@@ -38156,6 +38209,7 @@ def _abort_entry_split_probe_residual(
     set_fields = {
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_abort_reason": reason,
+        "entry_split_probe_abort_detail_reason": timeout_cause,
         "entry_split_probe_scale_in_forbidden": bool(
             preserve_position and not scale_in_recheck_allowed
         ),
@@ -38258,6 +38312,7 @@ def _abort_entry_split_probe_residual(
             "entry_split_probe_terminal_at": observed_at,
             "entry_split_probe_terminal_outcome": "residual_not_submitted",
             "entry_split_probe_terminal_abort_reason": reason,
+            "entry_split_probe_terminal_abort_detail_reason": timeout_cause,
             "entry_split_probe_terminal_direction_state": (
                 terminal_direction_state or "UNKNOWN"
             ),
@@ -38347,6 +38402,7 @@ def _abort_entry_split_probe_residual(
             terminal_at=observed_at,
             terminal_outcome="residual_not_submitted",
             terminal_abort_reason=reason,
+            terminal_abort_detail_reason=timeout_cause,
             terminal_direction_state=terminal_direction_state or "UNKNOWN",
             terminal_direction_reason=terminal_direction_reason,
             terminal_continuation_action=terminal_continuation_action or "BLOCK",
@@ -38360,6 +38416,7 @@ def _abort_entry_split_probe_residual(
         code,
         "residual_blocked",
         reason=reason,
+        residual_revalidation_timeout_cause=timeout_cause,
         probe_bundle_id=bundle_id or "-",
         filled_qty=filled_qty,
         actual_order_submitted=False,
@@ -59600,6 +59657,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         )
                         or "-"
                     ),
+                    "entry_split_probe_wait_contract_at_submit": (wait_probe_required),
                     "entry_split_probe_ai_decision_trace_id": (
                         entry_ai_submit_authority.get(
                             "entry_ai_submit_authority_decision_trace_id"
@@ -59647,6 +59705,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ai_action_source_at_submit=entry_ai_submit_authority.get(
                     "entry_ai_submit_authority_action_source"
                 ),
+                wait_contract_at_submit=wait_probe_required,
                 ai_decision_trace_id=entry_ai_submit_authority.get(
                     "entry_ai_submit_authority_decision_trace_id"
                 ),
@@ -70926,11 +70985,9 @@ def _submit_entry_split_probe_residual_locked(
         "post_probe_confirmation_grant_consumed_at",
     )
     wait_probe_bounded_single_leg = bool(
-        _rising_missed_ai_action_guard_active(now_ts=now_ts)
-        and str(stock.get("entry_split_probe_ai_action_at_submit") or "")
-        .strip()
-        .upper()
+        str(stock.get("entry_split_probe_ai_action_at_submit") or "").strip().upper()
         == "WAIT"
+        and _wait_probe_contract_at_submit(stock, now_ts=now_ts)
     )
     resolved_leg_prices: list[int] | None = None
     resolver_fields: list[dict[str, Any]] = []

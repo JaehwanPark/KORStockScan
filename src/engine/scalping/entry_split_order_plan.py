@@ -598,6 +598,12 @@ def recover_probe_runtime_bundle_for_stock(
                 or ("residual_not_submitted" if phase == "aborted" else None)
             ),
             "entry_split_probe_terminal_abort_reason": terminal_abort_reason,
+            "entry_split_probe_abort_detail_reason": bundle.get(
+                "terminal_abort_detail_reason"
+            ),
+            "entry_split_probe_terminal_abort_detail_reason": bundle.get(
+                "terminal_abort_detail_reason"
+            ),
             "entry_split_probe_terminal_direction_state": terminal_direction_state,
             "entry_split_probe_terminal_direction_reason": terminal_direction_reason,
             "entry_split_probe_terminal_continuation_action": (
@@ -616,6 +622,10 @@ def recover_probe_runtime_bundle_for_stock(
             "entry_requested_qty": actual_qty if soft_abort else requested_qty,
             "requested_buy_qty": actual_qty if soft_abort else requested_qty,
         }
+        if "wait_contract_at_submit" in bundle:
+            recovery_fields["entry_split_probe_wait_contract_at_submit"] = _safe_bool(
+                bundle.get("wait_contract_at_submit")
+            )
         stock.update(
             {key: value for key, value in recovery_fields.items() if value is not None}
         )

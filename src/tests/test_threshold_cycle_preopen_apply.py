@@ -8949,6 +8949,8 @@ def test_dated_runtime_auto_renew_projects_only_enabled_members_to_target_date()
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-07-31",
         "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED": "false",
         "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE": ("2026-07-31"),
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED": "true",
     }
 
     expected, expected_keys = mod._dated_runtime_auto_renew_expected_env(
@@ -8959,6 +8961,10 @@ def test_dated_runtime_auto_renew_projects_only_enabled_members_to_target_date()
     assert expected == {
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
         "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE": target_date,
     }
     assert expected_keys == sorted(expected)
     assert "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED" not in expected
@@ -9111,6 +9117,10 @@ def test_dated_runtime_override_audits_accept_current_runtime_bundle():
         "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE": target_date,
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ENABLED": "true",
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE": target_date,
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE": target_date,
     }
 
     audits = mod._dated_runtime_override_audits(target_date, env)

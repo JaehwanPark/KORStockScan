@@ -1428,13 +1428,19 @@ export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE=2026-07-30
 export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED=true
 export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE=2026-07-30
+export KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED=true
+unset KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE
+export KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED=true
+unset KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE
 renew_enabled_dated_runtime_overrides 2026-07-31 >/dev/null
 record_enabled_dated_runtime_provenance 2026-07-31 >/dev/null
-printf '%s|%s|%s|%s|%s\\n' \
+printf '%s|%s|%s|%s|%s|%s|%s\\n' \
   "$KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE" \
   "$KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE" \
   "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED" \
   "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE" \
+  "$KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE" \
+  "$KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE" \
   "$KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_COUNT"
 """,
         ],
@@ -1443,7 +1449,9 @@ printf '%s|%s|%s|%s|%s\\n' \
         check=True,
     )
 
-    assert result.stdout.strip() == "2026-07-31|2026-07-31|true|2026-07-30|2"
+    assert result.stdout.strip() == (
+        "2026-07-31|2026-07-31|true|2026-07-30|2026-07-31|2026-07-31|4"
+    )
 
 
 def test_run_bot_dated_auto_renew_registry_matches_handoff_verifier_registry():
@@ -1457,15 +1465,13 @@ def test_run_bot_dated_auto_renew_registry_matches_handoff_verifier_registry():
             "\n)\n\nrenew_enabled_dated_runtime_overrides"
         )
     ]
-    shell_specs = set(
-        re.findall(r'"([^":]+):([^"\n]+)"', registry_block)
-    )
+    shell_specs = set(re.findall(r'"([^":]+):([^"\n]+)"', registry_block))
     verifier_specs = {
         (spec["enabled_key"], spec["active_date_key"])
         for spec in DATED_RUNTIME_OVERRIDE_SPECS
     }
 
-    assert len(shell_specs) == 21
+    assert len(shell_specs) == 23
     assert shell_specs == verifier_specs
 
 

@@ -88,6 +88,12 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _safe_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, str]:
     effective_venue = (
         str(
@@ -167,6 +173,14 @@ def _probe_observation_contract_fields(stock: dict[str, Any]) -> dict[str, Any]:
             ),
             "entry_split_probe_abort_reason": (
                 stock.get("entry_split_probe_abort_reason") or "-"
+            ),
+            "entry_split_probe_abort_detail_reason": (
+                stock.get("entry_split_probe_abort_detail_reason") or "-"
+            ),
+            "entry_split_probe_wait_contract_at_submit": bool(
+                _safe_bool(
+                    stock.get("entry_split_probe_wait_contract_at_submit", False)
+                )
             ),
             "probe_confirmation_count": max(
                 0, _safe_int(stock.get("probe_confirmation_count"), 0)
@@ -469,7 +483,9 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_source_quality_recheck_reason",
     "entry_split_probe_source_quality_recheck_pending",
     "entry_split_probe_abort_reason",
+    "entry_split_probe_abort_detail_reason",
     "entry_split_probe_ai_action_at_submit",
+    "entry_split_probe_wait_contract_at_submit",
     "entry_split_probe_direction_positive_groups",
     "entry_split_probe_direction_negative_groups",
     "entry_split_probe_direction_evaluated_at",
@@ -481,6 +497,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "entry_split_probe_terminal_at",
     "entry_split_probe_terminal_outcome",
     "entry_split_probe_terminal_abort_reason",
+    "entry_split_probe_terminal_abort_detail_reason",
     "entry_split_probe_terminal_direction_state",
     "entry_split_probe_terminal_direction_reason",
     "entry_split_probe_terminal_continuation_action",
@@ -580,7 +597,9 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_source_quality_recheck_reason",
     "entry_split_probe_source_quality_recheck_pending",
     "entry_split_probe_abort_reason",
+    "entry_split_probe_abort_detail_reason",
     "entry_split_probe_ai_action_at_submit",
+    "entry_split_probe_wait_contract_at_submit",
     "entry_split_probe_direction_positive_groups",
     "entry_split_probe_direction_negative_groups",
     "entry_split_probe_direction_evaluated_at",
@@ -592,6 +611,7 @@ _SELL_COMPLETE_RESET_KEYS = (
     "entry_split_probe_terminal_at",
     "entry_split_probe_terminal_outcome",
     "entry_split_probe_terminal_abort_reason",
+    "entry_split_probe_terminal_abort_detail_reason",
     "entry_split_probe_terminal_direction_state",
     "entry_split_probe_terminal_direction_reason",
     "entry_split_probe_terminal_continuation_action",
@@ -752,6 +772,11 @@ def _probe_residual_scale_in_receipt_fields(
             or "residual_not_submitted"
         ),
         "prior_probe_residual_abort_reason": abort_reason or "-",
+        "prior_probe_residual_abort_detail_reason": (
+            target_stock.get("entry_split_probe_terminal_abort_detail_reason")
+            or target_stock.get("entry_split_probe_abort_detail_reason")
+            or "-"
+        ),
         "prior_probe_residual_direction_state": (
             target_stock.get("entry_split_probe_terminal_direction_state") or "UNKNOWN"
         ),
@@ -2449,19 +2474,26 @@ def _publish_entry_partial_fill_message(
     probe_abort_reason = str(
         target_stock.get("entry_split_probe_abort_reason") or ""
     ).strip()
+    probe_abort_detail_reason = str(
+        target_stock.get("entry_split_probe_abort_detail_reason") or ""
+    ).strip()
     probe_order_no = str(target_stock.get("entry_split_probe_order_no") or "").strip()
     probe_first_fill_with_planned_residual = bool(
         probe_order_no and cum_filled_qty == 1 and remaining_qty > 0
     )
     if probe_first_fill_with_planned_residual:
         partial_msg += (
-            f"\n✅ **probe 체결:** `1/1주`"
-            f" / **평균 체결가:** `{avg_buy_price:,.0f}원`"
+            f"\n✅ **probe 체결:** `1/1주` / **평균 체결가:** `{avg_buy_price:,.0f}원`"
         )
         if probe_phase == "aborted" and probe_abort_reason:
+            displayed_abort_reason = probe_abort_reason
+            if probe_abort_detail_reason and probe_abort_detail_reason != "-":
+                displayed_abort_reason = (
+                    f"{probe_abort_reason}/{probe_abort_detail_reason}"
+                )
             partial_msg += (
                 f"\n⏸ **계획 잔여:** `{remaining_qty}주 미제출`"
-                f" (`{probe_abort_reason}`)"
+                f" (`{displayed_abort_reason}`)"
             )
         elif probe_phase in {
             "residual_submitting",

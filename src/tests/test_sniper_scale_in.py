@@ -4363,6 +4363,187 @@ def test_wait_probe_requires_two_distinct_strong_confirmations(monkeypatch):
     assert count == 2
 
 
+def test_wait_probe_submit_contract_survives_guard_rollover_and_submits_once(
+    monkeypatch,
+):
+    now_ts = 1_785_710_000.0
+    stock = {
+        "id": 26323,
+        "name": "KNR",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "entry_filled_qty": 1,
+        "entry_split_probe_phase": "probe_filled",
+        "entry_split_probe_bundle_id": "199430-probe-test",
+        "entry_split_probe_requested_qty": 2,
+        "entry_split_probe_continuation": {"residual_quantities": [1]},
+        "entry_split_probe_submit_best_ask": 10_000,
+        "entry_split_probe_timeout_sec": 3,
+        "entry_split_probe_max_slippage_bps": 50,
+        "entry_split_probe_submitted_at": now_ts - 0.1,
+        "entry_split_probe_filled_at": now_ts,
+        "entry_split_probe_fill_price": 10_000,
+        "entry_split_probe_ai_action_at_submit": "WAIT",
+        "entry_split_probe_ai_result_source_at_submit": "live",
+        "entry_split_probe_ai_confirmed_at_submit": now_ts - 0.1,
+        "entry_split_probe_wait_contract_at_submit": True,
+    }
+    direction_calls = []
+    buy_calls = []
+
+    def strong_direction(*_args, **_kwargs):
+        signature = f"source-version-{len(direction_calls) + 1}"
+        direction_calls.append(signature)
+        return {
+            "post_probe_direction_state": "STRONG",
+            "post_probe_continuation_action": "ALLOW_NARROW",
+            "post_probe_direction_reason": "post_probe_wait_two_group_positive",
+            "post_probe_direction_positive_groups": "price_tick,orderbook",
+            "post_probe_direction_negative_groups": "-",
+            "post_probe_hard_veto": False,
+            "post_probe_direction_ai_authority": "fresh_wait_bounded_confirmation",
+            "post_probe_confirmation_source_version_signature": signature,
+            "post_probe_confirmation_evidence_version_proven": True,
+            "post_probe_nxt_wait_fast_tape_ready": False,
+            "post_probe_nxt_wait_fast_tape_bounded_single_leg": False,
+        }
+
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "false")
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "WS_MANAGER", None)
+    monkeypatch.setattr(state_handlers, "is_scalping_buy_time_allowed", lambda *_: True)
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        state_handlers, "_has_active_sell_order_pending", lambda *_: False
+    )
+    monkeypatch.setattr(
+        state_handlers, "_has_open_pending_entry_orders", lambda *_: False
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {
+                "quote_consistency_state": "consistent",
+                "quote_consistency_reason": "ok",
+                "passive_buy_price": 10_000,
+                "canonical_mark_price": 10_010,
+                "executable_buy_price": 10_010,
+            },
+            10_010,
+            10_010,
+            "ws",
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_post_probe_direction_fields", strong_direction
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scalping_entry_price",
+        lambda **_kwargs: {
+            "allowed": True,
+            "resolved_order_price": 10_010,
+            "offset_profile": "narrow",
+            "anchor_price": 10_000,
+            "min_price": 10_000,
+            "max_price": 10_010,
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_post_probe_chase_guard_fields",
+        lambda *_args, **_kwargs: {"post_probe_chase_guard_blocked": False},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "build_probe_residual_orders",
+        lambda *_args, **_kwargs: (
+            [{"qty": 1, "price": 10_010, "entry_split_order_leg_index": 1}],
+            {"allowed": True, "probe_anchor_price": 10_000},
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_probe_residual_account_guard_fields",
+        lambda *_args, **_kwargs: {
+            "account_guard_allowed": True,
+            "account_guard_reason": "probe_residual_account_guard_passed",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers, "_decorate_entry_split_leg_ttls", lambda orders, *_: orders
+    )
+    monkeypatch.setattr(state_handlers, "_iter_pending_entry_orders", lambda *_: [])
+    monkeypatch.setattr(
+        state_handlers, "_entry_order_submit_dmst_stex_tp", lambda *_: "KRX"
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_split_policy_pre_submit_price_guard_fields",
+        lambda *_args, **_kwargs: {"pre_submit_price_guard_blocked": False},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_order_resolution",
+        lambda *_args, **_kwargs: {
+            "broker_route": "KRX",
+            "broker_route_resolution": "test",
+            "requested_order_type": "LIMIT",
+            "effective_order_type": "LIMIT",
+            "order_type_remapped": False,
+            "order_type_remap_reason": "-",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *_args, **_kwargs: (
+            buy_calls.append((_args, _kwargs))
+            or {"return_code": "0", "ord_no": "RESIDUAL-1", "broker_route": "KRX"}
+        ),
+    )
+    monkeypatch.setattr(state_handlers, "_stage_buy_order_submission", lambda *_: None)
+    monkeypatch.setattr(
+        state_handlers, "update_probe_runtime_bundle", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *_a, **_k: None)
+
+    first = state_handlers._maybe_submit_entry_split_probe_residual(
+        stock,
+        "199430",
+        {"curr": 10_010},
+        now_ts=now_ts,
+        now_dt=datetime(2026, 8, 3, 9, 31, 45),
+    )
+    second = state_handlers._maybe_submit_entry_split_probe_residual(
+        stock,
+        "199430",
+        {"curr": 10_010},
+        now_ts=now_ts + 0.3,
+        now_dt=datetime(2026, 8, 3, 9, 31, 45, 300000),
+    )
+    duplicate = state_handlers._maybe_submit_entry_split_probe_residual(
+        stock,
+        "199430",
+        {"curr": 10_010},
+        now_ts=now_ts + 0.6,
+        now_dt=datetime(2026, 8, 3, 9, 31, 45, 600000),
+    )
+
+    assert first is False
+    assert second is True
+    assert duplicate is False
+    assert stock["probe_confirmation_count"] == 2
+    assert stock["entry_split_probe_phase"] == "residual_submitted"
+    assert len(buy_calls) == 1
+
+
 def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeypatch):
     now_ts = 1_784_778_400.0
     active_date = (
@@ -4437,6 +4618,10 @@ def test_krx_like_wait_probe_timeout_releases_existing_scale_in_owner(monkeypatc
     )
 
     assert stock["entry_split_probe_soft_abort"] is True
+    assert (
+        stock["entry_split_probe_abort_detail_reason"]
+        == "timeout_negative_group_persisted"
+    )
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
     assert stock["entry_split_probe_scale_in_forbidden"] is False
     assert stock["probe_expand_forbidden"] is False
@@ -10790,7 +10975,7 @@ def test_rising_missed_quality_guard_block_does_not_call_rest_estimator(monkeypa
     )
 
 
-def test_rising_missed_scout_quality_guard_preserves_explicit_drop_without_rest_recheck(
+def test_rising_missed_tp1_gate_preserves_explicit_drop_without_rest_recheck(
     monkeypatch,
 ):
     state_handlers.COOLDOWNS = {}
@@ -10881,10 +11066,16 @@ def test_rising_missed_scout_quality_guard_preserves_explicit_drop_without_rest_
     assert submitted is True
     assert submit_calls == []
     assert rest_calls == []
-    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
+    assert entry_logs[-1][0] == "rising_missed_tp1_candidate_blocked"
     assert "rising_missed_rest_quote_estimator_reason" not in entry_logs[-1][1]
-    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_attempted"] is False
-    assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_weak_ai_or_strength"
+    assert (
+        entry_logs[-1][1]["block_reason"]
+        == "rising_missed_tp1_ai_state_blocked"
+    )
+    assert (
+        entry_logs[-1][1]["rising_missed_tp1_hard_negative_reasons"]
+        == "ai_explicit_veto"
+    )
 
 
 def test_rising_missed_scout_quality_guard_does_not_rest_ai_recheck_after_block(
@@ -32400,6 +32591,7 @@ def test_aborted_probe_notice_distinguishes_fill_from_unsubmitted_residual(monke
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_order_no": "PROBE-1",
         "entry_split_probe_abort_reason": "residual_revalidation_timeout",
+        "entry_split_probe_abort_detail_reason": "timeout_ai_authority_expired",
     }
 
     assert (
@@ -32420,6 +32612,7 @@ def test_aborted_probe_notice_distinguishes_fill_from_unsubmitted_residual(monke
     assert "계획 잔여:" in message
     assert "`4주 미제출`" in message
     assert "residual_revalidation_timeout" in message
+    assert "timeout_ai_authority_expired" in message
     assert "부분 체결:" not in message
 
 

@@ -1804,6 +1804,7 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
         ai_result_source_at_submit="live",
         ai_confirmed_at_submit=99.8,
         ai_action_source_at_submit="latest_stock_ai",
+        wait_contract_at_submit=True,
         probe_confirmation_count=1,
         probe_confirmation_last_at=101.1,
         probe_confirmation_last_state="STRONG",
@@ -1850,6 +1851,7 @@ def test_probe_runtime_restart_recovery_restores_bundle_and_fails_closed_on_mism
     assert recovered_stock["probe_confirmation_last_state"] == "STRONG"
     assert recovered_stock["probe_confirmation_last_signature"] == "price+tape"
     assert recovered_stock["entry_split_probe_ai_action_at_submit"] == "WAIT"
+    assert recovered_stock["entry_split_probe_wait_contract_at_submit"] is True
     assert recovered_stock["entry_split_probe_ai_result_source_at_submit"] == "live"
     assert recovered_stock["entry_split_probe_ai_confirmed_at_submit"] == 99.8
     assert (
@@ -2044,6 +2046,7 @@ def test_probe_runtime_restart_restores_terminal_abort_guards_and_confirmation(
         terminal_at=100.5,
         terminal_outcome="residual_not_submitted",
         terminal_abort_reason="residual_revalidation_timeout",
+        terminal_abort_detail_reason="timeout_negative_group_persisted",
         terminal_direction_state="WEAK",
         terminal_direction_reason="post_probe_wait_negative_group",
         terminal_continuation_action="DEFER",
@@ -2076,6 +2079,14 @@ def test_probe_runtime_restart_restores_terminal_abort_guards_and_confirmation(
     assert stock["probe_confirmation_last_state"] == "STRONG"
     assert stock["probe_confirmation_last_signature"] == "price+tape"
     assert stock["entry_split_probe_terminal_at"] == 100.5
+    assert (
+        stock["entry_split_probe_abort_detail_reason"]
+        == "timeout_negative_group_persisted"
+    )
+    assert (
+        stock["entry_split_probe_terminal_abort_detail_reason"]
+        == "timeout_negative_group_persisted"
+    )
     assert stock["entry_split_probe_terminal_direction_state"] == "WEAK"
     assert stock["entry_split_probe_terminal_negative_groups"] == "orderbook"
     assert stock["entry_split_probe_terminal_confirmation_count"] == 1
