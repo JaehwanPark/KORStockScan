@@ -67,6 +67,8 @@ ENTRY_PATH_TARGET_PCT = 0.30
 ENTRY_PATH_ADVERSE_PCT = -0.70
 ENTRY_PATH_PRIMARY_HORIZON = "10m"
 ENTRY_PATH_LABEL_VERSION = "tight_stop_entry_path_v1"
+RISING_MISSED_POST_BLOCK_MIN_FRESH_SAMPLES = 2
+RISING_MISSED_POST_BLOCK_LABEL_VERSION = "rising_missed_post_block_exact_trace_v1"
 PIPELINE_FORWARD_DAYS = 7
 PRIMARY_HORIZON_BY_STAGE = {
     "entry": "10m",
@@ -1324,6 +1326,7 @@ def load_pipeline_price_and_lifecycle_rows(
     window_end: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     price_buckets: dict[tuple[str, str, str, datetime], dict[str, Any]] = {}
+    post_block_meta_by_evaluation: dict[str, dict[str, Any]] = {}
     lifecycle: list[dict[str, Any]] = []
     lifecycle_seen: set[tuple[Any, ...]] = set()
     for row in rows:
@@ -1331,6 +1334,7 @@ def load_pipeline_price_and_lifecycle_rows(
         fields = fields if isinstance(fields, dict) else {}
         timestamp = _parse_ts(row.get("emitted_at") or fields.get("event_ts"))
         code = _normalize_stock_code(row.get("stock_code") or fields.get("stock_code"))
+        stage = str(row.get("stage") or "")
         if stock_codes is not None and code not in stock_codes:
             continue
         if (
@@ -1341,12 +1345,82 @@ def load_pipeline_price_and_lifecycle_rows(
             continue
         if timestamp is not None and window_end is not None and timestamp > window_end:
             continue
+        post_block_evaluation_id = str(
+            fields.get("rising_missed_tp1_evaluation_id") or ""
+        ).strip()
+        if post_block_evaluation_id:
+            post_block_meta = post_block_meta_by_evaluation.setdefault(
+                post_block_evaluation_id,
+                {
+                    "stock_code": code,
+                    "decision_trace_id": None,
+                    "registered_at": None,
+                    "reference_price": None,
+                    "effective_venue": None,
+                    "session_bucket": None,
+                    "gross_target_pct": None,
+                    "adverse_pct": None,
+                    "horizon_sec": None,
+                    "source_block_stage": None,
+                    "source_block_reason": None,
+                },
+            )
+            linked_trace_id = str(
+                fields.get("rising_missed_tp1_ai_decision_trace_id") or ""
+            ).strip()
+            if linked_trace_id in {"", "-"} and stage == "ai_confirmed":
+                linked_trace_id = str(fields.get("ai_decision_trace_id") or "").strip()
+            if linked_trace_id not in {"", "-"}:
+                post_block_meta["decision_trace_id"] = linked_trace_id
+            gross_target_pct = _number(fields.get("rising_missed_tp1_gross_target_pct"))
+            adverse_pct = _number(fields.get("rising_missed_tp1_adverse_stop_pct"))
+            horizon_sec = _number(fields.get("rising_missed_tp1_horizon_sec"))
+            if gross_target_pct is not None and gross_target_pct > 0:
+                post_block_meta["gross_target_pct"] = gross_target_pct
+            if adverse_pct is not None and adverse_pct < 0:
+                post_block_meta["adverse_pct"] = adverse_pct
+            if horizon_sec is not None and horizon_sec > 0:
+                post_block_meta["horizon_sec"] = horizon_sec
+            source_block_stage = str(
+                fields.get("rising_missed_nxt_post_block_source_block_stage") or ""
+            ).strip()
+            source_block_reason = str(
+                fields.get("rising_missed_nxt_post_block_source_block_reason")
+                or fields.get("block_reason")
+                or fields.get("rising_missed_tp1_candidate_reason")
+                or ""
+            ).strip()
+            if source_block_stage:
+                post_block_meta["source_block_stage"] = source_block_stage
+            if source_block_reason:
+                post_block_meta["source_block_reason"] = source_block_reason
+            if stage in {
+                "rising_missed_nxt_post_block_sampler_registered",
+                "rising_missed_nxt_post_block_sampler_restored",
+            }:
+                post_block_meta["registered_at"] = (
+                    timestamp.isoformat() if timestamp else None
+                )
+                post_block_meta["reference_price"] = _number(
+                    fields.get("rising_missed_nxt_post_block_sampler_entry_price")
+                )
+                post_block_meta["effective_venue"] = str(
+                    fields.get("rising_missed_effective_venue")
+                    or fields.get("effective_venue")
+                    or ""
+                ).upper()
+                post_block_meta["session_bucket"] = str(
+                    fields.get("rising_missed_market_session_bucket")
+                    or fields.get("session_bucket")
+                    or ""
+                ).upper()
         price = _pipeline_event_observed_price(fields)
         venue = str(
             fields.get("effective_venue")
             or fields.get("ai_market_snapshot_effective_venue")
             or fields.get("holding_context_venue")
             or fields.get("market_venue")
+            or fields.get("rising_missed_effective_venue")
             or ""
         ).upper()
         session = str(
@@ -1375,6 +1449,13 @@ def load_pipeline_price_and_lifecycle_rows(
                 "session_bucket": session,
                 "source_quality": source_quality,
             }
+            if (
+                stage == "rising_missed_nxt_post_block_price_sample"
+                and post_block_evaluation_id
+            ):
+                candidate_price["_post_block_evaluation_ids"] = [
+                    post_block_evaluation_id
+                ]
             # Rows without an explicit usable source-quality contract are
             # rejected later by ``_same_route``. Do not retain millions of
             # unusable event observations in memory merely to discard them
@@ -1396,6 +1477,14 @@ def load_pipeline_price_and_lifecycle_rows(
                     bucket["high"] = max(float(bucket["high"]), price)
                     bucket["low"] = min(float(bucket["low"]), price)
                     bucket["close"] = price
+                    for evaluation_id in candidate_price.get(
+                        "_post_block_evaluation_ids", []
+                    ):
+                        evaluation_ids = bucket.setdefault(
+                            "_post_block_evaluation_ids", []
+                        )
+                        if evaluation_id not in evaluation_ids:
+                            evaluation_ids.append(evaluation_id)
         lifecycle_identifiers = {
             "decision_trace_id": fields.get("ai_decision_trace_id"),
             "entry_price_decision_trace_id": fields.get(
@@ -1407,7 +1496,6 @@ def load_pipeline_price_and_lifecycle_rows(
             "position_cycle_id": fields.get("position_cycle_id"),
             "broker_order_no": fields.get("broker_order_no") or fields.get("order_no"),
         }
-        stage = str(row.get("stage") or "")
         stage_lower = stage.lower()
         actual_order_submitted = _bool(fields.get("actual_order_submitted"))
         filled = "fill" in stage_lower or _bool(fields.get("filled"))
@@ -1467,6 +1555,49 @@ def load_pipeline_price_and_lifecycle_rows(
                     "realized_profit_pct": realized_profit_pct,
                 }
             )
+    for price_row in price_buckets.values():
+        evaluation_ids = price_row.pop("_post_block_evaluation_ids", [])
+        provenances: list[dict[str, Any]] = []
+        for evaluation_id_value in evaluation_ids:
+            evaluation_id = str(evaluation_id_value or "").strip()
+            post_block_meta = post_block_meta_by_evaluation.get(evaluation_id) or {}
+            if not (
+                evaluation_id
+                and post_block_meta.get("decision_trace_id")
+                and post_block_meta.get("registered_at")
+                and _number(post_block_meta.get("reference_price"))
+                and _number(post_block_meta.get("gross_target_pct"))
+                and _number(post_block_meta.get("adverse_pct"))
+                and _number(post_block_meta.get("horizon_sec"))
+                and _normalize_stock_code(post_block_meta.get("stock_code"))
+                == _normalize_stock_code(price_row.get("stock_code"))
+                and _venue(post_block_meta.get("effective_venue"))
+                == _venue(price_row.get("effective_venue"))
+                and _session(post_block_meta.get("session_bucket"))
+                == _session(price_row.get("session_bucket"))
+            ):
+                continue
+            provenances.append(
+                {
+                    "label_version": RISING_MISSED_POST_BLOCK_LABEL_VERSION,
+                    "evaluation_id": evaluation_id,
+                    "stock_code": post_block_meta.get("stock_code"),
+                    "decision_trace_id": post_block_meta.get("decision_trace_id"),
+                    "registered_at": post_block_meta.get("registered_at"),
+                    "reference_price": post_block_meta.get("reference_price"),
+                    "effective_venue": post_block_meta.get("effective_venue"),
+                    "session_bucket": post_block_meta.get("session_bucket"),
+                    "gross_target_pct": post_block_meta.get("gross_target_pct"),
+                    "adverse_pct": post_block_meta.get("adverse_pct"),
+                    "horizon_sec": post_block_meta.get("horizon_sec"),
+                    "source_block_stage": post_block_meta.get("source_block_stage"),
+                    "source_block_reason": post_block_meta.get("source_block_reason"),
+                    "source_quality_status": "pass_exact_trace_evaluation_join",
+                    "counterfactual_only": True,
+                }
+            )
+        if provenances:
+            price_row["post_block_outcome_provenances"] = provenances
     prices = sorted(
         price_buckets.values(),
         key=lambda row: (
@@ -1477,6 +1608,153 @@ def load_pipeline_price_and_lifecycle_rows(
         ),
     )
     return prices, lifecycle
+
+
+def _linked_rising_missed_post_block_outcome(
+    *,
+    label: dict[str, Any],
+    price_rows: list[dict[str, Any]],
+    as_of: datetime,
+) -> dict[str, Any] | None:
+    """Return the bounded TP1 outcome owned by this exact decision trace.
+
+    The same symbol may receive multiple AI decisions a few minutes apart.  A
+    symbol/time-window join would leak the first sampler outcome into the later
+    decision.  Require the runtime evaluation-to-trace link recorded by the
+    blocker producer and keep this result counterfactual/offline-only.
+    """
+
+    if _stage(label.get("decision_stage")) != "entry":
+        return None
+    trace_id = str(label.get("decision_trace_id") or "").strip()
+    decision_ts = _parse_ts(label.get("decision_ts"))
+    if not trace_id or decision_ts is None:
+        return None
+    linked: list[dict[str, Any]] = []
+    for row in price_rows:
+        provenances = row.get("post_block_outcome_provenances")
+        provenances = provenances if isinstance(provenances, list) else []
+        for provenance in provenances:
+            provenance = provenance if isinstance(provenance, dict) else {}
+            if str(provenance.get("decision_trace_id") or "") != trace_id:
+                continue
+            registered_at = _parse_ts(provenance.get("registered_at"))
+            reference = _number(provenance.get("reference_price"))
+            timestamp = row.get("_timestamp")
+            if (
+                registered_at is None
+                or registered_at < decision_ts
+                or reference is None
+                or reference <= 0
+                or not isinstance(timestamp, datetime)
+                or timestamp < registered_at
+                or not _same_route(label, row)
+            ):
+                continue
+            linked.append({**row, "post_block_outcome_provenance": provenance})
+    if not linked:
+        return None
+    linked.sort(key=lambda row: row["_timestamp"])
+    first_provenance = linked[0]["post_block_outcome_provenance"]
+    evaluation_id = str(first_provenance.get("evaluation_id") or "")
+    linked = [
+        row
+        for row in linked
+        if str(
+            (row.get("post_block_outcome_provenance") or {}).get("evaluation_id") or ""
+        )
+        == evaluation_id
+    ]
+    registered_at = _parse_ts(first_provenance.get("registered_at"))
+    reference = _number(first_provenance.get("reference_price"))
+    gross_target_pct = _number(first_provenance.get("gross_target_pct"))
+    adverse_pct = _number(first_provenance.get("adverse_pct"))
+    horizon_sec = _number(first_provenance.get("horizon_sec"))
+    if (
+        registered_at is None
+        or reference is None
+        or reference <= 0
+        or gross_target_pct is None
+        or gross_target_pct <= 0
+        or adverse_pct is None
+        or adverse_pct >= 0
+        or horizon_sec is None
+        or horizon_sec <= 0
+    ):
+        return None
+    horizon_end = registered_at + timedelta(seconds=horizon_sec)
+    linked = [row for row in linked if row["_timestamp"] <= horizon_end]
+    if not linked:
+        return None
+    target_price = reference * (1.0 + gross_target_pct / 100.0)
+    adverse_price = reference * (1.0 + adverse_pct / 100.0)
+    target_hit_at = next(
+        (
+            row["_timestamp"].isoformat()
+            for row in linked
+            if row["_high"] >= target_price
+        ),
+        None,
+    )
+    adverse_hit_at = next(
+        (
+            row["_timestamp"].isoformat()
+            for row in linked
+            if row["_low"] <= adverse_price
+        ),
+        None,
+    )
+    if target_hit_at and adverse_hit_at and target_hit_at == adverse_hit_at:
+        outcome_label = "same_sample_ambiguous"
+    elif target_hit_at and (not adverse_hit_at or target_hit_at < adverse_hit_at):
+        outcome_label = "gross_target_first"
+    elif adverse_hit_at:
+        outcome_label = "adverse_stop_first"
+    elif as_of >= horizon_end:
+        outcome_label = "neither_hit"
+    else:
+        outcome_label = "pending_horizon"
+    max_move_pct = max(((row["_high"] / reference) - 1.0) * 100.0 for row in linked)
+    min_move_pct = min(((row["_low"] / reference) - 1.0) * 100.0 for row in linked)
+    sample_floor_pass = len(linked) >= RISING_MISSED_POST_BLOCK_MIN_FRESH_SAMPLES
+    return {
+        "label_version": RISING_MISSED_POST_BLOCK_LABEL_VERSION,
+        "link_status": "exact_trace_evaluation_joined",
+        "evaluation_id": evaluation_id,
+        "decision_trace_id": trace_id,
+        "registered_at": registered_at.isoformat(),
+        "reference_price": reference,
+        "gross_target_pct": gross_target_pct,
+        "adverse_pct": adverse_pct,
+        "horizon_sec": horizon_sec,
+        "source_block_stage": first_provenance.get("source_block_stage"),
+        "source_block_reason": first_provenance.get("source_block_reason"),
+        "gross_first_hit_label": outcome_label,
+        "target_hit_at": target_hit_at,
+        "adverse_hit_at": adverse_hit_at,
+        "max_move_pct": round(max_move_pct, 10),
+        "min_move_pct": round(min_move_pct, 10),
+        "fresh_sample_count": len(linked),
+        "metric_role": "ai_decision_quality_outcome_attribution",
+        "decision_authority": "offline_replay_and_attribution_only",
+        "window_policy": (
+            "exact_trace_evaluation_same_venue_session_bounded_post_block_window"
+        ),
+        "sample_floor": "2_fresh_route_consistent_post_block_price_samples",
+        "sample_floor_pass": sample_floor_pass,
+        "primary_decision_metric": "gross_target_first_before_adverse_stop",
+        "source_quality_gate": (
+            "exact_trace_evaluation_join_and_fresh_same_route_price_samples"
+        ),
+        "source_quality_status": (
+            "pass" if sample_floor_pass else "sample_floor_keep_collecting"
+        ),
+        "counterfactual_only": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": list(OFFLINE_CONTRACT["forbidden_uses"]),
+    }
 
 
 def _request_code_for_venue(stock_code: Any, effective_venue: Any) -> str | None:
@@ -1702,6 +1980,17 @@ def merge_preferred_outcome_price_rows(
         )
         if timestamp and key in covered_minutes:
             suppressed_count += 1
+            provenances = row.get("post_block_outcome_provenances")
+            if isinstance(provenances, list) and provenances:
+                # Completed 1m OHLC remains the general MFE/MAE owner, but it
+                # cannot replace second-level exact-evaluation observations
+                # used to order the bounded TP1/adverse first hit.
+                retained_fallback.append(
+                    {
+                        **row,
+                        "post_block_attribution_only": True,
+                    }
+                )
             continue
         retained_fallback.append(row)
     return primary + retained_fallback, suppressed_count
@@ -2062,6 +2351,7 @@ def mature_outcome_labels(
                 row
                 for row in prices_by_code.get(code, [])
                 if row["_timestamp"].date() > decision_ts.date()
+                and row.get("post_block_attribution_only") is not True
                 and _venue(row.get("effective_venue"))
                 and _session(row.get("session_bucket"))
                 and _price_source_usable(row)
@@ -2085,6 +2375,7 @@ def mature_outcome_labels(
                     row
                     for row in prices_by_code.get(code, [])
                     if window_start <= row["_timestamp"] <= horizon_end
+                    and row.get("post_block_attribution_only") is not True
                     and row["_timestamp"].date().isoformat() == next_session_date
                     and _venue(row.get("effective_venue")) == next_session_venue
                     and _session(row.get("session_bucket")) == next_session_bucket
@@ -2095,6 +2386,7 @@ def mature_outcome_labels(
                     row
                     for row in prices_by_code.get(code, [])
                     if decision_ts < row["_timestamp"] <= horizon_end
+                    and row.get("post_block_attribution_only") is not True
                     and _same_route(pending, row)
                 ]
             if not window or reference is None or reference <= 0:
@@ -2288,6 +2580,11 @@ def mature_outcome_labels(
             }
             matured_horizons.append(horizon)
         correlation = _correlation(pending, lifecycle_rows)
+        linked_post_block_outcome = _linked_rising_missed_post_block_outcome(
+            label=pending,
+            price_rows=prices_by_code.get(code, []),
+            as_of=as_of,
+        )
         longest = (
             horizon_metrics[f"{max(matured_horizons)}m"] if matured_horizons else {}
         )
@@ -2311,6 +2608,10 @@ def mature_outcome_labels(
                 ),
                 "counterfactual_only": True,
             }
+            if linked_post_block_outcome is not None:
+                stage_outcome["rising_missed_post_block_outcome"] = (
+                    linked_post_block_outcome
+                )
         elif stage == "post_probe":
             stage_outcome = {
                 "residual_submitted": correlation["actual_order_submitted"],
@@ -2402,11 +2703,23 @@ def _taxonomy(label: dict[str, Any]) -> list[str]:
     first_hit = str(preferred.get("first_hit") or "")
     entry_path_first_hit = str(preferred.get("entry_path_first_hit") or "")
     stage = _stage(label.get("decision_stage"))
+    stage_outcome = label.get("stage_outcome")
+    stage_outcome = stage_outcome if isinstance(stage_outcome, dict) else {}
+    post_block_outcome = stage_outcome.get("rising_missed_post_block_outcome")
+    post_block_outcome = (
+        post_block_outcome if isinstance(post_block_outcome, dict) else {}
+    )
     errors: list[str] = []
     if action == "DROP" and mfe >= 1.0:
         errors.append("false_drop")
     if action == "WAIT" and mfe >= 1.0:
         errors.append("false_wait")
+    if (
+        action == "DROP"
+        and post_block_outcome.get("gross_first_hit_label") == "gross_target_first"
+        and post_block_outcome.get("source_quality_status") == "pass"
+    ):
+        errors.append("false_drop_post_block_gross_target_first")
     if action == "BUY" and (first_hit == "adverse" or mae <= -1.0):
         errors.append("false_buy")
     if stage == "entry" and action == "BUY" and entry_path_first_hit == "adverse_first":
@@ -2494,6 +2807,9 @@ def build_quality_baseline(
             "entry_path_first_hit": preferred.get("entry_path_first_hit"),
             "entry_path_target_pct": preferred.get("entry_path_target_pct"),
             "entry_path_adverse_pct": preferred.get("entry_path_adverse_pct"),
+            "rising_missed_post_block_outcome": (row.get("stage_outcome") or {}).get(
+                "rising_missed_post_block_outcome"
+            ),
             "decision_value_pct": decision_value,
             "errors": errors,
         }
@@ -6311,6 +6627,12 @@ def build_paired_replay_report(
         )
         pre_profit_mae = _number(preferred.get("pre_profit_mae_pct"))
         candidate_errors: list[str] = []
+        stage_outcome = label.get("stage_outcome")
+        stage_outcome = stage_outcome if isinstance(stage_outcome, dict) else {}
+        post_block_outcome = stage_outcome.get("rising_missed_post_block_outcome")
+        post_block_outcome = (
+            post_block_outcome if isinstance(post_block_outcome, dict) else {}
+        )
         if candidate_action == "DROP" and profit_opportunity_observed:
             candidate_errors.append("false_drop")
             if profit_opportunity_sequence == "drawdown_then_profit_recovery":
@@ -6322,6 +6644,12 @@ def build_paired_replay_report(
                 candidate_errors.append("false_drop_direct_profit")
             elif profit_opportunity_sequence == "ambiguous_same_bar":
                 candidate_errors.append("false_drop_same_bar_sequence_ambiguous")
+        if (
+            candidate_action == "DROP"
+            and post_block_outcome.get("gross_first_hit_label") == "gross_target_first"
+            and post_block_outcome.get("source_quality_status") == "pass"
+        ):
+            candidate_errors.append("false_drop_post_block_gross_target_first")
         if candidate_action == "WAIT" and mfe is not None and mfe >= 1.0:
             candidate_errors.append("false_wait")
         if candidate_action == "BUY" and (
@@ -6394,6 +6722,7 @@ def build_paired_replay_report(
                 ),
                 "profit_opportunity_sequence": profit_opportunity_sequence,
                 "pre_profit_mae_pct": pre_profit_mae,
+                "rising_missed_post_block_outcome": post_block_outcome or None,
                 "candidate_error_taxonomy": candidate_errors,
                 "clean_continuation_probe_eligible": (
                     clean_continuation.get("eligible") is True

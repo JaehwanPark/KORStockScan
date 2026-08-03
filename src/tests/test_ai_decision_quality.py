@@ -1282,6 +1282,47 @@ def test_outcome_price_merge_prefers_kiwoom_for_same_route_minute():
     assert [row["price"] for row in merged] == [101, 102, 201]
 
 
+def test_outcome_price_merge_retains_exact_post_block_attribution_only():
+    primary = [
+        {
+            "timestamp": "2026-08-03T16:05:00+09:00",
+            "stock_code": "459510",
+            "price": 101,
+            "effective_venue": "NXT",
+            "session_bucket": "NXT_AFTERMARKET",
+            "source_quality": "pass_completed_ka10080_bar",
+        }
+    ]
+    fallback = [
+        {
+            "timestamp": "2026-08-03T16:05:16+09:00",
+            "stock_code": "459510",
+            "price": 101.5,
+            "effective_venue": "NXT",
+            "session_bucket": "NXT_OPEN_OBSERVE",
+            "source_quality": "event_observed",
+            "post_block_outcome_provenances": [
+                {
+                    "evaluation_id": "evaluation-first",
+                    "decision_trace_id": "post-block-trace",
+                }
+            ],
+        }
+    ]
+
+    merged, suppressed = quality.merge_preferred_outcome_price_rows(
+        primary,
+        fallback,
+    )
+
+    assert suppressed == 1
+    assert len(merged) == 2
+    assert merged[1]["post_block_attribution_only"] is True
+    assert merged[1]["post_block_outcome_provenances"][0]["evaluation_id"] == (
+        "evaluation-first"
+    )
+
+
 def test_mature_outcome_uses_bar_high_low_and_marks_same_bar_first_hit_ambiguous():
     labels = quality.mature_outcome_labels(
         pending_labels=[_pending()],
@@ -1663,6 +1704,176 @@ def test_pipeline_loader_qualifies_fresh_contract_price_and_normalizes_session()
         },
         prices[1],
     )
+
+
+def test_rising_missed_post_block_outcome_joins_only_its_exact_trace():
+    first_trace_id = "analyze_target:459510:first"
+    second_trace_id = "analyze_target:459510:second"
+    evaluation_id = "evaluation-first"
+    pipeline_rows = [
+        {
+            "emitted_at": "2026-08-03T16:01:25.467742+09:00",
+            "stock_code": "459510",
+            "stage": "rising_missed_nxt_post_block_sampler_registered",
+            "fields": {
+                "rising_missed_tp1_evaluation_id": evaluation_id,
+                "rising_missed_effective_venue": "NXT",
+                "rising_missed_market_session_bucket": "nxt_open_observe",
+                "rising_missed_nxt_post_block_sampler_entry_price": 100,
+                "rising_missed_nxt_post_block_source_block_stage": "tp1_selector",
+                "rising_missed_nxt_post_block_source_block_reason": (
+                    "rising_missed_tp1_ai_state_blocked"
+                ),
+            },
+        },
+        {
+            "emitted_at": "2026-08-03T16:01:25.468085+09:00",
+            "stock_code": "459510",
+            "stage": "rising_missed_tp1_candidate_blocked",
+            "fields": {
+                "rising_missed_tp1_evaluation_id": evaluation_id,
+                "rising_missed_tp1_ai_decision_trace_id": first_trace_id,
+                "rising_missed_tp1_gross_target_pct": 1.3,
+                "rising_missed_tp1_adverse_stop_pct": -0.7,
+                "rising_missed_tp1_horizon_sec": 1200,
+            },
+        },
+        *[
+            {
+                "emitted_at": timestamp,
+                "stock_code": "459510",
+                "stage": "rising_missed_nxt_post_block_price_sample",
+                "fields": {
+                    "rising_missed_tp1_evaluation_id": evaluation_id,
+                    "rising_missed_effective_venue": "NXT",
+                    "rising_missed_market_session_bucket": "nxt_open_observe",
+                    "source_quality_gate": (
+                        "fresh_absolute_nxt_ws_route_or_bounded_ka10004_receive_observation"
+                    ),
+                    "rising_missed_nxt_post_block_fresh_sample": True,
+                    "current_price_observed": price,
+                },
+            }
+            for timestamp, price in (
+                ("2026-08-03T16:01:30+09:00", 100.0),
+                ("2026-08-03T16:05:16+09:00", 101.5),
+                ("2026-08-03T16:06:10+09:00", 101.4),
+            )
+        ],
+    ]
+
+    prices, _lifecycle = quality.load_pipeline_price_and_lifecycle_rows(pipeline_rows)
+
+    assert len(prices) == 3
+    assert prices[1]["effective_venue"] == "NXT"
+    assert prices[1]["session_bucket"] == "NXT_OPEN_OBSERVE"
+    assert prices[1]["post_block_outcome_provenances"] == [
+        {
+            "label_version": quality.RISING_MISSED_POST_BLOCK_LABEL_VERSION,
+            "evaluation_id": evaluation_id,
+            "stock_code": "459510",
+            "decision_trace_id": first_trace_id,
+            "registered_at": "2026-08-03T16:01:25.467742+09:00",
+            "reference_price": 100.0,
+            "effective_venue": "NXT",
+            "session_bucket": "NXT_OPEN_OBSERVE",
+            "gross_target_pct": 1.3,
+            "adverse_pct": -0.7,
+            "horizon_sec": 1200.0,
+            "source_block_stage": "tp1_selector",
+            "source_block_reason": "rising_missed_tp1_ai_state_blocked",
+            "source_quality_status": "pass_exact_trace_evaluation_join",
+            "counterfactual_only": True,
+        }
+    ]
+    pending = {
+        **_pending(),
+        "decision_trace_id": first_trace_id,
+        "decision_ts": "2026-08-03T16:01:23.495804+09:00",
+        "stock_code": "459510",
+        "effective_venue": "NXT",
+        "session_bucket": "nxt_aftermarket",
+        "reference_price": 100.1,
+    }
+    second_pending = {
+        **pending,
+        "decision_trace_id": second_trace_id,
+        "decision_ts": "2026-08-03T16:03:56.604917+09:00",
+        "reference_price": 101.4,
+    }
+    labels = quality.mature_outcome_labels(
+        pending_labels=[pending, second_pending],
+        price_rows=prices,
+        lifecycle_rows=[],
+        as_of=datetime.fromisoformat("2026-08-03T16:06:30+09:00"),
+    )
+
+    first_outcome = labels[0]["stage_outcome"]["rising_missed_post_block_outcome"]
+    assert first_outcome["evaluation_id"] == evaluation_id
+    assert first_outcome["decision_trace_id"] == first_trace_id
+    assert first_outcome["gross_first_hit_label"] == "gross_target_first"
+    assert first_outcome["target_hit_at"] == "2026-08-03T16:05:16+09:00"
+    assert first_outcome["adverse_hit_at"] is None
+    assert first_outcome["max_move_pct"] == 1.5
+    assert first_outcome["source_quality_status"] == "pass"
+    assert "false_drop_post_block_gross_target_first" in quality._taxonomy(labels[0])
+    assert labels[1]["stage_outcome"].get("rising_missed_post_block_outcome") is None
+
+
+def test_pipeline_loader_preserves_same_second_post_block_evaluations():
+    rows = []
+    for offset, evaluation_id in enumerate(("evaluation-a", "evaluation-b")):
+        rows.extend(
+            [
+                {
+                    "emitted_at": f"2026-08-03T16:01:25.46774{offset}+09:00",
+                    "stock_code": "459510",
+                    "stage": "rising_missed_nxt_post_block_sampler_registered",
+                    "fields": {
+                        "rising_missed_tp1_evaluation_id": evaluation_id,
+                        "rising_missed_effective_venue": "NXT",
+                        "rising_missed_market_session_bucket": "nxt_open_observe",
+                        "rising_missed_nxt_post_block_sampler_entry_price": 100,
+                    },
+                },
+                {
+                    "emitted_at": f"2026-08-03T16:01:25.46808{offset}+09:00",
+                    "stock_code": "459510",
+                    "stage": "rising_missed_tp1_candidate_blocked",
+                    "fields": {
+                        "rising_missed_tp1_evaluation_id": evaluation_id,
+                        "rising_missed_tp1_ai_decision_trace_id": f"trace-{offset}",
+                        "rising_missed_tp1_gross_target_pct": 1.3,
+                        "rising_missed_tp1_adverse_stop_pct": -0.7,
+                        "rising_missed_tp1_horizon_sec": 1200,
+                    },
+                },
+                {
+                    "emitted_at": f"2026-08-03T16:01:30.10000{offset}+09:00",
+                    "stock_code": "459510",
+                    "stage": "rising_missed_nxt_post_block_price_sample",
+                    "fields": {
+                        "rising_missed_tp1_evaluation_id": evaluation_id,
+                        "rising_missed_effective_venue": "NXT",
+                        "rising_missed_market_session_bucket": "nxt_open_observe",
+                        "source_quality_gate": (
+                            "fresh_absolute_nxt_ws_route_or_bounded_ka10004_"
+                            "receive_observation"
+                        ),
+                        "rising_missed_nxt_post_block_fresh_sample": True,
+                        "current_price_observed": 100 + offset,
+                    },
+                },
+            ]
+        )
+
+    prices, _lifecycle = quality.load_pipeline_price_and_lifecycle_rows(rows)
+
+    assert len(prices) == 1
+    assert {
+        provenance["evaluation_id"]
+        for provenance in prices[0]["post_block_outcome_provenances"]
+    } == {"evaluation-a", "evaluation-b"}
 
 
 def test_pipeline_loader_qualifies_fresh_evaluated_holding_exact_bid():
@@ -4071,6 +4282,86 @@ def test_paired_replay_consumes_tight_stop_entry_path_label():
     )
     assert report["entry_path_label_contract"]["decision_authority"] == (
         "offline_replay_and_attribution_only"
+    )
+
+
+def test_baseline_and_paired_report_preserve_exact_post_block_false_drop():
+    post_block_outcome = {
+        "label_version": quality.RISING_MISSED_POST_BLOCK_LABEL_VERSION,
+        "link_status": "exact_trace_evaluation_joined",
+        "evaluation_id": "evaluation-first",
+        "decision_trace_id": "post-block-trace",
+        "gross_first_hit_label": "gross_target_first",
+        "source_quality_status": "pass",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    label = {
+        "decision_trace_id": "post-block-trace",
+        "decision_stage": "entry",
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_AFTERMARKET",
+        "action": "DROP",
+        "label_status": "partial",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 0.8,
+                "mfe_pct": 1.5,
+                "mae_pct": -0.2,
+                "first_hit": "neither",
+                "entry_path_first_hit": "target_first",
+            }
+        },
+        "stage_outcome": {
+            "rising_missed_post_block_outcome": post_block_outcome,
+        },
+    }
+
+    baseline = quality.build_quality_baseline(
+        target_date="2026-08-03",
+        labels=[label],
+    )
+    report = quality.build_paired_replay_report(
+        target_date="2026-08-03",
+        requests=[
+            {
+                "decision_trace_id": "post-block-trace",
+                "paired_replay_id": "post-block-pair",
+                "stock_code": "459510",
+            }
+        ],
+        results=[
+            {
+                "decision_trace_id": "post-block-trace",
+                "paired_replay_id": "post-block-pair",
+                "stage": "entry",
+                "effective_venue": "NXT",
+                "session_bucket": "NXT_AFTERMARKET",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "DROP"},
+                "candidate_response": {"action": "DROP", "edge_state": "NO_EDGE"},
+            }
+        ],
+        labels=[label],
+    )
+
+    assert baseline["taxonomy_counts"] == {
+        "false_drop": 1,
+        "false_drop_post_block_gross_target_first": 1,
+        "missed_entry_tight_stop_target_first": 1,
+    }
+    assert baseline["rows"][0]["rising_missed_post_block_outcome"] == (
+        post_block_outcome
+    )
+    comparison = report["paired_comparisons"][0]
+    assert comparison["rising_missed_post_block_outcome"] == post_block_outcome
+    assert (
+        "false_drop_post_block_gross_target_first"
+        in comparison["candidate_error_taxonomy"]
     )
 
 
