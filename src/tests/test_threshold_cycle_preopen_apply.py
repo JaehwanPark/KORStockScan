@@ -8941,6 +8941,73 @@ def test_dated_runtime_override_audits_require_current_date_and_dependency():
     )
 
 
+def test_dated_runtime_auto_renew_projects_only_enabled_members_to_target_date():
+    target_date = "2026-08-03"
+    source = {
+        mod.DATED_RUNTIME_AUTO_RENEW_ENABLED_KEY: "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-07-31",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED": "false",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE": ("2026-07-31"),
+    }
+
+    expected, expected_keys = mod._dated_runtime_auto_renew_expected_env(
+        target_date,
+        source,
+    )
+
+    assert expected == {
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": target_date,
+    }
+    assert expected_keys == sorted(expected)
+    assert "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED" not in expected
+
+
+def test_verify_runtime_env_handoff_accepts_explicit_dated_auto_renew_contract(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(
+        mod, "authoritative_ai_context_runtime_env", lambda *_args, **_kwargs: {}
+    )
+    target_date = "2026-08-03"
+    (runtime_dir / f"threshold_runtime_env_{target_date}.json").write_text(
+        json.dumps(
+            {"target_date": target_date, "selected_families": [], "env_overrides": {}}
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "operator_runtime_overrides.env").write_text(
+        "\n".join(
+            [
+                f"export {mod.DATED_RUNTIME_AUTO_RENEW_ENABLED_KEY}=true",
+                "export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true",
+                (
+                    "export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE="
+                    "2026-07-31"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff(target_date)
+
+    assert result["status"] == "pass"
+    assert result["dated_runtime_auto_renew_enabled"] is True
+    assert result["dated_runtime_override_fail_count"] == 0
+    selector = next(
+        audit
+        for audit in result["dated_runtime_override_audits"]
+        if audit["family"] == "rising_missed_tp1_selector"
+    )
+    assert selector["status"] == "pass"
+    assert selector["active_date"] == target_date
+
+
 def test_dated_source_gap_relief_requires_its_own_active_date():
     target_date = "2026-07-31"
     audits = mod._dated_runtime_override_audits(

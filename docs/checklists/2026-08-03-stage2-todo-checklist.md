@@ -68,6 +68,7 @@
   - 누적 품질 갱신 기준: PYRAMID/AVG_DOWN 고효용 calibration은 clean-baseline `single_cumulative_quality_update` 중 최대 1건만 선택하고, `scale_in_split_order_plan`과 후단 real-pyramid 보호장치는 유지하며 post-apply attribution이 없는 후보는 fail-closed한다.
   - 금지: 관찰 결과만으로 장중 runtime을 변경하지 않는다. 사용자 명시 override는 fresh/conflict-free source, 단일 blocker 인과, 기존 bounded_tunable 단일 축, rollback과 즉시 attribution 계약을 모두 충족해야 한다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - dated override 보완 (`2026-08-03`): 2026-07-31 operator overlay와 handoff verifier에서 21개 canary/relief member가 모두 enabled/pass였고, 이후 개별 rollback·retirement 근거는 발견되지 않았다. 2026-08-03 target-date overlay 부재와 persistent false가 결합해 전부 OFF가 된 날짜 rollover 결함을 보완했다. Persistent operator가 `KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=true`를 명시한 경우에만 이미 enabled인 21개 member의 active date를 target date로 갱신하며, 개별 false는 명시적 rollback으로 보존한다. 만료된 early-volatility TP 3종, rising-missed AI action guard, scalp fast-exit guard는 갱신 allowlist 밖에 두고 launcher safe-disable을 유지한다. TP1 source-gap relief는 selector 날짜를 공유하지 않고 자체 active-date key를 사용하도록 수정했다. 재기동 전 verifier에서 21개 pass/fail 0을 확인했으며 실행 PID 반영은 최종 리뷰·재기동 후 별도 귀속한다.
 
 - [ ] `[SimProbeIntradayCoverage0803] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-08-03`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-07-31.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-07-31.json)

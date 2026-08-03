@@ -1421,14 +1421,18 @@ def test_run_bot_auto_renews_allowlisted_override_without_renewing_removed_famil
             "bash",
             "-c",
             function_block + """
+export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
+export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED=true
+export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE=2026-07-30
 export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED=true
 export KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE=2026-07-30
 renew_enabled_dated_runtime_overrides 2026-07-31 >/dev/null
 record_enabled_dated_runtime_provenance 2026-07-31 >/dev/null
-printf '%s|%s|%s|%s\\n' \
+printf '%s|%s|%s|%s|%s\\n' \
   "$KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE" \
+  "$KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE" \
   "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED" \
   "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE" \
   "$KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_COUNT"
@@ -1439,7 +1443,57 @@ printf '%s|%s|%s|%s\\n' \
         check=True,
     )
 
-    assert result.stdout.strip() == "2026-07-31|true|2026-07-30|1"
+    assert result.stdout.strip() == "2026-07-31|2026-07-31|true|2026-07-30|2"
+
+
+def test_run_bot_dated_auto_renew_registry_matches_handoff_verifier_registry():
+    import re
+
+    from src.engine.threshold_cycle_preopen_apply import DATED_RUNTIME_OVERRIDE_SPECS
+
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    registry_block = script[
+        script.index("DATED_RUNTIME_AUTO_RENEW_SPECS=(") : script.index(
+            "\n)\n\nrenew_enabled_dated_runtime_overrides"
+        )
+    ]
+    shell_specs = set(
+        re.findall(r'"([^":]+):([^"\n]+)"', registry_block)
+    )
+    verifier_specs = {
+        (spec["enabled_key"], spec["active_date_key"])
+        for spec in DATED_RUNTIME_OVERRIDE_SPECS
+    }
+
+    assert len(shell_specs) == 21
+    assert shell_specs == verifier_specs
+
+
+def test_run_bot_does_not_auto_renew_without_explicit_operator_authority():
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+    function_block = script[
+        script.index("korstockscan_env_true()") : script.index(
+            "disable_expired_dated_runtime_overrides()"
+        )
+    ]
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function_block + """
+export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=false
+export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
+export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
+renew_enabled_dated_runtime_overrides 2026-07-31 >/dev/null
+printf '%s\\n' "$KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE"
+""",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "2026-07-30"
 
 
 def test_run_bot_preserves_existing_daily_entry_split_contract_and_disables_expired_guard(

@@ -4094,6 +4094,9 @@ def _runtime_env_enabled(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+DATED_RUNTIME_AUTO_RENEW_ENABLED_KEY = "KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED"
+
+
 DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
     {
         "family": "rising_missed_tp1_selector",
@@ -4253,6 +4256,35 @@ DATED_RUNTIME_OVERRIDE_SPECS: tuple[dict[str, str], ...] = (
         "dependency_enabled_key": "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED",
     },
 )
+
+
+def _dated_runtime_auto_renew_expected_env(
+    target_date: str,
+    effective_env: dict[str, str],
+) -> tuple[dict[str, str], list[str]]:
+    """Project explicitly enabled dated members onto ``target_date``.
+
+    This mirrors ``run_bot.sh``.  The persistent operator flag is the renewal
+    authority, and each member must already be enabled.  A false member is
+    therefore an explicit rollback and is never revived by date rollover.
+    """
+
+    if not _runtime_env_enabled(
+        effective_env.get(DATED_RUNTIME_AUTO_RENEW_ENABLED_KEY)
+    ):
+        return {}, []
+    renewed_env: dict[str, str] = {}
+    renewed_keys: list[str] = []
+    for spec in DATED_RUNTIME_OVERRIDE_SPECS:
+        enabled_key = spec["enabled_key"]
+        if not _runtime_env_enabled(effective_env.get(enabled_key)):
+            continue
+        active_date_key = spec["active_date_key"]
+        renewed_env[enabled_key] = "true"
+        renewed_env[active_date_key] = target_date
+        renewed_keys.extend((enabled_key, active_date_key))
+    return renewed_env, sorted(set(renewed_keys))
+
 
 LAUNCHER_SAFE_DISABLE_SPECS: tuple[dict[str, str], ...] = (
     {
@@ -4798,6 +4830,14 @@ def verify_runtime_env_handoff(
     effective_env_overrides = dict(env_overrides)
     effective_env_overrides.update(operator_overrides)
     effective_env_overrides.update(dated_operator_overrides)
+    (
+        dated_runtime_auto_renew_expected_env,
+        dated_runtime_auto_renew_expected_keys,
+    ) = _dated_runtime_auto_renew_expected_env(
+        target_date,
+        effective_env_overrides,
+    )
+    effective_env_overrides.update(dated_runtime_auto_renew_expected_env)
     findings: list[dict[str, Any]] = []
     authoritative_context_env: dict[str, str] = {}
     promotion_artifact_value = str(
@@ -5219,12 +5259,16 @@ def verify_runtime_env_handoff(
                                     "ai_multi_timeframe_context_promotion"
                                     if key in authoritative_context_env
                                     else (
-                                        "dated_operator_runtime_overrides"
-                                        if key in dated_operator_overrides
+                                        "dated_runtime_auto_renew"
+                                        if key in dated_runtime_auto_renew_expected_env
                                         else (
-                                            "operator_runtime_overrides"
-                                            if key in operator_overrides
-                                            else "threshold_runtime_env_manifest"
+                                            "dated_operator_runtime_overrides"
+                                            if key in dated_operator_overrides
+                                            else (
+                                                "operator_runtime_overrides"
+                                                if key in operator_overrides
+                                                else "threshold_runtime_env_manifest"
+                                            )
                                         )
                                     )
                                 )
@@ -5265,6 +5309,12 @@ def verify_runtime_env_handoff(
             else None
         ),
         "dated_operator_runtime_override_keys": sorted(dated_operator_overrides),
+        "dated_runtime_auto_renew_enabled": _runtime_env_enabled(
+            effective_env_overrides.get(DATED_RUNTIME_AUTO_RENEW_ENABLED_KEY)
+        ),
+        "dated_runtime_auto_renew_expected_keys": (
+            dated_runtime_auto_renew_expected_keys
+        ),
         "authoritative_ai_context_runtime_env_keys": sorted(authoritative_context_env),
         "runtime_policy_audits": runtime_policy_audits,
         "runtime_policy_fail_count": sum(
