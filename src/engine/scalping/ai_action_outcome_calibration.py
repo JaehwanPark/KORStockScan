@@ -25,7 +25,10 @@ from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 KST = ZoneInfo("Asia/Seoul")
 CLEAN_BASELINE_DATE = "2026-06-05"
 SCHEMA = "ai_decision_action_outcome_calibration_v1"
-POLICY_VERSION = "exact_decision_trace_cumulative_action_outcome_v2"
+POLICY_VERSION = "exact_decision_trace_cumulative_action_outcome_v3"
+PROBE_RISK_GATE_VERSION = "bounded_probe_recovery_risk_v1"
+MAXIMUM_BOUNDED_PROBE_LOSS_PCT = 2.0
+SEVERE_TAIL_ADVERSE_PCT = -2.0
 OFI_LEDGER_SCHEMA = "ofi_exact_trace_action_outcome_calibration_v2"
 REPORT_SUBDIR = "ai_decision_action_outcome_calibration"
 PAIRED_SUBDIR = "ai_prompt_detailed_paired_replay"
@@ -86,8 +89,11 @@ PROMPT_REVIEW_GATE = {
     "maximum_schema_rejection_rate_pct": 1.0,
     "require_positive_candidate_ev": True,
     "require_positive_candidate_exposure_ev": True,
+    "require_positive_probe_cost_adjusted_ev": True,
     "require_positive_ev_delta": True,
-    "require_adverse_first_not_increased": True,
+    "maximum_bounded_probe_loss_pct": MAXIMUM_BOUNDED_PROBE_LOSS_PCT,
+    "require_severe_tail_adverse_not_increased": True,
+    "require_drawdown_recovery_capture_not_decreased": True,
 }
 DOWNSTREAM_RUNTIME_GUARDS = [
     "separate_runtime_apply_candidate_required",
@@ -280,6 +286,56 @@ def _transition_summary(
         )
         is not None
     ]
+    candidate_probe_losses = []
+    candidate_probe_risk_missing_count = 0
+    for row in exposure_rows:
+        probe_loss = _number(row.get("candidate_probe_worst_loss_pct"))
+        if probe_loss is None:
+            probe_loss = _number(row.get("probe_worst_loss_pct"))
+        if probe_loss is None:
+            outcome_mae = _number(row.get("outcome_mae_pct"))
+            if outcome_mae is not None:
+                probe_loss = min(0.0, outcome_mae)
+        if probe_loss is None:
+            candidate_probe_risk_missing_count += 1
+            continue
+        candidate_probe_losses.append(probe_loss)
+    control_severe_tail = sum(
+        row.get("control_probe_severe_tail_exposure") is True
+        or (
+            str(row.get("control_action") or "").upper() in EXPOSURE_ACTIONS
+            and (_number(row.get("probe_worst_loss_pct")) or 0.0)
+            < SEVERE_TAIL_ADVERSE_PCT
+        )
+        for row in values
+    )
+    candidate_severe_tail = sum(
+        row.get("candidate_probe_severe_tail_exposure") is True
+        or (
+            str(row.get("candidate_action") or "").upper() in EXPOSURE_ACTIONS
+            and (_number(row.get("probe_worst_loss_pct")) or 0.0)
+            < SEVERE_TAIL_ADVERSE_PCT
+        )
+        for row in values
+    )
+    control_recovery_capture = sum(
+        row.get("control_drawdown_recovery_captured") is True
+        or (
+            str(row.get("control_action") or "").upper() in EXPOSURE_ACTIONS
+            and row.get("profit_opportunity_sequence")
+            == "drawdown_then_profit_recovery"
+        )
+        for row in values
+    )
+    candidate_recovery_capture = sum(
+        row.get("candidate_drawdown_recovery_captured") is True
+        or (
+            str(row.get("candidate_action") or "").upper() in EXPOSURE_ACTIONS
+            and row.get("profit_opportunity_sequence")
+            == "drawdown_then_profit_recovery"
+        )
+        for row in values
+    )
     control_adverse = sum(
         str(row.get("first_hit") or "") == "adverse"
         and str(row.get("control_action") or "").upper() in EXPOSURE_ACTIONS
@@ -316,6 +372,18 @@ def _transition_summary(
         else None
     )
     adverse_not_increased = candidate_adverse <= control_adverse
+    probe_loss_budget_pass = (
+        bool(exposure_rows)
+        and candidate_probe_risk_missing_count == 0
+        and len(candidate_probe_losses) == len(exposure_rows)
+        and all(
+            loss >= -MAXIMUM_BOUNDED_PROBE_LOSS_PCT for loss in candidate_probe_losses
+        )
+    )
+    severe_tail_not_increased = candidate_severe_tail <= control_severe_tail
+    recovery_capture_not_decreased = (
+        candidate_recovery_capture >= control_recovery_capture
+    )
     unique_symbol_count = len(
         {str(row.get("stock_code") or "") for row in values if row.get("stock_code")}
     )
@@ -325,6 +393,13 @@ def _transition_summary(
     candidate_ev = fmean(candidate_primary_values) if candidate_primary_values else None
     candidate_exposure_ev = (
         fmean(candidate_exposure_values) if candidate_exposure_values else None
+    )
+    probe_cost_contract_complete = bool(exposure_rows) and all(
+        row.get("candidate_execution_cost_contract_applied") is True
+        for row in exposure_rows
+    )
+    candidate_probe_cost_adjusted_ev = (
+        candidate_exposure_ev if probe_cost_contract_complete else None
     )
     candidate_exposure_rate_pct = (
         (len(exposure_rows) / len(values)) * 100.0 if values else 0.0
@@ -351,8 +426,14 @@ def _transition_summary(
         "positive_candidate_ev": candidate_ev is not None and candidate_ev > 0,
         "positive_candidate_exposure_ev": candidate_exposure_ev is not None
         and candidate_exposure_ev > 0,
+        "positive_probe_cost_adjusted_ev": (
+            candidate_probe_cost_adjusted_ev is not None
+            and candidate_probe_cost_adjusted_ev > 0
+        ),
         "positive_ev_delta": primary_ev_delta is not None and primary_ev_delta > 0,
-        "adverse_first_not_increased": adverse_not_increased,
+        "probe_loss_budget_within_cap": probe_loss_budget_pass,
+        "severe_tail_adverse_not_increased": severe_tail_not_increased,
+        "drawdown_recovery_capture_not_decreased": (recovery_capture_not_decreased),
         "schema_rejection_rate_ceiling": schema_rejection_rate_pct
         <= PROMPT_REVIEW_GATE["maximum_schema_rejection_rate_pct"],
         "provider_transport_clean": provider_failed_count == 0
@@ -394,6 +475,17 @@ def _transition_summary(
         ),
         "control_adverse_first_exposure_count": control_adverse,
         "candidate_adverse_first_exposure_count": candidate_adverse,
+        "probe_risk_gate_version": PROBE_RISK_GATE_VERSION,
+        "candidate_probe_cost_adjusted_ev_pct": candidate_probe_cost_adjusted_ev,
+        "probe_cost_contract_complete": probe_cost_contract_complete,
+        "candidate_probe_loss_budget_breach_count": sum(
+            loss < -MAXIMUM_BOUNDED_PROBE_LOSS_PCT for loss in candidate_probe_losses
+        ),
+        "candidate_probe_risk_missing_count": candidate_probe_risk_missing_count,
+        "control_probe_severe_tail_exposure_count": control_severe_tail,
+        "candidate_probe_severe_tail_exposure_count": candidate_severe_tail,
+        "control_drawdown_recovery_capture_count": control_recovery_capture,
+        "candidate_drawdown_recovery_capture_count": candidate_recovery_capture,
         "candidate_error_taxonomy_counts": dict(
             Counter(
                 error
@@ -414,6 +506,7 @@ def _transition_summary(
         "provider_failed_count": provider_failed_count,
         "provider_none_count": provider_none_count,
         "adverse_first_exposure_not_increased": adverse_not_increased,
+        "adverse_first_role": "diagnostic_not_absolute_quality_veto",
         "review_ready_for_prompt_candidate": review_ready,
         "prompt_review_gate": {
             "policy": PROMPT_REVIEW_GATE,

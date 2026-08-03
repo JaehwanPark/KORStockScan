@@ -4183,47 +4183,22 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     assert report["candidate_exposure_sample_floor"]["pass"] is False
     assert report["status"] == "paired_replay_complete_candidate_quality_rejected"
     assert report["candidate_quality_gate_pass"] is False
-    assert report["buckets"] == [
-        {
-            "stage": "entry",
-            "effective_venue": "KRX",
-            "session_bucket": "KRX_REGULAR",
-            "sample_count": 1,
-            "control_source_quality_adjusted_ev_pct": 0,
-            "control_primary_decision_ev_pct": 0,
-            "candidate_source_quality_adjusted_ev_pct": 0,
-            "candidate_execution_cost_adjusted_ev_pct": None,
-            "candidate_primary_decision_ev_pct": 0,
-            "source_quality_adjusted_ev_delta_pct": 0,
-            "candidate_primary_decision_ev_delta_pct": 0,
-            "missed_upside_reduction_count": 0,
-            "new_missed_upside_count": 0,
-            "control_adverse_first_exposure_count": 0,
-            "adverse_first_candidate_exposure_count": 0,
-            "control_tight_stop_adverse_first_exposure_count": 0,
-            "candidate_tight_stop_adverse_first_exposure_count": 0,
-            "candidate_exposure_decision_count": 0,
-            "candidate_exposure_unique_symbol_count": 0,
-            "candidate_exposure_sample_floor_pass": False,
-            "candidate_dominant_action_ratio": 1.0,
-            "candidate_quality_checks": {
-                "source_quality_adjusted_ev_improved": False,
-                "primary_decision_ev_improved": False,
-                "candidate_ev_positive": False,
-                "missed_upside_reduced": False,
-                "new_missed_upside_not_increased": True,
-                "adverse_first_exposure_not_increased": True,
-                "tight_stop_adverse_first_exposure_not_increased": True,
-                "candidate_action_not_collapsed": False,
-                "candidate_exposure_sample_floor_pass": False,
-            },
-            "candidate_quality_gate_pass": False,
-            "candidate_error_taxonomy_counts": {
-                "false_drop": 1,
-                "false_drop_drawdown_recovery": 1,
-            },
-        }
-    ]
+    bucket = report["buckets"][0]
+    assert bucket["stage"] == "entry"
+    assert bucket["effective_venue"] == "KRX"
+    assert bucket["candidate_probe_cost_adjusted_ev_pct"] is None
+    assert bucket["candidate_probe_loss_budget_breach_count"] == 0
+    assert bucket["control_drawdown_recovery_capture_count"] == 0
+    assert bucket["candidate_drawdown_recovery_capture_count"] == 0
+    assert (
+        bucket["candidate_quality_checks"]["candidate_probe_loss_budget_within_cap"]
+        is False
+    )
+    assert bucket["diagnostic_checks_not_quality_veto"] == {
+        "adverse_first_exposure_not_increased": True,
+        "tight_stop_adverse_first_exposure_not_increased": True,
+    }
+    assert bucket["candidate_quality_gate_pass"] is False
 
 
 def test_paired_replay_consumes_tight_stop_entry_path_label():
@@ -4275,7 +4250,7 @@ def test_paired_replay_consumes_tight_stop_entry_path_label():
     assert report["control_tight_stop_adverse_first_exposure_count"] == 0
     assert report["candidate_tight_stop_adverse_first_exposure_count"] == 1
     assert (
-        report["candidate_quality_checks"][
+        report["diagnostic_checks_not_quality_veto"][
             "tight_stop_adverse_first_exposure_not_increased"
         ]
         is False
@@ -4283,6 +4258,111 @@ def test_paired_replay_consumes_tight_stop_entry_path_label():
     assert report["entry_path_label_contract"]["decision_authority"] == (
         "offline_replay_and_attribution_only"
     )
+
+
+def test_wide_spread_drawdown_recovery_uses_bounded_probe_risk_not_adverse_veto():
+    report = quality.build_paired_replay_report(
+        target_date="2026-08-03",
+        requests=[
+            {
+                "decision_trace_id": "korean-pim-trace",
+                "paired_replay_id": "korean-pim-pair",
+                "stock_code": "448900",
+                "reference_price_type": "executable_ask",
+                "reference_price": 60900,
+                "best_bid": 60300,
+                "best_ask": 60900,
+                "candidate": {
+                    "exposure_semantics": ("offline_counterfactual_passive_probe_only")
+                },
+                "anticipatory_reversal_analysis": {
+                    "execution_cost": {"conservative_execution_cost_pct": 0.5}
+                },
+            }
+        ],
+        results=[
+            {
+                "decision_trace_id": "korean-pim-trace",
+                "paired_replay_id": "korean-pim-pair",
+                "stage": "entry",
+                "effective_venue": "NXT",
+                "session_bucket": "nxt_aftermarket",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "DROP"},
+                "candidate_response": {"action": "BUY", "edge_state": "EDGE"},
+            }
+        ],
+        labels=[
+            {
+                "decision_trace_id": "korean-pim-trace",
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 1.4,
+                        "mfe_pct": 2.4631,
+                        "mae_pct": -0.9852,
+                        "first_hit": "adverse",
+                        "entry_path_first_hit": "adverse_first",
+                        "profit_opportunity_observed": True,
+                        "profit_opportunity_sequence": (
+                            "drawdown_then_profit_recovery"
+                        ),
+                        "pre_profit_mae_pct": -0.9852,
+                    }
+                },
+            }
+        ],
+    )
+
+    row = report["paired_comparisons"][0]
+    assert row["initial_spread_cost_pct"] == pytest.approx(0.9852216749)
+    assert row["entry_path_adverse_first_spread_confounded"] is True
+    assert row["directional_mae_estimate_ex_initial_spread_pct"] == pytest.approx(0.0)
+    assert row["probe_worst_loss_pct"] == pytest.approx(-1.4852)
+    assert row["probe_worst_loss_krw_per_share"] == pytest.approx(904.4868)
+    assert row["probe_loss_within_bounded_cap"] is True
+    assert row["probe_severe_tail_adverse"] is False
+    assert row["candidate_drawdown_recovery_captured"] is True
+    assert report["candidate_probe_cost_adjusted_ev_pct"] == pytest.approx(0.9)
+    assert report["candidate_probe_loss_budget_breach_count"] == 0
+    assert report["candidate_drawdown_recovery_capture_count"] == 1
+    assert (
+        report["candidate_quality_checks"]["candidate_probe_loss_budget_within_cap"]
+        is True
+    )
+    assert (
+        report["diagnostic_checks_not_quality_veto"][
+            "adverse_first_exposure_not_increased"
+        ]
+        is False
+    )
+    assert report["probe_risk_contract"]["adverse_first_role"] == (
+        "diagnostic_not_absolute_quality_veto"
+    )
+
+
+def test_missing_mae_fails_closed_for_bounded_probe_risk():
+    risk = quality._probe_path_risk(
+        request={
+            "reference_price_type": "executable_ask",
+            "reference_price": 10000,
+            "best_bid": 9990,
+            "best_ask": 10000,
+        },
+        outcome_mfe_pct=1.0,
+        outcome_mae_pct=None,
+        pre_profit_mae_pct=None,
+        entry_path_first_hit="neither_hit",
+        profit_opportunity_sequence="not_recorded_legacy",
+        conservative_execution_cost_pct=0.1,
+    )
+
+    assert risk["probe_path_risk_evaluable"] is False
+    assert risk["probe_worst_loss_pct"] is None
+    assert risk["probe_loss_within_bounded_cap"] is False
+    assert risk["probe_severe_tail_adverse"] is False
 
 
 def test_baseline_and_paired_report_preserve_exact_post_block_false_drop():

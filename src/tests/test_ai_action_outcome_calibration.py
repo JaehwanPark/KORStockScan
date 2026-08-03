@@ -69,7 +69,7 @@ def test_cumulative_calibration_updates_from_one_exact_trace(tmp_path: Path) -> 
     assert report["selected_review_candidate"] is None
     assert report["legacy_watching_score_smoothing"] == {
         "status": "retired_from_runtime_authority",
-        "replacement": "exact_decision_trace_cumulative_action_outcome_v2",
+        "replacement": "exact_decision_trace_cumulative_action_outcome_v3",
         "numeric_score_ema_used_for_live_decision": False,
         "projection_submitter_removed": True,
         "projection_refresh_removed": True,
@@ -98,6 +98,8 @@ def test_prompt_review_candidate_requires_multi_day_bounded_exploration(
                     "candidate_primary_decision_value_pct": (
                         0.4 if is_exposure else 0.01
                     ),
+                    "candidate_execution_cost_contract_applied": is_exposure,
+                    "candidate_probe_worst_loss_pct": -0.2,
                     "delta_pct": 0.4 if is_exposure else 0.01,
                     "first_hit": "target",
                     "candidate_error_taxonomy": [],
@@ -126,6 +128,84 @@ def test_prompt_review_candidate_requires_multi_day_bounded_exploration(
     assert candidate["prompt_review_gate"]["blockers"] == []
     assert candidate["review_ready_for_prompt_candidate"] is True
     assert report["selected_review_candidate"] == "candidate_v2"
+
+
+def test_bounded_recovery_exposure_is_not_blocked_by_raw_adverse_first_count(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for day_index, source_date in enumerate(("2026-08-02", "2026-08-03")):
+        rows = []
+        for offset in range(20):
+            index = day_index * 20 + offset
+            is_exposure = index < 5
+            is_recovery = index == 0
+            rows.append(
+                {
+                    "decision_trace_id": f"bounded-recovery-{index}",
+                    "stock_code": f"{index % 10:06d}",
+                    "control_action": "WAIT",
+                    "candidate_action": "BUY" if is_exposure else "WAIT",
+                    "control_decision_value_pct": 0.0,
+                    "candidate_primary_decision_value_pct": (
+                        0.5 if is_exposure else 0.01
+                    ),
+                    "candidate_execution_cost_contract_applied": is_exposure,
+                    "delta_pct": 0.5 if is_exposure else 0.01,
+                    "first_hit": "adverse" if is_recovery else "target",
+                    "profit_opportunity_sequence": (
+                        "drawdown_then_profit_recovery"
+                        if is_recovery
+                        else "profit_before_drawdown"
+                    ),
+                    "candidate_probe_worst_loss_pct": (-1.5 if is_recovery else -0.2),
+                    "probe_worst_loss_pct": -1.5 if is_recovery else -0.2,
+                    "control_probe_severe_tail_exposure": False,
+                    "candidate_probe_severe_tail_exposure": False,
+                    "control_drawdown_recovery_captured": False,
+                    "candidate_drawdown_recovery_captured": is_recovery,
+                    "candidate_error_taxonomy": [],
+                }
+            )
+        _write_json(
+            paired_dir
+            / f"ai_prompt_detailed_paired_replay_{source_date}_candidate_bounded.json",
+            {
+                "target_date": source_date,
+                "runtime_effect": False,
+                "schema_rejected_count": 0,
+                "provider_failed_count": 0,
+                "candidate_provider_none_count": 0,
+                "requests": [{"candidate": {"prompt_version": "candidate_bounded"}}],
+                "paired_comparisons": rows,
+            },
+        )
+
+    report = build_report(target_date="2026-08-03", data_root=tmp_path)
+
+    candidate = report["candidate_summaries"][0]
+    assert candidate["adverse_first_exposure_not_increased"] is False
+    assert candidate["adverse_first_role"] == ("diagnostic_not_absolute_quality_veto")
+    assert candidate["candidate_probe_loss_budget_breach_count"] == 0
+    assert candidate["candidate_drawdown_recovery_capture_count"] == 1
+    assert (
+        candidate["prompt_review_gate"]["checks"]["probe_loss_budget_within_cap"]
+        is True
+    )
+    assert (
+        candidate["prompt_review_gate"]["checks"]["severe_tail_adverse_not_increased"]
+        is True
+    )
+    assert (
+        candidate["prompt_review_gate"]["checks"][
+            "drawdown_recovery_capture_not_decreased"
+        ]
+        is True
+    )
+    assert (
+        "adverse_first_not_increased" not in candidate["prompt_review_gate"]["checks"]
+    )
+    assert candidate["review_ready_for_prompt_candidate"] is True
 
 
 def test_schema_reject_blocks_review_selection_but_keeps_learning(
@@ -185,6 +265,8 @@ def test_isolated_schema_reject_does_not_block_bounded_prompt_review(
                     "candidate_primary_decision_value_pct": (
                         0.4 if is_exposure else 0.01
                     ),
+                    "candidate_execution_cost_contract_applied": is_exposure,
+                    "candidate_probe_worst_loss_pct": -0.2,
                     "delta_pct": 0.4 if is_exposure else 0.01,
                     "first_hit": "target",
                     "candidate_error_taxonomy": [],

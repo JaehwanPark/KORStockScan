@@ -67,6 +67,10 @@ ENTRY_PATH_TARGET_PCT = 0.30
 ENTRY_PATH_ADVERSE_PCT = -0.70
 ENTRY_PATH_PRIMARY_HORIZON = "10m"
 ENTRY_PATH_LABEL_VERSION = "tight_stop_entry_path_v1"
+PROBE_RISK_CONTRACT_VERSION = "bounded_probe_recovery_risk_v1"
+OFFLINE_PROBE_SHARE_COUNT = 1
+OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT = 2.0
+OFFLINE_PROBE_SEVERE_TAIL_ADVERSE_PCT = -2.0
 RISING_MISSED_POST_BLOCK_MIN_FRESH_SAMPLES = 2
 RISING_MISSED_POST_BLOCK_LABEL_VERSION = "rising_missed_post_block_exact_trace_v1"
 PIPELINE_FORWARD_DAYS = 7
@@ -157,7 +161,9 @@ DECISION_QUALITY_OBJECTIVE = {
     ],
     "success_metrics": [
         "missed_upside_reduction",
-        "adverse_first_exposure_not_increased",
+        "positive_cost_adjusted_probe_ev_pct",
+        "bounded_probe_loss_and_severe_tail_not_increased",
+        "drawdown_recovery_capture_not_decreased",
         "positive_source_quality_adjusted_exposure_ev_pct",
         "notional_fill_joined_net_profit_improvement",
     ],
@@ -617,6 +623,100 @@ def _number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _probe_path_risk(
+    *,
+    request: dict[str, Any],
+    outcome_mfe_pct: float | None,
+    outcome_mae_pct: float | None,
+    pre_profit_mae_pct: float | None,
+    entry_path_first_hit: str,
+    profit_opportunity_sequence: str,
+    conservative_execution_cost_pct: float | None,
+) -> dict[str, Any]:
+    """Separate quote spread from the completed-trade counterfactual path.
+
+    The exact decision reference can be the executable ask while future bars are
+    completed trade OHLC.  In a wide market, comparing those values directly can
+    label the bid/last-side spread as directional adverse movement.  Keep the raw
+    label for audit compatibility, but expose the spread-confounded diagnostic and
+    a bounded one-share counterfactual risk contract for offline quality review.
+    """
+
+    reference_price = _number(request.get("reference_price"))
+    best_bid = _number(request.get("best_bid"))
+    best_ask = _number(request.get("best_ask"))
+    initial_spread_cost_pct = None
+    if (
+        best_bid is not None
+        and best_ask is not None
+        and best_ask > 0
+        and 0 < best_bid <= best_ask
+    ):
+        initial_spread_cost_pct = (best_ask - best_bid) / best_ask * 100.0
+    spread_confounded = bool(
+        entry_path_first_hit == "adverse_first"
+        and initial_spread_cost_pct is not None
+        and initial_spread_cost_pct >= abs(ENTRY_PATH_ADVERSE_PCT)
+    )
+
+    def directional(value: float | None) -> float | None:
+        if value is None:
+            return None
+        if initial_spread_cost_pct is None:
+            return value
+        return min(0.0, value + initial_spread_cost_pct)
+
+    execution_cost = conservative_execution_cost_pct or 0.0
+    cost_adjusted_mfe = (
+        outcome_mfe_pct - execution_cost if outcome_mfe_pct is not None else None
+    )
+    cost_adjusted_mae = (
+        outcome_mae_pct - execution_cost if outcome_mae_pct is not None else None
+    )
+    worst_loss_pct = (
+        min(0.0, cost_adjusted_mae) if cost_adjusted_mae is not None else None
+    )
+    worst_loss_krw = (
+        reference_price * abs(worst_loss_pct) / 100.0
+        if (
+            reference_price is not None
+            and reference_price > 0
+            and worst_loss_pct is not None
+        )
+        else None
+    )
+    return {
+        "probe_risk_contract_version": PROBE_RISK_CONTRACT_VERSION,
+        "reference_price_type": request.get("reference_price_type"),
+        "reference_price": reference_price,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "initial_spread_cost_pct": initial_spread_cost_pct,
+        "entry_path_adverse_first_spread_confounded": spread_confounded,
+        "directional_mae_estimate_ex_initial_spread_pct": directional(outcome_mae_pct),
+        "directional_pre_profit_mae_estimate_ex_initial_spread_pct": directional(
+            pre_profit_mae_pct
+        ),
+        "probe_cost_adjusted_mfe_pct": cost_adjusted_mfe,
+        "probe_cost_adjusted_mae_pct": cost_adjusted_mae,
+        "probe_worst_loss_pct": worst_loss_pct,
+        "probe_worst_loss_krw_per_share": worst_loss_krw,
+        "probe_loss_within_bounded_cap": (
+            worst_loss_pct is not None
+            and worst_loss_pct >= -OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT
+        ),
+        "probe_severe_tail_adverse": (
+            worst_loss_pct is not None
+            and worst_loss_pct < OFFLINE_PROBE_SEVERE_TAIL_ADVERSE_PCT
+        ),
+        "probe_path_risk_evaluable": worst_loss_pct is not None,
+        "drawdown_recovery_observed": (
+            profit_opportunity_sequence == "drawdown_then_profit_recovery"
+        ),
+        "path_basis": ("counterfactual_completed_1m_trade_path_with_conservative_cost"),
+    }
 
 
 def _bool(value: Any) -> bool:
@@ -5568,6 +5668,10 @@ def prepare_paired_replay_requests(
                 "stock_code": label.get("stock_code"),
                 "effective_venue": trace.get("effective_venue"),
                 "session_bucket": trace.get("session_bucket"),
+                "reference_price_type": trace.get("reference_price_type"),
+                "reference_price": trace.get("reference_price"),
+                "best_bid": trace.get("best_bid"),
+                "best_ask": trace.get("best_ask"),
                 "payload_sha256": trace.get("payload_sha256"),
                 "exact_payload": replay_payload,
                 "control": {
@@ -6626,6 +6730,18 @@ def build_paired_replay_report(
             preferred.get("profit_opportunity_sequence") or "not_recorded_legacy"
         )
         pre_profit_mae = _number(preferred.get("pre_profit_mae_pct"))
+        conservative_execution_cost_pct = _number(
+            execution_cost.get("conservative_execution_cost_pct")
+        )
+        probe_path_risk = _probe_path_risk(
+            request=request,
+            outcome_mfe_pct=mfe,
+            outcome_mae_pct=mae,
+            pre_profit_mae_pct=pre_profit_mae,
+            entry_path_first_hit=entry_path_first_hit,
+            profit_opportunity_sequence=profit_opportunity_sequence,
+            conservative_execution_cost_pct=conservative_execution_cost_pct,
+        )
         candidate_errors: list[str] = []
         stage_outcome = label.get("stage_outcome")
         stage_outcome = stage_outcome if isinstance(stage_outcome, dict) else {}
@@ -6691,9 +6807,7 @@ def build_paired_replay_report(
                 ),
                 "control_execution_cost_pct": control_execution_cost_pct,
                 "candidate_execution_cost_pct": candidate_execution_cost_pct,
-                "conservative_execution_cost_pct": _number(
-                    execution_cost.get("conservative_execution_cost_pct")
-                ),
+                "conservative_execution_cost_pct": conservative_execution_cost_pct,
                 "candidate_execution_cost_adjusted_decision_value_pct": (
                     candidate_execution_cost_adjusted_value
                 ),
@@ -6722,6 +6836,33 @@ def build_paired_replay_report(
                 ),
                 "profit_opportunity_sequence": profit_opportunity_sequence,
                 "pre_profit_mae_pct": pre_profit_mae,
+                **probe_path_risk,
+                "control_probe_worst_loss_pct": (
+                    probe_path_risk["probe_worst_loss_pct"]
+                    if control_exposure_selected
+                    else 0.0
+                ),
+                "candidate_probe_worst_loss_pct": (
+                    probe_path_risk["probe_worst_loss_pct"]
+                    if candidate_exposure_selected
+                    else 0.0
+                ),
+                "control_probe_severe_tail_exposure": bool(
+                    control_exposure_selected
+                    and probe_path_risk["probe_severe_tail_adverse"]
+                ),
+                "candidate_probe_severe_tail_exposure": bool(
+                    candidate_exposure_selected
+                    and probe_path_risk["probe_severe_tail_adverse"]
+                ),
+                "control_drawdown_recovery_captured": bool(
+                    control_exposure_selected
+                    and probe_path_risk["drawdown_recovery_observed"]
+                ),
+                "candidate_drawdown_recovery_captured": bool(
+                    candidate_exposure_selected
+                    and probe_path_risk["drawdown_recovery_observed"]
+                ),
                 "rising_missed_post_block_outcome": post_block_outcome or None,
                 "candidate_error_taxonomy": candidate_errors,
                 "clean_continuation_probe_eligible": (
@@ -6801,6 +6942,36 @@ def build_paired_replay_report(
         bucket_exposure_rows = [
             row for row in rows if row["candidate_exposure_selected"]
         ]
+        bucket_probe_cost_contract_complete = bool(bucket_exposure_rows) and all(
+            row["candidate_execution_cost_contract_applied"]
+            for row in bucket_exposure_rows
+        )
+        bucket_probe_cost_adjusted_ev = (
+            fmean(
+                row["candidate_primary_decision_value_pct"]
+                for row in bucket_exposure_rows
+            )
+            if bucket_probe_cost_contract_complete
+            else None
+        )
+        bucket_probe_loss_budget_pass = bool(bucket_exposure_rows) and all(
+            row["candidate_probe_worst_loss_pct"] is not None
+            and row["candidate_probe_worst_loss_pct"]
+            >= -OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT
+            for row in bucket_exposure_rows
+        )
+        bucket_control_severe_tail = sum(
+            row["control_probe_severe_tail_exposure"] for row in rows
+        )
+        bucket_candidate_severe_tail = sum(
+            row["candidate_probe_severe_tail_exposure"] for row in rows
+        )
+        bucket_control_recovery_capture = sum(
+            row["control_drawdown_recovery_captured"] for row in rows
+        )
+        bucket_candidate_recovery_capture = sum(
+            row["candidate_drawdown_recovery_captured"] for row in rows
+        )
         bucket_exposure_symbols = {
             str(row.get("stock_code") or "")
             for row in bucket_exposure_rows
@@ -6818,6 +6989,21 @@ def build_paired_replay_report(
             "candidate_ev_positive": bucket_candidate_primary_ev > 0,
             "missed_upside_reduced": bucket_missed_upside_reduction > 0,
             "new_missed_upside_not_increased": bucket_new_missed_upside == 0,
+            "candidate_probe_cost_adjusted_ev_positive": (
+                bucket_probe_cost_adjusted_ev is not None
+                and bucket_probe_cost_adjusted_ev > 0
+            ),
+            "candidate_probe_loss_budget_within_cap": bucket_probe_loss_budget_pass,
+            "severe_tail_adverse_not_increased": (
+                bucket_candidate_severe_tail <= bucket_control_severe_tail
+            ),
+            "drawdown_recovery_capture_not_decreased": (
+                bucket_candidate_recovery_capture >= bucket_control_recovery_capture
+            ),
+            "candidate_action_not_collapsed": bucket_dominant_action_ratio <= 0.90,
+            "candidate_exposure_sample_floor_pass": bucket_exposure_floor_pass,
+        }
+        bucket_diagnostic_checks = {
             "adverse_first_exposure_not_increased": (
                 bucket_candidate_adverse_exposure <= bucket_control_adverse_exposure
             ),
@@ -6825,8 +7011,6 @@ def build_paired_replay_report(
                 bucket_candidate_tight_stop_adverse_exposure
                 <= bucket_control_tight_stop_adverse_exposure
             ),
-            "candidate_action_not_collapsed": bucket_dominant_action_ratio <= 0.90,
-            "candidate_exposure_sample_floor_pass": bucket_exposure_floor_pass,
         }
         buckets.append(
             {
@@ -6859,11 +7043,38 @@ def build_paired_replay_report(
                 "candidate_tight_stop_adverse_first_exposure_count": (
                     bucket_candidate_tight_stop_adverse_exposure
                 ),
+                "candidate_probe_cost_adjusted_ev_pct": (bucket_probe_cost_adjusted_ev),
+                "candidate_probe_loss_budget_breach_count": sum(
+                    row["candidate_probe_worst_loss_pct"] is not None
+                    and row["candidate_probe_worst_loss_pct"]
+                    < -OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT
+                    for row in bucket_exposure_rows
+                ),
+                "candidate_probe_risk_missing_count": sum(
+                    row["candidate_probe_worst_loss_pct"] is None
+                    for row in bucket_exposure_rows
+                ),
+                "control_probe_severe_tail_exposure_count": (
+                    bucket_control_severe_tail
+                ),
+                "candidate_probe_severe_tail_exposure_count": (
+                    bucket_candidate_severe_tail
+                ),
+                "control_drawdown_recovery_capture_count": (
+                    bucket_control_recovery_capture
+                ),
+                "candidate_drawdown_recovery_capture_count": (
+                    bucket_candidate_recovery_capture
+                ),
+                "spread_confounded_adverse_first_count": sum(
+                    row["entry_path_adverse_first_spread_confounded"] for row in rows
+                ),
                 "candidate_exposure_decision_count": len(bucket_exposure_rows),
                 "candidate_exposure_unique_symbol_count": len(bucket_exposure_symbols),
                 "candidate_exposure_sample_floor_pass": (bucket_exposure_floor_pass),
                 "candidate_dominant_action_ratio": (bucket_dominant_action_ratio),
                 "candidate_quality_checks": bucket_quality_checks,
+                "diagnostic_checks_not_quality_veto": bucket_diagnostic_checks,
                 "candidate_quality_gate_pass": all(bucket_quality_checks.values()),
                 "candidate_error_taxonomy_counts": dict(
                     Counter(
@@ -6944,6 +7155,35 @@ def build_paired_replay_report(
     candidate_exposure_rows = [
         row for row in comparable_rows if row["candidate_exposure_selected"]
     ]
+    candidate_probe_cost_contract_complete = bool(candidate_exposure_rows) and all(
+        row["candidate_execution_cost_contract_applied"]
+        for row in candidate_exposure_rows
+    )
+    candidate_probe_cost_adjusted_ev = (
+        fmean(
+            row["candidate_primary_decision_value_pct"]
+            for row in candidate_exposure_rows
+        )
+        if candidate_probe_cost_contract_complete
+        else None
+    )
+    candidate_probe_loss_budget_pass = bool(candidate_exposure_rows) and all(
+        row["candidate_probe_worst_loss_pct"] is not None
+        and row["candidate_probe_worst_loss_pct"] >= -OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT
+        for row in candidate_exposure_rows
+    )
+    control_probe_severe_tail_count = sum(
+        row["control_probe_severe_tail_exposure"] for row in comparable_rows
+    )
+    candidate_probe_severe_tail_count = sum(
+        row["candidate_probe_severe_tail_exposure"] for row in comparable_rows
+    )
+    control_recovery_capture_count = sum(
+        row["control_drawdown_recovery_captured"] for row in comparable_rows
+    )
+    candidate_recovery_capture_count = sum(
+        row["candidate_drawdown_recovery_captured"] for row in comparable_rows
+    )
     candidate_exposure_symbol_count = len(
         {
             str(row.get("stock_code") or "")
@@ -7116,13 +7356,16 @@ def build_paired_replay_report(
         ),
         "missed_upside_reduced": missed_upside_reduction_count > 0,
         "new_missed_upside_not_increased": new_missed_upside_count == 0,
-        "adverse_first_exposure_not_increased": (
-            candidate_adverse_first_exposure_count
-            <= control_adverse_first_exposure_count
+        "candidate_probe_cost_adjusted_ev_positive": (
+            candidate_probe_cost_adjusted_ev is not None
+            and candidate_probe_cost_adjusted_ev > 0
         ),
-        "tight_stop_adverse_first_exposure_not_increased": (
-            candidate_tight_stop_adverse_first_exposure_count
-            <= control_tight_stop_adverse_first_exposure_count
+        "candidate_probe_loss_budget_within_cap": candidate_probe_loss_budget_pass,
+        "severe_tail_adverse_not_increased": (
+            candidate_probe_severe_tail_count <= control_probe_severe_tail_count
+        ),
+        "drawdown_recovery_capture_not_decreased": (
+            candidate_recovery_capture_count >= control_recovery_capture_count
         ),
         "candidate_action_not_collapsed": (
             dominant_candidate_action_ratio is not None
@@ -7131,6 +7374,16 @@ def build_paired_replay_report(
         "candidate_exposure_sample_floor_pass": (candidate_exposure_sample_floor_pass),
         "all_stage_venue_buckets_quality_pass": bool(buckets)
         and all(row["candidate_quality_gate_pass"] for row in buckets),
+    }
+    diagnostic_checks = {
+        "adverse_first_exposure_not_increased": (
+            candidate_adverse_first_exposure_count
+            <= control_adverse_first_exposure_count
+        ),
+        "tight_stop_adverse_first_exposure_not_increased": (
+            candidate_tight_stop_adverse_first_exposure_count
+            <= control_tight_stop_adverse_first_exposure_count
+        ),
     }
     quality_gate_pass = all(quality_checks.values())
     if rejected or (results and missing_result_count):
@@ -7234,6 +7487,39 @@ def build_paired_replay_report(
         "candidate_tight_stop_adverse_first_exposure_count": (
             candidate_tight_stop_adverse_first_exposure_count
         ),
+        "probe_risk_contract": {
+            "version": PROBE_RISK_CONTRACT_VERSION,
+            "probe_share_count": OFFLINE_PROBE_SHARE_COUNT,
+            "maximum_bounded_loss_pct": OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT,
+            "severe_tail_adverse_pct": OFFLINE_PROBE_SEVERE_TAIL_ADVERSE_PCT,
+            "path_basis": (
+                "counterfactual_completed_1m_trade_path_with_conservative_cost"
+            ),
+            "adverse_first_role": "diagnostic_not_absolute_quality_veto",
+            "decision_authority": "offline_replay_and_attribution_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+        },
+        "candidate_probe_cost_adjusted_ev_pct": candidate_probe_cost_adjusted_ev,
+        "candidate_probe_loss_budget_breach_count": sum(
+            row["candidate_probe_worst_loss_pct"] is not None
+            and row["candidate_probe_worst_loss_pct"]
+            < -OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT
+            for row in candidate_exposure_rows
+        ),
+        "candidate_probe_risk_missing_count": sum(
+            row["candidate_probe_worst_loss_pct"] is None
+            for row in candidate_exposure_rows
+        ),
+        "control_probe_severe_tail_exposure_count": control_probe_severe_tail_count,
+        "candidate_probe_severe_tail_exposure_count": (
+            candidate_probe_severe_tail_count
+        ),
+        "control_drawdown_recovery_capture_count": control_recovery_capture_count,
+        "candidate_drawdown_recovery_capture_count": (candidate_recovery_capture_count),
+        "spread_confounded_adverse_first_count": sum(
+            row["entry_path_adverse_first_spread_confounded"] for row in comparable_rows
+        ),
         "entry_path_label_contract": {
             "version": ENTRY_PATH_LABEL_VERSION,
             "primary_horizon": ENTRY_PATH_PRIMARY_HORIZON,
@@ -7264,6 +7550,7 @@ def build_paired_replay_report(
         "candidate_dominant_action_ratio": dominant_candidate_action_ratio,
         "candidate_quality_gate_pass": quality_gate_pass,
         "candidate_quality_checks": quality_checks,
+        "diagnostic_checks_not_quality_veto": diagnostic_checks,
         "control_action_counts": dict(
             Counter(
                 str((row.get("control_response") or {}).get("action") or "UNKNOWN")
