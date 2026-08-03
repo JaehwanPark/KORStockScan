@@ -1184,6 +1184,7 @@ def test_holding_score_preflight_stale_tick_skips_live_ai_call(monkeypatch):
     state_handlers.DB = _DummyDB()
     now_ts = state_handlers.time.time()
     pipeline_logs = []
+    decision_traces = []
 
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
@@ -1222,6 +1223,18 @@ def test_holding_score_preflight_stale_tick_skips_live_ai_call(monkeypatch):
         state_handlers,
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "record_ai_decision_trace",
+        lambda result, **kwargs: (
+            decision_traces.append((dict(result), dict(kwargs)))
+            or {
+                "ai_decision_trace_schema": "ai_decision_trace_v1",
+                "ai_decision_trace_id": "holding-upstream-blocked-trace",
+                "ai_decision_outcome_label_status": "not_applicable_rejected_attempt",
+            }
+        ),
     )
 
     class FakeEngine:
@@ -1283,6 +1296,25 @@ def test_holding_score_preflight_stale_tick_skips_live_ai_call(monkeypatch):
     )
     assert review_logs[-1]["holding_score_preflight_blocked"] is True
     assert review_logs[-1]["holding_score_preflight_source_quality"] == "stale"
+    assert len(decision_traces) == 1
+    trace_result, trace_kwargs = decision_traces[0]
+    assert trace_result["provider_called"] is False
+    assert trace_result["ai_decision_outcome_eligible"] is False
+    assert trace_result["holding_score_preflight_block_reason"] == (
+        "stale_tick_context"
+    )
+    assert trace_kwargs["prompt_type"] == "scalping_holding_score"
+    assert trace_kwargs["result_source"] == "input_preflight_blocked"
+    assert trace_kwargs["provider_called"] is False
+    assert (
+        trace_kwargs["input_contract_fields"][
+            "ai_trace_canonical_context_capture_status"
+        ]
+        == "canonical_context_missing"
+    )
+    assert trace_kwargs["input_contract_fields"]["ai_input_preflight_allowed"] is False
+    assert review_logs[-1]["ai_decision_trace_id"] == ("holding-upstream-blocked-trace")
+    assert review_logs[-1]["ai_result_source"] == "input_preflight_blocked"
 
 
 @pytest.fixture(autouse=True)

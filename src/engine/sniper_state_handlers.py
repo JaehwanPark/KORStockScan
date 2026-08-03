@@ -70,8 +70,10 @@ from src.engine.scalping.ai_market_snapshot import (
     ai_input_preflight,
     ai_market_snapshot_log_fields,
     build_ai_market_snapshot,
+    runtime_preflight_mode,
     runtime_preflight_required,
 )
+from src.engine.scalping.ai_decision_trace import record_ai_decision_trace
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     build_entry_candle_context,
@@ -22112,6 +22114,121 @@ def _holding_score_preflight_source_quality(
         "quote_stale": audit_fields.get("quote_stale", "unknown"),
         "quote_age_ms": audit_fields.get("quote_age_ms", "-"),
     }
+
+
+def _record_holding_score_upstream_preflight_trace(
+    *,
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    preflight: dict | None,
+) -> dict:
+    """Preserve a fail-closed holding decision that never reaches the AI engine.
+
+    The scanner feature-packet guard intentionally runs before canonical holding
+    context construction.  A stale tick rejection must therefore remain an
+    excluded trace row, not disappear from the decision ledger and not pretend
+    to be an Exact V2 payload.  This helper is observation-only and cannot call
+    a provider or alter the effective holding score.
+    """
+
+    target = stock if isinstance(stock, dict) else {}
+    snapshot = ws_data if isinstance(ws_data, dict) else {}
+    gate = preflight if isinstance(preflight, dict) else {}
+    now_ts = time.time()
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    venue = resolve_entry_candle_venue(snapshot, session=session)
+    best_ask, best_bid = _get_best_levels_from_ws(snapshot)
+    current_price = _safe_int(
+        snapshot.get("curr")
+        or snapshot.get("current_price")
+        or target.get("curr_price"),
+        0,
+    )
+    reference_price = best_bid if best_bid > 0 else current_price
+    block_reason = str(gate.get("block_reason") or "source_quality_blocked")
+    source_quality_reason = str(gate.get("source_quality_reason") or block_reason)
+    broker_route = str(
+        target.get("entry_execution_broker_route")
+        or target.get("broker_route")
+        or target.get("dmst_stex_tp")
+        or ""
+    ).strip()
+    market_data_route = str(
+        snapshot.get("market_data_route")
+        or snapshot.get("route")
+        or snapshot.get("ws_route")
+        or ""
+    ).strip()
+    blocker = f"holding_score_upstream_preflight:{block_reason}"
+    result = {
+        "action": "HOLD",
+        "score": 50,
+        "confidence": 0,
+        "reason": blocker,
+        "provider_called": False,
+        "ai_parse_ok": False,
+        "ai_parse_fail": False,
+        "ai_fallback_score_50": False,
+        "ai_response_ms": 0,
+        "ai_prompt_type": "scalping_holding_score",
+        "ai_prompt_version": "holding_score_v2",
+        "ai_result_source": "input_preflight_blocked",
+        "holding_score_preflight_blocked": True,
+        "holding_score_preflight_block_reason": block_reason,
+        "holding_score_preflight_source_quality": gate.get("data_quality", "blocked"),
+        "holding_score_preflight_source_quality_reason": source_quality_reason,
+        "holding_score_effective_usable": False,
+        "holding_score_excluded_reason": "preflight_source_quality_blocked",
+        "actual_order_authority": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "ai_decision_outcome_eligible": False,
+    }
+    input_contract_fields = {
+        "ai_trace_stock_code": code,
+        "ai_trace_record_id": target.get("id"),
+        "ai_trace_position_cycle_id": target.get("position_cycle_id"),
+        "ai_trace_effective_venue": venue,
+        "ai_trace_session_bucket": session,
+        "ai_trace_broker_route": broker_route or None,
+        "ai_trace_market_data_route": market_data_route or None,
+        "ai_trace_reference_price_type": (
+            "executable_bid"
+            if best_bid > 0
+            else ("current_price" if current_price > 0 else None)
+        ),
+        "ai_trace_reference_price": reference_price if reference_price > 0 else None,
+        "ai_trace_best_bid": best_bid if best_bid > 0 else None,
+        "ai_trace_best_ask": best_ask if best_ask > 0 else None,
+        "ai_trace_canonical_context_capture_status": "canonical_context_missing",
+        "ai_context_candidate_status": "upstream_preflight_blocked_before_context",
+        "ai_context_candidate_schema": HOLDING_CONTEXT_SCHEMA,
+        "ai_input_preflight_status": "blocked",
+        "ai_input_preflight_allowed": False,
+        "ai_input_preflight_blockers": [blocker, source_quality_reason],
+        "ai_input_preflight_quality_warnings": [],
+        "ai_input_preflight_missing_sources": ["canonical_holding_context"],
+        "ai_input_preflight_venue_consistent": str(venue or "").upper()
+        in {"KRX", "NXT"},
+        "ai_input_runtime_preflight_mode": runtime_preflight_mode(),
+        "source_event_stage": "holding_score_upstream_preflight",
+        "holding_context_provider_expected": "openai",
+        "ai_decision_outcome_eligible": False,
+    }
+    result.update(
+        record_ai_decision_trace(
+            result,
+            prompt_type="scalping_holding_score",
+            prompt_version="holding_score_v2",
+            result_source="input_preflight_blocked",
+            input_contract_fields=input_contract_fields,
+            decision_stage="holding_score",
+            stock_code=code,
+            provider_called=False,
+        )
+    )
+    return result
 
 
 def _build_holding_ai_decision_context(
@@ -73300,6 +73417,34 @@ def handle_holding_state(
                         ai_decision.update(
                             _holding_score_role_log_fields(holding_score_ctx)
                         )
+                        if holding_score_preflight_blocked:
+                            blocked_trace = (
+                                _record_holding_score_upstream_preflight_trace(
+                                    stock=stock,
+                                    code=code,
+                                    ws_data=ws_data,
+                                    preflight=holding_score_preflight,
+                                )
+                            )
+                            for trace_key in (
+                                "ai_decision_trace_schema",
+                                "ai_decision_trace_id",
+                                "ai_decision_outcome_label_status",
+                                "ai_prompt_type",
+                                "ai_prompt_version",
+                                "ai_result_source",
+                                "ai_parse_ok",
+                                "ai_parse_fail",
+                                "ai_fallback_score_50",
+                                "ai_response_ms",
+                                "provider_called",
+                                "holding_score_preflight_blocked",
+                                "holding_score_preflight_block_reason",
+                                "holding_score_preflight_source_quality",
+                                "holding_score_preflight_source_quality_reason",
+                            ):
+                                if trace_key in blocked_trace:
+                                    ai_decision[trace_key] = blocked_trace[trace_key]
 
                     # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
                     if (not sim_ai_budget_skip) and _rule_bool(
