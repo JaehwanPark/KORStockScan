@@ -4519,6 +4519,21 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
         == "not_applicable_full_eval_budget_source"
     )
 
+    completion = handlers._scanner_heavy_eval_completion_fields(
+        stock,
+        started_epoch=1012.2,
+        completed_epoch=1012.55,
+        queue_enter_epoch=1012.0,
+        outcome="WATCHING",
+    )
+    assert completion["heavy_queue_wait_sec"] == 0.2
+    assert completion["heavy_handler_duration_sec"] == 0.35
+    assert completion["heavy_end_to_end_sec"] == 0.55
+    assert completion["heavy_eval_outcome"] == "WATCHING"
+    assert completion["runtime_effect"] is False
+    assert completion["actual_order_submitted"] is False
+    assert completion["broker_order_forbidden"] is True
+
 
 def test_scanner_runtime_event_venue_fields_fail_closed_without_inference():
     conflict = handlers._scanner_runtime_event_venue_fields(

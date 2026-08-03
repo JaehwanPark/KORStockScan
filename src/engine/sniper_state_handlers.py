@@ -8944,9 +8944,7 @@ def _resolve_scalp_sim_panic_sell_price(
     quote_quality = (
         "BAD"
         if sell_price <= 0
-        else "DEGRADED"
-        if liquidity_state != "NORMAL" or spread_bps >= 80
-        else "OK"
+        else "DEGRADED" if liquidity_state != "NORMAL" or spread_bps >= 80 else "OK"
     )
     fill_quality = (
         "DEGRADED"
@@ -11495,19 +11493,9 @@ def bind_state_dependencies(
     dual_persona_engine=None,
     scanner_generation_submit_guard=None,
 ):
-    global \
-        KIWOOM_TOKEN, \
-        DB, \
-        EVENT_BUS, \
-        ACTIVE_TARGETS, \
-        COOLDOWNS, \
-        ALERTED_STOCKS, \
-        HIGHEST_PRICES
+    global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
-    global \
-        SHOULD_BLOCK_SWING_ENTRY, \
-        CONFIRM_CANCEL_OR_RELOAD_REMAINING, \
-        SEND_EXIT_BEST_IOC
+    global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
     global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
 
     if kiwoom_token is not None:
@@ -17123,9 +17111,7 @@ def _scanner_runtime_queue_lag_fields(
         "queue_lag_anchor_field": (
             "entry_armed_at_epoch"
             if armed_time > 0
-            else "added_time"
-            if added_time > 0
-            else "not_available"
+            else "added_time" if added_time > 0 else "not_available"
         ),
         "loop_started_epoch": f"{loop_epoch:.3f}",
         "queue_emit_epoch": f"{emit_epoch:.3f}",
@@ -18337,6 +18323,90 @@ def _scanner_heavy_eval_lag_fields(
         "heavy_eval_started_epoch": f"{float(now_ts):.3f}",
         "heavy_queue_wait_sec": round(max(0.0, float(now_ts) - float(enter_epoch)), 3),
         "target_status": (stock or {}).get("status") or "not_applicable_target_status",
+        "target_strategy": normalize_strategy((stock or {}).get("strategy")),
+        "target_position_tag": normalize_position_tag(
+            normalize_strategy((stock or {}).get("strategy")),
+            (stock or {}).get("position_tag"),
+        ),
+        "runtime_record_id": (stock or {}).get("id")
+        or "not_applicable_runtime_record_id",
+        **_scanner_rising_relief_observation_fields(stock),
+    }
+
+
+def _scanner_heavy_eval_completion_fields(
+    stock,
+    *,
+    started_epoch: float,
+    completed_epoch: float,
+    queue_enter_epoch: float | None = None,
+    outcome: str,
+) -> dict[str, Any]:
+    """Describe heavy WATCHING execution separately from its queue wait.
+
+    ``scalping_scanner_heavy_eval_lag`` ends when the handler starts, so it
+    cannot distinguish scheduler starvation from expensive handler work.  The
+    completion event keeps those two clocks separate and remains strictly
+    observation-only.
+    """
+
+    scanner_fields = _scanner_promotion_correlation_fields(stock)
+    started = float(started_epoch)
+    completed = max(started, float(completed_epoch))
+    entered = _safe_float(queue_enter_epoch, 0.0) or _safe_float(
+        (stock or {}).get("_scanner_heavy_queue_enter_epoch"),
+        started,
+    )
+    queue_wait_sec = max(0.0, started - entered)
+    handler_duration_sec = max(0.0, completed - started)
+    return {
+        **_scanner_runtime_event_venue_fields(stock),
+        "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
+        or "not_applicable_scanner_promotion_id",
+        "scanner_promotion_emitted_epoch": scanner_fields.get(
+            "scanner_promotion_emitted_epoch"
+        )
+        or "not_applicable_scanner_promotion_emitted_epoch",
+        "source_signature": scanner_fields.get("source_signature")
+        or "not_applicable_source_signature",
+        "metric_role": "ops_latency_diagnostic",
+        "decision_authority": (
+            "real_scalping_scanner_heavy_eval_completion_observation_only"
+        ),
+        "window_policy": "intraday_runtime_watchlist",
+        "sample_floor": "one_completed_heavy_watching_evaluation",
+        "primary_decision_metric": "heavy_handler_duration_sec",
+        "source_quality_gate": "scalping_scanner_heavy_eval_completion_contract",
+        "source_quality_route": (
+            "runtime_watchlist_heavy_eval_completion_observation_only"
+        ),
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "score_threshold_change,provider_route_change,order_price_change,"
+            "quantity_or_cap_change,broker_guard_change,real_execution_quality_approval"
+        ),
+        "heavy_queue_enter_epoch": f"{entered:.3f}",
+        "heavy_eval_started_epoch": f"{started:.3f}",
+        "heavy_eval_completed_epoch": f"{completed:.3f}",
+        "heavy_queue_wait_sec": round(queue_wait_sec, 3),
+        "heavy_handler_duration_sec": round(handler_duration_sec, 3),
+        "heavy_end_to_end_sec": round(max(0.0, completed - entered), 3),
+        "heavy_eval_outcome": str(outcome or "unknown"),
+        "heavy_eval_ws_snapshot_refreshed": bool(
+            (stock or {}).get("_scanner_heavy_eval_ws_snapshot_refreshed")
+        ),
+        "heavy_eval_ws_snapshot_refresh_status": (
+            (stock or {}).get("_scanner_heavy_eval_ws_snapshot_refresh_status")
+            or "not_applied"
+        ),
+        "heavy_eval_ws_snapshot_apply_phase": (
+            (stock or {}).get("_scanner_heavy_eval_ws_snapshot_apply_phase")
+            or "not_applied"
+        ),
+        "target_status": (stock or {}).get("status")
+        or "not_applicable_target_status",
         "target_strategy": normalize_strategy((stock or {}).get("strategy")),
         "target_position_tag": normalize_position_tag(
             normalize_strategy((stock or {}).get("strategy")),
@@ -23581,15 +23651,11 @@ def _observe_post_probe_hard_abort_recovery(
         json.dumps(signature_payload, sort_keys=True).encode("ascii")
     ).hexdigest()[:20]
 
-    previous_state = str(
-        stock.get("_post_probe_hard_abort_recovery_state") or ""
-    )
+    previous_state = str(stock.get("_post_probe_hard_abort_recovery_state") or "")
     previous_accepted_signature = str(
         stock.get("_post_probe_hard_abort_recovery_accepted_signature") or ""
     )
-    previous_reason = str(
-        stock.get("_post_probe_hard_abort_recovery_reason") or ""
-    )
+    previous_reason = str(stock.get("_post_probe_hard_abort_recovery_reason") or "")
     previous_accepted_at = _safe_float(
         stock.get("_post_probe_hard_abort_recovery_accepted_at"), 0.0
     )
@@ -23620,9 +23686,7 @@ def _observe_post_probe_hard_abort_recovery(
     stock["_post_probe_hard_abort_recovery_confirmation_count"] = confirmation_count
     if accepted:
         stock["_post_probe_hard_abort_recovery_accepted_at"] = float(now_ts)
-        stock["_post_probe_hard_abort_recovery_accepted_signature"] = (
-            evidence_signature
-        )
+        stock["_post_probe_hard_abort_recovery_accepted_signature"] = evidence_signature
     elif not eligible:
         stock.pop("_post_probe_hard_abort_recovery_accepted_signature", None)
         stock.pop("_post_probe_hard_abort_recovery_accepted_at", None)
@@ -23670,9 +23734,7 @@ def _observe_post_probe_hard_abort_recovery(
             "reversal_feature_source_quality", "missing"
         ),
         reversal_feature_stale=bool(quality.get("reversal_feature_stale")),
-        reversal_feature_stale_reason=quality.get(
-            "reversal_feature_stale_reason", "-"
-        ),
+        reversal_feature_stale_reason=quality.get("reversal_feature_stale_reason", "-"),
         feature_extracted_at=feature_extracted_at,
         active_exit_conflict_fields=",".join(conflicts) or "-",
         metric_role="bounded_tunable_scale_in_counterfactual",
@@ -31483,9 +31545,7 @@ def _rising_missed_price_anchor(
     state = (
         "recovered_fallback"
         if selected_price > 0 and rejected
-        else "valid"
-        if selected_price > 0
-        else "unavailable"
+        else "valid" if selected_price > 0 else "unavailable"
     )
     if state == "recovered_fallback":
         stock["first_seen_price"] = selected_price
@@ -32046,9 +32106,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     relief_path = (
         "fresh_tp1_micro"
         if fresh_tp1_micro_path
-        else "absolute_tick_throughput"
-        if absolute_throughput_path
-        else "none"
+        else "absolute_tick_throughput" if absolute_throughput_path else "none"
     )
     reasons = []
     if missing_window:
@@ -32063,9 +32121,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     block_reason = (
         "tick_speed_absolute_throughput_relief"
         if relief_applied
-        else "+".join(reasons)
-        if reasons
-        else "tick_speed_guard_pass"
+        else "+".join(reasons) if reasons else "tick_speed_guard_pass"
     )
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
@@ -32128,9 +32184,7 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "metric_role": (
             "bounded_tunable"
             if relief_applied
-            else "safety_veto"
-            if blocked
-            else "diagnostic"
+            else "safety_veto" if blocked else "diagnostic"
         ),
         "decision_authority": (
             "operator_runtime_override_tick_absolute_throughput_relief"
@@ -32573,9 +32627,7 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
             else (
                 "missing_stored_at"
                 if age_sec is None
-                else "expired"
-                if age_sec > ttl_sec
-                else "missing_or_unusable_state"
+                else "expired" if age_sec > ttl_sec else "missing_or_unusable_state"
             )
         ),
     }
@@ -33408,9 +33460,7 @@ def _entry_ai_submit_authority_fields(
     # authoritative for a real rising-missed scout.  This is intentionally
     # scoped to the scout path so an expired experiment cannot convert a fresh
     # trusted DROP (or observation-only WAIT) into an independent real probe.
-    action_contract_enforced = bool(
-        action_guard_active or rising_missed_scout_contract
-    )
+    action_contract_enforced = bool(action_guard_active or rising_missed_scout_contract)
     authoritative_action_source = "submit_context"
     stock_action = str(stock.get("last_watching_ai_action") or "").strip()
     stock_action_normalized = stock_action.lower()
@@ -33418,9 +33468,7 @@ def _entry_ai_submit_authority_fields(
     stock_result_source = (
         str(stock.get("last_watching_ai_result_source") or "").strip().lower()
     )
-    stock_trace_id = str(
-        stock.get("last_watching_ai_decision_trace_id") or ""
-    ).strip()
+    stock_trace_id = str(stock.get("last_watching_ai_decision_trace_id") or "").strip()
     attempt_trace_id = str(
         stock.get("last_watching_ai_attempt_decision_trace_id") or ""
     ).strip()
@@ -33557,9 +33605,7 @@ def _entry_ai_submit_authority_fields(
             wait_observation_only_veto
         ),
         "entry_ai_submit_authority_wait_probe_intent": bool(wait_probe_intent),
-        "entry_ai_submit_authority_latest_attempt_trusted": bool(
-            stock_attempt_trusted
-        ),
+        "entry_ai_submit_authority_latest_attempt_trusted": bool(stock_attempt_trusted),
         "entry_ai_submit_authority_zero_score_drop_trusted": bool(
             selected_zero_score_drop_trusted
         ),
@@ -38224,9 +38270,7 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_scale_in_recheck_origin": (
             "normal_winner_recovery"
             if rising_missed_normal_winner_recheck
-            else "source_quality_or_non_nxt_direction_recovery"
-            if soft_abort
-            else "-"
+            else "source_quality_or_non_nxt_direction_recovery" if soft_abort else "-"
         ),
         "entry_split_probe_scale_in_recheck_reason": (
             (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
@@ -38417,6 +38461,10 @@ def _abort_entry_split_probe_residual(
         "residual_blocked",
         reason=reason,
         residual_revalidation_timeout_cause=timeout_cause,
+        entry_split_probe_terminal_outcome="residual_not_submitted",
+        entry_split_probe_terminal_abort_reason=reason,
+        entry_split_probe_terminal_abort_detail_reason=timeout_cause,
+        entry_split_probe_terminal_failure_signature=terminal_failure_signature,
         probe_bundle_id=bundle_id or "-",
         filled_qty=filled_qty,
         actual_order_submitted=False,
@@ -42293,16 +42341,12 @@ def _resolve_early_accel_strong_bundle_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(min_score) <= numeric_score <= float(max_score)
-                else "low"
-                if numeric_score < float(min_score)
-                else "high"
+                else "low" if numeric_score < float(min_score) else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(min_score) <= numeric_score <= float(max_score)
-                else -0.2
-                if numeric_score < float(min_score)
-                else 0.0
+                else -0.2 if numeric_score < float(min_score) else 0.0
             ),
         }
     )
@@ -42860,16 +42904,12 @@ def _resolve_ai_numeric_consistency_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(score_floor) <= numeric_score <= 74.0
-                else "low"
-                if numeric_score < float(score_floor)
-                else "high"
+                else "low" if numeric_score < float(score_floor) else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(score_floor) <= numeric_score <= 74.0
-                else -0.2
-                if numeric_score < float(score_floor)
-                else 0.0
+                else -0.2 if numeric_score < float(score_floor) else 0.0
             ),
         }
     )
@@ -46079,9 +46119,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
     large_sell_state = (
         "confirmed_sell"
         if large_sell_print
-        else "confirmed_clear"
-        if feature_context_usable
-        else "unknown"
+        else "confirmed_clear" if feature_context_usable else "unknown"
     )
     micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
         ws_data,
@@ -48360,15 +48398,13 @@ def _canonical_wait_probe_handoff_active(
 
     decision = ai_decision if isinstance(ai_decision, dict) else {}
     action = str(ai_action or decision.get("action") or "").strip().upper()
-    contract_status = str(
-        decision.get("decision_quality_contract_status") or ""
-    ).strip().lower()
+    contract_status = (
+        str(decision.get("decision_quality_contract_status") or "").strip().lower()
+    )
     edge_state = canonical_entry_edge_state(decision)
     probe_status = str(decision.get("entry_probe_intent_status") or "").strip().lower()
     evidence = (
-        decision.get("evidence")
-        if isinstance(decision.get("evidence"), dict)
-        else {}
+        decision.get("evidence") if isinstance(decision.get("evidence"), dict) else {}
     )
     recovery_trigger = str(evidence.get("trigger") or "").strip().lower()
     return bool(
@@ -48725,9 +48761,7 @@ def _score65_74_recovery_probe_decision(
         "score_prior_band": (
             "supportive"
             if min_score <= score <= max_score
-            else "low"
-            if score < min_score
-            else "high"
+            else "low" if score < min_score else "high"
         ),
         "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
     }
@@ -53459,7 +53493,9 @@ def _handle_watching_strategy_branch(
                                         "ai_numeric_consistency_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "ai_numeric_consistency_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[:120],
+                                        )[
+                                            :120
+                                        ],
                                         "ai_numeric_consistency_recheck_inconsistency_field": str(
                                             ai_decision.get(
                                                 "ai_reason_numeric_inconsistency_field"
@@ -53478,7 +53514,9 @@ def _handle_watching_strategy_branch(
                                             ),
                                             ensure_ascii=False,
                                             default=str,
-                                        )[:240],
+                                        )[
+                                            :240
+                                        ],
                                     },
                                     candle_context=candle_context,
                                 )
@@ -53690,7 +53728,9 @@ def _handle_watching_strategy_branch(
                                         "early_accel_strong_bundle_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "early_accel_strong_bundle_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[:120],
+                                        )[
+                                            :120
+                                        ],
                                         "early_accel_strong_bundle_recheck_scanner_promotion_reason": str(
                                             stock.get("scanner_promotion_reason") or "-"
                                         ),
@@ -54422,9 +54462,7 @@ def _handle_watching_strategy_branch(
                                 ),
                                 entry_probe_intent=True,
                                 entry_probe_intent_status=str(
-                                    (ai_decision or {}).get(
-                                        "entry_probe_intent_status"
-                                    )
+                                    (ai_decision or {}).get("entry_probe_intent_status")
                                     or ""
                                 ),
                             )
@@ -81151,7 +81189,9 @@ def handle_buy_ordered_state(stock, code):
             return
 
     if time_elapsed > timeout_sec:
-        log_info(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
+        log_info(
+            f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입."
+        )
         orig_ord_no = stock.get("odno")
 
         if not orig_ord_no:

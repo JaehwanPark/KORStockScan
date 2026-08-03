@@ -136,6 +136,7 @@ def test_build_report_aggregates_threshold_opportunity_and_orders(tmp_path):
         "residual_blocked_record_count": 0,
         "residual_not_submitted_record_count": 0,
         "residual_not_submitted_source_counts": {},
+        "residual_terminal_abort_detail_reason_counts": {},
         "unresolved_record_count": 0,
     }
 
@@ -301,6 +302,15 @@ def test_probe_to_residual_attribution_joins_submit_and_terminal_outcomes(tmp_pa
                         "entry_split_probe_abort_reason": (
                             "residual_revalidation_timeout"
                         ),
+                        "entry_split_probe_terminal_abort_reason": (
+                            "residual_revalidation_timeout"
+                        ),
+                        "entry_split_probe_terminal_abort_detail_reason": (
+                            "timeout_wait_confirmation_not_reached"
+                        ),
+                        "entry_split_probe_terminal_failure_signature": (
+                            "residual_revalidation_timeout|WEAK|wait|price_tick|0/2"
+                        ),
                     },
                 ),
             ]
@@ -337,11 +347,21 @@ def test_probe_to_residual_attribution_joins_submit_and_terminal_outcomes(tmp_pa
         "residual_blocked_record_count": 2,
         "residual_not_submitted_record_count": 1,
         "residual_not_submitted_source_counts": {"legacy_aborted_phase_fallback": 1},
+        "residual_terminal_abort_detail_reason_counts": {
+            "timeout_wait_confirmation_not_reached": 1
+        },
         "unresolved_record_count": 0,
     }
     assert attribution["residual_not_submitted_source_counts"] == {
         "legacy_aborted_phase_fallback": 1
     }
+    assert attribution["residual_terminal_abort_reason_counts"] == {
+        "residual_revalidation_timeout": 1
+    }
+    assert attribution["residual_terminal_abort_detail_reason_counts"] == {
+        "timeout_wait_confirmation_not_reached": 1
+    }
+    assert attribution["residual_terminal_failure_signature_coverage_count"] == 1
     contract = attribution["probe_to_residual_contract"]
     assert contract["runtime_effect"] is False
     assert contract["allowed_runtime_apply"] is False

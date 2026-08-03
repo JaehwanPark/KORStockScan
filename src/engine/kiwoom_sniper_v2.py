@@ -11932,6 +11932,34 @@ def run_sniper(is_test_mode=False):
                 )
                 return True
 
+            def _defer_emit_scanner_heavy_eval_completion(
+                stock_value,
+                code_value,
+                *,
+                started_epoch,
+                completed_epoch,
+                queue_enter_epoch,
+                outcome,
+            ):
+                if not sniper_state_handlers._is_scanner_watching_runtime_observation_target(
+                    stock_value
+                ):
+                    return False
+                fields = sniper_state_handlers._scanner_heavy_eval_completion_fields(
+                    stock_value,
+                    started_epoch=float(started_epoch),
+                    completed_epoch=float(completed_epoch),
+                    queue_enter_epoch=queue_enter_epoch,
+                    outcome=outcome,
+                )
+                _defer_scanner_entry_pipeline_log(
+                    stock_value,
+                    code_value,
+                    "scalping_scanner_heavy_eval_completion",
+                    fields,
+                )
+                return True
+
             def _defer_scanner_watching_runtime_skip(stock_value, code_value, **kwargs):
                 deferred_scanner_skip_events.append(
                     (stock_value, code_value, dict(kwargs))
@@ -12586,6 +12614,11 @@ def run_sniper(is_test_mode=False):
                         if opening_rotation_handoff_allowed
                         else now
                     )
+                    # The handler may transition status/position ownership.
+                    # Keep immutable scanner lineage so completion telemetry
+                    # cannot disappear after a successful state transition.
+                    heavy_eval_completion_stock = dict(delayed_stock)
+                    heavy_eval_started_epoch = time.time()
                     try:
                         handle_watching_state(
                             delayed_stock,
@@ -12613,6 +12646,15 @@ def run_sniper(is_test_mode=False):
                             scanner_async_commit_phase=False,
                         )
                     except Exception:
+                        _defer_emit_scanner_heavy_eval_completion(
+                            heavy_eval_completion_stock,
+                            delayed_code,
+                            started_epoch=heavy_eval_started_epoch,
+                            completed_epoch=time.time(),
+                            queue_enter_epoch=queue_enter_epoch,
+                            outcome="heavy_eval_exception",
+                        )
+                        _flush_deferred_scanner_pipeline_events()
                         if scheduler_heavy_item is not None:
                             _scanner_scheduler_complete_target(
                                 scheduler,
@@ -12622,6 +12664,17 @@ def run_sniper(is_test_mode=False):
                                 outcome="heavy_eval_exception",
                             )
                         raise
+                    _defer_emit_scanner_heavy_eval_completion(
+                        heavy_eval_completion_stock,
+                        delayed_code,
+                        started_epoch=heavy_eval_started_epoch,
+                        completed_epoch=time.time(),
+                        queue_enter_epoch=queue_enter_epoch,
+                        outcome=str(
+                            delayed_stock.get("status") or "heavy_eval_completed"
+                        ),
+                    )
+                    _flush_deferred_scanner_pipeline_events()
                     if scheduler_heavy_item is not None:
                         heavy_completed = _scanner_scheduler_complete_target(
                             scheduler,

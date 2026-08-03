@@ -941,7 +941,9 @@ def build_holding_decision_context(
     )
     broker_snapshot_at = _safe_float(position.get("broker_snapshot_at"), None)
     if broker_snapshot_at is not None and broker_snapshot_at > 0:
-        broker_snapshot_age_sec = max(0.0, now_epoch - broker_snapshot_at)
+        # Preserve a negative age so a future-dated broker snapshot remains a
+        # provenance conflict instead of being silently normalized to fresh.
+        broker_snapshot_age_sec = now_epoch - broker_snapshot_at
     else:
         broker_snapshot_age_sec = _safe_float(
             position.get("broker_snapshot_age_sec"), None
@@ -950,6 +952,14 @@ def build_holding_decision_context(
             broker_snapshot_age_sec = _safe_float(
                 position.get("holding_snapshot_age_sec"), None
             )
+    if broker_snapshot_age_sec is None:
+        broker_snapshot_freshness_state = "missing"
+    elif broker_snapshot_age_sec < 0:
+        broker_snapshot_freshness_state = "future_conflict"
+    elif broker_snapshot_age_sec <= _BROKER_POSITION_FRESH_SEC:
+        broker_snapshot_freshness_state = "fresh"
+    else:
+        broker_snapshot_freshness_state = "expired"
     curr_price = abs(_safe_int(ws.get("curr") or position.get("curr_price"), 0))
     mark_pnl_pct = (
         round((curr_price / avg_price - 1.0) * 100.0, 4)
@@ -1181,6 +1191,11 @@ def build_holding_decision_context(
         },
         "order_reconciliation": {
             "broker_snapshot_age_sec": broker_snapshot_age_sec,
+            "broker_snapshot_freshness_state": broker_snapshot_freshness_state,
+            "broker_snapshot_freshness_limit_sec": _BROKER_POSITION_FRESH_SEC,
+            "broker_snapshot_source": position.get("broker_snapshot_source")
+            or position.get("broker_reconciliation_source")
+            or "missing",
             "open_buy_qty": position.get("open_buy_qty"),
             "open_sell_qty": position.get("open_sell_qty"),
             "partial_fill_qty": position.get("partial_fill_qty"),
@@ -1608,6 +1623,15 @@ def holding_decision_context_log_fields(
         "holding_context_broker_route": broker_route.get("route"),
         "holding_context_broker_route_source": broker_route.get("source"),
         "holding_context_broker_route_authority": broker_route.get("authority"),
+        "holding_context_broker_route_provenance_state": (
+            "missing"
+            if not broker_route.get("route")
+            else (
+                "execution_provenance"
+                if broker_route.get("authority") == "broker_execution_provenance"
+                else "observation_view_only"
+            )
+        ),
         "holding_context_broker_route_actual_order_submitted": broker_route.get(
             "actual_order_submitted"
         ),
@@ -1653,6 +1677,15 @@ def holding_decision_context_log_fields(
         ),
         "holding_context_broker_snapshot_age_sec": reconciliation.get(
             "broker_snapshot_age_sec"
+        ),
+        "holding_context_broker_snapshot_freshness_state": reconciliation.get(
+            "broker_snapshot_freshness_state"
+        ),
+        "holding_context_broker_snapshot_freshness_limit_sec": reconciliation.get(
+            "broker_snapshot_freshness_limit_sec"
+        ),
+        "holding_context_broker_snapshot_source": reconciliation.get(
+            "broker_snapshot_source"
         ),
         "holding_context_open_buy_qty": reconciliation.get("open_buy_qty"),
         "holding_context_open_sell_qty": reconciliation.get("open_sell_qty"),

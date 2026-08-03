@@ -4213,10 +4213,7 @@ def test_rising_missed_scout_wait_requires_explicit_probe_intent(monkeypatch):
     )
 
     assert observation_only["blocked"] is True
-    assert (
-        observation_only["reason"]
-        == "fresh_ai_wait_observation_only_probe_veto"
-    )
+    assert observation_only["reason"] == "fresh_ai_wait_observation_only_probe_veto"
     assert observation_only["entry_ai_submit_authority_wait_probe_required"] is False
     assert probe["blocked"] is False
     assert probe["entry_ai_submit_authority_wait_probe_required"] is True
@@ -11068,10 +11065,7 @@ def test_rising_missed_tp1_gate_preserves_explicit_drop_without_rest_recheck(
     assert rest_calls == []
     assert entry_logs[-1][0] == "rising_missed_tp1_candidate_blocked"
     assert "rising_missed_rest_quote_estimator_reason" not in entry_logs[-1][1]
-    assert (
-        entry_logs[-1][1]["block_reason"]
-        == "rising_missed_tp1_ai_state_blocked"
-    )
+    assert entry_logs[-1][1]["block_reason"] == "rising_missed_tp1_ai_state_blocked"
     assert (
         entry_logs[-1][1]["rising_missed_tp1_hard_negative_reasons"]
         == "ai_explicit_veto"

@@ -5770,6 +5770,37 @@ def test_scanner_pipeline_events_flush_before_heavy_eval_handler():
     assert flush_def_idx < heavy_lag_idx < pipeline_flush_idx < heavy_handle_idx
 
 
+def test_scanner_heavy_eval_completion_flushes_on_success_and_exception():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    flush_def_idx = source.index("def _flush_delayed_scanner_heavy_eval")
+    snapshot_idx = source.index(
+        "heavy_eval_completion_stock = dict(delayed_stock)", flush_def_idx
+    )
+    handler_idx = source.index(
+        "handle_watching_state(\n                            delayed_stock",
+        flush_def_idx,
+    )
+    exception_idx = source.index("except Exception:", handler_idx)
+    exception_completion_idx = source.index(
+        "_defer_emit_scanner_heavy_eval_completion(", exception_idx
+    )
+    exception_flush_idx = source.index(
+        "_flush_deferred_scanner_pipeline_events()", exception_completion_idx
+    )
+    success_completion_idx = source.index(
+        "_defer_emit_scanner_heavy_eval_completion(", exception_flush_idx
+    )
+    success_flush_idx = source.index(
+        "_flush_deferred_scanner_pipeline_events()", success_completion_idx
+    )
+
+    assert snapshot_idx < handler_idx < exception_idx
+    assert exception_idx < exception_completion_idx < exception_flush_idx
+    assert exception_flush_idx < success_completion_idx < success_flush_idx
+    completion_slice = source[exception_completion_idx:success_flush_idx]
+    assert completion_slice.count("heavy_eval_completion_stock") == 2
+
+
 def test_run_sniper_processes_one_delayed_heavy_eval_before_live_attach_yield():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     flush_idx = source.index("def _flush_delayed_scanner_heavy_eval")

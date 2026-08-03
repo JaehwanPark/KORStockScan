@@ -1143,6 +1143,31 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="real_scalping_scanner_heavy_eval_observation_only",
     ),
+    "scalping_scanner_heavy_eval_completion": StageContract(
+        required_fields=(
+            *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+            "heavy_queue_enter_epoch",
+            "heavy_eval_started_epoch",
+            "heavy_eval_completed_epoch",
+            "heavy_queue_wait_sec",
+            "heavy_handler_duration_sec",
+            "heavy_end_to_end_sec",
+            "heavy_eval_outcome",
+            "heavy_eval_ws_snapshot_refreshed",
+            "heavy_eval_ws_snapshot_refresh_status",
+            "heavy_eval_ws_snapshot_apply_phase",
+            "scanner_promotion_id",
+            "scanner_promotion_emitted_epoch",
+            "source_signature",
+            "target_status",
+            "target_strategy",
+            "target_position_tag",
+            "runtime_record_id",
+        ),
+        decision_authority=(
+            "real_scalping_scanner_heavy_eval_completion_observation_only"
+        ),
+    ),
     "scalping_scanner_promotion_latency_trace": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,

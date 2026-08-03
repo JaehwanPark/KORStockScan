@@ -588,6 +588,39 @@ def test_krx_real_holding_does_not_infer_missing_broker_route(monkeypatch):
         == "broker_execution_provenance_required"
     )
     assert context["ai_market_snapshot_v1"]["broker_route"] is None
+    assert (
+        context["ai_market_snapshot_v1"]["broker_route_match_state"] == "missing"
+    )
+    log_fields = holding_decision_context_log_fields(context)
+    assert log_fields["holding_context_broker_route_provenance_state"] == "missing"
+    assert log_fields["holding_context_broker_snapshot_freshness_state"] == "fresh"
+    assert log_fields["holding_context_broker_snapshot_freshness_limit_sec"] == 60.0
+
+
+def test_future_broker_snapshot_is_reported_as_provenance_conflict(monkeypatch):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    stock = _stock()
+    stock["broker_snapshot_at"] = now.timestamp() + 5.0
+
+    context = build_holding_decision_context(
+        None,
+        "322000",
+        _ws(now),
+        stock,
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 23, 9, 0, tzinfo=KST),
+        ),
+    )
+
+    reconciliation = context["order_reconciliation"]
+    assert reconciliation["broker_snapshot_age_sec"] == -5.0
+    assert reconciliation["broker_snapshot_freshness_state"] == "future_conflict"
 
 
 def test_nxt_aftermarket_real_holding_uses_current_session_execution_view(
@@ -652,6 +685,11 @@ def test_nxt_aftermarket_real_holding_uses_current_session_execution_view(
     assert preflight["broker_route_matches_venue"] is True
     assert "nxt_aftermarket_source_unproven" not in preflight["blockers"]
     assert preflight["allowed"] is True
+    log_fields = holding_decision_context_log_fields(context)
+    assert log_fields["holding_context_broker_route_provenance_state"] == (
+        "observation_view_only"
+    )
+    assert log_fields["holding_context_broker_snapshot_freshness_state"] == "fresh"
 
 
 def test_holding_submit_authority_requires_fresh_broker_reconciliation(

@@ -272,6 +272,7 @@ def _merge_probe_split_provenance(item: dict[str, Any], row: dict[str, Any]) -> 
             "entry_split_probe_abort_reason",
             (
                 "entry_split_probe_abort_reason",
+                "entry_split_probe_terminal_abort_reason",
                 "prior_probe_residual_abort_reason",
             ),
         ),
@@ -280,6 +281,20 @@ def _merge_probe_split_provenance(item: dict[str, Any], row: dict[str, Any]) -> 
             (
                 "entry_split_probe_terminal_outcome",
                 "prior_probe_residual_outcome",
+            ),
+        ),
+        (
+            "entry_split_probe_terminal_abort_detail_reason",
+            (
+                "entry_split_probe_terminal_abort_detail_reason",
+                "residual_revalidation_timeout_cause",
+            ),
+        ),
+        (
+            "entry_split_probe_terminal_failure_signature",
+            (
+                "entry_split_probe_terminal_failure_signature",
+                "prior_probe_residual_failure_signature",
             ),
         ),
     ):
@@ -877,6 +892,22 @@ def build_report(
     residual_not_submitted_source_counts = Counter(
         _residual_not_submitted_source(row) for row in residual_not_submitted_rows
     )
+    residual_terminal_abort_reason_counts = Counter(
+        str(row.get("entry_split_probe_abort_reason") or "unknown")
+        for row in residual_not_submitted_rows
+    )
+    residual_terminal_abort_detail_reason_counts = Counter(
+        str(
+            row.get("entry_split_probe_terminal_abort_detail_reason") or "unknown"
+        )
+        for row in residual_not_submitted_rows
+    )
+    residual_terminal_failure_signature_coverage_count = sum(
+        1
+        for row in residual_not_submitted_rows
+        if str(row.get("entry_split_probe_terminal_failure_signature") or "").strip()
+        not in {"", "-"}
+    )
     resolved_probe_record_ids = {
         str(row.get("record_id") or "")
         for row in residual_submitted_rows + residual_not_submitted_rows
@@ -984,6 +1015,17 @@ def build_report(
                     ).items()
                 )
             ),
+            "residual_terminal_abort_detail_reason_counts": dict(
+                sorted(
+                    Counter(
+                        str(
+                            row.get("entry_split_probe_terminal_abort_detail_reason")
+                            or "unknown"
+                        )
+                        for row in date_residual_not_submitted_rows
+                    ).items()
+                )
+            ),
             "unresolved_record_count": date_unresolved_count,
         }
     probe_split_attribution = {
@@ -1016,6 +1058,15 @@ def build_report(
         "residual_not_submitted_record_count": len(residual_not_submitted_rows),
         "residual_not_submitted_source_counts": dict(
             sorted(residual_not_submitted_source_counts.items())
+        ),
+        "residual_terminal_abort_reason_counts": dict(
+            sorted(residual_terminal_abort_reason_counts.items())
+        ),
+        "residual_terminal_abort_detail_reason_counts": dict(
+            sorted(residual_terminal_abort_detail_reason_counts.items())
+        ),
+        "residual_terminal_failure_signature_coverage_count": (
+            residual_terminal_failure_signature_coverage_count
         ),
         "probe_to_residual_unresolved_record_count": len(unresolved_probe_rows),
         "probe_to_residual_by_entry_date": probe_to_residual_by_entry_date,
@@ -1154,6 +1205,9 @@ def write_outputs(
         f"- residual_blocked_record_count: {probe_split.get('residual_blocked_record_count')}",
         f"- residual_not_submitted_record_count: {probe_split.get('residual_not_submitted_record_count')}",
         f"- residual_not_submitted_source_counts: {json.dumps(probe_split.get('residual_not_submitted_source_counts') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- residual_terminal_abort_reason_counts: {json.dumps(probe_split.get('residual_terminal_abort_reason_counts') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- residual_terminal_abort_detail_reason_counts: {json.dumps(probe_split.get('residual_terminal_abort_detail_reason_counts') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- residual_terminal_failure_signature_coverage_count: {probe_split.get('residual_terminal_failure_signature_coverage_count')}",
         f"- probe_to_residual_unresolved_record_count: {probe_split.get('probe_to_residual_unresolved_record_count')}",
         f"- target_date_probe_to_residual: {json.dumps(probe_split.get('target_date_probe_to_residual') or {}, ensure_ascii=False, sort_keys=True)}",
         "",

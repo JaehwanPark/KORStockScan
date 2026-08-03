@@ -66,6 +66,7 @@ BUY_WINDOW_PAUSE_REASONS = {
 
 QUEUE_STAGES = {
     "scalping_scanner_fast_precheck",
+    "scalping_scanner_heavy_eval_completion",
     "scalping_scanner_heavy_eval_lag",
     "scalping_scanner_runtime_queue_lag",
 }

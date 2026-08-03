@@ -5906,6 +5906,26 @@ def test_observation_source_quality_accepts_scanner_fast_precheck_and_heavy_eval
                     "heavy_queue_wait_sec": 0.2,
                 },
             ),
+            _event(
+                "scalping_scanner_heavy_eval_completion",
+                {
+                    **base_contract,
+                    "decision_authority": "real_scalping_scanner_heavy_eval_completion_observation_only",
+                    "primary_decision_metric": "heavy_handler_duration_sec",
+                    "source_quality_gate": "scalping_scanner_heavy_eval_completion_contract",
+                    "source_quality_route": "runtime_watchlist_heavy_eval_completion_observation_only",
+                    "heavy_queue_enter_epoch": "1012.000",
+                    "heavy_eval_started_epoch": "1012.200",
+                    "heavy_eval_completed_epoch": "1012.550",
+                    "heavy_queue_wait_sec": 0.2,
+                    "heavy_handler_duration_sec": 0.35,
+                    "heavy_end_to_end_sec": 0.55,
+                    "heavy_eval_outcome": "WATCHING",
+                    "heavy_eval_ws_snapshot_refreshed": False,
+                    "heavy_eval_ws_snapshot_refresh_status": "not_applied",
+                    "heavy_eval_ws_snapshot_apply_phase": "not_applied",
+                },
+            ),
         ],
     )
 
@@ -5916,6 +5936,10 @@ def test_observation_source_quality_accepts_scanner_fast_precheck_and_heavy_eval
     )
     assert (
         report["stage_contracts"]["scalping_scanner_heavy_eval_lag"]["status"] == "pass"
+    )
+    assert (
+        report["stage_contracts"]["scalping_scanner_heavy_eval_completion"]["status"]
+        == "pass"
     )
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True

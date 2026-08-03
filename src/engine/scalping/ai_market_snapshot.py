@@ -1415,6 +1415,11 @@ def build_ai_market_snapshot(
         venue_cohort=venue_value,
         session=session_bucket,
     )
+    broker_route_match_state = (
+        "missing"
+        if not broker_route_value
+        else ("matched" if broker_route_matches else "mismatched")
+    )
     if (
         optional_holding_reconciliation_advisory
         and broker_qty_value is not None
@@ -1491,6 +1496,7 @@ def build_ai_market_snapshot(
         "position_reconciliation_mode": position_reconciliation_mode,
         "simulation_position_reconciled": simulation_position_reconciled,
         "broker_route_matches_venue": broker_route_matches,
+        "broker_route_match_state": broker_route_match_state,
         "max_source_skew_ms": max_skew_ms,
     }
     integrated_sor_execution_view_only = bool(
@@ -1529,6 +1535,7 @@ def build_ai_market_snapshot(
         "effective_venue_input": effective_venue,
         "venue_resolution": venue_resolution,
         "broker_route": broker_route_value or None,
+        "broker_route_match_state": broker_route_match_state,
         "position_reconciliation_mode": position_reconciliation_mode,
         "simulation_position_reconciled": simulation_position_reconciled,
         "market_data_route": market_data_route,
@@ -1559,6 +1566,7 @@ def build_ai_market_snapshot(
         "effective_venue_input": effective_venue,
         "venue_resolution": venue_resolution,
         "broker_route": broker_route_value or None,
+        "broker_route_match_state": broker_route_match_state,
         "position_reconciliation_mode": position_reconciliation_mode,
         "simulation_position_reconciled": simulation_position_reconciled,
         "market_data_route": market_data_route,
@@ -1611,6 +1619,7 @@ def ai_input_preflight(
         "position_reconciliation_mode": "missing_snapshot",
         "simulation_position_reconciled": False,
         "broker_route_matches_venue": False,
+        "broker_route_match_state": "missing_snapshot",
         "max_source_skew_ms": None,
     }
 
@@ -1642,6 +1651,9 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_market_snapshot_venue_resolution": snapshot.get("venue_resolution"),
         "ai_market_snapshot_broker_route": snapshot.get("broker_route"),
+        "ai_market_snapshot_broker_route_match_state": snapshot.get(
+            "broker_route_match_state"
+        ),
         "ai_market_snapshot_market_data_route": snapshot.get("market_data_route"),
         "ai_market_snapshot_route_partition_used": bool(
             (snapshot.get("route_partition") or {}).get("used", False)
@@ -1709,6 +1721,9 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_input_preflight_broker_route_matches_venue": bool(
             preflight.get("broker_route_matches_venue", False)
+        ),
+        "ai_input_preflight_broker_route_match_state": preflight.get(
+            "broker_route_match_state"
         ),
         "ai_input_preflight_max_source_skew_ms": preflight.get("max_source_skew_ms"),
         "ai_input_runtime_preflight_mode": snapshot.get(

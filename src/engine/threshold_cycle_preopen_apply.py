@@ -752,9 +752,7 @@ def _cumulative_quality_update_contract_error(
         declared_candidate_count = int(
             contract.get("runtime_apply_candidate_count") or 0
         )
-        declared_allowed_count = int(
-            contract.get("allowed_runtime_apply_count") or 0
-        )
+        declared_allowed_count = int(contract.get("allowed_runtime_apply_count") or 0)
     except (TypeError, ValueError):
         return "invalid_runtime_update_counts"
     actual_allowed_count = sum(
@@ -775,9 +773,7 @@ def _cumulative_quality_update_contract_error(
         if isinstance(contract.get("cumulative_quality_window"), dict)
         else {}
     )
-    if str(quality_window.get("window_policy") or "") != (
-        "clean_baseline_cumulative"
-    ):
+    if str(quality_window.get("window_policy") or "") != ("clean_baseline_cumulative"):
         return "invalid_cumulative_window_policy"
     start_date = str(quality_window.get("start_date") or "")
     end_date = str(quality_window.get("end_date") or "")
@@ -824,9 +820,7 @@ def _cumulative_quality_update_contract_error(
         ):
             return "candidate_runtime_update_mode_mismatch"
         try:
-            candidate_max_apply_count = int(
-                item.get("max_runtime_apply_count") or 0
-            )
+            candidate_max_apply_count = int(item.get("max_runtime_apply_count") or 0)
         except (TypeError, ValueError):
             return "candidate_max_runtime_apply_count_invalid"
         if candidate_max_apply_count != 1:
@@ -839,9 +833,7 @@ def _cumulative_quality_update_contract_error(
             return "candidate_cumulative_window_mismatch"
         if not bool(item.get("post_apply_attribution_required")):
             return "candidate_post_apply_attribution_missing"
-        if bool(item.get("runtime_effect")) or bool(
-            item.get("actual_order_submitted")
-        ):
+        if bool(item.get("runtime_effect")) or bool(item.get("actual_order_submitted")):
             return "candidate_runtime_authority_leak"
         if item.get("broker_order_forbidden") is not True:
             return "candidate_broker_order_forbidden_missing"
@@ -1172,8 +1164,7 @@ def _load_scalping_pyramid_quality_calibration_candidates(
                 "allowed_runtime_apply": False,
                 "calibration_state": "freeze",
                 "apply_block_reason": (
-                    "single_cumulative_quality_contract:"
-                    f"{cumulative_contract_error}"
+                    f"single_cumulative_quality_contract:{cumulative_contract_error}"
                 ),
             }
             for item in normalized
@@ -1223,8 +1214,7 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
                 "allowed_runtime_apply": False,
                 "calibration_state": "freeze",
                 "apply_block_reason": (
-                    "single_cumulative_quality_contract:"
-                    f"{cumulative_contract_error}"
+                    f"single_cumulative_quality_contract:{cumulative_contract_error}"
                 ),
             }
             for item in normalized
@@ -3208,7 +3198,9 @@ def _select_auto_apply_candidates(
             reject_reason = reason
         elif not _env_overrides_for_candidate(candidate):
             reject_reason = "no_runtime_env_override"
-        elif cumulative_quality_update and stage in selected_cumulative_quality_by_stage:
+        elif (
+            cumulative_quality_update and stage in selected_cumulative_quality_by_stage
+        ):
             reject_reason = (
                 "single_cumulative_quality_update_conflict:"
                 f"{selected_cumulative_quality_by_stage[stage]}"
@@ -5487,7 +5479,7 @@ def build_runtime_gap_provenance_artifact(
         "active_gap_count": len(active_gaps),
         "gaps": active_gaps,
         "postclose_interpretation_scope": {
-            f"~{gap.get('gap_end_kst','').split('T')[1] if 'T' in str(gap.get('gap_end_kst','')) else gap.get('gap_end_kst','')}": str(
+            f"~{gap.get('gap_end_kst', '').split('T')[1] if 'T' in str(gap.get('gap_end_kst', '')) else gap.get('gap_end_kst', '')}": str(
                 gap.get("interpretation_rule", "")
             )
             for gap in active_gaps

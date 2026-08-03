@@ -791,9 +791,7 @@ def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
         "scalping_avg_down_recovery_quality_gate"
     )
     assert env["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"] == "true"
-    assert (
-        env["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"] == "2"
-    )
+    assert env["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"] == "2"
     assert "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE" not in env
 
 
@@ -834,12 +832,15 @@ def test_cumulative_quality_contract_rejects_quality_update_id_mismatch():
         },
     }
 
-    assert mod._cumulative_quality_update_contract_error(
-        payload,
-        [candidate],
-        owner_family="scalping_pyramid_quality_gate",
-        owner_stage="scale_in",
-    ) == "candidate_quality_update_id_mismatch"
+    assert (
+        mod._cumulative_quality_update_contract_error(
+            payload,
+            [candidate],
+            owner_family="scalping_pyramid_quality_gate",
+            owner_stage="scale_in",
+        )
+        == "candidate_quality_update_id_mismatch"
+    )
 
 
 def test_entry_ai_gate_backtest_entry_recheck_candidate_emits_runtime_env(
