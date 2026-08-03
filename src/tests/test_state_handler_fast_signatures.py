@@ -5770,6 +5770,116 @@ def test_canonical_wait_probe_handoff_precedes_legacy_first_ai_wait(monkeypatch)
     assert not handlers._canonical_wait_probe_handoff_active(decision)
 
 
+def test_canonical_wait_probe_micro_pending_has_no_submit_authority(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
+        "false",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+        "true",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
+    )
+    decision = {
+        "action": "WAIT",
+        "decision_quality_contract_status": "pass",
+        "edge_state": "EDGE",
+        "entry_probe_intent": True,
+        "entry_probe_intent_status": "eligible_wait_probe",
+        "evidence": {
+            "trigger": "recovery_required",
+            "adverse_risk": "non_blocking",
+        },
+    }
+    recheck = type(
+        "Recheck",
+        (),
+        {
+            "allowed": False,
+            "reason": "strong_micro_confirmation_missing",
+        },
+    )()
+
+    assert handlers._canonical_wait_probe_recheck_pending(
+        recheck,
+        decision,
+        ai_action="WAIT",
+        now_ts=1_785_737_300.0,
+    )
+    recheck.allowed = True
+    assert not handlers._canonical_wait_probe_recheck_pending(
+        recheck,
+        decision,
+        ai_action="WAIT",
+        now_ts=1_785_737_300.0,
+    )
+
+
+def test_entry_opportunity_recheck_pending_window_is_bounded(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_PENDING_TTL_SEC", "15")
+
+    active = handlers._entry_opportunity_recheck_pending_window(
+        {
+            "entry_opportunity_recheck_pending": True,
+            "entry_opportunity_recheck_pending_since": 100.0,
+        },
+        now_ts=114.9,
+    )
+    expired = handlers._entry_opportunity_recheck_pending_window(
+        {
+            "entry_opportunity_recheck_pending": True,
+            "entry_opportunity_recheck_pending_since": 100.0,
+        },
+        now_ts=115.0,
+    )
+
+    assert active["pending_active"] is True
+    assert expired["pending_active"] is False
+    assert expired["pending_ttl_sec"] == 15.0
+
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_PENDING_TTL_SEC", "999")
+    clamped = handlers._entry_opportunity_recheck_pending_window({}, now_ts=200.0)
+    assert clamped["pending_ttl_sec"] == 30.0
+
+
+def test_watching_handler_consumes_pending_with_bounded_fresh_ai_recheck():
+    source = inspect.getsource(handlers._handle_watching_strategy_branch)
+    pending_slice = source[
+        source.index("pending_recheck_requested") : source.index(
+            "ai_wait_rebound_recheck_pending"
+        )
+    ]
+
+    assert 'stock.get("entry_opportunity_recheck_pending")' in pending_slice
+    assert '"entry_opportunity_recheck_pending_fresh_ai"' in pending_slice
+    assert '"entry_opportunity_recheck_pending_fresh_ai_requested"' in pending_slice
+    assert '"entry_opportunity_recheck_pending_parent_snapshot_id"' in pending_slice
+    assert '"entry_opportunity_recheck_pending_recheck_after_epoch"' in pending_slice
+    assert '"entry_opportunity_recheck_pending_expired"' in pending_slice
+    assert "cooldowns[code] = now_ts + cooldown_time" in pending_slice
+    assert "actual_order_submitted=False" in pending_slice
+    assert "broker_order_forbidden=True" in pending_slice
+
+    reset = handlers._entry_opportunity_recheck_pending_window(
+        {
+            "entry_opportunity_recheck_pending": False,
+            "entry_opportunity_recheck_pending_since": 100.0,
+        },
+        now_ts=200.0,
+    )
+    assert reset["pending_since"] == 200.0
+    assert reset["pending_active"] is True
+
+
 def test_first_ai_big_bite_wait_arms_rebound_anchor_for_score_band(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_SCORE", "65")

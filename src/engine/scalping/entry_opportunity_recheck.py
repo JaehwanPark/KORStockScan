@@ -705,15 +705,6 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
-    if not micro_confirmed:
-        return _decision(
-            allowed=False,
-            reason="strong_micro_confirmation_missing",
-            stage="entry_opportunity_recheck_blocked",
-            action="block",
-            config=config,
-            fields=base,
-        )
     if config.forbid_danger and latency == "DANGER":
         return _decision(
             allowed=False,
@@ -729,6 +720,15 @@ def evaluate_blocked_ai_score_recheck(
             reason="quote_freshness_not_confirmed",
             stage="entry_opportunity_recheck_blocked",
             action="block",
+            config=config,
+            fields=base,
+        )
+    if not micro_confirmed:
+        return _decision(
+            allowed=False,
+            reason="strong_micro_confirmation_missing",
+            stage="entry_opportunity_recheck_blocked",
+            action="wait_for_recovery_micro",
             config=config,
             fields=base,
         )

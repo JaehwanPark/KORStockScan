@@ -113,6 +113,7 @@ def test_wait_recheck_requires_canonical_probe_micro_and_probe_first_contract():
         _decision(microstructure_confirmed=False).reason
         == "strong_micro_confirmation_missing"
     )
+    assert _decision(microstructure_confirmed=False).action == "wait_for_recovery_micro"
     assert (
         _decision(config=_enabled_config(post_probe_resolver_enabled=False)).reason
         == "probe_first_post_probe_contract_not_active"
@@ -136,8 +137,14 @@ def test_wait_recheck_requires_canonical_probe_micro_and_probe_first_contract():
 
 
 def test_danger_and_stale_quote_are_not_relaxed():
-    assert _decision(latency_state="DANGER").reason == "latency_state_danger"
-    assert _decision(ws_age_ms=2000).reason == "quote_freshness_not_confirmed"
+    assert (
+        _decision(latency_state="DANGER", microstructure_confirmed=False).reason
+        == "latency_state_danger"
+    )
+    assert (
+        _decision(ws_age_ms=2000, microstructure_confirmed=False).reason
+        == "quote_freshness_not_confirmed"
+    )
 
 
 def test_hard_safety_source_reason_blocks_even_when_score_matches():

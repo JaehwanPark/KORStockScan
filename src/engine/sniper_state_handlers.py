@@ -48440,6 +48440,65 @@ def _canonical_wait_probe_handoff_active(
     )
 
 
+def _canonical_wait_probe_recheck_pending(
+    recheck_decision,
+    ai_decision: dict | None,
+    *,
+    ai_action: str | None = None,
+    now_ts: float | None = None,
+) -> bool:
+    """Keep an eligible WAIT candidate observable until recovery micro appears.
+
+    This state carries no submit authority.  A later evaluation must still pass
+    the existing fresh-quote, latency, strong-micro, cap, and probe-first gates.
+    """
+
+    return bool(
+        not bool(getattr(recheck_decision, "allowed", False))
+        and str(getattr(recheck_decision, "reason", "") or "")
+        == "strong_micro_confirmation_missing"
+        and _canonical_wait_probe_handoff_active(
+            ai_decision,
+            ai_action=ai_action,
+            now_ts=now_ts,
+        )
+    )
+
+
+def _entry_opportunity_recheck_pending_window(
+    stock: dict | None,
+    *,
+    now_ts: float,
+) -> dict[str, float | bool]:
+    """Bound recovery observation without using the ordinary WAIT cooldown."""
+
+    ttl_sec = max(
+        3.0,
+        min(
+            30.0,
+            _safe_float(
+                os.getenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_PENDING_TTL_SEC"),
+                15.0,
+            ),
+        ),
+    )
+    state = stock if isinstance(stock, dict) else {}
+    if _truthy_field(state.get("entry_opportunity_recheck_pending")):
+        pending_since = _safe_float(
+            state.get("entry_opportunity_recheck_pending_since"),
+            now_ts,
+        )
+    else:
+        pending_since = float(now_ts)
+    pending_age_sec = max(0.0, float(now_ts) - pending_since)
+    return {
+        "pending_since": pending_since,
+        "pending_age_sec": pending_age_sec,
+        "pending_ttl_sec": ttl_sec,
+        "pending_active": pending_age_sec < ttl_sec,
+    }
+
+
 def _score65_74_recovery_probe_wait_negative_reason(ai_decision) -> str:
     reason = str((ai_decision or {}).get("reason") or "").strip().lower()
     if not reason:
@@ -52976,6 +53035,123 @@ def _handle_watching_strategy_branch(
                 runtime_refresh_allowed = bool(
                     runtime_refresh_allowed or early_accel_recheck.get("allowed")
                 )
+                pending_recheck_requested = _truthy_field(
+                    stock.get("entry_opportunity_recheck_pending")
+                )
+                if pending_recheck_requested:
+                    pending_window = _entry_opportunity_recheck_pending_window(
+                        stock,
+                        now_ts=now_ts,
+                    )
+                    if not pending_window.get("pending_active"):
+                        cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
+                        with ENTRY_LOCK:
+                            cooldowns[code] = now_ts + cooldown_time
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                "entry_opportunity_recheck_pending": False,
+                                "entry_opportunity_recheck_pending_status": (
+                                    "recovery_micro_pending_expired"
+                                ),
+                            },
+                            pop_fields=[
+                                "entry_opportunity_recheck_pending_recheck_after_epoch"
+                            ],
+                        )
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "entry_opportunity_recheck_pending_expired",
+                            metric_role="bounded_tunable",
+                            decision_authority=(
+                                "entry_opportunity_recheck_pending_fresh_ai_runtime"
+                            ),
+                            window_policy="same_day_intraday_runtime_state",
+                            sample_floor="one_canonical_wait_probe_intent",
+                            primary_decision_metric=(
+                                "entry_opportunity_recheck_pending_status"
+                            ),
+                            source_quality_gate=(
+                                "canonical_wait_probe_contract_and_bounded_ttl"
+                            ),
+                            runtime_effect=True,
+                            allowed_runtime_apply=True,
+                            actual_order_submitted=False,
+                            broker_order_forbidden=True,
+                            entry_opportunity_recheck_pending=False,
+                            entry_opportunity_recheck_pending_status=(
+                                "recovery_micro_pending_expired"
+                            ),
+                            entry_opportunity_recheck_pending_age_sec=round(
+                                float(pending_window.get("pending_age_sec", 0.0)), 3
+                            ),
+                            entry_opportunity_recheck_pending_ttl_sec=(
+                                pending_window.get("pending_ttl_sec")
+                            ),
+                            cooldown_sec=cooldown_time,
+                            forbidden_uses=(
+                                "broker_guard_bypass,stale_submit_bypass,"
+                                "account_order_quantity_cooldown_bypass,"
+                                "hard_safety_bypass,provider_route_change,"
+                                "threshold_mutation,direct_order_authority"
+                            ),
+                        )
+                        return False
+                    pending_recheck_after = _safe_float(
+                        stock.get(
+                            "entry_opportunity_recheck_pending_recheck_after_epoch"
+                        ),
+                        0.0,
+                    )
+                    if now_ts < pending_recheck_after or not is_vip_target:
+                        return False
+                    ai_call_trigger_reason = (
+                        "entry_opportunity_recheck_pending_fresh_ai"
+                    )
+                    runtime_refresh_allowed = True
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "entry_opportunity_recheck_pending_fresh_ai_requested",
+                        metric_role="bounded_tunable",
+                        decision_authority=(
+                            "entry_opportunity_recheck_pending_fresh_ai_runtime"
+                        ),
+                        window_policy="same_day_intraday_runtime_state",
+                        sample_floor="one_canonical_wait_probe_intent",
+                        primary_decision_metric="fresh_exact_ai_recheck_requested",
+                        source_quality_gate=(
+                            "canonical_wait_probe_parent_snapshot_and_bounded_ttl"
+                        ),
+                        runtime_effect=True,
+                        allowed_runtime_apply=True,
+                        actual_order_submitted=False,
+                        broker_order_forbidden=True,
+                        entry_opportunity_recheck_pending_parent_snapshot_id=(
+                            stock.get(
+                                "entry_opportunity_recheck_pending_parent_snapshot_id"
+                            )
+                            or "not_available"
+                        ),
+                        entry_opportunity_recheck_pending_parent_trace_id=(
+                            stock.get(
+                                "entry_opportunity_recheck_pending_parent_trace_id"
+                            )
+                            or "not_available"
+                        ),
+                        entry_opportunity_recheck_pending_attempt_count=_safe_int(
+                            stock.get(
+                                "entry_opportunity_recheck_pending_attempt_count"
+                            ),
+                            0,
+                        ),
+                        forbidden_uses=(
+                            "direct_order_authority,broker_guard_bypass,"
+                            "stale_submit_bypass,account_order_quantity_guard_bypass,"
+                            "hard_safety_bypass,provider_route_change,threshold_mutation"
+                        ),
+                    )
                 ai_wait_rebound_recheck_pending = bool(
                     stock.pop("ai_wait_rebound_recheck_pending", False)
                 )
@@ -54725,6 +54901,31 @@ def _handle_watching_strategy_branch(
                     or stock.get("last_watching_ai_action")
                     or "WAIT"
                 ).upper()
+                fresh_canonical_wait_probe = bool(
+                    ai_call_executed
+                    and _canonical_wait_probe_handoff_active(
+                        ai_decision,
+                        ai_action=current_ai_action,
+                        now_ts=now_ts,
+                    )
+                )
+                if (
+                    ai_call_executed
+                    and _truthy_field(stock.get("entry_opportunity_recheck_pending"))
+                    and not fresh_canonical_wait_probe
+                ):
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            "entry_opportunity_recheck_pending": False,
+                            "entry_opportunity_recheck_pending_status": (
+                                "fresh_ai_contract_replaced_pending_intent"
+                            ),
+                        },
+                        pop_fields=[
+                            "entry_opportunity_recheck_pending_recheck_after_epoch"
+                        ],
+                    )
                 explicit_buy_action = current_ai_action == "BUY"
                 entry_score_role_gate = evaluate_entry_score_role_gate(
                     ai_decision,
@@ -54752,6 +54953,7 @@ def _handle_watching_strategy_branch(
                     ),
                 )
                 entry_opportunity_recheck_allowed = False
+                entry_opportunity_recheck_pending = False
                 if blocked_ai_score_candidate and entry_score_role_gate.get(
                     "entry_score_usable_for_recheck"
                 ):
@@ -54846,6 +55048,7 @@ def _handle_watching_strategy_branch(
                         today=now_dt.date().isoformat(),
                     )
                     should_log_recheck_block = False
+                    recheck_log_fields = dict(entry_opportunity_recheck.fields)
                     if entry_opportunity_recheck.allowed:
                         _ENTRY_OPPORTUNITY_RECHECK_STATE.record_recheck(code)
                         _ENTRY_OPPORTUNITY_RECHECK_STATE.record_buy_recovery()
@@ -54876,7 +55079,11 @@ def _handle_watching_strategy_branch(
                                 "entry_opportunity_recheck_probe_only": True,
                                 "entry_opportunity_recheck_ai_action": current_ai_action,
                                 "entry_opportunity_recheck_probe_intent": True,
+                                "entry_opportunity_recheck_pending": False,
                             },
+                            pop_fields=[
+                                "entry_opportunity_recheck_pending_recheck_after_epoch"
+                            ],
                         )
                         _log_entry_pipeline(
                             stock,
@@ -54921,8 +55128,143 @@ def _handle_watching_strategy_branch(
                             74.999,
                         )
                         recheck_log_reason = str(entry_opportunity_recheck.reason or "")
+                        already_pending = _truthy_field(
+                            stock.get("entry_opportunity_recheck_pending")
+                        )
+                        entry_opportunity_recheck_pending = (
+                            _canonical_wait_probe_recheck_pending(
+                                entry_opportunity_recheck,
+                                ai_decision,
+                                ai_action=current_ai_action,
+                                now_ts=now_ts,
+                            )
+                        )
+                        if entry_opportunity_recheck_pending:
+                            pending_window = _entry_opportunity_recheck_pending_window(
+                                stock,
+                                now_ts=now_ts,
+                            )
+                            pending_active = bool(
+                                pending_window.get("pending_active", False)
+                            )
+                            pending_fields = dict(entry_opportunity_recheck.fields)
+                            pending_fields.update(
+                                {
+                                    "entry_opportunity_recheck_pending": pending_active,
+                                    "entry_opportunity_recheck_pending_first_observation": (
+                                        not already_pending
+                                    ),
+                                    "entry_opportunity_recheck_pending_since": pending_window.get(
+                                        "pending_since"
+                                    ),
+                                    "entry_opportunity_recheck_pending_age_sec": round(
+                                        float(
+                                            pending_window.get("pending_age_sec", 0.0)
+                                        ),
+                                        3,
+                                    ),
+                                    "entry_opportunity_recheck_pending_ttl_sec": pending_window.get(
+                                        "pending_ttl_sec"
+                                    ),
+                                    "entry_opportunity_recheck_pending_status": (
+                                        "waiting_for_recovery_micro"
+                                        if pending_active
+                                        else "recovery_micro_pending_expired"
+                                    ),
+                                    "entry_opportunity_recheck_pending_submit_authority": False,
+                                    "entry_opportunity_recheck_pending_parent_snapshot_id": (
+                                        (ai_decision or {}).get(
+                                            "ai_decision_snapshot_id"
+                                        )
+                                        or (ai_decision or {}).get(
+                                            "ai_input_snapshot_id"
+                                        )
+                                        or (ai_decision or {}).get(
+                                            "ai_market_snapshot_id"
+                                        )
+                                        or "not_available"
+                                    ),
+                                    "entry_opportunity_recheck_pending_parent_trace_id": (
+                                        (ai_decision or {}).get(
+                                            "ai_decision_trace_id"
+                                        )
+                                        or "not_available"
+                                    ),
+                                    "actual_order_submitted": False,
+                                    "broker_order_forbidden": True,
+                                    "runtime_effect": True,
+                                    "allowed_runtime_apply": True,
+                                }
+                            )
+                            recheck_log_fields = pending_fields
+                            if pending_active:
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        "entry_opportunity_recheck_pending": True,
+                                        "entry_opportunity_recheck_pending_since": pending_window.get(
+                                            "pending_since"
+                                        ),
+                                        "entry_opportunity_recheck_pending_reason": (
+                                            entry_opportunity_recheck.reason
+                                        ),
+                                        "entry_opportunity_recheck_pending_ai_action": (
+                                            current_ai_action
+                                        ),
+                                        "entry_opportunity_recheck_pending_probe_intent": True,
+                                        "entry_opportunity_recheck_pending_status": (
+                                            "waiting_for_recovery_micro"
+                                        ),
+                                        "entry_opportunity_recheck_pending_parent_snapshot_id": (
+                                            pending_fields.get(
+                                                "entry_opportunity_recheck_pending_parent_snapshot_id"
+                                            )
+                                        ),
+                                        "entry_opportunity_recheck_pending_parent_trace_id": (
+                                            pending_fields.get(
+                                                "entry_opportunity_recheck_pending_parent_trace_id"
+                                            )
+                                        ),
+                                        "entry_opportunity_recheck_pending_recheck_after_epoch": (
+                                            now_ts + 1.0
+                                        ),
+                                        "entry_opportunity_recheck_pending_attempt_count": (
+                                            (
+                                                _safe_int(
+                                                    stock.get(
+                                                        "entry_opportunity_recheck_pending_attempt_count"
+                                                    ),
+                                                    0,
+                                                )
+                                                + 1
+                                            )
+                                            if already_pending
+                                            else 1
+                                        ),
+                                    },
+                                )
+                            else:
+                                entry_opportunity_recheck_pending = False
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        "entry_opportunity_recheck_pending": False
+                                    },
+                                    pop_fields=[
+                                        "entry_opportunity_recheck_pending_recheck_after_epoch"
+                                    ],
+                                )
                         should_log_recheck_block = (
-                            recheck_log_min <= recheck_log_score <= recheck_log_max
+                            (entry_opportunity_recheck_pending and not already_pending)
+                            or (
+                                not entry_opportunity_recheck_pending
+                                and already_pending
+                                and recheck_log_fields.get(
+                                    "entry_opportunity_recheck_pending_status"
+                                )
+                                == "recovery_micro_pending_expired"
+                            )
+                            or recheck_log_min <= recheck_log_score <= recheck_log_max
                             or recheck_log_reason
                             in {
                                 "daily_recheck_cap_exhausted",
@@ -54937,9 +55279,22 @@ def _handle_watching_strategy_branch(
                             stock,
                             code,
                             entry_opportunity_recheck.stage,
-                            **entry_opportunity_recheck.fields,
+                            **recheck_log_fields,
                         )
+                if entry_opportunity_recheck_pending:
+                    # Preserve the watch candidate for a later micro recovery
+                    # evaluation.  Do not convert pending observation into BUY
+                    # authority and do not apply the ordinary 180s WAIT cooldown.
+                    return False
                 if blocked_ai_score_candidate and not entry_opportunity_recheck_allowed:
+                    if _truthy_field(stock.get("entry_opportunity_recheck_pending")):
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={"entry_opportunity_recheck_pending": False},
+                            pop_fields=[
+                                "entry_opportunity_recheck_pending_recheck_after_epoch"
+                            ],
+                        )
                     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
                     with ENTRY_LOCK:
                         cooldowns[code] = now_ts + cooldown_time
