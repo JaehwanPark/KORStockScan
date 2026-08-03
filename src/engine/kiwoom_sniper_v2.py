@@ -2860,6 +2860,42 @@ def _scanner_watch_eviction_decision_from_stale(
         )
     attempt_count = _safe_int(target.get("_scanner_watch_eviction_stale_count"), 0) + 1
     stale_age_sec = max(0.0, float(now_ts) - first_seen)
+    market_gainer_retention = _market_gainer_first_eval_retention(
+        target,
+        now_ts=now_ts,
+    )
+    if market_gainer_retention.get("retention_active"):
+        # Retain the reserved observation slot, not the stale payload.  The
+        # normal recovery loop continues to request a fresh subscription and
+        # Entry AI/pre-submit remain fail-closed until source quality recovers.
+        # Preserve the stale clock so the bounded first-AI lifetime cannot be
+        # extended by repeatedly entering this branch.
+        target["_scanner_watch_eviction_stale_first_seen_epoch"] = first_seen
+        target["_scanner_watch_eviction_stale_count"] = attempt_count
+        return {
+            "should_evict": False,
+            "eviction_reason": "market_gainer_first_eval_retention_active",
+            "eviction_attempt_count": attempt_count,
+            "terminal_stage": "not_applicable_terminal_stage",
+            "terminal_reason": reason,
+            "fresh_input_confirmed": False,
+            "stale_first_seen_epoch": f"{first_seen:.3f}",
+            "stale_age_sec": round(stale_age_sec, 3),
+            "ws_recovery_outcome": recovery_outcome,
+            "market_gainer_stale_retention_active": True,
+            "market_gainer_ws_recovery_priority_requested": True,
+            "source_quality_detail_route": (
+                recovery_fields.get("source_quality_detail_route")
+                or "market_gainer_first_ai_bounded_ws_recovery"
+            ),
+            "rest_quote_price_recovery_only": bool(
+                rest_quote_price_only_strength_missing
+                or recovery_fields.get("rest_quote_price_recovery_only")
+            ),
+            "scanner_source_quality_reallocation_candidate": False,
+            "observed_epoch": f"{float(now_ts):.3f}",
+            **market_gainer_retention,
+        }
     after_buy_window_source_quality_expired = (
         is_source_quality_unresolved
         and _scanner_after_buy_window_source_quality_eviction_enabled()
@@ -4192,9 +4228,22 @@ def handle_ws_reg_budget_skipped(payload):
         return False
     now_ts = time.time()
     expired = []
+    retained = []
     for target in list(ACTIVE_TARGETS or []):
         code = str((target or {}).get("code") or "").strip()[:6]
         if code not in skipped_codes or not _is_scanner_watching_target(target):
+            continue
+        first_ai_retention = _market_gainer_first_eval_retention(
+            target,
+            now_ts=now_ts,
+        )
+        if first_ai_retention.get("retention_active"):
+            target["_scanner_ws_budget_skipped_retained_at"] = float(now_ts)
+            target["_scanner_ws_budget_skipped_retained_count"] = (
+                _safe_int(target.get("_scanner_ws_budget_skipped_retained_count"), 0)
+                + 1
+            )
+            retained.append(code)
             continue
         decision = {
             "should_evict": True,
@@ -4217,6 +4266,13 @@ def handle_ws_reg_budget_skipped(payload):
             "[WS_REG_BUDGET_SKIPPED] expired scanner hot-slot targets "
             f"codes={','.join(sorted(set(expired)))} "
             f"max_items={payload.get('max_items', 'unknown')}"
+        )
+    if retained:
+        log_info(
+            "[WS_REG_BUDGET_SKIPPED] retained market-gainer first-AI slots "
+            f"codes={','.join(sorted(set(retained)))} "
+            f"max_items={payload.get('max_items', 'unknown')} "
+            "reason=market_gainer_first_eval_retention_active"
         )
     return bool(expired)
 

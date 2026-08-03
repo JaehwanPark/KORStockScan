@@ -6010,6 +6010,82 @@ def test_prev_close_gainer_below_rising_threshold_hands_off_to_entry_ai(
     assert entry_logs[-1][1]["rising_missed_filter_action"] == "entry_ai_handoff"
 
 
+def test_prev_close_gainer_handoff_counts_once_per_scanner_promotion(monkeypatch):
+    entry_logs = []
+    stock = {
+        "id": 4,
+        "code": "123456",
+        "scanner_promotion_id": "SCANPROM-123456-1000000",
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: entry_logs.append((stage, fields)),
+    )
+
+    first = state_handlers._log_prev_close_gainer_entry_ai_handoff_once(
+        stock,
+        "123456",
+        metric_role="funnel_count",
+    )
+    duplicate = state_handlers._log_prev_close_gainer_entry_ai_handoff_once(
+        stock,
+        "123456",
+        metric_role="funnel_count",
+    )
+    stock["scanner_promotion_id"] = "SCANPROM-123456-1001000"
+    next_promotion = state_handlers._log_prev_close_gainer_entry_ai_handoff_once(
+        stock,
+        "123456",
+        metric_role="funnel_count",
+    )
+
+    assert first is True
+    assert duplicate is False
+    assert next_promotion is True
+    assert len(entry_logs) == 2
+    assert all(stage == "prev_close_gainer_entry_ai_handoff" for stage, _ in entry_logs)
+    assert [
+        fields["market_gainer_handoff_counting_key"] for _, fields in entry_logs
+    ] == ["SCANPROM-123456-1000000", "SCANPROM-123456-1001000"]
+    assert all(
+        fields["funnel_count_unit"] == "unique_scanner_promotion_id"
+        for _, fields in entry_logs
+    )
+
+
+def test_prev_close_gainer_handoff_retries_after_log_failure(monkeypatch):
+    stock = {
+        "id": 4,
+        "code": "123456",
+        "scanner_promotion_id": "SCANPROM-123456-1000000",
+    }
+    calls = []
+
+    def _fail_once(stock, code, stage, **fields):
+        calls.append(stage)
+        if len(calls) == 1:
+            raise RuntimeError("synthetic log failure")
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", _fail_once)
+
+    with pytest.raises(RuntimeError, match="synthetic log failure"):
+        state_handlers._log_prev_close_gainer_entry_ai_handoff_once(
+            stock,
+            "123456",
+        )
+
+    assert "_prev_close_gainer_entry_ai_handoff_promotion_id" not in stock
+    assert (
+        state_handlers._log_prev_close_gainer_entry_ai_handoff_once(stock, "123456")
+        is True
+    )
+    assert calls == [
+        "prev_close_gainer_entry_ai_handoff",
+        "prev_close_gainer_entry_ai_handoff",
+    ]
+
+
 def test_prev_close_gainer_upper_limit_collects_ai_before_generic_submit_veto(
     monkeypatch,
 ):
@@ -10027,13 +10103,15 @@ def test_rising_missed_nxt_downstream_block_registers_source_only_sampler(
         broker_order_forbidden=True,
         rising_missed_tp1_effective_price=24000,
         canonical_mark_price=24800,
+        executable_buy_price=24900,
+        executable_sell_price=24700,
         latest_price=24750,
         reason="latency_state_danger",
     )
 
     sampler = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS["nxt-downstream-1"]
-    assert sampler["entry_price"] == 24800
-    assert sampler["entry_price_source"] == "canonical_mark_price"
+    assert sampler["entry_price"] == 24900
+    assert sampler["entry_price_source"] == "executable_buy_price"
     assert sampler["source_block_stage"] == "latency_block"
     assert sampler["source_block_reason"] == "latency_state_danger"
     registration = next(

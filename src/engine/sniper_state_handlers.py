@@ -13737,11 +13737,14 @@ def _maybe_register_rising_missed_nxt_downstream_block_sampler(
     entry_price = 0.0
     entry_price_source = "missing"
     for key in (
-        "canonical_mark_price",
-        "executable_sell_price",
-        "latest_price",
+        # This sampler measures the counterfactual result of a blocked BUY.
+        # Use the price that was executable on the buy side at the decision
+        # boundary before any mark, last-trade, or passive reference price.
+        "executable_buy_price",
         "current_price_observed",
         "signal_price",
+        "latest_price",
+        "canonical_mark_price",
         "rising_missed_tp1_effective_price",
         "rising_missed_tp1_submit_context_anchor_price",
     ):
@@ -65804,6 +65807,53 @@ def _rising_missed_async_prepared_reentry_guard(
     return dict(guard) if isinstance(guard, dict) else None
 
 
+def _log_prev_close_gainer_entry_ai_handoff_once(
+    stock: dict,
+    code: str,
+    **fields,
+) -> bool:
+    """Emit one first-AI handoff row per immutable scanner promotion."""
+
+    promotion_id = str((stock or {}).get("scanner_promotion_id") or "").strip()
+    if not promotion_id:
+        # Legacy/unproven rows remain visible, but cannot claim unique-promotion
+        # funnel authority without the producer-owned immutable identifier.
+        fields.setdefault("market_gainer_handoff_counting_key", "unproven")
+        fields.setdefault(
+            "market_gainer_handoff_counting_status",
+            "promotion_id_missing_attempt_only",
+        )
+        fields.setdefault("funnel_count_unit", "attempt_without_promotion_id")
+        _log_entry_pipeline(
+            stock,
+            code,
+            "prev_close_gainer_entry_ai_handoff",
+            **fields,
+        )
+        return True
+
+    state_key = "_prev_close_gainer_entry_ai_handoff_promotion_id"
+    if str((stock or {}).get(state_key) or "").strip() == promotion_id:
+        return False
+    fields.setdefault("scanner_promotion_id", promotion_id)
+    fields.setdefault("market_gainer_handoff_counting_key", promotion_id)
+    fields.setdefault(
+        "market_gainer_handoff_counting_status",
+        "first_unique_promotion_handoff",
+    )
+    fields.setdefault("funnel_count_unit", "unique_scanner_promotion_id")
+    _log_entry_pipeline(
+        stock,
+        code,
+        "prev_close_gainer_entry_ai_handoff",
+        **fields,
+    )
+    # A logging failure must remain retryable.  Mark the immutable promotion as
+    # observed only after its funnel row has been emitted successfully.
+    _mutate_stock_state(stock, set_fields={state_key: promotion_id})
+    return True
+
+
 def _maybe_submit_rising_missed_one_share_entry(
     stock,
     code,
@@ -65867,14 +65917,7 @@ def _maybe_submit_rising_missed_one_share_entry(
             ).strip()
             == RISING_MISSED_CLASS_NOT_RISING
         ):
-            _log_entry_pipeline(
-                stock,
-                code,
-                (
-                    "prev_close_gainer_entry_ai_handoff"
-                    if prev_close_gainer_source
-                    else "rising_missed_watch_not_rising_skipped"
-                ),
+            handoff_fields = dict(
                 block_reason=decision.reason,
                 forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
                 actual_order_submitted=False,
@@ -65916,6 +65959,19 @@ def _maybe_submit_rising_missed_one_share_entry(
                 ),
             )
             if prev_close_gainer_source:
+                _log_prev_close_gainer_entry_ai_handoff_once(
+                    stock,
+                    code,
+                    **handoff_fields,
+                )
+            else:
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "rising_missed_watch_not_rising_skipped",
+                    **handoff_fields,
+                )
+            if prev_close_gainer_source:
                 # The market-wide gainer source owns candidate discovery, not
                 # the rising-missed +1% classifier. Continue through the normal
                 # exact_v2 Entry AI and its existing submit guards.
@@ -65927,10 +65983,9 @@ def _maybe_submit_rising_missed_one_share_entry(
         and decision.reason == RISING_MISSED_BLOCK_UPPER_LIMIT_PROXIMITY
         and prev_close_gainer_source
     ):
-        _log_entry_pipeline(
+        _log_prev_close_gainer_entry_ai_handoff_once(
             stock,
             code,
-            "prev_close_gainer_entry_ai_handoff",
             block_reason=decision.reason,
             handoff_reason="collect_entry_ai_before_existing_upper_limit_submit_veto",
             actual_order_submitted=False,

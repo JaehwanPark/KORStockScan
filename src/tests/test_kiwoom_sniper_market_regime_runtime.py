@@ -10089,6 +10089,60 @@ def test_market_gainer_reserved_watch_keeps_semantic_rejected_live_attempt(
     )
 
 
+def test_market_gainer_reserved_watch_retains_stale_recovery_until_trusted_ai(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
+    )
+    target = _scanner_watch_stock(
+        source_signature="PREV_CLOSE_GAINER",
+        scanner_promotion_emitted_epoch=1000.0,
+    )
+
+    retained = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        target,
+        now_ts=1065.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={"ws_recovery_outcome": "rest_quote_unavailable"},
+    )
+
+    assert retained["should_evict"] is False
+    assert retained["market_gainer_stale_retention_active"] is True
+    assert retained["market_gainer_ws_recovery_priority_requested"] is True
+    assert retained["fresh_input_confirmed"] is False
+    assert retained["ws_recovery_outcome"] == "rest_quote_unavailable"
+    assert retained["scanner_source_quality_reallocation_candidate"] is False
+    assert target["_scanner_watch_eviction_stale_first_seen_epoch"] == 1065.0
+    assert target["_scanner_watch_eviction_stale_count"] == 1
+
+    target.update(
+        {
+            "last_watching_ai_attempt_completed_at": 1068.0,
+            "last_watching_ai_attempt_result_source": "live",
+            "last_watching_ai_attempt_evaluation_status": "evaluated",
+            "last_watching_ai_attempt_contract_status": "pass",
+            "last_watching_ai_attempt_trusted": True,
+        }
+    )
+    second = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        target,
+        now_ts=1181.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={"ws_recovery_outcome": "rest_quote_unavailable"},
+    )
+    released = kiwoom_sniper_v2._scanner_watch_eviction_decision_from_stale(
+        target,
+        now_ts=1182.0,
+        stale_reason="stale_ws_snapshot",
+        recovery_fields={"ws_recovery_outcome": "rest_quote_unavailable"},
+    )
+
+    assert second["should_evict"] is False
+    assert released["should_evict"] is True
+    assert released["eviction_reason"] == "stale_recovery_failed"
+
+
 def test_market_gainer_reserved_watch_retention_is_bounded(monkeypatch):
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "60"
@@ -10819,6 +10873,43 @@ def test_ws_reg_budget_skipped_expires_scanner_hot_slot(monkeypatch):
     )
     assert emitted[-1]["fields"]["terminal_reason"] == "ws_item_budget_exhausted"
     assert emitted[-1]["fields"]["ws_recovery_outcome"] == "ws_reg_budget_skipped"
+
+
+def test_ws_reg_budget_skipped_retains_market_gainer_until_first_ai(monkeypatch):
+    active = [
+        {
+            "id": 77,
+            "code": "005930",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "buy_qty": 0,
+            "buy_time": None,
+            "source_signature": "PREV_CLOSE_GAINER,PRICE_JUMP_START",
+            "scanner_promotion_emitted_epoch": 1000.0,
+        }
+    ]
+    fake_db = _ExpireDB()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCANNER_MARKET_GAINER_FIRST_EVAL_RETENTION_SEC", "180"
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2.time, "time", lambda: 1012.0)
+    monkeypatch.setattr(kiwoom_sniper_v2, "ACTIVE_TARGETS", active)
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+
+    expired = kiwoom_sniper_v2.handle_ws_reg_budget_skipped(
+        {
+            "codes": ["005930"],
+            "source": "scanner_fast_precheck_stale_ws_recovery",
+            "max_items": 24,
+        }
+    )
+
+    assert expired is False
+    assert active[0]["status"] == "WATCHING"
+    assert active[0]["_scanner_ws_budget_skipped_retained_count"] == 1
+    assert active[0]["_scanner_ws_budget_skipped_retained_at"] == 1012.0
+    assert fake_db.calls == []
 
 
 def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
