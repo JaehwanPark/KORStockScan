@@ -897,9 +897,7 @@ def build_report(
         for row in residual_not_submitted_rows
     )
     residual_terminal_abort_detail_reason_counts = Counter(
-        str(
-            row.get("entry_split_probe_terminal_abort_detail_reason") or "unknown"
-        )
+        str(row.get("entry_split_probe_terminal_abort_detail_reason") or "unknown")
         for row in residual_not_submitted_rows
     )
     residual_terminal_failure_signature_coverage_count = sum(

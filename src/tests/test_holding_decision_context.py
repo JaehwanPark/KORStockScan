@@ -588,9 +588,7 @@ def test_krx_real_holding_does_not_infer_missing_broker_route(monkeypatch):
         == "broker_execution_provenance_required"
     )
     assert context["ai_market_snapshot_v1"]["broker_route"] is None
-    assert (
-        context["ai_market_snapshot_v1"]["broker_route_match_state"] == "missing"
-    )
+    assert context["ai_market_snapshot_v1"]["broker_route_match_state"] == "missing"
     log_fields = holding_decision_context_log_fields(context)
     assert log_fields["holding_context_broker_route_provenance_state"] == "missing"
     assert log_fields["holding_context_broker_snapshot_freshness_state"] == "fresh"
