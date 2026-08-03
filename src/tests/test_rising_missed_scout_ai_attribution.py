@@ -74,6 +74,35 @@ def test_scout_attribution_freezes_non_authoritative_ai_drop() -> None:
     assert fields["scout_probe_bundle_id"] == "probe-bundle-1"
 
 
+def test_submit_authority_refreshes_scout_parent_to_current_wait_probe() -> None:
+    stock = _armed_scout_stock()
+    stock.update(
+        {
+            "last_watching_ai_decision_trace_id": "trace-wait-probe",
+            "last_watching_ai_snapshot_id": "snapshot-wait-probe",
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_score": 65,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_attempt_contract_status": "pass",
+            "last_watching_ai_probe_intent": True,
+            "last_watching_ai_probe_intent_status": "eligible_wait_probe",
+        }
+    )
+
+    refreshed = handlers._refresh_rising_missed_scout_ai_parent_provenance(stock)
+    fields = scout_ai_execution_attribution_fields(
+        stock,
+        stage="probe_submitted",
+        actual_order_submitted=True,
+    )
+
+    assert refreshed["rising_missed_scout_parent_ai_action"] == "WAIT"
+    assert fields["scout_ai_parent_decision_trace_id"] == "trace-wait-probe"
+    assert fields["scout_ai_parent_snapshot_id"] == "snapshot-wait-probe"
+    assert fields["scout_ai_parent_probe_intent"] is True
+    assert fields["scout_ai_parent_probe_intent_status"] == "eligible_wait_probe"
+
+
 def test_non_scout_has_no_execution_attribution() -> None:
     assert (
         scout_ai_execution_attribution_fields(

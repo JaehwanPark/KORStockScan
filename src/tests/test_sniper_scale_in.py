@@ -1773,6 +1773,54 @@ def test_rising_missed_tp1_selector_passes_low_rebound_with_trusted_micro():
     )
 
 
+def test_rising_missed_tp1_expired_selector_preserves_explicit_ai_veto():
+    decision_input = {
+        "rising_missed_tp1_input_ready": True,
+        "rising_missed_tp1_effective_quote_age_ms": 100.0,
+        "rising_missed_tp1_spread_ratio": 0.001,
+        "rising_missed_tp1_micro_confidence": 0.85,
+        "rising_missed_tp1_true_ofi_ewma": 0.1,
+        "rising_missed_tp1_pressure_ewma": 65.0,
+        "rising_missed_tp1_depth_imbalance_ewma": 0.2,
+        "rising_missed_tp1_top_depth_ratio": 1.4,
+        "rising_missed_tp1_tick_acceleration": 1.5,
+        "rising_missed_tp1_tick_acceleration_fresh": True,
+        "market_data_signed_tape_state": "mixed",
+    }
+    stock = {
+        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        "price_delta_since_first_seen_pct": 2.0,
+    }
+
+    dropped = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-21",
+        current_date="2026-08-03",
+        current_ai_action="DROP",
+    )
+    wait_bypass = evaluate_rising_missed_tp1_candidate(
+        stock,
+        decision_input,
+        selector_enabled=True,
+        active_date="2026-07-21",
+        current_date="2026-08-03",
+        current_ai_action="WAIT",
+        current_probe_intent=True,
+    )
+
+    assert dropped.allowed is False
+    assert dropped.deferred is False
+    assert dropped.reason == "rising_missed_tp1_ai_state_blocked"
+    assert dropped.log_fields["rising_missed_tp1_selector_active"] is False
+    assert dropped.log_fields["rising_missed_tp1_hard_negative_reasons"] == (
+        "ai_explicit_veto"
+    )
+    assert wait_bypass.allowed is True
+    assert wait_bypass.reason == "rising_missed_tp1_selector_inactive"
+
+
 def test_rising_missed_tp1_selector_defers_missing_micro_and_allows_wait_with_other_supports():
     stock = {
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
@@ -2335,7 +2383,7 @@ def test_rising_missed_tp1_probe_intent_bypasses_only_nonhard_candidate_filters(
     assert stale.deferred is True
     assert stale.reason == "tp1_effective_quote_stale"
     assert vetoed.allowed is False
-    assert vetoed.reason == "rising_missed_tp1_lane_not_eligible"
+    assert vetoed.reason == "rising_missed_tp1_ai_state_blocked"
 
 
 def test_rising_missed_tp1_nxt_price_jump_recovery_is_nxt_only():
@@ -4071,6 +4119,107 @@ def test_entry_ai_submit_authority_vetoes_fresh_drop_for_real_buy(monkeypatch):
     assert decision["broker_order_forbidden"] is True
     assert decision["reason"] == "fresh_ai_drop_real_buy_veto"
     assert decision["metric_role"] == "safety_veto"
+
+
+def test_rising_missed_scout_keeps_fresh_drop_veto_after_dated_guard_expires(
+    monkeypatch,
+):
+    now_ts = 1_784_778_400.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "false")
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "rising_missed_one_share_entry_forced": True,
+            "rising_missed_one_share_scout": True,
+            "last_watching_ai_action": "DROP",
+            "last_watching_ai_score": 13.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 0.2,
+            "last_watching_ai_decision_trace_id": "trace-drop",
+            "last_watching_ai_attempt_decision_trace_id": "trace-drop",
+            "last_watching_ai_attempt_trusted": True,
+        },
+        latency_gate={"ai_action": "DROP", "ai_score": 13.0},
+        latency_signal_score=13.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["reason"] == "fresh_ai_drop_real_buy_veto"
+    assert decision["entry_ai_submit_authority_action_guard_active"] is False
+    assert decision["entry_ai_submit_authority_scout_contract_enforced"] is True
+    assert decision["entry_ai_submit_authority_latest_attempt_trusted"] is True
+
+
+def test_rising_missed_scout_accepts_contract_valid_zero_score_drop_as_veto(
+    monkeypatch,
+):
+    now_ts = 1_784_778_400.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "false")
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            "strategy": "SCALPING",
+            "rising_missed_one_share_entry_forced": True,
+            "last_watching_ai_action": "DROP",
+            "last_watching_ai_score": 0.0,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 0.1,
+            "last_watching_ai_decision_trace_id": "trace-zero-drop",
+            "last_watching_ai_attempt_decision_trace_id": "trace-zero-drop",
+            "last_watching_ai_attempt_trusted": True,
+            "last_watching_ai_attempt_zero_score_drop_trusted": True,
+        },
+        latency_gate={"ai_action": "DROP", "ai_score": 0.0},
+        latency_signal_score=0.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["reason"] == "fresh_ai_drop_real_buy_veto"
+    assert decision["entry_ai_submit_authority_zero_score_drop_trusted"] is True
+
+
+def test_rising_missed_scout_wait_requires_explicit_probe_intent(monkeypatch):
+    now_ts = 1_784_778_400.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED", "false")
+    base_stock = {
+        "strategy": "SCALPING",
+        "rising_missed_one_share_entry_forced": True,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 65.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": now_ts - 0.1,
+        "last_watching_ai_decision_trace_id": "trace-wait",
+        "last_watching_ai_attempt_decision_trace_id": "trace-wait",
+        "last_watching_ai_attempt_trusted": True,
+    }
+
+    observation_only = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={**base_stock, "last_watching_ai_probe_intent": False},
+        latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
+        latency_signal_score=65.0,
+    )
+    probe = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={**base_stock, "last_watching_ai_probe_intent": True},
+        latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
+        latency_signal_score=65.0,
+    )
+
+    assert observation_only["blocked"] is True
+    assert (
+        observation_only["reason"]
+        == "fresh_ai_wait_observation_only_probe_veto"
+    )
+    assert observation_only["entry_ai_submit_authority_wait_probe_required"] is False
+    assert probe["blocked"] is False
+    assert probe["entry_ai_submit_authority_wait_probe_required"] is True
 
 
 def test_entry_ai_submit_authority_latest_fresh_drop_overrides_stale_buy_context(

@@ -33394,6 +33394,17 @@ def _entry_ai_submit_authority_fields(
     )
     age_sec = max(0.0, time.time() - confirmed_at) if confirmed_at > 0 else None
     action_guard_active = _rising_missed_ai_action_guard_active()
+    rising_missed_scout_contract = bool(
+        stock.get("rising_missed_one_share_entry_forced")
+        or stock.get("rising_missed_one_share_scout")
+    )
+    # A dated relief/guard may expire, but the final Entry AI contract remains
+    # authoritative for a real rising-missed scout.  This is intentionally
+    # scoped to the scout path so an expired experiment cannot convert a fresh
+    # trusted DROP (or observation-only WAIT) into an independent real probe.
+    action_contract_enforced = bool(
+        action_guard_active or rising_missed_scout_contract
+    )
     authoritative_action_source = "submit_context"
     stock_action = str(stock.get("last_watching_ai_action") or "").strip()
     stock_action_normalized = stock_action.lower()
@@ -33401,10 +33412,29 @@ def _entry_ai_submit_authority_fields(
     stock_result_source = (
         str(stock.get("last_watching_ai_result_source") or "").strip().lower()
     )
+    stock_trace_id = str(
+        stock.get("last_watching_ai_decision_trace_id") or ""
+    ).strip()
+    attempt_trace_id = str(
+        stock.get("last_watching_ai_attempt_decision_trace_id") or ""
+    ).strip()
+    stock_attempt_trusted = bool(
+        stock.get("last_watching_ai_attempt_trusted")
+        and stock_trace_id
+        and stock_trace_id == attempt_trace_id
+    )
+    stock_zero_score_drop_trusted = bool(
+        stock_action_normalized == "drop"
+        and stock_attempt_trusted
+        and stock.get("last_watching_ai_attempt_zero_score_drop_trusted")
+    )
+    stock_score_contract_valid = bool(
+        stock_score > 0.0 or stock_zero_score_drop_trusted
+    )
     stock_ai_fresh = bool(
-        action_guard_active
+        action_contract_enforced
         and stock_action_normalized not in {"", "-", "none", "not_evaluated"}
-        and stock_score > 0.0
+        and stock_score_contract_valid
         and stock_result_source in {"live", "prior_valid"}
         and age_sec is not None
         and age_sec <= max_prior_age_sec
@@ -33415,21 +33445,39 @@ def _entry_ai_submit_authority_fields(
         score = stock_score
         result_source = stock_result_source
         authoritative_action_source = "latest_stock_ai"
+    selected_zero_score_drop_trusted = bool(
+        normalized_action == "drop"
+        and authoritative_action_source == "latest_stock_ai"
+        and stock_zero_score_drop_trusted
+    )
+    selected_score_contract_valid = bool(
+        score > 0.0 or selected_zero_score_drop_trusted
+    )
     fresh_prior = (
         result_source in {"live", "prior_valid"}
-        and score > 0.0
+        and selected_score_contract_valid
         and age_sec is not None
         and age_sec <= max_prior_age_sec
     )
     recognized_action = normalized_action in {"buy", "wait", "drop"}
     action_authority_unavailable = bool(
-        action_guard_active and (not fresh_prior or not recognized_action)
+        action_contract_enforced and (not fresh_prior or not recognized_action)
     )
     fresh_drop_veto = bool(
-        action_guard_active and fresh_prior and normalized_action == "drop"
+        action_contract_enforced and fresh_prior and normalized_action == "drop"
+    )
+    wait_probe_intent = bool(stock.get("last_watching_ai_probe_intent"))
+    wait_observation_only_veto = bool(
+        rising_missed_scout_contract
+        and fresh_prior
+        and normalized_action == "wait"
+        and not wait_probe_intent
     )
     fresh_wait_probe_required = bool(
-        action_guard_active and fresh_prior and normalized_action == "wait"
+        action_contract_enforced
+        and fresh_prior
+        and normalized_action == "wait"
+        and (wait_probe_intent or not rising_missed_scout_contract)
     )
     invalid_action = normalized_action in {
         "",
@@ -33444,11 +33492,14 @@ def _entry_ai_submit_authority_fields(
     blocked = bool(
         ((invalid_action or missing_score) and not fresh_prior)
         or fresh_drop_veto
+        or wait_observation_only_veto
         or action_authority_unavailable
     )
     reason = "ok"
     if fresh_drop_veto:
         reason = "fresh_ai_drop_real_buy_veto"
+    elif wait_observation_only_veto:
+        reason = "fresh_ai_wait_observation_only_probe_veto"
     elif action_authority_unavailable and not fresh_prior:
         reason = "entry_ai_result_stale_or_untrusted"
     elif action_authority_unavailable:
@@ -33484,12 +33535,28 @@ def _entry_ai_submit_authority_fields(
         "entry_ai_submit_authority_result_source": result_source or "not_available",
         "entry_ai_submit_authority_fresh_prior": bool(fresh_prior),
         "entry_ai_submit_authority_action_guard_active": bool(action_guard_active),
+        "entry_ai_submit_authority_action_contract_enforced": bool(
+            action_contract_enforced
+        ),
+        "entry_ai_submit_authority_scout_contract_enforced": bool(
+            rising_missed_scout_contract
+        ),
         "entry_ai_submit_authority_action_source": authoritative_action_source,
         "entry_ai_submit_authority_decision_trace_id": str(
             stock.get("last_watching_ai_decision_trace_id") or ""
         )
         or "not_available",
         "entry_ai_submit_authority_fresh_drop_veto": bool(fresh_drop_veto),
+        "entry_ai_submit_authority_wait_observation_only_veto": bool(
+            wait_observation_only_veto
+        ),
+        "entry_ai_submit_authority_wait_probe_intent": bool(wait_probe_intent),
+        "entry_ai_submit_authority_latest_attempt_trusted": bool(
+            stock_attempt_trusted
+        ),
+        "entry_ai_submit_authority_zero_score_drop_trusted": bool(
+            selected_zero_score_drop_trusted
+        ),
         "entry_ai_submit_authority_action_recognized": bool(recognized_action),
         "entry_ai_submit_authority_action_authority_unavailable": bool(
             action_authority_unavailable
@@ -58643,6 +58710,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         return False
 
+    # Rising-missed candidate selection may precede the final Entry AI call.
+    # Refresh execution provenance only after that decision passes its authority
+    # guard so probe/fill receipts carry the exact current trace and probe intent.
+    _refresh_rising_missed_scout_ai_parent_provenance(stock)
+
     krx_direct_canary_ai_wait_block = (
         _evaluate_krx_direct_canary_live_ai_wait_submit_block(
             strategy=strategy,
@@ -64454,6 +64526,28 @@ def _rising_missed_scout_entry_budget_cap_krw() -> int:
     """Legacy call-site compatibility; scout sizing is centralized."""
 
     return 0
+
+
+def _refresh_rising_missed_scout_ai_parent_provenance(stock: dict) -> dict:
+    """Refresh a scout's frozen parent from the final trusted Entry AI trace."""
+
+    if not isinstance(stock, dict) or not bool(
+        stock.get("rising_missed_one_share_entry_forced")
+        or stock.get("rising_missed_one_share_scout")
+    ):
+        return {}
+    fields = freeze_scout_ai_parent_fields(stock)
+    if not all(
+        str(fields.get(key) or "").strip()
+        for key in (
+            "rising_missed_scout_parent_ai_decision_trace_id",
+            "rising_missed_scout_parent_ai_snapshot_id",
+            "rising_missed_scout_parent_ai_action",
+        )
+    ):
+        return {}
+    _mutate_stock_state(stock, set_fields=fields)
+    return fields
 
 
 def _rising_missed_async_prepared_reentry_guard(

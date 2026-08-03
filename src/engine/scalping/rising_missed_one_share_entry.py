@@ -459,6 +459,21 @@ def evaluate_rising_missed_tp1_candidate(
             "rising_missed_tp1_candidate_reason": reason,
         }
 
+    # Explicit Entry AI vetoes always retract scout order authority.  The dated
+    # selector may expire into a candidate-gate bypass, but that bypass must not
+    # turn a newer DROP/fail-closed decision into an independent real probe.
+    if ai_action in {"DROP", "NOT_EVALUATED", "FAIL_CLOSED", "UNAVAILABLE"}:
+        return RisingMissedTP1CandidateDecision(
+            allowed=False,
+            deferred=False,
+            reason=TP1_SELECTOR_BLOCK_AI,
+            lane=lane,
+            log_fields=_decision_fields(
+                allowed=False,
+                deferred=False,
+                reason=TP1_SELECTOR_BLOCK_AI,
+            ),
+        )
     if not active:
         return RisingMissedTP1CandidateDecision(
             allowed=True,
@@ -511,18 +526,6 @@ def evaluate_rising_missed_tp1_candidate(
                 allowed=False,
                 deferred=False,
                 reason=TP1_SELECTOR_BLOCK_LANE,
-            ),
-        )
-    if ai_action in {"DROP", "NOT_EVALUATED", "FAIL_CLOSED", "UNAVAILABLE"}:
-        return RisingMissedTP1CandidateDecision(
-            allowed=False,
-            deferred=False,
-            reason=TP1_SELECTOR_BLOCK_AI,
-            lane=lane,
-            log_fields=_decision_fields(
-                allowed=False,
-                deferred=False,
-                reason=TP1_SELECTOR_BLOCK_AI,
             ),
         )
     if hard_negative_reasons:
@@ -1031,11 +1034,12 @@ def is_forced_rising_missed_one_share_entry(
 
 
 def freeze_scout_ai_parent_fields(stock: dict[str, Any] | None) -> dict[str, Any]:
-    """Freeze the entry AI parent before the independent scout lifecycle starts.
+    """Freeze the current Entry AI parent for scout lifecycle attribution.
 
-    The exact AI decision trace remains immutable and has no order authority.  These
-    runtime fields preserve which decision the bounded scout guard observed so later
-    fill and sell receipts cannot accidentally attach a newer AI result.
+    Candidate selection can happen before the final Entry AI call.  The submit owner
+    therefore refreshes this frozen snapshot once after AI authority passes and before
+    broker submission.  Downstream submit guards retain order authority; these fields
+    only preserve the exact handoff used by later fill and sell receipts.
     """
 
     source = stock if isinstance(stock, dict) else {}
