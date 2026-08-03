@@ -5693,6 +5693,59 @@ def test_first_ai_big_bite_wait_does_not_block_strong_buy():
     )
 
 
+def test_canonical_wait_probe_handoff_precedes_legacy_first_ai_wait(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION", "false"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT", "true"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
+    )
+    decision = {
+        "action": "WAIT",
+        "decision_quality_contract_status": "pass",
+        "edge_state": "EDGE",
+        "entry_probe_intent": True,
+        "entry_probe_intent_status": "eligible_wait_probe",
+        "evidence": {"trigger": "recovery_required"},
+    }
+
+    assert handlers._canonical_wait_probe_handoff_active(decision)
+    assert handlers._canonical_wait_probe_handoff_active(
+        {
+            **decision,
+            "edge_state": None,
+            "decision_quality_model_edge_state": "EDGE",
+        }
+    )
+    assert not handlers._canonical_wait_probe_handoff_active(
+        {**decision, "entry_probe_intent": False}
+    )
+    assert not handlers._canonical_wait_probe_handoff_active(
+        {**decision, "decision_quality_contract_status": "semantic_rejected"}
+    )
+    assert not handlers._canonical_wait_probe_handoff_active(
+        {**decision, "edge_state": "NO_EDGE"}
+    )
+    assert not handlers._canonical_wait_probe_handoff_active(
+        {**decision, "action": "DROP"}
+    )
+    assert not handlers._canonical_wait_probe_handoff_active(
+        {**decision, "evidence": {"trigger": "hold"}}
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "false")
+    assert not handlers._canonical_wait_probe_handoff_active(decision)
+
+
 def test_first_ai_big_bite_wait_arms_rebound_anchor_for_score_band(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_MIN_SCORE", "65")

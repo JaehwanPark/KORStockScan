@@ -345,6 +345,23 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
     )
     assert valid_wait_recheck["entry_score_usable_for_recheck"] is True
 
+    normalized_wait_recheck = gate.evaluate_entry_score_role_gate(
+        {
+            "action": "WAIT",
+            "score": 72,
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+            "decision_quality_model_edge_state": "EDGE",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "evidence": {"trigger": "recovery_required"},
+        },
+        ws_data={"quote_stale": False},
+    )
+    assert normalized_wait_recheck["entry_score_usable_for_recheck"] is True
+    assert normalized_wait_recheck["entry_recheck_edge_state"] == "EDGE"
+
     stale = gate.evaluate_entry_score_role_gate(
         {
             "action": "WAIT",
@@ -823,9 +840,10 @@ def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
     assert report["summary"]["calibration_state"] == "source_quality_blocked"
     assert report["best_apply_candidate"] == {}
     assert report["summary"]["source_quality_excluded_date_count"] == 1
-    assert report["source_consumption"]["source_quality_excluded_dates"][0][
-        "source_date"
-    ] == "2026-06-05"
+    assert (
+        report["source_consumption"]["source_quality_excluded_dates"][0]["source_date"]
+        == "2026-06-05"
+    )
     assert report["calibration_candidates"] == []
     assert report["runtime_update_contract"]["runtime_apply_candidate_count"] == 0
     assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 0

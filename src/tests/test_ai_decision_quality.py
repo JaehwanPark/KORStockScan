@@ -172,13 +172,10 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
     paired = materialization["reports"]["paired"]
     assert paired["prepared_request_count"] == 1
     assert paired["request_count"] == 1
-    assert paired["status"] == (
-        "paired_replay_requests_ready_candidate_not_executed"
-    )
+    assert paired["status"] == ("paired_replay_requests_ready_candidate_not_executed")
     assert paired["sample_floor_buckets"][0]["pass"] is True
     assert (
-        paired["sample_floor_buckets"][0]["promotion_evidence_floor"]["pass"]
-        is False
+        paired["sample_floor_buckets"][0]["promotion_evidence_floor"]["pass"] is False
     )
     assert paired["candidate_execution_performed"] is False
     assert paired["candidate_execution_authority"] == (
@@ -373,6 +370,7 @@ def test_cached_semantic_repair_requires_current_version_and_exact_repair_list()
     stale_list["candidate_attempts"][0]["provider_provenance"]["repairs"] = []
     assert quality._semantic_repair_provenance_matches(stale_list, request) is False
 
+
 def test_paired_request_preparation_is_not_mislabeled_as_candidate_rejection():
     request = {
         "paired_replay_id": "pair-1",
@@ -389,9 +387,7 @@ def test_paired_request_preparation_is_not_mislabeled_as_candidate_rejection():
         labels=[],
     )
 
-    assert report["status"] == (
-        "paired_replay_requests_ready_candidate_not_executed"
-    )
+    assert report["status"] == ("paired_replay_requests_ready_candidate_not_executed")
     assert report["candidate_execution_performed"] is False
     assert report["missing_result_count"] == 1
 
@@ -545,9 +541,7 @@ def test_postclose_cli_writes_and_revalidates_all_daily_artifacts(
         lambda **kwargs: kwargs["labels"],
     )
     monkeypatch.setattr(quality, "control_path", lambda _date: paths["control"])
-    monkeypatch.setattr(
-        quality, "label_report_path", lambda _date: paths["mature"]
-    )
+    monkeypatch.setattr(quality, "label_report_path", lambda _date: paths["mature"])
     monkeypatch.setattr(quality, "baseline_path", lambda _date: paths["baseline"])
     monkeypatch.setattr(quality, "paired_path", lambda _date: paths["paired"])
 
@@ -828,9 +822,7 @@ def test_control_manifest_rejects_explicit_sparse_canonical_decision_window():
 
 def test_control_manifest_accepts_exact_sparse_no_trade_minute_contract():
     payload = _payload()
-    payload.update(
-        {"effective_venue": "NXT", "session_bucket": "NXT_AFTERMARKET"}
-    )
+    payload.update({"effective_venue": "NXT", "session_bucket": "NXT_AFTERMARKET"})
     payload["sanitized_user_input"]["entry_candle_context"].update(
         {"venue": "NXT", "session": "nxt_aftermarket"}
     )
@@ -881,9 +873,7 @@ def test_control_manifest_accepts_exact_sparse_no_trade_minute_contract():
 
 def test_control_manifest_rejects_sparse_context_spoofed_across_trace_venue():
     payload = _payload()
-    payload.update(
-        {"effective_venue": "NXT", "session_bucket": "NXT_AFTERMARKET"}
-    )
+    payload.update({"effective_venue": "NXT", "session_bucket": "NXT_AFTERMARKET"})
     payload["sanitized_user_input"]["entry_candle_context"].update(
         {"venue": "NXT", "session": "nxt_aftermarket"}
     )
@@ -2968,9 +2958,12 @@ def test_v2_10_bounded_opportunity_accepts_high_risk_one_share_probe_and_fair_co
         quality.BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
     )
     assert request["candidate"]["system_prompt"].isascii()
-    assert request["anticipatory_reversal_analysis"]["bounded_opportunity"][
-        "eligible_for_one_share_probe"
-    ] is True
+    assert (
+        request["anticipatory_reversal_analysis"]["bounded_opportunity"][
+            "eligible_for_one_share_probe"
+        ]
+        is True
+    )
     response = {
         "edge_state": "EDGE",
         "action": "BUY",
@@ -3018,8 +3011,7 @@ def test_v2_10_bounded_opportunity_accepts_high_risk_one_share_probe_and_fair_co
     assert repaired_below_floor["evidence"]["trigger"] == "recovery_required"
     assert "invalid_probe_buy_waited" in below_floor_repairs
     assert (
-        quality.validate_replay_candidate_response(request, repaired_below_floor)
-        == []
+        quality.validate_replay_candidate_response(request, repaired_below_floor) == []
     )
     trusted_request = json.loads(json.dumps(request))
     trusted_features = trusted_request["exact_payload"]["features"]
@@ -3077,9 +3069,10 @@ def test_v2_10_bounded_opportunity_accepts_high_risk_one_share_probe_and_fair_co
     assert repaired_trusted["action"] == "WAIT"
     assert repaired_trusted["evidence"]["trigger"] == "confirmed"
     assert "invalid_probe_buy_waited" in trusted_repairs
-    assert quality.validate_replay_candidate_response(
-        trusted_request, repaired_trusted
-    ) == []
+    assert (
+        quality.validate_replay_candidate_response(trusted_request, repaired_trusted)
+        == []
+    )
     blocked_request = {
         **request,
         "anticipatory_reversal_analysis": {
@@ -3169,9 +3162,10 @@ def test_v2_10_bounded_opportunity_accepts_high_risk_one_share_probe_and_fair_co
         ],
     )
     assert report["control_entry_probe_intent_count"] == 1
-    assert report["control_primary_decision_ev_pct"] == report[
-        "candidate_primary_decision_ev_pct"
-    ]
+    assert (
+        report["control_primary_decision_ev_pct"]
+        == report["candidate_primary_decision_ev_pct"]
+    )
     assert report["candidate_primary_decision_ev_delta_pct"] == 0.0
 
 
@@ -3870,10 +3864,10 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
             "stage": "entry",
             "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR",
-                "sample_count": 1,
-                "control_source_quality_adjusted_ev_pct": 0,
-                "control_primary_decision_ev_pct": 0,
-                "candidate_source_quality_adjusted_ev_pct": 0,
+            "sample_count": 1,
+            "control_source_quality_adjusted_ev_pct": 0,
+            "control_primary_decision_ev_pct": 0,
+            "candidate_source_quality_adjusted_ev_pct": 0,
             "candidate_execution_cost_adjusted_ev_pct": None,
             "candidate_primary_decision_ev_pct": 0,
             "source_quality_adjusted_ev_delta_pct": 0,
@@ -3953,14 +3947,15 @@ def test_paired_replay_consumes_tight_stop_entry_path_label():
 
     row = report["paired_comparisons"][0]
     assert row["entry_path_first_hit"] == "adverse_first"
-    assert "false_buy_tight_stop_adverse_first" in row[
-        "candidate_error_taxonomy"
-    ]
+    assert "false_buy_tight_stop_adverse_first" in row["candidate_error_taxonomy"]
     assert report["control_tight_stop_adverse_first_exposure_count"] == 0
     assert report["candidate_tight_stop_adverse_first_exposure_count"] == 1
-    assert report["candidate_quality_checks"][
-        "tight_stop_adverse_first_exposure_not_increased"
-    ] is False
+    assert (
+        report["candidate_quality_checks"][
+            "tight_stop_adverse_first_exposure_not_increased"
+        ]
+        is False
+    )
     assert report["entry_path_label_contract"]["decision_authority"] == (
         "offline_replay_and_attribution_only"
     )

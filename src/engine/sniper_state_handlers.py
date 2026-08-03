@@ -261,6 +261,7 @@ from src.engine.scalping.entry_opportunity_recheck import (
     evaluate_blocked_ai_score_recheck,
 )
 from src.engine.scalping.entry_ai_gate import (
+    canonical_entry_edge_state,
     entry_buy_decision_allowed,
     entry_score_role_log_fields,
     evaluate_ai_score_prior,
@@ -48292,6 +48293,38 @@ def _entry_opportunity_recheck_wait_probe_owner_active(
     )
 
 
+def _canonical_wait_probe_handoff_active(
+    ai_decision: dict | None,
+    *,
+    ai_action: str | None = None,
+    now_ts: float | None = None,
+) -> bool:
+    """Let the canonical WAIT probe owner evaluate before legacy WAIT exits."""
+
+    decision = ai_decision if isinstance(ai_decision, dict) else {}
+    action = str(ai_action or decision.get("action") or "").strip().upper()
+    contract_status = str(
+        decision.get("decision_quality_contract_status") or ""
+    ).strip().lower()
+    edge_state = canonical_entry_edge_state(decision)
+    probe_status = str(decision.get("entry_probe_intent_status") or "").strip().lower()
+    evidence = (
+        decision.get("evidence")
+        if isinstance(decision.get("evidence"), dict)
+        else {}
+    )
+    recovery_trigger = str(evidence.get("trigger") or "").strip().lower()
+    return bool(
+        action == "WAIT"
+        and contract_status == "pass"
+        and edge_state == "EDGE"
+        and _truthy_field(decision.get("entry_probe_intent"))
+        and probe_status == "eligible_wait_probe"
+        and recovery_trigger == "recovery_required"
+        and _entry_opportunity_recheck_wait_probe_owner_active(now_ts=now_ts)
+    )
+
+
 def _score65_74_recovery_probe_wait_negative_reason(ai_decision) -> str:
     reason = str((ai_decision or {}).get("reason") or "").strip().lower()
     if not reason:
@@ -54268,8 +54301,19 @@ def _handle_watching_strategy_branch(
                                 ai_action=current_ai_action_for_bridge,
                             )
                         )
+                        canonical_wait_probe_handoff = bool(
+                            entry_score_role_gate_for_bridge.get(
+                                "entry_score_usable_for_recheck"
+                            )
+                            and _canonical_wait_probe_handoff_active(
+                                ai_decision,
+                                ai_action=current_ai_action_for_bridge,
+                                now_ts=now_ts,
+                            )
+                        )
                         first_ai_wait_score_prior_block = (
                             not wait6579_probe_entry_unlocked
+                            and not canonical_wait_probe_handoff
                             and _should_first_ai_wait_for_big_bite(
                                 ai_decision,
                                 current_ai_score,
@@ -54277,6 +54321,56 @@ def _handle_watching_strategy_branch(
                                 entry_score_threshold=entry_buy_score_threshold,
                             )
                         )
+                        if canonical_wait_probe_handoff:
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "entry_ai_wait_probe_intent_handoff",
+                                metric_role="bounded_tunable",
+                                decision_authority=(
+                                    "entry_opportunity_recheck_first_ai_handoff_only"
+                                ),
+                                window_policy="same_day_intraday_runtime_state",
+                                sample_floor="one_canonical_wait_probe_intent",
+                                primary_decision_metric=(
+                                    "canonical_wait_probe_handoff_count"
+                                ),
+                                source_quality_gate=(
+                                    "entry_ai_contract_pass_edge_wait_probe_intent"
+                                ),
+                                runtime_effect=True,
+                                allowed_runtime_apply=True,
+                                actual_order_submitted=False,
+                                broker_order_forbidden=True,
+                                forbidden_uses=(
+                                    "broker_guard_bypass,stale_submit_bypass,"
+                                    "account_order_quantity_cooldown_bypass,"
+                                    "hard_safety_bypass,provider_route_change,"
+                                    "threshold_mutation"
+                                ),
+                                ai_action=current_ai_action_for_bridge,
+                                ai_score=f"{current_ai_score:.1f}",
+                                ai_contract_status=str(
+                                    (ai_decision or {}).get(
+                                        "decision_quality_contract_status"
+                                    )
+                                    or ""
+                                ),
+                                ai_edge_state=str(
+                                    (ai_decision or {}).get("edge_state")
+                                    or (ai_decision or {}).get(
+                                        "decision_quality_model_edge_state"
+                                    )
+                                    or ""
+                                ),
+                                entry_probe_intent=True,
+                                entry_probe_intent_status=str(
+                                    (ai_decision or {}).get(
+                                        "entry_probe_intent_status"
+                                    )
+                                    or ""
+                                ),
+                            )
                         if first_ai_wait_score_prior_block:
                             rising_missed_normal_buy_bridge_fields = _evaluate_rising_missed_normal_buy_bridge(
                                 stock,
@@ -54567,7 +54661,7 @@ def _handle_watching_strategy_branch(
                         ai_contract_status=(ai_decision or {}).get(
                             "decision_quality_contract_status"
                         ),
-                        ai_edge_state=(ai_decision or {}).get("edge_state"),
+                        ai_edge_state=canonical_entry_edge_state(ai_decision),
                         ai_probe_intent=(ai_decision or {}).get("entry_probe_intent"),
                         ai_probe_intent_status=(ai_decision or {}).get(
                             "entry_probe_intent_status"

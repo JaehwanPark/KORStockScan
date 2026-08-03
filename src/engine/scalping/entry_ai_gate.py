@@ -59,6 +59,21 @@ def _stale_flag(value: Any) -> bool:
     }
 
 
+def canonical_entry_edge_state(ai_result: dict[str, Any] | None) -> str:
+    """Resolve the canonical entry edge state across normalized payload shapes."""
+
+    result = ai_result if isinstance(ai_result, dict) else {}
+    return (
+        str(
+            result.get("edge_state")
+            or result.get("decision_quality_model_edge_state")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+
 def get_entry_buy_score_threshold(config: dict[str, Any] | None = None) -> float:
     if isinstance(config, dict) and config.get("BUY_SCORE_THRESHOLD") not in (None, ""):
         return _safe_float(config.get("BUY_SCORE_THRESHOLD"), 75.0)
@@ -185,7 +200,7 @@ def evaluate_entry_score_role_gate(
     contract_status = (
         str(result.get("decision_quality_contract_status") or "").strip().lower()
     )
-    edge_state = str(result.get("edge_state") or "").strip().upper()
+    edge_state = canonical_entry_edge_state(result)
     probe_intent = _truthy(result.get("entry_probe_intent"))
     probe_intent_status = (
         str(result.get("entry_probe_intent_status") or "").strip().lower()

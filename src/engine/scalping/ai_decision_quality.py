@@ -104,9 +104,7 @@ ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semanti
 BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
     "bounded_opportunity_offline_semantic_v1"
 )
-BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION = (
-    "bounded_opportunity_fail_safe_repair_v2"
-)
+BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION = "bounded_opportunity_fail_safe_repair_v2"
 ANTICIPATORY_SEMANTIC_REPAIR_VERSION = (
     "anticipatory_reversal_contract_closure_repair_v1"
 )
@@ -1241,10 +1239,7 @@ def _latest_exact_control_signatures(
         candidate = (observed_at, index, signature)
         if endpoint not in selected or candidate[:2] > selected[endpoint][:2]:
             selected[endpoint] = candidate
-    return {
-        endpoint: value[2]
-        for endpoint, value in sorted(selected.items())
-    }
+    return {endpoint: value[2] for endpoint, value in sorted(selected.items())}
 
 
 def annotate_primary_cohort_eligibility(
@@ -1318,9 +1313,7 @@ def load_pipeline_price_and_lifecycle_rows(
     window_start: datetime | None = None,
     window_end: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    price_buckets: dict[
-        tuple[str, str, str, datetime], dict[str, Any]
-    ] = {}
+    price_buckets: dict[tuple[str, str, str, datetime], dict[str, Any]] = {}
     lifecycle: list[dict[str, Any]] = []
     lifecycle_seen: set[tuple[Any, ...]] = set()
     for row in rows:
@@ -1443,10 +1436,7 @@ def load_pipeline_price_and_lifecycle_rows(
                 timestamp.isoformat() if timestamp else None,
                 stage,
                 code,
-                *(
-                    lifecycle_identifiers.get(key)
-                    for key in lifecycle_identifiers
-                ),
+                *(lifecycle_identifiers.get(key) for key in lifecycle_identifiers),
                 actual_order_submitted,
                 filled,
                 realized_profit_pct,
@@ -1755,12 +1745,14 @@ def _pipeline_event_price_source_quality(
     ):
         return "source_quality_blocked"
 
-    refresh_reason = str(
-        fields.get("pre_ai_ws_snapshot_refresh_reason") or ""
-    ).strip().lower()
-    rising_refresh_reason = str(
-        fields.get("rising_missed_watch_delta_refresh_reason") or ""
-    ).strip().lower()
+    refresh_reason = (
+        str(fields.get("pre_ai_ws_snapshot_refresh_reason") or "").strip().lower()
+    )
+    rising_refresh_reason = (
+        str(fields.get("rising_missed_watch_delta_refresh_reason") or "")
+        .strip()
+        .lower()
+    )
     affirmative_freshness = any(
         (
             _bool(fields.get("scanner_promotion_price_ws_fresh")),
@@ -1780,12 +1772,14 @@ def _pipeline_event_observed_price(fields: dict[str, Any]) -> float | None:
     """Select the price owned by the same freshness fact used for qualification."""
 
     selected_keys: tuple[str, ...]
-    refresh_reason = str(
-        fields.get("pre_ai_ws_snapshot_refresh_reason") or ""
-    ).strip().lower()
-    rising_refresh_reason = str(
-        fields.get("rising_missed_watch_delta_refresh_reason") or ""
-    ).strip().lower()
+    refresh_reason = (
+        str(fields.get("pre_ai_ws_snapshot_refresh_reason") or "").strip().lower()
+    )
+    rising_refresh_reason = (
+        str(fields.get("rising_missed_watch_delta_refresh_reason") or "")
+        .strip()
+        .lower()
+    )
     if _bool(fields.get("scanner_promotion_price_ws_fresh")) and not _bool(
         fields.get("scanner_promotion_price_conflict")
     ):
@@ -2105,9 +2099,7 @@ def mature_outcome_labels(
                             or entry_path_target_hit < entry_path_adverse_hit
                         )
                         else (
-                            "adverse_first"
-                            if entry_path_adverse_hit
-                            else "neither_hit"
+                            "adverse_first" if entry_path_adverse_hit else "neither_hit"
                         )
                     )
                 )
@@ -2228,9 +2220,7 @@ def mature_outcome_labels(
             stage_outcome = {
                 "entry_path_primary_horizon": ENTRY_PATH_PRIMARY_HORIZON,
                 "entry_path_label_version": ENTRY_PATH_LABEL_VERSION,
-                "entry_path_first_hit": primary_entry_path.get(
-                    "entry_path_first_hit"
-                ),
+                "entry_path_first_hit": primary_entry_path.get("entry_path_first_hit"),
                 "entry_path_target_pct": ENTRY_PATH_TARGET_PCT,
                 "entry_path_adverse_pct": ENTRY_PATH_ADVERSE_PCT,
                 "entry_path_target_hit_at": primary_entry_path.get(
@@ -2240,9 +2230,7 @@ def mature_outcome_labels(
                     "entry_path_adverse_hit_at"
                 ),
                 "entry_path_label_status": (
-                    "mature"
-                    if primary_entry_path
-                    else "pending_primary_horizon"
+                    "mature" if primary_entry_path else "pending_primary_horizon"
                 ),
                 "counterfactual_only": True,
             }
@@ -3772,17 +3760,14 @@ def validate_replay_candidate_response(
     )
     candidate = request.get("candidate")
     candidate = candidate if isinstance(candidate, dict) else {}
-    semantic_validator_version = str(
-        candidate.get("semantic_validator_version") or ""
-    )
+    semantic_validator_version = str(candidate.get("semantic_validator_version") or "")
     if semantic_validator_version not in {
         ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION,
         BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION,
     }:
         return errors
     bounded_opportunity_contract = (
-        semantic_validator_version
-        == BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+        semantic_validator_version == BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
     )
     clean_continuation_contract = bool(
         str(candidate.get("prompt_version") or "")
@@ -3838,9 +3823,7 @@ def validate_replay_candidate_response(
         bounded = bounded if isinstance(bounded, dict) else {}
         clean_continuation = analysis.get("clean_continuation_probe")
         clean_continuation = (
-            clean_continuation
-            if isinstance(clean_continuation, dict)
-            else {}
+            clean_continuation if isinstance(clean_continuation, dict) else {}
         )
         if not bounded:
             return [*errors, *semantic_errors, "bounded_opportunity_contract_missing"]
@@ -3862,8 +3845,7 @@ def validate_replay_candidate_response(
             else None
         )
         clean_continuation_eligible = bool(
-            clean_continuation_contract
-            and clean_continuation.get("eligible") is True
+            clean_continuation_contract and clean_continuation.get("eligible") is True
         )
         after_cost_floor = 0.75 if clean_continuation_eligible else 1.0
         if action == "BUY":
@@ -3879,18 +3861,9 @@ def validate_replay_candidate_response(
                 semantic_errors.append("bounded_opportunity_risk_not_bounded")
             if trigger != "confirmed":
                 semantic_errors.append("bounded_opportunity_trigger_not_confirmed")
-            if (
-                adverse_risk == "high"
-                and confidence is not None
-                and confidence > 65
-            ):
+            if adverse_risk == "high" and confidence is not None and confidence > 65:
                 semantic_errors.append("bounded_opportunity_high_risk_confidence_cap")
-            if (
-                cost_pct is None
-                or upside is None
-                or downside is None
-                or downside >= 0
-            ):
+            if cost_pct is None or upside is None or downside is None or downside >= 0:
                 semantic_errors.append(
                     "bounded_opportunity_after_cost_reward_risk_unavailable"
                 )
@@ -3918,12 +3891,9 @@ def validate_replay_candidate_response(
             and bounded.get("eligible_for_one_share_probe") is True
             and edge_state == "EDGE"
             and setup in {"continuation", "pullback_recovery", "reversal"}
-            and str(evidence.get("positive_edge") or "")
-            in {"moderate", "strong"}
-            and str(evidence.get("adverse_risk") or "")
-            in {"low", "moderate", "high"}
-            and str(evidence.get("trigger") or "")
-            in {"recovery_required", "confirmed"}
+            and str(evidence.get("positive_edge") or "") in {"moderate", "strong"}
+            and str(evidence.get("adverse_risk") or "") in {"low", "moderate", "high"}
+            and str(evidence.get("trigger") or "") in {"recovery_required", "confirmed"}
             and (
                 str(evidence.get("trigger") or "") == "recovery_required"
                 or after_cost_ratio is None
@@ -4333,7 +4303,9 @@ def repair_bounded_opportunity_candidate_response(
         set_value(repaired, "action", "WAIT", "bounded_reversal_wait")
         set_value(evidence, "setup", "reversal", "bounded_reversal_setup")
         if evidence.get("positive_edge") not in {"moderate", "strong"}:
-            set_value(evidence, "positive_edge", "moderate", "bounded_reversal_strength")
+            set_value(
+                evidence, "positive_edge", "moderate", "bounded_reversal_strength"
+            )
         if evidence.get("adverse_risk") not in {"low", "moderate", "high"}:
             set_value(evidence, "adverse_risk", "high", "bounded_reversal_risk")
         set_value(
@@ -4347,7 +4319,9 @@ def repair_bounded_opportunity_candidate_response(
         set_value(repaired, "action", "WAIT", "orderly_pullback_wait")
         set_value(evidence, "setup", "pullback_recovery", "orderly_pullback_setup")
         if evidence.get("positive_edge") not in {"moderate", "strong"}:
-            set_value(evidence, "positive_edge", "moderate", "orderly_pullback_strength")
+            set_value(
+                evidence, "positive_edge", "moderate", "orderly_pullback_strength"
+            )
         if evidence.get("adverse_risk") not in {"low", "moderate", "high"}:
             set_value(evidence, "adverse_risk", "high", "orderly_pullback_risk")
         set_value(
@@ -4495,14 +4469,10 @@ def repair_bounded_opportunity_candidate_response(
     if facts["adverse_distribution_no_edge"]:
         mandatory_codes.extend(("distribution_adverse", "volume_confirmation_missing"))
     mandatory_codes = [
-        code
-        for code in dict.fromkeys(mandatory_codes)
-        if code is not None
+        code for code in dict.fromkeys(mandatory_codes) if code is not None
     ]
     optional_codes = [
-        code
-        for code in dict.fromkeys(reason_codes)
-        if code not in mandatory_codes
+        code for code in dict.fromkeys(reason_codes) if code not in mandatory_codes
     ]
     normalized_codes = [
         *mandatory_codes,
@@ -4906,9 +4876,7 @@ def execute_openai_prompt_v2_candidate(
                     "after conservative execution cost"
                 )
             )
-        if any(
-            error.startswith("bounded_opportunity_") for error in correction_errors
-        ):
+        if any(error.startswith("bounded_opportunity_") for error in correction_errors):
             correction_rules.append(
                 "For V2.10, BUY is an offline one-share passive-probe label only. "
                 "It requires bounded_opportunity.eligible_for_one_share_probe=true, "
@@ -4918,8 +4886,7 @@ def execute_openai_prompt_v2_candidate(
                 "Keep wide spread adverse and do not weaken high risk"
             )
         if any(
-            error.startswith("clean_continuation_probe_")
-            for error in correction_errors
+            error.startswith("clean_continuation_probe_") for error in correction_errors
         ):
             correction_rules.append(
                 "For V2.11, clean_continuation_probe.eligible=true is the narrow "
@@ -5216,12 +5183,8 @@ def prepare_paired_replay_requests(
                     "captured_edge_state": trace.get(
                         "decision_quality_model_edge_state"
                     ),
-                    "captured_evidence": trace.get(
-                        "decision_quality_model_evidence"
-                    ),
-                    "captured_entry_probe_intent": trace.get(
-                        "entry_probe_intent"
-                    ),
+                    "captured_evidence": trace.get("decision_quality_model_evidence"),
+                    "captured_entry_probe_intent": trace.get("entry_probe_intent"),
                     "captured_entry_probe_intent_status": trace.get(
                         "entry_probe_intent_status"
                     ),
@@ -5360,8 +5323,7 @@ def recover_same_trace_outcome_labels_from_paired_reports(
             == OFFLINE_CONTRACT["source_quality_gate"]
             and report.get("paired_comparable_count") == len(comparisons)
             and len(comparisons) > 0
-            and "kiwoom_completed_1m"
-            in str(report.get("outcome_price_source") or "")
+            and "kiwoom_completed_1m" in str(report.get("outcome_price_source") or "")
         )
         if not authority_valid:
             excluded["source_report_contract_invalid"] += 1
@@ -5520,7 +5482,9 @@ def recover_same_trace_outcome_labels_from_paired_reports(
     for trace_id, recovered_rows in candidates_by_trace.items():
         current = current_by_trace.get(trace_id)
         metric_hashes = {
-            _sha256(_primary_metric(row)) for row in recovered_rows if _primary_metric(row)
+            _sha256(_primary_metric(row))
+            for row in recovered_rows
+            if _primary_metric(row)
         }
         if len(metric_hashes) != 1:
             excluded["conflicting_recovered_outcome"] += 1
@@ -5634,16 +5598,12 @@ def prepare_detailed_paired_replay_requests(
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION
             ):
-                prompt = decision_quality_v2_11_clean_continuation_system_prompt(
-                    stage
-                )
+                prompt = decision_quality_v2_11_clean_continuation_system_prompt(stage)
             elif (
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION
             ):
-                prompt = decision_quality_v2_10_bounded_opportunity_system_prompt(
-                    stage
-                )
+                prompt = decision_quality_v2_10_bounded_opportunity_system_prompt(stage)
             elif (
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION
@@ -5731,13 +5691,10 @@ def prepare_detailed_paired_replay_requests(
                 candidate["semantic_repair_version"] = (
                     ANTICIPATORY_SEMANTIC_REPAIR_VERSION
                 )
-            elif (
-                candidate_prompt_version
-                in {
-                    DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
-                    DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
-                }
-            ):
+            elif candidate_prompt_version in {
+                DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
+            }:
                 candidate["semantic_repair_version"] = (
                     BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION
                 )
@@ -5745,9 +5702,7 @@ def prepare_detailed_paired_replay_requests(
         sample_floor = request.get("sample_floor")
         sample_floor = sample_floor if isinstance(sample_floor, dict) else {}
         if anticipatory_analysis is not None:
-            promotion_evidence_floor = sample_floor.get(
-                "promotion_evidence_floor"
-            )
+            promotion_evidence_floor = sample_floor.get("promotion_evidence_floor")
             promotion_evidence_floor = (
                 dict(promotion_evidence_floor)
                 if isinstance(promotion_evidence_floor, dict)
@@ -5878,9 +5833,7 @@ def run_paired_replay(
             )
             if not semantic_repairs:
                 repaired_response, semantic_repairs = (
-                    repair_anticipatory_candidate_response(
-                        request, candidate_response
-                    )
+                    repair_anticipatory_candidate_response(request, candidate_response)
                 )
             if semantic_repairs:
                 repaired_errors = validate_replay_candidate_response(
@@ -6213,9 +6166,7 @@ def build_paired_replay_report(
         )
         execution_cost = anticipatory_analysis.get("execution_cost")
         execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
-        clean_continuation = anticipatory_analysis.get(
-            "clean_continuation_probe"
-        )
+        clean_continuation = anticipatory_analysis.get("clean_continuation_probe")
         clean_continuation = (
             clean_continuation if isinstance(clean_continuation, dict) else {}
         )
@@ -6419,8 +6370,7 @@ def build_paired_replay_report(
             for row in rows
         )
         bucket_candidate_adverse_exposure = sum(
-            row["first_hit"] == "adverse"
-            and row["candidate_exposure_selected"]
+            row["first_hit"] == "adverse" and row["candidate_exposure_selected"]
             for row in rows
         )
         bucket_control_tight_stop_adverse_exposure = sum(
@@ -6678,9 +6628,7 @@ def build_paired_replay_report(
         ),
     }
     clean_continuation_rows = [
-        row
-        for row in comparable_rows
-        if row["clean_continuation_probe_eligible"]
+        row for row in comparable_rows if row["clean_continuation_probe_eligible"]
     ]
     clean_continuation_exposure_rows = [
         row for row in clean_continuation_rows if row["candidate_exposure_selected"]
@@ -6695,16 +6643,12 @@ def build_paired_replay_report(
                 if row.get("stock_code")
             }
         ),
-        "candidate_exposure_decision_count": len(
-            clean_continuation_exposure_rows
-        ),
+        "candidate_exposure_decision_count": len(clean_continuation_exposure_rows),
         "candidate_not_exposed_decision_count": (
             len(clean_continuation_rows) - len(clean_continuation_exposure_rows)
         ),
         "candidate_exposure_coverage_pct": (
-            len(clean_continuation_exposure_rows)
-            / len(clean_continuation_rows)
-            * 100.0
+            len(clean_continuation_exposure_rows) / len(clean_continuation_rows) * 100.0
             if clean_continuation_rows
             else None
         ),
@@ -7044,9 +6988,7 @@ def build_daily_materialization_reports(
         price_source_provenance=price_source_provenance,
     )
     paired["candidate_execution_performed"] = False
-    paired["candidate_execution_authority"] = (
-        "explicit_offline_execute_candidate_only"
-    )
+    paired["candidate_execution_authority"] = "explicit_offline_execute_candidate_only"
     paired["decision_quality_objective"] = dict(DECISION_QUALITY_OBJECTIVE)
 
     reports = {
@@ -7061,8 +7003,7 @@ def build_daily_materialization_reports(
     )
     if validation_errors:
         raise RuntimeError(
-            "daily_exact_quality_chain_contract_invalid:"
-            + ",".join(validation_errors)
+            "daily_exact_quality_chain_contract_invalid:" + ",".join(validation_errors)
         )
     return {
         "schema": DAILY_MATERIALIZATION_SCHEMA,
@@ -7079,13 +7020,9 @@ def build_daily_materialization_reports(
             "label_status": label_report.get("status"),
             "label_counts": label_report.get("summary"),
             "baseline_status": baseline.get("status"),
-            "baseline_eligible_sample_count": baseline.get(
-                "eligible_sample_count"
-            ),
+            "baseline_eligible_sample_count": baseline.get("eligible_sample_count"),
             "paired_status": paired.get("status"),
-            "paired_prepared_request_count": paired.get(
-                "prepared_request_count"
-            ),
+            "paired_prepared_request_count": paired.get("prepared_request_count"),
             "paired_accepted_request_count": paired.get("request_count"),
         },
         **OFFLINE_CONTRACT,
@@ -9754,9 +9691,7 @@ def main(argv: list[str] | None = None) -> int:
                         + ",".join(write_validation_errors)
                     )
             printable = {
-                key: value
-                for key, value in materialization.items()
-                if key != "reports"
+                key: value for key, value in materialization.items() if key != "reports"
             }
             printable["artifact_paths"] = {
                 "control": str(control_path(args.date)),
@@ -9942,9 +9877,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     and _semantic_repair_provenance_matches(
                         row,
-                        request_by_pair[
-                            str(row.get("paired_replay_id") or "")
-                        ],
+                        request_by_pair[str(row.get("paired_replay_id") or "")],
                     )
                     and _successful_candidate_result_model(row)
                     == str(
