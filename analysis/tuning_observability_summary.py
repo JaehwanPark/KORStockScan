@@ -9,7 +9,7 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SNAPSHOT_DIR = PROJECT_ROOT / "data" / "report" / "monitor_snapshots"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 FORBIDDEN_USES = [
     "runtime_threshold_apply",
     "broker_order_enable",
@@ -23,7 +23,10 @@ OBSERVABILITY_METRIC_CONTRACT = {
     "window_policy": "daily_only_for_ops_with_rolling_consumer_required",
     "sample_floor": 1,
     "primary_decision_metric": "submitted_drought_and_blocker_count",
-    "source_quality_gate": "performance_tuning + wait6579_ev_cohort + trade_review + post_sell_feedback source presence",
+    "source_quality_gate": (
+        "performance_tuning + wait6579_ev_cohort + trade_review source presence + "
+        "typed post_sell_feedback source quality"
+    ),
     "forbidden_uses": FORBIDDEN_USES,
     "runtime_effect": False,
 }
@@ -45,7 +48,7 @@ SNAPSHOT_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "post_sell_feedback": {
         "producer": "post_sell_feedback_monitor_snapshot",
-        "required_fields": ("metrics",),
+        "required_fields": ("metrics", "metric_contract", "source_quality"),
         "consumers": ("tuning_observability_summary", "pattern_lab_currentness_audit"),
     },
 }
@@ -283,6 +286,11 @@ def build_tuning_observability_summary(
     preflight = wait6579.get("preflight", {}) or {}
     trade_metrics = trade_review.get("metrics", {}) or {}
     post_metrics = post_sell.get("metrics", {}) or {}
+    post_source_quality = (
+        post_sell.get("source_quality")
+        if isinstance(post_sell.get("source_quality"), dict)
+        else {}
+    )
     terminal_rows = wait6579.get("terminal_breakdown", []) or []
     terminal_map = {
         str(row.get("terminal_blocker") or ""): _safe_int(row.get("samples"))
@@ -381,6 +389,12 @@ def build_tuning_observability_summary(
             "good_exit_rate": _safe_float(post_metrics.get("good_exit_rate")),
             "capture_efficiency_avg_pct": _safe_float(
                 post_metrics.get("capture_efficiency_avg_pct")
+            ),
+            "source_quality_status": str(
+                post_source_quality.get("status") or "missing"
+            ),
+            "source_quality_reason": str(
+                post_source_quality.get("reason") or "missing"
             ),
         },
     }

@@ -320,6 +320,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     sim_post_sell_idx = script.index("src.engine.sniper_post_sell_feedback")
+    assert "--materialize-monitor-snapshot" in script
     rising_missed_feedback_idx = script.index(
         "src.engine.monitoring.rising_missed_intraday_feedback"
     )

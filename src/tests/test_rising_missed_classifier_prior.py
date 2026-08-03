@@ -8,6 +8,128 @@ def _write(path, payload):
     return path
 
 
+def test_blocker_outcome_prior_routes_positive_thin_sample_to_source_only_probe():
+    report = {
+        "summary": {
+            "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": [
+                {
+                    "source_block_stage": "rising_missed_tick_speed_entry_block",
+                    "source_block_reason": "tick_acceleration_ratio_lt_1",
+                    "completed_sample_count": 2,
+                    "gross_target_first_count": 1,
+                    "adverse_stop_first_count": 0,
+                    "no_hit_within_20m_count": 1,
+                    "gross_first_hit_payoff_proxy_pct": 0.65,
+                    "equal_weight_avg_mfe_after_block_pct": 1.31,
+                    "equal_weight_avg_mae_after_block_pct": -0.33,
+                    "source_dates": ["2026-07-29", "2026-08-03"],
+                    "clean_tuning_baseline_date": "2026-06-05",
+                    "sample_floor": "10_source_quality_pass_completed_samplers_per_blocker",
+                    "sample_floor_met": False,
+                    "decision_authority": "source_only_no_runtime_mutation",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+                    "source_quality_gate": "completed_sampler_source_quality_pass",
+                },
+                {
+                    "source_block_stage": "tp1_selector",
+                    "source_block_reason": "rising_missed_tp1_hard_negative_evidence",
+                    "completed_sample_count": 5,
+                    "gross_target_first_count": 0,
+                    "adverse_stop_first_count": 3,
+                    "no_hit_within_20m_count": 2,
+                    "gross_first_hit_payoff_proxy_pct": -0.42,
+                    "equal_weight_avg_mfe_after_block_pct": 0.23,
+                    "equal_weight_avg_mae_after_block_pct": -0.91,
+                    "source_dates": ["2026-07-29", "2026-07-31"],
+                    "clean_tuning_baseline_date": "2026-06-05",
+                    "decision_authority": "source_only_no_runtime_mutation",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "source_quality_gate": "completed_sampler_source_quality_pass",
+                },
+            ]
+        }
+    }
+
+    rows = mod._build_blocker_outcome_priors(report)
+
+    assert rows[0]["source_block_reason"] == "tick_acceleration_ratio_lt_1"
+    assert rows[0]["exploration_assessment"] == "bounded_probe_exploration_candidate"
+    assert rows[0]["sample_floor_met"] is False
+    assert rows[0]["raw_adverse_first_is_standalone_veto"] is False
+    assert rows[0]["metric_role"] == "source_quality_gated_blocker_outcome_attribution"
+    assert (
+        rows[0]["net_ev_state"] == "unavailable_fee_tax_and_no_hit_exit_outcome_missing"
+    )
+    assert rows[0]["runtime_effect"] is False
+    assert rows[0]["allowed_runtime_apply"] is False
+    assert rows[0]["actual_order_submitted"] is False
+    assert rows[0]["broker_order_forbidden"] is True
+    assert rows[1]["exploration_assessment"] == "hold_loss_dominant"
+
+
+def test_blocker_outcome_prior_rejects_runtime_authority_leak():
+    rows = mod._build_blocker_outcome_priors(
+        {
+            "summary": {
+                "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": [
+                    {
+                        "source_block_stage": "tp1_selector",
+                        "source_block_reason": "unsafe_row",
+                        "completed_sample_count": 12,
+                        "gross_target_first_count": 10,
+                        "adverse_stop_first_count": 0,
+                        "gross_first_hit_payoff_proxy_pct": 1.0,
+                        "equal_weight_avg_mfe_after_block_pct": 2.0,
+                        "equal_weight_avg_mae_after_block_pct": -0.1,
+                        "source_dates": ["2026-08-03"],
+                        "clean_tuning_baseline_date": "2026-06-05",
+                        "decision_authority": "live_runtime",
+                        "runtime_effect": True,
+                        "allowed_runtime_apply": True,
+                        "source_quality_gate": "completed_sampler_source_quality_pass",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert rows[0]["exploration_assessment"] == "source_quality_blocked"
+    assert rows[0]["runtime_effect"] is False
+    assert rows[0]["allowed_runtime_apply"] is False
+
+
+def test_blocker_outcome_prior_rejects_string_false_authority_flags():
+    rows = mod._build_blocker_outcome_priors(
+        {
+            "summary": {
+                "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": [
+                    {
+                        "source_block_stage": "tp1_selector",
+                        "source_block_reason": "string_flags",
+                        "completed_sample_count": 12,
+                        "gross_target_first_count": 10,
+                        "adverse_stop_first_count": 0,
+                        "gross_first_hit_payoff_proxy_pct": 1.0,
+                        "equal_weight_avg_mfe_after_block_pct": 2.0,
+                        "equal_weight_avg_mae_after_block_pct": -0.1,
+                        "source_dates": ["2026-08-03"],
+                        "clean_tuning_baseline_date": "2026-06-05",
+                        "decision_authority": "source_only_no_runtime_mutation",
+                        "runtime_effect": "false",
+                        "allowed_runtime_apply": "false",
+                        "source_quality_gate": "completed_sampler_source_quality_pass",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert rows[0]["exploration_assessment"] == "source_quality_blocked"
+
+
 def test_prior_report_merges_daily_rolling_mtd_and_blocks_child_conflict(tmp_path):
     daily = _write(
         tmp_path / "daily.json",

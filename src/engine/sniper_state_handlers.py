@@ -44173,8 +44173,27 @@ def _ensure_ai_source_quality_fields(
     fields: dict, stock: dict | None, *, not_evaluated_reason: str
 ) -> dict:
     out = dict(fields or {})
-    if "tick_source_quality_fields_sent" not in out and isinstance(stock, dict):
-        out.update(dict(stock.get("last_watching_ai_source_quality_fields") or {}))
+    current_ai_provenance = any(
+        out.get(key) not in (None, "", "-", "None", "none", "null")
+        for key in (
+            "ai_decision_trace_id",
+            "ai_market_snapshot_id",
+            "ai_result_source",
+        )
+    )
+    if (
+        "tick_source_quality_fields_sent" not in out
+        and isinstance(stock, dict)
+        and not current_ai_provenance
+    ):
+        # The persisted payload is only a fallback for fields absent from the
+        # current decision.  In particular, never replace the current exact
+        # snapshot/preflight provenance with the previous WATCHING decision's
+        # values when the provider is skipped by a fresh preflight block.
+        for key, value in dict(
+            stock.get("last_watching_ai_source_quality_fields") or {}
+        ).items():
+            out.setdefault(key, value)
     for key in ("buy_pressure_10t", "curr_vs_micro_vwap_bp", "curr_vs_ma5_bp"):
         value = out.get(key)
         if value is None or (

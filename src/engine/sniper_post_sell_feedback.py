@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from src.engine.log_archive_service import load_monitor_snapshot
+from src.engine.log_archive_service import load_monitor_snapshot, save_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import read_jsonl
@@ -51,6 +51,19 @@ HIGH_AI_HARD_STOP_CONFLICT_CONTRACT = {
     "primary_decision_metric": "sim_post_decision_mfe_10m_pct",
     "source_quality_gate": "hard_stop exit_rule + numeric current_ai_score + post_sell_forward_metrics",
     "forbidden_uses": list(HIGH_AI_HARD_STOP_CONFLICT_FORBIDDEN_USES),
+}
+POST_SELL_SNAPSHOT_METRIC_CONTRACT = {
+    "metric_role": "exit_post_sell_dimension",
+    "decision_authority": "source_quality_only",
+    "window_policy": "same_day_existing_post_sell_rows",
+    "sample_floor": "one_evaluated_post_sell_candidate",
+    "primary_decision_metric": "capture_efficiency_avg_pct",
+    "source_quality_gate": (
+        "canonical_post_sell_candidate_and_evaluation_join_or_explicit_"
+        "insufficient_sample"
+    ),
+    "forbidden_uses": list(SIM_POST_SELL_FORBIDDEN_USES),
+    "runtime_effect": False,
 }
 
 
@@ -2565,6 +2578,59 @@ def build_post_sell_feedback_report(
     }
 
 
+def materialize_post_sell_feedback_snapshot(target_date: str) -> dict:
+    """Write the source-only post-sell snapshot from already collected rows.
+
+    This deliberately avoids REST evaluation. The postclose chain may have no
+    mature real post-sell evaluation yet, but the pattern-lab consumer still
+    needs a typed artifact that distinguishes insufficient sample from a
+    missing producer.
+    """
+
+    safe_date = str(target_date or datetime.now().strftime("%Y-%m-%d")).strip()
+    report = build_post_sell_feedback_report(safe_date, evaluate_now=False)
+    metrics = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
+    evaluated_count = _safe_int(metrics.get("evaluated_candidates"), 0)
+    total_count = _safe_int(metrics.get("total_candidates"), 0)
+    if evaluated_count <= 0:
+        source_quality_status = "insufficient_sample"
+        source_quality_reason = "no_mature_real_post_sell_evaluation_rows"
+    elif evaluated_count < total_count:
+        source_quality_status = "partial_sample"
+        source_quality_reason = "partial_mature_real_post_sell_evaluation_rows"
+    else:
+        source_quality_status = "pass"
+        source_quality_reason = "evaluated_post_sell_rows_available"
+    report["metric_contract"] = dict(POST_SELL_SNAPSHOT_METRIC_CONTRACT)
+    report["source_quality"] = {
+        "status": source_quality_status,
+        "reason": source_quality_reason,
+        "candidate_count": total_count,
+        "evaluated_candidate_count": evaluated_count,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "underlying_execution_scope": "real_post_sell_candidates",
+    }
+    report.setdefault("meta", {})
+    report["meta"].update(
+        {
+            "snapshot_materialization_mode": "existing_rows_only_no_rest_evaluation",
+            "snapshot_source_quality_status": source_quality_status,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    )
+    path = save_monitor_snapshot("post_sell_feedback", safe_date, report)
+    return {
+        "path": str(path),
+        "source_quality": report["source_quality"],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Post-sell feedback report-only utilities."
@@ -2572,6 +2638,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--backfill-sim-candidates", action="store_true")
     parser.add_argument("--evaluate-sim", action="store_true")
+    parser.add_argument("--materialize-monitor-snapshot", action="store_true")
     args = parser.parse_args(argv)
 
     result: dict = {"date": args.target_date, "runtime_effect": False}
@@ -2583,6 +2650,10 @@ def main(argv: list[str] | None = None) -> int:
         summary = evaluate_sim_post_sell_candidates(args.target_date)
         result["sim_evaluation"] = post_sell_feedback_summary_to_dict(summary)
         result["sim_evaluation_path"] = str(_sim_evaluation_path(args.target_date))
+    if args.materialize_monitor_snapshot:
+        result["monitor_snapshot"] = materialize_post_sell_feedback_snapshot(
+            args.target_date
+        )
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

@@ -935,7 +935,8 @@ if [ "$RUN_SIM_POST_SELL_FEEDBACK" = "true" ] || [ "$RUN_SIM_POST_SELL_FEEDBACK"
   PYTHONPATH=. "$VENV_PY" -m src.engine.sniper_post_sell_feedback \
     --date "$TARGET_DATE" \
     --backfill-sim-candidates \
-    --evaluate-sim
+    --evaluate-sim \
+    --materialize-monitor-snapshot
 fi
 if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "1" ]; then
   wait_for_postclose_resources "limit_down_watch_report"

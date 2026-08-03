@@ -2699,6 +2699,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "entry_ai_price_canary_applied",
             "entry_ai_price_canary_fallback",
             "order_bundle_submitted",
+            "pre_submit_micro_unavailable_block",
             "pre_submit_entry_ai_authority_guard_block",
             "rising_missed_async_commit_phase",
             "rising_missed_entry_ai_async_result_applied",
@@ -2713,6 +2714,11 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if str(value or "").strip().lower() != "unknown":
             return False
+        if stage == "pre_submit_micro_unavailable_block" and not (
+            _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+        ):
+            return False
         context_quality = _field_text("entry_context_quality").lower()
         missing_features = _field_text("entry_context_missing_features").lower()
         return context_quality in {"partial", "stale", "insufficient"} and any(
@@ -2723,6 +2729,59 @@ def _reviewed_unknown_reason_for_stage_field(
                 "micro_vwap",
                 "minute_candle",
             }
+        )
+
+    def _is_reviewed_prior_probe_residual_source_gap() -> bool:
+        field = str(key or "")
+        if field not in {
+            "post_probe_direction_state",
+            "prior_probe_residual_direction_state",
+            "prior_probe_residual_failure_signature",
+        }:
+            return False
+        value_text = str(value or "").strip()
+        if field == "prior_probe_residual_failure_signature":
+            signature_parts = value_text.split("|")
+            is_unknown_value = (
+                len(signature_parts) >= 2
+                and signature_parts[1].strip().upper() == "UNKNOWN"
+            )
+        else:
+            is_unknown_value = value_text.upper() == "UNKNOWN"
+        if not is_unknown_value:
+            return False
+        if _field_text("prior_probe_residual_decision_authority") != (
+            "causal_attribution_only"
+        ):
+            return False
+        if _field_text("prior_probe_residual_continuation_action") != "DEFER":
+            return False
+        if _field_text("prior_probe_residual_source_quality_gate") != (
+            "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+        ):
+            return False
+        reason = _field_text("prior_probe_residual_direction_reason")
+        if reason not in {
+            "post_probe_ai_action_not_fresh",
+            "post_probe_ai_action_source_unverified",
+            "post_probe_nxt_ai_veto_not_fresh",
+            "post_probe_nxt_ai_veto_source_unverified",
+            "post_probe_nxt_event_time_speed_unavailable",
+            "post_probe_nxt_wait_fast_tape_required",
+            "post_probe_resolver_unavailable",
+            "post_probe_stale_or_conflicted_fresh_quote",
+            "post_probe_stale_wait_positive_confirmation_required",
+            "post_probe_wait_positive_confirmation_required",
+            "post_probe_wait_negative_group",
+        }:
+            return False
+        source_only_snapshot = (
+            stage == "stat_action_decision_snapshot"
+            and _field_text("source_quality_gate") == "stat_action_snapshot_source_only"
+        )
+        return source_only_snapshot or (
+            _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
         )
 
     def _is_reviewed_sizing_unknown_venue_fallback() -> bool:
@@ -2952,10 +3011,6 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if str(value or "").strip().upper() != "UNKNOWN":
             return False
-        if not _is_falseish("actual_order_submitted") or not _is_trueish(
-            "broker_order_forbidden"
-        ):
-            return False
         venue_resolution = _field_text("venue_resolution")
         runtime_event_fail_closed = (
             venue_resolution == "scanner_runtime_event:explicit_target_venue_missing"
@@ -2966,6 +3021,16 @@ def _reviewed_unknown_reason_for_stage_field(
                 "scanner_runtime_event:market_session_bucket_venue_mismatch:"
             )
         )
+        explicit_reviewed_fail_closed = (
+            _field_text("venue_source_quality_status") == "reviewed_fail_closed"
+            and bool(_field_text("venue_unknown_reviewed_reason"))
+            and _field_text("venue_unknown_reviewed_reason") == venue_resolution
+        )
+        if not explicit_reviewed_fail_closed and (
+            not _is_falseish("actual_order_submitted")
+            or not _is_trueish("broker_order_forbidden")
+        ):
+            return False
         if (
             field
             in {
@@ -2976,7 +3041,7 @@ def _reviewed_unknown_reason_for_stage_field(
                 "opening_rotation_no_pullback_continuation_effective_venue",
             }
             and runtime_event_fail_closed
-            and _is_falseish("runtime_effect")
+            and (_is_falseish("runtime_effect") or explicit_reviewed_fail_closed)
         ):
             return True
         if stage == "scalping_scanner_watching_runtime_skip":
@@ -3058,6 +3123,24 @@ def _reviewed_unknown_reason_for_stage_field(
             in _field_text("holding_context_ai_market_snapshot")
         )
         return result_blocked and (explicit_blocked or disabled_with_embedded_block)
+
+    def _is_reviewed_holding_route_partition_not_available() -> bool:
+        if stage != "scale_in_ai_authority_retry":
+            return False
+        if str(key or "") != "ai_market_snapshot_route_partition_selected_key":
+            return False
+        if not str(value or "").strip().lower().endswith("|unknown"):
+            return False
+        return (
+            _field_text("ai_market_snapshot_route_partition_used").lower()
+            in {"false", "0", "no"}
+            and _field_text("ai_market_snapshot_route_partition_reason")
+            == "route_snapshots_unavailable"
+            and _field_text("holding_context_source_quality_status") == "blocked"
+            and bool(_field_text("holding_context_blockers"))
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
+        )
 
     def _is_reviewed_canonical_unknown_flow_state() -> bool:
         return (
@@ -3361,6 +3444,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_holding_score_preflight_not_available"
     if _is_reviewed_entry_order_flow_not_available():
         return "reviewed_entry_order_flow_not_available"
+    if _is_reviewed_prior_probe_residual_source_gap():
+        return "reviewed_prior_probe_residual_source_gap"
     if _is_reviewed_sizing_unknown_venue_fallback():
         return "reviewed_explicit_sizing_unknown_venue_fallback"
     if _is_reviewed_observation_only_venue_not_available():
@@ -3383,6 +3468,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_scanner_venue_fail_closed_provenance"
     if _is_reviewed_holding_preflight_unknown_provenance():
         return "reviewed_holding_input_preflight_blocked_provenance"
+    if _is_reviewed_holding_route_partition_not_available():
+        return "reviewed_holding_route_partition_not_available"
     if _is_reviewed_canonical_unknown_flow_state():
         return "reviewed_canonical_unknown_flow_state"
     if _is_reviewed_probe_confirmation_not_evaluated():
@@ -3695,9 +3782,7 @@ def _normalized_fields_for_contract(
                 "submitted_receipt_observed"
                 if submitted_bool
                 and normalized.get("broker_order_no") != "unknown_pre_contract"
-                else "unknown_pre_contract"
-                if submitted_bool
-                else "not_submitted"
+                else "unknown_pre_contract" if submitted_bool else "not_submitted"
             )
         normalized.setdefault(
             "broker_receipt_reason",
@@ -3964,7 +4049,13 @@ def _blocked_observation_records_fail_closed_source_gap(
         reason = str(fields.get("score65_74_recovery_probe_skip_reason") or "").lower()
         return any(
             token in reason
-            for token in ("source_quality", "unusable", "unavailable", "missing", "stale")
+            for token in (
+                "source_quality",
+                "unusable",
+                "unavailable",
+                "missing",
+                "stale",
+            )
         )
     if stage in {
         "early_accel_recheck_evaluated",
@@ -3973,7 +4064,13 @@ def _blocked_observation_records_fail_closed_source_gap(
         reason = str(fields.get("skip_reason") or "").lower()
         return any(
             token in reason
-            for token in ("source_quality", "unusable", "unavailable", "missing", "stale")
+            for token in (
+                "source_quality",
+                "unusable",
+                "unavailable",
+                "missing",
+                "stale",
+            )
         )
     if stage == "adverse_fill_observed":
         return not _contract_bool(fields.get("feature_valid"), True)
@@ -5313,9 +5410,7 @@ def _streaming_contract_audit(
         status = (
             "fail"
             if invalid_label_violations
-            else "pass"
-            if not missing_violations and not zero_violations
-            else "warning"
+            else "pass" if not missing_violations and not zero_violations else "warning"
         )
         if status != "pass":
             warnings.append(stage)

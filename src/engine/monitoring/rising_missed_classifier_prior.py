@@ -36,7 +36,10 @@ WINDOW_PRIORITY = ("rolling10d", "rolling5d", "mtd", "daily")
 FORBIDDEN_USES = [
     "real_order_submission",
     "runtime_threshold_mutation",
+    "stale_submit_bypass",
     "broker_guard_bypass",
+    "order_guard_relaxation",
+    "quantity_guard_relaxation",
     "provider_route_change",
     "bot_restart",
     "cap_release",
@@ -436,6 +439,116 @@ def _merge_intraday_feedback(
         )
 
 
+def _build_blocker_outcome_priors(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Preserve promising blocker outcomes as source-only exploration evidence.
+
+    These rows deliberately do not join the live classifier prefix table.  A
+    target-first observation can justify further bounded-probe simulation, but
+    it cannot identify a live entry cohort without executable costs, sample
+    maturity, and the downstream stale/broker/order guards.
+    """
+
+    summary = _as_dict(report.get("summary"))
+    source_rows = _as_list(
+        summary.get("rising_missed_nxt_post_block_rolling_blocker_outcome_attribution")
+    )
+    rows: list[dict[str, Any]] = []
+    for item in source_rows:
+        if not isinstance(item, dict):
+            continue
+        sample_count = _safe_int(item.get("completed_sample_count"))
+        if sample_count <= 0:
+            continue
+        target_count = _safe_int(item.get("gross_target_first_count"))
+        adverse_count = _safe_int(item.get("adverse_stop_first_count"))
+        no_hit_count = _safe_int(item.get("no_hit_within_20m_count"))
+        payoff_proxy = _safe_float(item.get("gross_first_hit_payoff_proxy_pct"))
+        avg_mfe = _safe_float(item.get("equal_weight_avg_mfe_after_block_pct"))
+        avg_mae = _safe_float(item.get("equal_weight_avg_mae_after_block_pct"))
+        source_dates = [str(value) for value in _as_list(item.get("source_dates"))]
+        source_quality_valid = (
+            str(item.get("decision_authority") or "")
+            == "source_only_no_runtime_mutation"
+            and item.get("runtime_effect") is False
+            and item.get("allowed_runtime_apply") is False
+            and str(item.get("clean_tuning_baseline_date") or "") == "2026-06-05"
+            and bool(source_dates)
+            and all(value >= "2026-06-05" for value in source_dates)
+            and bool(str(item.get("source_quality_gate") or "").strip())
+        )
+        positive_path = bool(
+            source_quality_valid
+            and target_count > 0
+            and payoff_proxy is not None
+            and payoff_proxy > 0.0
+            and avg_mfe is not None
+            and avg_mae is not None
+            and avg_mfe > abs(avg_mae)
+        )
+        if not source_quality_valid:
+            assessment = "source_quality_blocked"
+        elif positive_path:
+            assessment = "bounded_probe_exploration_candidate"
+        elif (
+            adverse_count > target_count
+            and payoff_proxy is not None
+            and payoff_proxy <= 0
+        ):
+            assessment = "hold_loss_dominant"
+        elif target_count > 0:
+            assessment = "accumulate_mixed_recovery"
+        else:
+            assessment = "hold_sample"
+        rows.append(
+            {
+                "blocker_prior_key": "|".join(
+                    (
+                        str(item.get("source_block_stage") or "missing"),
+                        str(item.get("source_block_reason") or "missing"),
+                    )
+                ),
+                "source_block_stage": item.get("source_block_stage"),
+                "source_block_reason": item.get("source_block_reason"),
+                "completed_sample_count": sample_count,
+                "gross_target_first_count": target_count,
+                "adverse_stop_first_count": adverse_count,
+                "no_hit_within_20m_count": no_hit_count,
+                "gross_first_hit_payoff_proxy_pct": payoff_proxy,
+                "equal_weight_avg_mfe_after_block_pct": avg_mfe,
+                "equal_weight_avg_mae_after_block_pct": avg_mae,
+                "source_dates": source_dates,
+                "sample_floor": item.get("sample_floor"),
+                "sample_floor_met": bool(item.get("sample_floor_met")),
+                "exploration_assessment": assessment,
+                "raw_adverse_first_is_standalone_veto": False,
+                "cost_adjusted_ev_required_before_runtime_apply": True,
+                "net_ev_state": "unavailable_fee_tax_and_no_hit_exit_outcome_missing",
+                "downstream_submit_guards_required": True,
+                "metric_role": "source_quality_gated_blocker_outcome_attribution",
+                "decision_authority": "source_only_bounded_probe_exploration",
+                "window_policy": item.get("window_policy")
+                or "clean_baseline_rolling_latest_20_report_artifacts",
+                "primary_decision_metric": (
+                    "gross_first_hit_payoff_proxy_pct_with_equal_weight_mfe_mae"
+                ),
+                "source_quality_gate": item.get("source_quality_gate"),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "forbidden_uses": list(FORBIDDEN_USES),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["exploration_assessment"] != "bounded_probe_exploration_candidate",
+            -_safe_int(row.get("completed_sample_count")),
+            str(row.get("blocker_prior_key")),
+        ),
+    )
+
+
 def _counterfactual_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     primary_rows = _as_list(report.get("rows")) or _as_list(report.get("evaluations"))
@@ -622,7 +735,10 @@ def _strip_private_metrics(prior: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_code_improvement_orders(summary: dict[str, Any]) -> list[dict[str, Any]]:
-    if _safe_int(summary.get("prior_count")) <= 0:
+    if (
+        _safe_int(summary.get("prior_count")) <= 0
+        and _safe_int(summary.get("bounded_probe_exploration_candidate_count")) <= 0
+    ):
         return []
     return [
         {
@@ -647,6 +763,11 @@ def _build_code_improvement_orders(summary: dict[str, Any]) -> list[dict[str, An
                 f"prior_count={_safe_int(summary.get('prior_count'))}",
                 f"positive_prior_count={_safe_int(summary.get('positive_prior_count'))}",
                 f"source_quality_blocked_count={_safe_int(summary.get('source_quality_blocked_count'))}",
+                "bounded_probe_exploration_candidate_count="
+                + str(
+                    _safe_int(summary.get("bounded_probe_exploration_candidate_count"))
+                ),
+                "raw_adverse_first_is_standalone_veto=false",
                 "runtime_effect=false",
             ],
             "forbidden_uses": list(FORBIDDEN_USES),
@@ -667,6 +788,9 @@ def build_report(
     _merge_scout_metrics(priors, payloads.get("rising_missed_scout_workorder", {}))
     _merge_intraday_feedback(
         priors, payloads.get("rising_missed_intraday_feedback", {})
+    )
+    blocker_outcome_priors = _build_blocker_outcome_priors(
+        payloads.get("rising_missed_intraday_feedback", {})
     )
     counterfactual_metrics = _merge_counterfactual_metrics(
         priors,
@@ -711,6 +835,12 @@ def build_report(
         "source_quality_blocked_count": recommendation_counts.get(
             "source_quality_blocked", 0
         ),
+        "blocker_outcome_prior_count": len(blocker_outcome_priors),
+        "bounded_probe_exploration_candidate_count": sum(
+            row.get("exploration_assessment") == "bounded_probe_exploration_candidate"
+            for row in blocker_outcome_priors
+        ),
+        "raw_adverse_first_is_standalone_veto": False,
         "window_priority": list(WINDOW_PRIORITY),
         "counterfactual_status": counterfactual_status,
         "lifecycle_source_count": sum(
@@ -749,7 +879,20 @@ def build_report(
                 "primary_decision_metric": "source_quality_adjusted_ev_pct",
                 "source_quality_gate": "clean_baseline_after_2026_06_04_and_contract_quality",
                 "forbidden_uses": list(FORBIDDEN_USES),
-            }
+            },
+            "rising_missed_blocker_outcome_prior": {
+                "metric_role": "source_quality_gated_blocker_outcome_attribution",
+                "decision_authority": "source_only_bounded_probe_exploration",
+                "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+                "sample_floor": "10_source_quality_pass_completed_samplers_per_blocker",
+                "primary_decision_metric": (
+                    "gross_first_hit_payoff_proxy_pct_with_equal_weight_mfe_mae"
+                ),
+                "source_quality_gate": (
+                    "daily_completed_sampler_source_quality_pass_and_explicit_nxt_venue"
+                ),
+                "forbidden_uses": list(FORBIDDEN_USES),
+            },
         },
         "source_paths": {
             label: _source_ref(path) for label, path in sorted(paths.items())
@@ -757,6 +900,7 @@ def build_report(
         "source_quality": source_quality,
         "summary": summary,
         "priors": prior_rows,
+        "blocker_outcome_priors": blocker_outcome_priors,
         "code_improvement_orders": orders,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -782,6 +926,8 @@ def write_outputs(
         "- allowed_runtime_apply: false",
         f"- counterfactual_status: {report.get('summary', {}).get('counterfactual_status')}",
         f"- prior_count: {report.get('summary', {}).get('prior_count')}",
+        f"- blocker_outcome_prior_count: {report.get('summary', {}).get('blocker_outcome_prior_count')}",
+        f"- bounded_probe_exploration_candidate_count: {report.get('summary', {}).get('bounded_probe_exploration_candidate_count')}",
         f"- recommendation_counts: {json.dumps(report.get('summary', {}).get('recommendation_counts', {}), ensure_ascii=False, sort_keys=True)}",
         "",
         "## Top Priors",
@@ -798,6 +944,19 @@ def write_outputs(
         )
     if not _as_list(report.get("priors")):
         lines.append("- no prior rows")
+    lines.extend(["", "## Blocker Outcome Priors", ""])
+    for row in _as_list(report.get("blocker_outcome_priors"))[:20]:
+        lines.append(
+            "- "
+            + str(row.get("blocker_prior_key"))
+            + f" | assessment={row.get('exploration_assessment')}"
+            + f" | sample={row.get('completed_sample_count')}"
+            + f" | target_first={row.get('gross_target_first_count')}"
+            + f" | adverse_first={row.get('adverse_stop_first_count')}"
+            + f" | payoff_proxy={row.get('gross_first_hit_payoff_proxy_pct')}"
+        )
+    if not _as_list(report.get("blocker_outcome_priors")):
+        lines.append("- no blocker outcome prior rows")
     lines.extend(["", "## Code Improvement Orders", ""])
     for order in _as_list(report.get("code_improvement_orders")):
         lines.append(

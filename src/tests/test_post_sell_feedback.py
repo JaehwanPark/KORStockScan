@@ -814,3 +814,75 @@ def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
     assert report["priority_actions"]
     assert report["top_missed_upside"]
     assert "soft_stop_forensics" in report
+
+
+def test_materialize_post_sell_snapshot_preserves_insufficient_sample_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    captured = {}
+    monkeypatch.setattr(
+        feedback_mod,
+        "build_post_sell_feedback_report",
+        lambda target_date, evaluate_now: {
+            "date": target_date,
+            "metrics": {"total_candidates": 3, "evaluated_candidates": 0},
+            "meta": {},
+        },
+    )
+
+    def _save(kind, target_date, payload):
+        captured.update({"kind": kind, "target_date": target_date, "payload": payload})
+        return tmp_path / f"{kind}_{target_date}.json"
+
+    monkeypatch.setattr(feedback_mod, "save_monitor_snapshot", _save)
+
+    result = feedback_mod.materialize_post_sell_feedback_snapshot("2026-08-03")
+
+    assert captured["kind"] == "post_sell_feedback"
+    assert captured["payload"]["source_quality"] == {
+        "status": "insufficient_sample",
+        "reason": "no_mature_real_post_sell_evaluation_rows",
+        "candidate_count": 3,
+        "evaluated_candidate_count": 0,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "underlying_execution_scope": "real_post_sell_candidates",
+    }
+    assert captured["payload"]["metric_contract"]["runtime_effect"] is False
+    assert captured["payload"]["meta"]["snapshot_materialization_mode"] == (
+        "existing_rows_only_no_rest_evaluation"
+    )
+    assert result["runtime_effect"] is False
+    assert result["allowed_runtime_apply"] is False
+
+
+def test_materialize_post_sell_feedback_snapshot_marks_partial_sample(
+    monkeypatch,
+    tmp_path,
+):
+    captured = {}
+    monkeypatch.setattr(
+        feedback_mod,
+        "build_post_sell_feedback_report",
+        lambda target_date, evaluate_now: {
+            "date": target_date,
+            "metrics": {"total_candidates": 3, "evaluated_candidates": 1},
+            "meta": {},
+        },
+    )
+
+    def _save(kind, target_date, payload):
+        captured["payload"] = payload
+        return tmp_path / f"{kind}_{target_date}.json"
+
+    monkeypatch.setattr(feedback_mod, "save_monitor_snapshot", _save)
+
+    feedback_mod.materialize_post_sell_feedback_snapshot("2026-08-03")
+
+    assert captured["payload"]["source_quality"]["status"] == "partial_sample"
+    assert captured["payload"]["source_quality"]["reason"] == (
+        "partial_mature_real_post_sell_evaluation_rows"
+    )

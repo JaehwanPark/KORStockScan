@@ -583,7 +583,9 @@ def test_observation_source_quality_audit_accepts_fail_closed_early_accel_gap(
 
     report = audit.build_observation_source_quality_audit("2026-05-15")
 
-    assert report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
+    assert (
+        report["stage_contracts"]["early_accel_recheck_evaluated"]["status"] == "pass"
+    )
     assert report["stage_contracts"]["early_accel_recheck_skipped"]["status"] == "pass"
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
@@ -690,6 +692,8 @@ def test_partial_fill_reconciled_metric_contract_prevents_high_volume_hard_block
     assert "partial_fill_reconciled" not in gaps
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
     assert report["summary"]["tuning_input_allowed"] is True
+
+
 def test_observation_source_quality_audit_warns_on_high_rate_unknown_tokens(
     monkeypatch, tmp_path
 ):
@@ -5785,9 +5789,9 @@ def test_observation_source_quality_accepts_scalping_scanner_runtime_queue_lag(
         "venue",
         "effective_venue",
     }
-    assert {
-        field["reviewed_reason"] for field in queue_lag["fields"]
-    } == {"reviewed_scanner_venue_fail_closed_provenance"}
+    assert {field["reviewed_reason"] for field in queue_lag["fields"]} == {
+        "reviewed_scanner_venue_fail_closed_provenance"
+    }
 
 
 def test_observation_source_quality_reviews_explicit_scanner_derived_venue_gaps(
@@ -5830,9 +5834,9 @@ def test_observation_source_quality_reviews_explicit_scanner_derived_venue_gaps(
         "scanner_promotion_reanchor_effective_venue",
         "scanner_stale_backoff_canonical_effective_venue",
     }
-    assert {
-        field["reviewed_reason"] for field in reviewed["fields"]
-    } == {"reviewed_scanner_venue_fail_closed_provenance"}
+    assert {field["reviewed_reason"] for field in reviewed["fields"]} == {
+        "reviewed_scanner_venue_fail_closed_provenance"
+    }
 
 
 def test_observation_source_quality_reviews_target_attach_missing_venue_bucket(
@@ -7321,3 +7325,163 @@ def test_observation_source_quality_reviews_explicit_unavailable_route_provenanc
     assert reviewed["ai_holding_review"]["holding_context_ws_route"] == (
         "reviewed_holding_input_preflight_blocked_provenance"
     )
+
+
+def test_observation_source_quality_reviews_explicit_postclose_unknown_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-08-03",
+        [
+            _event(
+                "opening_rotation_entry_owner_handoff",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_runtime_event:explicit_target_venue_missing"
+                    ),
+                    "venue_source_quality_status": "reviewed_fail_closed",
+                    "venue_unknown_reviewed_reason": (
+                        "scanner_runtime_event:explicit_target_venue_missing"
+                    ),
+                    "runtime_effect": True,
+                },
+                record_id=1,
+            ),
+            _event(
+                "residual_blocked",
+                {
+                    "post_probe_direction_state": "UNKNOWN",
+                    "prior_probe_residual_direction_state": "UNKNOWN",
+                    "prior_probe_residual_failure_signature": (
+                        "residual_revalidation_timeout|UNKNOWN|"
+                        "post_probe_ai_action_not_fresh|orderbook|0/2"
+                    ),
+                    "prior_probe_residual_continuation_action": "DEFER",
+                    "prior_probe_residual_decision_authority": (
+                        "causal_attribution_only"
+                    ),
+                    "prior_probe_residual_direction_reason": (
+                        "post_probe_ai_action_not_fresh"
+                    ),
+                    "prior_probe_residual_source_quality_gate": (
+                        "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=2,
+            ),
+            _event(
+                "pre_submit_micro_unavailable_block",
+                {
+                    "entry_order_flow_status": "unknown",
+                    "entry_context_quality": "partial",
+                    "entry_context_missing_features": "quote_freshness",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=3,
+            ),
+            _event(
+                "scale_in_ai_authority_retry",
+                {
+                    "ai_market_snapshot_route_partition_selected_key": "KRX|unknown",
+                    "ai_market_snapshot_route_partition_used": False,
+                    "ai_market_snapshot_route_partition_reason": (
+                        "route_snapshots_unavailable"
+                    ),
+                    "holding_context_source_quality_status": "blocked",
+                    "holding_context_blockers": "['realtime_type_provenance_missing']",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=4,
+            ),
+            _event(
+                "stat_action_decision_snapshot",
+                {
+                    "prior_probe_residual_direction_state": "UNKNOWN",
+                    "prior_probe_residual_continuation_action": "DEFER",
+                    "prior_probe_residual_decision_authority": (
+                        "causal_attribution_only"
+                    ),
+                    "prior_probe_residual_direction_reason": (
+                        "post_probe_ai_action_not_fresh"
+                    ),
+                    "prior_probe_residual_source_quality_gate": (
+                        "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+                    ),
+                    "source_quality_gate": "stat_action_snapshot_source_only",
+                },
+                record_id=5,
+            ),
+            _event(
+                "residual_blocked",
+                {
+                    "prior_probe_residual_failure_signature": (
+                        "residual_revalidation_timeout|NOT_UNKNOWN|"
+                        "post_probe_ai_action_not_fresh|orderbook|0/2"
+                    ),
+                    "prior_probe_residual_continuation_action": "DEFER",
+                    "prior_probe_residual_decision_authority": (
+                        "causal_attribution_only"
+                    ),
+                    "prior_probe_residual_direction_reason": (
+                        "post_probe_ai_action_not_fresh"
+                    ),
+                    "prior_probe_residual_source_quality_gate": (
+                        "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=6,
+            ),
+            _event(
+                "unexplained_unknown_stage",
+                {"unexplained_source": "UNKNOWN"},
+                record_id=7,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-03")
+
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert set(reviewed["opening_rotation_entry_owner_handoff"].values()) == {
+        "reviewed_scanner_venue_fail_closed_provenance"
+    }
+    assert set(reviewed["residual_blocked"].values()) == {
+        "reviewed_prior_probe_residual_source_gap"
+    }
+    assert set(reviewed["stat_action_decision_snapshot"].values()) == {
+        "reviewed_prior_probe_residual_source_gap"
+    }
+    assert (
+        reviewed["pre_submit_micro_unavailable_block"]["entry_order_flow_status"]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["scale_in_ai_authority_retry"][
+            "ai_market_snapshot_route_partition_selected_key"
+        ]
+        == "reviewed_holding_route_partition_not_available"
+    )
+    unknown_by_stage = {
+        item["stage"]: {field["field"] for field in item["fields"]}
+        for item in report["unknown_token_findings"]
+    }
+    assert unknown_by_stage == {
+        "residual_blocked": {"prior_probe_residual_failure_signature"},
+        "unexplained_unknown_stage": {"__stage", "unexplained_source"},
+    }

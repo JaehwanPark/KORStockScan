@@ -12,7 +12,7 @@ def test_observability_warns_when_all_snapshots_missing(tmp_path, monkeypatch):
         analysis_end="2026-05-26",
     )
 
-    assert summary["schema_version"] == 3
+    assert summary["schema_version"] == 4
     assert summary["source_quality"]["status"] == "fail"
     assert summary["source_contract_status"] == "fail"
     assert len(summary["source_quality"]["findings"]) == 4
@@ -122,7 +122,17 @@ def test_observability_contract_passes_with_required_sources(tmp_path, monkeypat
         json.dumps({"metrics": {}}), encoding="utf-8"
     )
     (tmp_path / "post_sell_feedback_2026-05-26.json").write_text(
-        json.dumps({"metrics": {}}), encoding="utf-8"
+        json.dumps(
+            {
+                "metrics": {"evaluated_candidates": 0},
+                "metric_contract": {"runtime_effect": False},
+                "source_quality": {
+                    "status": "insufficient_sample",
+                    "reason": "no_mature_real_post_sell_evaluation_rows",
+                },
+            }
+        ),
+        encoding="utf-8",
     )
 
     summary = mod.build_tuning_observability_summary(
@@ -134,3 +144,7 @@ def test_observability_contract_passes_with_required_sources(tmp_path, monkeypat
     assert summary["source_contract_status"] == "pass"
     assert summary["source_contract_findings"] == []
     assert summary["code_improvement_orders"] == []
+    assert summary["holding_axis"]["source_quality_status"] == "insufficient_sample"
+    assert summary["holding_axis"]["source_quality_reason"] == (
+        "no_mature_real_post_sell_evaluation_rows"
+    )

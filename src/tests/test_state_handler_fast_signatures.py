@@ -944,6 +944,51 @@ def test_entry_adm_snapshot_prefers_latency_quote_freshness_over_ai_snapshot(
     )
 
 
+def test_entry_adm_snapshot_keeps_current_ai_preflight_over_persisted_fallback(
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_log_entry_pipeline(stock, code, stage, **fields):
+        captured.update(fields)
+
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", fake_log_entry_pipeline)
+
+    handlers._emit_scalp_entry_adm_snapshot(
+        {
+            "strategy": "SCALPING",
+            "name": "테스트",
+            "last_watching_ai_source_quality_fields": {
+                "ai_market_snapshot_id": "snapshot-previous",
+                "ai_input_preflight_status": "fresh_consistent",
+                "ai_input_preflight_allowed": True,
+                "ai_input_preflight_blockers": "",
+                "tick_accel_source": "computed_10ticks",
+            },
+        },
+        "003490",
+        "ai_confirmed",
+        ai_decision={
+            "action": "DROP",
+            "score": 0,
+            "reason": "ai_input_preflight_blocked",
+            "ai_result_source": "input_preflight_blocked",
+            "ai_market_snapshot_id": "snapshot-current",
+            "ai_input_preflight_status": "blocked",
+            "ai_input_preflight_allowed": False,
+            "ai_input_preflight_blockers": "bbo_stale,tape_stale",
+        },
+        ai_score=0,
+        chosen_action="NO_BUY_AI",
+    )
+
+    assert captured["ai_market_snapshot_id"] == "snapshot-current"
+    assert captured["ai_input_preflight_status"] == "blocked"
+    assert captured["ai_input_preflight_allowed"] is False
+    assert captured["ai_input_preflight_blockers"] == "bbo_stale,tape_stale"
+    assert captured["tick_accel_source"] == "not_evaluated"
+
+
 def test_gatekeeper_fast_signature_absorbs_small_noise():
     stock = {"position_tag": "MIDDLE"}
     ws_a = {

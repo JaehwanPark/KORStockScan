@@ -1,7 +1,7 @@
 # Tuning Observability Summary
 
-- target_date: `2026-07-31`
-- analysis_period: `2026-06-05 ~ 2026-07-31`
+- target_date: `2026-08-03`
+- analysis_period: `2026-06-05 ~ 2026-08-03`
 
 ## Entry Funnel
 
@@ -9,19 +9,19 @@
 - gatekeeper_eval_ms_p95: `0ms`
 - gatekeeper_lock_wait_ms_p95: `0ms`
 - gatekeeper_model_call_ms_p95: `0ms`
-- budget_pass_events: `179`
-- submitted_events: `4`
+- budget_pass_events: `628`
+- submitted_events: `14`
 - budget_pass_to_submitted_rate: `2.2%`
-- latency_block_events: `115`
-- quote_fresh_latency_blocks: `115`
+- latency_block_events: `463`
+- quote_fresh_latency_blocks: `449`
 
 ## Buy Recovery Canary
 
-- total_candidates: `32`
+- total_candidates: `63`
 - recovery_check: `0`
 - promoted: `0`
 - submitted: `0`
-- blocked_ai_score_share: `28.1%`
+- blocked_ai_score_share: `20.6%`
 
 ## Priority Findings
 
