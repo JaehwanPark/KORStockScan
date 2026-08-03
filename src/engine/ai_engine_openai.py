@@ -1807,9 +1807,22 @@ class GPTSniperEngine:
         if contract_errors and model_action != "BUY":
             repaired = dict(payload)
             repair_codes = []
+            non_buy_action_aliases = {
+                "STAGE_WAIT": "WAIT",
+                "STAGE_DROP": "DROP",
+                "STAGE-SPECIFIC ACTION=DROP": "DROP",
+            }
+            normalized_action_alias = non_buy_action_aliases.get(model_action)
+            if normalized_action_alias is not None:
+                repaired["action"] = normalized_action_alias
+                repair_codes.append(
+                    (
+                        "non_buy_stage_wait_action_alias_normalized"
+                        if normalized_action_alias == "WAIT"
+                        else "non_buy_stage_drop_action_alias_normalized"
+                    )
+                )
             if model_action == "STAGE_WAIT":
-                repaired["action"] = "WAIT"
-                repair_codes.append("non_buy_stage_wait_action_alias_normalized")
                 stage_wait_evidence = (
                     dict(repaired.get("evidence") or {})
                     if isinstance(repaired.get("evidence"), dict)
@@ -1834,6 +1847,7 @@ class GPTSniperEngine:
             valid_reason_codes = []
             invalid_reason_codes = []
             non_buy_reason_code_aliases = {
+                "adverse_distribution_no_edge": "distribution_adverse",
                 "blocking_current_entry_risk": "adverse_risk_high",
                 "structural_edge_floor": "structural_edge_without_trigger",
             }

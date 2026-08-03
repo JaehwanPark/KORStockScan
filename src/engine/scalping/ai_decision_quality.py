@@ -3672,12 +3672,19 @@ def validate_candidate_response(
                 ):
                     errors.append("entry_bounded_reversal_probe_misclassified")
             if contract_facts["trusted_supportive_trigger"]:
+                # WAIT remains a non-exposure candidate signal.  Trusted tape
+                # may justify a recovery-required probe candidate while the
+                # existing liquidity, freshness, broker, and submit guards
+                # retain final order authority.
+                trusted_trigger_action_consistent = bool(
+                    (action == "WAIT" and trigger == "recovery_required")
+                    or (action != "WAIT" and trigger == "confirmed")
+                )
                 if (
                     edge_state != "EDGE"
                     or positive_edge not in {"moderate", "strong"}
                     or str(evidence.get("tape") or "").lower() != "supportive"
-                    or trigger != "confirmed"
-                    or action == "WAIT"
+                    or not trusted_trigger_action_consistent
                 ):
                     errors.append("entry_trusted_supportive_trigger_misclassified")
             if edge_state != "INSUFFICIENT_DATA" and contract_facts["thin_tape_sample"]:
