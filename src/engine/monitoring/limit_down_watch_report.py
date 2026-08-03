@@ -20,20 +20,25 @@ RUNTIME_DIR = DATA_DIR / "runtime"
 COUNTERFACTUAL_DIR = DATA_DIR / "report" / "limit_down_watch_counterfactual"
 SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 POST_SIM_DIR = DATA_DIR / "report" / "limit_down_watch_post_sim_attribution"
+BOUNDED_CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
 APPROVAL_DIR = DATA_DIR / "approval"
 
 ROLLOUT_DATE = date(2026, 7, 28)
 CONVERSION_SAMPLE_FLOOR = {
     "observation_days": 5,
     "ordered_paths": 20,
-    "consecutive_limit_down_2plus_paths": 5,
-    "single_limit_down_paths": 10,
     "ordered_path_capture_rate_pct": 80.0,
 }
-CONVERSION_SAMPLE_FLOOR_NAME = "5_dates_20_paths_5_consecutive_10_single_capture80pct"
+CONVERSION_SAMPLE_FLOOR_NAME = "5_dates_20_paths_capture80pct_independent_cell_floors"
+POST_SIM_SAMPLE_FLOOR_NAME = "20_prior_policy_matches_with_independent_cell_floors"
 CONVERSION_FORBIDDEN_USES = (
     "direct_real_order,automatic_runtime_apply,provider_route_change,"
     "bot_restart,hard_safety_bypass"
+)
+LIVE_AUTO_FORBIDDEN_USES = (
+    "direct_broker_order_submission,hard_safety_bypass,stale_quote_bypass,"
+    "account_order_quantity_cooldown_bypass,provider_route_change,bot_restart,"
+    "scale_in,reentry,overnight,position_sizing_owner_override"
 )
 COUNTERFACTUAL_METRIC_CONTRACT = {
     "metric_role": "primary_ev",
@@ -48,7 +53,7 @@ POST_SIM_METRIC_CONTRACT = {
     "metric_role": "primary_ev",
     "decision_authority": "limit_down_post_sim_attribution_only",
     "window_policy": "rolling_clean_baseline_post_sim_attribution",
-    "sample_floor": CONVERSION_SAMPLE_FLOOR_NAME,
+    "sample_floor": POST_SIM_SAMPLE_FLOOR_NAME,
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": "valid_sim_attribution_and_raw_row_exclusion",
     "forbidden_uses": CONVERSION_FORBIDDEN_USES,
@@ -242,6 +247,8 @@ def _artifact_path_map(target_date: str) -> dict[str, Path]:
         / f"limit_down_watch_sim_policy_catalog_{target_date}.json",
         "post_sim_attribution": POST_SIM_DIR
         / f"limit_down_watch_post_sim_attribution_{target_date}.json",
+        "bounded_live_candidate": BOUNDED_CANDIDATE_DIR
+        / f"limit_down_watch_bounded_live_candidate_{target_date}.json",
         "live_conversion_approval": APPROVAL_DIR
         / f"limit_down_watch_live_conversion_approval_{target_date}.json",
     }
@@ -337,14 +344,6 @@ def _rolling_observation_evidence(
         "observation_days": len(path_dates)
         >= CONVERSION_SAMPLE_FLOOR["observation_days"],
         "ordered_paths": ordered_paths >= CONVERSION_SAMPLE_FLOOR["ordered_paths"],
-        "consecutive_limit_down_2plus_paths": (
-            cohort_paths.get("consecutive_limit_down_2plus", 0)
-            >= CONVERSION_SAMPLE_FLOOR["consecutive_limit_down_2plus_paths"]
-        ),
-        "single_limit_down_paths": (
-            cohort_paths.get("single_limit_down", 0)
-            >= CONVERSION_SAMPLE_FLOOR["single_limit_down_paths"]
-        ),
         "ordered_path_capture_rate_pct": (
             capture_rate >= CONVERSION_SAMPLE_FLOOR["ordered_path_capture_rate_pct"]
         ),
@@ -408,16 +407,14 @@ def _conversion_artifact_checks(
             counterfactual.get("observation_date_count")
         )
         >= CONVERSION_SAMPLE_FLOOR["observation_days"],
-        "consecutive_cohort_floor_not_met": _safe_int(
-            counterfactual.get("consecutive_limit_down_2plus_sample_count")
+        "eligible_policy_missing": _safe_int(
+            counterfactual.get("eligible_policy_count")
         )
-        >= CONVERSION_SAMPLE_FLOOR["consecutive_limit_down_2plus_paths"],
-        "single_cohort_floor_not_met": _safe_int(
-            counterfactual.get("single_limit_down_sample_count")
-        )
-        >= CONVERSION_SAMPLE_FLOOR["single_limit_down_paths"],
-        "primary_ev_not_positive": counterfactual_ev is not None
-        and counterfactual_ev > 0.0,
+        > 0,
+        "eligible_policy_ev_not_positive": (
+            (_safe_float(counterfactual.get("best_eligible_policy_ev_pct")) or 0.0)
+            > 0.0
+        ),
     }
     counterfactual_issues = (
         ["artifact_missing"]
@@ -464,7 +461,11 @@ def _conversion_artifact_checks(
         in {"pass", "pass_with_exclusions"},
         "sample_floor_not_met": _safe_int(post_sim.get("sample_count"))
         >= CONVERSION_SAMPLE_FLOOR["ordered_paths"],
-        "primary_ev_not_positive": post_sim_ev is not None and post_sim_ev > 0.0,
+        "qualified_policy_missing": _safe_int(post_sim.get("qualified_policy_count"))
+        > 0,
+        "qualified_policy_ev_not_positive": (
+            (_safe_float(post_sim.get("best_qualified_policy_ev_pct")) or 0.0) > 0.0
+        ),
     }
     post_sim_issues = (
         ["artifact_missing"]
@@ -476,35 +477,106 @@ def _conversion_artifact_checks(
     )
     post_sim_valid = not post_sim_issues
 
-    approval = _load_json(paths["live_conversion_approval"])
-    approval_checks = {
-        "schema_version_invalid": approval.get("schema_version") == 1,
-        "report_type_invalid": approval.get("report_type")
-        == "limit_down_watch_live_conversion_approval",
-        "target_date_invalid": approval.get("target_date") == target_date,
-        "explicit_approval_missing": approval.get("approved") is True,
-        "approved_by_user_missing": approval.get("approved_by") == "user",
-        "approval_scope_invalid": approval.get("approval_scope")
-        == "limit_down_watch_live_conversion",
-        "decision_authority_invalid": approval.get("decision_authority")
-        == "limit_down_live_conversion_approval_record_only",
-        "rollback_guard_missing": bool(
-            str(approval.get("rollback_guard") or "").strip()
-        ),
-        "runtime_effect_not_false": approval.get("runtime_effect") is False,
-        "actual_order_submitted_not_false": approval.get("actual_order_submitted")
-        is False,
-        "broker_order_forbidden_not_true": approval.get("broker_order_forbidden")
-        is True,
-        "allowed_runtime_apply_not_false": approval.get("allowed_runtime_apply")
-        is False,
-    }
-    approval_issues = (
-        ["artifact_missing"]
-        if not approval
-        else [name for name, passed in approval_checks.items() if not passed]
+    bounded = _load_json(paths["bounded_live_candidate"])
+    bounded_candidates = (
+        bounded.get("candidates") if isinstance(bounded.get("candidates"), list) else []
     )
-    approval_valid = not approval_issues
+    bounded_candidate_rows_valid = bool(
+        bounded_candidates
+        and all(
+            isinstance(row, dict)
+            and str(row.get("policy_key") or "")
+            == f"{row.get('cohort')}|{row.get('price_band')}"
+            and _safe_int(row.get("sample_count")) >= 1
+            and _safe_float(row.get("source_quality_adjusted_ev_pct")) is not None
+            and _safe_float(row.get("source_quality_adjusted_ev_pct")) > 0.0
+            and _safe_float(row.get("downside_p10_pct")) is not None
+            and _safe_float(row.get("downside_p10_pct")) > 0.0
+            and _safe_float(row.get("mae_p10_pct")) is not None
+            and _safe_float(row.get("mae_p10_pct")) >= -5.0
+            and _safe_float(row.get("relock_rate_pct")) is not None
+            and _safe_float(row.get("relock_rate_pct")) <= 0.0
+            and _safe_float(row.get("entry_bbo_coverage_pct")) is not None
+            and _safe_float(row.get("entry_bbo_coverage_pct")) >= 100.0
+            for row in bounded_candidates
+        )
+    )
+    bounded_checks = {
+        "schema_version_invalid": bounded.get("schema_version") == 1,
+        "target_date_invalid": bounded.get("target_date") == target_date,
+        "producer_runtime_effect_invalid": bounded.get("runtime_effect") is False,
+        "producer_order_state_invalid": bounded.get("actual_order_submitted") is False,
+        "producer_broker_state_invalid": bounded.get("broker_order_forbidden") is True,
+        "runtime_apply_not_allowed": bounded.get("allowed_runtime_apply") is True,
+        "report_type_invalid": bounded.get("report_type")
+        == "limit_down_watch_bounded_live_candidate",
+        "status_not_ready": bounded.get("status") == "live_auto_apply_ready",
+        "ready_candidate_missing": _safe_int(bounded.get("ready_candidate_count"))
+        == len(bounded_candidates)
+        > 0,
+        "candidate_row_contract_invalid": bounded_candidate_rows_valid,
+        "decision_authority_invalid": bounded.get("decision_authority")
+        == "limit_down_live_auto_eligibility_candidate",
+        "operator_approval_must_be_false": bounded.get("operator_approval_required")
+        is False,
+        "preopen_consumer_missing": bounded.get("preopen_consumer_implemented") is True,
+        "forbidden_uses_invalid": bounded.get("forbidden_uses")
+        == LIVE_AUTO_FORBIDDEN_USES,
+    }
+    risk_contract = (
+        bounded.get("risk_contract")
+        if isinstance(bounded.get("risk_contract"), dict)
+        else {}
+    )
+    bounded_checks.update(
+        {
+            "risk_max_concurrent_invalid": risk_contract.get("max_concurrent_positions")
+            == 1,
+            "risk_max_daily_entries_invalid": risk_contract.get("max_daily_entries")
+            == 1,
+            "risk_quantity_owner_invalid": risk_contract.get("quantity_owner")
+            == "position_sizing_dynamic_formula",
+            "risk_quantity_override_present": risk_contract.get(
+                "requested_quantity_override"
+            )
+            is None,
+            "risk_scale_in_not_blocked": risk_contract.get("scale_in_allowed") is False,
+            "risk_overnight_not_blocked": risk_contract.get("overnight_allowed")
+            is False,
+            "risk_reentry_not_blocked": risk_contract.get("same_day_reentry_allowed")
+            is False,
+            "risk_spread_cap_invalid": 0.0
+            < (_safe_float(risk_contract.get("max_entry_spread_pct")) or 0.0)
+            <= 1.5,
+            "risk_unlock_confirmation_missing": risk_contract.get(
+                "entry_requires_two_ordered_unlocked_ticks"
+            )
+            is True,
+            "risk_fresh_bbo_missing": risk_contract.get(
+                "entry_requires_fresh_quote_and_bbo"
+            )
+            is True,
+            "risk_relock_cancel_missing": risk_contract.get(
+                "relock_or_stale_cancels_unfilled_entry"
+            )
+            is True,
+            "risk_normal_guards_missing": risk_contract.get(
+                "normal_scalping_ai_and_submit_guards_required"
+            )
+            is True,
+            "risk_hard_safety_priority_invalid": risk_contract.get(
+                "hard_safety_priority"
+            )
+            == "unchanged_and_unbypassable",
+        }
+    )
+    bounded_issues = (
+        ["artifact_missing"]
+        if not bounded
+        else [name for name, passed in bounded_checks.items() if not passed]
+    )
+    bounded_valid = not bounded_issues
+
     return {
         "counterfactual": {
             "status": (
@@ -536,13 +608,19 @@ def _conversion_artifact_checks(
             "sample_count": _safe_int(post_sim.get("sample_count")),
             "issues": post_sim_issues,
         },
-        "live_conversion_approval": {
+        "bounded_live_candidate": {
             "status": (
-                "pass" if approval_valid else "missing" if not approval else "invalid"
+                "pass" if bounded_valid else "missing" if not bounded else "invalid"
             ),
+            "path": str(paths["bounded_live_candidate"]),
+            "ready_candidate_count": _safe_int(bounded.get("ready_candidate_count")),
+            "issues": bounded_issues,
+        },
+        "live_conversion_approval": {
+            "status": "not_required_live_auto",
             "path": str(paths["live_conversion_approval"]),
-            "approved": approval_valid,
-            "issues": approval_issues,
+            "approved": False,
+            "issues": [],
         },
     }
 
@@ -573,43 +651,25 @@ def _conversion_readiness(
     counterfactual_ready = artifact_checks["counterfactual"]["status"] == "pass"
     sim_policy_ready = artifact_checks["sim_policy_catalog"]["status"] == "pass"
     post_sim_ready = artifact_checks["post_sim_attribution"]["status"] == "pass"
-    approval_ready = artifact_checks["live_conversion_approval"]["status"] == "pass"
-    preapproval_ready = bool(
-        daily_source_ready
-        and rolling_ready
-        and counterfactual_ready
-        and sim_policy_ready
-        and post_sim_ready
+    bounded_candidate_ready = (
+        artifact_checks["bounded_live_candidate"]["status"] == "pass"
     )
-    separate_preopen_apply_ready = bool(preapproval_ready and approval_ready)
+    live_auto_ready = bool(daily_source_ready and bounded_candidate_ready)
+    separate_preopen_apply_ready = live_auto_ready
 
     blockers: list[str] = []
     if not activation_observed:
         blockers.append("observer_activation_not_observed")
     if not daily_source_ready:
         blockers.append("daily_source_contract_not_ready")
-    if not rolling_ready:
-        blockers.append("multi_day_cohort_sample_floor_not_established")
-    if not counterfactual_ready:
-        blockers.extend(
-            [
-                "counterfactual_entry_exit_labels_missing",
-                "clean_baseline_rolling_ev_missing",
-            ]
-        )
-    if not sim_policy_ready:
-        blockers.append("sim_policy_catalog_handoff_missing")
-    if not post_sim_ready:
-        blockers.append("post_sim_attribution_missing")
-    if not approval_ready:
-        blockers.append("separate_live_conversion_approval_missing")
+    if not bounded_candidate_ready:
+        blockers.append("bounded_live_candidate_contract_missing")
 
-    if separate_preopen_apply_ready:
-        decision = "approved_for_separate_preopen_apply"
-    elif preapproval_ready:
-        decision = "operator_live_conversion_approval_required"
-    else:
-        decision = "keep_observing_and_build_evidence"
+    decision = (
+        "auto_live_policy_ready"
+        if live_auto_ready
+        else "keep_observing_and_build_evidence"
+    )
     return {
         "schema_version": 1,
         "decision": decision,
@@ -620,13 +680,15 @@ def _conversion_readiness(
         "counterfactual_ev_ready": counterfactual_ready,
         "sim_policy_catalog_ready": sim_policy_ready,
         "post_sim_attribution_ready": post_sim_ready,
-        "live_conversion_review_ready": preapproval_ready,
-        "operator_approval_required": bool(preapproval_ready and not approval_ready),
-        "operator_approval_present": approval_ready,
+        "bounded_live_candidate_ready": bounded_candidate_ready,
+        "live_conversion_review_ready": live_auto_ready,
+        "operator_approval_required": False,
+        "operator_approval_present": False,
         "separate_preopen_apply_ready": separate_preopen_apply_ready,
+        "automatic_live_conversion_scheduled": live_auto_ready,
         "automatic_live_conversion_performed": False,
-        "real_trading_ready": False,
-        "allowed_runtime_apply": False,
+        "real_trading_ready": live_auto_ready,
+        "allowed_runtime_apply": live_auto_ready,
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
@@ -680,6 +742,7 @@ def _evidence_readiness(
         "clean_baseline_rolling_ev_missing": "clean_baseline_rolling_source_quality_adjusted_ev_pct",
         "sim_policy_catalog_handoff_missing": "sim_policy_catalog_and_preopen_handoff",
         "post_sim_attribution_missing": "post_sim_attribution",
+        "bounded_live_candidate_contract_missing": "bounded_live_candidate_with_locked_risk_contract",
         "separate_live_conversion_approval_missing": "separate_operator_live_conversion_approval_and_rollback",
     }
     required_next_evidence = list(
@@ -691,7 +754,7 @@ def _evidence_readiness(
     )
     return {
         "stage": "source_observation",
-        "decision": "collect_source_then_build_sim_candidate",
+        "decision": "collect_source_and_auto_promote_eligible_type",
         "source_quality_status": source_quality_status,
         "candidate_source_valid": candidate_source_valid,
         "candidate_source_report_status": candidate_source.get("status"),
@@ -704,7 +767,7 @@ def _evidence_readiness(
         "snapshot_code_count": snapshot_code_count,
         "ordered_path_captured_code_count": ordered_path_captured_code_count,
         "sim_candidate_ready": False,
-        "real_trading_ready": False,
+        "real_trading_ready": conversion_readiness.get("real_trading_ready", False),
         "blockers": blockers,
         "required_next_evidence": required_next_evidence,
         "conversion_decision": conversion_readiness.get("decision"),
@@ -713,6 +776,9 @@ def _evidence_readiness(
         ),
         "operator_approval_required": conversion_readiness.get(
             "operator_approval_required", False
+        ),
+        "bounded_live_candidate_ready": conversion_readiness.get(
+            "bounded_live_candidate_ready", False
         ),
         "separate_preopen_apply_ready": conversion_readiness.get(
             "separate_preopen_apply_ready", False
@@ -875,7 +941,8 @@ def build_report(
     if set(resolved_conversion_paths) != required_conversion_paths:
         raise ValueError(
             "conversion_paths must provide runtime_state, counterfactual, "
-            "sim_policy_catalog, post_sim_attribution, and live_conversion_approval"
+            "sim_policy_catalog, post_sim_attribution, bounded_live_candidate, "
+            "and live_conversion_approval"
         )
     runtime_state = _load_json(resolved_conversion_paths["runtime_state"])
     artifact_checks = _conversion_artifact_checks(
@@ -988,6 +1055,10 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             f"`{conversion.get('operator_approval_required')}`"
         ),
         (
+            "- bounded_live_candidate_ready: "
+            f"`{conversion.get('bounded_live_candidate_ready')}`"
+        ),
+        (
             "- separate_preopen_apply_ready: "
             f"`{conversion.get('separate_preopen_apply_ready')}`"
         ),
@@ -1095,6 +1166,14 @@ def _atomic_write_text(path: Path, content: str) -> None:
 
 
 def write_report(target_date: str) -> tuple[Path, Path]:
+    # The research producer validates and streams the same target-date source
+    # contract. Run it first, then build the final report once with all research
+    # artifacts visible; this avoids a redundant third full JSONL scan.
+    from src.engine.monitoring.limit_down_watch_research import (
+        produce_research_artifacts,
+    )
+
+    produce_research_artifacts(target_date)
     payload = build_report(target_date)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     base = OUTPUT_DIR / f"limit_down_watch_{target_date}"

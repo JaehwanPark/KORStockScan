@@ -76,7 +76,9 @@ from src.engine.scalping.watch_budget import (
     slot_type as watch_budget_slot_type,
     policy_version as watch_budget_policy_version,
 )
-from src.engine.scalping.limit_down_watch import LIMIT_DOWN_OBSERVATION_REGISTRY
+from src.engine.scalping.limit_down_watch import (  # noqa: E402
+    LIMIT_DOWN_OBSERVATION_REGISTRY,
+)
 from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
@@ -5236,6 +5238,7 @@ def _scalping_watch_budget_owner(target, now_ts=None):
     if str(explicit or "").strip().lower() in {
         GENERAL_SCALPING,
         OPENING_ROTATION,
+        LIMIT_DOWN_ROTATION,
         RISING_MISSED,
     }:
         return normalize_watch_budget_owner(explicit)
@@ -5265,11 +5268,24 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
     total = _scalping_fifo_max_active()
     opening_active = _scalping_watch_budget_opening_window_active(now_ts)
     policy = watch_budget_limits(total, opening_window_active=opening_active)
+    active_limit_down_observation_code = LIMIT_DOWN_OBSERVATION_REGISTRY.active_code()
+    observation_handoff_present = bool(
+        active_limit_down_observation_code
+        and any(
+            str((target or {}).get("code") or "").strip()[:6]
+            == active_limit_down_observation_code
+            and _scalping_watch_budget_owner(target, now_ts=now_ts)
+            == LIMIT_DOWN_ROTATION
+            for target in targets or []
+        )
+    )
     counts = {
         GENERAL_SCALPING: 0,
         OPENING_ROTATION: 0,
         LIMIT_DOWN_ROTATION: (
-            1 if LIMIT_DOWN_OBSERVATION_REGISTRY.active_code() else 0
+            1
+            if active_limit_down_observation_code and not observation_handoff_present
+            else 0
         ),
         RISING_MISSED: 0,
     }
@@ -7616,6 +7632,26 @@ def _scanner_runtime_context_updates(payload):
         "negative_display_rebound",
         "scanner_watch_budget_owner",
         "scanner_watch_budget_owner_source",
+        "limit_down_live_policy_key",
+        "limit_down_live_policy_matched",
+        "limit_down_live_policy_source_date",
+        "limit_down_live_policy_version",
+        "limit_down_live_policy_sample_count",
+        "limit_down_unlock_confirmed",
+        "limit_down_unlock_confirmed_epoch",
+        "limit_down_last_tick_epoch",
+        "limit_down_lower_limit_price",
+        "limit_down_best_ask",
+        "limit_down_best_bid",
+        "limit_down_entry_spread_pct",
+        "limit_down_max_entry_spread_pct",
+        "limit_down_cohort",
+        "limit_down_price_band",
+        "limit_down_risk_max_daily_entries",
+        "limit_down_scale_in_allowed",
+        "limit_down_same_day_reentry_allowed",
+        "limit_down_overnight_allowed",
+        "limit_down_normal_scalping_guards_required",
     ):
         value = payload.get(key)
         if value not in (None, ""):

@@ -1,13 +1,14 @@
 import json
 import threading
-from datetime import date
+import time
+from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
 
-from src.engine.monitoring import limit_down_watch_report
-from src.engine import kiwoom_websocket
+from src.engine.monitoring import limit_down_watch_report, limit_down_watch_research
+from src.engine import kiwoom_websocket, sniper_state_handlers
 from src.engine.scalping import limit_down_watch
 from src.engine.scalping.limit_down_watch import (
     LIMIT_DOWN_OBSERVATION_REGISTRY,
@@ -354,6 +355,7 @@ def test_raw_tick_state_preserves_locked_unlock_relock_order(monkeypatch, tmp_pa
     assert manager.state["relock_count"] == 1
     assert manager.state["first_unlock_epoch"] == 11.0
     assert manager.state["first_relock_epoch"] == 12.0
+    assert manager.state["unlock_confirmed_epoch"] == 0.0
     assert manager.state["trade_value"] == 1_000_000
     assert manager.state["actual_ws_item_count"] == 1
     assert manager.state["actual_ws_route"] == "krx_nxt_integrated"
@@ -363,6 +365,50 @@ def test_raw_tick_state_preserves_locked_unlock_relock_order(monkeypatch, tmp_pa
     manager.on_raw_tick("000001", {"curr": 3200}, 11.5)
     assert manager.state["phase"] == "RELOCKED"
     assert manager.state["current_price"] == 2800
+
+
+def test_raw_tick_emits_source_only_unlock_confirmation_after_second_tick(
+    monkeypatch, tmp_path
+):
+    emitted = []
+    monkeypatch.setattr(limit_down_watch, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    manager = LimitDownWatchManager("token", object(), _Bus())
+    manager.active = _candidate()
+    manager.state = {
+        "phase": "LIMIT_LOCKED",
+        "registered_epoch": 1.0,
+        "last_transition_epoch": 1.0,
+        "lower_limit_price": 2800,
+        "unlock_count": 0,
+        "relock_count": 0,
+        "transition_count": 0,
+        "consecutive_unlocked_tick_count": 0,
+        "unlock_confirmed_epoch": 0.0,
+    }
+
+    manager.on_raw_tick("000001", {"curr": 2900}, 10.0)
+    manager.on_raw_tick(
+        "000001",
+        {"curr": 2910, "best_ask": 2920, "best_bid": 2910},
+        11.0,
+    )
+
+    confirmations = [
+        kwargs["fields"]
+        for args, kwargs in emitted
+        if len(args) >= 4 and args[3] == "limit_down_watch_unlock_confirmed"
+    ]
+    assert len(confirmations) == 1
+    assert confirmations[0]["confirmation_tick_count"] == 2
+    assert confirmations[0]["current_price"] == 2910
+    assert confirmations[0]["actual_order_submitted"] is False
+    assert confirmations[0]["broker_order_forbidden"] is True
+    assert manager.state["unlock_confirmed_epoch"] == 11.0
 
 
 def test_ws_raw_sink_receives_every_tick_before_latest_tick_coalescing(monkeypatch):
@@ -517,6 +563,490 @@ def test_observation_registry_suppresses_trade_signal():
         LIMIT_DOWN_OBSERVATION_REGISTRY.release("000001")
 
 
+def test_rotation_pays_unseen_candidate_coverage_debt_before_reexploitation():
+    manager = LimitDownWatchManager("token", _DB(), _Bus())
+    first = _candidate(code="000011", count=2)
+    second = _candidate(code="000012", count=2)
+    single = _candidate(code="000013", count=1)
+    manager.candidates = [first, second, single]
+    manager.activity = {
+        first.code: {
+            "visit_count": 1,
+            "unlock_count": 3,
+            "tick_count": 100,
+            "trade_value": 1_000_000_000,
+            "last_tick_epoch": 990.0,
+        },
+        second.code: {"visit_count": 1},
+    }
+    manager.cell_visit_counts = {
+        "consecutive_limit_down_2plus|1000_4999": 2,
+    }
+
+    picked = manager._pick(set(), 1000.0)
+
+    assert picked is single
+
+
+def test_runtime_loads_latest_prior_source_only_sim_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr(limit_down_watch, "SIM_POLICY_DIR", tmp_path)
+    path = tmp_path / "limit_down_watch_sim_policy_catalog_2026-08-02.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "report_type": "limit_down_watch_sim_policy_catalog",
+                "target_date": "2026-08-02",
+                "status": "pass",
+                "allowed_sim_apply": True,
+                "active_policy_count": 1,
+                "active_policies": [
+                    {
+                        "policy_key": "single_limit_down|1000_4999",
+                        "cohort": "single_limit_down",
+                        "price_band": "1000_4999",
+                    }
+                ],
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = LimitDownWatchManager("token", _DB(), _Bus())
+
+    manager._load_sim_policy(date(2026, 8, 3))
+
+    assert manager.active_sim_policy_keys == {"single_limit_down|1000_4999"}
+    assert manager.sim_policy_source_date == "2026-08-02"
+
+
+def test_runtime_loads_latest_prior_live_auto_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr(limit_down_watch, "LIVE_AUTO_POLICY_DIR", tmp_path)
+    path = tmp_path / "limit_down_watch_bounded_live_candidate_2026-08-02.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "report_type": "limit_down_watch_bounded_live_candidate",
+                "target_date": "2026-08-02",
+                "status": "live_auto_apply_ready",
+                "decision_authority": "limit_down_live_auto_eligibility_candidate",
+                "operator_approval_required": False,
+                "preopen_consumer_implemented": True,
+                "activation_mode": "latest_valid_prior_date_policy_auto_loaded",
+                "sample_floor": "1_verified_ordered_path_per_cohort_price_band",
+                "ready_candidate_count": 1,
+                "candidates": [
+                    {
+                        "policy_key": "single_limit_down|1000_4999",
+                        "cohort": "single_limit_down",
+                        "price_band": "1000_4999",
+                        "sample_count": 1,
+                        "source_quality_adjusted_ev_pct": 0.8,
+                        "downside_p10_pct": 0.8,
+                        "mae_p10_pct": -0.1,
+                        "relock_rate_pct": 0.0,
+                        "entry_bbo_coverage_pct": 100.0,
+                        "evidence_mode": "single_verified_ordered_path_allowed",
+                    }
+                ],
+                "risk_contract": {
+                    "max_concurrent_positions": 1,
+                    "max_daily_entries": 1,
+                    "quantity_owner": "position_sizing_dynamic_formula",
+                    "requested_quantity_override": None,
+                    "scale_in_allowed": False,
+                    "same_day_reentry_allowed": False,
+                    "overnight_allowed": False,
+                    "entry_requires_two_ordered_unlocked_ticks": True,
+                    "entry_requires_fresh_quote_and_bbo": True,
+                    "max_entry_spread_pct": 1.5,
+                    "relock_or_stale_cancels_unfilled_entry": True,
+                    "normal_scalping_ai_and_submit_guards_required": True,
+                    "hard_safety_priority": "unchanged_and_unbypassable",
+                },
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = LimitDownWatchManager("token", _DB(), _Bus())
+
+    manager._load_live_policy(date(2026, 8, 3))
+
+    assert manager.active_live_policy_keys == {"single_limit_down|1000_4999"}
+    assert manager.live_policy_source_date == "2026-08-02"
+
+
+def test_live_policy_handoff_requires_fresh_confirmed_unlock_and_daily_capacity():
+    manager = LimitDownWatchManager("token", _DB(), _Bus())
+    manager.active = _candidate(count=1)
+    key = "single_limit_down|1000_4999"
+    manager.active_live_policy_keys = {key}
+    manager.live_policy_by_key = {key: {"sample_count": 1}}
+    manager.live_policy_source_date = "2026-08-02"
+    manager.live_policy_max_entry_spread_pct = 1.5
+    manager.state = {
+        "phase": "UNLOCKED",
+        "consecutive_unlocked_tick_count": 2,
+        "unlock_confirmed_epoch": 99.0,
+        "last_tick_epoch": 100.0,
+        "current_price": 2910,
+        "lower_limit_price": 2800,
+        "best_ask": 2920,
+        "best_bid": 2910,
+        "trade_value": 1_000_000,
+        "volume": 1000,
+    }
+
+    target = manager.live_promotion_target(now_epoch=101.0, daily_promotion_count=0)
+
+    assert target is not None
+    assert target["LimitDownLivePolicyKey"] == key
+    assert target["ScannerWatchBudgetOwner"] == "limit_down_rotation"
+    assert target["LimitDownMaxEntrySpreadPct"] == 1.5
+    assert target["LimitDownScaleInAllowed"] is False
+    assert (
+        manager.live_promotion_target(now_epoch=101.0, daily_promotion_count=1) is None
+    )
+    assert (
+        manager.live_promotion_target(now_epoch=106.0, daily_promotion_count=0) is None
+    )
+
+
+def test_limit_down_live_scanner_contract_and_scale_in_veto():
+    now_ts = datetime(2026, 8, 3, 9, 10).timestamp()
+    target = {
+        "Code": "000001",
+        "Name": "테스트",
+        "Price": 2910,
+        "SourceSet": {limit_down_watch.LIMIT_DOWN_LIVE_UNLOCK_SOURCE},
+        "LimitDownLivePolicyMatched": True,
+        "LimitDownLivePolicyKey": "single_limit_down|1000_4999",
+        "LimitDownLivePolicySourceDate": "2026-08-02",
+        "LimitDownLivePolicySampleCount": 1,
+        "LimitDownUnlockConfirmed": True,
+        "LimitDownLastTickEpoch": now_ts - 1,
+        "LimitDownLowerLimitPrice": 2800,
+        "LimitDownBestAsk": 2920,
+        "LimitDownBestBid": 2910,
+        "LimitDownEntrySpreadPct": 0.342466,
+        "LimitDownMaxEntrySpreadPct": 1.5,
+        "LimitDownCohort": "single_limit_down",
+        "LimitDownPriceBand": "1000_4999",
+        "LimitDownRiskMaxDailyEntries": 1,
+        "LimitDownScaleInAllowed": False,
+        "LimitDownSameDayReentryAllowed": False,
+        "LimitDownOvernightAllowed": False,
+        "LimitDownNormalScalpingGuardsRequired": True,
+    }
+
+    assert (
+        scalping_scanner._limit_down_live_candidate_block_reason(target, now_ts=now_ts)
+        == ""
+    )
+    guard = scalping_scanner._scanner_real_source_guard_decision(target, {}, now_ts)
+    assert guard["blocked"] is False
+    target["LimitDownMaxEntrySpreadPct"] = 0.1
+    assert (
+        scalping_scanner._limit_down_live_candidate_block_reason(target, now_ts=now_ts)
+        == "limit_down_live_spread_too_wide"
+    )
+    target["LimitDownMaxEntrySpreadPct"] = 1.5
+    scale_in = sniper_state_handlers.can_consider_scale_in(
+        {"source_signature": "LIMIT_DOWN_LIVE_UNLOCK"},
+        "000001",
+        {},
+        "SCALPING",
+        "NORMAL",
+    )
+    assert scale_in == {
+        "allowed": False,
+        "reason": "limit_down_live_scale_in_forbidden",
+    }
+
+
+def test_limit_down_live_pre_submit_guard_blocks_relock(monkeypatch):
+    now_ts = time.time()
+    stock = {
+        "source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
+        "limit_down_live_policy_matched": True,
+        "limit_down_live_policy_sample_count": 1,
+        "limit_down_risk_max_daily_entries": 1,
+        "limit_down_scale_in_allowed": False,
+        "limit_down_same_day_reentry_allowed": False,
+        "limit_down_overnight_allowed": False,
+        "limit_down_normal_scalping_guards_required": True,
+        "limit_down_lower_limit_price": 2800,
+        "limit_down_max_entry_spread_pct": 1.5,
+    }
+    relocked = {
+        "curr": 2800,
+        "best_ask": 2800,
+        "best_bid": 2795,
+        "last_ws_update_ts": now_ts,
+    }
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *_args: (relocked, {"pre_submit_ws_snapshot_refresh_reason": "fresh"}),
+    )
+
+    _, blocked = sniper_state_handlers._limit_down_live_pre_submit_guard(
+        stock, "000001", relocked, "SCALPING"
+    )
+
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "limit_down_live_relocked_or_quote_invalid"
+
+
+def test_limit_down_live_pre_submit_guard_accepts_fresh_unlocked_bbo(monkeypatch):
+    now_ts = time.time()
+    stock = {
+        "scanner_source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
+        "limit_down_live_policy_matched": True,
+        "limit_down_live_policy_sample_count": 1,
+        "limit_down_risk_max_daily_entries": 1,
+        "limit_down_scale_in_allowed": False,
+        "limit_down_same_day_reentry_allowed": False,
+        "limit_down_overnight_allowed": False,
+        "limit_down_normal_scalping_guards_required": True,
+        "limit_down_lower_limit_price": 2800,
+        "limit_down_max_entry_spread_pct": 1.5,
+    }
+    unlocked = {
+        "curr": 2910,
+        "best_ask": 2920,
+        "best_bid": 2910,
+        "last_ws_update_ts": now_ts,
+    }
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *_args: (unlocked, {"pre_submit_ws_snapshot_refresh_reason": "fresh"}),
+    )
+
+    _, allowed = sniper_state_handlers._limit_down_live_pre_submit_guard(
+        stock, "000001", unlocked, "SCALPING"
+    )
+
+    assert allowed["allowed"] is True
+    assert allowed["reason"] == "limit_down_live_pre_submit_pass"
+
+
+def test_rotation_prefers_active_sim_policy_after_coverage_floor():
+    manager = LimitDownWatchManager("token", _DB(), _Bus())
+    consecutive = _candidate(code="000021", count=2)
+    single = _candidate(code="000022", count=1)
+    manager.candidates = [consecutive, single]
+    manager.activity = {
+        consecutive.code: {"visit_count": 2, "unlock_count": 5},
+        single.code: {"visit_count": 2},
+    }
+    manager.cell_visit_counts = {
+        "consecutive_limit_down_2plus|1000_4999": 2,
+        "single_limit_down|1000_4999": 2,
+    }
+    manager.active_sim_policy_keys = {"single_limit_down|1000_4999"}
+
+    picked = manager._pick(set(), 1000.0)
+
+    assert picked is single
+
+
+def test_limit_down_counterfactual_label_uses_confirmed_unlock_and_cost():
+    visit = {
+        "row_id": "2026-08-03:000001:1",
+        "target_date": "2026-08-03",
+        "code": "000001",
+        "name": "테스트",
+        "cohort": "single_limit_down",
+        "price_band": "1000_4999",
+        "consecutive_count": 1,
+        "registered_at": "2026-08-03T09:00:00",
+        "release_reason": "rotation_due",
+        "lower_limit_price": 1000,
+        "transitions": [
+            {"at": "2026-08-03T09:00:05", "phase": "UNLOCKED"},
+            {"at": "2026-08-03T09:02:00", "phase": "RELOCKED"},
+        ],
+        "snapshots": [
+            {
+                "at": "2026-08-03T09:00:05",
+                "phase": "UNLOCKED",
+                "current_price": 1050,
+                "best_ask": 1050,
+                "best_bid": 1045,
+            },
+            {
+                "at": "2026-08-03T09:00:10",
+                "phase": "UNLOCKED",
+                "current_price": 1060,
+                "best_ask": 1060,
+                "best_bid": 1055,
+            },
+            {
+                "at": "2026-08-03T09:03:10",
+                "phase": "UNLOCKED_AGAIN",
+                "current_price": 1120,
+                "best_ask": 1120,
+                "best_bid": 1115,
+            },
+        ],
+    }
+
+    label = limit_down_watch_research.label_observation_visit(visit)
+
+    assert label["label_status"] == "pass"
+    assert label["entry_price"] == 1060
+    assert label["entry_bbo_available"] is True
+    assert label["selected_exit_horizon_sec"] == 180
+    assert label["gross_return_pct"] > 0
+    assert label["net_return_pct"] < label["gross_return_pct"]
+    assert label["relocked_after_entry"] is True
+    assert label["runtime_effect"] is False
+    assert label["actual_order_submitted"] is False
+    assert label["broker_order_forbidden"] is True
+
+
+def test_sim_policy_is_independent_by_cohort_and_price_band():
+    rows = []
+    for index in range(5):
+        rows.append(
+            {
+                "row_id": f"positive-{index}",
+                "target_date": f"2026-07-{29 + index % 3:02d}",
+                "label_status": "pass",
+                "cohort": "single_limit_down",
+                "price_band": "5000_9999",
+                "entry_price": 6000,
+                "net_return_pct": 1.0,
+                "mfe_pct": 2.0,
+                "mae_pct": -0.5,
+                "slot_hours": 0.05,
+                "entry_bbo_available": True,
+                "relocked_after_entry": False,
+            }
+        )
+        rows.append(
+            {
+                "row_id": f"negative-{index}",
+                "target_date": f"2026-07-{29 + index % 3:02d}",
+                "label_status": "pass",
+                "cohort": "consecutive_limit_down_2plus",
+                "price_band": "1000_4999",
+                "entry_price": 1500,
+                "net_return_pct": -2.0,
+                "mfe_pct": 0.3,
+                "mae_pct": -3.0,
+                "slot_hours": 0.05,
+                "entry_bbo_available": True,
+                "relocked_after_entry": True,
+            }
+        )
+    cells = limit_down_watch_research._cell_rows(rows)
+    counterfactual = {
+        "policy_cells": cells,
+        "target_date": "2026-08-03",
+    }
+
+    catalog = limit_down_watch_research.build_sim_policy_catalog(
+        "2026-08-03", counterfactual
+    )
+
+    assert catalog["status"] == "pass"
+    assert catalog["active_policy_count"] == 1
+    assert catalog["active_policies"][0]["policy_key"] == (
+        "single_limit_down|5000_9999"
+    )
+    assert catalog["allowed_sim_apply"] is True
+    assert catalog["allowed_runtime_apply"] is False
+
+
+def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
+    counterfactual = {
+        "source_quality_status": "pass",
+        "policy_cells": [
+            {
+                "policy_key": "single_limit_down|5000_9999",
+                "cohort": "single_limit_down",
+                "price_band": "5000_9999",
+                "sample_count": 1,
+                "observation_date_count": 1,
+                "source_quality_adjusted_ev_pct": 1.0,
+                "ev_lower_confidence_bound_90_pct": None,
+                "downside_p10_pct": 1.0,
+                "mae_p10_pct": -0.5,
+                "relock_rate_pct": 0.0,
+                "entry_bbo_coverage_pct": 100.0,
+            }
+        ],
+    }
+
+    artifact = limit_down_watch_research.build_bounded_live_candidate(
+        "2026-08-03", counterfactual
+    )
+
+    assert artifact["status"] == "live_auto_apply_ready"
+    assert artifact["ready_candidate_count"] == 1
+    assert artifact["operator_approval_required"] is False
+    assert artifact["preopen_consumer_implemented"] is True
+    assert artifact["risk_contract"]["quantity_owner"] == (
+        "position_sizing_dynamic_formula"
+    )
+    assert artifact["risk_contract"]["requested_quantity_override"] is None
+    assert artifact["risk_contract"]["scale_in_allowed"] is False
+    assert artifact["runtime_effect"] is False
+    assert artifact["actual_order_submitted"] is False
+    assert artifact["broker_order_forbidden"] is True
+    assert artifact["allowed_runtime_apply"] is True
+
+
+def test_report_write_materializes_research_before_final_report(monkeypatch, tmp_path):
+    calls = []
+    payload = {
+        "schema_version": 1,
+        "report_type": "limit_down_watch",
+        "target_date": "2026-08-03",
+        "generated_at": "2026-08-03T20:10:00",
+        "status": "no_observation",
+        "groups": [],
+        "evidence_readiness": {"blockers": []},
+        "conversion_readiness": {"evidence_artifacts": {}},
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_sim_apply": False,
+        "allowed_runtime_apply": False,
+    }
+    monkeypatch.setattr(limit_down_watch_report, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch_report,
+        "build_report",
+        lambda target_date: calls.append(("build", target_date)) or payload,
+    )
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "produce_research_artifacts",
+        lambda target_date: calls.append(("research", target_date)) or {},
+    )
+
+    json_path, markdown_path = limit_down_watch_report.write_report("2026-08-03")
+
+    assert calls == [
+        ("research", "2026-08-03"),
+        ("build", "2026-08-03"),
+    ]
+    assert json_path.exists()
+    assert markdown_path.exists()
+
+
 def test_postclose_report_groups_ordered_intraday_path(tmp_path):
     event_path = tmp_path / "events.jsonl"
     candidate_path = tmp_path / "candidates.json"
@@ -606,7 +1136,7 @@ def test_postclose_report_groups_ordered_intraday_path(tmp_path):
     assert report["evidence_readiness"]["real_trading_ready"] is False
     assert report["evidence_readiness"]["ordered_path_captured_code_count"] == 1
     assert (
-        "counterfactual_entry_exit_labels_missing"
+        "bounded_live_candidate_contract_missing"
         in report["evidence_readiness"]["blockers"]
     )
     assert (
@@ -891,14 +1421,17 @@ def test_rolling_observation_evidence_enforces_cohort_and_day_floors(tmp_path):
     }
     assert evidence["checks"]["observation_days"] is True
     assert evidence["checks"]["ordered_paths"] is False
+    assert "consecutive_limit_down_2plus_paths" not in evidence["checks"]
+    assert "single_limit_down_paths" not in evidence["checks"]
     assert evidence["status"] == "insufficient_sample"
 
 
-def test_conversion_readiness_requires_explicit_approval_and_never_auto_applies():
+def test_conversion_readiness_auto_applies_without_operator_approval():
     artifact_checks = {
         "counterfactual": {"status": "pass"},
         "sim_policy_catalog": {"status": "pass"},
         "post_sim_attribution": {"status": "pass"},
+        "bounded_live_candidate": {"status": "pass"},
         "live_conversion_approval": {"status": "missing"},
     }
     readiness = limit_down_watch_report._conversion_readiness(
@@ -911,28 +1444,14 @@ def test_conversion_readiness_requires_explicit_approval_and_never_auto_applies(
         runtime_state={"target_date": "2026-08-03", "enabled": True},
     )
 
-    assert readiness["decision"] == "operator_live_conversion_approval_required"
+    assert readiness["decision"] == "auto_live_policy_ready"
     assert readiness["live_conversion_review_ready"] is True
-    assert readiness["operator_approval_required"] is True
-    assert readiness["separate_preopen_apply_ready"] is False
+    assert readiness["operator_approval_required"] is False
+    assert readiness["separate_preopen_apply_ready"] is True
+    assert readiness["automatic_live_conversion_scheduled"] is True
     assert readiness["automatic_live_conversion_performed"] is False
-    assert readiness["real_trading_ready"] is False
-    assert readiness["allowed_runtime_apply"] is False
-
-    artifact_checks["live_conversion_approval"] = {"status": "pass"}
-    approved = limit_down_watch_report._conversion_readiness(
-        "2026-08-03",
-        candidate_source_valid=True,
-        source_quality_status="pass",
-        event_source_valid=True,
-        rolling_observation={"status": "pass"},
-        artifact_checks=artifact_checks,
-        runtime_state={"target_date": "2026-08-03", "enabled": True},
-    )
-    assert approved["decision"] == "approved_for_separate_preopen_apply"
-    assert approved["separate_preopen_apply_ready"] is True
-    assert approved["automatic_live_conversion_performed"] is False
-    assert approved["allowed_runtime_apply"] is False
+    assert readiness["real_trading_ready"] is True
+    assert readiness["allowed_runtime_apply"] is True
 
 
 def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_path):
@@ -941,6 +1460,7 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
         "counterfactual": tmp_path / "counterfactual.json",
         "sim_policy_catalog": tmp_path / "sim-policy.json",
         "post_sim_attribution": tmp_path / "post-sim.json",
+        "bounded_live_candidate": tmp_path / "bounded.json",
         "live_conversion_approval": tmp_path / "approval.json",
     }
     source_only = {
@@ -964,6 +1484,8 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
                 "consecutive_limit_down_2plus_sample_count": 5,
                 "single_limit_down_sample_count": 10,
                 "source_quality_adjusted_ev_pct": 0.1,
+                "eligible_policy_count": 1,
+                "best_eligible_policy_ev_pct": 0.1,
             }
         ),
         encoding="utf-8",
@@ -992,6 +1514,52 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
                 "source_quality_status": "pass",
                 "sample_count": 20,
                 "source_quality_adjusted_ev_pct": 0.2,
+                "qualified_policy_count": 1,
+                "best_qualified_policy_ev_pct": 0.2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["bounded_live_candidate"].write_text(
+        json.dumps(
+            {
+                **source_only,
+                "report_type": "limit_down_watch_bounded_live_candidate",
+                "status": "live_auto_apply_ready",
+                "ready_candidate_count": 1,
+                "candidates": [
+                    {
+                        "policy_key": "single_limit_down|5000_9999",
+                        "cohort": "single_limit_down",
+                        "price_band": "5000_9999",
+                        "sample_count": 1,
+                        "source_quality_adjusted_ev_pct": 0.5,
+                        "downside_p10_pct": 0.5,
+                        "mae_p10_pct": -0.2,
+                        "relock_rate_pct": 0.0,
+                        "entry_bbo_coverage_pct": 100.0,
+                    }
+                ],
+                "decision_authority": "limit_down_live_auto_eligibility_candidate",
+                "operator_approval_required": False,
+                "preopen_consumer_implemented": True,
+                "forbidden_uses": limit_down_watch_report.LIVE_AUTO_FORBIDDEN_USES,
+                "allowed_runtime_apply": True,
+                "risk_contract": {
+                    "max_concurrent_positions": 1,
+                    "max_daily_entries": 1,
+                    "quantity_owner": "position_sizing_dynamic_formula",
+                    "requested_quantity_override": None,
+                    "scale_in_allowed": False,
+                    "same_day_reentry_allowed": False,
+                    "overnight_allowed": False,
+                    "entry_requires_two_ordered_unlocked_ticks": True,
+                    "entry_requires_fresh_quote_and_bbo": True,
+                    "max_entry_spread_pct": 1.5,
+                    "relock_or_stale_cancels_unfilled_entry": True,
+                    "normal_scalping_ai_and_submit_guards_required": True,
+                    "hard_safety_priority": "unchanged_and_unbypassable",
+                },
             }
         ),
         encoding="utf-8",
@@ -1016,7 +1584,8 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
         "counterfactual": "pass",
         "sim_policy_catalog": "pass",
         "post_sim_attribution": "pass",
-        "live_conversion_approval": "pass",
+        "bounded_live_candidate": "pass",
+        "live_conversion_approval": "not_required_live_auto",
     }
 
     payload = json.loads(paths["counterfactual"].read_text(encoding="utf-8"))
@@ -1038,6 +1607,7 @@ def test_postclose_report_marks_missing_daily_observer_activation(tmp_path):
             "counterfactual": tmp_path / "missing-counterfactual.json",
             "sim_policy_catalog": tmp_path / "missing-sim-policy.json",
             "post_sim_attribution": tmp_path / "missing-post-sim.json",
+            "bounded_live_candidate": tmp_path / "missing-bounded.json",
             "live_conversion_approval": tmp_path / "missing-approval.json",
         },
     )

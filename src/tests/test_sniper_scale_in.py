@@ -8920,6 +8920,65 @@ def test_rising_missed_decision_input_resolver_shares_rest_envelope(monkeypatch)
     )
 
 
+def test_rising_missed_micro_estimator_consumes_new_source_observation_before_processing_ts():
+    code = "123469_observation_clock"
+    stock = {}
+    state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.clear()
+    raw_ws = {
+        "curr": 10000,
+        "best_bid": 9990,
+        "best_ask": 10000,
+        "best_bid_qty": 800,
+        "best_ask_qty": 200,
+        "last_ws_update_ts": 999.9,
+        "last_realtime_type_ts": {"0B": 999.8, "0D": 999.7},
+        "last_trade_tick": {
+            "ts": 999.8,
+            "values": {"15": "+100"},
+            "aggressor_source": "kiwoom_0b_signed_trade_volume",
+            "strength": 120.0,
+        },
+    }
+
+    first_fields = (
+        state_handlers._maybe_update_rising_missed_micro_estimator_from_fresh_ws(
+            stock,
+            code,
+            raw_ws,
+            {"now_ts": 1000.0},
+            consumer_stage="test",
+        )
+    )
+    first_snapshot = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(
+        code, now_ts=1000.0
+    )
+    raw_ws["last_ws_update_ts"] = 1000.0
+    raw_ws["last_realtime_type_ts"] = {"0B": 999.95, "0D": 999.9}
+    raw_ws["best_bid_qty"] = 900
+    raw_ws["best_ask_qty"] = 150
+
+    second_fields = (
+        state_handlers._maybe_update_rising_missed_micro_estimator_from_fresh_ws(
+            stock,
+            code,
+            raw_ws,
+            {"now_ts": 1000.1},
+            consumer_stage="test",
+        )
+    )
+    second_snapshot = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(
+        code, now_ts=1000.1
+    )
+
+    assert first_fields["rising_missed_micro_estimator_ws_update_applied"] is True
+    assert second_fields["rising_missed_micro_estimator_ws_update_applied"] is True
+    assert second_fields["rising_missed_micro_estimator_ws_update_reason"] == (
+        "trusted_fresh_ws_updated"
+    )
+    assert second_snapshot["sample_count"] > first_snapshot["sample_count"]
+    assert stock["_rising_missed_tp1_last_micro_ws_observation_ts"] == 999.9
+
+
 def test_rising_missed_decision_input_cache_expires_rest_signed_tape(monkeypatch):
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "TOKEN")
     state_handlers._RISING_MISSED_QUALITY_GUARD_PRE_ENVELOPE_RATE_EPOCHS.clear()
@@ -9060,6 +9119,16 @@ def test_rising_missed_decision_input_normalizes_ws_spread_and_fresh_features(
     assert fields["rising_missed_tp1_micro_vwap_source"] == (
         "last_watching_ai_feature_probe"
     )
+    assert fields["rising_missed_tp1_micro_unavailable_reason"] == (
+        "estimator_warmup"
+    )
+    assert fields["rising_missed_tp1_micro_unavailable_class"] == (
+        "expected_estimator_warmup"
+    )
+    assert (
+        fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"]
+        is False
+    )
 
 
 def test_rising_missed_decision_input_observes_nxt_trade_quiet_without_changing_readiness(
@@ -9122,6 +9191,47 @@ def test_rising_missed_decision_input_observes_nxt_trade_quiet_without_changing_
     assert fields["rising_missed_nxt_micro_state"] == "fresh_trade_quiet"
     assert fields["rising_missed_tp1_input_ready"] is False
     assert fields["rising_missed_tp1_input_reason"] == "tp1_micro_ws_unavailable"
+    assert fields["rising_missed_tp1_micro_unavailable_reason"] == (
+        "trade_unavailable"
+    )
+    assert fields["rising_missed_tp1_micro_unavailable_class"] == (
+        "external_ws_input_gap"
+    )
+    assert fields["rising_missed_tp1_micro_unavailable_owner"] == (
+        "kiwoom_ws_0b_source_quality"
+    )
+    assert (
+        fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"]
+        is False
+    )
+
+
+def test_rising_missed_tp1_micro_unavailable_fields_marks_stale_estimator_internal():
+    fields = state_handlers._rising_missed_tp1_micro_unavailable_fields(
+        ws_provenance={
+            "rising_missed_tp1_ws_0d_depth_fresh": True,
+            "rising_missed_tp1_ws_0b_trade_fresh": True,
+            "rising_missed_tp1_ws_0b_signed_fid15_present": True,
+            "rising_missed_tp1_ws_0b_tick_flow_trusted": True,
+            "rising_missed_tp1_ws_micro_provenance_ready": True,
+        },
+        micro_source_state="fresh_ws_order_flow_delta",
+        micro_age_sec=3.1,
+        true_ofi_samples=10,
+        trusted_micro_ready=False,
+    )
+
+    assert fields["rising_missed_tp1_micro_unavailable_reason"] == "estimator_stale"
+    assert fields["rising_missed_tp1_micro_unavailable_class"] == (
+        "estimator_state_gap"
+    )
+    assert fields["rising_missed_tp1_micro_unavailable_owner"] == (
+        "rising_missed_micro_estimator"
+    )
+    assert (
+        fields["rising_missed_tp1_micro_unavailable_code_defect_candidate"] is True
+    )
+    assert fields["rising_missed_tp1_micro_unavailable_runtime_effect"] is False
 
 
 def test_rising_missed_premarket_is_krx_like_without_nxt_runtime_classification():
@@ -9555,6 +9665,9 @@ def test_rising_missed_decision_input_resolver_defers_without_budget_cache(monke
     )
     assert (
         fields["rising_missed_tp1_resolver_envelope_result"] == "rest_budget_deferred"
+    )
+    assert (
+        "rising_missed_tp1_micro_unavailable_code_defect_candidate" not in fields
     )
 
 

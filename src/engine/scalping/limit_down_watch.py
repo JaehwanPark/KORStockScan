@@ -1,4 +1,4 @@
-"""Source-only rotating observation lane for prior KRX limit-down stocks."""
+"""Rotating observation lane and bounded live-eligibility handoff."""
 
 from __future__ import annotations
 
@@ -23,6 +23,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
 RUNTIME_DIR = DATA_DIR / "runtime"
 CANDIDATE_DIR = DATA_DIR / "report" / "limit_down_watch_candidate_source"
+SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
+LIVE_AUTO_POLICY_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
+LIMIT_DOWN_LIVE_UNLOCK_SOURCE = "LIMIT_DOWN_LIVE_UNLOCK"
+LIMIT_DOWN_LIVE_POLICY_VERSION = "limit_down_single_verified_path_live_auto_v1"
 
 DECISION_AUTHORITY = "limit_down_source_observation_only"
 METRIC_ROLE = "diagnostic"
@@ -47,6 +51,13 @@ def feature_enabled() -> bool:
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(str(value).replace(",", "").replace("+", "").strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(str(value).replace(",", "").strip())
     except (TypeError, ValueError):
         return default
 
@@ -410,6 +421,13 @@ class LimitDownWatchManager:
         self.next_retry_epoch = 0.0
         self.last_snapshot_epoch = 0.0
         self.activity: dict[str, dict[str, Any]] = {}
+        self.cell_visit_counts: dict[str, int] = {}
+        self.active_sim_policy_keys: set[str] = set()
+        self.sim_policy_source_date = ""
+        self.active_live_policy_keys: set[str] = set()
+        self.live_policy_by_key: dict[str, dict[str, Any]] = {}
+        self.live_policy_source_date = ""
+        self.live_policy_max_entry_spread_pct = 0.0
         self.last_release: dict[str, Any] | None = None
         self._lock = threading.RLock()
 
@@ -441,6 +459,15 @@ class LimitDownWatchManager:
             "active_candidate": asdict(self.active) if self.active else None,
             "pool_hash": _canonical_hash([asdict(item) for item in self.candidates]),
             "state": self.state,
+            "selection_policy": "coverage_first_then_evidence_weighted_v2",
+            "candidate_activity": self.activity,
+            "cell_visit_counts": self.cell_visit_counts,
+            "active_sim_policy_keys": sorted(self.active_sim_policy_keys),
+            "sim_policy_source_date": self.sim_policy_source_date,
+            "active_live_policy_keys": sorted(self.active_live_policy_keys),
+            "live_policy_source_date": self.live_policy_source_date,
+            "live_policy_version": LIMIT_DOWN_LIVE_POLICY_VERSION,
+            "live_policy_max_entry_spread_pct": self.live_policy_max_entry_spread_pct,
             "last_release": self.last_release,
             **_contract_fields(),
         }
@@ -474,11 +501,152 @@ class LimitDownWatchManager:
             return
         self.loaded_date = today.isoformat()
         self.next_retry_epoch = 0.0
+        self._load_sim_policy(today)
+        self._load_live_policy(today)
         self._emit(
             "limit_down_watch_source_loaded",
             candidate_count=len(self.candidates),
             source_status=artifact.get("status"),
             source_hash=artifact.get("request_response_hash"),
+            active_sim_policy_count=len(self.active_sim_policy_keys),
+            sim_policy_source_date=self.sim_policy_source_date,
+            active_live_policy_count=len(self.active_live_policy_keys),
+            live_policy_source_date=self.live_policy_source_date,
+        )
+
+    def _load_sim_policy(self, target_date: date) -> None:
+        candidates: list[tuple[date, Path]] = []
+        for path in SIM_POLICY_DIR.glob("limit_down_watch_sim_policy_catalog_*.json"):
+            suffix = path.stem.removeprefix("limit_down_watch_sim_policy_catalog_")
+            try:
+                policy_date = date.fromisoformat(suffix)
+            except ValueError:
+                continue
+            if policy_date < target_date:
+                candidates.append((policy_date, path))
+        self.active_sim_policy_keys = set()
+        self.sim_policy_source_date = ""
+        if not candidates:
+            return
+        policy_date, path = max(candidates)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        policies = (
+            payload.get("active_policies")
+            if isinstance(payload, dict)
+            and isinstance(payload.get("active_policies"), list)
+            else []
+        )
+        valid = bool(
+            payload.get("schema_version") == 1
+            and payload.get("report_type") == "limit_down_watch_sim_policy_catalog"
+            and payload.get("target_date") == policy_date.isoformat()
+            and payload.get("status") == "pass"
+            and payload.get("allowed_sim_apply") is True
+            and payload.get("runtime_effect") is False
+            and payload.get("actual_order_submitted") is False
+            and payload.get("broker_order_forbidden") is True
+            and payload.get("allowed_runtime_apply") is False
+            and payload.get("active_policy_count") == len(policies)
+        )
+        if not valid:
+            return
+        self.active_sim_policy_keys = {
+            str(row.get("policy_key"))
+            for row in policies
+            if isinstance(row, dict)
+            and str(row.get("policy_key") or "")
+            == f"{row.get('cohort')}|{row.get('price_band')}"
+        }
+        self.sim_policy_source_date = policy_date.isoformat()
+
+    def _load_live_policy(self, target_date: date) -> None:
+        candidates: list[tuple[date, Path]] = []
+        for path in LIVE_AUTO_POLICY_DIR.glob(
+            "limit_down_watch_bounded_live_candidate_*.json"
+        ):
+            suffix = path.stem.removeprefix("limit_down_watch_bounded_live_candidate_")
+            try:
+                policy_date = date.fromisoformat(suffix)
+            except ValueError:
+                continue
+            if policy_date < target_date:
+                candidates.append((policy_date, path))
+        self.active_live_policy_keys = set()
+        self.live_policy_by_key = {}
+        self.live_policy_source_date = ""
+        self.live_policy_max_entry_spread_pct = 0.0
+        if not candidates:
+            return
+        policy_date, path = max(candidates)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        policies = (
+            payload.get("candidates")
+            if isinstance(payload, dict) and isinstance(payload.get("candidates"), list)
+            else []
+        )
+        risk = payload.get("risk_contract") if isinstance(payload, dict) else {}
+        risk = risk if isinstance(risk, dict) else {}
+        valid = bool(
+            payload.get("schema_version") == 1
+            and payload.get("report_type") == "limit_down_watch_bounded_live_candidate"
+            and payload.get("target_date") == policy_date.isoformat()
+            and payload.get("status") == "live_auto_apply_ready"
+            and payload.get("decision_authority")
+            == "limit_down_live_auto_eligibility_candidate"
+            and payload.get("operator_approval_required") is False
+            and payload.get("preopen_consumer_implemented") is True
+            and payload.get("activation_mode")
+            == "latest_valid_prior_date_policy_auto_loaded"
+            and payload.get("sample_floor")
+            == "1_verified_ordered_path_per_cohort_price_band"
+            and payload.get("runtime_effect") is False
+            and payload.get("actual_order_submitted") is False
+            and payload.get("broker_order_forbidden") is True
+            and payload.get("allowed_runtime_apply") is True
+            and payload.get("ready_candidate_count") == len(policies)
+            and risk.get("max_concurrent_positions") == 1
+            and risk.get("max_daily_entries") == 1
+            and risk.get("quantity_owner") == "position_sizing_dynamic_formula"
+            and risk.get("requested_quantity_override") is None
+            and risk.get("scale_in_allowed") is False
+            and risk.get("same_day_reentry_allowed") is False
+            and risk.get("overnight_allowed") is False
+            and risk.get("entry_requires_two_ordered_unlocked_ticks") is True
+            and risk.get("entry_requires_fresh_quote_and_bbo") is True
+            and risk.get("relock_or_stale_cancels_unfilled_entry") is True
+            and 0.0 < _safe_float(risk.get("max_entry_spread_pct")) <= 1.5
+            and risk.get("normal_scalping_ai_and_submit_guards_required") is True
+            and risk.get("hard_safety_priority") == "unchanged_and_unbypassable"
+        )
+        if not valid:
+            return
+        policy_by_key = {
+            str(row.get("policy_key")): dict(row)
+            for row in policies
+            if isinstance(row, dict)
+            and str(row.get("policy_key") or "")
+            == f"{row.get('cohort')}|{row.get('price_band')}"
+            and _safe_int(row.get("sample_count")) >= 1
+            and _safe_float(row.get("source_quality_adjusted_ev_pct")) > 0.0
+            and _safe_float(row.get("downside_p10_pct")) > 0.0
+            and _safe_float(row.get("mae_p10_pct"), -999.0) >= -5.0
+            and _safe_float(row.get("relock_rate_pct"), 999.0) <= 0.0
+            and _safe_float(row.get("entry_bbo_coverage_pct")) >= 100.0
+            and row.get("evidence_mode") == "single_verified_ordered_path_allowed"
+        }
+        if len(policy_by_key) != len(policies) or not policy_by_key:
+            return
+        self.live_policy_by_key = policy_by_key
+        self.active_live_policy_keys = set(policy_by_key)
+        self.live_policy_source_date = policy_date.isoformat()
+        self.live_policy_max_entry_spread_pct = _safe_float(
+            risk.get("max_entry_spread_pct")
         )
 
     def _pick(
@@ -494,14 +662,42 @@ class LimitDownWatchManager:
         if not available:
             return None
 
+        # Exploration debt is paid before evidence-weighted exploitation. This
+        # prevents a previously active/unlocked symbol (or a dense 2+ cohort)
+        # from starving unseen candidates and price bands. Once every candidate
+        # has one visit and every observed cell has two visits, the original
+        # cohort/liquidity/activity preference resumes.
+        unseen_exists = any(
+            _safe_int(self.activity.get(item.code, {}).get("visit_count")) <= 0
+            for item in available
+        )
+
         def priority(item: LimitDownCandidate) -> tuple[Any, ...]:
             activity = self.activity.get(item.code, {})
+            visit_count = _safe_int(activity.get("visit_count"))
+            cell_key = f"{item.cohort}|{item.price_band}"
+            cell_visit_count = _safe_int(self.cell_visit_counts.get(cell_key))
             tick_count = _safe_int(activity.get("tick_count"))
             unlock_count = _safe_int(activity.get("unlock_count"))
             trade_value = _safe_int(activity.get("trade_value"))
             last_tick_epoch = float(activity.get("last_tick_epoch") or 0.0)
             fresh_tick = last_tick_epoch > 0 and now_epoch - last_tick_epoch <= 30.0
+            live_policy_rank = 0 if cell_key in self.active_live_policy_keys else 1
+            if unseen_exists:
+                return (
+                    live_policy_rank,
+                    0 if visit_count <= 0 else 1,
+                    cell_visit_count,
+                    0 if item.consecutive_count >= 2 else 1,
+                    -item.volume,
+                    item.code,
+                )
             return (
+                live_policy_rank,
+                0 if cell_visit_count < 2 else 1,
+                cell_visit_count if cell_visit_count < 2 else 0,
+                visit_count if cell_visit_count < 2 else 0,
+                0 if cell_key in self.active_sim_policy_keys else 1,
                 0 if item.consecutive_count >= 2 else 1,
                 0 if fresh_tick or unlock_count > 0 or tick_count > 0 else 1,
                 -unlock_count,
@@ -526,6 +722,13 @@ class LimitDownWatchManager:
             )
             return
         self.active = candidate
+        cell_key = f"{candidate.cohort}|{candidate.price_band}"
+        activity = self.activity.setdefault(candidate.code, {})
+        activity["visit_count"] = _safe_int(activity.get("visit_count")) + 1
+        activity["last_selected_epoch"] = now_epoch
+        self.cell_visit_counts[cell_key] = (
+            _safe_int(self.cell_visit_counts.get(cell_key)) + 1
+        )
         self.last_snapshot_epoch = 0.0
         self.state = {
             "phase": "WAITING_FIRST_TICK",
@@ -544,11 +747,24 @@ class LimitDownWatchManager:
             "transition_count": 0,
             "first_unlock_epoch": 0.0,
             "first_relock_epoch": 0.0,
+            "consecutive_unlocked_tick_count": 0,
+            "unlock_confirmed_epoch": 0.0,
+            "live_promotion_eligible_emitted": False,
             "requested_ws_route": "krx_regular_or_effective_integrated",
             "requested_ws_code_count": 1,
             "requested_ws_item_count_max": 1,
             "last_reg_request_epoch": 0.0,
             "reg_request_count": 0,
+            "selection_policy": "coverage_first_then_evidence_weighted_v2",
+            "candidate_visit_count": activity["visit_count"],
+            "cell_key": cell_key,
+            "cell_visit_count": self.cell_visit_counts[cell_key],
+            "sim_policy_key": cell_key,
+            "sim_policy_matched": cell_key in self.active_sim_policy_keys,
+            "sim_policy_source_date": self.sim_policy_source_date,
+            "live_policy_key": cell_key,
+            "live_policy_matched": cell_key in self.active_live_policy_keys,
+            "live_policy_source_date": self.live_policy_source_date,
         }
         LIMIT_DOWN_OBSERVATION_REGISTRY.activate(candidate.code, self.on_raw_tick)
         self._request_registration(now_epoch, reason="initial")
@@ -558,6 +774,12 @@ class LimitDownWatchManager:
             price_band=candidate.price_band,
             consecutive_count=candidate.consecutive_count,
             lower_limit_price=lower_limit,
+            sim_policy_key=cell_key,
+            sim_policy_matched=cell_key in self.active_sim_policy_keys,
+            sim_policy_source_date=self.sim_policy_source_date,
+            live_policy_key=cell_key,
+            live_policy_matched=cell_key in self.active_live_policy_keys,
+            live_policy_source_date=self.live_policy_source_date,
         )
         self._write_state()
 
@@ -633,6 +855,80 @@ class LimitDownWatchManager:
             self.release(reason="normal_scanner_claimed", keep_ws=True)
             return True
         return False
+
+    def live_promotion_target(
+        self,
+        *,
+        now_epoch: float | None = None,
+        daily_promotion_count: int = 0,
+    ) -> dict[str, Any] | None:
+        """Return one guarded normal-scanner handoff; never submit an order."""
+
+        now_epoch = time.time() if now_epoch is None else float(now_epoch)
+        with self._lock:
+            candidate = self.active
+            if candidate is None or int(daily_promotion_count or 0) >= 1:
+                return None
+            cell_key = f"{candidate.cohort}|{candidate.price_band}"
+            policy = self.live_policy_by_key.get(cell_key)
+            if not policy:
+                return None
+            phase = str(self.state.get("phase") or "")
+            last_tick_epoch = _safe_float(self.state.get("last_tick_epoch"))
+            current = _safe_int(self.state.get("current_price"))
+            lower_limit = _safe_int(self.state.get("lower_limit_price"))
+            best_ask = _safe_int(self.state.get("best_ask"))
+            best_bid = _safe_int(self.state.get("best_bid"))
+            confirmed_epoch = _safe_float(self.state.get("unlock_confirmed_epoch"))
+            if not (
+                phase in {"UNLOCKED", "UNLOCKED_AGAIN"}
+                and confirmed_epoch > 0.0
+                and _safe_int(self.state.get("consecutive_unlocked_tick_count")) >= 2
+                and 0.0 <= now_epoch - last_tick_epoch <= 5.0
+                and current > lower_limit > 0
+                and best_ask >= best_bid > 0
+                and best_ask >= current > 0
+            ):
+                return None
+            spread_pct = (best_ask - best_bid) / best_ask * 100.0
+            max_spread_pct = self.live_policy_max_entry_spread_pct
+            if max_spread_pct <= 0.0:
+                return None
+            if spread_pct > max_spread_pct:
+                return None
+            unlock_from_lower_pct = _pct(current, lower_limit) or 0.0
+            return {
+                "Code": candidate.code,
+                "Name": candidate.name,
+                "Price": current,
+                "FluRate": unlock_from_lower_pct,
+                "TradeValue": _safe_int(self.state.get("trade_value")),
+                "Volume": _safe_int(self.state.get("volume")),
+                "PriorityScore": 220.0,
+                "ScannerWatchBudgetOwner": "limit_down_rotation",
+                "LimitDownLivePolicyKey": cell_key,
+                "LimitDownLivePolicyMatched": True,
+                "LimitDownLivePolicySourceDate": self.live_policy_source_date,
+                "LimitDownLivePolicyVersion": LIMIT_DOWN_LIVE_POLICY_VERSION,
+                "LimitDownLivePolicySampleCount": _safe_int(policy.get("sample_count")),
+                "LimitDownUnlockConfirmed": True,
+                "LimitDownUnlockConfirmedEpoch": confirmed_epoch,
+                "LimitDownLastTickEpoch": last_tick_epoch,
+                "LimitDownLowerLimitPrice": lower_limit,
+                "LimitDownBestAsk": best_ask,
+                "LimitDownBestBid": best_bid,
+                "LimitDownEntrySpreadPct": round(spread_pct, 6),
+                "LimitDownMaxEntrySpreadPct": max_spread_pct,
+                "LimitDownUnlockFromLowerPct": unlock_from_lower_pct,
+                "LimitDownCohort": candidate.cohort,
+                "LimitDownPriceBand": candidate.price_band,
+                "LimitDownConsecutiveCount": candidate.consecutive_count,
+                "LimitDownRiskMaxDailyEntries": 1,
+                "LimitDownScaleInAllowed": False,
+                "LimitDownSameDayReentryAllowed": False,
+                "LimitDownOvernightAllowed": False,
+                "LimitDownNormalScalpingGuardsRequired": True,
+            }
 
     def reconcile(
         self, *, active_codes: set[str] | None = None, now_epoch: float | None = None
@@ -717,6 +1013,15 @@ class LimitDownWatchManager:
             lower_limit = _safe_int(self.state.get("lower_limit_price"))
             previous_phase = str(self.state.get("phase") or "WAITING_FIRST_TICK")
             locked = current <= lower_limit
+            best_ask, best_bid = _top_of_book(data)
+            if locked:
+                self.state["consecutive_unlocked_tick_count"] = 0
+                self.state["unlock_confirmed_epoch"] = 0.0
+                self.state["live_promotion_eligible_emitted"] = False
+            else:
+                self.state["consecutive_unlocked_tick_count"] = (
+                    _safe_int(self.state.get("consecutive_unlocked_tick_count")) + 1
+                )
             if previous_phase == "WAITING_FIRST_TICK":
                 new_phase = "LIMIT_LOCKED" if locked else "UNLOCKED"
                 if not locked:
@@ -762,12 +1067,53 @@ class LimitDownWatchManager:
                     relock_count=self.state.get("relock_count"),
                     tick_count=self.state.get("tick_count"),
                 )
+            if (
+                not locked
+                and _safe_int(self.state.get("consecutive_unlocked_tick_count")) >= 2
+                and float(self.state.get("unlock_confirmed_epoch") or 0.0) <= 0.0
+            ):
+                self.state["unlock_confirmed_epoch"] = received_epoch
+                self._emit(
+                    "limit_down_watch_unlock_confirmed",
+                    phase=self.state.get("phase"),
+                    cohort=self.active.cohort,
+                    price_band=self.active.price_band,
+                    current_price=current,
+                    lower_limit_price=lower_limit,
+                    best_ask=best_ask,
+                    best_bid=best_bid,
+                    spread=(
+                        max(0, best_ask - best_bid)
+                        if best_ask > 0 and best_bid > 0
+                        else None
+                    ),
+                    confirmation_tick_count=self.state.get(
+                        "consecutive_unlocked_tick_count"
+                    ),
+                    tick_count=self.state.get("tick_count"),
+                )
+                if (
+                    f"{self.active.cohort}|{self.active.price_band}"
+                    in self.active_live_policy_keys
+                    and not self.state.get("live_promotion_eligible_emitted")
+                ):
+                    self.state["live_promotion_eligible_emitted"] = True
+                    self._emit(
+                        "limit_down_live_auto_eligibility_observed",
+                        policy_key=f"{self.active.cohort}|{self.active.price_band}",
+                        policy_source_date=self.live_policy_source_date,
+                        current_price=current,
+                        lower_limit_price=lower_limit,
+                        best_ask=best_ask,
+                        best_bid=best_bid,
+                        normal_scalping_guards_required=True,
+                        direct_order_submitted=False,
+                    )
 
             reference = self.active.limit_down_close
             open_value = _safe_int(self.state.get("open_price"))
             high_value = _safe_int(self.state.get("high_price"))
             low_value = _safe_int(self.state.get("low_price"))
-            best_ask, best_bid = _top_of_book(data)
             vi_observation_available = bool(
                 self.state.get("vi_observation_available") or "vi_triggered" in data
             )
@@ -848,6 +1194,10 @@ class LimitDownWatchManager:
                     relock_count=self.state.get("relock_count"),
                     first_unlock_epoch=self.state.get("first_unlock_epoch"),
                     first_relock_epoch=self.state.get("first_relock_epoch"),
+                    consecutive_unlocked_tick_count=self.state.get(
+                        "consecutive_unlocked_tick_count"
+                    ),
+                    unlock_confirmed_epoch=self.state.get("unlock_confirmed_epoch"),
                     first_tick_epoch=self.state.get("first_tick_epoch"),
                     last_tick_epoch=self.state.get("last_tick_epoch"),
                     open_price=self.state.get("open_price"),

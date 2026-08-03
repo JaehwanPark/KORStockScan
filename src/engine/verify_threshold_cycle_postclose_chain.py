@@ -652,19 +652,6 @@ def _limit_down_watch_report_status(
             "source_blocked",
         }:
             issues.append("limit_down_watch_status_invalid")
-        if readiness.get("stage") != "source_observation":
-            issues.append("limit_down_watch_readiness_stage_invalid")
-        if readiness.get("decision") != "collect_source_then_build_sim_candidate":
-            issues.append("limit_down_watch_readiness_decision_invalid")
-        if readiness.get("sim_candidate_ready") is not False:
-            issues.append("limit_down_watch_sim_authority_leak")
-        if readiness.get("real_trading_ready") is not False:
-            issues.append("limit_down_watch_real_authority_leak")
-        blockers = (
-            set(readiness.get("blockers"))
-            if isinstance(readiness.get("blockers"), list)
-            else set()
-        )
         conversion_contract_required = False
         try:
             conversion_contract_required = date.fromisoformat(target_date) >= date(
@@ -672,13 +659,34 @@ def _limit_down_watch_report_status(
             )
         except ValueError:
             pass
+        if readiness.get("stage") != "source_observation":
+            issues.append("limit_down_watch_readiness_stage_invalid")
+        expected_readiness_decision = (
+            "collect_source_and_auto_promote_eligible_type"
+            if conversion_contract_required
+            else "collect_source_then_build_sim_candidate"
+        )
+        if readiness.get("decision") != expected_readiness_decision:
+            issues.append("limit_down_watch_readiness_decision_invalid")
+        if readiness.get("sim_candidate_ready") is not False:
+            issues.append("limit_down_watch_sim_authority_leak")
+        if conversion_contract_required:
+            if readiness.get("real_trading_ready") is not conversion.get(
+                "real_trading_ready"
+            ):
+                issues.append("limit_down_watch_real_readiness_mismatch")
+        elif readiness.get("real_trading_ready") is not False:
+            issues.append("limit_down_watch_real_authority_leak")
+        blockers = (
+            set(readiness.get("blockers"))
+            if isinstance(readiness.get("blockers"), list)
+            else set()
+        )
         if conversion_contract_required:
             expected_conversion = {
                 "schema_version": 1,
                 "observer_activation_expected": True,
                 "automatic_live_conversion_performed": False,
-                "real_trading_ready": False,
-                "allowed_runtime_apply": False,
                 "runtime_effect": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
@@ -692,8 +700,7 @@ def _limit_down_watch_report_status(
                     )
             if conversion.get("decision") not in {
                 "keep_observing_and_build_evidence",
-                "operator_live_conversion_approval_required",
-                "approved_for_separate_preopen_apply",
+                "auto_live_policy_ready",
             }:
                 issues.append("limit_down_watch_conversion_decision_invalid")
             conversion_blockers = (
@@ -704,17 +711,8 @@ def _limit_down_watch_report_status(
             blocker_requirements = {
                 "observer_activation_observed": {"observer_activation_not_observed"},
                 "daily_source_ready": {"daily_source_contract_not_ready"},
-                "rolling_observation_ready": {
-                    "multi_day_cohort_sample_floor_not_established"
-                },
-                "counterfactual_ev_ready": {
-                    "counterfactual_entry_exit_labels_missing",
-                    "clean_baseline_rolling_ev_missing",
-                },
-                "sim_policy_catalog_ready": {"sim_policy_catalog_handoff_missing"},
-                "post_sim_attribution_ready": {"post_sim_attribution_missing"},
-                "operator_approval_present": {
-                    "separate_live_conversion_approval_missing"
+                "bounded_live_candidate_ready": {
+                    "bounded_live_candidate_contract_missing"
                 },
             }
             for field, required in blocker_requirements.items():
@@ -724,43 +722,35 @@ def _limit_down_watch_report_status(
                     issues.append(
                         f"limit_down_watch_conversion_blocker_missing:{field}"
                     )
-            preapproval_ready = conversion.get("live_conversion_review_ready") is True
-            approval_present = conversion.get("operator_approval_present") is True
+            live_auto_ready = conversion.get("live_conversion_review_ready") is True
             separate_ready = conversion.get("separate_preopen_apply_ready") is True
             expected_decision = (
-                "approved_for_separate_preopen_apply"
-                if preapproval_ready and approval_present
-                else (
-                    "operator_live_conversion_approval_required"
-                    if preapproval_ready
-                    else "keep_observing_and_build_evidence"
-                )
+                "auto_live_policy_ready"
+                if live_auto_ready
+                else "keep_observing_and_build_evidence"
             )
             if conversion.get("decision") != expected_decision:
                 issues.append("limit_down_watch_conversion_decision_state_invalid")
-            expected_approval_required = preapproval_ready and not approval_present
-            if (
-                conversion.get("operator_approval_required")
-                is not expected_approval_required
-            ):
+            if conversion.get("operator_approval_required") is not False:
                 issues.append("limit_down_watch_operator_approval_required_invalid")
-            if separate_ready != (preapproval_ready and approval_present):
+            if conversion.get("operator_approval_present") is not False:
+                issues.append("limit_down_watch_operator_approval_present_invalid")
+            if separate_ready != live_auto_ready:
                 issues.append("limit_down_watch_separate_preopen_apply_state_invalid")
+            if conversion.get("real_trading_ready") is not live_auto_ready:
+                issues.append("limit_down_watch_real_trading_ready_invalid")
+            if conversion.get("allowed_runtime_apply") is not live_auto_ready:
+                issues.append("limit_down_watch_runtime_apply_readiness_invalid")
             if (
-                conversion.get("decision")
-                == "operator_live_conversion_approval_required"
+                conversion.get("automatic_live_conversion_scheduled")
+                is not live_auto_ready
             ):
-                if not preapproval_ready or approval_present:
-                    issues.append("limit_down_watch_operator_approval_state_invalid")
-                else:
-                    warnings.append(
-                        "limit_down_watch_operator_live_conversion_approval_required"
-                    )
-            if conversion.get("decision") == "approved_for_separate_preopen_apply":
+                issues.append("limit_down_watch_auto_schedule_state_invalid")
+            if conversion.get("decision") == "auto_live_policy_ready":
                 if not separate_ready:
                     issues.append("limit_down_watch_preopen_apply_readiness_invalid")
                 else:
-                    warnings.append("limit_down_watch_separate_preopen_apply_ready")
+                    warnings.append("limit_down_watch_auto_live_policy_ready")
             if (
                 observer_activation.get("policy")
                 != "persistent_daily_source_observation"
@@ -812,6 +802,9 @@ def _limit_down_watch_report_status(
         ),
         "operator_approval_required": conversion.get(
             "operator_approval_required", False
+        ),
+        "bounded_live_candidate_ready": conversion.get(
+            "bounded_live_candidate_ready", False
         ),
         "separate_preopen_apply_ready": conversion.get(
             "separate_preopen_apply_ready", False

@@ -12,6 +12,7 @@ from src.engine.sniper_overnight_gatekeeper import (
     _eod_label,
     _format_order_error,
     _humanize_eod_action,
+    _limit_down_live_overnight_forbidden,
     _overnight_gatekeeper_enabled,
     run_scalping_overnight_gatekeeper,
     _snapshot_record,
@@ -40,6 +41,15 @@ def test_overnight_gatekeeper_default_disabled(monkeypatch):
     )
 
     assert _overnight_gatekeeper_enabled() is False
+
+
+def test_limit_down_live_source_forbids_overnight_hold():
+    assert _limit_down_live_overnight_forbidden(
+        {"source_signature": "PRICE_JUMP_START,LIMIT_DOWN_LIVE_UNLOCK"}
+    )
+    assert not _limit_down_live_overnight_forbidden(
+        {"source_signature": "PRICE_JUMP_START"}
+    )
 
 
 def test_run_scalping_overnight_gatekeeper_returns_false_when_disabled(monkeypatch):

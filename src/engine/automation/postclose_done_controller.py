@@ -61,6 +61,7 @@ DONE_ACCEPTABLE_WARNING_ISSUES = {
     "limit_down_watch_observer_activation_not_observed",
     "limit_down_watch_operator_live_conversion_approval_required",
     "limit_down_watch_separate_preopen_apply_ready",
+    "limit_down_watch_auto_live_policy_ready",
     "limit_down_watch_source_blocked",
     "swing_active_arm_priority_preopen_handoff_pending",
     "swing_active_arm_priority_runtime_observation_missing",

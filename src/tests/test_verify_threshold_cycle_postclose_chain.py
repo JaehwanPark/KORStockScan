@@ -471,8 +471,24 @@ def _limit_down_readiness(**overrides):
             "clean_baseline_rolling_ev_missing",
             "sim_policy_catalog_handoff_missing",
             "post_sim_attribution_missing",
+            "bounded_live_candidate_contract_missing",
             "separate_live_conversion_approval_missing",
         ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _limit_down_live_readiness(**overrides):
+    payload = {
+        "stage": "source_observation",
+        "decision": "collect_source_and_auto_promote_eligible_type",
+        "candidate_source_valid": True,
+        "event_source_valid": True,
+        "source_quality_status": "pass",
+        "sim_candidate_ready": False,
+        "real_trading_ready": False,
+        "blockers": ["bounded_live_candidate_contract_missing"],
     }
     payload.update(overrides)
     return payload
@@ -506,17 +522,19 @@ def _limit_down_conversion(**overrides):
         "counterfactual_ev_ready": False,
         "sim_policy_catalog_ready": False,
         "post_sim_attribution_ready": False,
+        "bounded_live_candidate_ready": False,
         "live_conversion_review_ready": False,
         "operator_approval_required": False,
         "operator_approval_present": False,
         "separate_preopen_apply_ready": False,
+        "automatic_live_conversion_scheduled": False,
         "automatic_live_conversion_performed": False,
         "real_trading_ready": False,
         "allowed_runtime_apply": False,
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
-        "blockers": _limit_down_readiness()["blockers"],
+        "blockers": ["bounded_live_candidate_contract_missing"],
     }
     payload.update(overrides)
     return payload
@@ -616,7 +634,7 @@ def test_limit_down_watch_report_validates_daily_conversion_check_contract():
             "broker_order_forbidden": True,
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
-            "evidence_readiness": _limit_down_readiness(),
+            "evidence_readiness": _limit_down_live_readiness(),
             "conversion_readiness": _limit_down_conversion(),
             "observer_activation": _limit_down_observer_activation(),
         },
@@ -629,16 +647,20 @@ def test_limit_down_watch_report_validates_daily_conversion_check_contract():
     assert status["separate_preopen_apply_ready"] is False
 
 
-def test_limit_down_watch_report_surfaces_operator_approval_without_auto_apply():
+def test_limit_down_watch_report_surfaces_auto_live_policy_ready():
     conversion = _limit_down_conversion(
-        decision="operator_live_conversion_approval_required",
+        decision="auto_live_policy_ready",
         rolling_observation_ready=True,
         counterfactual_ev_ready=True,
         sim_policy_catalog_ready=True,
         post_sim_attribution_ready=True,
+        bounded_live_candidate_ready=True,
         live_conversion_review_ready=True,
-        operator_approval_required=True,
-        blockers=["separate_live_conversion_approval_missing"],
+        separate_preopen_apply_ready=True,
+        automatic_live_conversion_scheduled=True,
+        real_trading_ready=True,
+        allowed_runtime_apply=True,
+        blockers=[],
     )
     status = mod._limit_down_watch_report_status(
         {
@@ -654,8 +676,9 @@ def test_limit_down_watch_report_surfaces_operator_approval_without_auto_apply()
             "broker_order_forbidden": True,
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
-            "evidence_readiness": _limit_down_readiness(
-                blockers=["separate_live_conversion_approval_missing"]
+            "evidence_readiness": _limit_down_live_readiness(
+                real_trading_ready=True,
+                blockers=[],
             ),
             "conversion_readiness": conversion,
             "observer_activation": _limit_down_observer_activation(),
@@ -665,10 +688,8 @@ def test_limit_down_watch_report_surfaces_operator_approval_without_auto_apply()
     )
 
     assert status["status"] == "warning"
-    assert status["operator_approval_required"] is True
-    assert status["warnings"] == [
-        "limit_down_watch_operator_live_conversion_approval_required"
-    ]
+    assert status["operator_approval_required"] is False
+    assert status["warnings"] == ["limit_down_watch_auto_live_policy_ready"]
 
 
 def test_limit_down_watch_report_rejects_conversion_authority_leak():
@@ -686,7 +707,7 @@ def test_limit_down_watch_report_rejects_conversion_authority_leak():
             "broker_order_forbidden": True,
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
-            "evidence_readiness": _limit_down_readiness(),
+            "evidence_readiness": _limit_down_live_readiness(),
             "conversion_readiness": _limit_down_conversion(
                 automatic_live_conversion_performed=True,
                 allowed_runtime_apply=True,
@@ -700,7 +721,7 @@ def test_limit_down_watch_report_rejects_conversion_authority_leak():
     assert status["status"] == "fail"
     assert {
         "limit_down_watch_conversion_contract_mismatch:automatic_live_conversion_performed",
-        "limit_down_watch_conversion_contract_mismatch:allowed_runtime_apply",
+        "limit_down_watch_runtime_apply_readiness_invalid",
     }.issubset(status["issues"])
 
 

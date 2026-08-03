@@ -18612,8 +18612,7 @@ def _scanner_heavy_eval_completion_fields(
             (stock or {}).get("_scanner_heavy_eval_ws_snapshot_apply_phase")
             or "not_applied"
         ),
-        "target_status": (stock or {}).get("status")
-        or "not_applicable_target_status",
+        "target_status": (stock or {}).get("status") or "not_applicable_target_status",
         "target_strategy": normalize_strategy((stock or {}).get("strategy")),
         "target_position_tag": normalize_position_tag(
             normalize_strategy((stock or {}).get("strategy")),
@@ -19278,9 +19277,7 @@ def _holding_pipeline_stable_block_log_decision(
 ) -> tuple[bool, dict[str, Any]]:
     """Bound unchanged blocker telemetry without changing holding decisions."""
 
-    signature_keys = _HOLDING_PIPELINE_STABLE_BLOCK_SIGNATURE_KEYS.get(
-        str(stage or "")
-    )
+    signature_keys = _HOLDING_PIPELINE_STABLE_BLOCK_SIGNATURE_KEYS.get(str(stage or ""))
     if not signature_keys or not isinstance(stock, dict):
         return True, {}
     observed_at = float(time.time() if now_ts is None else now_ts)
@@ -42520,6 +42517,99 @@ def _source_signature_tokens(source_signature: str | None) -> set[str]:
     }
 
 
+def _has_limit_down_live_source(stock: dict | None) -> bool:
+    stock = stock if isinstance(stock, dict) else {}
+    source_signature = stock.get("source_signature") or stock.get(
+        "scanner_source_signature"
+    )
+    return "LIMIT_DOWN_LIVE_UNLOCK" in _source_signature_tokens(source_signature)
+
+
+def _limit_down_live_pre_submit_guard(
+    stock: dict | None,
+    code: str,
+    ws_data: dict | None,
+    strategy: str,
+) -> tuple[dict, dict]:
+    """Fail closed if a bounded limit-down entry relocks before submission."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    base = dict(ws_data or {})
+    if not _has_limit_down_live_source(stock):
+        return base, {
+            "allowed": True,
+            "applicable": False,
+            "reason": "not_limit_down_live_source",
+        }
+
+    refreshed, refresh_fields = _pre_submit_refresh_real_ws_snapshot(
+        code, base, strategy
+    )
+    lower_limit = _safe_int(stock.get("limit_down_lower_limit_price"), 0)
+    max_spread_pct = _safe_float(stock.get("limit_down_max_entry_spread_pct"), 0.0)
+    current = _safe_int(refreshed.get("curr"), 0)
+    best_ask, best_bid = _get_best_levels_from_ws(refreshed)
+    last_ws_update_ts = _safe_float(refreshed.get("last_ws_update_ts"), 0.0)
+    quote_age_ms = (
+        max(0.0, (time.time() - last_ws_update_ts) * 1000.0)
+        if last_ws_update_ts > 0.0
+        else None
+    )
+    max_quote_age_ms = max(
+        1,
+        _safe_int(
+            os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
+            _safe_int(
+                getattr(
+                    TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700
+                ),
+                700,
+            ),
+        ),
+    )
+    spread_pct = (
+        (best_ask - best_bid) / best_ask * 100.0
+        if best_ask > 0 and best_bid > 0 and best_ask >= best_bid
+        else None
+    )
+    contract_valid = bool(
+        stock.get("limit_down_live_policy_matched") is True
+        and _safe_int(stock.get("limit_down_live_policy_sample_count"), 0) >= 1
+        and _safe_int(stock.get("limit_down_risk_max_daily_entries"), 0) == 1
+        and stock.get("limit_down_scale_in_allowed") is False
+        and stock.get("limit_down_same_day_reentry_allowed") is False
+        and stock.get("limit_down_overnight_allowed") is False
+        and stock.get("limit_down_normal_scalping_guards_required") is True
+        and lower_limit > 0
+        and 0.0 < max_spread_pct <= 1.5
+    )
+    reason = "limit_down_live_pre_submit_pass"
+    if not contract_valid:
+        reason = "limit_down_live_runtime_contract_invalid"
+    elif quote_age_ms is None or quote_age_ms > max_quote_age_ms:
+        reason = "limit_down_live_pre_submit_quote_stale"
+    elif not (
+        current > lower_limit and best_ask >= current > 0 and best_ask >= best_bid > 0
+    ):
+        reason = "limit_down_live_relocked_or_quote_invalid"
+    elif spread_pct is None or spread_pct > max_spread_pct:
+        reason = "limit_down_live_pre_submit_spread_too_wide"
+    return refreshed, {
+        "allowed": reason == "limit_down_live_pre_submit_pass",
+        "applicable": True,
+        "reason": reason,
+        "current_price": current,
+        "lower_limit_price": lower_limit,
+        "best_ask": best_ask,
+        "best_bid": best_bid,
+        "quote_age_ms": None if quote_age_ms is None else round(quote_age_ms, 3),
+        "max_quote_age_ms": max_quote_age_ms,
+        "spread_pct": None if spread_pct is None else round(spread_pct, 6),
+        "max_spread_pct": max_spread_pct,
+        "refresh_reason": refresh_fields.get("pre_submit_ws_snapshot_refresh_reason"),
+    }
+
+
 def _source_signature_strong_bundle_pass(source_signature: str | None) -> bool:
     tokens = _source_signature_tokens(source_signature)
     if {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"}.issubset(tokens):
@@ -42803,9 +42893,7 @@ def _early_accel_strong_bundle_recheck_revokes_probe_intent(
     decision = recheck_decision if isinstance(recheck_decision, dict) else {}
     action = str(decision.get("action") or "WAIT").strip().upper()
     evidence = (
-        decision.get("evidence")
-        if isinstance(decision.get("evidence"), dict)
-        else {}
+        decision.get("evidence") if isinstance(decision.get("evidence"), dict) else {}
     )
     adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
     return bool(action == "DROP" or adverse_risk == "blocking")
@@ -54465,10 +54553,8 @@ def _handle_watching_strategy_branch(
                                         now_ts=now_ts,
                                     )
                                 )
-                                probe_intent_revoked = (
-                                    _early_accel_strong_bundle_recheck_revokes_probe_intent(
-                                        recheck_decision
-                                    )
+                                probe_intent_revoked = _early_accel_strong_bundle_recheck_revokes_probe_intent(
+                                    recheck_decision
                                 )
                                 early_accel_strong_bundle_recheck[
                                     "wait_probe_handoff"
@@ -54510,9 +54596,7 @@ def _handle_watching_strategy_branch(
                                             )
                                         ),
                                         "last_watching_ai_decision_trace_id": (
-                                            recheck_decision.get(
-                                                "ai_decision_trace_id"
-                                            )
+                                            recheck_decision.get("ai_decision_trace_id")
                                             or ""
                                         ),
                                         "last_watching_ai_source_quality_fields": _build_tick_source_quality_log_fields(
@@ -54527,10 +54611,11 @@ def _handle_watching_strategy_branch(
                                 action = recheck_action
                                 ai_score = recheck_score
                                 raw_ai_score = recheck_score
-                                reason = str(
-                                    ai_decision.get("reason") or reason or ""
-                                )
-                                if recheck_action == "BUY" or recheck_wait_probe_handoff:
+                                reason = str(ai_decision.get("reason") or reason or "")
+                                if (
+                                    recheck_action == "BUY"
+                                    or recheck_wait_probe_handoff
+                                ):
                                     early_accel_strong_bundle_recheck[
                                         "recheck_failure_class"
                                     ] = "not_applicable"
@@ -55577,9 +55662,7 @@ def _handle_watching_strategy_branch(
                                         or "not_available"
                                     ),
                                     "entry_opportunity_recheck_pending_parent_trace_id": (
-                                        (ai_decision or {}).get(
-                                            "ai_decision_trace_id"
-                                        )
+                                        (ai_decision or {}).get("ai_decision_trace_id")
                                         or "not_available"
                                     ),
                                     "actual_order_submitted": False,
@@ -60858,6 +60941,36 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 f"mode={pre_submit_price_guard_fields.get('pre_submit_price_guard_mode')}"
             )
             continue
+        ws_data, limit_down_live_submit_guard = _limit_down_live_pre_submit_guard(
+            stock, code, ws_data, strategy
+        )
+        if not limit_down_live_submit_guard.get("allowed", False):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "limit_down_live_pre_submit_blocked",
+                metric_role="safety_veto",
+                decision_authority="limit_down_live_pre_submit_safety_veto",
+                window_policy="same_order_leg_latest_ws_quote",
+                sample_floor="not_applicable_runtime_safety_veto",
+                primary_decision_metric="limit_down_live_pre_submit_allowed",
+                source_quality_gate="fresh_ws_bbo_above_official_lower_limit",
+                runtime_effect=True,
+                allowed_runtime_apply=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                forbidden_uses=(
+                    "stale_quote_bypass|lower_limit_relock_bypass|spread_guard_bypass|"
+                    "broker_guard_bypass|provider_route_change|quantity_or_cap_change"
+                ),
+                limit_down_live_pre_submit_allowed=False,
+                **{
+                    f"limit_down_live_pre_submit_{key}": value
+                    for key, value in limit_down_live_submit_guard.items()
+                    if key != "allowed"
+                },
+            )
+            break
         _log_entry_pipeline(
             stock,
             code,
@@ -64859,7 +64972,6 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         (stock or {}).get("_rising_missed_tp1_last_micro_ws_observation_ts"),
         0.0,
     )
-    store_last_ws_ts = _safe_float(pre_snapshot.get("last_ws_ts"), 0.0)
     _RISING_MISSED_MICRO_ESTIMATOR_STORE.mark_candidate(
         code,
         tier="hot",
@@ -64869,7 +64981,7 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
     if (
         observation_ts > 0
         and _safe_int(pre_snapshot.get("sample_count"), 0) > 0
-        and max(prior_consumed_ts, store_last_ws_ts) >= observation_ts
+        and prior_consumed_ts >= observation_ts
     ):
         snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
         fields.update(
@@ -64910,6 +65022,104 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         }
     )
     return fields
+
+
+def _rising_missed_tp1_micro_unavailable_fields(
+    *,
+    ws_provenance: dict[str, Any],
+    micro_source_state: str,
+    micro_age_sec: float,
+    true_ofi_samples: int,
+    trusted_micro_ready: bool,
+    attribution_applicable: bool = True,
+) -> dict[str, Any]:
+    """Attribute a generic TP1 micro defer without changing entry authority."""
+
+    if not attribution_applicable:
+        return {}
+    if trusted_micro_ready:
+        reason = "not_applicable_ready"
+        reason_class = "ready"
+        owner = "not_applicable"
+        code_defect_candidate = False
+    elif not bool(ws_provenance.get("rising_missed_tp1_ws_0d_depth_fresh")):
+        reason = "depth_unavailable"
+        reason_class = "external_ws_input_gap"
+        owner = "kiwoom_ws_0d_source_quality"
+        code_defect_candidate = False
+    elif not bool(ws_provenance.get("rising_missed_tp1_ws_0b_trade_fresh")):
+        reason = "trade_unavailable"
+        reason_class = "external_ws_input_gap"
+        owner = "kiwoom_ws_0b_source_quality"
+        code_defect_candidate = False
+    elif not bool(
+        ws_provenance.get("rising_missed_tp1_ws_0b_signed_fid15_present")
+    ) or not bool(
+        ws_provenance.get("rising_missed_tp1_ws_0b_tick_flow_trusted")
+    ):
+        reason = "signed_tape_untrusted"
+        reason_class = "external_ws_input_gap"
+        owner = "kiwoom_ws_0b_signed_tape_contract"
+        code_defect_candidate = False
+    elif not bool(
+        ws_provenance.get("rising_missed_tp1_ws_micro_provenance_ready")
+    ):
+        reason = "ws_provenance_incomplete"
+        reason_class = "ws_provenance_gap"
+        owner = "rising_missed_ws_provenance_contract"
+        code_defect_candidate = True
+    elif true_ofi_samples < 3:
+        reason = "estimator_warmup"
+        reason_class = "expected_estimator_warmup"
+        owner = "rising_missed_micro_estimator"
+        code_defect_candidate = False
+    elif micro_age_sec > 3.0:
+        reason = "estimator_stale"
+        reason_class = "estimator_state_gap"
+        owner = "rising_missed_micro_estimator"
+        code_defect_candidate = True
+    elif not str(micro_source_state or "").startswith("fresh_ws"):
+        reason = "estimator_source_untrusted"
+        reason_class = "estimator_state_gap"
+        owner = "rising_missed_micro_estimator"
+        code_defect_candidate = True
+    else:
+        reason = "unclassified_contract_mismatch"
+        reason_class = "internal_contract_gap"
+        owner = "rising_missed_tp1_decision_input"
+        code_defect_candidate = True
+    return {
+        "rising_missed_tp1_micro_unavailable_reason": reason,
+        "rising_missed_tp1_micro_unavailable_class": reason_class,
+        "rising_missed_tp1_micro_unavailable_owner": owner,
+        "rising_missed_tp1_micro_unavailable_code_defect_candidate": (
+            code_defect_candidate
+        ),
+        "rising_missed_tp1_micro_unavailable_metric_role": (
+            "source_quality_diagnostic"
+        ),
+        "rising_missed_tp1_micro_unavailable_decision_authority": (
+            "observe_only_no_runtime_mutation"
+        ),
+        "rising_missed_tp1_micro_unavailable_runtime_effect": False,
+        "rising_missed_tp1_micro_unavailable_allowed_runtime_apply": False,
+        "rising_missed_tp1_micro_unavailable_window_policy": (
+            "same_tp1_evaluation_latest_ws_0b_0d_with_3s_ttl"
+        ),
+        "rising_missed_tp1_micro_unavailable_sample_floor": (
+            "1_tp1_micro_defer_evaluation"
+        ),
+        "rising_missed_tp1_micro_unavailable_primary_decision_metric": (
+            "canonical_micro_unavailable_reason"
+        ),
+        "rising_missed_tp1_micro_unavailable_source_quality_gate": (
+            "absolute_ws_0b_0d_receive_ts_and_signed_fid15_provenance"
+        ),
+        "rising_missed_tp1_micro_unavailable_forbidden_uses": (
+            "standalone_buy|submit_safety_bypass|broker_guard_bypass|"
+            "threshold_mutation|provider_route_change|quantity_or_cap_change"
+        ),
+    }
 
 
 def resolve_rising_missed_decision_input(
@@ -65343,6 +65553,14 @@ def resolve_rising_missed_decision_input(
         input_reason = "tp1_micro_ws_unavailable"
     else:
         input_reason = "ready"
+    micro_unavailable_fields = _rising_missed_tp1_micro_unavailable_fields(
+        ws_provenance=ws_provenance,
+        micro_source_state=micro_source_state,
+        micro_age_sec=micro_age_sec,
+        true_ofi_samples=true_ofi_samples,
+        trusted_micro_ready=trusted_micro_ready,
+        attribution_applicable=input_reason == "tp1_micro_ws_unavailable",
+    )
     nxt_observation_fields = _rising_missed_nxt_observation_fields(
         stock,
         code,
@@ -65355,6 +65573,7 @@ def resolve_rising_missed_decision_input(
         **market_data_enrichment_log_fields(enriched_ws),
         **envelope_fields,
         **ws_provenance,
+        **micro_unavailable_fields,
         **price_anchor_fields,
         **ws_momentum_fields,
         "rising_missed_tp1_input_ready": bool(envelope_ready and trusted_micro_ready),
@@ -78571,6 +78790,9 @@ def can_consider_scale_in(
 ):
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
+
+    if _has_limit_down_live_source(stock):
+        return {"allowed": False, "reason": "limit_down_live_scale_in_forbidden"}
 
     exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
     if exit_authority_reason:

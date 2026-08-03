@@ -124,6 +124,21 @@ def _safe_int(value, default=0):
         return default
 
 
+def _limit_down_live_overnight_forbidden(mem_stock):
+    source_tokens = {
+        token.strip().upper()
+        for token in str(
+            (mem_stock or {}).get("source_signature")
+            or (mem_stock or {}).get("scanner_source_signature")
+            or ""
+        )
+        .replace("|", ",")
+        .split(",")
+        if token.strip()
+    }
+    return "LIMIT_DOWN_LIVE_UNLOCK" in source_tokens
+
+
 def _entry_time_context_from_mem_stock(mem_stock):
     if not isinstance(mem_stock, dict):
         return {}
@@ -951,7 +966,15 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
             holding_recent_candles,
             holding_candle_meta,
         ) = _build_overnight_holding_context(code, mem_stock, ws_data, ctx)
-        if holding_context is None:
+        limit_down_forced_sell = _limit_down_live_overnight_forbidden(mem_stock)
+        if limit_down_forced_sell:
+            decision = {
+                "action": "SELL_TODAY",
+                "confidence": 100,
+                "reason": "limit_down_live_overnight_forbidden",
+                "risk_note": "bounded_live_auto_contract",
+            }
+        elif holding_context is None:
             decision = ai_engine.evaluate_scalping_overnight_decision(name, code, ctx)
         else:
             decision = ai_engine.evaluate_scalping_overnight_decision(
@@ -999,9 +1022,10 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
                 holding_decision_context_model_payload(holding_context)
             )
         _submit_overnight_dual_persona_shadow(name, code, shadow_ctx, decision)
-        decision = _apply_overnight_flow_override(
-            record, mem_stock, ws_data, ctx, decision, ai_engine
-        )
+        if not limit_down_forced_sell:
+            decision = _apply_overnight_flow_override(
+                record, mem_stock, ws_data, ctx, decision, ai_engine
+            )
         action = str(decision.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
 
         if action == "HOLD_OVERNIGHT":
