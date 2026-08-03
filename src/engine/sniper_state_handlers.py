@@ -65054,16 +65054,12 @@ def _rising_missed_tp1_micro_unavailable_fields(
         code_defect_candidate = False
     elif not bool(
         ws_provenance.get("rising_missed_tp1_ws_0b_signed_fid15_present")
-    ) or not bool(
-        ws_provenance.get("rising_missed_tp1_ws_0b_tick_flow_trusted")
-    ):
+    ) or not bool(ws_provenance.get("rising_missed_tp1_ws_0b_tick_flow_trusted")):
         reason = "signed_tape_untrusted"
         reason_class = "external_ws_input_gap"
         owner = "kiwoom_ws_0b_signed_tape_contract"
         code_defect_candidate = False
-    elif not bool(
-        ws_provenance.get("rising_missed_tp1_ws_micro_provenance_ready")
-    ):
+    elif not bool(ws_provenance.get("rising_missed_tp1_ws_micro_provenance_ready")):
         reason = "ws_provenance_incomplete"
         reason_class = "ws_provenance_gap"
         owner = "rising_missed_ws_provenance_contract"
