@@ -97,3 +97,12 @@ Close the checklist item only after reporting:
 `no_eligible_limit_down_candidate` is a valid ON-state result; it is not evidence that the flag or budget policy failed.
 
 Current decision: `started_and_limit_down_on`, with Pass 3 raw-tick capture pending. The next action is continued source-only observation through a future natural raw-`0B` capture, bounded no-tick rotation, or normal-scanner ownership handoff, followed by the postclose diagnostic report.
+
+## 2026-08-03 Persistent Daily Extension
+
+- The observer is now a persistent daily launcher policy. `src/run_bot.sh` defaults `KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED=true`, and the persistent `operator_runtime_overrides.env` records the same explicit operator decision. A dated or persistent explicit `false` remains the rollback authority.
+- The postclose wrapper runs `limit_down_watch_report` every day unless `THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT` explicitly disables it. A missing candidate source is therefore reported as missing observer activation instead of silently skipping the check.
+- `conversion_readiness` checks daily source integrity, rolling ordered-path sample floors, counterfactual clean-baseline EV, sim-policy handoff, post-sim attribution, and the separate user live-conversion approval artifact.
+- Counterfactual and post-sim EV artifacts must declare the complete metric contract (`metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, and `forbidden_uses`). Sim-policy and approval artifacts must use their dedicated source-only authority labels; incomplete or mismatched contracts remain `invalid` with field-level issues.
+- The automated decision is limited to `keep_observing_and_build_evidence`, `operator_live_conversion_approval_required`, or `approved_for_separate_preopen_apply`. It always keeps `automatic_live_conversion_performed=false`, `runtime_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`, and `allowed_runtime_apply=false`.
+- Even `approved_for_separate_preopen_apply` is a readiness signal only. Real-order authority requires a separately reviewed PREOPEN apply with an explicit rollback guard; the postclose job never changes orders, thresholds, providers, quantity, caps, broker guards, or bot state.

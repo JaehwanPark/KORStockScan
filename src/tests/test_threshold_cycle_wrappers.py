@@ -488,15 +488,14 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         'RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE:-true}"'
         in script
     )
-    assert 'LIMIT_DOWN_WATCH_CANDIDATE_SOURCE="$PROJECT_DIR/data/report/' in script
-    assert 'limit_down_watch_candidate_source_${TARGET_DATE}.json"' in script
     assert '[[ -n "${THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT:-}" ]]' in script
     assert (
         'RUN_LIMIT_DOWN_WATCH_REPORT="$THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT"'
         in script
     )
-    assert '|| -s "$LIMIT_DOWN_WATCH_CANDIDATE_SOURCE"' in script
-    assert "RUN_LIMIT_DOWN_WATCH_REPORT=false" in script
+    assert "RUN_LIMIT_DOWN_WATCH_REPORT=true" in script
+    assert '|| -s "$LIMIT_DOWN_WATCH_CANDIDATE_SOURCE"' not in script
+    assert "RUN_LIMIT_DOWN_WATCH_REPORT=false" not in script
     assert "src.engine.monitoring.limit_down_watch_report" in script
     assert (
         '"$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.json"'
@@ -1285,6 +1284,10 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     )
     assert "operator_runtime_overrides_${RUNTIME_TARGET_DATE}.env" in script
     assert "KORSTOCKSCAN_OPENAI_HOLDING_SCORE_MODEL=gpt-5.4-nano" in script
+    assert (
+        'export KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED="${KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED:-true}"'
+        in script
+    )
     assert "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_MODEL=gpt-5.4-mini" in script
     assert "KORSTOCKSCAN_OPENAI_HOLDING_FLOW_TIMEOUT_MS=15000" in script
     assert (

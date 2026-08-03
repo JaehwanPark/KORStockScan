@@ -692,7 +692,9 @@ def test_postclose_report_skips_event_scan_without_candidate_source(
     event_path.write_text("not-json\n" * 100, encoding="utf-8")
 
     def fail_if_scanned(_path):
-        raise AssertionError("event source must not be scanned before candidate preflight")
+        raise AssertionError(
+            "event source must not be scanned before candidate preflight"
+        )
 
     monkeypatch.setattr(limit_down_watch_report, "_load_events", fail_if_scanned)
 
@@ -707,9 +709,7 @@ def test_postclose_report_skips_event_scan_without_candidate_source(
     assert readiness["source_quality_status"] == "missing"
     assert readiness["event_source_required"] is False
     assert readiness["event_source_valid"] is True
-    assert readiness["event_source"]["read_mode"] == (
-        "not_scanned_candidate_preflight"
-    )
+    assert readiness["event_source"]["read_mode"] == ("not_scanned_candidate_preflight")
     assert readiness["event_source"]["scan_skip_reason"] == "missing"
     assert readiness["event_source"]["line_count"] == 0
     assert "ordered_intraday_event_source_invalid" not in readiness["blockers"]
@@ -722,9 +722,7 @@ def test_postclose_report_skips_event_scan_for_valid_empty_candidate_set(
     tmp_path, monkeypatch
 ):
     candidate_path = tmp_path / "candidates.json"
-    candidate_path.write_text(
-        json.dumps(_candidate_source_payload()), encoding="utf-8"
-    )
+    candidate_path.write_text(json.dumps(_candidate_source_payload()), encoding="utf-8")
 
     def fail_if_scanned(_path):
         raise AssertionError("empty candidate set must not scan the event source")
@@ -824,3 +822,228 @@ def test_postclose_event_loader_streams_and_filters_source(tmp_path, monkeypatch
     assert status["line_count"] == 2
     assert status["matching_event_count"] == 1
     assert status["valid"] is True
+
+
+def test_rolling_observation_evidence_enforces_cohort_and_day_floors(tmp_path):
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    for day_index in range(1, 5):
+        target_date = f"2026-07-{27 + day_index:02d}"
+        (history_dir / f"limit_down_watch_{target_date}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "report_type": "limit_down_watch",
+                    "target_date": target_date,
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "allowed_runtime_apply": False,
+                    "evidence_readiness": {
+                        "candidate_source_valid": True,
+                        "event_source_valid": True,
+                    },
+                    "groups": [
+                        {
+                            "cohort": "consecutive_limit_down_2plus",
+                            "registered_codes": 2,
+                            "ordered_path_captured_codes": 1,
+                        },
+                        {
+                            "cohort": "single_limit_down",
+                            "registered_codes": 3,
+                            "ordered_path_captured_codes": 2,
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    evidence = limit_down_watch_report._rolling_observation_evidence(
+        "2026-08-03",
+        current_status="pass",
+        current_groups=[
+            {
+                "cohort": "consecutive_limit_down_2plus",
+                "registered_codes": 1,
+                "ordered_path_captured_codes": 1,
+            },
+            {
+                "cohort": "single_limit_down",
+                "registered_codes": 2,
+                "ordered_path_captured_codes": 2,
+            },
+        ],
+        current_readiness={
+            "candidate_source_valid": True,
+            "event_source_valid": True,
+        },
+        history_dir=history_dir,
+    )
+
+    assert evidence["observation_day_count"] == 5
+    assert evidence["ordered_path_captured_code_count"] == 15
+    assert evidence["cohort_ordered_path_counts"] == {
+        "consecutive_limit_down_2plus": 5,
+        "single_limit_down": 10,
+    }
+    assert evidence["checks"]["observation_days"] is True
+    assert evidence["checks"]["ordered_paths"] is False
+    assert evidence["status"] == "insufficient_sample"
+
+
+def test_conversion_readiness_requires_explicit_approval_and_never_auto_applies():
+    artifact_checks = {
+        "counterfactual": {"status": "pass"},
+        "sim_policy_catalog": {"status": "pass"},
+        "post_sim_attribution": {"status": "pass"},
+        "live_conversion_approval": {"status": "missing"},
+    }
+    readiness = limit_down_watch_report._conversion_readiness(
+        "2026-08-03",
+        candidate_source_valid=True,
+        source_quality_status="pass",
+        event_source_valid=True,
+        rolling_observation={"status": "pass"},
+        artifact_checks=artifact_checks,
+        runtime_state={"target_date": "2026-08-03", "enabled": True},
+    )
+
+    assert readiness["decision"] == "operator_live_conversion_approval_required"
+    assert readiness["live_conversion_review_ready"] is True
+    assert readiness["operator_approval_required"] is True
+    assert readiness["separate_preopen_apply_ready"] is False
+    assert readiness["automatic_live_conversion_performed"] is False
+    assert readiness["real_trading_ready"] is False
+    assert readiness["allowed_runtime_apply"] is False
+
+    artifact_checks["live_conversion_approval"] = {"status": "pass"}
+    approved = limit_down_watch_report._conversion_readiness(
+        "2026-08-03",
+        candidate_source_valid=True,
+        source_quality_status="pass",
+        event_source_valid=True,
+        rolling_observation={"status": "pass"},
+        artifact_checks=artifact_checks,
+        runtime_state={"target_date": "2026-08-03", "enabled": True},
+    )
+    assert approved["decision"] == "approved_for_separate_preopen_apply"
+    assert approved["separate_preopen_apply_ready"] is True
+    assert approved["automatic_live_conversion_performed"] is False
+    assert approved["allowed_runtime_apply"] is False
+
+
+def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_path):
+    paths = {
+        "runtime_state": tmp_path / "runtime.json",
+        "counterfactual": tmp_path / "counterfactual.json",
+        "sim_policy_catalog": tmp_path / "sim-policy.json",
+        "post_sim_attribution": tmp_path / "post-sim.json",
+        "live_conversion_approval": tmp_path / "approval.json",
+    }
+    source_only = {
+        "schema_version": 1,
+        "target_date": "2026-08-03",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+    }
+    paths["counterfactual"].write_text(
+        json.dumps(
+            {
+                **source_only,
+                **limit_down_watch_report.COUNTERFACTUAL_METRIC_CONTRACT,
+                "report_type": "limit_down_watch_counterfactual",
+                "status": "pass",
+                "source_quality_status": "pass",
+                "sample_count": 20,
+                "observation_date_count": 5,
+                "consecutive_limit_down_2plus_sample_count": 5,
+                "single_limit_down_sample_count": 10,
+                "source_quality_adjusted_ev_pct": 0.1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["sim_policy_catalog"].write_text(
+        json.dumps(
+            {
+                **source_only,
+                "report_type": "limit_down_watch_sim_policy_catalog",
+                "status": "pass",
+                "allowed_sim_apply": True,
+                "active_policy_count": 1,
+                "decision_authority": "limit_down_sim_policy_only",
+                "forbidden_uses": limit_down_watch_report.CONVERSION_FORBIDDEN_USES,
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["post_sim_attribution"].write_text(
+        json.dumps(
+            {
+                **source_only,
+                **limit_down_watch_report.POST_SIM_METRIC_CONTRACT,
+                "report_type": "limit_down_watch_post_sim_attribution",
+                "status": "pass",
+                "source_quality_status": "pass",
+                "sample_count": 20,
+                "source_quality_adjusted_ev_pct": 0.2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    paths["live_conversion_approval"].write_text(
+        json.dumps(
+            {
+                **source_only,
+                "report_type": "limit_down_watch_live_conversion_approval",
+                "approved": True,
+                "approved_by": "user",
+                "approval_scope": "limit_down_watch_live_conversion",
+                "decision_authority": "limit_down_live_conversion_approval_record_only",
+                "rollback_guard": "set flag false and gracefully restart",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    checks = limit_down_watch_report._conversion_artifact_checks("2026-08-03", paths)
+    assert {name: item["status"] for name, item in checks.items()} == {
+        "counterfactual": "pass",
+        "sim_policy_catalog": "pass",
+        "post_sim_attribution": "pass",
+        "live_conversion_approval": "pass",
+    }
+
+    payload = json.loads(paths["counterfactual"].read_text(encoding="utf-8"))
+    payload["metric_role"] = "diagnostic"
+    paths["counterfactual"].write_text(json.dumps(payload), encoding="utf-8")
+    invalid = limit_down_watch_report._conversion_artifact_checks("2026-08-03", paths)
+    assert invalid["counterfactual"]["status"] == "invalid"
+    assert "contract_mismatch:metric_role" in invalid["counterfactual"]["issues"]
+
+
+def test_postclose_report_marks_missing_daily_observer_activation(tmp_path):
+    report = limit_down_watch_report.build_report(
+        "2026-08-03",
+        event_path=tmp_path / "missing-events.jsonl",
+        candidate_path=tmp_path / "missing-candidates.json",
+        history_dir=tmp_path / "history",
+        conversion_paths={
+            "runtime_state": tmp_path / "missing-runtime.json",
+            "counterfactual": tmp_path / "missing-counterfactual.json",
+            "sim_policy_catalog": tmp_path / "missing-sim-policy.json",
+            "post_sim_attribution": tmp_path / "missing-post-sim.json",
+            "live_conversion_approval": tmp_path / "missing-approval.json",
+        },
+    )
+
+    conversion = report["conversion_readiness"]
+    assert conversion["observer_activation_expected"] is True
+    assert conversion["observer_activation_observed"] is False
+    assert "observer_activation_not_observed" in conversion["blockers"]
+    assert conversion["automatic_live_conversion_performed"] is False

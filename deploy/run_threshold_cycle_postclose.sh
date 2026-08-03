@@ -100,20 +100,14 @@ RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"
 RUN_ENTRY_SPLIT_ORDER_PLAN="${THRESHOLD_CYCLE_RUN_ENTRY_SPLIT_ORDER_PLAN:-true}"
 RUN_SCALE_IN_SPLIT_ORDER_PLAN="${THRESHOLD_CYCLE_RUN_SCALE_IN_SPLIT_ORDER_PLAN:-true}"
 RUN_ENTRY_AI_GATE_BACKTEST="${THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-true}"
-# The report is useful only when the source-only runtime observer produced its
-# candidate/tick provenance.  The postclose cron does not necessarily inherit
-# the bot's PREOPEN runtime env, so target-date candidate-source presence is
-# also accepted as factual evidence that the observer ran.  An explicit report
-# override remains authoritative.
-LIMIT_DOWN_WATCH_CANDIDATE_SOURCE="$PROJECT_DIR/data/report/limit_down_watch_candidate_source/limit_down_watch_candidate_source_${TARGET_DATE}.json"
+# The observer is a persistent daily source-only policy. The postclose cron
+# does not necessarily inherit the bot's PREOPEN runtime env, so run the report
+# every day and let its activation/source checks expose a missing observer run.
+# An explicit report override remains authoritative for emergency rollback.
 if [[ -n "${THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT:-}" ]]; then
   RUN_LIMIT_DOWN_WATCH_REPORT="$THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT"
-elif [[ "${KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED:-false}" == "true" \
-     || "${KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED:-false}" == "1" \
-     || -s "$LIMIT_DOWN_WATCH_CANDIDATE_SOURCE" ]]; then
-  RUN_LIMIT_DOWN_WATCH_REPORT=true
 else
-  RUN_LIMIT_DOWN_WATCH_REPORT=false
+  RUN_LIMIT_DOWN_WATCH_REPORT=true
 fi
 RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE:-true}"
 RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"

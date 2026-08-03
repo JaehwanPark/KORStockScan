@@ -1841,10 +1841,12 @@ def test_disabled_artifact_inventory_does_not_trigger_wrapper_rerun():
 
 
 def test_limit_down_no_observation_is_done_acceptable_warning():
-    assert (
-        "limit_down_watch_ordered_path_not_observed"
-        in mod.DONE_ACCEPTABLE_WARNING_ISSUES
-    )
+    assert {
+        "limit_down_watch_ordered_path_not_observed",
+        "limit_down_watch_observer_activation_not_observed",
+        "limit_down_watch_operator_live_conversion_approval_required",
+        "limit_down_watch_separate_preopen_apply_ready",
+    }.issubset(mod.DONE_ACCEPTABLE_WARNING_ISSUES)
 
 
 def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_required(

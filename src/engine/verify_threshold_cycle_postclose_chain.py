@@ -598,6 +598,16 @@ def _limit_down_watch_report_status(
         if isinstance(report.get("evidence_readiness"), dict)
         else {}
     )
+    conversion = (
+        report.get("conversion_readiness")
+        if isinstance(report.get("conversion_readiness"), dict)
+        else {}
+    )
+    observer_activation = (
+        report.get("observer_activation")
+        if isinstance(report.get("observer_activation"), dict)
+        else {}
+    )
     if not report:
         issues.append("limit_down_watch_report_missing")
     else:
@@ -655,16 +665,126 @@ def _limit_down_watch_report_status(
             if isinstance(readiness.get("blockers"), list)
             else set()
         )
-        required_blockers = {
-            "multi_day_cohort_sample_floor_not_established",
-            "counterfactual_entry_exit_labels_missing",
-            "clean_baseline_rolling_ev_missing",
-            "sim_policy_catalog_handoff_missing",
-            "post_sim_attribution_missing",
-            "separate_live_conversion_approval_missing",
-        }
-        if not required_blockers.issubset(blockers):
-            issues.append("limit_down_watch_conversion_blockers_missing")
+        conversion_contract_required = False
+        try:
+            conversion_contract_required = date.fromisoformat(target_date) >= date(
+                2026, 8, 3
+            )
+        except ValueError:
+            pass
+        if conversion_contract_required:
+            expected_conversion = {
+                "schema_version": 1,
+                "observer_activation_expected": True,
+                "automatic_live_conversion_performed": False,
+                "real_trading_ready": False,
+                "allowed_runtime_apply": False,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+            if not conversion:
+                issues.append("limit_down_watch_conversion_readiness_missing")
+            for field, expected_value in expected_conversion.items():
+                if conversion.get(field) != expected_value:
+                    issues.append(
+                        f"limit_down_watch_conversion_contract_mismatch:{field}"
+                    )
+            if conversion.get("decision") not in {
+                "keep_observing_and_build_evidence",
+                "operator_live_conversion_approval_required",
+                "approved_for_separate_preopen_apply",
+            }:
+                issues.append("limit_down_watch_conversion_decision_invalid")
+            conversion_blockers = (
+                set(conversion.get("blockers"))
+                if isinstance(conversion.get("blockers"), list)
+                else set()
+            )
+            blocker_requirements = {
+                "observer_activation_observed": {"observer_activation_not_observed"},
+                "daily_source_ready": {"daily_source_contract_not_ready"},
+                "rolling_observation_ready": {
+                    "multi_day_cohort_sample_floor_not_established"
+                },
+                "counterfactual_ev_ready": {
+                    "counterfactual_entry_exit_labels_missing",
+                    "clean_baseline_rolling_ev_missing",
+                },
+                "sim_policy_catalog_ready": {"sim_policy_catalog_handoff_missing"},
+                "post_sim_attribution_ready": {"post_sim_attribution_missing"},
+                "operator_approval_present": {
+                    "separate_live_conversion_approval_missing"
+                },
+            }
+            for field, required in blocker_requirements.items():
+                if conversion.get(field) is not True and not required.issubset(
+                    conversion_blockers
+                ):
+                    issues.append(
+                        f"limit_down_watch_conversion_blocker_missing:{field}"
+                    )
+            preapproval_ready = conversion.get("live_conversion_review_ready") is True
+            approval_present = conversion.get("operator_approval_present") is True
+            separate_ready = conversion.get("separate_preopen_apply_ready") is True
+            expected_decision = (
+                "approved_for_separate_preopen_apply"
+                if preapproval_ready and approval_present
+                else (
+                    "operator_live_conversion_approval_required"
+                    if preapproval_ready
+                    else "keep_observing_and_build_evidence"
+                )
+            )
+            if conversion.get("decision") != expected_decision:
+                issues.append("limit_down_watch_conversion_decision_state_invalid")
+            expected_approval_required = preapproval_ready and not approval_present
+            if (
+                conversion.get("operator_approval_required")
+                is not expected_approval_required
+            ):
+                issues.append("limit_down_watch_operator_approval_required_invalid")
+            if separate_ready != (preapproval_ready and approval_present):
+                issues.append("limit_down_watch_separate_preopen_apply_state_invalid")
+            if (
+                conversion.get("decision")
+                == "operator_live_conversion_approval_required"
+            ):
+                if not preapproval_ready or approval_present:
+                    issues.append("limit_down_watch_operator_approval_state_invalid")
+                else:
+                    warnings.append(
+                        "limit_down_watch_operator_live_conversion_approval_required"
+                    )
+            if conversion.get("decision") == "approved_for_separate_preopen_apply":
+                if not separate_ready:
+                    issues.append("limit_down_watch_preopen_apply_readiness_invalid")
+                else:
+                    warnings.append("limit_down_watch_separate_preopen_apply_ready")
+            if (
+                observer_activation.get("policy")
+                != "persistent_daily_source_observation"
+            ):
+                issues.append("limit_down_watch_activation_policy_invalid")
+            if observer_activation.get("expected_enabled") is not True:
+                issues.append("limit_down_watch_activation_expectation_invalid")
+            if observer_activation.get("observed_enabled") is not conversion.get(
+                "observer_activation_observed"
+            ):
+                issues.append("limit_down_watch_activation_observation_mismatch")
+            if conversion.get("observer_activation_observed") is not True:
+                warnings.append("limit_down_watch_observer_activation_not_observed")
+        else:
+            required_blockers = {
+                "multi_day_cohort_sample_floor_not_established",
+                "counterfactual_entry_exit_labels_missing",
+                "clean_baseline_rolling_ev_missing",
+                "sim_policy_catalog_handoff_missing",
+                "post_sim_attribution_missing",
+                "separate_live_conversion_approval_missing",
+            }
+            if not required_blockers.issubset(blockers):
+                issues.append("limit_down_watch_conversion_blockers_missing")
         if readiness.get("candidate_source_valid") is not True:
             warnings.append("limit_down_watch_candidate_source_invalid")
         if readiness.get("event_source_valid") is not True:
@@ -686,6 +806,16 @@ def _limit_down_watch_report_status(
         "sim_candidate_ready": readiness.get("sim_candidate_ready", False),
         "real_trading_ready": readiness.get("real_trading_ready", False),
         "blockers": readiness.get("blockers") or [],
+        "conversion_decision": conversion.get("decision"),
+        "live_conversion_review_ready": conversion.get(
+            "live_conversion_review_ready", False
+        ),
+        "operator_approval_required": conversion.get(
+            "operator_approval_required", False
+        ),
+        "separate_preopen_apply_ready": conversion.get(
+            "separate_preopen_apply_ready", False
+        ),
     }
 
 
@@ -4766,9 +4896,7 @@ def _code_improvement_workorder_contract_status(
         "contract_state": (
             "declared_and_verified"
             if contract_declared
-            else "required_but_missing"
-            if contract_required
-            else "legacy_not_declared"
+            else "required_but_missing" if contract_required else "legacy_not_declared"
         ),
         "issues": sorted(set(issues)),
         "duplicate_order_warnings": duplicate_warnings,
@@ -6471,9 +6599,7 @@ def build_threshold_cycle_postclose_verification(
                     else (
                         "fail"
                         if predecessor_timeouts or strict_log_issues
-                        else "warning"
-                        if predecessor_waits
-                        else "pass"
+                        else "warning" if predecessor_waits else "pass"
                     )
                 )
             ),

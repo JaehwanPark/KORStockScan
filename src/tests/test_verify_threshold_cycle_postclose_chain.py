@@ -495,6 +495,43 @@ def _limit_down_metric_contract():
     }
 
 
+def _limit_down_conversion(**overrides):
+    payload = {
+        "schema_version": 1,
+        "decision": "keep_observing_and_build_evidence",
+        "observer_activation_expected": True,
+        "observer_activation_observed": True,
+        "daily_source_ready": True,
+        "rolling_observation_ready": False,
+        "counterfactual_ev_ready": False,
+        "sim_policy_catalog_ready": False,
+        "post_sim_attribution_ready": False,
+        "live_conversion_review_ready": False,
+        "operator_approval_required": False,
+        "operator_approval_present": False,
+        "separate_preopen_apply_ready": False,
+        "automatic_live_conversion_performed": False,
+        "real_trading_ready": False,
+        "allowed_runtime_apply": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "blockers": _limit_down_readiness()["blockers"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _limit_down_observer_activation(**overrides):
+    payload = {
+        "policy": "persistent_daily_source_observation",
+        "expected_enabled": True,
+        "observed_enabled": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_artifact_paths_include_limit_down_watch():
     paths = mod._artifact_paths("2026-07-30")
 
@@ -562,6 +599,109 @@ def test_limit_down_watch_report_status_passes_source_only_contract():
     assert status["status"] == "pass"
     assert status["sim_candidate_ready"] is False
     assert status["real_trading_ready"] is False
+
+
+def test_limit_down_watch_report_validates_daily_conversion_check_contract():
+    status = mod._limit_down_watch_report_status(
+        {
+            "schema_version": 1,
+            "report_type": "limit_down_watch",
+            "target_date": "2026-08-03",
+            "generated_at": "2026-08-03T20:10:00+09:00",
+            **_limit_down_metric_contract(),
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": _limit_down_readiness(),
+            "conversion_readiness": _limit_down_conversion(),
+            "observer_activation": _limit_down_observer_activation(),
+        },
+        enabled=True,
+        target_date="2026-08-03",
+    )
+
+    assert status["status"] == "pass"
+    assert status["conversion_decision"] == "keep_observing_and_build_evidence"
+    assert status["separate_preopen_apply_ready"] is False
+
+
+def test_limit_down_watch_report_surfaces_operator_approval_without_auto_apply():
+    conversion = _limit_down_conversion(
+        decision="operator_live_conversion_approval_required",
+        rolling_observation_ready=True,
+        counterfactual_ev_ready=True,
+        sim_policy_catalog_ready=True,
+        post_sim_attribution_ready=True,
+        live_conversion_review_ready=True,
+        operator_approval_required=True,
+        blockers=["separate_live_conversion_approval_missing"],
+    )
+    status = mod._limit_down_watch_report_status(
+        {
+            "schema_version": 1,
+            "report_type": "limit_down_watch",
+            "target_date": "2026-08-03",
+            "generated_at": "2026-08-03T20:10:00+09:00",
+            **_limit_down_metric_contract(),
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": _limit_down_readiness(
+                blockers=["separate_live_conversion_approval_missing"]
+            ),
+            "conversion_readiness": conversion,
+            "observer_activation": _limit_down_observer_activation(),
+        },
+        enabled=True,
+        target_date="2026-08-03",
+    )
+
+    assert status["status"] == "warning"
+    assert status["operator_approval_required"] is True
+    assert status["warnings"] == [
+        "limit_down_watch_operator_live_conversion_approval_required"
+    ]
+
+
+def test_limit_down_watch_report_rejects_conversion_authority_leak():
+    status = mod._limit_down_watch_report_status(
+        {
+            "schema_version": 1,
+            "report_type": "limit_down_watch",
+            "target_date": "2026-08-03",
+            "generated_at": "2026-08-03T20:10:00+09:00",
+            **_limit_down_metric_contract(),
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": _limit_down_readiness(),
+            "conversion_readiness": _limit_down_conversion(
+                automatic_live_conversion_performed=True,
+                allowed_runtime_apply=True,
+            ),
+            "observer_activation": _limit_down_observer_activation(),
+        },
+        enabled=True,
+        target_date="2026-08-03",
+    )
+
+    assert status["status"] == "fail"
+    assert {
+        "limit_down_watch_conversion_contract_mismatch:automatic_live_conversion_performed",
+        "limit_down_watch_conversion_contract_mismatch:allowed_runtime_apply",
+    }.issubset(status["issues"])
 
 
 def test_limit_down_watch_report_status_fails_authority_leak():
