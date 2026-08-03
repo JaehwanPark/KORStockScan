@@ -13,6 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE_EVENTS_DIR = PROJECT_ROOT / "data" / "pipeline_events"
 REPORT_DIR = PROJECT_ROOT / "data" / "report" / "rising_missed_intraday_feedback"
 KST = timezone(timedelta(hours=9))
+CLEAN_BASELINE_DATE = "2026-06-05"
+NXT_POST_BLOCK_ROLLING_REPORT_DAYS = 20
 FORCED_REASON = "rising_missed_one_share_entry"
 AVG_DOWN_FAIL_FLOOR = 2
 FORCED_SUBMIT_LINEAGE_JOIN_WINDOW_MINUTES = 15
@@ -2877,6 +2879,203 @@ def _aggregate_nxt_post_block_outcomes(
     )
 
 
+def _clean_baseline_rolling_nxt_post_block_outcomes(
+    target_date: str,
+    current_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Aggregate recent source-quality-gated blocker outcomes since baseline.
+
+    The daily report remains the owner of same-day samples.  This view only
+    combines already-gated daily summaries and never grants runtime authority.
+    The target-date artifact is deliberately excluded from disk so a stale
+    partial report cannot be counted alongside the current in-memory result.
+    """
+
+    source_rows: list[tuple[str, dict[str, Any]]] = [
+        (target_date, dict(row)) for row in current_rows
+    ]
+    source_dates = {target_date}
+    excluded_reports: list[dict[str, str]] = []
+    prefix = "rising_missed_intraday_feedback_"
+    eligible_paths = []
+    for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
+        report_date = path.stem.removeprefix(prefix)
+        if not (CLEAN_BASELINE_DATE <= report_date < target_date):
+            continue
+        eligible_paths.append(path)
+    prior_limit = max(0, NXT_POST_BLOCK_ROLLING_REPORT_DAYS - 1)
+    for path in eligible_paths[-prior_limit:] if prior_limit else []:
+        report_date = path.stem.removeprefix(prefix)
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "report_unreadable"}
+            )
+            continue
+        if not isinstance(payload, dict) or (
+            payload.get("report_type") != "rising_missed_intraday_feedback"
+            or payload.get("target_date") != report_date
+            or bool(payload.get("runtime_effect"))
+            or bool(payload.get("allowed_runtime_apply"))
+        ):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "report_contract_invalid"}
+            )
+            continue
+        daily_rows = (payload.get("summary") or {}).get(
+            "rising_missed_nxt_post_block_blocker_outcome_attribution"
+        )
+        if not isinstance(daily_rows, list):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "daily_attribution_missing"}
+            )
+            continue
+        source_dates.add(report_date)
+        source_rows.extend(
+            (report_date, dict(row)) for row in daily_rows if isinstance(row, dict)
+        )
+
+    grouped: dict[tuple[str, str], list[tuple[str, dict[str, Any]]]] = {}
+    for report_date, row in source_rows:
+        stage = str(row.get("source_block_stage") or "missing").strip()
+        reason = str(row.get("source_block_reason") or "missing").strip()
+        grouped.setdefault((stage, reason), []).append((report_date, row))
+
+    rolling_rows: list[dict[str, Any]] = []
+    for (stage, reason), dated_rows in grouped.items():
+        sample_count = sum(
+            _safe_int(row.get("completed_sample_count")) for _, row in dated_rows
+        )
+        if sample_count <= 0:
+            continue
+        target_count = sum(
+            _safe_int(row.get("gross_target_first_count")) for _, row in dated_rows
+        )
+        adverse_count = sum(
+            _safe_int(row.get("adverse_stop_first_count")) for _, row in dated_rows
+        )
+        no_hit_count = sum(
+            _safe_int(row.get("no_hit_within_20m_count")) for _, row in dated_rows
+        )
+
+        def _weighted_average(field: str) -> float | None:
+            weighted_sum = 0.0
+            weight = 0
+            for _, row in dated_rows:
+                value = _safe_float(row.get(field))
+                row_count = _safe_int(row.get("completed_sample_count"))
+                if value is None or row_count <= 0:
+                    continue
+                weighted_sum += value * row_count
+                weight += row_count
+            return round(weighted_sum / weight, 6) if weight else None
+
+        avg_mfe = _weighted_average("equal_weight_avg_mfe_after_block_pct")
+        avg_mae = _weighted_average("equal_weight_avg_mae_after_block_pct")
+        gross_first_hit_payoff_proxy_pct = round(
+            (target_count * TP1_GROSS_TARGET_PCT + adverse_count * TP1_ADVERSE_STOP_PCT)
+            / sample_count,
+            6,
+        )
+        sample_floor_met = sample_count >= 10
+        rolling_assessment = "hold_sample"
+        if sample_floor_met:
+            rolling_assessment = (
+                "source_only_positive_payoff_proxy_needs_cost_adjusted_ev"
+                if gross_first_hit_payoff_proxy_pct > 0.0
+                and avg_mfe is not None
+                and avg_mae is not None
+                and avg_mfe > abs(avg_mae)
+                else "hold_no_edge"
+            )
+        max_mfe_values = [
+            value
+            for _, row in dated_rows
+            for value in [_safe_float(row.get("max_mfe_after_block_pct"))]
+            if value is not None
+        ]
+        min_mae_values = [
+            value
+            for _, row in dated_rows
+            for value in [_safe_float(row.get("min_mae_after_block_pct"))]
+            if value is not None
+        ]
+        row_source_dates = sorted({report_date for report_date, _ in dated_rows})
+        rolling_rows.append(
+            {
+                "source_block_stage": stage,
+                "source_block_reason": reason,
+                "completed_sample_count": sample_count,
+                "daily_unique_symbol_count_sum": sum(
+                    _safe_int(row.get("unique_symbol_count")) for _, row in dated_rows
+                ),
+                "gross_target_first_count": target_count,
+                "adverse_stop_first_count": adverse_count,
+                "no_hit_within_20m_count": no_hit_count,
+                "gross_target_first_rate_pct": round(
+                    target_count * 100.0 / sample_count, 6
+                ),
+                "adverse_stop_first_rate_pct": round(
+                    adverse_count * 100.0 / sample_count, 6
+                ),
+                "equal_weight_avg_mfe_after_block_pct": avg_mfe,
+                "equal_weight_avg_mae_after_block_pct": avg_mae,
+                "gross_first_hit_payoff_proxy_pct": (gross_first_hit_payoff_proxy_pct),
+                "net_ev_state": "unavailable_fee_tax_and_no_hit_exit_outcome_missing",
+                "max_mfe_after_block_pct": (
+                    max(max_mfe_values) if max_mfe_values else None
+                ),
+                "min_mae_after_block_pct": (
+                    min(min_mae_values) if min_mae_values else None
+                ),
+                "rolling_assessment": rolling_assessment,
+                "metric_role": "source_quality_gated_blocker_outcome_attribution",
+                "decision_authority": "source_only_no_runtime_mutation",
+                "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+                "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+                "source_dates": row_source_dates,
+                "source_date_count": len(row_source_dates),
+                "sample_floor": (
+                    "10_source_quality_pass_completed_samplers_per_blocker"
+                ),
+                "sample_floor_met": sample_floor_met,
+                "primary_decision_metric": (
+                    "gross_target_first_rate_pct_and_adverse_stop_first_rate_pct_"
+                    "with_gross_first_hit_payoff_proxy_and_equal_weight_mfe_mae"
+                ),
+                "source_quality_gate": (
+                    "daily_completed_sampler_source_quality_pass_and_explicit_nxt_venue"
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    rolling_rows.sort(
+        key=lambda row: (
+            str(row.get("rolling_assessment")),
+            -_safe_int(row.get("completed_sample_count")),
+            str(row.get("source_block_stage")),
+            str(row.get("source_block_reason")),
+        )
+    )
+    return rolling_rows, {
+        "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+        "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+        "rolling_report_day_limit": NXT_POST_BLOCK_ROLLING_REPORT_DAYS,
+        "start_date": min(source_dates) if source_dates else target_date,
+        "end_date": target_date,
+        "source_dates": sorted(source_dates),
+        "source_date_count": len(source_dates),
+        "excluded_report_count": len(excluded_reports),
+        "excluded_reports": excluded_reports,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _build_nxt_session_observation(
     pipeline_path: Path,
 ) -> tuple[
@@ -3550,6 +3749,17 @@ def build_report(
         source_quality_status = "first_touch_micro_provenance_missing"
     if first_touch_source_quality_counts["first_touch_micro_provenance_unusable_count"]:
         source_quality_status = "first_touch_micro_provenance_unusable"
+    (
+        rolling_nxt_post_block_rows,
+        rolling_nxt_post_block_window,
+    ) = _clean_baseline_rolling_nxt_post_block_outcomes(
+        target_date,
+        list(
+            nxt_session_summary.get(
+                "rising_missed_nxt_post_block_blocker_outcome_attribution", []
+            )
+        ),
+    )
     initial_fail_count = sum(
         count
         for label, count in label_counts.items()
@@ -3769,6 +3979,22 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": {
+                "metric_role": "source_quality_gated_blocker_outcome_attribution",
+                "decision_authority": "source_only_no_runtime_mutation",
+                "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+                "sample_floor": (
+                    "10_source_quality_pass_completed_samplers_per_blocker"
+                ),
+                "primary_decision_metric": (
+                    "gross_target_first_rate_pct_and_adverse_stop_first_rate_pct_"
+                    "with_gross_first_hit_payoff_proxy_and_equal_weight_mfe_mae"
+                ),
+                "source_quality_gate": (
+                    "daily_completed_sampler_source_quality_pass_and_explicit_nxt_venue"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
             "rising_missed_adverse_micro_recovery": {
                 "metric_role": "source_quality_gate",
                 "decision_authority": "observe_only_adverse_micro_recovery",
@@ -3864,6 +4090,12 @@ def build_report(
                 tp1_counterfactual_multi_horizon_by_effective_venue
             ),
             **nxt_session_summary,
+            "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": (
+                rolling_nxt_post_block_rows
+            ),
+            "rising_missed_nxt_post_block_rolling_window": (
+                rolling_nxt_post_block_window
+            ),
             **adverse_micro_recovery_summary,
             "code_improvement_order_count": len(code_improvement_orders),
             "consumer_readiness": {
@@ -4040,6 +4272,10 @@ def write_outputs(
         f"{summary.get('rising_missed_nxt_post_block_sampler_outcome_counts')}",
         f"- rising_missed_nxt_post_block_blocker_outcome_attribution: "
         f"{summary.get('rising_missed_nxt_post_block_blocker_outcome_attribution')}",
+        f"- rising_missed_nxt_post_block_rolling_blocker_outcome_attribution: "
+        f"{summary.get('rising_missed_nxt_post_block_rolling_blocker_outcome_attribution')}",
+        f"- rising_missed_nxt_post_block_rolling_window: "
+        f"{summary.get('rising_missed_nxt_post_block_rolling_window')}",
         f"- rising_missed_adverse_micro_recovery_observation_count: "
         f"{summary.get('rising_missed_adverse_micro_recovery_observation_count')}",
         f"- rising_missed_adverse_micro_recovery_checkpoint_counts: "

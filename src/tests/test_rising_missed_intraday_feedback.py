@@ -2833,3 +2833,82 @@ def test_latency_false_negative_review_selects_only_high_mfe_low_mae_latency_blo
         ]["decision_authority"]
         == "source_only_latency_false_negative_canary_candidate"
     )
+
+
+def test_clean_baseline_rolling_nxt_post_block_outcomes(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    prior_row = {
+        "source_block_stage": "tp1_selector",
+        "source_block_reason": "rising_missed_tp1_lane_not_eligible",
+        "completed_sample_count": 13,
+        "unique_symbol_count": 6,
+        "gross_target_first_count": 0,
+        "adverse_stop_first_count": 2,
+        "no_hit_within_20m_count": 11,
+        "equal_weight_avg_mfe_after_block_pct": 0.158771,
+        "equal_weight_avg_mae_after_block_pct": -0.480772,
+        "max_mfe_after_block_pct": 0.824176,
+        "min_mae_after_block_pct": -0.833333,
+    }
+    valid_prior = {
+        "report_type": "rising_missed_intraday_feedback",
+        "target_date": "2026-07-31",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "summary": {
+            "rising_missed_nxt_post_block_blocker_outcome_attribution": [prior_row]
+        },
+    }
+    (tmp_path / "rising_missed_intraday_feedback_2026-07-31.json").write_text(
+        json.dumps(valid_prior), encoding="utf-8"
+    )
+    (tmp_path / "rising_missed_intraday_feedback_2026-07-30.json").write_text(
+        "not-json", encoding="utf-8"
+    )
+    # A stale target-date artifact must not be double-counted.
+    (tmp_path / "rising_missed_intraday_feedback_2026-08-03.json").write_text(
+        json.dumps(valid_prior), encoding="utf-8"
+    )
+    current_rows = [
+        {
+            **prior_row,
+            "completed_sample_count": 4,
+            "unique_symbol_count": 4,
+            "gross_target_first_count": 1,
+            "adverse_stop_first_count": 1,
+            "no_hit_within_20m_count": 2,
+            "equal_weight_avg_mfe_after_block_pct": 1.129822,
+            "equal_weight_avg_mae_after_block_pct": -0.420203,
+            "max_mfe_after_block_pct": 3.663986,
+            "min_mae_after_block_pct": -1.029601,
+        }
+    ]
+
+    rows, window = mod._clean_baseline_rolling_nxt_post_block_outcomes(
+        "2026-08-03", current_rows
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["completed_sample_count"] == 17
+    assert row["gross_target_first_count"] == 1
+    assert row["adverse_stop_first_count"] == 3
+    assert row["gross_target_first_rate_pct"] == 5.882353
+    assert row["adverse_stop_first_rate_pct"] == 17.647059
+    assert row["equal_weight_avg_mfe_after_block_pct"] == 0.387254
+    assert row["equal_weight_avg_mae_after_block_pct"] == -0.46652
+    assert row["gross_first_hit_payoff_proxy_pct"] == -0.047059
+    assert row["net_ev_state"] == (
+        "unavailable_fee_tax_and_no_hit_exit_outcome_missing"
+    )
+    assert row["sample_floor_met"] is True
+    assert row["rolling_assessment"] == "hold_no_edge"
+    assert row["runtime_effect"] is False
+    assert row["allowed_runtime_apply"] is False
+    assert row["source_dates"] == ["2026-07-31", "2026-08-03"]
+    assert window["clean_tuning_baseline_date"] == "2026-06-05"
+    assert window["rolling_report_day_limit"] == 20
+    assert window["excluded_report_count"] == 1
+    assert window["excluded_reports"] == [
+        {"target_date": "2026-07-30", "reason": "report_unreadable"}
+    ]
