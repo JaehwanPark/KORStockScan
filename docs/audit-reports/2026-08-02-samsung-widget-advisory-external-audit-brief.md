@@ -186,6 +186,10 @@ source-quality 및 완전한 권장가격 범위를 별도로 확인한다.
 - 최근 8봉에 상승봉 2개 이상, 하락봉 1개 이상이 있고 0거래량 봉 비율이 25%
   이하여야 한다. 한 방향 표본만 있는 경우에는 평균 비교를 통과시키지 않는다.
 - 두 pivot 재시험이 있으면 두 번째 저점 봉 거래량이 첫 번째 이하이어야 한다.
+- 예외적으로 두 번째 저점 거래량이 증가했더라도 retest 지지가 유지되고 상승봉이
+  3개 이상 누적된 뒤 최신 확정봉 종가가 세션 VWAP과 직전 저항을 모두 회복했으며 3·5분
+  추세가 하락이 아니면 `absorption_recovery`로 통과시킨다. 대량 매도 흡수 후
+  회복을 단순 거래량 증가 실패로 오분류하지 않기 위한 경로이며 단독 승격은 아니다.
 - 1·3·5분 확정봉 추세의 중립 band는 고정 5bp가 아니라
   `max(세션·시간창 tick multiplier, 최근 12봉 절대변화 중앙값*1.25)`를 유효
   tick으로 올림해 사용한다. KRX multiplier는 `1/2/3틱`, NXT 프리·애프터는
@@ -203,6 +207,10 @@ source-quality 및 완전한 권장가격 범위를 별도로 확인한다.
   삼성-SK하이닉스, KRX 삼성-KOSPI 수익률 차를 계산한다. 가장 긴 가용 시간창에서
   `-0.5%p` 미만이면 추가 약세 veto로만 사용한다. 동일 시간창 결측은 새 positive
   authority도 새 hard block도 만들지 않는다.
+- 전일종가 대비 상대약세가 있더라도 두 비교대상의 15분·5분 동일 시간창이 모두
+  존재하고 각각 `-0.5%p` 이상이면 누적 약세 block만 해제한다. 이는 진입 승격이
+  아니라 영구 block 해제이며, 구조·VWAP·거래량·추세·호가 조건은 별도로 통과해야
+  한다. 어느 시간창이든 결측 또는 `-0.5%p` 미만이면 해제하지 않는다.
 - KRX 외국인 2시점과 프로그램 값이 모두 있어야 수급을 `OBSERVED`로 표시한다.
   두 흐름이 모두 비악화여야 ready를 유지하며, 어느 한쪽이라도 악화되면
   caution으로 낮춘다. 한쪽만 있는 `PARTIAL`이나 전체 결측도 caution이다.
@@ -235,8 +243,10 @@ entry_high = min(best_ask, tactical_support + 2 exchange ticks)
 ```
 
 가격대 경계에서 tick size가 바뀌는 경우에도 `move_price_by_ticks`로 실제 tick을
-하나씩 계산한다. 구조적·전술적 지지 각각의 거리 중 하나라도 0.3%를 넘으면
-`NO_CHASE`다. 현재가가 structural support보다 낮거나 invalidation과 같거나
+하나씩 계산한다. `structural_support`는 무효화와 하락위험 거리를 소유하고,
+추격 여부는 실제 권장가격 owner인 `tactical_support`와의 거리만 사용한다.
+현재가가 tactical support보다 0.3%를 넘으면 `NO_CHASE`다. 현재가가
+structural support보다 낮거나 invalidation과 같거나
 낮으면 즉시 `AVOID`다. 추천 범위가
 역전되면 역시 `NO_CHASE`다. 권장가격은 자동 주문가격이 아니다.
 
@@ -265,7 +275,7 @@ entry_high = min(best_ask, tactical_support + 2 exchange ticks)
 | 3 | confirmed support 하향 이탈 | `AVOID` |
 | 4 | 최신 체결 하락 또는 실시간 반전 veto | `WATCH` |
 | 5 | 국내 6개 core 중 하나 실패 | `WATCH`, 최초 blocker 표시 |
-| 6 | 국내 6개 core 통과 후 support 대비 0.3% 초과 추격 | `NO_CHASE` |
+| 6 | 국내 6개 core 통과 후 tactical support 대비 0.3% 초과 추격 | `NO_CHASE` |
 | 7 | 국내 core 통과 + 외부 `HOLD` | `WATCH`, 가격범위 제거 |
 | 8 | 국내 core 통과 + 보조 risk/gap | `ENTRY_CAUTION` |
 | 9 | 국내 core 통과 + 보조 위험 없음 | `ENTRY_READY` |
@@ -288,7 +298,8 @@ Windows 화면은 비진입 상태에 빈 문자열 대신 `가격대기`, `범�
 - `entry_price_low/high`, `trigger_price`, `invalidation_price`
 - `reasons`, `unmet_conditions`, `valid_until`
 - `source_quality`, `external_risk`, `external_points`, `provenance`
-- `trend_assessment`, `trend_details`, `live_reversal`, `relative_strength`
+- `trend_assessment`, `trend_details`, `live_reversal`, `relative_strength`,
+  `relative_assessment`
 - `derived`, `flow`, authority 안전 필드, `metric_contract`
 
 Windows 창은 팝업·소리 없이 `상태 · 권장가격`, 확정봉 추세, 핵심 근거, 외부 위험/지연을

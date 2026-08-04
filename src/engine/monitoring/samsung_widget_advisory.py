@@ -77,6 +77,7 @@ TREND_TICK_MULTIPLIERS = {
     "NXT_AFTERMARKET": {1: 2, 3: 3, 5: 4},
 }
 RELATIVE_UNDERPERFORMANCE_LIMIT_PCT = 0.50
+TACTICAL_CHASE_LIMIT_PCT = 0.30
 
 EXTERNAL_THRESHOLDS = {
     "NQ": -0.40,
@@ -485,7 +486,7 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
 
 def _volume_confirmation(
     bars: list[MinuteBar],
-) -> tuple[bool, dict[str, float | int | bool | None]]:
+) -> tuple[bool, dict[str, Any]]:
     recent = bars[-8:]
     rising = [bar.volume for bar in recent if bar.close > bar.open and bar.volume > 0]
     falling = [bar.volume for bar in recent if bar.close < bar.open and bar.volume > 0]
@@ -526,6 +527,32 @@ def _volume_confirmation(
         "zero_volume_ratio": round(zero_volume_ratio, 4),
         "volume_minimum_composition_met": minimum_composition_met,
     }
+
+
+def _absorption_recovery_confirmation(
+    *,
+    volume_meta: dict[str, Any],
+    structure: dict[str, Any],
+    completed_close: int,
+    vwap: int | None,
+    recent_resistance: int | None,
+    reclaim_ok: bool,
+    trends_ok: bool,
+) -> bool:
+    """Recognize a high-volume retest that was absorbed and fully reclaimed."""
+    return bool(
+        structure.get("retest_held") is True
+        and volume_meta.get("retest_volume_contracted") is False
+        and int(volume_meta.get("rising_volume_sample_count") or 0) >= 3
+        and int(volume_meta.get("falling_volume_sample_count") or 0) >= 1
+        and float(volume_meta.get("zero_volume_ratio") or 0.0) <= 0.25
+        and reclaim_ok
+        and trends_ok
+        and isinstance(vwap, int)
+        and completed_close >= vwap
+        and isinstance(recent_resistance, int)
+        and completed_close >= recent_resistance
+    )
 
 
 @dataclass(frozen=True)
@@ -903,7 +930,7 @@ def _same_window_relative_snapshot(
             "kospi": _aligned_window_returns(samsung_bars, kospi_bars),
         },
         "same_window_basis": "timestamp_aligned_completed_1m_closes",
-        "same_window_authority": "negative_relative_weakness_veto_only",
+        "same_window_authority": ("negative_veto_and_session_weakness_recovery_only"),
         "same_window_sources": {
             "samsung": "kiwoom_ka10080_completed_1m",
             "sk_hynix": "kiwoom_ka10080_completed_1m",
@@ -912,9 +939,9 @@ def _same_window_relative_snapshot(
     }
 
 
-def _relative_quality(
+def _relative_quality_assessment(
     relative: dict[str, Any], context: SessionContext
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], dict[str, Any]]:
     samsung_change = _signed_float(relative.get("samsung_change_pct"))
     sk_hynix_change = _signed_float(relative.get("sk_hynix_change_pct"))
     kospi_change = _signed_float(relative.get("kospi_change_pct"))
@@ -924,21 +951,35 @@ def _relative_quality(
         else [sk_hynix_change]
     )
     if samsung_change is None or any(value is None for value in comparisons):
-        return False, ["relative_strength_unavailable"]
+        return (
+            False,
+            ["relative_strength_unavailable"],
+            {
+                "session_underperformance": None,
+                "same_window_negative_veto": False,
+                "same_window_recovery_complete": False,
+                "same_window_recovery_confirmed": False,
+                "session_underperformance_cleared": False,
+            },
+        )
     weak_against = [
         value
         for value in comparisons
-        if value is not None and samsung_change < value - 0.5
+        if value is not None
+        and samsung_change < value - RELATIVE_UNDERPERFORMANCE_LIMIT_PCT
     ]
     same_window = relative.get("same_window")
     same_window_weak = False
+    recovery_complete = True
+    recovery_nonweak = True
+    comparison_names = (
+        ("sk_hynix", "kospi") if context.name == "KRX_REGULAR" else ("sk_hynix",)
+    )
     if isinstance(same_window, dict):
-        comparison_names = (
-            ("sk_hynix", "kospi") if context.name == "KRX_REGULAR" else ("sk_hynix",)
-        )
         for comparison_name in comparison_names:
             windows = same_window.get(comparison_name)
             if not isinstance(windows, dict):
+                recovery_complete = False
                 continue
             # Prefer the broadest available intraday window. Missing optional
             # minute data does not create a new positive or blocking authority.
@@ -953,8 +994,46 @@ def _relative_quality(
                 ):
                     same_window_weak = True
                 break
-    passed = not weak_against and not same_window_weak
-    return passed, ([] if passed else ["relative_strength_weak"])
+            for horizon in ("15m", "5m"):
+                row = windows.get(horizon)
+                relative_return = (
+                    _signed_float(row.get("relative_return_pct_point"))
+                    if isinstance(row, dict)
+                    else None
+                )
+                if relative_return is None:
+                    recovery_complete = False
+                elif relative_return < -RELATIVE_UNDERPERFORMANCE_LIMIT_PCT:
+                    recovery_nonweak = False
+    else:
+        recovery_complete = False
+
+    same_window_recovery = recovery_complete and recovery_nonweak
+    session_underperformance = bool(weak_against)
+    session_underperformance_cleared = bool(
+        session_underperformance and same_window_recovery and not same_window_weak
+    )
+    passed = not same_window_weak and (
+        not session_underperformance or session_underperformance_cleared
+    )
+    return (
+        passed,
+        ([] if passed else ["relative_strength_weak"]),
+        {
+            "session_underperformance": session_underperformance,
+            "same_window_negative_veto": same_window_weak,
+            "same_window_recovery_complete": recovery_complete,
+            "same_window_recovery_confirmed": same_window_recovery,
+            "session_underperformance_cleared": session_underperformance_cleared,
+        },
+    )
+
+
+def _relative_quality(
+    relative: dict[str, Any], context: SessionContext
+) -> tuple[bool, list[str]]:
+    passed, issues, _metadata = _relative_quality_assessment(relative, context)
+    return passed, issues
 
 
 def _live_reversal_veto(
@@ -1176,7 +1255,10 @@ def evaluate_advisory(
     structure = _structure_features(bars)
     vwap = _session_vwap(bars)
     volume_ok, volume_meta = _volume_confirmation(bars)
-    relative_ok, relative_issues = _relative_quality(relative, context)
+    relative_ok, relative_issues, relative_assessment = _relative_quality_assessment(
+        relative, context
+    )
+    base["relative_assessment"] = relative_assessment
     best_bid = int(bbo["best_bid"])
     best_ask = int(bbo["best_ask"])
     spread_ticks = _spread_tick_count(best_bid, best_ask)
@@ -1219,6 +1301,22 @@ def evaluate_advisory(
         "up",
         "flat",
     }
+    absorption_recovery_ok = _absorption_recovery_confirmation(
+        volume_meta=volume_meta,
+        structure=structure,
+        completed_close=bars[-1].close,
+        vwap=vwap,
+        recent_resistance=recent_resistance,
+        reclaim_ok=reclaim_ok,
+        trends_ok=trends_ok,
+    )
+    volume_ok = volume_ok or absorption_recovery_ok
+    volume_meta["absorption_recovery_confirmed"] = absorption_recovery_ok
+    volume_meta["volume_confirmation_mode"] = (
+        "absorption_recovery"
+        if absorption_recovery_ok
+        else "standard_rebound" if volume_ok else "unconfirmed"
+    )
     spread_ok = spread_ticks <= 2
     core_checks = {
         "low_structure_confirmed": structure_ok,
@@ -1231,6 +1329,8 @@ def evaluate_advisory(
     unmet = [name for name, passed in core_checks.items() if not passed]
     unmet.extend(relative_issues)
     reasons = [name for name, passed in core_checks.items() if passed]
+    if relative_assessment["session_underperformance_cleared"]:
+        reasons.append("same_window_relative_recovery")
     if flow.get("foreign_nonworsening"):
         reasons.append("foreign_flow_nonworsening")
     if flow.get("program_nonworsening"):
@@ -1371,7 +1471,8 @@ def evaluate_advisory(
                     bar.low for bar in bars[: context.minimum_bars]
                 ),
                 "spread_ticks": spread_ticks,
-                "chase_pct": round(max(structural_chase_pct, tactical_chase_pct), 4),
+                "chase_pct": round(tactical_chase_pct, 4),
+                "chase_basis": "tactical_support",
                 "structural_chase_pct": round(structural_chase_pct, 4),
                 "tactical_chase_pct": round(tactical_chase_pct, 4),
                 "minute_trends": trends,
@@ -1402,7 +1503,7 @@ def evaluate_advisory(
         base["state"] = base["raw_state"] = "WATCH"
         return base
 
-    if structural_chase_pct > 0.3 or tactical_chase_pct > 0.3:
+    if tactical_chase_pct > TACTICAL_CHASE_LIMIT_PCT:
         base["state"] = base["raw_state"] = "NO_CHASE"
         base["reasons"] = ["price_more_than_30bp_above_support"]
         return base

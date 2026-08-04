@@ -101,6 +101,14 @@ and `KRW=X` data is explicitly labeled `yahoo_best_effort` and
 `BEST_EFFORT_DELAYED`; it is not represented as licensed real-time data.
 Favorable external data cannot create an entry signal. Adverse external data
 can downgrade or hold an otherwise domestic-qualified advisory.
+Session-wide relative weakness may be cleared only when both 15-minute and
+5-minute aligned returns versus every required comparison are no worse than
+-0.5 percentage points; this clears a stale negative veto and cannot promote a
+setup by itself. A high-volume retest may qualify as absorption only after the
+held structure, latest completed close, VWAP, recent resistance, and non-down
+3/5-minute trends agree. A forming-price upside impulse cannot qualify it.
+Structural support owns invalidation, while chase distance is measured from
+the tactical VWAP/support used to form the displayed price range.
 NXT premarket context is auxiliary-only through 09:30 KST and is then removed;
 it cannot create `ENTRY_READY`. In the NXT aftermarket, the latest regular-KRX
 foreign/program flow is labeled `FROZEN_REGULAR_SESSION` and is never presented

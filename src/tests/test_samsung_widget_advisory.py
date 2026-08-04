@@ -688,6 +688,59 @@ def test_same_window_relative_weakness_is_negative_veto_only():
     assert issues == ["relative_strength_weak"]
 
 
+def test_same_window_recovery_clears_persistent_session_underperformance():
+    context = advisory.session_context(datetime(2026, 8, 3, 10, 35, tzinfo=KST))
+    relative = {
+        "samsung_change_pct": -1.67,
+        "sk_hynix_change_pct": -2.30,
+        "kospi_change_pct": -0.37,
+        "same_window": {
+            "sk_hynix": {
+                "15m": {"relative_return_pct_point": -0.0337},
+                "5m": {"relative_return_pct_point": -0.3332},
+            },
+            "kospi": {
+                "15m": {"relative_return_pct_point": 0.7438},
+                "5m": {"relative_return_pct_point": 0.2841},
+            },
+        },
+    }
+
+    ok, issues, metadata = advisory._relative_quality_assessment(relative, context)
+
+    assert ok is True
+    assert issues == []
+    assert metadata["session_underperformance"] is True
+    assert metadata["same_window_recovery_confirmed"] is True
+    assert metadata["session_underperformance_cleared"] is True
+
+
+def test_same_window_recovery_requires_both_15m_and_5m_for_every_comparison():
+    context = advisory.session_context(datetime(2026, 8, 3, 10, 35, tzinfo=KST))
+    relative = {
+        "samsung_change_pct": -1.67,
+        "sk_hynix_change_pct": -2.30,
+        "kospi_change_pct": -0.37,
+        "same_window": {
+            "sk_hynix": {
+                "15m": {"relative_return_pct_point": 0.1},
+            },
+            "kospi": {
+                "15m": {"relative_return_pct_point": 0.2},
+                "5m": {"relative_return_pct_point": 0.1},
+            },
+        },
+    }
+
+    ok, issues, metadata = advisory._relative_quality_assessment(relative, context)
+
+    assert ok is False
+    assert issues == ["relative_strength_weak"]
+    assert metadata["same_window_recovery_complete"] is False
+    assert metadata["same_window_recovery_confirmed"] is False
+    assert metadata["session_underperformance_cleared"] is False
+
+
 def test_missing_same_window_relative_data_does_not_add_a_new_block():
     context = advisory.session_context(datetime(2026, 8, 3, 9, 3, tzinfo=KST))
 
@@ -790,6 +843,86 @@ def test_chasing_more_than_30bp_is_rejected():
     result = advisory.evaluate_advisory(**inputs)
     assert result["state"] == "NO_CHASE"
     assert result["entry_price_low"] is None
+
+
+def test_tactical_support_owns_chase_while_structural_support_owns_invalidation(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            "higher_low": True,
+            "higher_high": True,
+            "higher_high_and_low": True,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "confirmed_support": 100_000,
+            "candidate_support": 100_000,
+            "support_confirmation": "retest_held",
+            "recent_resistance": 101_000,
+        },
+    )
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 101_000)
+    inputs = _ready_input(current_price=101_200)
+    inputs["bbo"] = {"best_bid": 101_100, "best_ask": 101_200, "age_sec": 0}
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_READY"
+    assert result["entry_price_low"] == 101_100
+    assert result["entry_price_high"] == 101_200
+    assert result["derived"]["structural_chase_pct"] > 0.3
+    assert result["derived"]["tactical_chase_pct"] < 0.3
+    assert result["derived"]["chase_pct"] == result["derived"]["tactical_chase_pct"]
+    assert result["derived"]["chase_basis"] == "tactical_support"
+
+
+def test_absorption_recovery_can_confirm_expanded_retest_volume(monkeypatch):
+    monkeypatch.setattr(
+        advisory,
+        "_volume_confirmation",
+        lambda _bars: (
+            False,
+            {
+                "rebound_avg_volume": 61_667.8,
+                "decline_avg_volume": 159_850.0,
+                "first_test_volume": 63_810,
+                "retest_volume": 159_850,
+                "retest_volume_contracted": False,
+                "rising_volume_sample_count": 5,
+                "falling_volume_sample_count": 1,
+                "zero_volume_count": 0,
+                "zero_volume_ratio": 0.0,
+                "volume_minimum_composition_met": True,
+            },
+        ),
+    )
+
+    result = advisory.evaluate_advisory(**_ready_input())
+
+    assert result["state"] == "ENTRY_READY"
+    assert result["derived"]["absorption_recovery_confirmed"] is True
+    assert result["derived"]["volume_confirmation_mode"] == "absorption_recovery"
+
+
+def test_absorption_recovery_does_not_use_forming_price_as_positive_authority():
+    confirmed = advisory._absorption_recovery_confirmation(
+        volume_meta={
+            "retest_volume_contracted": False,
+            "rising_volume_sample_count": 5,
+            "falling_volume_sample_count": 1,
+            "zero_volume_ratio": 0.0,
+        },
+        structure={"retest_held": True},
+        completed_close=100_900,
+        vwap=100_800,
+        recent_resistance=101_000,
+        reclaim_ok=True,
+        trends_ok=True,
+    )
+
+    assert confirmed is False
 
 
 def test_core_blocker_is_reported_before_no_chase():
