@@ -62,6 +62,20 @@
 
 ## 장후 체크리스트 (20:05~21:55)
 
+- [ ] `[EntryPriceSelectionContractV20804] Exact V2 entry_price 가격선택 계약 재설계 및 동일 payload replay` (`Due: 2026-08-04`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:05`, `Track: AIPrompt`)
+  - Source: [ai_prompt_stage_coverage_replay_2026-08-03_entry_price.json](/home/ubuntu/KORStockScan/data/report/ai_prompt_stage_coverage_replay/ai_prompt_stage_coverage_replay_2026-08-03_entry_price.json), [ai_stage_coverage_replay.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_stage_coverage_replay.py), [ai_prompt_contracts.py](/home/ubuntu/KORStockScan/src/engine/ai_prompt_contracts.py)
+  - 현재 증거: mature Exact V2 `133`건 replay에서 Control `USE_DEFENSIVE 130`, Candidate `SKIP 87 / USE_DEFENSIVE 19 / USE_REFERENCE 17 / IMPROVE_LIMIT 7`, schema reject `3`, provider failure `0`이다. 비교 가능 `130`건의 source-quality-adjusted EV는 Control `+0.518089%`, Candidate `+0.281367%`, delta `-0.236722%p`, 신규 missed-upside `50`건으로 현 후보는 거부한다.
+  - 판정 기준: 진입 매력도와 주문가격 선택을 분리하고, 주문 가능 후보에서는 exact payload에 존재하는 executable price만 선택한다. `SKIP`은 실제 setup invalidation·blocking fillability에 한정하고, defensive/reference/improve-limit별 fill 가능성·비용·10분 outcome을 venue/session별 동일 cohort로 비교한다.
+  - 금지: provider/model/route, live prompt, 주문 수량, threshold, broker/stale/account/order/cooldown/hard-safety guard 변경 또는 runtime 승격.
+  - 다음 액션: `candidate_quality_pass_offline_only`, `price_selection_contract_redesign_required`, `source_or_fill_join_gap`, `schema_semantic_fix_required` 중 하나로 닫는다.
+
+- [ ] `[HoldingFlowDedicatedPairedReplay0804] holding_flow 전용 Exact V2 paired replay 생산자·소비자 연결` (`Due: 2026-08-04`, `Slot: POSTCLOSE`, `TimeWindow: 17:05~17:20`, `Track: AIPrompt`)
+  - Source: [ai_decision_quality.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py), [ai_decision_trace_2026-08-04.jsonl](/home/ubuntu/KORStockScan/data/ai_decision_trace/ai_decision_trace_2026-08-04.jsonl), [ai_prompt_paired_replay_2026-08-03_holding.json](/home/ubuntu/KORStockScan/data/report/ai_prompt_paired_replay/ai_prompt_paired_replay_2026-08-03_holding.json)
+  - 현재 증거: clean baseline 이후 확인한 exact `holding_flow` 자연호출은 `2`건이며 provider none `0`, action `EXIT 2`다. 현 holding stage paired report는 `holding_score` 중심이므로 endpoint별 성과 귀속을 분리해야 한다.
+  - 판정 기준: 첫 mature row부터 동일 exact payload/hash/provider/model로 Control과 Candidate를 비교하고, HOLD/TRIM/EXIT action 분포, 확보한 추가수익, 확대 손실, peak giveback, post-decision MFE/MAE를 venue/session별로 기록한다. 표본 부족은 수집 중단이 아니라 cumulative keep-collecting으로 닫는다.
+  - 금지: Bedrock Nova Lite v2→OpenAI failback route 변경, live holding/exit 승격, 자동 매도, threshold/stop/trailing/quantity/broker guard 변경.
+  - 다음 액션: `paired_replay_complete_candidate_quality_pass_offline_only`, `sample_floor_keep_collecting`, `holding_flow_endpoint_attribution_gap`, `prompt_redesign_required` 중 하나로 닫는다.
+
 - [ ] `[PostcloseSourceQualityGateReview0804] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-08-04`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:35`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-08-04.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-08-04.json), [threshold_cycle_ev_2026-08-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-04.json), [code_improvement_workorder_2026-08-04.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-08-04.json), [threshold_cycle_postclose_verification_2026-08-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-08-04.json)
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.
