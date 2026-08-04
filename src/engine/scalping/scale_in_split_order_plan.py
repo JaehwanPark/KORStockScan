@@ -981,7 +981,9 @@ def _runtime_refresh_evidence(
         "price_join_coverage": round(price_join_coverage, 4),
         "price_join_coverage_floor": RUNTIME_REFRESH_PRICE_JOIN_COVERAGE_FLOOR,
         "blockers": blockers,
-        "insufficient_evidence_action": "carry_forward_previous_runtime_policy",
+        "insufficient_evidence_action": (
+            "block_refresh_until_validated_prior_policy_available"
+        ),
     }
 
 
@@ -1205,7 +1207,7 @@ def build_report(target_date: str) -> dict[str, Any]:
                 ],
             },
             "rollback_guard": {
-                "action": "carry_forward_previous_runtime_policy",
+                "action": "disable_candidate_require_validated_prior_policy",
                 "triggers": [
                     "worse_fill_rate",
                     "higher_cancel_rate",
@@ -1294,6 +1296,13 @@ def _load_policy_from_env(
         return None, "policy_schema_mismatch"
     if not _safe_bool(payload.get("runtime_apply_allowed")):
         return None, "runtime_apply_not_allowed"
+    refresh_evidence = payload.get("runtime_refresh_evidence")
+    if not isinstance(refresh_evidence, dict):
+        return None, "runtime_refresh_evidence_missing"
+    if refresh_evidence.get("runtime_policy_refresh_allowed") is not True:
+        return None, "runtime_refresh_evidence_not_allowed"
+    if refresh_evidence.get("blockers"):
+        return None, "runtime_refresh_evidence_blocked"
     return payload, "loaded"
 
 

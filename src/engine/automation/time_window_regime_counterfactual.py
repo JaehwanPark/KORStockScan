@@ -7,7 +7,7 @@ import json
 import os
 import re
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -198,12 +198,16 @@ def _entry_time_from_event(
 def _index_entry_events(target_date: str) -> dict[str, dict[str, dict[str, Any]]]:
     by_candidate: dict[str, dict[str, Any]] = {}
     by_record: dict[str, dict[str, Any]] = {}
-    paths = list(
-        (
-            THRESHOLD_CYCLE_DIR
-            / f"date={target_date}"
-            / "family=scalp_entry_action_decision_matrix"
-        ).glob("part-*.jsonl")
+    partition_dir = (
+        THRESHOLD_CYCLE_DIR
+        / f"date={target_date}"
+        / "family=scalp_entry_action_decision_matrix"
+    )
+    paths = sorted(
+        [
+            *partition_dir.glob("part-*.jsonl"),
+            *partition_dir.glob("part-*.jsonl.gz"),
+        ]
     )
     legacy = THRESHOLD_CYCLE_DIR / f"threshold_events_{target_date}.jsonl"
     legacy = existing_or_gzip_path(legacy)

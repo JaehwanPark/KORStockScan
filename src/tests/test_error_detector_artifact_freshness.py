@@ -2,12 +2,8 @@ from __future__ import annotations
 
 import os
 import time
-import tempfile
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from src.engine.error_detectors.artifact_freshness import (
     ArtifactFreshnessDetector,
@@ -734,6 +730,7 @@ class TestArtifactFreshnessDetector:
             / "family=soft_stop_whipsaw_confirmation"
             / "part-000001.jsonl"
         )
+        temp_part = part.with_name(f"{part.name}.gz.tmp")
         checkpoint.parent.mkdir(parents=True)
         part.parent.mkdir(parents=True)
         checkpoint.write_text(
@@ -741,6 +738,7 @@ class TestArtifactFreshnessDetector:
             encoding="utf-8",
         )
         part.write_text('{"stage":"soft_stop_micro_grace"}\n', encoding="utf-8")
+        temp_part.write_bytes(b"incomplete gzip")
         artifact = {
             "id": "threshold_events",
             "path_template": str(tmp_path / f"threshold_events_{today}.jsonl"),
@@ -749,7 +747,7 @@ class TestArtifactFreshnessDetector:
             "partitioned_compact": {
                 "checkpoint_template": str(checkpoint),
                 "partition_glob_template": str(
-                    tmp_path / f"date={today}" / "family=*" / "part-*.jsonl"
+                    tmp_path / f"date={today}" / "family=*" / "part-*.jsonl*"
                 ),
             },
         }

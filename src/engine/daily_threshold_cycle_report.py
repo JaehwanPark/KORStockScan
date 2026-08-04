@@ -1185,7 +1185,12 @@ def _partition_paths_for_date(target_date: str) -> list[Path]:
     root = THRESHOLD_CYCLE_DIR / f"date={target_date}"
     if not root.exists():
         return []
-    return sorted(root.glob("family=*/part-*.jsonl"))
+    return sorted(
+        [
+            *root.glob("family=*/part-*.jsonl"),
+            *root.glob("family=*/part-*.jsonl.gz"),
+        ]
+    )
 
 
 def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | None:

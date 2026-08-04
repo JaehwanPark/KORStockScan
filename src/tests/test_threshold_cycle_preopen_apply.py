@@ -8849,6 +8849,10 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
                 "policy_version": "scale-current",
                 "generated_at": "2026-07-13T20:28:03+09:00",
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "buckets": {"default": {}},
             }
         ),
@@ -8884,6 +8888,10 @@ def test_split_runtime_policy_audit_accepts_scale_in_policy_across_krx_holiday_w
                 "policy_version": "scale-holiday-handoff",
                 "generated_at": "2026-07-16T20:28:37+09:00",
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "buckets": {"default": {}},
             }
         ),
@@ -8905,6 +8913,37 @@ def test_split_runtime_policy_audit_accepts_scale_in_policy_across_krx_holiday_w
     assert scale_audit["freshness_age_trading_days"] == 1
 
 
+def test_split_runtime_policy_audit_rejects_scale_policy_without_refresh_evidence(
+    tmp_path,
+):
+    scale_policy = tmp_path / "scale.json"
+    scale_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "scale-legacy",
+                "generated_at": "2026-07-16T20:28:37+09:00",
+                "runtime_apply_allowed": True,
+                "buckets": {"default": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(scale_policy),
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "scale-legacy",
+    }
+
+    audits = mod._split_runtime_policy_audits("2026-07-20", env)
+
+    scale_audit = next(
+        item for item in audits if item["family"] == "scale_in_split_order_plan"
+    )
+    assert scale_audit["status"] == "fail"
+    assert scale_audit["reason"] == "runtime_refresh_evidence_missing"
+
+
 def test_split_runtime_policy_audit_rejects_scale_in_policy_after_three_trading_days(
     tmp_path,
 ):
@@ -8916,6 +8955,10 @@ def test_split_runtime_policy_audit_rejects_scale_in_policy_after_three_trading_
                 "policy_version": "scale-stale-trading-days",
                 "generated_at": "2026-07-13T20:28:37+09:00",
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "buckets": {"default": {}},
             }
         ),

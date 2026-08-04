@@ -79,6 +79,10 @@ def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
                 "policy_version": "scale_in_split_order_plan:test",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "default_bucket": {
                     "context_bucket": "default",
                     "leg_count": 2,
@@ -128,6 +132,10 @@ def test_allocator_accepts_policy_across_krx_holiday_weekend(monkeypatch, tmp_pa
                 "policy_version": "scale-in-holiday-handoff",
                 "generated_at": "2026-07-16T20:28:37+09:00",
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "default_bucket": {
                     "leg_count": 2,
                     "price_offsets_pct": [0.0, 0.3],
@@ -169,6 +177,10 @@ def test_allocator_rejects_policy_after_three_krx_trading_days(monkeypatch, tmp_
                 "policy_version": "scale-in-stale-trading-days",
                 "generated_at": "2026-07-13T20:28:37+09:00",
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "default_bucket": {"leg_count": 2},
                 "buckets": {},
             }
@@ -207,6 +219,10 @@ def test_allocator_skips_qty_one_pyramid_and_splits_market_avg_down(
                 "policy_version": "scale_in_split_order_plan:test",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "default_bucket": {
                     "leg_count": 2,
                     "price_offsets_ticks": [0, 1],
@@ -268,6 +284,10 @@ def test_allocator_applies_explicit_three_leg_avg_down_policy(monkeypatch, tmp_p
                 "policy_version": "scale_in_split_order_plan:test-three-leg",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "buckets": {
                     "scalping:late_loss_retry:normal": {
                         "context_bucket": "scalping:late_loss_retry:normal",
@@ -320,6 +340,10 @@ def test_allocator_runtime_default_uses_one_pct_when_policy_bucket_missing(
                 "policy_version": "scale_in_split_order_plan:test",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": True,
+                    "blockers": [],
+                },
                 "buckets": {},
             }
         ),
@@ -341,6 +365,28 @@ def test_allocator_runtime_default_uses_one_pct_when_policy_bucket_missing(
     assert fields["scale_in_split_order_runtime_default_policy_applied"] is True
     assert fields["scale_in_split_order_price_offsets_pct"] == "0.0,0.3"
     assert [order["price"] for order in orders] == [10000, 9970]
+
+
+def test_runtime_loader_rejects_legacy_policy_without_refresh_evidence(
+    monkeypatch, tmp_path
+):
+    policy_file = tmp_path / "legacy-scale-policy.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "legacy-without-evidence",
+                "runtime_apply_allowed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED", "true")
+
+    policy, reason = split_plan._load_policy_from_env(str(policy_file))
+
+    assert policy is None
+    assert reason == "runtime_refresh_evidence_missing"
 
 
 def test_report_and_preopen_env_handoff(monkeypatch, tmp_path):
@@ -910,5 +956,9 @@ def test_policy_artifact_repeats_runtime_refresh_gate():
 
     assert blocked["runtime_apply_allowed"] is False
     assert blocked["default_bucket"]["runtime_apply_allowed"] is False
+    assert (
+        blocked["runtime_refresh_evidence"]["insufficient_evidence_action"]
+        == "block_refresh_until_validated_prior_policy_available"
+    )
     assert ready["runtime_apply_allowed"] is True
     assert ready["default_bucket"]["runtime_apply_allowed"] is True

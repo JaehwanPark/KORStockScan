@@ -40,7 +40,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "path_template": "data/threshold_cycle/threshold_events_{date}.jsonl",
         "partitioned_compact": {
             "checkpoint_template": "data/threshold_cycle/checkpoints/{date}.json",
-            "partition_glob_template": "data/threshold_cycle/date={date}/family=*/part-*.jsonl",
+            "partition_glob_template": "data/threshold_cycle/date={date}/family=*/part-*.jsonl*",
         },
         "max_staleness_sec": 600,
         "critical": False,
@@ -538,7 +538,6 @@ class ArtifactFreshnessDetector(BaseDetector):
                 continue
 
             ws_total = ws[0] * 60 + ws[1] if ws else None
-            we_total = we[0] * 60 + we[1] if we else None
 
             if ws_total is not None and now_total < ws_total:
                 details[f"{aid}_status"] = "not_yet_due"
@@ -816,6 +815,11 @@ class ArtifactFreshnessDetector(BaseDetector):
             partition_paths = sorted(Path(path) for path in glob.glob(partition_glob))
         else:
             partition_paths = sorted(PROJECT_ROOT.glob(partition_glob))
+        partition_paths = [
+            path
+            for path in partition_paths
+            if path.name.endswith((".jsonl", ".jsonl.gz"))
+        ]
 
         details[f"{aid}_legacy_path_missing"] = True
         details[f"{aid}_partitioned_checkpoint_path"] = str(checkpoint_path)

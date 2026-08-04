@@ -1,9 +1,9 @@
 # Scale-In Split Order Plan 2026-08-04
 
 - schema_version: `scale_in_split_order_plan_v1`
-- source_quality: `warning`
-- runtime_apply_allowed: `True`
-- policy_version: `scale_in_split_order_plan:2026-08-04:14372dda39b0`
+- source_quality: `pass`
+- runtime_apply_allowed: `False`
+- policy_version: `scale_in_split_order_plan:2026-08-04:7c997a750a3b`
 - policy_file: `/home/ubuntu/KORStockScan/data/threshold_cycle/scale_in_split_order_policy/scale_in_split_order_policy_2026-08-04.json`
 - candidate_count: `3`
 - counterfactual_selected_count: `3`

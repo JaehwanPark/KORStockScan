@@ -4731,6 +4731,30 @@ def _split_runtime_policy_audits(
                 audits.append(audit)
                 continue
             audit["operator_fallback_authorized"] = True
+        if spec["family"] == "scale_in_split_order_plan":
+            refresh_evidence = policy.get("runtime_refresh_evidence")
+            audit["runtime_refresh_evidence"] = refresh_evidence
+            if not isinstance(refresh_evidence, dict):
+                audit.update(
+                    status="fail",
+                    reason="runtime_refresh_evidence_missing",
+                )
+                audits.append(audit)
+                continue
+            if refresh_evidence.get("runtime_policy_refresh_allowed") is not True:
+                audit.update(
+                    status="fail",
+                    reason="runtime_refresh_evidence_not_allowed",
+                )
+                audits.append(audit)
+                continue
+            if refresh_evidence.get("blockers"):
+                audit.update(
+                    status="fail",
+                    reason="runtime_refresh_evidence_blocked",
+                )
+                audits.append(audit)
+                continue
         freshness_value = str(policy.get(str(spec["freshness_field"])) or "").strip()
         audit["freshness_value"] = freshness_value or None
         try:

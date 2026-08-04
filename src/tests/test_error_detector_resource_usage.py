@@ -8,7 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from src.engine.error_detectors.resource_usage import ResourceUsageDetector
-from src.engine.monitoring.system_metric_sampler import _cpu_pct
+from src.engine.monitoring.system_metric_sampler import (
+    _append_json_line_durable,
+    _cpu_pct,
+)
 
 
 def test_cpu_pct_separates_compute_from_iowait():
@@ -39,6 +42,16 @@ def test_cpu_pct_separates_compute_from_iowait():
         "cpu_compute_busy_pct": 33.33,
         "iowait_pct": 64.44,
     }
+
+
+def test_system_metric_append_writes_complete_json_records(tmp_path):
+    sample_path = tmp_path / "system_metric_samples.jsonl"
+
+    _append_json_line_durable(sample_path, {"epoch": 1, "cpu": {"iowait_pct": 2.0}})
+    _append_json_line_durable(sample_path, {"epoch": 2, "cpu": {"iowait_pct": 3.0}})
+
+    rows = [json.loads(line) for line in sample_path.read_text().splitlines()]
+    assert [row["epoch"] for row in rows] == [1, 2]
 
 
 class TestResourceUsageDetector:

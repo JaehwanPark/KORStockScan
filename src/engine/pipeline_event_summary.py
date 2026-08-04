@@ -4,6 +4,7 @@ import hashlib
 import gzip
 import json
 import math
+import os
 import time
 from collections import Counter, deque
 from dataclasses import dataclass
@@ -746,6 +747,25 @@ def _load_summary_rows(
     return rows
 
 
+def _rehydrate_summary_for_append(summary_path: Path) -> None:
+    """Restore an archived summary before an explicit historical append/rebuild."""
+
+    if summary_path.exists():
+        return
+    archived_path = Path(f"{summary_path}.gz")
+    if not archived_path.exists():
+        return
+    tmp_path = summary_path.with_name(f"{summary_path.name}.tmp.{os.getpid()}")
+    try:
+        with gzip.open(archived_path, "rb") as source, tmp_path.open("wb") as target:
+            while chunk := source.read(1024 * 1024):
+                target.write(chunk)
+        os.replace(tmp_path, summary_path)
+        archived_path.unlink()
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def load_summary_rows(
     path: Path, *, include_samples: bool = True
 ) -> list[dict[str, Any]]:
@@ -816,6 +836,8 @@ def update_and_load_pipeline_event_summaries(
     )
     raw_offset = int(manifest.get("raw_offset") or 0)
     raw_size = max(int(stat.st_size), raw_offset) if is_gzip_raw else int(stat.st_size)
+    archived_summary_path = Path(f"{summary_path}.gz")
+    summary_exists = summary_path.exists() or archived_summary_path.exists()
     stale_summary = (
         int(manifest.get("schema_version") or 0) != SUMMARY_SCHEMA_VERSION
         or str(manifest.get("raw_path") or "") != str(raw_path)
@@ -823,13 +845,15 @@ def update_and_load_pipeline_event_summaries(
         or set(manifest.get("summary_stages") or ()) != set(summary_stages)
         or str(manifest.get("summary_detail_level") or "") != summary_detail_level
         or raw_offset > raw_size
-        or not summary_path.exists()
+        or not summary_exists
     )
     if stale_summary:
         summary_path.unlink(missing_ok=True)
+        archived_summary_path.unlink(missing_ok=True)
         manifest_path.unlink(missing_ok=True)
         raw_offset = 0
-    summary_path.touch(exist_ok=True)
+    if not summary_path.exists() and not archived_summary_path.exists():
+        summary_path.touch(exist_ok=True)
 
     groups: dict[tuple[str, ...], _SummaryAggregate] = {}
     appended_raw_lines = 0
@@ -881,6 +905,7 @@ def update_and_load_pipeline_event_summaries(
 
     appended_summary_rows = 0
     if groups:
+        _rehydrate_summary_for_append(summary_path)
         with summary_path.open("a", encoding="utf-8") as summary_handle:
             for key in sorted(groups):
                 row = groups[key].to_row(
@@ -1043,6 +1068,7 @@ class ProducerSummaryCompactor:
         summary_path, manifest_path = producer_summary_paths(
             self.summary_dir, safe_date
         )
+        _rehydrate_summary_for_append(summary_path)
         summary_path.touch(exist_ok=True)
         flushed_rows = 0
         flushed_events = 0
