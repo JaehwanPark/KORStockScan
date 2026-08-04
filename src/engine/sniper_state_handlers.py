@@ -9038,7 +9038,9 @@ def _resolve_scalp_sim_panic_sell_price(
     quote_quality = (
         "BAD"
         if sell_price <= 0
-        else "DEGRADED" if liquidity_state != "NORMAL" or spread_bps >= 80 else "OK"
+        else "DEGRADED"
+        if liquidity_state != "NORMAL" or spread_bps >= 80
+        else "OK"
     )
     fill_quality = (
         "DEGRADED"
@@ -11587,9 +11589,19 @@ def bind_state_dependencies(
     dual_persona_engine=None,
     scanner_generation_submit_guard=None,
 ):
-    global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
+    global \
+        KIWOOM_TOKEN, \
+        DB, \
+        EVENT_BUS, \
+        ACTIVE_TARGETS, \
+        COOLDOWNS, \
+        ALERTED_STOCKS, \
+        HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
-    global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
+    global \
+        SHOULD_BLOCK_SWING_ENTRY, \
+        CONFIRM_CANCEL_OR_RELOAD_REMAINING, \
+        SEND_EXIT_BEST_IOC
     global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
 
     if kiwoom_token is not None:
@@ -17488,7 +17500,9 @@ def _scanner_runtime_queue_lag_fields(
         "queue_lag_anchor_field": (
             "entry_armed_at_epoch"
             if armed_time > 0
-            else "added_time" if added_time > 0 else "not_available"
+            else "added_time"
+            if added_time > 0
+            else "not_available"
         ),
         "loop_started_epoch": f"{loop_epoch:.3f}",
         "queue_emit_epoch": f"{emit_epoch:.3f}",
@@ -19384,6 +19398,22 @@ def _probe_residual_scale_in_causal_fields(
         "prior_probe_residual_negative_groups": (
             stock.get("entry_split_probe_terminal_negative_groups") or "-"
         ),
+        "prior_probe_residual_mixed_groups": (
+            stock.get("entry_split_probe_terminal_mixed_groups") or "-"
+        ),
+        "prior_probe_residual_orderbook_state": (
+            stock.get("entry_split_probe_terminal_orderbook_state") or "unknown"
+        ),
+        "prior_probe_residual_signed_pressure_source": (
+            stock.get("entry_split_probe_terminal_signed_pressure_source")
+            or "unavailable"
+        ),
+        "prior_probe_residual_route_source_allowed": bool(
+            stock.get("entry_split_probe_terminal_route_source_allowed", False)
+        ),
+        "prior_probe_residual_route_source_blockers": (
+            stock.get("entry_split_probe_terminal_route_source_blockers") or "-"
+        ),
         "prior_probe_residual_confirmation_count": max(
             0,
             _safe_int(
@@ -19436,6 +19466,7 @@ def _holding_stage_needs_probe_residual_causality(stage: str) -> bool:
             "reversal_add",
             "shallow_source_gap",
             "post_probe_hard_abort_recovery",
+            "post_probe_terminal_abort_recovery",
         )
     )
 
@@ -23988,7 +24019,7 @@ def _observe_post_probe_hard_abort_recovery(
     held_sec: int,
     now_ts: float,
 ) -> dict | None:
-    """Observe a later recovery after a terminal hard probe abort.
+    """Observe a later recovery after a terminal hard or soft probe abort.
 
     This producer is deliberately source-only.  It must never reopen the
     residual bundle, clear a scale-in prohibition, or submit an order.  The
@@ -23999,11 +24030,23 @@ def _observe_post_probe_hard_abort_recovery(
 
     if not _is_scalp_strategy(strategy):
         return None
-    if (
-        str(stock.get("entry_split_probe_terminal_outcome") or "").strip()
-        != "residual_not_submitted"
-        or not bool(stock.get("entry_split_probe_scale_in_forbidden"))
-        or bool(stock.get("entry_split_probe_scale_in_recheck_allowed"))
+    terminal_outcome = str(
+        stock.get("entry_split_probe_terminal_outcome") or ""
+    ).strip()
+    scale_in_forbidden = bool(stock.get("entry_split_probe_scale_in_forbidden"))
+    scale_in_recheck_allowed = bool(
+        stock.get("entry_split_probe_scale_in_recheck_allowed")
+    )
+    soft_abort = bool(stock.get("entry_split_probe_soft_abort"))
+    recovery_abort_class = (
+        "hard"
+        if scale_in_forbidden and not scale_in_recheck_allowed
+        else "soft"
+        if soft_abort and scale_in_recheck_allowed
+        else "ineligible"
+    )
+    if terminal_outcome != "residual_not_submitted" or recovery_abort_class == (
+        "ineligible"
     ):
         return None
     terminal_at = _safe_float(stock.get("entry_split_probe_terminal_at"), 0.0)
@@ -24065,6 +24108,8 @@ def _observe_post_probe_hard_abort_recovery(
         source_blockers.append("tick_freshness_unproven")
     if feature_extracted_at <= 0:
         source_blockers.append("feature_version_missing")
+    elif feature_extracted_at <= terminal_at:
+        source_blockers.append("feature_version_not_after_terminal_abort")
 
     pressure_usable = _truthy_field(features.get("tick_aggressor_pressure_usable"))
     trusted_count = _safe_int(features.get("tick_aggressor_trusted_count"), 0)
@@ -24117,7 +24162,7 @@ def _observe_post_probe_hard_abort_recovery(
     )
     state = "STRONG" if eligible else ("SOURCE_BLOCKED" if source_blockers else "WEAK")
     reason = (
-        "post_hard_abort_recovery_confirmed"
+        "post_terminal_abort_recovery_confirmed"
         if eligible
         else (
             "source_quality_blocked:" + ",".join(source_blockers)
@@ -24146,6 +24191,9 @@ def _observe_post_probe_hard_abort_recovery(
     previous_accepted_at = _safe_float(
         stock.get("_post_probe_hard_abort_recovery_accepted_at"), 0.0
     )
+    previous_accepted_feature_at = _safe_float(
+        stock.get("_post_probe_hard_abort_recovery_accepted_feature_at"), 0.0
+    )
     confirmation_count = max(
         0,
         _safe_int(stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0),
@@ -24159,6 +24207,7 @@ def _observe_post_probe_hard_abort_recovery(
             confirmation_count = 2
         elif (
             evidence_signature != previous_accepted_signature
+            and feature_extracted_at > previous_accepted_feature_at
             and float(now_ts) - previous_accepted_at >= 0.25
         ):
             confirmation_count += 1
@@ -24174,9 +24223,13 @@ def _observe_post_probe_hard_abort_recovery(
     if accepted:
         stock["_post_probe_hard_abort_recovery_accepted_at"] = float(now_ts)
         stock["_post_probe_hard_abort_recovery_accepted_signature"] = evidence_signature
+        stock["_post_probe_hard_abort_recovery_accepted_feature_at"] = (
+            feature_extracted_at
+        )
     elif not eligible:
         stock.pop("_post_probe_hard_abort_recovery_accepted_signature", None)
         stock.pop("_post_probe_hard_abort_recovery_accepted_at", None)
+        stock.pop("_post_probe_hard_abort_recovery_accepted_feature_at", None)
     if not should_emit:
         return {
             "state": state,
@@ -24188,8 +24241,15 @@ def _observe_post_probe_hard_abort_recovery(
     _log_holding_pipeline(
         stock,
         code,
-        "post_probe_hard_abort_recovery_observed",
+        "post_probe_terminal_abort_recovery_observed",
         probe_bundle_id=stock.get("entry_split_probe_bundle_id") or "-",
+        recovery_abort_class=recovery_abort_class,
+        recovery_terminal_abort_reason=(
+            stock.get("entry_split_probe_terminal_abort_reason") or "-"
+        ),
+        recovery_terminal_abort_detail_reason=(
+            stock.get("entry_split_probe_terminal_abort_detail_reason") or "-"
+        ),
         recovery_evaluation_seen=True,
         recovery_state=state,
         recovery_reason=reason,
@@ -24223,12 +24283,17 @@ def _observe_post_probe_hard_abort_recovery(
         reversal_feature_stale=bool(quality.get("reversal_feature_stale")),
         reversal_feature_stale_reason=quality.get("reversal_feature_stale_reason", "-"),
         feature_extracted_at=feature_extracted_at,
+        recovery_feature_after_terminal_abort=feature_extracted_at > terminal_at,
+        recovery_feature_version_distinct=(
+            previous_accepted_feature_at <= 0
+            or feature_extracted_at > previous_accepted_feature_at
+        ),
         active_exit_conflict_fields=",".join(conflicts) or "-",
         metric_role="bounded_tunable_scale_in_counterfactual",
         decision_authority=(
-            "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+            "source_only_post_terminal_abort_recovery_observation_no_runtime_mutation"
         ),
-        window_policy="same_position_cycle_terminal_hard_abort_to_sell",
+        window_policy="same_position_cycle_terminal_abort_to_sell",
         sample_floor="rolling_closed_source_quality_valid_recovery_candidates_ge_20",
         primary_decision_metric="notional_weighted_ev_pct",
         source_quality_gate=(
@@ -32032,7 +32097,9 @@ def _rising_missed_price_anchor(
     state = (
         "recovered_fallback"
         if selected_price > 0 and rejected
-        else "valid" if selected_price > 0 else "unavailable"
+        else "valid"
+        if selected_price > 0
+        else "unavailable"
     )
     if state == "recovered_fallback":
         stock["first_seen_price"] = selected_price
@@ -32593,7 +32660,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     relief_path = (
         "fresh_tp1_micro"
         if fresh_tp1_micro_path
-        else "absolute_tick_throughput" if absolute_throughput_path else "none"
+        else "absolute_tick_throughput"
+        if absolute_throughput_path
+        else "none"
     )
     reasons = []
     if missing_window:
@@ -32608,7 +32677,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     block_reason = (
         "tick_speed_absolute_throughput_relief"
         if relief_applied
-        else "+".join(reasons) if reasons else "tick_speed_guard_pass"
+        else "+".join(reasons)
+        if reasons
+        else "tick_speed_guard_pass"
     )
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
@@ -32671,7 +32742,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "metric_role": (
             "bounded_tunable"
             if relief_applied
-            else "safety_veto" if blocked else "diagnostic"
+            else "safety_veto"
+            if blocked
+            else "diagnostic"
         ),
         "decision_authority": (
             "operator_runtime_override_tick_absolute_throughput_relief"
@@ -33114,7 +33187,9 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
             else (
                 "missing_stored_at"
                 if age_sec is None
-                else "expired" if age_sec > ttl_sec else "missing_or_unusable_state"
+                else "expired"
+                if age_sec > ttl_sec
+                else "missing_or_unusable_state"
             )
         ),
     }
@@ -37753,6 +37828,11 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_continuation_action",
     "entry_split_probe_direction_positive_groups",
     "entry_split_probe_direction_negative_groups",
+    "entry_split_probe_direction_mixed_groups",
+    "entry_split_probe_direction_orderbook_state",
+    "entry_split_probe_direction_signed_pressure_source",
+    "entry_split_probe_route_source_allowed",
+    "entry_split_probe_route_source_blockers",
     "entry_split_probe_direction_evaluated_at",
     "entry_split_probe_direction_evidence_signature",
     "entry_split_probe_offset_profile",
@@ -37797,6 +37877,11 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_terminal_continuation_action",
     "entry_split_probe_terminal_positive_groups",
     "entry_split_probe_terminal_negative_groups",
+    "entry_split_probe_terminal_mixed_groups",
+    "entry_split_probe_terminal_orderbook_state",
+    "entry_split_probe_terminal_signed_pressure_source",
+    "entry_split_probe_terminal_route_source_allowed",
+    "entry_split_probe_terminal_route_source_blockers",
     "entry_split_probe_terminal_confirmation_count",
     "entry_split_probe_terminal_failure_signature",
     "probe_expand_forbidden",
@@ -38158,6 +38243,53 @@ def _post_probe_direction_fields(
         .strip()
         .lower()
     )
+    snapshot_venue = effective_venue or resolve_entry_candle_venue(
+        ws_data,
+        session=resolve_entry_candle_session(now_ts=observed_now),
+    )
+    snapshot_session = market_session_bucket or resolve_entry_candle_session(
+        now_ts=observed_now
+    )
+    market_snapshot = build_ai_market_snapshot(
+        stock_code=code,
+        decision_stage="post_probe",
+        ws_data=ws_data,
+        effective_venue=snapshot_venue,
+        session_bucket=snapshot_session,
+        broker_route=(
+            stock.get("entry_execution_broker_route")
+            or stock.get("broker_route")
+            or stock.get("market_route")
+        ),
+        position=stock,
+        now_ts=observed_now,
+    )
+    snapshot_preflight = (
+        market_snapshot.get("ai_input_preflight_v1")
+        if isinstance(market_snapshot.get("ai_input_preflight_v1"), dict)
+        else {}
+    )
+    snapshot_blockers = {
+        str(value).strip()
+        for value in snapshot_preflight.get("source_blockers") or []
+        if str(value).strip()
+    }
+    route_source_blockers = {
+        blocker
+        for blocker in snapshot_blockers
+        if any(
+            token in blocker
+            for token in (
+                "venue",
+                "route",
+                "suffix",
+                "symbol_conflict",
+                "premarket_actual_route",
+                "nxt_aftermarket_source",
+            )
+        )
+    }
+    post_probe_route_source_allowed = bool(not code or not route_source_blockers)
     nxt_entry_context = bool(
         effective_venue == "NXT" and market_session_bucket == "nxt_entry_window"
     )
@@ -38268,6 +38400,10 @@ def _post_probe_direction_fields(
         )
         and not _truthy_field(source_quality_fields.get("tick_context_stale"))
     )
+    probe_filled_at = _safe_float(stock.get("entry_split_probe_filled_at"), 0.0)
+    feature_probe_post_fill = bool(
+        probe_filled_at <= 0 or feature_probe_at >= probe_filled_at
+    )
     sources = (
         live_micro,
         ws_direction_fields,
@@ -38334,32 +38470,62 @@ def _post_probe_direction_fields(
     orderbook_available = bool(
         micro_state_available or (qi_available and ofi_available)
     )
+    qi_positive = bool(qi_available and qi > qi_weak_max)
+    qi_negative = bool(qi_available and qi <= qi_weak_max)
+    ofi_positive = bool(ofi_available and ofi >= ofi_min)
+    ofi_negative = bool(ofi_available and ofi < ofi_min)
+    orderbook_mixed = bool(
+        qi_available
+        and ofi_available
+        and ((qi_positive and ofi_negative) or (qi_negative and ofi_positive))
+    )
     orderbook_positive = bool(
         orderbook_available
         and (
             micro_state in {"bullish", "strong_bullish"}
-            or (qi_available and qi > qi_weak_max and ofi_available and ofi >= ofi_min)
+            or (qi_positive and ofi_positive)
         )
     )
     orderbook_negative = bool(
         orderbook_available
         and micro_state not in {"bullish", "strong_bullish"}
-        and ((qi_available and qi <= qi_weak_max) or (ofi_available and ofi < ofi_min))
+        and qi_negative
+        and ofi_negative
     )
 
-    buy_pressure, pressure_available, _ = _first_numeric_field_with_source(
-        *sources,
-        key="buy_pressure_10t",
-        aliases=(
-            "buy_pressure",
-            "last_buy_pressure_10t",
-            "late_entry_fresh_buy_pressure_10t",
-        ),
+    pressure_sources = (
+        ws_direction_fields,
+        fresh_ws_momentum_direction_fields,
+        source_quality_fields
+        if feature_tick_context_fresh and feature_probe_post_fill
+        else {},
+        feature_probe if feature_tick_context_fresh and feature_probe_post_fill else {},
+    )
+    buy_pressure, pressure_available, pressure_source = (
+        _first_numeric_field_with_source(
+            *pressure_sources,
+            key="buy_pressure_10t",
+            aliases=(
+                "buy_pressure",
+                "last_buy_pressure_10t",
+                "late_entry_fresh_buy_pressure_10t",
+            ),
+        )
     )
     pressure_low = _rising_missed_reversal_pre_submit_low_buy_pressure_max()
     pressure_high = _rising_missed_reversal_pre_submit_high_buy_pressure_min()
     pressure_positive = bool(pressure_available and buy_pressure >= pressure_high)
     pressure_negative = bool(pressure_available and buy_pressure < pressure_low)
+    if pressure_source is ws_direction_fields:
+        pressure_source_name = "post_fill_ws_tick_context"
+    elif pressure_source is fresh_ws_momentum_direction_fields:
+        pressure_source_name = "post_fill_route_proven_fast_tape"
+    elif pressure_source is source_quality_fields:
+        pressure_source_name = "post_fill_feature_source_quality"
+    elif pressure_source is feature_probe:
+        pressure_source_name = "post_fill_feature_probe"
+    else:
+        pressure_source_name = "unavailable"
 
     groups = {
         "price_tick": (price_available, price_positive, price_negative),
@@ -38507,6 +38673,10 @@ def _post_probe_direction_fields(
             else "post_probe_fresh_ai_drop"
         )
         hard_veto = True
+    elif not post_probe_route_source_allowed:
+        direction_state = "UNKNOWN"
+        action = "DEFER"
+        reason = "post_probe_route_source_quality_unproven"
     elif fresh_negative_ai_action and ai_action == "WAIT":
         wait_positive = bool(
             price_available
@@ -38611,24 +38781,25 @@ def _post_probe_direction_fields(
         action = "ALLOW_NARROW"
         reason = "post_probe_multi_group_strong"
     else:
-        direction_state = "NEUTRAL"
-        action = "DEFER" if wait_probe_origin or negatives else "ALLOW_NORMAL"
+        direction_state = "MIXED" if orderbook_mixed else "NEUTRAL"
+        action = (
+            "DEFER"
+            if wait_probe_origin or negatives or orderbook_mixed
+            else "ALLOW_NORMAL"
+        )
         reason = (
             "post_probe_wait_mixed_or_neutral"
             if wait_probe_origin
             else (
                 "post_probe_neutral_negative_group_deferred"
                 if negatives
-                else "post_probe_mixed_or_neutral"
+                else (
+                    "post_probe_orderbook_mixed_confirmation_required"
+                    if orderbook_mixed
+                    else "post_probe_mixed_or_neutral"
+                )
             )
         )
-    snapshot_venue = effective_venue or resolve_entry_candle_venue(
-        ws_data,
-        session=resolve_entry_candle_session(now_ts=observed_now),
-    )
-    snapshot_session = market_session_bucket or resolve_entry_candle_session(
-        now_ts=observed_now
-    )
     realtime_type_ts = (
         ws_data.get("last_realtime_type_ts")
         if isinstance(ws_data.get("last_realtime_type_ts"), dict)
@@ -38707,20 +38878,6 @@ def _post_probe_direction_fields(
     confirmation_version_proven = any(
         _safe_float(value, 0.0) > 0 for value in evidence_versions.values()
     )
-    market_snapshot = build_ai_market_snapshot(
-        stock_code=code,
-        decision_stage="post_probe",
-        ws_data=ws_data,
-        effective_venue=snapshot_venue,
-        session_bucket=snapshot_session,
-        broker_route=(
-            stock.get("entry_execution_broker_route")
-            or stock.get("broker_route")
-            or stock.get("market_route")
-        ),
-        position=stock,
-        now_ts=observed_now,
-    )
     return {
         "post_probe_direction_state": direction_state,
         "post_probe_continuation_action": action,
@@ -38728,6 +38885,7 @@ def _post_probe_direction_fields(
         "post_probe_direction_available_groups": ",".join(available) or "-",
         "post_probe_direction_positive_groups": ",".join(positives) or "-",
         "post_probe_direction_negative_groups": ",".join(negatives) or "-",
+        "post_probe_direction_mixed_groups": ("orderbook" if orderbook_mixed else "-"),
         "post_probe_direction_group_count": len(available),
         "post_probe_directional_group_count": directional_group_count,
         "post_probe_direction_mark_price": mark_price or "-",
@@ -38823,8 +38981,36 @@ def _post_probe_direction_fields(
         "post_probe_direction_micro_state": micro_state or "-",
         "post_probe_direction_qi": f"{qi:.6f}" if qi_available else "-",
         "post_probe_direction_ofi_norm": f"{ofi:.6f}" if ofi_available else "-",
+        "post_probe_direction_orderbook_state": (
+            "positive"
+            if orderbook_positive
+            else "negative"
+            if orderbook_negative
+            else "mixed"
+            if orderbook_mixed
+            else "neutral"
+        ),
+        "post_probe_direction_qi_state": (
+            "positive" if qi_positive else "negative" if qi_negative else "unavailable"
+        ),
+        "post_probe_direction_ofi_state": (
+            "positive"
+            if ofi_positive
+            else "negative"
+            if ofi_negative
+            else "unavailable"
+        ),
         "post_probe_direction_buy_pressure_10t": (
             f"{buy_pressure:.4f}" if pressure_available else "-"
+        ),
+        "post_probe_direction_signed_pressure_source": pressure_source_name,
+        "post_probe_direction_signed_pressure_post_fill": bool(
+            pressure_available and pressure_source_name.startswith("post_fill_")
+        ),
+        "post_probe_feature_probe_post_fill": feature_probe_post_fill,
+        "post_probe_route_source_allowed": post_probe_route_source_allowed,
+        "post_probe_route_source_blockers": (
+            ",".join(sorted(route_source_blockers)) or "-"
         ),
         "post_probe_live_micro_fresh": bool(live_micro),
         "post_probe_ws_tick_context_fresh": ws_tick_context_fresh,
@@ -38935,6 +39121,7 @@ def _abort_entry_split_probe_residual(
         "post_probe_nxt_ai_veto_source_unverified",
         "post_probe_nxt_event_time_speed_unavailable",
         "post_probe_price_resolver_unavailable",
+        "post_probe_route_source_quality_unproven",
         "post_probe_resolver_unavailable",
         "post_probe_stale_or_conflicted_fresh_quote",
         "post_probe_fresh_bbo_unavailable",
@@ -38957,6 +39144,8 @@ def _abort_entry_split_probe_residual(
             "post_probe_fresh_bbo_unavailable",
         }:
             timeout_cause = "timeout_quote_source_conflict"
+        elif last_direction_reason == "post_probe_route_source_quality_unproven":
+            timeout_cause = "timeout_route_source_quality_unproven"
         elif "negative_group" in last_direction_reason:
             timeout_cause = "timeout_negative_group_persisted"
         elif last_direction_reason in {
@@ -39059,7 +39248,9 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_scale_in_recheck_origin": (
             "normal_winner_recovery"
             if rising_missed_normal_winner_recheck
-            else "source_quality_or_non_nxt_direction_recovery" if soft_abort else "-"
+            else "source_quality_or_non_nxt_direction_recovery"
+            if soft_abort
+            else "-"
         ),
         "entry_split_probe_scale_in_recheck_reason": (
             (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
@@ -39119,6 +39310,21 @@ def _abort_entry_split_probe_residual(
     terminal_negative_groups = str(
         stock.get("entry_split_probe_direction_negative_groups") or "-"
     ).strip()
+    terminal_mixed_groups = str(
+        stock.get("entry_split_probe_direction_mixed_groups") or "-"
+    ).strip()
+    terminal_orderbook_state = str(
+        stock.get("entry_split_probe_direction_orderbook_state") or "unknown"
+    ).strip()
+    terminal_signed_pressure_source = str(
+        stock.get("entry_split_probe_direction_signed_pressure_source") or "unavailable"
+    ).strip()
+    terminal_route_source_allowed = bool(
+        stock.get("entry_split_probe_route_source_allowed", False)
+    )
+    terminal_route_source_blockers = str(
+        stock.get("entry_split_probe_route_source_blockers") or "-"
+    ).strip()
     terminal_confirmation_count = max(
         0, _safe_int(stock.get("probe_confirmation_count"), 0)
     )
@@ -39158,6 +39364,19 @@ def _abort_entry_split_probe_residual(
             ),
             "entry_split_probe_terminal_negative_groups": (
                 terminal_negative_groups or "-"
+            ),
+            "entry_split_probe_terminal_mixed_groups": terminal_mixed_groups or "-",
+            "entry_split_probe_terminal_orderbook_state": (
+                terminal_orderbook_state or "unknown"
+            ),
+            "entry_split_probe_terminal_signed_pressure_source": (
+                terminal_signed_pressure_source or "unavailable"
+            ),
+            "entry_split_probe_terminal_route_source_allowed": (
+                terminal_route_source_allowed
+            ),
+            "entry_split_probe_terminal_route_source_blockers": (
+                terminal_route_source_blockers or "-"
             ),
             "entry_split_probe_terminal_confirmation_count": (
                 terminal_confirmation_count
@@ -39241,6 +39460,13 @@ def _abort_entry_split_probe_residual(
             terminal_continuation_action=terminal_continuation_action or "BLOCK",
             terminal_positive_groups=terminal_positive_groups or "-",
             terminal_negative_groups=terminal_negative_groups or "-",
+            terminal_mixed_groups=terminal_mixed_groups or "-",
+            terminal_orderbook_state=terminal_orderbook_state or "unknown",
+            terminal_signed_pressure_source=(
+                terminal_signed_pressure_source or "unavailable"
+            ),
+            terminal_route_source_allowed=terminal_route_source_allowed,
+            terminal_route_source_blockers=terminal_route_source_blockers or "-",
             terminal_confirmation_count=terminal_confirmation_count,
             terminal_failure_signature=terminal_failure_signature,
         )
@@ -39276,6 +39502,13 @@ def _abort_entry_split_probe_residual(
         post_probe_direction_reason=terminal_direction_reason,
         post_probe_direction_positive_groups=terminal_positive_groups or "-",
         post_probe_direction_negative_groups=terminal_negative_groups or "-",
+        post_probe_direction_mixed_groups=terminal_mixed_groups or "-",
+        post_probe_direction_orderbook_state=terminal_orderbook_state or "unknown",
+        post_probe_direction_signed_pressure_source=(
+            terminal_signed_pressure_source or "unavailable"
+        ),
+        post_probe_route_source_allowed=terminal_route_source_allowed,
+        post_probe_route_source_blockers=terminal_route_source_blockers or "-",
         post_probe_continuation_action=terminal_continuation_action or "BLOCK",
         active_sell_pending_fields=(
             ",".join(_active_sell_order_pending_fields(stock)) or "-"
@@ -43223,12 +43456,16 @@ def _resolve_early_accel_strong_bundle_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(min_score) <= numeric_score <= float(max_score)
-                else "low" if numeric_score < float(min_score) else "high"
+                else "low"
+                if numeric_score < float(min_score)
+                else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(min_score) <= numeric_score <= float(max_score)
-                else -0.2 if numeric_score < float(min_score) else 0.0
+                else -0.2
+                if numeric_score < float(min_score)
+                else 0.0
             ),
         }
     )
@@ -43800,12 +44037,16 @@ def _resolve_ai_numeric_consistency_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(score_floor) <= numeric_score <= 74.0
-                else "low" if numeric_score < float(score_floor) else "high"
+                else "low"
+                if numeric_score < float(score_floor)
+                else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(score_floor) <= numeric_score <= 74.0
-                else -0.2 if numeric_score < float(score_floor) else 0.0
+                else -0.2
+                if numeric_score < float(score_floor)
+                else 0.0
             ),
         }
     )
@@ -47034,7 +47275,9 @@ def _evaluate_scalp_trailing_continuation_recheck(
     large_sell_state = (
         "confirmed_sell"
         if large_sell_print
-        else "confirmed_clear" if feature_context_usable else "unknown"
+        else "confirmed_clear"
+        if feature_context_usable
+        else "unknown"
     )
     micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
         ws_data,
@@ -49803,7 +50046,9 @@ def _score65_74_recovery_probe_decision(
         "score_prior_band": (
             "supportive"
             if min_score <= score <= max_score
-            else "low" if score < min_score else "high"
+            else "low"
+            if score < min_score
+            else "high"
         ),
         "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
     }
@@ -54690,9 +54935,7 @@ def _handle_watching_strategy_branch(
                                         "ai_numeric_consistency_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "ai_numeric_consistency_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[
-                                            :120
-                                        ],
+                                        )[:120],
                                         "ai_numeric_consistency_recheck_inconsistency_field": str(
                                             ai_decision.get(
                                                 "ai_reason_numeric_inconsistency_field"
@@ -54711,9 +54954,7 @@ def _handle_watching_strategy_branch(
                                             ),
                                             ensure_ascii=False,
                                             default=str,
-                                        )[
-                                            :240
-                                        ],
+                                        )[:240],
                                     },
                                     candle_context=candle_context,
                                 )
@@ -54931,9 +55172,7 @@ def _handle_watching_strategy_branch(
                                         "early_accel_strong_bundle_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "early_accel_strong_bundle_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[
-                                            :120
-                                        ],
+                                        )[:120],
                                         "early_accel_strong_bundle_recheck_scanner_promotion_reason": str(
                                             stock.get("scanner_promotion_reason") or "-"
                                         ),
@@ -72678,6 +72917,25 @@ def _submit_entry_split_probe_residual_locked(
                     "post_probe_direction_negative_groups"
                 )
                 or "-",
+                "entry_split_probe_direction_mixed_groups": direction_fields.get(
+                    "post_probe_direction_mixed_groups"
+                )
+                or "-",
+                "entry_split_probe_direction_orderbook_state": direction_fields.get(
+                    "post_probe_direction_orderbook_state"
+                )
+                or "unknown",
+                "entry_split_probe_direction_signed_pressure_source": (
+                    direction_fields.get("post_probe_direction_signed_pressure_source")
+                    or "unavailable"
+                ),
+                "entry_split_probe_route_source_allowed": bool(
+                    direction_fields.get("post_probe_route_source_allowed", False)
+                ),
+                "entry_split_probe_route_source_blockers": direction_fields.get(
+                    "post_probe_route_source_blockers"
+                )
+                or "-",
                 "entry_split_probe_direction_evaluated_at": now_ts,
                 "entry_split_probe_direction_evidence_signature": (
                     direction_fields.get(
@@ -82808,9 +83066,7 @@ def handle_buy_ordered_state(stock, code):
             return
 
     if time_elapsed > timeout_sec:
-        log_info(
-            f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입."
-        )
+        log_info(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
         orig_ord_no = stock.get("odno")
 
         if not orig_ord_no:

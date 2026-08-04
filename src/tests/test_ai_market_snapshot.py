@@ -1141,6 +1141,35 @@ def test_integrated_sor_execution_view_rejects_nxt_event_and_post_probe():
         assert snapshot["venue_attribution_allowed"] is False
 
 
+def test_integrated_sor_post_probe_accepts_only_frozen_filled_probe_execution_view():
+    now = datetime(2026, 8, 4, 10, 0, tzinfo=KST).timestamp()
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="post_probe",
+        ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        broker_route="SOR",
+        position={
+            "status": "HOLDING",
+            "buy_qty": 1,
+            "buy_price": 10000,
+            "entry_execution_broker_route": "SOR",
+            "entry_split_probe_bundle_id": "005930-probe-test",
+            "entry_split_probe_fill_price": 10000,
+            "entry_split_probe_filled_at": now - 0.2,
+        },
+        now_ts=now,
+    )
+
+    assert snapshot["integrated_sor_route_proven"] is True
+    assert snapshot["integrated_sor_route_proof"] == (
+        "post_probe_sor_integrated_execution_view"
+    )
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+    assert snapshot["venue_attribution_allowed"] is False
+
+
 def test_integrated_sor_holding_requires_matching_al_candle_route():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     snapshot = mod.build_ai_market_snapshot(

@@ -1619,9 +1619,14 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
             701,
             "123456",
             "recovery-winner",
-            "post_probe_hard_abort_recovery_observed",
+            "post_probe_terminal_abort_recovery_observed",
             {
                 **recovery_contract,
+                "decision_authority": (
+                    "source_only_post_terminal_abort_recovery_observation_"
+                    "no_runtime_mutation"
+                ),
+                "recovery_abort_class": "soft",
                 "recovery_evidence_signature": "recovery-b",
                 "recovery_confirmation_count": 2,
                 "recovery_confirmation_ready": True,
@@ -1664,8 +1669,14 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
     )
     assert item["normal_winner_expansion_candidate_seen"] is True
     assert item["normal_winner_expansion_blocker_reason"] == (
-        "post_hard_abort_recovery_source_only"
+        "post_terminal_abort_recovery_source_only"
     )
+    assert item["normal_winner_expansion_blocker_namespace"] == (
+        "POST_PROBE_TERMINAL_ABORT_RECOVERY"
+    )
+    assert item["post_probe_terminal_abort_recovery_latest_class"] == "soft"
+    assert report["summary"]["post_terminal_abort_recovery_soft_count"] == 1
+    assert report["summary"]["post_terminal_abort_recovery_hard_count"] == 0
     assert item["normal_winner_expansion_label"] == "realized_incremental_winner"
     assert item["runtime_effect"] is False
     assert item["actual_order_submitted"] is False
@@ -1744,9 +1755,12 @@ def test_profitable_hard_abort_without_recovery_is_not_labeled_correct_block(
     assert item["canonical_expansion_outcome_label"] != (
         "expansion_correctly_not_expanded_no_confirmation"
     )
-    assert report["summary"][
-        "post_hard_abort_recovery_evaluation_not_run_profitable_count"
-    ] == 1
+    assert (
+        report["summary"][
+            "post_hard_abort_recovery_evaluation_not_run_profitable_count"
+        ]
+        == 1
+    )
 
 
 def test_probe_residual_fill_uses_exact_bundle_terminal_not_later_buy_qty(tmp_path):

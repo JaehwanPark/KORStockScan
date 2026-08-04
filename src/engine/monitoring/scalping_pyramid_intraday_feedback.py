@@ -199,9 +199,7 @@ def _update_scout_ai_execution_attribution(
     incoming_trace_id = str(
         fields.get("scout_ai_parent_decision_trace_id") or ""
     ).strip()
-    current_trace_id = str(
-        item.get("scout_ai_parent_decision_trace_id") or ""
-    ).strip()
+    current_trace_id = str(item.get("scout_ai_parent_decision_trace_id") or "").strip()
     if (
         current_trace_id not in {"", "-"}
         and incoming_trace_id not in {"", "-"}
@@ -825,7 +823,8 @@ def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
 def _post_probe_hard_abort_recovery_candidate_record(
     row: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if str(row.get("stage") or "") != _POST_PROBE_HARD_ABORT_RECOVERY_STAGE:
+    stage = str(row.get("stage") or "")
+    if stage not in _POST_PROBE_RECOVERY_STAGES:
         return None
     fields = _fields(row)
     if not (
@@ -835,9 +834,10 @@ def _post_probe_hard_abort_recovery_candidate_record(
         and not _boolish(fields.get("actual_order_submitted"))
         and _boolish(fields.get("broker_order_forbidden"))
         and str(fields.get("decision_authority") or "").strip()
-        == "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+        in _POST_PROBE_RECOVERY_AUTHORITIES
     ):
         return None
+    terminal_abort_event = stage == "post_probe_terminal_abort_recovery_observed"
     return {
         "record_id": str(row.get("record_id") or "").strip(),
         "stock_code": row.get("stock_code"),
@@ -845,8 +845,17 @@ def _post_probe_hard_abort_recovery_candidate_record(
         "first_observed_ts": row.get("emitted_at"),
         "source_stage": row.get("stage"),
         "scale_in_arm": "PYRAMID",
-        "scale_in_blocker_reason": "post_hard_abort_recovery_source_only",
-        "scale_in_blocker_namespace": "POST_PROBE_HARD_ABORT_RECOVERY",
+        "scale_in_blocker_reason": (
+            "post_terminal_abort_recovery_source_only"
+            if terminal_abort_event
+            else "post_hard_abort_recovery_source_only"
+        ),
+        "scale_in_blocker_namespace": (
+            "POST_PROBE_TERMINAL_ABORT_RECOVERY"
+            if terminal_abort_event
+            else "POST_PROBE_HARD_ABORT_RECOVERY"
+        ),
+        "recovery_abort_class": str(fields.get("recovery_abort_class") or "unknown"),
         "profit_rate": _safe_float(fields.get("profit_rate")),
         "peak_profit": _safe_float(fields.get("peak_profit")),
         "current_ai_score": _safe_float(fields.get("current_ai_score")),
@@ -857,13 +866,9 @@ def _post_probe_hard_abort_recovery_candidate_record(
         "tick_aggressor_pressure_usable": _optional_boolish(
             fields.get("tick_aggressor_pressure_usable")
         ),
-        "tick_acceleration_ratio": _safe_float(
-            fields.get("tick_acceleration_ratio")
-        ),
+        "tick_acceleration_ratio": _safe_float(fields.get("tick_acceleration_ratio")),
         "curr_vs_micro_vwap_bp": _safe_float(fields.get("curr_vs_micro_vwap_bp")),
-        "micro_vwap_available": _optional_boolish(
-            fields.get("micro_vwap_available")
-        ),
+        "micro_vwap_available": _optional_boolish(fields.get("micro_vwap_available")),
         "minute_candle_window_fresh": _optional_boolish(
             fields.get("minute_candle_window_fresh")
         ),
@@ -1044,7 +1049,14 @@ _PROBE_DIRECTION_STAGES = {
     "probe_continuation_deferred",
     "residual_planned",
 }
-_POST_PROBE_HARD_ABORT_RECOVERY_STAGE = "post_probe_hard_abort_recovery_observed"
+_POST_PROBE_RECOVERY_STAGES = {
+    "post_probe_hard_abort_recovery_observed",
+    "post_probe_terminal_abort_recovery_observed",
+}
+_POST_PROBE_RECOVERY_AUTHORITIES = {
+    "source_only_post_hard_abort_recovery_observation_no_runtime_mutation",
+    "source_only_post_terminal_abort_recovery_observation_no_runtime_mutation",
+}
 _SOFT_RESIDUAL_ABORT_REASONS = {
     "residual_leg_direction_deferred",
     "residual_revalidation_timeout",
@@ -1135,6 +1147,21 @@ def _update_probe_residual_observation(
         item["probe_direction_latest_negative_groups"] = (
             ",".join(sorted(negative_groups)) or "-"
         )
+        item["probe_direction_latest_mixed_groups"] = str(
+            fields.get("post_probe_direction_mixed_groups") or "-"
+        )
+        item["probe_direction_latest_orderbook_state"] = str(
+            fields.get("post_probe_direction_orderbook_state") or "unknown"
+        )
+        item["probe_direction_latest_signed_pressure_source"] = str(
+            fields.get("post_probe_direction_signed_pressure_source") or "unavailable"
+        )
+        item["probe_direction_latest_route_source_allowed"] = _optional_boolish(
+            fields.get("post_probe_route_source_allowed")
+        )
+        item["probe_direction_latest_route_source_blockers"] = str(
+            fields.get("post_probe_route_source_blockers") or "-"
+        )
         mark_price = _safe_float(fields.get("post_probe_direction_mark_price"), None)
         probe_fill_price = _safe_float(
             fields.get("post_probe_direction_probe_fill_price"), None
@@ -1200,11 +1227,10 @@ def _update_probe_residual_observation(
         item["pyramid_evaluation_count"] = (
             int(item.get("pyramid_evaluation_count") or 0) + 1
         )
-    if stage == _POST_PROBE_HARD_ABORT_RECOVERY_STAGE:
+    if stage in _POST_PROBE_RECOVERY_STAGES:
         item["post_probe_hard_abort_recovery_evaluation_seen"] = True
         item["post_probe_hard_abort_recovery_evaluation_count"] = (
-            int(item.get("post_probe_hard_abort_recovery_evaluation_count") or 0)
-            + 1
+            int(item.get("post_probe_hard_abort_recovery_evaluation_count") or 0) + 1
         )
         source_blockers = {
             token.strip()
@@ -1215,9 +1241,7 @@ def _update_probe_residual_observation(
         }
         decision_authority = str(fields.get("decision_authority") or "").strip()
         contract_blockers = set(source_blockers)
-        if decision_authority != (
-            "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
-        ):
+        if decision_authority not in _POST_PROBE_RECOVERY_AUTHORITIES:
             contract_blockers.add("decision_authority_invalid")
         if _boolish(fields.get("runtime_effect")):
             contract_blockers.add("runtime_effect_not_false")
@@ -1236,8 +1260,7 @@ def _update_probe_residual_observation(
                 "observed_at": row.get("emitted_at"),
                 "observed_epoch": observed_epoch,
                 "eligible": bool(
-                    _boolish(fields.get("recovery_eligible"))
-                    and not contract_blockers
+                    _boolish(fields.get("recovery_eligible")) and not contract_blockers
                 ),
                 "evidence_signature": evidence_signature,
                 "source_quality_blockers": sorted(contract_blockers),
@@ -1249,11 +1272,12 @@ def _update_probe_residual_observation(
         item["post_probe_hard_abort_recovery_latest_reason"] = str(
             fields.get("recovery_reason") or "-"
         )
+        item["post_probe_terminal_abort_recovery_latest_class"] = str(
+            fields.get("recovery_abort_class") or "unknown"
+        )
         item["post_probe_hard_abort_recovery_event_confirmation_max_count"] = max(
             int(
-                item.get(
-                    "post_probe_hard_abort_recovery_event_confirmation_max_count"
-                )
+                item.get("post_probe_hard_abort_recovery_event_confirmation_max_count")
                 or 0
             ),
             int(_safe_float(fields.get("recovery_confirmation_count"), 0) or 0),
@@ -1335,6 +1359,26 @@ def _update_probe_residual_observation(
             )
         )
         item["residual_block_reason"] = reason
+        item["residual_abort_detail_reason"] = str(
+            fields.get("entry_split_probe_terminal_abort_detail_reason")
+            or fields.get("residual_revalidation_timeout_cause")
+            or "-"
+        )
+        item["residual_terminal_mixed_groups"] = str(
+            fields.get("post_probe_direction_mixed_groups") or "-"
+        )
+        item["residual_terminal_orderbook_state"] = str(
+            fields.get("post_probe_direction_orderbook_state") or "unknown"
+        )
+        item["residual_terminal_signed_pressure_source"] = str(
+            fields.get("post_probe_direction_signed_pressure_source") or "unavailable"
+        )
+        item["residual_terminal_route_source_allowed"] = _optional_boolish(
+            fields.get("post_probe_route_source_allowed")
+        )
+        item["residual_terminal_route_source_blockers"] = str(
+            fields.get("post_probe_route_source_blockers") or "-"
+        )
         item["residual_soft_abort"] = soft_abort
         item["residual_hard_or_capacity_abort"] = not soft_abort
         item["residual_partial_submitted_before_block"] = partial_submitted
@@ -1514,8 +1558,7 @@ def _finalize_post_probe_real_confirmation(item: dict[str, Any]) -> None:
 def _finalize_post_probe_hard_abort_recovery(item: dict[str, Any]) -> None:
     observations = [
         observation
-        for observation in item.get("post_probe_hard_abort_recovery_observations")
-        or []
+        for observation in item.get("post_probe_hard_abort_recovery_observations") or []
         if isinstance(observation, dict)
         and _safe_float(observation.get("observed_epoch"), None) is not None
     ]
@@ -1707,10 +1750,15 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
         ):
             if item.get("post_probe_hard_abort_recovery_confirmation_ready"):
                 label = "profitable_zero_fill_recovery_confirmation_ready"
-            elif int(
-                item.get("post_probe_hard_abort_recovery_valid_window_evaluation_count")
-                or 0
-            ) > 0:
+            elif (
+                int(
+                    item.get(
+                        "post_probe_hard_abort_recovery_valid_window_evaluation_count"
+                    )
+                    or 0
+                )
+                > 0
+            ):
                 label = "profitable_zero_fill_recovery_not_confirmed"
             else:
                 label = "profitable_zero_fill_recovery_evaluation_not_run"
@@ -1771,9 +1819,9 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
     item["post_probe_counterfactual_source_quality_reasons"] = (
         counterfactual_source_quality_reasons
     )
-    item["post_probe_counterfactual_source_quality_valid"] = (
-        not counterfactual_source_quality_reasons
-    )
+    item[
+        "post_probe_counterfactual_source_quality_valid"
+    ] = not counterfactual_source_quality_reasons
     item["post_probe_counterfactual_first_leg_profit_proxy_krw"] = (
         round(first_leg_notional * final_profit / 100.0, 2)
         if first_leg_notional > 0 and final_profit is not None
@@ -1901,6 +1949,8 @@ def _update_normal_winner_expansion_candidate(
         "observed_at": row.get("emitted_at"),
         "profit_rate": profit_rate,
         "scale_in_blocker_reason": blocked.get("scale_in_blocker_reason"),
+        "scale_in_blocker_namespace": blocked.get("scale_in_blocker_namespace"),
+        "recovery_abort_class": blocked.get("recovery_abort_class"),
         "current_ai_score": blocked.get("current_ai_score"),
         "buy_pressure_10t": blocked.get("buy_pressure_10t"),
         "tick_acceleration_ratio": blocked.get("tick_acceleration_ratio"),
@@ -1918,6 +1968,12 @@ def _update_normal_winner_expansion_candidate(
     item["normal_winner_expansion_entry_profit_pct"] = profit_rate
     item["normal_winner_expansion_blocker_reason"] = blocked.get(
         "scale_in_blocker_reason"
+    )
+    item["normal_winner_expansion_blocker_namespace"] = blocked.get(
+        "scale_in_blocker_namespace"
+    )
+    item["normal_winner_expansion_recovery_abort_class"] = blocked.get(
+        "recovery_abort_class"
     )
     item["normal_winner_expansion_current_ai_score"] = blocked.get("current_ai_score")
     item["normal_winner_expansion_buy_pressure_10t"] = blocked.get("buy_pressure_10t")
@@ -2311,8 +2367,7 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "scout_ai_attribution_incomplete_count": sum(
             1
             for item in rows
-            if item.get("scout_ai_attribution_status")
-            != "linked_frozen_parent"
+            if item.get("scout_ai_attribution_status") != "linked_frozen_parent"
         ),
         "scout_ai_attribution_conflict_count": sum(
             1 for item in rows if item.get("scout_ai_attribution_conflict")
@@ -2372,6 +2427,26 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             1
             for item in post_probe_closed
             if item.get("post_probe_hard_abort_recovery_confirmation_ready")
+        ),
+        "post_terminal_abort_recovery_evaluation_seen_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_hard_abort_recovery_evaluation_seen")
+        ),
+        "post_terminal_abort_recovery_confirmation_ready_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_hard_abort_recovery_confirmation_ready")
+        ),
+        "post_terminal_abort_recovery_hard_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_terminal_abort_recovery_latest_class") == "hard"
+        ),
+        "post_terminal_abort_recovery_soft_count": sum(
+            1
+            for item in post_probe_closed
+            if item.get("post_probe_terminal_abort_recovery_latest_class") == "soft"
         ),
         "post_hard_abort_recovery_evaluation_not_run_profitable_count": sum(
             1
@@ -2846,9 +2921,7 @@ def build_report(
             _update_scout_ai_execution_attribution(one_share_records[key], row)
             _update_venue_provenance(one_share_records[key], row)
             _update_probe_residual_observation(one_share_records[key], row)
-            recovery_candidate = _post_probe_hard_abort_recovery_candidate_record(
-                row
-            )
+            recovery_candidate = _post_probe_hard_abort_recovery_candidate_record(row)
             if recovery_candidate:
                 _update_normal_winner_expansion_candidate(
                     one_share_records[key], recovery_candidate, row
@@ -2945,11 +3018,10 @@ def build_report(
     for key, item in one_share_records.items():
         _finalize_probe_residual_observation(item)
         _finalize_probe_residual_real_outcome(item)
-        if (
-            item.get("normal_winner_expansion_blocker_reason")
-            == "post_hard_abort_recovery_source_only"
-            and not item.get("post_probe_hard_abort_recovery_confirmation_ready")
-        ):
+        if item.get("normal_winner_expansion_blocker_reason") in {
+            "post_hard_abort_recovery_source_only",
+            "post_terminal_abort_recovery_source_only",
+        } and not item.get("post_probe_hard_abort_recovery_confirmation_ready"):
             for field_name in tuple(item):
                 if field_name.startswith("normal_winner_expansion_"):
                     item.pop(field_name, None)
@@ -3099,9 +3171,9 @@ def build_report(
         "post_hard_abort_recovery_metric_contract": {
             "metric_role": "bounded_tunable_scale_in_counterfactual",
             "decision_authority": (
-                "source_only_post_hard_abort_recovery_observation_no_runtime_mutation"
+                "source_only_post_terminal_abort_recovery_observation_no_runtime_mutation"
             ),
-            "window_policy": "same_position_cycle_terminal_hard_abort_to_sell",
+            "window_policy": "same_position_cycle_terminal_abort_to_sell",
             "sample_floor": (
                 "rolling_closed_source_quality_valid_recovery_candidates_ge_20"
             ),
@@ -3398,9 +3470,7 @@ def write_outputs(
                         item.get("post_probe_hard_abort_recovery_evaluation_seen")
                     ),
                     "post_probe_hard_abort_recovery_confirmation_ready": bool(
-                        item.get(
-                            "post_probe_hard_abort_recovery_confirmation_ready"
-                        )
+                        item.get("post_probe_hard_abort_recovery_confirmation_ready")
                     ),
                     "post_probe_real_confirmation_source_quality_blockers": (
                         ",".join(

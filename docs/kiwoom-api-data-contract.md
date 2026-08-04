@@ -68,6 +68,29 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-04 SOR Post-Probe Execution-View Gate
+
+- Retrieved at `2026-08-04T09:20:35+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`,
+  `kiwoom/realtime/events.py`, `kiwoom/realtime/decoders.py`, and
+  `kiwoom/specs.py`.
+- The official realtime contract identifies a SOR subscription item as
+  `039490_AL`, KRX as `039490`, and NXT as `039490_NX`. The 0B contract keeps
+  signed field `15` as BUY/SELL execution-volume provenance and exposes
+  exchange fields such as `9081`; 0D owns the executable orderbook view.
+- `_AL` proves a SOR execution view, not the underlying exchange of an
+  individual event. Post-probe may therefore consume fresh, route-consistent
+  `_AL` 0B/0D only when the filled probe has a frozen `SOR` broker route, an
+  active position, a bundle ID, fill price, and fill timestamp. Venue
+  attribution remains false. Missing frozen fill lineage or any route/suffix
+  conflict fails closed.
+- A pre-submit pressure snapshot cannot be reused as post-fill signed-pressure
+  evidence. Mixed QI/OFI orderbook evidence remains mixed rather than being
+  promoted to a positive or negative venue signal. These source corrections
+  do not bypass AI DROP, broker/account/order/quantity/cooldown, stale quote,
+  price freshness, exit-token, or hard/protect/emergency guards.
+
 ### 2026-07-27 ka10017 Previous-Limit-Down Observation Gate
 
 - Retrieved at `2026-07-27T16:01:10+09:00` from upstream commit

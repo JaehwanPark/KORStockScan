@@ -770,9 +770,9 @@ def _integrated_sor_execution_view_proof(
 
     ``_AL`` does not identify the underlying exchange.  It can still be the
     executable market view when the planned broker route is SOR and every
-    required source is consistently integrated.  Entry proof is limited to
-    regular-session AI context/gatekeeper decisions; post-probe remains
-    excluded because it must preserve the probe's exact venue lineage.
+    required source is consistently integrated.  Post-probe proof is allowed
+    only for an active, filled probe whose frozen execution route is also SOR;
+    this proves an executable SOR view, never the underlying event venue.
     """
 
     stage = str(decision_stage or "").strip().lower()
@@ -784,6 +784,25 @@ def _integrated_sor_execution_view_proof(
         "holding_flow",
     } or stage.startswith("overnight")
     entry_stage = stage in {"entry_context", "entry_screen", "gatekeeper"}
+    post_probe_stage = stage == "post_probe"
+    frozen_execution_route = (
+        str(
+            position.get("entry_execution_broker_route")
+            or position.get("broker_route")
+            or broker_route
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    post_probe_position_contract = bool(
+        post_probe_stage
+        and _active_holding_position(position)
+        and frozen_execution_route == "SOR"
+        and str(position.get("entry_split_probe_bundle_id") or "").strip()
+        and (_safe_float(position.get("entry_split_probe_fill_price")) or 0.0) > 0
+        and (_safe_float(position.get("entry_split_probe_filled_at")) or 0.0) > 0
+    )
     candle_quality = (
         candle_context.get("source_quality")
         if isinstance(candle_context.get("source_quality"), dict)
@@ -792,9 +811,13 @@ def _integrated_sor_execution_view_proof(
     rows = [provenance[key] for key in _MARKET_TYPES]
     candle_schema = str(candle_context.get("schema") or "").strip()
     conditions = {
-        "supported_stage": holding_stage or entry_stage,
+        "supported_stage": holding_stage or entry_stage or post_probe_stage,
         "stage_position_contract": (
-            _active_holding_position(position) if holding_stage else entry_stage
+            _active_holding_position(position)
+            if holding_stage
+            else post_probe_position_contract
+            if post_probe_stage
+            else entry_stage
         ),
         "krx_regular_cohort": str(venue or "").strip().upper() == "KRX"
         and session_value == "krx_regular"
@@ -803,12 +826,16 @@ def _integrated_sor_execution_view_proof(
         <= datetime.strptime("15:30", "%H:%M").time(),
         "sor_broker_route": str(broker_route or "").strip().upper() == "SOR",
         "integrated_candle_route": (
-            candle_schema in {"session_candle_source_v1", "entry_candle_context_v1"}
-            and _base_code(candle_context.get("request_code")) == _base_code(stock_code)
-            and str(candle_context.get("rest_route") or "").strip().upper() == "_AL"
-            and str(candle_context.get("ws_route") or "").strip().lower()
-            == "krx_nxt_integrated"
-            and candle_quality.get("status") == "fresh_consistent"
+            post_probe_stage
+            or (
+                candle_schema in {"session_candle_source_v1", "entry_candle_context_v1"}
+                and _base_code(candle_context.get("request_code"))
+                == _base_code(stock_code)
+                and str(candle_context.get("rest_route") or "").strip().upper() == "_AL"
+                and str(candle_context.get("ws_route") or "").strip().lower()
+                == "krx_nxt_integrated"
+                and candle_quality.get("status") == "fresh_consistent"
+            )
         ),
         "integrated_realtime_routes": all(
             row.get("quality") == "fresh"
@@ -827,6 +854,8 @@ def _integrated_sor_execution_view_proof(
         return False, "missing:" + ",".join(missing)
     if holding_stage:
         return True, "holding_sor_integrated_execution_view"
+    if post_probe_stage:
+        return True, "post_probe_sor_integrated_execution_view"
     return True, "entry_sor_integrated_execution_view"
 
 

@@ -4892,6 +4892,185 @@ def test_wait_probe_neutral_defers_but_buy_probe_keeps_existing_behavior(monkeyp
     assert buy_decision["post_probe_continuation_action"] == "ALLOW_NORMAL"
 
 
+def test_post_probe_excludes_prefill_pressure_and_preserves_mixed_orderbook(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        state_handlers,
+        "build_ai_market_snapshot",
+        lambda **_kwargs: {
+            "snapshot_id": "post-probe-test",
+            "ai_input_preflight_v1": {
+                "source_allowed": True,
+                "source_blockers": [],
+            },
+        },
+    )
+    stock = {
+        "rising_missed_effective_venue": "KRX",
+        "rising_missed_market_session_bucket": "krx_regular",
+        "entry_split_probe_filled_at": 1_000.0,
+        "last_watching_ai_feature_probe_at": 999.8,
+        "last_watching_ai_feature_probe": {
+            "orderbook_micro_qi": 0.01,
+            "orderbook_micro_ofi_norm": 1.0,
+            "buy_pressure_10t": 10.0,
+            "tick_aggressor_pressure_usable": True,
+        },
+        "last_watching_ai_source_quality_fields": {
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+        },
+    }
+
+    decision = state_handlers._post_probe_direction_fields(
+        stock,
+        {},
+        {"canonical_mark_price": 10_010},
+        probe_fill_price=10_000,
+        now_ts=1_000.2,
+        max_context_age_sec=3.0,
+    )
+
+    assert decision["post_probe_direction_orderbook_state"] == "mixed"
+    assert decision["post_probe_direction_mixed_groups"] == "orderbook"
+    assert decision["post_probe_direction_signed_pressure_source"] == "unavailable"
+    assert decision["post_probe_direction_signed_pressure_post_fill"] is False
+    assert "orderbook" not in decision["post_probe_direction_negative_groups"]
+    assert "signed_pressure" not in decision["post_probe_direction_negative_groups"]
+    assert decision["post_probe_direction_state"] == "MIXED"
+    assert decision["post_probe_continuation_action"] == "DEFER"
+    assert decision["post_probe_direction_reason"] == (
+        "post_probe_orderbook_mixed_confirmation_required"
+    )
+
+
+def test_post_probe_accepts_only_postfill_feature_pressure(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "build_ai_market_snapshot",
+        lambda **_kwargs: {
+            "snapshot_id": "post-probe-test",
+            "ai_input_preflight_v1": {
+                "source_allowed": True,
+                "source_blockers": [],
+            },
+        },
+    )
+    stock = {
+        "entry_split_probe_filled_at": 1_000.0,
+        "last_watching_ai_feature_probe_at": 1_000.1,
+        "last_watching_ai_feature_probe": {
+            "buy_pressure_10t": 10.0,
+            "tick_aggressor_pressure_usable": True,
+        },
+        "last_watching_ai_source_quality_fields": {
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+        },
+    }
+
+    decision = state_handlers._post_probe_direction_fields(
+        stock,
+        {},
+        {"canonical_mark_price": 10_010},
+        probe_fill_price=10_000,
+        now_ts=1_000.2,
+        max_context_age_sec=3.0,
+    )
+
+    assert decision["post_probe_direction_signed_pressure_source"] == (
+        "post_fill_feature_probe"
+    )
+    assert decision["post_probe_direction_signed_pressure_post_fill"] is True
+    assert "signed_pressure" in decision["post_probe_direction_negative_groups"]
+
+
+def test_post_probe_mixed_orderbook_keeps_two_group_winner_expansion(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "build_ai_market_snapshot",
+        lambda **_kwargs: {
+            "snapshot_id": "post-probe-mixed-two-positive",
+            "ai_input_preflight_v1": {
+                "source_allowed": True,
+                "source_blockers": [],
+            },
+        },
+    )
+    stock = {
+        "entry_split_probe_filled_at": 1_000.0,
+        "last_watching_ai_feature_probe_at": 1_000.1,
+        "last_watching_ai_feature_probe": {
+            "orderbook_micro_qi": 0.01,
+            "orderbook_micro_ofi_norm": 1.0,
+            "buy_pressure_10t": 80.0,
+            "tick_aggressor_pressure_usable": True,
+        },
+        "last_watching_ai_source_quality_fields": {
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+        },
+    }
+
+    decision = state_handlers._post_probe_direction_fields(
+        stock,
+        {},
+        {"canonical_mark_price": 10_010},
+        probe_fill_price=10_000,
+        now_ts=1_000.2,
+        max_context_age_sec=3.0,
+    )
+
+    assert decision["post_probe_direction_mixed_groups"] == "orderbook"
+    assert set(decision["post_probe_direction_positive_groups"].split(",")) == {
+        "price_tick",
+        "signed_pressure",
+    }
+    assert decision["post_probe_direction_state"] == "STRONG"
+    assert decision["post_probe_continuation_action"] == "ALLOW_NARROW"
+
+
+def test_post_probe_route_source_conflict_defers_residual(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "build_ai_market_snapshot",
+        lambda **_kwargs: {
+            "snapshot_id": "post-probe-route-conflict",
+            "ai_input_preflight_v1": {
+                "source_allowed": False,
+                "source_blockers": ["realtime_route_conflict"],
+            },
+        },
+    )
+    stock = {
+        "rising_missed_effective_venue": "KRX",
+        "rising_missed_market_session_bucket": "krx_regular",
+        "entry_split_probe_filled_at": 1_000.0,
+    }
+
+    decision = state_handlers._post_probe_direction_fields(
+        stock,
+        {},
+        {"canonical_mark_price": 10_010},
+        probe_fill_price=10_000,
+        code="123456",
+        now_ts=1_000.2,
+        max_context_age_sec=3.0,
+    )
+
+    assert decision["post_probe_route_source_allowed"] is False
+    assert decision["post_probe_route_source_blockers"] == "realtime_route_conflict"
+    assert decision["post_probe_direction_state"] == "UNKNOWN"
+    assert decision["post_probe_continuation_action"] == "DEFER"
+    assert decision["post_probe_direction_reason"] == (
+        "post_probe_route_source_quality_unproven"
+    )
+
+
 def test_krx_like_wait_probe_timeout_releases_existing_scale_in_owner(monkeypatch):
     now_ts = 1_784_778_400.0
     active_date = (
@@ -17593,6 +17772,19 @@ def test_post_probe_hard_abort_recovery_is_source_only_and_never_reopens_guard(
         held_sec=10,
         now_ts=base_ts,
     )
+    same_version = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10110,
+        profit_rate=1.1,
+        peak_profit=1.1,
+        current_ai_score=70,
+        held_sec=10,
+        now_ts=base_ts + 0.3,
+    )
+    assert same_version["confirmation_count"] == 1
+    assert same_version["emitted"] is False
     stock["last_reversal_features"]["feature_extracted_at"] = base_ts + 0.3
     stock["last_reversal_features"]["curr_vs_micro_vwap_bp"] = 13.0
     second = state_handlers._observe_post_probe_hard_abort_recovery(
@@ -17614,7 +17806,8 @@ def test_post_probe_hard_abort_recovery_is_source_only_and_never_reopens_guard(
         "emitted": True,
     }
     assert second["confirmation_count"] == 2
-    assert logs[-1][0] == "post_probe_hard_abort_recovery_observed"
+    assert logs[-1][0] == "post_probe_terminal_abort_recovery_observed"
+    assert logs[-1][1]["recovery_abort_class"] == "hard"
     assert logs[-1][1]["recovery_confirmation_ready"] is True
     assert logs[-1][1]["runtime_effect"] is False
     assert logs[-1][1]["actual_order_submitted"] is False
@@ -17622,6 +17815,68 @@ def test_post_probe_hard_abort_recovery_is_source_only_and_never_reopens_guard(
     assert stock["entry_split_probe_scale_in_forbidden"] is True
     assert stock["probe_expand_forbidden"] is True
     assert stock["entry_split_probe_residual_expand_forbidden"] is True
+
+
+def test_post_probe_soft_abort_recovery_is_observed_without_order_authority(
+    monkeypatch,
+):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    base_ts = time.time()
+    stock = {
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": "123456-soft-abort",
+        "entry_split_probe_terminal_at": base_ts - 1.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_terminal_abort_reason": "residual_revalidation_timeout",
+        "entry_split_probe_terminal_abort_detail_reason": (
+            "timeout_negative_group_persisted"
+        ),
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_forbidden": False,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "last_reversal_features": {
+            "buy_pressure_10t": 72.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 1.2,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts,
+        },
+    }
+
+    result = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10100,
+        profit_rate=1.0,
+        peak_profit=1.0,
+        current_ai_score=70,
+        held_sec=10,
+        now_ts=base_ts,
+    )
+
+    assert result["eligible"] is True
+    assert logs[-1][0] == "post_probe_terminal_abort_recovery_observed"
+    assert logs[-1][1]["recovery_abort_class"] == "soft"
+    assert logs[-1][1]["runtime_effect"] is False
+    assert logs[-1][1]["actual_order_submitted"] is False
+    assert logs[-1][1]["broker_order_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
 
 
 def test_post_probe_hard_abort_recovery_resets_on_negative_group(monkeypatch):
@@ -38186,8 +38441,17 @@ def test_post_probe_nxt_requires_speed_and_distinguishes_wait_from_drop_authorit
         "rising_missed_effective_venue": "NXT",
         "rising_missed_market_session_bucket": "nxt_entry_window",
         **tp1_context,
+        "entry_split_probe_filled_at": 999.9,
         "last_watching_ai_feature_probe_at": 1_000.0,
-        "last_watching_ai_feature_probe": {"buy_pressure_10t": 80.0},
+        "last_watching_ai_feature_probe": {
+            "buy_pressure_10t": 80.0,
+            "tick_aggressor_pressure_usable": True,
+        },
+        "last_watching_ai_source_quality_fields": {
+            "tick_context_quality": "fresh_computed",
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_stale": False,
+        },
     }
     quote_fields = {"canonical_mark_price": 10_020}
 
@@ -38206,6 +38470,8 @@ def test_post_probe_nxt_requires_speed_and_distinguishes_wait_from_drop_authorit
 
     no_speed_stock = dict(base_stock)
     no_speed_stock["rising_missed_tp1_submit_context_tick_acceleration_fresh"] = False
+    no_speed_stock["last_watching_ai_feature_probe"] = {}
+    no_speed_stock["last_watching_ai_source_quality_fields"] = {}
     no_speed = state_handlers._post_probe_direction_fields(
         no_speed_stock,
         {},
