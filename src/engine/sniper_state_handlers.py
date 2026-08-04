@@ -43560,7 +43560,13 @@ def _limit_down_live_pre_submit_guard(
     refreshed, refresh_fields = _pre_submit_refresh_real_ws_snapshot(
         code, base, strategy
     )
+    trigger_type = str(stock.get("limit_down_live_trigger_type") or "exact_unlock")
     lower_limit = _safe_int(stock.get("limit_down_lower_limit_price"), 0)
+    session_open = _safe_int(stock.get("limit_down_session_open_price"), 0)
+    session_low = _safe_int(stock.get("limit_down_session_low_price"), 0)
+    min_rebound_pct = _safe_float(
+        stock.get("limit_down_min_rebound_from_low_pct"), 0.0
+    )
     max_spread_pct = _safe_float(stock.get("limit_down_max_entry_spread_pct"), 0.0)
     current = _safe_int(refreshed.get("curr"), 0)
     best_ask, best_bid = _get_best_levels_from_ws(refreshed)
@@ -43595,7 +43601,20 @@ def _limit_down_live_pre_submit_guard(
         and stock.get("limit_down_same_day_reentry_allowed") is False
         and stock.get("limit_down_overnight_allowed") is False
         and stock.get("limit_down_normal_scalping_guards_required") is True
-        and lower_limit > 0
+        and trigger_type in {"exact_unlock", "near_rebound"}
+        and (
+            stock.get("limit_down_unlock_confirmed") is True
+            if trigger_type == "exact_unlock"
+            else stock.get("limit_down_rebound_confirmed") is True
+        )
+        and (lower_limit > 0 if trigger_type == "exact_unlock" else True)
+        and (
+            session_open > 0
+            and session_low > 0
+            and 0.0 < min_rebound_pct <= 3.0
+            if trigger_type == "near_rebound"
+            else True
+        )
         and 0.0 < max_spread_pct <= 1.5
     )
     reason = "limit_down_live_pre_submit_pass"
@@ -43603,10 +43622,16 @@ def _limit_down_live_pre_submit_guard(
         reason = "limit_down_live_runtime_contract_invalid"
     elif quote_age_ms is None or quote_age_ms > max_quote_age_ms:
         reason = "limit_down_live_pre_submit_quote_stale"
-    elif not (
-        current > lower_limit and best_ask >= current > 0 and best_ask >= best_bid > 0
-    ):
+    elif not (best_ask >= current > 0 and best_ask >= best_bid > 0):
         reason = "limit_down_live_relocked_or_quote_invalid"
+    elif trigger_type == "exact_unlock" and current <= lower_limit:
+        reason = "limit_down_live_relocked_or_quote_invalid"
+    elif trigger_type == "near_rebound" and not (
+        current >= session_open
+        and current > session_low
+        and (current / session_low - 1.0) * 100.0 >= min_rebound_pct
+    ):
+        reason = "limit_down_live_rebound_lost"
     elif spread_pct is None or spread_pct > max_spread_pct:
         reason = "limit_down_live_pre_submit_spread_too_wide"
     return refreshed, {
@@ -43614,7 +43639,11 @@ def _limit_down_live_pre_submit_guard(
         "applicable": True,
         "reason": reason,
         "current_price": current,
+        "trigger_type": trigger_type,
         "lower_limit_price": lower_limit,
+        "session_open_price": session_open,
+        "session_low_price": session_low,
+        "min_rebound_from_low_pct": min_rebound_pct,
         "best_ask": best_ask,
         "best_bid": best_bid,
         "quote_age_ms": None if quote_age_ms is None else round(quote_age_ms, 3),

@@ -512,6 +512,61 @@ def test_raw_tick_emits_source_only_unlock_confirmation_after_second_tick(
     assert manager.state["unlock_confirmed_epoch"] == 11.0
 
 
+def test_raw_tick_confirms_near_rebound_only_after_two_qualifying_ticks(
+    monkeypatch, tmp_path
+):
+    emitted = []
+    monkeypatch.setattr(limit_down_watch, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    manager = LimitDownWatchManager("token", object(), _Bus())
+    base = _candidate(count=1)
+    manager.active = LimitDownCandidate(
+        **{
+            **base.__dict__,
+            "consecutive_count": 0,
+            "cohort": "near_limit_rebound",
+            "candidate_kind": "near_limit_rebound",
+        }
+    )
+    manager.state = {
+        "phase": "WAITING_FIRST_TRADE",
+        "registered_epoch": 1.0,
+        "last_transition_epoch": 1.0,
+        "lower_limit_price": 0,
+        "consecutive_rebound_tick_count": 0,
+        "rebound_confirmed_epoch": 0.0,
+    }
+
+    manager.on_raw_tick("000001", {"curr": 2990, "open": 3000, "low": 2950}, 10.0)
+    assert manager.state["rebound_confirmed_epoch"] == 0.0
+    manager.on_raw_tick("000001", {"curr": 3000, "open": 3000, "low": 2950}, 11.0)
+    manager.on_raw_tick(
+        "000001",
+        {
+            "curr": 3020,
+            "open": 3000,
+            "low": 2950,
+            "best_ask": 3030,
+            "best_bid": 3020,
+        },
+        12.0,
+    )
+
+    confirmations = [
+        kwargs["fields"]
+        for args, kwargs in emitted
+        if len(args) >= 4 and args[3] == "limit_down_watch_rebound_confirmed"
+    ]
+    assert len(confirmations) == 1
+    assert confirmations[0]["confirmation_tick_count"] == 2
+    assert confirmations[0]["rebound_from_low_pct"] > 1.0
+    assert manager.state["rebound_confirmed_epoch"] == 12.0
+
+
 def test_raw_0d_quote_is_observed_without_fabricating_trade_or_unlock(
     monkeypatch, tmp_path
 ):
@@ -556,7 +611,7 @@ def test_raw_0d_quote_is_observed_without_fabricating_trade_or_unlock(
     assert "limit_down_watch_unlock_confirmed" not in stages
 
 
-def test_near_limit_rebound_never_creates_live_promotion_target():
+def test_near_limit_rebound_creates_live_target_after_verified_rebound():
     manager = LimitDownWatchManager("token", _DB(), _Bus())
     base = _candidate(count=1)
     manager.active = LimitDownCandidate(
@@ -570,19 +625,28 @@ def test_near_limit_rebound_never_creates_live_promotion_target():
     key = "near_limit_rebound|1000_4999"
     manager.active_live_policy_keys = {key}
     manager.live_policy_by_key = {key: {"sample_count": 1}}
+    manager.live_policy_source_date = "2026-08-04"
     manager.live_policy_max_entry_spread_pct = 1.5
     manager.state = {
-        "phase": "UNLOCKED",
-        "consecutive_unlocked_tick_count": 2,
-        "unlock_confirmed_epoch": 99.0,
+        "phase": "NEAR_REBOUND_OBSERVING",
+        "consecutive_rebound_tick_count": 2,
+        "rebound_confirmed_epoch": 99.0,
         "last_tick_epoch": 100.0,
-        "current_price": 2910,
-        "lower_limit_price": 2800,
-        "best_ask": 2920,
-        "best_bid": 2910,
+        "current_price": 3030,
+        "open_price": 3000,
+        "low_price": 2950,
+        "lower_limit_price": 0,
+        "best_ask": 3040,
+        "best_bid": 3030,
     }
 
-    assert manager.live_promotion_target(now_epoch=101.0) is None
+    target = manager.live_promotion_target(now_epoch=101.0)
+
+    assert target is not None
+    assert target["LimitDownLiveTriggerType"] == "near_rebound"
+    assert target["LimitDownUnlockConfirmed"] is False
+    assert target["LimitDownReboundConfirmed"] is True
+    assert target["LimitDownReboundFromLowPct"] > 1.0
 
 
 def test_ws_raw_sink_receives_every_tick_before_latest_tick_coalescing(monkeypatch):
@@ -900,6 +964,60 @@ def test_runtime_loads_latest_prior_live_auto_policy(monkeypatch, tmp_path):
     assert manager.live_policy_source_date == "2026-08-02"
 
 
+def test_latest_cumulative_blocked_artifact_withdraws_prior_live_policy(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(limit_down_watch, "LIVE_AUTO_POLICY_DIR", tmp_path)
+    positive_cell = {
+        "policy_key": "near_limit_rebound|1000_4999",
+        "cohort": "near_limit_rebound",
+        "price_band": "1000_4999",
+        "sample_count": 1,
+        "observation_date_count": 1,
+        "source_quality_adjusted_ev_pct": 1.0,
+        "downside_p10_pct": 1.0,
+        "mae_p10_pct": -0.2,
+        "relock_rate_pct": 0.0,
+        "entry_bbo_coverage_pct": 100.0,
+    }
+    ready = limit_down_watch_research.build_bounded_live_candidate(
+        "2026-08-02",
+        {"source_quality_status": "pass", "policy_cells": [positive_cell]},
+    )
+    blocked = limit_down_watch_research.build_bounded_live_candidate(
+        "2026-08-03",
+        {
+            "source_quality_status": "pass",
+            "policy_cells": [
+                {
+                    **positive_cell,
+                    "sample_count": 2,
+                    "observation_date_count": 2,
+                    "source_quality_adjusted_ev_pct": -0.5,
+                    "downside_p10_pct": -2.0,
+                }
+            ],
+        },
+    )
+    (tmp_path / "limit_down_watch_bounded_live_candidate_2026-08-02.json").write_text(
+        json.dumps(ready), encoding="utf-8"
+    )
+    (tmp_path / "limit_down_watch_bounded_live_candidate_2026-08-03.json").write_text(
+        json.dumps(blocked), encoding="utf-8"
+    )
+    prior_manager = LimitDownWatchManager("token", _DB(), _Bus())
+    prior_manager._load_live_policy(date(2026, 8, 3))
+    manager = LimitDownWatchManager("token", _DB(), _Bus())
+
+    manager._load_live_policy(date(2026, 8, 4))
+
+    assert ready["status"] == "live_auto_apply_ready"
+    assert prior_manager.active_live_policy_keys == {"near_limit_rebound|1000_4999"}
+    assert blocked["status"] == "blocked"
+    assert manager.active_live_policy_keys == set()
+    assert manager.live_policy_source_date == ""
+
+
 def test_live_policy_handoff_requires_fresh_confirmed_unlock_and_daily_capacity():
     manager = LimitDownWatchManager("token", _DB(), _Bus())
     manager.active = _candidate(count=1)
@@ -988,12 +1106,52 @@ def test_limit_down_live_scanner_contract_and_scale_in_veto():
     }
 
 
+def test_near_limit_live_scanner_contract_requires_rebound_provenance():
+    now_ts = datetime(2026, 8, 5, 9, 10).timestamp()
+    target = {
+        "Price": 3030,
+        "LimitDownLivePolicyMatched": True,
+        "LimitDownLivePolicyKey": "near_limit_rebound|1000_4999",
+        "LimitDownLivePolicySourceDate": "2026-08-04",
+        "LimitDownLivePolicySampleCount": 1,
+        "LimitDownLiveTriggerType": "near_rebound",
+        "LimitDownReboundConfirmed": True,
+        "LimitDownLastTickEpoch": now_ts - 1,
+        "LimitDownBestAsk": 3040,
+        "LimitDownBestBid": 3030,
+        "LimitDownEntrySpreadPct": 0.328947,
+        "LimitDownMaxEntrySpreadPct": 1.5,
+        "LimitDownSessionOpenPrice": 3000,
+        "LimitDownSessionLowPrice": 2950,
+        "LimitDownReboundFromLowPct": 2.711864,
+        "LimitDownMinReboundFromLowPct": 1.0,
+        "LimitDownCohort": "near_limit_rebound",
+        "LimitDownPriceBand": "1000_4999",
+        "LimitDownRiskMaxDailyEntries": 1,
+        "LimitDownScaleInAllowed": False,
+        "LimitDownSameDayReentryAllowed": False,
+        "LimitDownOvernightAllowed": False,
+        "LimitDownNormalScalpingGuardsRequired": True,
+    }
+
+    assert (
+        scalping_scanner._limit_down_live_candidate_block_reason(target, now_ts=now_ts)
+        == ""
+    )
+    target["Price"] = 2990
+    assert (
+        scalping_scanner._limit_down_live_candidate_block_reason(target, now_ts=now_ts)
+        == "limit_down_live_quote_contract_invalid"
+    )
+
+
 def test_limit_down_live_pre_submit_guard_blocks_relock(monkeypatch):
     now_ts = time.time()
     stock = {
         "source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
         "limit_down_live_policy_matched": True,
         "limit_down_live_policy_sample_count": 1,
+        "limit_down_unlock_confirmed": True,
         "limit_down_risk_max_daily_entries": 1,
         "limit_down_scale_in_allowed": False,
         "limit_down_same_day_reentry_allowed": False,
@@ -1028,6 +1186,7 @@ def test_limit_down_live_pre_submit_guard_accepts_fresh_unlocked_bbo(monkeypatch
         "scanner_source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
         "limit_down_live_policy_matched": True,
         "limit_down_live_policy_sample_count": 1,
+        "limit_down_unlock_confirmed": True,
         "limit_down_risk_max_daily_entries": 1,
         "limit_down_scale_in_allowed": False,
         "limit_down_same_day_reentry_allowed": False,
@@ -1054,6 +1213,51 @@ def test_limit_down_live_pre_submit_guard_accepts_fresh_unlocked_bbo(monkeypatch
 
     assert allowed["allowed"] is True
     assert allowed["reason"] == "limit_down_live_pre_submit_pass"
+
+
+def test_near_limit_live_pre_submit_guard_rechecks_open_and_rebound(monkeypatch):
+    now_ts = time.time()
+    stock = {
+        "source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
+        "limit_down_live_policy_matched": True,
+        "limit_down_live_policy_sample_count": 1,
+        "limit_down_live_trigger_type": "near_rebound",
+        "limit_down_rebound_confirmed": True,
+        "limit_down_risk_max_daily_entries": 1,
+        "limit_down_scale_in_allowed": False,
+        "limit_down_same_day_reentry_allowed": False,
+        "limit_down_overnight_allowed": False,
+        "limit_down_normal_scalping_guards_required": True,
+        "limit_down_session_open_price": 3000,
+        "limit_down_session_low_price": 2950,
+        "limit_down_min_rebound_from_low_pct": 1.0,
+        "limit_down_max_entry_spread_pct": 1.5,
+    }
+    refreshed = {
+        "curr": 3030,
+        "best_ask": 3040,
+        "best_bid": 3030,
+        "last_ws_update_ts": now_ts,
+    }
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_pre_submit_refresh_real_ws_snapshot",
+        lambda *_args: (refreshed, {"pre_submit_ws_snapshot_refresh_reason": "fresh"}),
+    )
+
+    _, allowed = sniper_state_handlers._limit_down_live_pre_submit_guard(
+        stock, "000001", refreshed, "SCALPING"
+    )
+    assert allowed["allowed"] is True
+
+    refreshed["curr"] = 2990
+    refreshed["best_ask"] = 3000
+    refreshed["best_bid"] = 2990
+    _, blocked = sniper_state_handlers._limit_down_live_pre_submit_guard(
+        stock, "000001", refreshed, "SCALPING"
+    )
+    assert blocked["allowed"] is False
+    assert blocked["reason"] == "limit_down_live_rebound_lost"
 
 
 def test_rotation_prefers_active_sim_policy_after_coverage_floor():
@@ -1131,7 +1335,149 @@ def test_limit_down_counterfactual_label_uses_confirmed_unlock_and_cost():
     assert label["broker_order_forbidden"] is True
 
 
-def test_near_limit_rebound_label_is_isolated_from_exact_live_research():
+def test_near_limit_rebound_label_requires_ordered_open_recovery():
+    row = limit_down_watch_research.label_observation_visit(
+        {
+            "row_id": "2026-08-05:000001:1",
+            "target_date": "2026-08-05",
+            "code": "000001",
+            "cohort": "near_limit_rebound",
+            "price_band": "1000_4999",
+            "confirmations": [
+                {
+                    "at": "2026-08-05T09:00:06",
+                    "phase": "NEAR_REBOUND_OBSERVING",
+                    "current_price": 3020,
+                    "open_price": 3000,
+                    "low_price": 2950,
+                    "rebound_from_low_pct": 2.372881,
+                    "best_ask": 3030,
+                    "best_bid": 3020,
+                    "confirmation_tick_count": 2,
+                    "confirmation_type": "near_rebound",
+                }
+            ],
+            "snapshots": [
+                {
+                    "at": "2026-08-05T09:00:01",
+                    "phase": "NEAR_REBOUND_OBSERVING",
+                    "current_price": 3000,
+                    "open_price": 3000,
+                    "low_price": 2950,
+                    "best_ask": 3010,
+                    "best_bid": 3000,
+                },
+                {
+                    "at": "2026-08-05T09:00:06",
+                    "phase": "NEAR_REBOUND_OBSERVING",
+                    "current_price": 3020,
+                    "open_price": 3000,
+                    "low_price": 2950,
+                    "best_ask": 3030,
+                    "best_bid": 3020,
+                },
+                {
+                    "at": "2026-08-05T09:03:10",
+                    "phase": "NEAR_REBOUND_OBSERVING",
+                    "current_price": 3100,
+                    "open_price": 3000,
+                    "low_price": 2950,
+                    "best_ask": 3110,
+                    "best_bid": 3100,
+                },
+            ],
+        }
+    )
+
+    assert row["label_status"] == "pass"
+    assert row["entry_confirmation_type"] == "near_rebound"
+    assert row["entry_price"] == 3030
+    assert row["runtime_effect"] is False
+    assert row["broker_order_forbidden"] is True
+
+
+def test_research_collector_preserves_raw_near_rebound_confirmation(
+    monkeypatch, tmp_path
+):
+    event_dir = tmp_path / "events"
+    candidate_dir = tmp_path / "candidates"
+    event_dir.mkdir()
+    candidate_dir.mkdir()
+    monkeypatch.setattr(limit_down_watch_research, "EVENT_DIR", event_dir)
+    monkeypatch.setattr(limit_down_watch_research, "CANDIDATE_DIR", candidate_dir)
+    candidate = {
+        "code": "000001",
+        "name": "테스트",
+        "cohort": "near_limit_rebound",
+        "price_band": "1000_4999",
+        "candidate_kind": "near_limit_rebound",
+        "limit_down_close": 3000,
+    }
+    source = {
+        **_candidate_source_payload(candidate),
+        "target_date": "2026-08-05",
+    }
+    (candidate_dir / "limit_down_watch_candidate_source_2026-08-05.json").write_text(
+        json.dumps(source), encoding="utf-8"
+    )
+    events = [
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_registered",
+            "stock_code": "000001",
+            "emitted_at": "2026-08-05T09:00:00+09:00",
+            "fields": _observation_event_fields(
+                cohort="near_limit_rebound", price_band="1000_4999"
+            ),
+        },
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_rebound_confirmed",
+            "stock_code": "000001",
+            "emitted_at": "2026-08-05T09:00:06+09:00",
+            "fields": _observation_event_fields(
+                phase="NEAR_REBOUND_OBSERVING",
+                current_price=3020,
+                open_price=3000,
+                low_price=2950,
+                rebound_from_low_pct=2.372881,
+                best_ask=3030,
+                best_bid=3020,
+                confirmation_tick_count=2,
+            ),
+        },
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_released",
+            "stock_code": "000001",
+            "emitted_at": "2026-08-05T09:03:10+09:00",
+            "fields": _observation_event_fields(reason="rotation_due"),
+        },
+    ]
+    (event_dir / "pipeline_events_2026-08-05.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in events), encoding="utf-8"
+    )
+
+    visits, status = limit_down_watch_research.collect_observation_visits("2026-08-05")
+
+    assert status["valid"] is True
+    assert visits[0]["confirmations"] == [
+        {
+            "at": "2026-08-05T09:00:06+09:00",
+            "phase": "NEAR_REBOUND_OBSERVING",
+            "current_price": 3020,
+            "open_price": 3000,
+            "low_price": 2950,
+            "rebound_from_low_pct": 2.372881,
+            "best_ask": 3030,
+            "best_bid": 3020,
+            "confirmation_tick_count": 2,
+            "confirmation_type": "near_rebound",
+        }
+    ]
+
+
+def test_near_limit_rebound_label_rejects_single_trigger_tick():
     row = limit_down_watch_research.label_observation_visit(
         {
             "row_id": "2026-08-05:000001:1",
@@ -1144,6 +1490,8 @@ def test_near_limit_rebound_label_is_isolated_from_exact_live_research():
                     "at": "2026-08-05T09:00:01",
                     "phase": "NEAR_REBOUND_OBSERVING",
                     "current_price": 3000,
+                    "open_price": 3000,
+                    "low_price": 2950,
                     "best_ask": 3010,
                     "best_bid": 3000,
                 }
@@ -1151,9 +1499,7 @@ def test_near_limit_rebound_label_is_isolated_from_exact_live_research():
         }
     )
 
-    assert row["label_status"] == ("observation_only_cohort_separate_contract_required")
-    assert row["runtime_effect"] is False
-    assert row["broker_order_forbidden"] is True
+    assert row["label_status"] == "insufficient_ordered_rebound_confirmation"
 
 
 def test_sim_policy_is_independent_by_cohort_and_price_band():
@@ -1215,8 +1561,8 @@ def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
         "source_quality_status": "pass",
         "policy_cells": [
             {
-                "policy_key": "single_limit_down|5000_9999",
-                "cohort": "single_limit_down",
+                "policy_key": "near_limit_rebound|5000_9999",
+                "cohort": "near_limit_rebound",
                 "price_band": "5000_9999",
                 "sample_count": 1,
                 "observation_date_count": 1,
@@ -1236,6 +1582,7 @@ def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
 
     assert artifact["status"] == "live_auto_apply_ready"
     assert artifact["ready_candidate_count"] == 1
+    assert artifact["candidates"][0]["cohort"] == "near_limit_rebound"
     assert artifact["operator_approval_required"] is False
     assert artifact["preopen_consumer_implemented"] is True
     assert artifact["risk_contract"]["quantity_owner"] == (
@@ -1243,10 +1590,132 @@ def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
     )
     assert artifact["risk_contract"]["requested_quantity_override"] is None
     assert artifact["risk_contract"]["scale_in_allowed"] is False
+    assert artifact["risk_contract"]["entry_requires_two_ordered_trigger_ticks"] is True
     assert artifact["runtime_effect"] is False
     assert artifact["actual_order_submitted"] is False
     assert artifact["broker_order_forbidden"] is True
     assert artifact["allowed_runtime_apply"] is True
+
+
+def test_counterfactual_cumulative_rows_auto_merge_and_deduplicate(monkeypatch):
+    prior_row = {
+        "row_id": "2026-08-04:000001:1",
+        "target_date": "2026-08-04",
+        "label_status": "pass",
+        "cohort": "near_limit_rebound",
+        "price_band": "1000_4999",
+        "entry_price": 3000,
+        "net_return_pct": 1.0,
+        "mfe_pct": 1.5,
+        "mae_pct": -0.2,
+        "slot_hours": 0.05,
+        "entry_bbo_available": True,
+        "relocked_after_entry": False,
+    }
+    current_row = {
+        **prior_row,
+        "row_id": "2026-08-05:000002:1",
+        "target_date": "2026-08-05",
+        "net_return_pct": 2.0,
+    }
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "collect_observation_visits",
+        lambda _target_date: (
+            [{"label": current_row}, {"label": dict(current_row)}],
+            {"valid": True},
+        ),
+    )
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "label_observation_visit",
+        lambda visit: dict(visit["label"]),
+    )
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "_latest_prior_artifact",
+        lambda *_args: {
+            "schema_version": 1,
+            "report_type": "limit_down_watch_counterfactual",
+            "target_date": "2026-08-04",
+            "rows": [prior_row],
+            **limit_down_watch_research.COUNTERFACTUAL_CONTRACT,
+            **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+        },
+    )
+
+    artifact, rows, source_status = limit_down_watch_research.build_counterfactual(
+        "2026-08-05"
+    )
+
+    assert source_status["valid"] is True
+    assert len(rows) == 2
+    assert len(artifact["rows"]) == 2
+    assert artifact["sample_count"] == 2
+    assert artifact["observation_date_count"] == 2
+    assert artifact["source_quality_adjusted_ev_pct"] == 1.5
+    assert artifact["near_limit_rebound_sample_count"] == 2
+    assert artifact["cumulative_update"] == {
+        "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+        "prior_artifact_target_date": "2026-08-04",
+        "prior_input_row_count": 1,
+        "current_input_row_count": 2,
+        "deduplicated_rolling_row_count": 2,
+        "duplicate_or_out_of_window_row_count": 1,
+    }
+
+
+def test_counterfactual_blocks_live_candidate_when_prior_cumulative_is_invalid(
+    monkeypatch,
+):
+    current_row = {
+        "row_id": "2026-08-05:000002:1",
+        "target_date": "2026-08-05",
+        "label_status": "pass",
+        "cohort": "near_limit_rebound",
+        "price_band": "1000_4999",
+        "entry_price": 3000,
+        "net_return_pct": 2.0,
+        "mfe_pct": 2.5,
+        "mae_pct": -0.2,
+        "slot_hours": 0.05,
+        "entry_bbo_available": True,
+        "relocked_after_entry": False,
+    }
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "collect_observation_visits",
+        lambda _target_date: ([{"label": current_row}], {"valid": True}),
+    )
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "label_observation_visit",
+        lambda visit: dict(visit["label"]),
+    )
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "_latest_prior_artifact",
+        lambda *_args: {
+            "schema_version": 1,
+            "report_type": "limit_down_watch_counterfactual",
+            "target_date": "2026-08-04",
+            "rows": [{"row_id": "duplicate"}, {"row_id": "duplicate"}],
+            **limit_down_watch_research.COUNTERFACTUAL_CONTRACT,
+            **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+        },
+    )
+
+    counterfactual, _rows, status = limit_down_watch_research.build_counterfactual(
+        "2026-08-05"
+    )
+    bounded = limit_down_watch_research.build_bounded_live_candidate(
+        "2026-08-05", counterfactual
+    )
+
+    assert status["prior_counterfactual_valid"] is False
+    assert counterfactual["source_quality_status"] == "blocked"
+    assert bounded["status"] == "blocked"
+    assert bounded["allowed_runtime_apply"] is False
 
 
 def test_report_write_materializes_research_before_final_report(monkeypatch, tmp_path):
@@ -1775,6 +2244,11 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
                 "source_quality_adjusted_ev_pct": 0.1,
                 "eligible_policy_count": 1,
                 "best_eligible_policy_ev_pct": 0.1,
+                "rows": [{"row_id": f"row-{index}"} for index in range(20)],
+                "cumulative_update": {
+                    "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+                    "deduplicated_rolling_row_count": 20,
+                },
             }
         ),
         encoding="utf-8",
@@ -1843,6 +2317,9 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
                     "same_day_reentry_allowed": False,
                     "overnight_allowed": False,
                     "entry_requires_two_ordered_unlocked_ticks": True,
+                    "entry_requires_two_ordered_trigger_ticks": True,
+                    "near_rebound_requires_session_open_recovery": True,
+                    "near_rebound_min_from_low_pct": 1.0,
                     "entry_requires_fresh_quote_and_bbo": True,
                     "max_entry_spread_pct": 1.5,
                     "relock_or_stale_cancels_unfilled_entry": True,

@@ -26,7 +26,7 @@ CANDIDATE_DIR = DATA_DIR / "report" / "limit_down_watch_candidate_source"
 SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 LIVE_AUTO_POLICY_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
 LIMIT_DOWN_LIVE_UNLOCK_SOURCE = "LIMIT_DOWN_LIVE_UNLOCK"
-LIMIT_DOWN_LIVE_POLICY_VERSION = "limit_down_single_verified_path_live_auto_v1"
+LIMIT_DOWN_LIVE_POLICY_VERSION = "limit_down_single_verified_path_live_auto_v2"
 
 DECISION_AUTHORITY = "limit_down_source_observation_only"
 METRIC_ROLE = "diagnostic"
@@ -44,10 +44,12 @@ NEAR_LIMIT_LOW_MIN_PCT = -29.5
 NEAR_LIMIT_LOW_MAX_PCT = -27.0
 NEAR_LIMIT_MIN_CLOSE_RECOVERY_PCT = 5.0
 NEAR_LIMIT_MIN_DAILY_ROW_COUNT = 2_000
+NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT = 1.0
 EXACT_LIMIT_DOWN_COHORTS = {
     "consecutive_limit_down_2plus",
     "single_limit_down",
 }
+LIVE_AUTO_COHORTS = {*EXACT_LIMIT_DOWN_COHORTS, "near_limit_rebound"}
 
 
 def _truthy(value: Any) -> bool:
@@ -889,7 +891,7 @@ class LimitDownWatchManager:
             str(row.get("policy_key"))
             for row in policies
             if isinstance(row, dict)
-            and str(row.get("cohort") or "") in EXACT_LIMIT_DOWN_COHORTS
+            and str(row.get("cohort") or "") in LIVE_AUTO_COHORTS
             and str(row.get("policy_key") or "")
             == f"{row.get('cohort')}|{row.get('price_band')}"
         }
@@ -925,6 +927,10 @@ class LimitDownWatchManager:
         )
         risk = payload.get("risk_contract") if isinstance(payload, dict) else {}
         risk = risk if isinstance(risk, dict) else {}
+        has_near_policy = any(
+            isinstance(row, dict) and row.get("cohort") == "near_limit_rebound"
+            for row in policies
+        )
         valid = bool(
             payload.get("schema_version") == 1
             and payload.get("report_type") == "limit_down_watch_bounded_live_candidate"
@@ -951,6 +957,21 @@ class LimitDownWatchManager:
             and risk.get("same_day_reentry_allowed") is False
             and risk.get("overnight_allowed") is False
             and risk.get("entry_requires_two_ordered_unlocked_ticks") is True
+            and (
+                risk.get("entry_requires_two_ordered_trigger_ticks") is True
+                or (
+                    not has_near_policy
+                    and risk.get("entry_requires_two_ordered_trigger_ticks") is None
+                )
+            )
+            and (
+                not has_near_policy
+                or (
+                    risk.get("near_rebound_requires_session_open_recovery") is True
+                    and _safe_float(risk.get("near_rebound_min_from_low_pct"))
+                    == NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT
+                )
+            )
             and risk.get("entry_requires_fresh_quote_and_bbo") is True
             and risk.get("relock_or_stale_cancels_unfilled_entry") is True
             and 0.0 < _safe_float(risk.get("max_entry_spread_pct")) <= 1.5
@@ -963,7 +984,7 @@ class LimitDownWatchManager:
             str(row.get("policy_key")): dict(row)
             for row in policies
             if isinstance(row, dict)
-            and str(row.get("cohort") or "") in EXACT_LIMIT_DOWN_COHORTS
+            and str(row.get("cohort") or "") in LIVE_AUTO_COHORTS
             and str(row.get("policy_key") or "")
             == f"{row.get('cohort')}|{row.get('price_band')}"
             and _safe_int(row.get("sample_count")) >= 1
@@ -1094,6 +1115,9 @@ class LimitDownWatchManager:
             "first_relock_epoch": 0.0,
             "consecutive_unlocked_tick_count": 0,
             "unlock_confirmed_epoch": 0.0,
+            "consecutive_rebound_tick_count": 0,
+            "rebound_confirmed_epoch": 0.0,
+            "rebound_from_low_pct": None,
             "live_promotion_eligible_emitted": False,
             "requested_ws_route": "krx_regular_or_effective_integrated",
             "requested_ws_code_count": 1,
@@ -1222,7 +1246,7 @@ class LimitDownWatchManager:
             candidate = self.active
             if candidate is None or int(daily_promotion_count or 0) >= 1:
                 return None
-            if candidate.cohort not in EXACT_LIMIT_DOWN_COHORTS:
+            if candidate.cohort not in LIVE_AUTO_COHORTS:
                 return None
             cell_key = f"{candidate.cohort}|{candidate.price_band}"
             policy = self.live_policy_by_key.get(cell_key)
@@ -1235,12 +1259,32 @@ class LimitDownWatchManager:
             best_ask = _safe_int(self.state.get("best_ask"))
             best_bid = _safe_int(self.state.get("best_bid"))
             confirmed_epoch = _safe_float(self.state.get("unlock_confirmed_epoch"))
-            if not (
-                phase in {"UNLOCKED", "UNLOCKED_AGAIN"}
+            rebound_confirmed_epoch = _safe_float(
+                self.state.get("rebound_confirmed_epoch")
+            )
+            open_price = _safe_int(self.state.get("open_price"))
+            low_price = _safe_int(self.state.get("low_price"))
+            rebound_from_low_pct = _pct(current, low_price)
+            exact_trigger = bool(
+                candidate.cohort in EXACT_LIMIT_DOWN_COHORTS
+                and phase in {"UNLOCKED", "UNLOCKED_AGAIN"}
                 and confirmed_epoch > 0.0
                 and _safe_int(self.state.get("consecutive_unlocked_tick_count")) >= 2
-                and 0.0 <= now_epoch - last_tick_epoch <= 5.0
                 and current > lower_limit > 0
+            )
+            near_trigger = bool(
+                candidate.cohort == "near_limit_rebound"
+                and phase == "NEAR_REBOUND_OBSERVING"
+                and rebound_confirmed_epoch > 0.0
+                and _safe_int(self.state.get("consecutive_rebound_tick_count")) >= 2
+                and current >= open_price > 0
+                and current > low_price > 0
+                and rebound_from_low_pct is not None
+                and rebound_from_low_pct >= NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT
+            )
+            if not (
+                (exact_trigger or near_trigger)
+                and 0.0 <= now_epoch - last_tick_epoch <= 5.0
                 and best_ask >= best_bid > 0
                 and best_ask >= current > 0
             ):
@@ -1252,11 +1296,16 @@ class LimitDownWatchManager:
             if spread_pct > max_spread_pct:
                 return None
             unlock_from_lower_pct = _pct(current, lower_limit) or 0.0
+            trigger_type = "exact_unlock" if exact_trigger else "near_rebound"
             return {
                 "Code": candidate.code,
                 "Name": candidate.name,
                 "Price": current,
-                "FluRate": unlock_from_lower_pct,
+                "FluRate": (
+                    unlock_from_lower_pct
+                    if exact_trigger
+                    else (_pct(current, candidate.limit_down_close) or 0.0)
+                ),
                 "TradeValue": _safe_int(self.state.get("trade_value")),
                 "Volume": _safe_int(self.state.get("volume")),
                 "PriorityScore": 220.0,
@@ -1266,8 +1315,11 @@ class LimitDownWatchManager:
                 "LimitDownLivePolicySourceDate": self.live_policy_source_date,
                 "LimitDownLivePolicyVersion": LIMIT_DOWN_LIVE_POLICY_VERSION,
                 "LimitDownLivePolicySampleCount": _safe_int(policy.get("sample_count")),
-                "LimitDownUnlockConfirmed": True,
+                "LimitDownLiveTriggerType": trigger_type,
+                "LimitDownUnlockConfirmed": exact_trigger,
                 "LimitDownUnlockConfirmedEpoch": confirmed_epoch,
+                "LimitDownReboundConfirmed": near_trigger,
+                "LimitDownReboundConfirmedEpoch": rebound_confirmed_epoch,
                 "LimitDownLastTickEpoch": last_tick_epoch,
                 "LimitDownLowerLimitPrice": lower_limit,
                 "LimitDownBestAsk": best_ask,
@@ -1275,6 +1327,12 @@ class LimitDownWatchManager:
                 "LimitDownEntrySpreadPct": round(spread_pct, 6),
                 "LimitDownMaxEntrySpreadPct": max_spread_pct,
                 "LimitDownUnlockFromLowerPct": unlock_from_lower_pct,
+                "LimitDownSessionOpenPrice": open_price,
+                "LimitDownSessionLowPrice": low_price,
+                "LimitDownReboundFromLowPct": rebound_from_low_pct,
+                "LimitDownMinReboundFromLowPct": (
+                    NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT
+                ),
                 "LimitDownCohort": candidate.cohort,
                 "LimitDownPriceBand": candidate.price_band,
                 "LimitDownConsecutiveCount": candidate.consecutive_count,
@@ -1483,6 +1541,27 @@ class LimitDownWatchManager:
                 self.state["consecutive_unlocked_tick_count"] = (
                     _safe_int(self.state.get("consecutive_unlocked_tick_count")) + 1
                 )
+            near_candidate = self.active.cohort == "near_limit_rebound"
+            session_open = _safe_int(self.state.get("open_price"))
+            session_low = _safe_int(self.state.get("low_price"))
+            rebound_from_low_pct = _pct(current, session_low)
+            rebound_tick = bool(
+                near_candidate
+                and current >= session_open > 0
+                and current > session_low > 0
+                and rebound_from_low_pct is not None
+                and rebound_from_low_pct >= NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT
+            )
+            if rebound_tick:
+                self.state["consecutive_rebound_tick_count"] = (
+                    _safe_int(self.state.get("consecutive_rebound_tick_count")) + 1
+                )
+            else:
+                self.state["consecutive_rebound_tick_count"] = 0
+                if near_candidate:
+                    self.state["rebound_confirmed_epoch"] = 0.0
+                    self.state["live_promotion_eligible_emitted"] = False
+            self.state["rebound_from_low_pct"] = rebound_from_low_pct
             if not exact_candidate and previous_phase == "WAITING_FIRST_TRADE":
                 new_phase = "NEAR_REBOUND_OBSERVING"
             elif previous_phase == "WAITING_FIRST_TICK":
@@ -1530,6 +1609,51 @@ class LimitDownWatchManager:
                     relock_count=self.state.get("relock_count"),
                     tick_count=self.state.get("tick_count"),
                 )
+
+            if (
+                near_candidate
+                and rebound_tick
+                and _safe_int(self.state.get("consecutive_rebound_tick_count")) >= 2
+                and _safe_float(self.state.get("rebound_confirmed_epoch")) <= 0.0
+            ):
+                self.state["rebound_confirmed_epoch"] = received_epoch
+                self._emit(
+                    "limit_down_watch_rebound_confirmed",
+                    phase=self.state.get("phase"),
+                    cohort=self.active.cohort,
+                    price_band=self.active.price_band,
+                    current_price=current,
+                    open_price=session_open,
+                    low_price=session_low,
+                    rebound_from_low_pct=rebound_from_low_pct,
+                    min_rebound_from_low_pct=NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT,
+                    best_ask=best_ask,
+                    best_bid=best_bid,
+                    confirmation_tick_count=self.state.get(
+                        "consecutive_rebound_tick_count"
+                    ),
+                    tick_count=self.state.get("tick_count"),
+                )
+                if (
+                    f"{self.active.cohort}|{self.active.price_band}"
+                    in self.active_live_policy_keys
+                    and not self.state.get("live_promotion_eligible_emitted")
+                ):
+                    self.state["live_promotion_eligible_emitted"] = True
+                    self._emit(
+                        "limit_down_live_auto_eligibility_observed",
+                        policy_key=f"{self.active.cohort}|{self.active.price_band}",
+                        policy_source_date=self.live_policy_source_date,
+                        trigger_type="near_rebound",
+                        current_price=current,
+                        open_price=session_open,
+                        low_price=session_low,
+                        rebound_from_low_pct=rebound_from_low_pct,
+                        best_ask=best_ask,
+                        best_bid=best_bid,
+                        normal_scalping_guards_required=True,
+                        direct_order_submitted=False,
+                    )
             if (
                 exact_candidate
                 and not locked
@@ -1666,6 +1790,11 @@ class LimitDownWatchManager:
                         "consecutive_unlocked_tick_count"
                     ),
                     unlock_confirmed_epoch=self.state.get("unlock_confirmed_epoch"),
+                    consecutive_rebound_tick_count=self.state.get(
+                        "consecutive_rebound_tick_count"
+                    ),
+                    rebound_confirmed_epoch=self.state.get("rebound_confirmed_epoch"),
+                    rebound_from_low_pct=self.state.get("rebound_from_low_pct"),
                     first_tick_epoch=self.state.get("first_tick_epoch"),
                     last_tick_epoch=self.state.get("last_tick_epoch"),
                     first_quote_epoch=self.state.get("first_quote_epoch"),

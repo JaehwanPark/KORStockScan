@@ -79,9 +79,10 @@ CONTRACT = {
     "allowed_sim_apply": False,
     "allowed_runtime_apply": False,
 }
-EXACT_LIMIT_DOWN_COHORTS = {
+LIVE_AUTO_COHORTS = {
     "consecutive_limit_down_2plus",
     "single_limit_down",
+    "near_limit_rebound",
 }
 
 
@@ -336,7 +337,7 @@ def _rolling_observation_evidence(
         included_dates.append(str(daily["target_date"]))
         daily_paths = 0
         for group in daily["groups"]:
-            if str(group.get("cohort") or "") not in EXACT_LIMIT_DOWN_COHORTS:
+            if str(group.get("cohort") or "") not in LIVE_AUTO_COHORTS:
                 continue
             group_registered = _safe_int(group.get("registered_codes"))
             group_paths = _safe_int(group.get("ordered_path_captured_codes"))
@@ -400,6 +401,16 @@ def _conversion_artifact_checks(
     counterfactual_ev = _safe_float(
         counterfactual.get("source_quality_adjusted_ev_pct")
     )
+    cumulative_update = (
+        counterfactual.get("cumulative_update")
+        if isinstance(counterfactual.get("cumulative_update"), dict)
+        else {}
+    )
+    cumulative_rows = (
+        counterfactual.get("rows")
+        if isinstance(counterfactual.get("rows"), list)
+        else []
+    )
     counterfactual_checks = {
         "source_only_contract_invalid": _source_only_contract_valid(
             counterfactual, target_date
@@ -423,6 +434,12 @@ def _conversion_artifact_checks(
             (_safe_float(counterfactual.get("best_eligible_policy_ev_pct")) or 0.0)
             > 0.0
         ),
+        "cumulative_update_mode_invalid": cumulative_update.get("mode")
+        == "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+        "cumulative_row_count_mismatch": _safe_int(
+            cumulative_update.get("deduplicated_rolling_row_count")
+        )
+        == len(cumulative_rows),
     }
     counterfactual_issues = (
         ["artifact_missing"]
@@ -560,6 +577,18 @@ def _conversion_artifact_checks(
                 "entry_requires_two_ordered_unlocked_ticks"
             )
             is True,
+            "risk_trigger_confirmation_missing": risk_contract.get(
+                "entry_requires_two_ordered_trigger_ticks"
+            )
+            is True,
+            "risk_near_rebound_open_recovery_missing": risk_contract.get(
+                "near_rebound_requires_session_open_recovery"
+            )
+            is True,
+            "risk_near_rebound_threshold_invalid": _safe_float(
+                risk_contract.get("near_rebound_min_from_low_pct")
+            )
+            == 1.0,
             "risk_fresh_bbo_missing": risk_contract.get(
                 "entry_requires_fresh_quote_and_bbo"
             )
