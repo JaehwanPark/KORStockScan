@@ -11,16 +11,20 @@ import json
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from statistics import fmean
 from typing import Any
 
 from src.engine.ai_prompt_contracts import (
+    DECISION_QUALITY_ENTRY_PRICE_V2_1_PROMPT_VERSION,
+    DECISION_QUALITY_ENTRY_PRICE_V2_1_RESPONSE_SCHEMA,
+    DECISION_QUALITY_HOLDING_FLOW_V2_1_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
-    DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
+    decision_quality_entry_price_v2_1_system_prompt,
+    decision_quality_holding_flow_v2_1_system_prompt,
     decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
-    decision_quality_v2_system_prompt,
 )
 from src.engine.bedrock_nova_provider import (
     BedrockNovaProvider,
@@ -98,11 +102,12 @@ def prepare_stage_requests(
     """Freeze the first exact eligible rows and preserve every exclusion reason."""
 
     normalized_stage = str(stage or "").strip().lower()
-    if normalized_stage not in {"entry", "holding", "entry_price"}:
+    if normalized_stage not in {"entry", "holding", "holding_flow", "entry_price"}:
         raise ValueError("unsupported_stage")
     endpoint = {
         "entry": "analyze_target",
         "holding": "holding_score",
+        "holding_flow": "holding_flow",
         "entry_price": "entry_price",
     }[normalized_stage]
     control_field = (
@@ -185,42 +190,44 @@ def prepare_stage_requests(
     prompt = {
         "entry": decision_quality_v2_8_detailed_system_prompt("entry"),
         "holding": decision_quality_holding_v2_3_system_prompt(),
-        "entry_price": decision_quality_v2_system_prompt("entry_price"),
+        "holding_flow": decision_quality_holding_flow_v2_1_system_prompt(),
+        "entry_price": decision_quality_entry_price_v2_1_system_prompt(),
     }[normalized_stage]
-    if normalized_stage == "entry_price":
-        prompt += """
-
-Entry-price replay extension:
-1. Return selected_price as a positive integer limit price, or null only for SKIP.
-2. Return price_basis as BEST_BID, BEST_ASK, DEFENSIVE, REFERENCE, RESOLVED, or NONE.
-3. Use only prices present in the exact payload. Do not invent a price.
-4. USE_DEFENSIVE selects defensive_order_price when it is positive; otherwise use
-   the fresh best bid. USE_REFERENCE selects a positive reference_target_price.
-   IMPROVE_LIMIT selects a positive resolved_order_price or fresh best ask.
-5. SKIP requires selected_price=null and price_basis=NONE.
-""".strip()
+    response_schema = (
+        DECISION_QUALITY_ENTRY_PRICE_V2_1_RESPONSE_SCHEMA
+        if normalized_stage == "entry_price"
+        else DECISION_QUALITY_V2_RESPONSE_SCHEMA
+    )
     candidate = {
         "prompt_version": (
             DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
             if normalized_stage == "holding"
             else (
-                DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
-                if normalized_stage == "entry"
-                else f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{normalized_stage}"
+                DECISION_QUALITY_HOLDING_FLOW_V2_1_PROMPT_VERSION
+                if normalized_stage == "holding_flow"
+                else (
+                    DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
+                    if normalized_stage == "entry"
+                    else DECISION_QUALITY_ENTRY_PRICE_V2_1_PROMPT_VERSION
+                )
             )
         ),
         "system_prompt": prompt,
         "system_prompt_sha256": quality._sha256(prompt),
-        "response_schema": DECISION_QUALITY_V2_RESPONSE_SCHEMA,
-        "response_schema_sha256": quality._sha256(DECISION_QUALITY_V2_RESPONSE_SCHEMA),
+        "response_schema": response_schema,
+        "response_schema_sha256": quality._sha256(response_schema),
         "provider": control.get("provider_actual"),
         "model": control.get("model"),
         "temperature": control.get("request_temperature"),
         "reasoning_effort": control.get("request_reasoning_effort"),
     }
-    if normalized_stage == "holding":
+    if normalized_stage in {"holding", "holding_flow"}:
         candidate["semantic_validator_version"] = (
             quality.HOLDING_SEMANTIC_VALIDATOR_VERSION
+        )
+    elif normalized_stage == "entry_price":
+        candidate["semantic_validator_version"] = (
+            quality.ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION
         )
     candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
     requests: list[dict[str, Any]] = []
@@ -240,7 +247,11 @@ Entry-price replay extension:
             "decision_trace_id": trace_id,
             "decision_ts": trace.get("decision_ts"),
             "source_date": str(trace.get("decision_ts") or "")[:10],
-            "stage": normalized_stage,
+            "stage": "holding"
+            if normalized_stage == "holding_flow"
+            else normalized_stage,
+            "coverage_stage": normalized_stage,
+            "endpoint": endpoint,
             "stock_code": trace.get("stock_code"),
             "effective_venue": trace.get("effective_venue"),
             "session_bucket": trace.get("session_bucket"),
@@ -281,13 +292,21 @@ Entry-price replay extension:
             request["candidate_input"] = candidate_input
             request["candidate_input_sha256"] = quality._sha256(candidate_input)
             request["exact_payload_analysis_sha256"] = exact_analysis["analysis_sha256"]
-        elif normalized_stage == "holding":
+        elif normalized_stage in {"holding", "holding_flow"}:
             holding_facts = quality._holding_contract_facts(
                 payload.get("sanitized_user_input")
             )
             candidate_input = {
                 "exact_payload": payload.get("sanitized_user_input"),
                 "holding_exact_contract_facts_v1": holding_facts,
+            }
+            request["candidate_input"] = candidate_input
+            request["candidate_input_sha256"] = quality._sha256(candidate_input)
+        elif normalized_stage == "entry_price":
+            entry_price_facts = quality._entry_price_contract_facts(exact_payload)
+            candidate_input = {
+                "exact_payload": exact_payload,
+                "entry_price_exact_contract_facts_v1": entry_price_facts,
             }
             request["candidate_input"] = candidate_input
             request["candidate_input_sha256"] = quality._sha256(candidate_input)
@@ -342,45 +361,56 @@ def execute_bedrock_candidate(
     ):
         raise ValueError("provider_or_model_control_mismatch")
     profile = qwen3_32b_profile_from_env()
+    prompt = str(candidate.get("system_prompt") or "")
+    correction_errors = [
+        str(value)
+        for value in request.get("candidate_schema_correction_errors") or []
+        if value
+    ]
+    if correction_errors:
+        correction_rules: list[str] = []
+        if "reason_codes_invalid" in correction_errors:
+            correction_rules.append(
+                "Remove every non-canonical reason code. Never use spread_bp, "
+                "wide_spread, or price_basis as a reason code; use "
+                "liquidity_adverse or fillability_adverse when supported"
+            )
+        if "expected_edge_values_required" in correction_errors:
+            correction_rules.append(
+                "NO_EDGE requires numeric expected_upside_pct and "
+                "expected_downside_pct; use bounded numeric estimates and never "
+                "null. Only INSUFFICIENT_DATA may use null values"
+            )
+        if any(error.startswith("entry_price_") for error in correction_errors):
+            correction_rules.append(
+                "For USE_DEFENSIVE select DEFENSIVE and its exact value, or "
+                "BEST_BID only when DEFENSIVE is null. For USE_REFERENCE select "
+                "REFERENCE. For IMPROVE_LIMIT select RESOLVED or BEST_ASK. Never "
+                "return selected_price=null or price_basis=NONE for a non-SKIP "
+                "action"
+            )
+        prompt += (
+            "\n\nCorrection retry: the prior response violated: "
+            + ",".join(correction_errors)
+            + ". Re-read entry_price_exact_contract_facts_v1. SKIP is valid only "
+            "when skip_permitted=true. Match action, price_basis, and the exact "
+            "candidate_prices value. "
+            + "; ".join(correction_rules)
+            + ". Return one corrected JSON object only."
+        )
     result = (provider or BedrockNovaProvider()).converse(
-        prompt=str(candidate.get("system_prompt") or ""),
-        user_input=quality._canonical_bytes(request.get("exact_payload")).decode(
-            "utf-8"
-        ),
+        prompt=prompt,
+        user_input=quality._canonical_bytes(
+            request.get("candidate_input", request.get("exact_payload"))
+        ).decode("utf-8"),
         profile=profile,
     )
     payload = dict(result.payload)
-    action = str(payload.get("action") or "").upper()
-    selected_price = quality._number(payload.get("selected_price"))
-    price_basis = str(payload.get("price_basis") or "").upper()
-    valid_bases = {
-        "BEST_BID",
-        "BEST_ASK",
-        "DEFENSIVE",
-        "REFERENCE",
-        "RESOLVED",
-    }
-    selection_valid = (
-        action == "SKIP" and selected_price is None and price_basis == "NONE"
-    ) or (
-        action != "SKIP"
-        and selected_price is not None
-        and selected_price > 0
-        and float(selected_price).is_integer()
-        and price_basis in valid_bases
-        and selected_price
-        in {
-            value
-            for item in quality._walk(request.get("exact_payload"))
-            if isinstance(item, dict)
-            for key, raw in item.items()
-            if "price" in str(key).lower()
-            and (value := quality._number(raw)) is not None
-            and value > 0
-        }
+    selection_errors = quality._entry_price_response_errors(
+        payload,
+        exact_payload=request.get("exact_payload"),
     )
-    if not selection_valid:
-        payload["action"] = "INVALID_ENTRY_PRICE_SELECTION"
+    selection_valid = not selection_errors
     provenance = result.transport_meta()
     provenance.update(
         {
@@ -390,6 +420,7 @@ def execute_bedrock_candidate(
             "provider_none": False,
             "failback_chain": [],
             "entry_price_selection_valid": selection_valid,
+            "entry_price_selection_errors": selection_errors,
         }
     )
     return {
@@ -442,9 +473,6 @@ def build_report(
     dominant_action_ratio = (
         max(candidate_actions.values()) / len(passed) if passed else None
     )
-    action_not_collapsed = (
-        dominant_action_ratio is not None and dominant_action_ratio <= 0.90
-    )
     coverage_sample_floor = {
         "required_decision_rows": quality.PAIRED_REPLAY_MIN_ROWS,
         "required_unique_symbols": quality.PAIRED_REPLAY_MIN_SYMBOLS,
@@ -455,6 +483,12 @@ def build_report(
             and symbol_count >= quality.PAIRED_REPLAY_MIN_SYMBOLS
         ),
     }
+    action_collapse_evaluable = coverage_sample_floor["pass"]
+    action_not_collapsed = (
+        dominant_action_ratio <= 0.90
+        if action_collapse_evaluable and dominant_action_ratio is not None
+        else None
+    )
     attempts = [
         attempt
         for row in results
@@ -470,10 +504,10 @@ def build_report(
     primary_exact_count = len(requests) - supplemental_count
     if not execution_complete:
         status = "coverage_replay_incomplete"
-    elif not action_not_collapsed:
-        status = "coverage_replay_complete_candidate_action_collapsed"
     elif not coverage_sample_floor["pass"]:
         status = "coverage_replay_complete_sample_floor_keep_collecting"
+    elif action_not_collapsed is False:
+        status = "coverage_replay_complete_candidate_action_collapsed"
     else:
         status = "coverage_replay_complete_outcome_comparison_pending"
     base_status = status
@@ -547,6 +581,7 @@ def build_report(
         ),
         "candidate_action_counts": dict(candidate_actions),
         "candidate_dominant_action_ratio": dominant_action_ratio,
+        "candidate_action_collapse_evaluable": action_collapse_evaluable,
         "candidate_action_not_collapsed": action_not_collapsed,
         "action_transition_counts": {
             f"{control}->{candidate}": count
@@ -626,10 +661,9 @@ def reusable_pass_results(
             )
         ):
             continue
-        if quality.validate_candidate_response(
+        if quality.validate_replay_candidate_response(
+            request,
             dict(row.get("candidate_response") or {}),
-            stage=str(request.get("stage") or ""),
-            exact_payload=request.get("exact_payload"),
         ):
             continue
         reusable.append(row)
@@ -643,13 +677,431 @@ def reusable_pass_results(
     return reusable
 
 
+def build_holding_flow_outcome_attribution(
+    *,
+    requests: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    labels: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Join holding-flow actions to the observed path without claiming causality."""
+
+    request_by_trace = {
+        str(row.get("decision_trace_id") or ""): row for row in requests
+    }
+    label_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in labels
+        if row.get("source_quality_status") == "pass"
+        and row.get("primary_cohort_eligible") is True
+    }
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        if (
+            result.get("status") != "pass"
+            or result.get("same_payload_confirmed") is not True
+        ):
+            continue
+        trace_id = str(result.get("decision_trace_id") or "")
+        request = request_by_trace.get(trace_id)
+        label = label_by_trace.get(trace_id)
+        metric = quality._primary_metric(label or {})
+        if request is None or label is None or metric is None:
+            continue
+        stage_outcome = label.get("stage_outcome")
+        stage_outcome = stage_outcome if isinstance(stage_outcome, dict) else {}
+        mfe = quality._number(metric.get("mfe_pct"))
+        end_return = quality._number(metric.get("end_return_pct"))
+        rows.append(
+            {
+                "decision_trace_id": trace_id,
+                "stock_code": request.get("stock_code"),
+                "effective_venue": request.get("effective_venue"),
+                "session_bucket": request.get("session_bucket"),
+                "control_action": (result.get("control_response") or {}).get("action"),
+                "candidate_action": (result.get("candidate_response") or {}).get(
+                    "action"
+                ),
+                "primary_horizon": quality.PRIMARY_HORIZON_BY_STAGE["holding"],
+                "observed_post_decision_end_return_pct": end_return,
+                "observed_post_decision_mfe_pct": mfe,
+                "observed_post_decision_mae_pct": quality._number(
+                    metric.get("mae_pct")
+                ),
+                "observed_first_hit": metric.get("first_hit"),
+                "full_maturity_secured_upside_pct": quality._number(
+                    stage_outcome.get("secured_upside_pct")
+                ),
+                "full_maturity_enlarged_loss_pct": quality._number(
+                    stage_outcome.get("enlarged_loss_pct")
+                ),
+                "full_maturity_horizon": (
+                    f"{max(label.get('matured_horizons_min') or [])}m"
+                    if label.get("matured_horizons_min")
+                    else None
+                ),
+                "observed_peak_giveback_pct": (
+                    round(mfe - end_return, 10)
+                    if mfe is not None and end_return is not None
+                    else None
+                ),
+                "outcome_interpretation": (
+                    "same_observed_path_not_action_counterfactual"
+                ),
+            }
+        )
+
+    symbol_count = len(
+        {str(row.get("stock_code") or "") for row in rows if row.get("stock_code")}
+    )
+    sample_floor_pass = (
+        len(rows) >= quality.PAIRED_REPLAY_MIN_ROWS
+        and symbol_count >= quality.PAIRED_REPLAY_MIN_SYMBOLS
+    )
+
+    def action_summary(action: str) -> dict[str, Any]:
+        cohort = [row for row in rows if row.get("candidate_action") == action]
+        summary: dict[str, Any] = {"count": len(cohort)}
+        for field in (
+            "observed_post_decision_end_return_pct",
+            "observed_post_decision_mfe_pct",
+            "observed_post_decision_mae_pct",
+            "observed_peak_giveback_pct",
+        ):
+            values = [quality._number(row.get(field)) for row in cohort]
+            values = [value for value in values if value is not None]
+            summary[f"equal_weight_avg_{field}"] = fmean(values) if values else None
+        return summary
+
+    return {
+        "schema": "holding_flow_outcome_attribution_v1",
+        "status": (
+            "outcome_observation_ready_no_counterfactual_claim"
+            if sample_floor_pass
+            else "sample_floor_keep_collecting"
+        ),
+        "sample_floor": {
+            "required_decision_rows": quality.PAIRED_REPLAY_MIN_ROWS,
+            "required_unique_symbols": quality.PAIRED_REPLAY_MIN_SYMBOLS,
+            "observed_decision_rows": len(rows),
+            "observed_unique_symbols": symbol_count,
+            "pass": sample_floor_pass,
+        },
+        "candidate_action_counts": dict(
+            Counter(str(row.get("candidate_action") or "UNKNOWN") for row in rows)
+        ),
+        "candidate_action_outcomes": {
+            action: action_summary(action) for action in ("HOLD", "TRIM", "EXIT")
+        },
+        "rows": rows,
+        "metric_role": "holding_flow_action_outcome_observation",
+        "decision_authority": "offline_replay_no_runtime_change",
+        "window_policy": "same_exact_snapshot_30m_same_venue_session",
+        "primary_decision_metric": (
+            "equal_weight_avg_observed_post_decision_end_return_pct_by_action"
+        ),
+        "source_quality_gate": "exact_v2_same_route_mature_30m_window",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "claim_observed_path_as_action_counterfactual",
+            "live_holding_or_exit_promotion",
+            "provider_model_route_change",
+            "broker_or_hard_safety_guard_bypass",
+        ],
+    }
+
+
+def build_entry_price_selection_outcome_comparison(
+    *,
+    requests: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    labels: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare exact selected limits without claiming that a touch was a fill."""
+
+    request_by_trace = {
+        str(row.get("decision_trace_id") or ""): row for row in requests
+    }
+    label_by_trace = {
+        str(row.get("decision_trace_id") or ""): row
+        for row in labels
+        if row.get("source_quality_status") == "pass"
+        and row.get("primary_cohort_eligible") is True
+    }
+    rows: list[dict[str, Any]] = []
+
+    def price_path(
+        *,
+        selected_price: float | None,
+        reference_price: float,
+        metric: dict[str, Any],
+        best_bid: float | None,
+        best_ask: float | None,
+    ) -> dict[str, Any]:
+        if selected_price is None or selected_price <= 0:
+            return {
+                "selected_price": None,
+                "limit_touch_observed": False,
+                "limit_touch_end_return_pct": 0.0,
+                "limit_touch_mfe_pct": None,
+                "limit_touch_mae_pct": None,
+                "discount_to_best_ask_bp": None,
+                "premium_to_best_bid_bp": None,
+            }
+        mfe = quality._number(metric.get("mfe_pct"))
+        mae = quality._number(metric.get("mae_pct"))
+        end_return = quality._number(metric.get("end_return_pct"))
+        if mfe is None or mae is None or end_return is None:
+            raise ValueError("entry_price_10m_path_metric_missing")
+        observed_high = reference_price * (1.0 + mfe / 100.0)
+        observed_low = reference_price * (1.0 + mae / 100.0)
+        observed_end = reference_price * (1.0 + end_return / 100.0)
+        touched = observed_low <= selected_price
+        return {
+            "selected_price": selected_price,
+            "limit_touch_observed": touched,
+            "limit_touch_end_return_pct": (
+                ((observed_end / selected_price) - 1.0) * 100.0 if touched else 0.0
+            ),
+            "limit_touch_mfe_pct": (
+                ((observed_high / selected_price) - 1.0) * 100.0 if touched else None
+            ),
+            "limit_touch_mae_pct": (
+                ((observed_low / selected_price) - 1.0) * 100.0 if touched else None
+            ),
+            "discount_to_best_ask_bp": (
+                ((best_ask - selected_price) / best_ask) * 10000.0
+                if best_ask is not None and best_ask > 0
+                else None
+            ),
+            "premium_to_best_bid_bp": (
+                ((selected_price - best_bid) / best_bid) * 10000.0
+                if best_bid is not None and best_bid > 0
+                else None
+            ),
+        }
+
+    for result in results:
+        if (
+            result.get("status") != "pass"
+            or result.get("same_payload_confirmed") is not True
+        ):
+            continue
+        trace_id = str(result.get("decision_trace_id") or "")
+        request = request_by_trace.get(trace_id)
+        label = label_by_trace.get(trace_id)
+        if not request or not label:
+            continue
+        metric = (label.get("horizon_metrics") or {}).get("10m")
+        metric = metric if isinstance(metric, dict) else {}
+        reference_price = quality._number(label.get("reference_price"))
+        if reference_price is None or reference_price <= 0 or not metric:
+            continue
+        control = request.get("control") or {}
+        candidate = result.get("candidate_response") or {}
+        control_price = quality._number(control.get("captured_selected_price"))
+        candidate_price = (
+            None
+            if str(candidate.get("action") or "").upper() == "SKIP"
+            else quality._number(candidate.get("selected_price"))
+        )
+        facts = quality._entry_price_contract_facts(request.get("exact_payload"))
+        best_bid = quality._number(facts["candidate_prices"].get("BEST_BID"))
+        best_ask = quality._number(facts["candidate_prices"].get("BEST_ASK"))
+        control_path = price_path(
+            selected_price=control_price,
+            reference_price=reference_price,
+            metric=metric,
+            best_bid=best_bid,
+            best_ask=best_ask,
+        )
+        candidate_path = price_path(
+            selected_price=candidate_price,
+            reference_price=reference_price,
+            metric=metric,
+            best_bid=best_bid,
+            best_ask=best_ask,
+        )
+        profit_opportunity = bool(metric.get("profit_opportunity_observed"))
+        rows.append(
+            {
+                "decision_trace_id": trace_id,
+                "stock_code": request.get("stock_code"),
+                "effective_venue": request.get("effective_venue"),
+                "session_bucket": request.get("session_bucket"),
+                "control_action": control.get("captured_action"),
+                "candidate_action": candidate.get("action"),
+                "candidate_price_basis": candidate.get("price_basis"),
+                "reference_price": reference_price,
+                "observed_10m_mfe_pct_from_reference": quality._number(
+                    metric.get("mfe_pct")
+                ),
+                "observed_10m_mae_pct_from_reference": quality._number(
+                    metric.get("mae_pct")
+                ),
+                "control": control_path,
+                "candidate": candidate_path,
+                "candidate_vs_control_price_bp": (
+                    ((candidate_price - control_price) / control_price) * 10000.0
+                    if candidate_price is not None
+                    and control_price is not None
+                    and control_price > 0
+                    else None
+                ),
+                "control_missed_touch_opportunity": bool(
+                    profit_opportunity and not control_path["limit_touch_observed"]
+                ),
+                "candidate_missed_touch_opportunity": bool(
+                    profit_opportunity and not candidate_path["limit_touch_observed"]
+                ),
+            }
+        )
+
+    def aggregate(values: list[dict[str, Any]]) -> dict[str, Any]:
+        if not values:
+            return {"comparable_count": 0}
+        control_values = [
+            float(row["control"]["limit_touch_end_return_pct"]) for row in values
+        ]
+        candidate_values = [
+            float(row["candidate"]["limit_touch_end_return_pct"]) for row in values
+        ]
+        control_discounts = [
+            quality._number(row["control"].get("discount_to_best_ask_bp"))
+            for row in values
+        ]
+        control_discounts = [value for value in control_discounts if value is not None]
+        candidate_discounts = [
+            quality._number(row["candidate"].get("discount_to_best_ask_bp"))
+            for row in values
+        ]
+        candidate_discounts = [
+            value for value in candidate_discounts if value is not None
+        ]
+        price_deltas = [
+            quality._number(row.get("candidate_vs_control_price_bp")) for row in values
+        ]
+        price_deltas = [value for value in price_deltas if value is not None]
+        return {
+            "comparable_count": len(values),
+            "control_limit_touch_count": sum(
+                row["control"]["limit_touch_observed"] for row in values
+            ),
+            "candidate_limit_touch_count": sum(
+                row["candidate"]["limit_touch_observed"] for row in values
+            ),
+            "control_equal_weight_avg_10m_limit_touch_end_return_pct": fmean(
+                control_values
+            ),
+            "candidate_equal_weight_avg_10m_limit_touch_end_return_pct": fmean(
+                candidate_values
+            ),
+            "delta_equal_weight_avg_10m_limit_touch_end_return_pct": (
+                fmean(candidate_values) - fmean(control_values)
+            ),
+            "control_avg_discount_to_best_ask_bp": (
+                fmean(control_discounts) if control_discounts else None
+            ),
+            "candidate_avg_discount_to_best_ask_bp": (
+                fmean(candidate_discounts) if candidate_discounts else None
+            ),
+            "candidate_more_aggressive_price_count": sum(
+                value > 0 for value in price_deltas
+            ),
+            "candidate_same_price_count": sum(value == 0 for value in price_deltas),
+            "candidate_more_passive_price_count": sum(
+                value < 0 for value in price_deltas
+            ),
+            "control_missed_touch_opportunity_count": sum(
+                row["control_missed_touch_opportunity"] for row in values
+            ),
+            "candidate_missed_touch_opportunity_count": sum(
+                row["candidate_missed_touch_opportunity"] for row in values
+            ),
+        }
+
+    venue_rows: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        venue_rows.setdefault(str(row.get("effective_venue") or "UNKNOWN"), []).append(
+            row
+        )
+    summary = aggregate(rows)
+    venue_summary = {
+        venue: aggregate(cohort) for venue, cohort in sorted(venue_rows.items())
+    }
+    quality_checks = {
+        "all_results_comparable": bool(rows) and len(rows) == len(requests),
+        "limit_touch_end_return_improved": bool(
+            quality._number(
+                summary.get("delta_equal_weight_avg_10m_limit_touch_end_return_pct")
+            )
+            is not None
+            and summary["delta_equal_weight_avg_10m_limit_touch_end_return_pct"] > 0
+        ),
+        "missed_touch_opportunity_not_increased": bool(
+            summary.get("candidate_missed_touch_opportunity_count", 0)
+            <= summary.get("control_missed_touch_opportunity_count", 0)
+        ),
+        "limit_touch_count_not_decreased": bool(
+            summary.get("candidate_limit_touch_count", 0)
+            >= summary.get("control_limit_touch_count", 0)
+        ),
+        "all_venue_end_return_not_decreased": bool(venue_summary)
+        and all(
+            quality._number(
+                value.get("delta_equal_weight_avg_10m_limit_touch_end_return_pct")
+            )
+            is not None
+            and value["delta_equal_weight_avg_10m_limit_touch_end_return_pct"] >= 0
+            for value in venue_summary.values()
+        ),
+    }
+    quality_gate_pass = all(quality_checks.values())
+    return {
+        "schema": "entry_price_selection_outcome_comparison_v1",
+        "status": (
+            "candidate_quality_pass_offline_only"
+            if quality_gate_pass
+            else "candidate_quality_rejected"
+            if rows
+            else "no_comparable_rows"
+        ),
+        "quality_gate_pass": quality_gate_pass,
+        "quality_checks": quality_checks,
+        "summary": summary,
+        "venue_summary": venue_summary,
+        "rows": rows,
+        "metric_role": "entry_price_selection_counterfactual",
+        "decision_authority": "offline_replay_no_runtime_change",
+        "window_policy": "same_exact_snapshot_10m_same_venue_session",
+        "sample_floor": "one_source_quality_passing_10m_label_for_observation",
+        "primary_decision_metric": ("equal_weight_avg_10m_limit_touch_end_return_pct"),
+        "source_quality_gate": "exact_v2_same_route_mature_10m_window",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "limit_touch_semantics": (
+            "price_path_touch_is_counterfactual_fill_opportunity_not_fill_proof"
+        ),
+        "forbidden_uses": [
+            "claim_limit_touch_as_actual_fill",
+            "live_prompt_or_price_promotion",
+            "provider_model_route_change",
+            "broker_or_safety_guard_bypass",
+        ],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
     parser.add_argument("--source-date", action="append", required=True)
     parser.add_argument(
         "--stage",
-        choices=("entry", "holding", "entry_price"),
+        choices=("entry", "holding", "holding_flow", "entry_price"),
         required=True,
     )
     parser.add_argument("--max-rows", type=int, required=True)
@@ -769,6 +1221,7 @@ def main(argv: list[str] | None = None) -> int:
         stage_endpoint = {
             "entry": "analyze_target",
             "holding": "holding_score",
+            "holding_flow": "holding_flow",
             "entry_price": "entry_price",
         }[args.stage]
         stage_trace_ids = {
@@ -780,13 +1233,44 @@ def main(argv: list[str] | None = None) -> int:
         report["mature_outcome_eligible_trace_count"] = len(
             (eligible_trace_ids or set()).intersection(stage_trace_ids)
         )
-        report["outcome_comparison_status"] = "attached_mature_outcomes"
-        report["outcome_comparison"] = quality.build_paired_replay_report(
-            target_date=args.date,
-            requests=requests,
-            results=results,
-            labels=labels,
-        )
+        if args.stage == "holding_flow":
+            report["outcome_comparison_status"] = (
+                "attached_dedicated_holding_flow_outcomes"
+            )
+            report["holding_flow_outcome_attribution"] = (
+                build_holding_flow_outcome_attribution(
+                    requests=requests,
+                    results=results,
+                    labels=labels,
+                )
+            )
+            if (
+                report["holding_flow_outcome_attribution"].get("status")
+                == "sample_floor_keep_collecting"
+            ):
+                report["status"] = (
+                    "coverage_replay_complete_sample_floor_keep_collecting"
+                )
+        else:
+            report["outcome_comparison_status"] = "attached_mature_outcomes"
+            report["outcome_comparison"] = quality.build_paired_replay_report(
+                target_date=args.date,
+                requests=requests,
+                results=results,
+                labels=labels,
+            )
+        if args.stage == "entry_price":
+            report["entry_price_selection_outcome_comparison"] = (
+                build_entry_price_selection_outcome_comparison(
+                    requests=requests,
+                    results=results,
+                    labels=labels,
+                )
+            )
+            selection_status = report["entry_price_selection_outcome_comparison"].get(
+                "status"
+            )
+            report["status"] = f"coverage_replay_complete_{selection_status}"
     if args.write:
         quality._atomic_write_json(path, report)
     print(json.dumps(report, ensure_ascii=False))

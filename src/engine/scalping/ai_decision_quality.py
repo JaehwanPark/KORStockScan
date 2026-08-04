@@ -112,6 +112,7 @@ ANTICIPATORY_LEARNING_MIN_ROWS = 1
 ANTICIPATORY_LEARNING_MIN_SYMBOLS = 1
 CANDIDATE_SCHEMA_MAX_ATTEMPTS = 4
 HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
+ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_exact_semantic_gate_v1"
 ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
 BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
     "bounded_opportunity_offline_semantic_v1"
@@ -406,9 +407,7 @@ def resolve_candidate_reason_code_conflicts(
             "confirmed": "recovery_trigger_confirmed",
             "recovery_required": "recovery_trigger_required",
             "failed": "recovery_trigger_failed",
-        }.get(
-            trigger
-        ),
+        }.get(trigger),
     }
     try:
         upside = float(response.get("expected_upside_pct"))
@@ -762,15 +761,47 @@ def _walk(value: Any):
             yield from _walk(child)
 
 
+def _extract_holding_context_from_exact_payload(value: Any) -> dict[str, Any]:
+    """Extract only the canonical holding JSON embedded in an exact text prompt."""
+
+    if isinstance(value, dict):
+        holding = value.get("holding_decision_context")
+        return dict(holding) if isinstance(holding, dict) else {}
+    if not isinstance(value, str):
+        return {}
+    marker = "[HOLDING_DECISION_CONTEXT]"
+    marker_index = value.find(marker)
+    if marker_index < 0:
+        return {}
+    decoder = json.JSONDecoder()
+    marked_json = value[marker_index + len(marker) :].lstrip()
+    try:
+        parsed, _end = decoder.raw_decode(marked_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
 def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
     schemas: set[str] = set()
     bundles: set[str] = set()
     canonical_contexts: list[dict[str, Any]] = []
-    for item in _walk(payload.get("sanitized_user_input")):
-        if not isinstance(item, dict):
-            continue
-        schema = str(item.get("schema") or "")
-        if schema in {ENTRY_CONTEXT_SCHEMA, HOLDING_CONTEXT_SCHEMA}:
+    sanitized_input = payload.get("sanitized_user_input")
+    roots = [sanitized_input]
+    marked_holding = (
+        _extract_holding_context_from_exact_payload(sanitized_input)
+        if isinstance(sanitized_input, str)
+        else {}
+    )
+    if marked_holding:
+        roots.append(marked_holding)
+    for root in roots:
+        for item in _walk(root):
+            if not isinstance(item, dict):
+                continue
+            schema = str(item.get("schema") or "")
+            if schema not in {ENTRY_CONTEXT_SCHEMA, HOLDING_CONTEXT_SCHEMA}:
+                continue
             schemas.add(schema)
             candle = item.get("candle") if schema == HOLDING_CONTEXT_SCHEMA else item
             candle = candle if isinstance(candle, dict) else {}
@@ -782,9 +813,14 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
                 "is_forming" if schema == HOLDING_CONTEXT_SCHEMA else "forming"
             )
             source_quality = (
-                candle.get("source_quality")
-                if isinstance(candle.get("source_quality"), dict)
-                else {}
+                item.get("source_quality")
+                if schema == HOLDING_CONTEXT_SCHEMA
+                and isinstance(item.get("source_quality"), dict)
+                else (
+                    candle.get("source_quality")
+                    if isinstance(candle.get("source_quality"), dict)
+                    else {}
+                )
             )
             decision_window = (
                 source_quality.get("decision_window")
@@ -840,9 +876,12 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
                     "route_equivalence_proven": route_equivalence_proof.get("proven"),
                 }
             )
-        bundle = str(item.get("input_bundle_version") or "")
-        if bundle:
-            bundles.add(bundle)
+        for item in _walk(root):
+            if not isinstance(item, dict):
+                continue
+            bundle = str(item.get("input_bundle_version") or "")
+            if bundle:
+                bundles.add(bundle)
     return {
         "context_schemas": sorted(schemas),
         "input_bundle_versions": sorted(bundles),
@@ -994,13 +1033,27 @@ def _exact_trace_payload_findings(
         findings.append("simulation_observation_not_natural_cohort")
     trace_venue = _venue(trace.get("effective_venue"))
     trace_session = _session(trace.get("session_bucket"))
-    payload_venue = _venue(payload.get("effective_venue"))
-    payload_session = _session(payload.get("session_bucket"))
+    contract = _payload_contract(payload)
+    context_venues = {
+        _venue(context.get("venue"))
+        for context in contract["canonical_contexts"]
+        if context.get("venue")
+    }
+    context_sessions = {
+        _session(context.get("session"))
+        for context in contract["canonical_contexts"]
+        if context.get("session")
+    }
+    payload_venue = _venue(payload.get("effective_venue")) or (
+        next(iter(context_venues)) if len(context_venues) == 1 else ""
+    )
+    payload_session = _session(payload.get("session_bucket")) or (
+        next(iter(context_sessions)) if len(context_sessions) == 1 else ""
+    )
     if payload and payload_venue != trace_venue:
         findings.append("payload_trace_venue_mismatch")
     if payload and payload_session != trace_session:
         findings.append("payload_trace_session_mismatch")
-    contract = _payload_contract(payload)
     expected_schema = (
         ENTRY_CONTEXT_SCHEMA
         if _stage(trace.get("decision_stage"), trace.get("endpoint"))
@@ -4257,6 +4310,13 @@ def repair_v2_13_recovery_confirmation_response(
 
 
 def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
+    marked_holding = (
+        _extract_holding_context_from_exact_payload(exact_payload)
+        if isinstance(exact_payload, str)
+        else {}
+    )
+    if marked_holding:
+        exact_payload = {"holding_decision_context": marked_holding}
     holding = (
         exact_payload.get("holding_decision_context")
         if isinstance(exact_payload, dict)
@@ -4607,6 +4667,131 @@ def validate_candidate_response(
     return errors
 
 
+def _entry_price_contract_facts(exact_payload: Any) -> dict[str, Any]:
+    """Derive a small price-selection ledger without changing the exact payload."""
+
+    payload = exact_payload if isinstance(exact_payload, dict) else {}
+    if isinstance(payload.get("exact_payload"), dict):
+        payload = payload["exact_payload"]
+    price_context = payload.get("price_context")
+    price_context = price_context if isinstance(price_context, dict) else {}
+    entry_context = payload.get("entry_context_features")
+    entry_context = entry_context if isinstance(entry_context, dict) else {}
+    snapshot = payload.get("ai_market_snapshot_v1")
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    preflight = snapshot.get("ai_input_preflight_v1")
+    preflight = preflight if isinstance(preflight, dict) else {}
+    candle = payload.get("entry_candle_context")
+    candle = candle if isinstance(candle, dict) else {}
+    guard = price_context.get("entry_price_guard")
+    guard = guard if isinstance(guard, dict) else {}
+
+    def positive_integer(value: Any) -> int | None:
+        number = _number(value)
+        if number is None or number <= 0 or not float(number).is_integer():
+            return None
+        return int(number)
+
+    candidate_prices = {
+        "DEFENSIVE": positive_integer(price_context.get("defensive_order_price")),
+        "REFERENCE": positive_integer(price_context.get("reference_target_price")),
+        "RESOLVED": positive_integer(price_context.get("resolved_order_price")),
+        "BEST_BID": positive_integer(price_context.get("best_bid")),
+        "BEST_ASK": positive_integer(price_context.get("best_ask")),
+    }
+    source_blockers: list[str] = []
+    if not preflight:
+        source_blockers.append("preflight_missing")
+    elif preflight.get("allowed") is not True:
+        source_blockers.append("preflight_not_allowed")
+    source_blockers.extend(str(value) for value in preflight.get("blockers") or [])
+    if not entry_context:
+        source_blockers.append("entry_context_missing")
+    if entry_context.get("quote_stale") is True:
+        source_blockers.append("quote_stale")
+    if entry_context.get("quote_fresh_for_entry") is not True:
+        source_blockers.append("quote_not_fresh")
+    if preflight.get("venue_consistent") is False:
+        source_blockers.append("venue_session_mismatch")
+
+    explicit_block = any(
+        value is True
+        for value in (
+            guard.get("blocked"),
+            guard.get("price_selection_blocked"),
+            guard.get("setup_invalidated"),
+        )
+    ) or bool(str(guard.get("block_reason") or "").strip())
+    raw_risk_flags = candle.get("risk_flags") or []
+    if isinstance(raw_risk_flags, str):
+        raw_risk_flags = [raw_risk_flags]
+    risk_flags = {str(value).strip().lower() for value in raw_risk_flags}
+    setup_invalidated = explicit_block or bool(
+        risk_flags.intersection(
+            {"setup_invalidated", "failed_breakout", "entry_setup_invalidated"}
+        )
+    )
+    available_price_count = sum(
+        value is not None for value in candidate_prices.values()
+    )
+    skip_reasons = list(dict.fromkeys(source_blockers))
+    if setup_invalidated:
+        skip_reasons.append("explicit_setup_or_price_guard_block")
+    if available_price_count == 0:
+        skip_reasons.append("candidate_prices_missing")
+    return {
+        "schema": "entry_price_exact_contract_facts_v1",
+        "candidate_prices": candidate_prices,
+        "available_price_count": available_price_count,
+        "fresh_quote": not source_blockers,
+        "source_blockers": list(dict.fromkeys(source_blockers)),
+        "setup_invalidated": setup_invalidated,
+        "would_fill_now": entry_context.get("would_fill_now"),
+        "spread_bp": _number(entry_context.get("spread_bp")),
+        "skip_permitted": bool(skip_reasons),
+        "skip_reasons": list(dict.fromkeys(skip_reasons)),
+    }
+
+
+def _entry_price_response_errors(
+    response: dict[str, Any], *, exact_payload: Any
+) -> list[str]:
+    facts = _entry_price_contract_facts(exact_payload)
+    action = str(response.get("action") or "").strip().upper()
+    basis = str(response.get("price_basis") or "").strip().upper()
+    selected_price = _number(response.get("selected_price"))
+    errors: list[str] = []
+    if action == "SKIP":
+        if selected_price is not None or basis != "NONE":
+            errors.append("entry_price_skip_requires_null_none")
+        if not facts["skip_permitted"]:
+            errors.append("entry_price_skip_without_explicit_blocker")
+        return errors
+
+    if facts["skip_permitted"]:
+        errors.append("entry_price_explicit_blocker_requires_skip")
+    action_bases = {
+        "USE_DEFENSIVE": {"DEFENSIVE"}
+        if facts["candidate_prices"].get("DEFENSIVE") is not None
+        else {"BEST_BID"},
+        "USE_REFERENCE": {"REFERENCE"},
+        "IMPROVE_LIMIT": {"RESOLVED", "BEST_ASK"},
+    }
+    allowed_bases = action_bases.get(action, set())
+    if basis not in allowed_bases:
+        errors.append("entry_price_action_basis_mismatch")
+    expected_price = facts["candidate_prices"].get(basis)
+    if (
+        selected_price is None
+        or selected_price <= 0
+        or not float(selected_price).is_integer()
+    ):
+        errors.append("entry_price_selected_price_invalid")
+    elif expected_price is None or int(selected_price) != expected_price:
+        errors.append("entry_price_selected_price_not_exact_basis_value")
+    return errors
+
+
 def validate_replay_candidate_response(
     request: dict[str, Any],
     response: dict[str, Any],
@@ -4622,6 +4807,16 @@ def validate_replay_candidate_response(
     candidate = request.get("candidate")
     candidate = candidate if isinstance(candidate, dict) else {}
     semantic_validator_version = str(candidate.get("semantic_validator_version") or "")
+    if semantic_validator_version == ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION:
+        if stage != "entry_price":
+            return [*errors, "entry_price_semantic_stage_unsupported"]
+        return [
+            *errors,
+            *_entry_price_response_errors(
+                response,
+                exact_payload=request.get("exact_payload"),
+            ),
+        ]
     if semantic_validator_version not in {
         ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION,
         BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION,
@@ -6694,11 +6889,9 @@ def prepare_detailed_paired_replay_requests(
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
             ):
-                anticipatory_analysis = (
-                    build_v2_13_recovery_confirmation_analysis_v1(
-                        exact_payload,
-                        stage=stage,
-                    )
+                anticipatory_analysis = build_v2_13_recovery_confirmation_analysis_v1(
+                    exact_payload,
+                    stage=stage,
                 )
             else:
                 anticipatory_analysis = build_anticipatory_reversal_analysis_v1(
@@ -7332,12 +7525,16 @@ def build_paired_replay_report(
         control_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and control_exposure_selected
-            else 0.0 if execution_cost_contract_applied else None
+            else 0.0
+            if execution_cost_contract_applied
+            else None
         )
         candidate_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and candidate_exposure_selected
-            else 0.0 if execution_cost_contract_applied else None
+            else 0.0
+            if execution_cost_contract_applied
+            else None
         )
         control_primary_value = (
             (outcome if control_exposure_selected else 0.0)
@@ -10704,14 +10901,22 @@ def build_entry_reversal_sequence_report(
         "all_candidate_drop": lambda row: True,
         "reversal_armed": lambda row: row.get("reversal_armed") is True,
         "reversal_confirmed": lambda row: row.get("reversal_state") == "CONFIRMED",
-        "support_flush_armed": lambda row: row.get("reversal_armed") is True
-        and (row.get("archetypes") or {}).get("support_flush") is True,
-        "trend_pullback_armed": lambda row: row.get("reversal_armed") is True
-        and (row.get("archetypes") or {}).get("trend_pullback") is True,
-        "continuation_shakeout_armed": lambda row: row.get("reversal_armed") is True
-        and (row.get("archetypes") or {}).get("continuation_shakeout") is True,
-        "wide_spread_reversal_armed": lambda row: row.get("reversal_armed") is True
-        and (row.get("liquidity") or {}).get("wide_spread_observed") is True,
+        "support_flush_armed": lambda row: (
+            row.get("reversal_armed") is True
+            and (row.get("archetypes") or {}).get("support_flush") is True
+        ),
+        "trend_pullback_armed": lambda row: (
+            row.get("reversal_armed") is True
+            and (row.get("archetypes") or {}).get("trend_pullback") is True
+        ),
+        "continuation_shakeout_armed": lambda row: (
+            row.get("reversal_armed") is True
+            and (row.get("archetypes") or {}).get("continuation_shakeout") is True
+        ),
+        "wide_spread_reversal_armed": lambda row: (
+            row.get("reversal_armed") is True
+            and (row.get("liquidity") or {}).get("wide_spread_observed") is True
+        ),
     }
     cohorts: dict[str, Any] = {}
     for cohort_name, predicate in cohort_predicates.items():

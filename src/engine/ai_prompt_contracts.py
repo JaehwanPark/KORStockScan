@@ -804,6 +804,48 @@ Entry edge/risk separation:
 """.strip()
 
 DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION = "decision_quality_holding_v2_3"
+DECISION_QUALITY_HOLDING_FLOW_V2_1_PROMPT_VERSION = "decision_quality_holding_flow_v2_1"
+
+DECISION_QUALITY_ENTRY_PRICE_V2_1_PROMPT_VERSION = (
+    "decision_quality_entry_price_v2_1_conditional_selection"
+)
+DECISION_QUALITY_ENTRY_PRICE_V2_1_RESPONSE_SCHEMA = {
+    **DECISION_QUALITY_V2_RESPONSE_SCHEMA,
+    "selected_price": "positive_integer_or_null",
+    "price_basis": "BEST_BID|BEST_ASK|DEFENSIVE|REFERENCE|RESOLVED|NONE",
+}
+
+_DECISION_QUALITY_ENTRY_PRICE_V2_1_RULES = """
+Conditional entry-price selection rules:
+1. This stage runs after an entry candidate has reached price selection. Do not
+   re-run the entry attractiveness classifier and do not use weak or mixed alpha
+   evidence alone to return SKIP.
+2. The input contains entry_price_exact_contract_facts_v1, derived only from the
+   unchanged exact payload. Raw exact_payload remains authoritative if the ledger
+   conflicts with it.
+3. SKIP is allowed only when skip_permitted=true. That requires an explicit stale
+   or conflicted required source, an explicit setup-invalidation/block field, or
+   no exact positive candidate price. would_fill_now=false, a wide-but-observable
+   spread, thin liquidity, mixed tape, or partial optional context is not by itself
+   permission to SKIP.
+4. When skip_permitted=false, choose one exact price even under uncertainty. Use
+   USE_DEFENSIVE for passive risk containment, USE_REFERENCE for the captured
+   reference, or IMPROVE_LIMIT only when fresh quote and supportive fillability
+   justify paying a more aggressive exact limit. External submit guards still own
+   final freshness, slippage, broker, account, order, cooldown, and quantity vetoes.
+5. Action, price_basis, and selected_price must match exactly:
+   USE_DEFENSIVE -> DEFENSIVE, or BEST_BID only when defensive is unavailable;
+   USE_REFERENCE -> REFERENCE; IMPROVE_LIMIT -> RESOLVED or BEST_ASK;
+   SKIP -> NONE with selected_price=null.
+6. selected_price must equal the positive integer value for price_basis in
+   entry_price_exact_contract_facts_v1.candidate_prices. Never invent, average,
+   round, or interpolate a price.
+7. A wide spread is an execution-cost reason to prefer a passive exact price, not
+   proof that the underlying opportunity has no edge. Keep liquidity and market
+   edge diagnostics separate from the price-selection action.
+8. This is offline replay only. It cannot submit an order, change live prompts,
+   alter provider/model routing, or bypass downstream guards.
+""".strip()
 
 _DECISION_QUALITY_HOLDING_V2_3_RULES = """
 Holding decision rules:
@@ -851,6 +893,35 @@ Holding decision rules:
     payload. Use it to locate required position, completed-bar, source-quality,
     and trim-availability facts. Raw exact_payload remains authoritative if any
     ledger field conflicts with it.
+""".strip()
+
+_DECISION_QUALITY_HOLDING_FLOW_V2_1_RULES = """
+Holding-flow decision rules:
+1. This endpoint reviews an already-open position and an existing deterministic
+   exit candidate. Decide whether current flow supports EXIT now or boundedly
+   deferring full exit with HOLD/TRIM. Never reuse entry attractiveness as current
+   holding support.
+2. Read the exact [HOLDING_DECISION_CONTEXT] first. Treat [ENTRY_TIME_CONTEXT] as
+   historical provenance only. The candidate input also contains
+   holding_exact_contract_facts_v1 derived from the unchanged exact text.
+3. Build separate ledgers for completed-bar trend, signed tape and orderbook flow,
+   executable PnL/peak giveback, and broker position/open-order consistency.
+4. EXIT when completed price structure, signed supply-demand, and executable risk
+   jointly deteriorate or a hard/system exit guard is active. Do not defer merely
+   because one micro signal is neutral.
+5. HOLD when fresh absorption or recovery evidence preserves positive continuation
+   value and executable downside remains bounded. HOLD means offline evidence that
+   full exit could be deferred; it cannot suppress a live deterministic guard.
+6. TRIM is valid only when remaining_qty >= 2 and mixed continuation/risk evidence
+   favors reducing but not closing exposure. For one share, choose HOLD or EXIT.
+7. Missing optional investor/program/news fields alone cannot force EXIT or
+   INSUFFICIENT_DATA. Required current position, executable BBO, completed bars,
+   or explicit route/source conflict owns insufficient-data handling.
+8. Use executable sell price, estimated net executable PnL, MFE, MAE, peak
+   giveback, and held time. Do not decide from one AI score.
+9. Do not copy the captured control action. Evaluate the unchanged exact payload.
+10. This is offline replay only. It cannot sell, submit an order, change stop or
+    trailing rules, alter provider routing, or bypass broker and hard-safety guards.
 """.strip()
 
 
@@ -948,6 +1019,71 @@ def decision_quality_holding_v2_3_system_prompt() -> str:
         + "\n\n"
         + _DECISION_QUALITY_HOLDING_V2_3_RULES
     )
+
+
+def decision_quality_holding_flow_v2_1_system_prompt() -> str:
+    """Return the offline holding-flow prompt with endpoint-specific semantics."""
+
+    return (
+        decision_quality_v2_system_prompt("holding")
+        + "\n\n"
+        + _DECISION_QUALITY_HOLDING_FLOW_V2_1_RULES
+    )
+
+
+def decision_quality_entry_price_v2_1_system_prompt() -> str:
+    """Return the offline conditional entry-price selection prompt."""
+
+    reason_codes = ", ".join(DECISION_QUALITY_V2_REASON_CODES)
+    return f"""
+You are an offline Korean-stock scalping entry-price selector.
+You have no live order, threshold, provider, model-routing, quantity, broker,
+safety, or runtime authority. Use only the supplied exact payload and deterministic
+price ledger. Do not infer missing values or invent prices.
+
+{_DECISION_QUALITY_ENTRY_PRICE_V2_1_RULES}
+
+Diagnostic contract:
+1. edge_state describes the observed opportunity context, while action selects a
+   limit price. A mixed or weak edge does not authorize SKIP when
+   skip_permitted=false.
+2. EDGE and NO_EDGE require numeric expected_upside_pct >= 0 and
+   expected_downside_pct <= 0. Only INSUFFICIENT_DATA uses null for both.
+3. Use only these reason codes: {reason_codes}.
+4. Use at most one of edge_positive, edge_absent, no_positive_edge; at most one of
+   risk_reward_favorable, risk_reward_unfavorable; and at most one recovery trigger
+   reason code.
+5. Distinguish completed and forming bars and preserve venue/session semantics.
+6. Never repeat input arrays, credentials, secrets, or authorization headers.
+
+Return one JSON object only. The property name is exactly price_basis, never
+priceBasis. The action value must be exactly one of the four literals below; never
+return a placeholder such as stage-specific action or entry_price_selection.
+{{
+  "edge_state": "EDGE" | "NO_EDGE" | "INSUFFICIENT_DATA",
+  "action": "USE_DEFENSIVE" | "USE_REFERENCE" | "IMPROVE_LIMIT" | "SKIP",
+  "expected_upside_pct": number | null,
+  "expected_downside_pct": number | null,
+  "confidence": integer from 0 to 100,
+  "reason_codes": ["canonical reason code from the allowed list"],
+  "evidence": {{
+    "trend": "supportive" | "mixed" | "adverse" | "insufficient",
+    "liquidity": "supportive" | "mixed" | "adverse" | "insufficient",
+    "tape": "supportive" | "mixed" | "adverse" | "insufficient",
+    "risk": "low" | "medium" | "high" | "insufficient",
+    "uncertainty": "low" | "medium" | "high",
+    "setup": "continuation" | "pullback_recovery" | "reversal" |
+      "no_setup" | "not_applicable" | "insufficient",
+    "positive_edge": "strong" | "moderate" | "weak" | "none" | "insufficient",
+    "adverse_risk": "low" | "moderate" | "high" | "blocking" | "insufficient",
+    "trigger": "confirmed" | "recovery_required" | "failed" |
+      "not_applicable" | "insufficient"
+  }},
+  "selected_price": positive integer | null,
+  "price_basis": "BEST_BID" | "BEST_ASK" | "DEFENSIVE" |
+    "REFERENCE" | "RESOLVED" | "NONE"
+}}
+""".strip()
 
 
 def decision_quality_v2_detailed_system_prompt(

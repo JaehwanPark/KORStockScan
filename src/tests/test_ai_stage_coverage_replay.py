@@ -25,6 +25,15 @@ def _control():
                 "request_reasoning_effort": "medium",
             },
             {
+                "endpoint": "holding_flow",
+                "prompt_version": "flow_v1",
+                "prompt_sha256": "prompt-flow",
+                "provider_actual": "openai",
+                "model": "gpt-5.4-mini",
+                "request_temperature": 0,
+                "request_reasoning_effort": "medium",
+            },
+            {
                 "endpoint": "entry_price",
                 "prompt_version": "entry_price_v1",
                 "prompt_sha256": "prompt-2",
@@ -150,6 +159,77 @@ def test_prepare_stage_requests_freezes_exact_holding_without_outcome():
     assert summary["strict_eligible_count"] == 1
 
 
+def test_prepare_holding_flow_preserves_endpoint_and_extracts_marked_context():
+    holding_context = {
+        "schema": "holding_decision_context_v1",
+        "venue": "KRX",
+        "session": "krx_regular",
+        "execution_pnl": {
+            "remaining_qty": 1,
+            "average_entry_price": 100,
+            "executable_sell_price": 99,
+        },
+        "position_lifecycle": {"memory_qty": 1},
+        "source_quality": {
+            "status": "fresh_consistent",
+            "candle_status": "fresh_consistent",
+            "bbo_fresh": True,
+            "position_valid": True,
+            "order_consistent": True,
+            "position_reconciled": True,
+        },
+        "candle": {
+            "input_bundle_version": "scalping_multi_timeframe_context_v1",
+            "completed_bar_count": 1,
+            "bars": [{"is_forming": False, "close": 99}],
+        },
+    }
+    exact_text = (
+        "[ENTRY_TIME_CONTEXT]\n{}\n\n[HOLDING_DECISION_CONTEXT]\n"
+        + __import__("json").dumps(holding_context)
+    )
+    trace = {
+        **_trace("holding_score"),
+        "decision_trace_id": "trace-holding-flow",
+        "decision_stage": "holding",
+        "endpoint": "holding_flow",
+        "payload_sha256": "payload-holding-flow",
+        "prompt_version": "flow_v1",
+        "prompt_sha256": "prompt-flow",
+        "provider_actual": "openai",
+        "model": "gpt-5.4-mini",
+    }
+    payload = {
+        "endpoint": "holding_flow",
+        "payload_sha256": "payload-holding-flow",
+        "replay_exact": True,
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "sanitized_user_input": exact_text,
+    }
+
+    requests, summary = replay.prepare_stage_requests(
+        stage="holding_flow",
+        dates=["2026-08-04"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[trace],
+        payloads=[payload],
+    )
+
+    assert summary["strict_eligible_count"] == 1
+    assert requests[0]["stage"] == "holding"
+    assert requests[0]["coverage_stage"] == "holding_flow"
+    assert requests[0]["endpoint"] == "holding_flow"
+    assert requests[0]["candidate"]["prompt_version"] == (
+        "decision_quality_holding_flow_v2_1"
+    )
+    assert requests[0]["candidate_input"]["holding_exact_contract_facts_v1"][
+        "fresh_consistent_core"
+    ]
+
+
 def test_prepare_stage_requests_preserves_source_quality_exclusion():
     trace = {**_trace("entry_price"), "input_blockers": ["candle_source_quality"]}
     requests, summary = replay.prepare_stage_requests(
@@ -191,6 +271,139 @@ def test_prepare_stage_requests_restricts_to_mature_outcome_trace_ids():
 
     assert [row["decision_trace_id"] for row in requests] == ["trace-entry_price"]
     assert summary["mature_outcome_not_eligible"] == 1
+
+
+def test_prepare_entry_price_uses_conditional_selection_contract():
+    payload = _payload("entry_price")
+    payload["sanitized_user_input"].update(
+        {
+            "price_context": {
+                "best_bid": 99,
+                "best_ask": 101,
+                "defensive_order_price": 99,
+                "reference_target_price": 100,
+                "resolved_order_price": 100,
+            },
+            "entry_context_features": {
+                "quote_fresh_for_entry": True,
+                "quote_stale": False,
+                "would_fill_now": False,
+                "spread_bp": 200,
+            },
+            "ai_market_snapshot_v1": {
+                "ai_input_preflight_v1": {
+                    "allowed": True,
+                    "blockers": [],
+                    "venue_consistent": True,
+                }
+            },
+        }
+    )
+    requests, _ = replay.prepare_stage_requests(
+        stage="entry_price",
+        dates=["2026-07-29"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[_trace("entry_price")],
+        payloads=[payload],
+    )
+
+    request = requests[0]
+    facts = request["candidate_input"]["entry_price_exact_contract_facts_v1"]
+    assert request["candidate"]["prompt_version"] == (
+        "decision_quality_entry_price_v2_1_conditional_selection"
+    )
+    assert request["candidate"]["semantic_validator_version"] == (
+        "entry_price_exact_semantic_gate_v1"
+    )
+    assert request["candidate"]["response_schema"]["selected_price"] == (
+        "positive_integer_or_null"
+    )
+    assert facts["skip_permitted"] is False
+    assert facts["would_fill_now"] is False
+    assert "would_fill_now=false" in request["candidate"]["system_prompt"]
+
+
+def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch():
+    request = {
+        "stage": "entry_price",
+        "exact_payload": {
+            "price_context": {
+                "best_bid": 99,
+                "best_ask": 101,
+                "defensive_order_price": 99,
+                "reference_target_price": 100,
+                "resolved_order_price": 100,
+            },
+            "entry_context_features": {
+                "quote_fresh_for_entry": True,
+                "quote_stale": False,
+            },
+            "ai_market_snapshot_v1": {
+                "ai_input_preflight_v1": {
+                    "allowed": True,
+                    "blockers": [],
+                    "venue_consistent": True,
+                }
+            },
+        },
+        "candidate": {
+            "semantic_validator_version": "entry_price_exact_semantic_gate_v1"
+        },
+    }
+    common = {
+        "edge_state": "NO_EDGE",
+        "expected_upside_pct": 0.3,
+        "expected_downside_pct": -0.4,
+        "confidence": 50,
+        "reason_codes": ["edge_absent"],
+        "evidence": {
+            "trend": "mixed",
+            "liquidity": "mixed",
+            "tape": "mixed",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "not_applicable",
+            "positive_edge": "weak",
+            "adverse_risk": "moderate",
+            "trigger": "not_applicable",
+        },
+    }
+    skip_errors = replay.quality.validate_replay_candidate_response(
+        request,
+        {**common, "action": "SKIP", "selected_price": None, "price_basis": "NONE"},
+    )
+    assert "entry_price_skip_without_explicit_blocker" in skip_errors
+    mismatch_errors = replay.quality.validate_replay_candidate_response(
+        request,
+        {
+            **common,
+            "action": "USE_REFERENCE",
+            "selected_price": 99,
+            "price_basis": "DEFENSIVE",
+        },
+    )
+    assert "entry_price_action_basis_mismatch" in mismatch_errors
+
+
+def test_entry_price_contract_facts_fail_closed_when_preflight_is_missing():
+    facts = replay.quality._entry_price_contract_facts(
+        {
+            "price_context": {
+                "best_bid": 99,
+                "best_ask": 101,
+                "defensive_order_price": 99,
+            },
+            "entry_context_features": {
+                "quote_fresh_for_entry": True,
+                "quote_stale": False,
+            },
+        }
+    )
+
+    assert facts["skip_permitted"] is True
+    assert "preflight_missing" in facts["source_blockers"]
 
 
 def test_prepare_entry_stage_uses_v2_8_and_unwraps_live_v2_7_payload():
@@ -390,7 +603,7 @@ def test_report_marks_action_collapse_before_outcome_comparison():
     requests = [
         {
             "paired_replay_id": f"pair-{index}",
-            "stock_code": f"{index % 4:06d}",
+            "stock_code": f"{index:06d}",
             "control": {},
             "candidate_input": {"exact_payload": {"secret_marker": "do-not-store"}},
         }
@@ -418,6 +631,143 @@ def test_report_marks_action_collapse_before_outcome_comparison():
 
     assert report["status"] == "coverage_replay_complete_candidate_action_collapsed"
     assert report["candidate_action_not_collapsed"] is False
-    assert report["coverage_sample_floor"]["pass"] is False
+    assert report["coverage_sample_floor"]["pass"] is True
+    assert report["candidate_action_collapse_evaluable"] is True
     assert "candidate_input" not in report["requests"][0]
     assert "do-not-store" not in str(report)
+
+
+def test_report_keeps_collecting_before_action_collapse_is_evaluable():
+    requests = [
+        {
+            "paired_replay_id": "pair-thin",
+            "stock_code": "108860",
+            "control": {},
+        }
+    ]
+    results = [
+        {
+            "paired_replay_id": "pair-thin",
+            "status": "pass",
+            "control_response": {"action": "EXIT"},
+            "candidate_response": {"action": "EXIT"},
+        }
+    ]
+
+    report = replay.build_report(
+        target_date="2026-08-04",
+        stage="holding_flow",
+        dates=["2026-08-04"],
+        requested_max_rows=10,
+        source_summary={},
+        requests=requests,
+        results=results,
+    )
+
+    assert report["status"] == ("coverage_replay_complete_sample_floor_keep_collecting")
+    assert report["candidate_action_collapse_evaluable"] is False
+    assert report["candidate_action_not_collapsed"] is None
+
+
+def test_holding_flow_outcome_attribution_keeps_observed_path_noncausal():
+    request = {
+        "decision_trace_id": "trace-flow",
+        "stock_code": "108860",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+    }
+    result = {
+        "decision_trace_id": "trace-flow",
+        "status": "pass",
+        "same_payload_confirmed": True,
+        "control_response": {"action": "EXIT"},
+        "candidate_response": {"action": "HOLD"},
+    }
+    label = {
+        "decision_trace_id": "trace-flow",
+        "decision_stage": "holding",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "30m": {
+                "end_return_pct": 0.4,
+                "mfe_pct": 1.2,
+                "mae_pct": -0.5,
+                "first_hit": "target",
+            }
+        },
+        "stage_outcome": {
+            "secured_upside_pct": 1.2,
+            "enlarged_loss_pct": -0.5,
+        },
+    }
+
+    report = replay.build_holding_flow_outcome_attribution(
+        requests=[request], results=[result], labels=[label]
+    )
+
+    assert report["status"] == "sample_floor_keep_collecting"
+    assert report["candidate_action_counts"] == {"HOLD": 1}
+    assert report["rows"][0]["observed_peak_giveback_pct"] == 0.8
+    assert report["rows"][0]["outcome_interpretation"] == (
+        "same_observed_path_not_action_counterfactual"
+    )
+    assert "claim_observed_path_as_action_counterfactual" in report["forbidden_uses"]
+
+
+def test_entry_price_selection_outcome_uses_selected_limit_and_not_fill_claim():
+    request = {
+        "decision_trace_id": "trace-price",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "exact_payload": {
+            "price_context": {
+                "best_bid": 99,
+                "best_ask": 101,
+                "defensive_order_price": 99,
+                "reference_target_price": 100,
+                "resolved_order_price": 100,
+            }
+        },
+        "control": {
+            "captured_action": "USE_DEFENSIVE",
+            "captured_selected_price": 99,
+        },
+    }
+    result = {
+        "decision_trace_id": "trace-price",
+        "status": "pass",
+        "same_payload_confirmed": True,
+        "candidate_response": {
+            "action": "USE_REFERENCE",
+            "selected_price": 100,
+            "price_basis": "REFERENCE",
+        },
+    }
+    label = {
+        "decision_trace_id": "trace-price",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "reference_price": 99,
+        "horizon_metrics": {
+            "10m": {
+                "mfe_pct": 2.0,
+                "mae_pct": 0.5,
+                "end_return_pct": 1.0,
+                "profit_opportunity_observed": True,
+            }
+        },
+    }
+
+    report = replay.build_entry_price_selection_outcome_comparison(
+        requests=[request], results=[result], labels=[label]
+    )
+
+    assert report["summary"]["comparable_count"] == 1
+    assert report["rows"][0]["control"]["limit_touch_observed"] is False
+    assert report["rows"][0]["candidate"]["limit_touch_observed"] is True
+    assert "not_fill_proof" in report["limit_touch_semantics"]
+    assert report["actual_order_submitted"] is False
+    assert report["quality_gate_pass"] is False
+    assert report["summary"]["candidate_more_aggressive_price_count"] == 1
