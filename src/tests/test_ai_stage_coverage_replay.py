@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from src.engine.scalping import ai_stage_coverage_replay as replay
@@ -183,10 +184,18 @@ def test_prepare_holding_flow_preserves_endpoint_and_extracts_marked_context():
             "completed_bar_count": 1,
             "bars": [{"is_forming": False, "close": 99}],
         },
+        "order_reconciliation": {
+            "open_sell_qty": 0,
+            "cancel_pending": False,
+            "exit_token_active": False,
+            "order_or_quantity_conflict": False,
+        },
     }
     exact_text = (
+        "[DECISION_TYPE]\n- candidate_exit_rule: scalp_soft_stop_pct\n\n"
+        "[POSITION_CONTEXT]\n- allowed_worsen_pct: 0.80\n\n"
         "[ENTRY_TIME_CONTEXT]\n{}\n\n[HOLDING_DECISION_CONTEXT]\n"
-        + __import__("json").dumps(holding_context)
+        + json.dumps(holding_context)
     )
     trace = {
         **_trace("holding_score"),
@@ -223,11 +232,176 @@ def test_prepare_holding_flow_preserves_endpoint_and_extracts_marked_context():
     assert requests[0]["coverage_stage"] == "holding_flow"
     assert requests[0]["endpoint"] == "holding_flow"
     assert requests[0]["candidate"]["prompt_version"] == (
-        "decision_quality_holding_flow_v2_1"
+        "decision_quality_holding_flow_v2_2_bounded_defer"
+    )
+    assert requests[0]["candidate"]["semantic_validator_version"] == (
+        "holding_flow_bounded_defer_semantic_v1"
     )
     assert requests[0]["candidate_input"]["holding_exact_contract_facts_v1"][
         "fresh_consistent_core"
     ]
+    assert requests[0]["candidate_input"]["holding_exact_contract_facts_v1"][
+        "bounded_defer_eligible"
+    ]
+
+
+def test_holding_flow_bounded_defer_semantic_gate_preserves_hard_exit():
+    context = {
+        "holding_decision_context": {
+            "execution_pnl": {
+                "remaining_qty": 1,
+                "average_entry_price": 100,
+                "executable_sell_price": 97,
+            },
+            "source_quality": {
+                "status": "fresh_consistent",
+                "candle_status": "fresh_consistent",
+                "bbo_fresh": True,
+                "position_valid": True,
+                "order_consistent": True,
+            },
+            "candle": {
+                "completed_bar_count": 1,
+                "bars": [{"is_forming": False, "close": 97}],
+            },
+            "order_reconciliation": {"open_sell_qty": 0},
+        }
+    }
+    exact_text = (
+        "[DECISION_TYPE]\n- candidate_exit_rule: scalp_hard_stop_pct\n\n"
+        "[POSITION_CONTEXT]\n- allowed_worsen_pct: 0.80\n\n"
+        "[HOLDING_DECISION_CONTEXT]\n" + json.dumps(context["holding_decision_context"])
+    )
+    request = {
+        "stage": "holding",
+        "exact_payload": exact_text,
+        "candidate": {
+            "semantic_validator_version": "holding_flow_bounded_defer_semantic_v1"
+        },
+    }
+    response = {
+        "edge_state": "EDGE",
+        "action": "HOLD",
+        "expected_upside_pct": 0.8,
+        "expected_downside_pct": -0.6,
+        "confidence": 55,
+        "reason_codes": ["edge_positive", "recovery_trigger_required"],
+        "evidence": {
+            "trend": "mixed",
+            "liquidity": "mixed",
+            "tape": "mixed",
+            "risk": "high",
+            "uncertainty": "medium",
+            "setup": "reversal",
+            "positive_edge": "moderate",
+            "adverse_risk": "high",
+            "trigger": "recovery_required",
+        },
+    }
+
+    errors = replay.quality.validate_replay_candidate_response(request, response)
+
+    assert "holding_flow_hard_guard_requires_exit" in errors
+    assert "holding_flow_defer_not_eligible" in errors
+
+    soft_request = {
+        **request,
+        "exact_payload": exact_text.replace(
+            "scalp_hard_stop_pct", "scalp_soft_stop_pct"
+        ),
+    }
+    soft_errors = replay.quality.validate_replay_candidate_response(
+        soft_request, response
+    )
+    assert not [error for error in soft_errors if error.startswith("holding_flow_")]
+
+
+def test_holding_flow_checkpoint_loader_does_not_infer_missing_or_position_path(
+    tmp_path,
+):
+    source = tmp_path / "pipeline.jsonl"
+    snapshot_39 = {
+        "sources": {
+            "bbo": {
+                "value": {"best_bid": 99, "best_ask": 100},
+                "source": "ws_0D",
+                "observed_at": "2026-08-04T10:00:39+09:00",
+                "quality": "fresh",
+                "market_route": "krx_only",
+            }
+        }
+    }
+    events = [
+        {
+            "pipeline": "HOLDING_PIPELINE",
+            "stage": "scale_in_executed",
+            "stock_code": "005930",
+            "record_id": 7,
+            "emitted_at": "2026-08-04T10:00:05+09:00",
+            "fields": {
+                "actual_order_submitted": "True",
+                "order_no": "1",
+                "fill_qty": "1",
+                "fill_price": "100",
+                "new_buy_qty": "2",
+                "new_avg_price": "100.5",
+            },
+        },
+        {
+            "pipeline": "HOLDING_PIPELINE",
+            "stage": "ai_holding_review",
+            "stock_code": "005930",
+            "record_id": 7,
+            "emitted_at": "2026-08-04T10:00:40+09:00",
+            "fields": {
+                "holding_context_venue": "KRX",
+                "holding_context_session": "krx_regular",
+                "holding_context_ai_market_snapshot": repr(snapshot_39),
+            },
+        },
+    ]
+    source.write_text("".join(json.dumps(row) + "\n" for row in events))
+    request = {
+        "decision_trace_id": "holding-flow-1",
+        "decision_ts": "2026-08-04T10:00:00+09:00",
+        "record_id": "7",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "control": {"captured_selected_price": 100},
+    }
+
+    evidence = replay.load_holding_flow_checkpoint_evidence(
+        pipeline_path=source,
+        requests=[request],
+    )
+    ledger = evidence["holding-flow-1"]
+    assert ledger["checkpoint_available_count"] == 1
+    assert [row["status"] for row in ledger["checkpoints"]] == [
+        "available",
+        "source_unavailable",
+        "source_unavailable",
+    ]
+    assert all(not row["bar_price_inference_used"] for row in ledger["checkpoints"])
+    assert ledger["position_mutation_observed"] is True
+
+    report = replay.build_holding_flow_bounded_defer_v2_2_report(
+        requests=[request],
+        results=[
+            {
+                "decision_trace_id": "holding-flow-1",
+                "status": "pass",
+                "control_response": {"action": "EXIT"},
+                "candidate_response": {"action": "HOLD"},
+            }
+        ],
+        checkpoint_evidence=evidence,
+    )
+    row = report["rows"][0]
+    assert report["status"] == "checkpoint_source_partial_keep_collecting"
+    assert row["pure_defer_counterfactual_eligible"] is False
+    assert row["cost_adjusted_defer_ev_pct"] is None
+    assert row["source_runtime_position_mutation_observed"] is True
 
 
 def test_prepare_stage_requests_preserves_source_quality_exclusion():

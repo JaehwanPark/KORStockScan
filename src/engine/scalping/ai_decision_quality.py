@@ -112,6 +112,9 @@ ANTICIPATORY_LEARNING_MIN_ROWS = 1
 ANTICIPATORY_LEARNING_MIN_SYMBOLS = 1
 CANDIDATE_SCHEMA_MAX_ATTEMPTS = 4
 HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
+HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION = (
+    "holding_flow_bounded_defer_semantic_v1"
+)
 ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_exact_semantic_gate_v1"
 ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
 BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
@@ -4310,6 +4313,7 @@ def repair_v2_13_recovery_confirmation_response(
 
 
 def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
+    exact_text = exact_payload if isinstance(exact_payload, str) else ""
     marked_holding = (
         _extract_holding_context_from_exact_payload(exact_payload)
         if isinstance(exact_payload, str)
@@ -4337,6 +4341,22 @@ def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
     candle = candle if isinstance(candle, dict) else {}
     bars = candle.get("bars")
     bars = bars if isinstance(bars, list) else []
+    order_reconciliation = holding.get("order_reconciliation")
+    order_reconciliation = (
+        order_reconciliation if isinstance(order_reconciliation, dict) else {}
+    )
+
+    def marked_scalar(name: str) -> str:
+        if not exact_text:
+            return ""
+        match = re.search(
+            rf"(?m)^\s*-\s*{re.escape(name)}\s*:\s*([^\r\n]+)$",
+            exact_text,
+        )
+        return str(match.group(1)).strip() if match else ""
+
+    candidate_exit_rule = marked_scalar("candidate_exit_rule").lower()
+    allowed_worsen_pct = _number(marked_scalar("allowed_worsen_pct"))
     remaining_qty = _number(
         execution.get("remaining_qty")
         if execution.get("remaining_qty") is not None
@@ -4377,6 +4397,26 @@ def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
         and str(source_quality.get("candle_status") or "") == "fresh_consistent"
         and source_quality.get("bbo_fresh") is True
     )
+    hard_exit_guard_observed = any(
+        token in candidate_exit_rule
+        for token in ("hard", "protect", "emergency", "mandatory")
+    )
+    soft_exit_candidate = "soft" in candidate_exit_rule
+    open_sell_qty = _number(order_reconciliation.get("open_sell_qty"))
+    sell_order_or_exit_token_active = bool(
+        (open_sell_qty is not None and open_sell_qty > 0)
+        or order_reconciliation.get("cancel_pending") is True
+        or order_reconciliation.get("exit_token_active") is True
+        or order_reconciliation.get("order_or_quantity_conflict") is True
+    )
+    bounded_defer_eligible = bool(
+        fresh_consistent_core
+        and soft_exit_candidate
+        and not hard_exit_guard_observed
+        and not sell_order_or_exit_token_active
+        and allowed_worsen_pct is not None
+        and allowed_worsen_pct > 0
+    )
     return {
         "schema": "holding_exact_contract_facts_v1",
         "position_observed": position_observed,
@@ -4393,6 +4433,15 @@ def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
         "bbo_fresh": source_quality.get("bbo_fresh"),
         "fresh_consistent_core": fresh_consistent_core,
         "trim_available": remaining_qty is not None and remaining_qty >= 2,
+        "candidate_exit_rule": candidate_exit_rule or None,
+        "allowed_worsen_pct": allowed_worsen_pct,
+        "hard_exit_guard_observed": hard_exit_guard_observed,
+        "soft_exit_candidate": soft_exit_candidate,
+        "open_sell_qty": open_sell_qty,
+        "sell_order_or_exit_token_active": sell_order_or_exit_token_active,
+        "bounded_defer_eligible": bounded_defer_eligible,
+        "bounded_defer_checkpoint_horizons_sec": [30, 60, 90],
+        "bounded_defer_authority": "offline_observation_only_no_exit_delay",
     }
 
 
@@ -4807,6 +4856,25 @@ def validate_replay_candidate_response(
     candidate = request.get("candidate")
     candidate = candidate if isinstance(candidate, dict) else {}
     semantic_validator_version = str(candidate.get("semantic_validator_version") or "")
+    if (
+        semantic_validator_version
+        == HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION
+    ):
+        if stage != "holding":
+            return [*errors, "holding_flow_semantic_stage_unsupported"]
+        facts = _holding_contract_facts(request.get("exact_payload"))
+        action = str(response.get("action") or "").strip().upper()
+        evidence = response.get("evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        if facts["hard_exit_guard_observed"] and action != "EXIT":
+            errors.append("holding_flow_hard_guard_requires_exit")
+        if action in {"HOLD", "TRIM"} and not facts["bounded_defer_eligible"]:
+            errors.append("holding_flow_defer_not_eligible")
+        if action == "HOLD" and str(evidence.get("trigger") or "").lower() != (
+            "recovery_required"
+        ):
+            errors.append("holding_flow_hold_requires_recovery_trigger")
+        return list(dict.fromkeys(errors))
     if semantic_validator_version == ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION:
         if stage != "entry_price":
             return [*errors, "entry_price_semantic_stage_unsupported"]
@@ -6182,6 +6250,15 @@ def execute_openai_prompt_v2_candidate(
                 "or invalidated structure aligns with high/blocking executable "
                 "risk. Do not return INSUFFICIENT_DATA merely because TRIM is "
                 "unavailable"
+            )
+        if any(error.startswith("holding_flow_") for error in correction_errors):
+            correction_rules.append(
+                "For holding-flow bounded defer: hard/protect/emergency or active "
+                "sell-order guards require EXIT. HOLD or TRIM is permitted only "
+                "when holding_exact_contract_facts_v1.bounded_defer_eligible=true. "
+                "HOLD requires trigger=recovery_required and represents only an "
+                "offline 30/60/90-second comparison inside allowed_worsen_pct; it "
+                "does not delay a live exit or bypass any broker or safety guard"
             )
         if "reason_codes_conflict" in correction_errors:
             correction_rules.append(

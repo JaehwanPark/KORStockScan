@@ -7,6 +7,7 @@ It never changes a live prompt, provider route, order, price, or runtime setting
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 from collections import Counter
 from datetime import datetime
@@ -17,12 +18,12 @@ from typing import Any
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_ENTRY_PRICE_V2_1_PROMPT_VERSION,
     DECISION_QUALITY_ENTRY_PRICE_V2_1_RESPONSE_SCHEMA,
-    DECISION_QUALITY_HOLDING_FLOW_V2_1_PROMPT_VERSION,
+    DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     decision_quality_entry_price_v2_1_system_prompt,
-    decision_quality_holding_flow_v2_1_system_prompt,
+    decision_quality_holding_flow_v2_2_system_prompt,
     decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
 )
@@ -190,7 +191,7 @@ def prepare_stage_requests(
     prompt = {
         "entry": decision_quality_v2_8_detailed_system_prompt("entry"),
         "holding": decision_quality_holding_v2_3_system_prompt(),
-        "holding_flow": decision_quality_holding_flow_v2_1_system_prompt(),
+        "holding_flow": decision_quality_holding_flow_v2_2_system_prompt(),
         "entry_price": decision_quality_entry_price_v2_1_system_prompt(),
     }[normalized_stage]
     response_schema = (
@@ -203,7 +204,7 @@ def prepare_stage_requests(
             DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
             if normalized_stage == "holding"
             else (
-                DECISION_QUALITY_HOLDING_FLOW_V2_1_PROMPT_VERSION
+                DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION
                 if normalized_stage == "holding_flow"
                 else (
                     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
@@ -221,7 +222,11 @@ def prepare_stage_requests(
         "temperature": control.get("request_temperature"),
         "reasoning_effort": control.get("request_reasoning_effort"),
     }
-    if normalized_stage in {"holding", "holding_flow"}:
+    if normalized_stage == "holding_flow":
+        candidate["semantic_validator_version"] = (
+            quality.HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION
+        )
+    elif normalized_stage == "holding":
         candidate["semantic_validator_version"] = (
             quality.HOLDING_SEMANTIC_VALIDATOR_VERSION
         )
@@ -245,6 +250,7 @@ def prepare_stage_requests(
                 f"coverage-{quality._sha256((trace_id, trace.get('payload_sha256')))[:24]}"
             ),
             "decision_trace_id": trace_id,
+            "record_id": trace.get("record_id"),
             "decision_ts": trace.get("decision_ts"),
             "source_date": str(trace.get("decision_ts") or "")[:10],
             "stage": "holding"
@@ -813,6 +819,287 @@ def build_holding_flow_outcome_attribution(
     }
 
 
+def _boolish(value: Any) -> bool:
+    return value is True or str(value or "").strip().lower() in {"1", "true", "yes"}
+
+
+def load_holding_flow_checkpoint_evidence(
+    *,
+    pipeline_path: Path,
+    requests: list[dict[str, Any]],
+    checkpoints_sec: tuple[int, ...] = (30, 60, 90),
+    max_target_lag_sec: float = 15.0,
+) -> dict[str, dict[str, Any]]:
+    """Read exact executable-bid checkpoints without bar-price inference."""
+
+    ledgers: dict[str, dict[str, Any]] = {}
+    for request in requests:
+        trace_id = str(request.get("decision_trace_id") or "")
+        decision_at = quality._parse_ts(request.get("decision_ts"))
+        if not trace_id or decision_at is None:
+            continue
+        ledgers[trace_id] = {
+            "decision_trace_id": trace_id,
+            "stock_code": str(request.get("stock_code") or ""),
+            "record_id": str(request.get("record_id") or ""),
+            "effective_venue": str(request.get("effective_venue") or ""),
+            "session_bucket": str(request.get("session_bucket") or ""),
+            "decision_at": decision_at,
+            "quotes": [],
+            "position_mutations": [],
+        }
+    if not ledgers:
+        return {}
+
+    with pipeline_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if event.get("pipeline") != "HOLDING_PIPELINE":
+                continue
+            stock_code = str(event.get("stock_code") or "")
+            event_record_id = str(event.get("record_id") or "")
+            emitted_at = quality._parse_ts(event.get("emitted_at"))
+            if emitted_at is None:
+                continue
+            fields = event.get("fields")
+            fields = fields if isinstance(fields, dict) else {}
+            stage = str(event.get("stage") or "")
+            for ledger in ledgers.values():
+                if stock_code != ledger["stock_code"]:
+                    continue
+                if (
+                    ledger["record_id"]
+                    and event_record_id
+                    and event_record_id != ledger["record_id"]
+                ):
+                    continue
+                elapsed_emitted = (emitted_at - ledger["decision_at"]).total_seconds()
+                if elapsed_emitted < 0 or elapsed_emitted > max(checkpoints_sec) + 30:
+                    continue
+                if _boolish(fields.get("actual_order_submitted")) or stage == (
+                    "scale_in_executed"
+                ):
+                    ledger["position_mutations"].append(
+                        {
+                            "stage": stage,
+                            "emitted_at": emitted_at.isoformat(),
+                            "elapsed_sec": round(elapsed_emitted, 6),
+                            "order_no": fields.get("order_no")
+                            or fields.get("ord_no")
+                            or fields.get("broker_order_no"),
+                            "submitted_qty": quality._number(
+                                fields.get("submitted_qty") or fields.get("qty")
+                            ),
+                            "fill_qty": quality._number(fields.get("fill_qty")),
+                            "fill_price": quality._number(fields.get("fill_price")),
+                            "new_buy_qty": quality._number(fields.get("new_buy_qty")),
+                            "new_avg_price": quality._number(
+                                fields.get("new_avg_price")
+                            ),
+                        }
+                    )
+                if stage != "ai_holding_review":
+                    continue
+                if (
+                    str(fields.get("holding_context_venue") or "")
+                    != ledger["effective_venue"]
+                ):
+                    continue
+                if (
+                    str(fields.get("holding_context_session") or "")
+                    != ledger["session_bucket"]
+                ):
+                    continue
+                snapshot = fields.get("holding_context_ai_market_snapshot")
+                if isinstance(snapshot, str):
+                    try:
+                        snapshot = ast.literal_eval(snapshot)
+                    except (SyntaxError, ValueError):
+                        continue
+                if not isinstance(snapshot, dict):
+                    continue
+                bbo = (snapshot.get("sources") or {}).get("bbo")
+                bbo = bbo if isinstance(bbo, dict) else {}
+                value = bbo.get("value")
+                value = value if isinstance(value, dict) else {}
+                observed_at = quality._parse_ts(bbo.get("observed_at"))
+                best_bid = quality._number(value.get("best_bid"))
+                if (
+                    str(bbo.get("quality") or "") != "fresh"
+                    or observed_at is None
+                    or best_bid is None
+                    or best_bid <= 0
+                ):
+                    continue
+                elapsed_observed = (observed_at - ledger["decision_at"]).total_seconds()
+                if elapsed_observed < 0 or elapsed_observed > max(checkpoints_sec) + (
+                    max_target_lag_sec
+                ):
+                    continue
+                ledger["quotes"].append(
+                    {
+                        "observed_at": observed_at.isoformat(),
+                        "emitted_at": emitted_at.isoformat(),
+                        "elapsed_sec": round(elapsed_observed, 6),
+                        "best_bid": best_bid,
+                        "source": bbo.get("source"),
+                        "quality": bbo.get("quality"),
+                        "market_route": bbo.get("market_route"),
+                    }
+                )
+
+    evidence: dict[str, dict[str, Any]] = {}
+    for trace_id, ledger in ledgers.items():
+        quotes = sorted(ledger.pop("quotes"), key=lambda row: row["elapsed_sec"])
+        checkpoints: list[dict[str, Any]] = []
+        for target_sec in checkpoints_sec:
+            match = next(
+                (
+                    quote
+                    for quote in quotes
+                    if target_sec
+                    <= quote["elapsed_sec"]
+                    <= target_sec + max_target_lag_sec
+                ),
+                None,
+            )
+            checkpoints.append(
+                {
+                    "target_sec": target_sec,
+                    "status": "available" if match else "source_unavailable",
+                    "target_max_lag_sec": max_target_lag_sec,
+                    "quote": (
+                        {
+                            **match,
+                            "target_lag_sec": round(
+                                match["elapsed_sec"] - target_sec, 6
+                            ),
+                        }
+                        if match
+                        else None
+                    ),
+                    "bar_price_inference_used": False,
+                }
+            )
+        evidence[trace_id] = {
+            **ledger,
+            "decision_at": ledger["decision_at"].isoformat(),
+            "checkpoints": checkpoints,
+            "checkpoint_available_count": sum(
+                row["status"] == "available" for row in checkpoints
+            ),
+            "checkpoint_required_count": len(checkpoints),
+            "position_mutation_observed": bool(ledger["position_mutations"]),
+        }
+    return evidence
+
+
+def build_holding_flow_bounded_defer_v2_2_report(
+    *,
+    requests: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    checkpoint_evidence: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a non-authoritative one-time defer comparison with strict provenance."""
+
+    result_by_trace = {str(row.get("decision_trace_id") or ""): row for row in results}
+    rows: list[dict[str, Any]] = []
+    for request in requests:
+        trace_id = str(request.get("decision_trace_id") or "")
+        result = result_by_trace.get(trace_id, {})
+        evidence = checkpoint_evidence.get(trace_id, {})
+        immediate_bid = quality._number(
+            (request.get("control") or {}).get("captured_selected_price")
+        )
+        checkpoints = []
+        for checkpoint in evidence.get("checkpoints") or []:
+            row = dict(checkpoint)
+            quote = row.get("quote")
+            quote = dict(quote) if isinstance(quote, dict) else None
+            if quote is not None:
+                quote["executable_bid_delta_pct_vs_immediate"] = (
+                    round((quote["best_bid"] / immediate_bid - 1.0) * 100.0, 10)
+                    if immediate_bid
+                    else None
+                )
+            row["quote"] = quote
+            checkpoints.append(row)
+        complete = bool(checkpoints) and all(
+            row.get("status") == "available" for row in checkpoints
+        )
+        mutation = evidence.get("position_mutation_observed") is True
+        pure_eligible = bool(complete and not mutation and immediate_bid)
+        rows.append(
+            {
+                "decision_trace_id": trace_id,
+                "stock_code": request.get("stock_code"),
+                "effective_venue": request.get("effective_venue"),
+                "session_bucket": request.get("session_bucket"),
+                "decision_at": request.get("decision_ts"),
+                "immediate_executable_bid": immediate_bid,
+                "control_action": (result.get("control_response") or {}).get("action"),
+                "candidate_action": (result.get("candidate_response") or {}).get(
+                    "action"
+                ),
+                "provider_replay_status": result.get("status"),
+                "checkpoints": checkpoints,
+                "checkpoint_available_count": evidence.get(
+                    "checkpoint_available_count", 0
+                ),
+                "checkpoint_required_count": evidence.get(
+                    "checkpoint_required_count", 3
+                ),
+                "source_runtime_position_mutation_observed": mutation,
+                "source_runtime_position_mutations": evidence.get(
+                    "position_mutations", []
+                ),
+                "pure_defer_counterfactual_eligible": pure_eligible,
+                "cost_adjusted_defer_ev_pct": None,
+                "cost_adjusted_defer_ev_status": (
+                    "not_computed_policy_definition_pending"
+                    if pure_eligible
+                    else "not_available_incomplete_checkpoint_or_position_mutation"
+                ),
+            }
+        )
+    complete_rows = [row for row in rows if row["pure_defer_counterfactual_eligible"]]
+    return {
+        "schema": "holding_flow_bounded_defer_v2_2_manual_replay_v1",
+        "status": (
+            "checkpoint_source_ready_policy_definition_pending"
+            if complete_rows
+            else "checkpoint_source_partial_keep_collecting"
+        ),
+        "rows": rows,
+        "eligible_counterfactual_row_count": len(complete_rows),
+        "metric_role": "holding_flow_bounded_defer_counterfactual_source_quality",
+        "decision_authority": "one_time_offline_replay_no_runtime_change",
+        "window_policy": (
+            "first_fresh_same_venue_session_executable_bid_at_or_after_"
+            "30_60_90s_target_within_15s"
+        ),
+        "sample_floor": "one_exact_soft_exit_row_with_all_30_60_90_checkpoints",
+        "primary_decision_metric": "cost_adjusted_defer_ev_pct",
+        "source_quality_gate": (
+            "exact_v2_fresh_quote_provenance_complete_checkpoints_no_position_mutation"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "live_exit_delay",
+            "hard_protect_emergency_or_broker_guard_bypass",
+            "actual_pnl_claim",
+            "completed_bar_checkpoint_price_inference",
+            "provider_model_route_change",
+        ],
+    }
+
+
 def build_entry_price_selection_outcome_comparison(
     *,
     requests: list[dict[str, Any]],
@@ -1123,12 +1410,29 @@ def main(argv: list[str] | None = None) -> int:
             "separate non-exact supplemental cohort."
         ),
     )
+    parser.add_argument(
+        "--holding-flow-checkpoint-source",
+        type=Path,
+        help=(
+            "Attach strict 30/60/90-second same-route executable-bid evidence "
+            "for a one-time holding-flow V2.2 replay."
+        ),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     if args.max_rows <= 0:
         parser.error("--max-rows must be positive")
     if args.execute_candidate and not args.write:
         parser.error("--execute-candidate requires --write")
+    if args.holding_flow_checkpoint_source and args.stage != "holding_flow":
+        parser.error("--holding-flow-checkpoint-source requires --stage holding_flow")
+    if args.holding_flow_checkpoint_source and not args.mature_outcomes_only:
+        parser.error("--holding-flow-checkpoint-source requires --mature-outcomes-only")
+    if (
+        args.holding_flow_checkpoint_source
+        and not args.holding_flow_checkpoint_source.is_file()
+    ):
+        parser.error("--holding-flow-checkpoint-source must be an existing file")
     promotion, _, _ = quality.load_promotion_for_target_date(args.source_date[0])
     control = quality._load_json(quality.control_path(args.source_date[0]))
     traces = _load_rows(quality.TRACE_DIR, "ai_decision_trace", args.source_date)
@@ -1271,6 +1575,22 @@ def main(argv: list[str] | None = None) -> int:
                 "status"
             )
             report["status"] = f"coverage_replay_complete_{selection_status}"
+    if args.holding_flow_checkpoint_source:
+        checkpoint_evidence = load_holding_flow_checkpoint_evidence(
+            pipeline_path=args.holding_flow_checkpoint_source,
+            requests=requests,
+        )
+        report["holding_flow_bounded_defer_v2_2"] = (
+            build_holding_flow_bounded_defer_v2_2_report(
+                requests=requests,
+                results=results,
+                checkpoint_evidence=checkpoint_evidence,
+            )
+        )
+        report["status"] = (
+            "coverage_replay_complete_"
+            + report["holding_flow_bounded_defer_v2_2"]["status"]
+        )
     if args.write:
         quality._atomic_write_json(path, report)
     print(json.dumps(report, ensure_ascii=False))

@@ -805,6 +805,9 @@ Entry edge/risk separation:
 
 DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION = "decision_quality_holding_v2_3"
 DECISION_QUALITY_HOLDING_FLOW_V2_1_PROMPT_VERSION = "decision_quality_holding_flow_v2_1"
+DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION = (
+    "decision_quality_holding_flow_v2_2_bounded_defer"
+)
 
 DECISION_QUALITY_ENTRY_PRICE_V2_1_PROMPT_VERSION = (
     "decision_quality_entry_price_v2_1_conditional_selection"
@@ -924,6 +927,34 @@ Holding-flow decision rules:
     trailing rules, alter provider routing, or bypass broker and hard-safety guards.
 """.strip()
 
+_DECISION_QUALITY_HOLDING_FLOW_V2_2_RULES = """
+Bounded-defer V2.2 rules:
+1. Use holding_exact_contract_facts_v1.bounded_defer_eligible as an eligibility
+   boundary, not as a forced HOLD. It is true only for a fresh, position-observed,
+   order-consistent soft-exit candidate with no current sell-order conflict and a
+   positive exact loss budget.
+2. A hard, protect, emergency, broker, order, position, or source-quality blocker
+   requires EXIT. Never delay a mandatory guard for recovery exploration.
+3. For an eligible soft-exit row, compare immediate executable-bid exit with a
+   bounded 30/60/90-second re-evaluation. HOLD means offline bounded defer only;
+   it never cancels an order or changes the live exit owner.
+4. Do not equate an existing loss, adverse completed trend, or sell-dominated tape
+   with a mandatory EXIT when fresh absorption, bid-depth support, exhaustion, or
+   recovery asymmetry can justify a bounded recheck inside allowed_worsen_pct.
+5. Conversely, a wide spread or bid depth alone cannot justify HOLD. Preserve
+   severe-tail risk, failed recovery, accelerating sell pressure, and structural
+   breakdown as EXIT evidence.
+6. Use EDGE/HOLD with trigger=recovery_required only when a bounded recovery path
+   remains plausible. Use NO_EDGE/EXIT when continuation and recovery are both
+   invalidated. TRIM remains limited to remaining_qty>=2.
+7. The fixed checkpoint horizons and loss budget are deterministic fields in the
+   candidate input. Never invent a new horizon, infer future prices, or use outcome
+   labels while deciding.
+8. This is a one-time offline replay. runtime_effect=false,
+   allowed_runtime_apply=false, actual_order_submitted=false, and
+   broker_order_forbidden=true remain mandatory.
+""".strip()
+
 
 def decision_quality_v2_system_prompt(stage: str, *, live_entry: bool = False) -> str:
     """Return an English ASCII decision-quality prompt for one stage."""
@@ -1028,6 +1059,18 @@ def decision_quality_holding_flow_v2_1_system_prompt() -> str:
         decision_quality_v2_system_prompt("holding")
         + "\n\n"
         + _DECISION_QUALITY_HOLDING_FLOW_V2_1_RULES
+    )
+
+
+def decision_quality_holding_flow_v2_2_system_prompt() -> str:
+    """Return the one-time offline soft-exit bounded-defer candidate prompt."""
+
+    return (
+        decision_quality_v2_system_prompt("holding")
+        + "\n\n"
+        + _DECISION_QUALITY_HOLDING_FLOW_V2_1_RULES
+        + "\n\n"
+        + _DECISION_QUALITY_HOLDING_FLOW_V2_2_RULES
     )
 
 
