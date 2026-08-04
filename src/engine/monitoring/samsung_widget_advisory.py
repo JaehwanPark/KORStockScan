@@ -53,6 +53,9 @@ from src.engine.monitoring.samsung_widget_contract import (
     snapshot_observed_at,
     snapshot_is_fresh,
 )
+from src.engine.monitoring.samsung_widget_entry_notify import (
+    SamsungWidgetEntryTelegramNotifier,
+)
 from src.engine.sniper_config import CONF
 from src.trading.order.tick_utils import (
     clamp_price_to_tick,
@@ -2055,10 +2058,12 @@ class SamsungWidgetCollector:
         observation_dir: Path = DEFAULT_OBSERVATION_DIR,
         external_provider: ExternalMarketProvider | None = None,
         request_session: requests.Session | None = None,
+        entry_notifier: SamsungWidgetEntryTelegramNotifier | None = None,
     ) -> None:
         self.snapshot_path = snapshot_path
         self.external_provider = external_provider or YahooExternalMarketProvider()
         self.request_session = request_session
+        self.entry_notifier = entry_notifier
         self.request_budget = ReadOnlyRequestBudget()
         self.promotion_filter = AdvisoryPromotionFilter()
         self.recorder = ObservationRecorder(observation_dir)
@@ -2084,6 +2089,22 @@ class SamsungWidgetCollector:
         self._optional_gaps: list[dict[str, str]] = []
         self._external_fetch_error: str | None = None
         self._promotion_state_restore_attempted = False
+
+    def _observe_entry_notification(
+        self, payload: dict[str, Any], observed_at: datetime
+    ) -> str:
+        if self.entry_notifier is None:
+            return "not_configured"
+        try:
+            return self.entry_notifier.observe(payload, observed_at)
+        except Exception as exc:
+            # Telegram/state persistence is advisory-only and must never
+            # replace a fresh market-data snapshot with collector failure.
+            print(
+                "[WARN] Samsung widget entry Telegram notification isolated: "
+                f"{type(exc).__name__}"
+            )
+            return "notifier_error_isolated"
 
     @staticmethod
     def _scope_key(
@@ -2578,6 +2599,7 @@ class SamsungWidgetCollector:
         }
         _atomic_write_json(self.snapshot_path, payload)
         self.recorder.record(payload, decision_now)
+        self._observe_entry_notification(payload, decision_now)
         return payload
 
     def write_failure(self, reason: str, observed_at: datetime | None = None) -> None:
@@ -2629,6 +2651,7 @@ def main(argv: list[str] | None = None) -> int:
     collector = SamsungWidgetCollector(
         snapshot_path=args.snapshot_path,
         observation_dir=args.observation_dir,
+        entry_notifier=SamsungWidgetEntryTelegramNotifier(),
     )
     if args.once:
         collector.collect_once()

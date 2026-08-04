@@ -1051,6 +1051,26 @@ def test_collector_scope_change_clears_session_local_caches(tmp_path):
     )
 
 
+def test_collector_isolates_entry_notification_failure(tmp_path, capsys):
+    class BrokenNotifier:
+        def observe(self, payload, observed_at):
+            raise OSError("telegram state unavailable")
+
+    collector = advisory.SamsungWidgetCollector(
+        snapshot_path=tmp_path / "snapshot.json",
+        observation_dir=tmp_path / "observations",
+        entry_notifier=BrokenNotifier(),
+    )
+
+    status = collector._observe_entry_notification(
+        {"advisory": {"state": "ENTRY_CAUTION"}},
+        datetime(2026, 8, 4, 14, 33, tzinfo=KST),
+    )
+
+    assert status == "notifier_error_isolated"
+    assert "OSError" in capsys.readouterr().out
+
+
 def test_stale_bbo_fails_closed_before_advisory():
     result = advisory.evaluate_advisory(**_ready_input(bbo_age=21.0))
     assert result["state"] == "DATA_WAIT"

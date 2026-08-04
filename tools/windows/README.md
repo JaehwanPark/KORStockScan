@@ -116,6 +116,17 @@ as live aftermarket flow. Each advisory expires after 60 seconds or at the
 current session close, whichever arrives first, and never later than 20:00 KST.
 The window always says `관측용/자동주문 아님`; `ENTRY_READY` and
 `ENTRY_CAUTION` are rendered as softer observation labels, not order commands.
+
+The AWS collector also sends a plain-text Telegram notice only to the configured
+`ADMIN_ID` when a displayed advisory first becomes `ENTRY_CAUTION` or
+`ENTRY_READY`.  A direct `ENTRY_CAUTION -> ENTRY_READY` upgrade produces one
+additional notice.  Repeated 10-second observations are deduplicated, and a
+non-actionable interval of at least 60 seconds is required before a new episode
+can notify again.  Telegram failures are isolated from quote collection and do
+not change advisory state, trading runtime, accounts, or orders.  Set
+`KORSTOCKSCAN_SAMSUNG_WIDGET_ENTRY_TELEGRAM_ENABLED=false` on the collector
+service to disable this admin-only notification path.
+
 Only those two actionable states can display a recommended price range. `WATCH`
 and `DATA_WAIT` show `가격대기`, `NO_CHASE` shows `범위이탈`, and `AVOID` shows
 `범위없음`; the widget never fabricates a price while a setup condition is
