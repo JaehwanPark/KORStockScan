@@ -623,6 +623,9 @@ DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION = (
 DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION = (
     "decision_quality_v2_11_clean_continuation_probe"
 )
+DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION = (
+    "decision_quality_v2_12_selective_recovery_probe"
+)
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -1277,4 +1280,50 @@ def decision_quality_v2_11_clean_continuation_system_prompt(stage: str) -> str:
         decision_quality_v2_10_bounded_opportunity_system_prompt(normalized)
         + "\n\n"
         + _DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_RULES
+    )
+
+
+_DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_RULES = """
+V2.12 selective-recovery one-share probe experiment:
+1. This rule set narrows the inherited V2.10 BUY permission without removing
+   truthful EDGE/WAIT observations. BUY remains an offline label meaning only
+   "present one passive share to unchanged downstream submit guards."
+2. BUY is permitted only when either clean_continuation_probe.eligible=true or
+   selective_recovery_probe.eligible=true. A generic bounded_opportunity is no
+   longer sufficient for BUY. Non-eligible structural edge should remain WAIT
+   with recovery_required unless the trigger failed, risk is blocking, or the
+   after-cost magnitude is genuinely unfavorable.
+3. selective_recovery_probe.eligible=true means all of these exact facts hold:
+   fresh dual source, normal observable spread, no hard blocker, structural
+   edge, bounded anticipatory reversal, conservative execution cost <=0.25%,
+   peak drawdown above -2.0%, near-reference reclaim, and at least three
+   independent non-tape precursors. Do not weaken or infer a missing fact.
+4. For clean continuation, require truthful after-cost upside/downside ratio
+   >=0.75. For selective recovery, require ratio >=1.00. Eligibility does not
+   compel BUY: use WAIT when recovery is not yet confirmed or magnitude support
+   is incomplete. Never fabricate numeric estimates to pass a floor.
+5. A wide_but_observable spread, peak drawdown <=-2.0%, execution cost >0.25%,
+   missing near-reference reclaim, fewer than three non-tape precursors, stale
+   or conflicting source, failed structure, large sell print, or blocking risk
+   cannot produce BUY. Preserve valid structural edge as WAIT when risk remains
+   non-blocking; use DROP only for failed, blocking, or unfavorable evidence.
+6. Current adverse tape is not by itself NO_EDGE when completed structure and
+   volume retain edge. Keep tape truthful and separate it from the completed-bar
+   trend. Conversely, supportive tape alone cannot create BUY eligibility.
+7. Runtime effect, prompt promotion, provider/model changes, thresholds, order
+   price/quantity, broker guards, and bot state remain forbidden. Outcome labels
+   are absent from candidate input and must never influence the action.
+""".strip()
+
+
+def decision_quality_v2_12_selective_recovery_system_prompt(stage: str) -> str:
+    """Return the offline selective-recovery one-share candidate prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.12 currently supports entry only")
+    return (
+        decision_quality_v2_11_clean_continuation_system_prompt(normalized)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_RULES
     )

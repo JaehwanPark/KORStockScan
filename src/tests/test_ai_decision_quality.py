@@ -406,6 +406,14 @@ def test_paired_request_preparation_is_not_mislabeled_as_candidate_rejection():
     assert report["missing_result_count"] == 1
 
 
+def test_stage_paired_path_isolated_from_combined_artifact():
+    assert quality.stage_paired_path("2026-08-03", "holding").name == (
+        "ai_prompt_paired_replay_2026-08-03_holding.json"
+    )
+    with pytest.raises(ValueError, match="unsupported_paired_stage"):
+        quality.stage_paired_path("2026-08-03", "entry_price")
+
+
 def test_control_manifest_selects_named_prompt_version_and_records_rollover(tmp_path):
     old_trace = {
         **_trace(),
@@ -3883,6 +3891,167 @@ def test_v2_11_clean_continuation_requires_truthful_guard_delegated_probe():
     assert summary["runtime_effect"] is False
 
 
+def test_v2_12_selective_recovery_restricts_generic_bounded_probe_buy():
+    exact_payload = {
+        "current": {"price": 10000, "fluctuation_pct": 4.0},
+        "features": {
+            "quote_fresh_for_entry": True,
+            "quote_stale": False,
+            "quote_age_ms": 500,
+            "quote_depth_present": True,
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 500,
+            "spread_bp": 40,
+            "top1_bid_notional": 2_000_000,
+            "top1_ask_notional": 2_000_000,
+            "same_price_buy_absorption": 1,
+            "buy_pressure_10t": 70,
+            "net_aggressive_delta_10t": 50,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -10,
+            "curr_vs_ma5_bp": 5,
+            "price_change_10t_pct": 0.2,
+            "entry_order_flow_status": "supportive",
+            "tick_aggressor_trusted_count": 12,
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_quality": "pass",
+            "tick_accel_source": "trusted_aggressor",
+            "tick_acceleration_ratio": 1.2,
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 20,
+            "source_quality": {
+                "status": "fresh_consistent",
+                "decision_window": {
+                    "status": "fresh_consistent",
+                    "provider_call_allowed": True,
+                    "completed_bar_count": 20,
+                },
+            },
+            "structure": {
+                "returns_pct": {
+                    "1": 0.6,
+                    "3": 0.3,
+                    "5": -0.1,
+                    "10": 1.2,
+                    "20": 1.4,
+                    "60": 1.6,
+                },
+                "slopes_pct_per_bar": {
+                    "5": 0.05,
+                    "10": 0.1,
+                    "20": 0.1,
+                    "60": 0.05,
+                },
+                "peak_drawdown_pct": -1.2,
+                "latest_lower_wick_ratio": 0.5,
+                "low_rebound_pct": 0.8,
+                "high_direction": "up",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 1.0,
+                "volume_direction_alignment": "aligned",
+                "regime": "trend",
+                "alignment": "supportive",
+            },
+        },
+    }
+    base_request = {
+        "paired_replay_id": "pair-v2-12",
+        "decision_trace_id": "trace-v2-12",
+        "stage": "entry",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "payload_sha256": quality._sha256(exact_payload),
+        "exact_payload": exact_payload,
+        "control": {"captured_action": "WAIT"},
+        "candidate": {
+            "provider": "openai",
+            "model": "gpt-5.4-nano",
+            "response_schema_sha256": "schema-hash",
+        },
+        "sample_floor": {"pass": True},
+        **quality.OFFLINE_CONTRACT,
+    }
+    v2_11_request = quality.prepare_detailed_paired_replay_requests(
+        [base_request],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION
+        ),
+    )[0]
+    assert (
+        "selective_recovery_probe"
+        not in v2_11_request["anticipatory_reversal_analysis"]
+    )
+    request = quality.prepare_detailed_paired_replay_requests(
+        [base_request],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION
+        ),
+    )[0]
+    analysis = request["anticipatory_reversal_analysis"]
+    assert analysis["clean_continuation_probe"]["eligible"] is False
+    assert analysis["selective_recovery_probe"]["eligible"] is True
+    assert request["candidate"]["system_prompt"].isascii()
+
+    buy_response = {
+        "edge_state": "EDGE",
+        "action": "BUY",
+        "expected_upside_pct": 1.2,
+        "expected_downside_pct": -0.7,
+        "confidence": 60,
+        "reason_codes": [
+            "edge_positive",
+            "recovery_trigger_confirmed",
+            "risk_reward_favorable",
+        ],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "mixed",
+            "tape": "supportive",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "reversal",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    assert quality.validate_replay_candidate_response(request, buy_response) == []
+
+    no_reclaim_payload = json.loads(json.dumps(exact_payload))
+    no_reclaim_payload["features"].update(
+        {
+            "curr_vs_micro_vwap_bp": -100,
+            "curr_vs_ma5_bp": -100,
+            "price_change_10t_pct": -0.1,
+        }
+    )
+    blocked_request = quality.prepare_detailed_paired_replay_requests(
+        [
+            {
+                **base_request,
+                "paired_replay_id": "pair-v2-12-no-reclaim",
+                "decision_trace_id": "trace-v2-12-no-reclaim",
+                "payload_sha256": quality._sha256(no_reclaim_payload),
+                "exact_payload": no_reclaim_payload,
+            }
+        ],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION
+        ),
+    )[0]
+    assert (
+        blocked_request["anticipatory_reversal_analysis"]["selective_recovery_probe"][
+            "eligible"
+        ]
+        is False
+    )
+    assert "selective_recovery_buy_not_eligible" in (
+        quality.validate_replay_candidate_response(blocked_request, buy_response)
+    )
+
+
 def test_v2_9_1_semantic_repair_aligns_trigger_reason_without_promoting_buy():
     request = {
         "stage": "entry",
@@ -5507,3 +5676,80 @@ def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
     assert output_schema["properties"]["expected_upside_pct"]["minimum"] == 0
     assert output_schema["properties"]["expected_downside_pct"]["maximum"] == 0
     assert captured["metadata"]["candidate_contract_sha256"]
+
+
+def test_v2_12_semantic_correction_preserves_nonblocking_wait(monkeypatch):
+    captured = {}
+    response = {
+        "edge_state": "EDGE",
+        "action": "WAIT",
+        "expected_upside_pct": 0.8,
+        "expected_downside_pct": -0.7,
+        "confidence": 55,
+        "reason_codes": ["recovery_trigger_required"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "mixed",
+            "tape": "supportive",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "reversal",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "recovery_required",
+        },
+    }
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                id="resp-v2-12-correction",
+                output_text=json.dumps(response),
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    output_tokens=10,
+                    total_tokens=20,
+                ),
+            )
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key, max_retries):
+            assert api_key == "test-secret"
+            assert max_retries == 0
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    request = {
+        "paired_replay_id": "pair-v2-12-correction",
+        "stage": "entry",
+        "exact_payload": {"value": 1},
+        "candidate_schema_correction_errors": [
+            "entry_trusted_supportive_trigger_misclassified",
+            "entry_edge_drop_requires_failed_blocking_or_unfavorable",
+        ],
+        "control": {"provider": "openai", "model": "gpt-test"},
+        "candidate": {
+            "provider": "openai",
+            "model": "gpt-test",
+            "system_prompt": "V2.12 base prompt.",
+            "prompt_version": (
+                f"{quality.DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}"
+                "_entry"
+            ),
+            "semantic_validator_version": (
+                quality.BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+            ),
+        },
+        **quality.OFFLINE_CONTRACT,
+    }
+
+    quality.execute_openai_prompt_v2_candidate(
+        request,
+        api_keys=["test-secret"],
+    )
+
+    instructions = captured["instructions"]
+    assert "For V2.12" in instructions
+    assert "WAIT with trigger=recovery_required" in instructions
+    assert "WAIT is prohibited for this contract" not in instructions

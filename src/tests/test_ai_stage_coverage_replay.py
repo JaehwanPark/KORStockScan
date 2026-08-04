@@ -166,6 +166,33 @@ def test_prepare_stage_requests_preserves_source_quality_exclusion():
     assert summary["source_quality_blockers_present"] == 1
 
 
+def test_prepare_stage_requests_restricts_to_mature_outcome_trace_ids():
+    included = _trace("entry_price")
+    excluded = {
+        **included,
+        "decision_trace_id": "trace-entry-price-without-mature-outcome",
+        "payload_sha256": "payload-entry-price-without-mature-outcome",
+    }
+    excluded_payload = {
+        **_payload("entry_price"),
+        "payload_sha256": "payload-entry-price-without-mature-outcome",
+    }
+
+    requests, summary = replay.prepare_stage_requests(
+        stage="entry_price",
+        dates=["2026-07-29"],
+        max_rows=16,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[included, excluded],
+        payloads=[_payload("entry_price"), excluded_payload],
+        eligible_trace_ids={"trace-entry_price"},
+    )
+
+    assert [row["decision_trace_id"] for row in requests] == ["trace-entry_price"]
+    assert summary["mature_outcome_not_eligible"] == 1
+
+
 def test_prepare_entry_stage_uses_v2_8_and_unwraps_live_v2_7_payload():
     payload = _payload("analyze_target")
     raw_exact = payload["sanitized_user_input"]

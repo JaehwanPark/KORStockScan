@@ -92,6 +92,7 @@ def prepare_stage_requests(
     promotion: dict[str, Any],
     traces: list[dict[str, Any]],
     payloads: list[dict[str, Any]],
+    eligible_trace_ids: set[str] | None = None,
     allow_approved_cache_redaction_supplemental: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Freeze the first exact eligible rows and preserve every exclusion reason."""
@@ -129,6 +130,10 @@ def prepare_stage_requests(
     )
     for trace in sorted(traces, key=lambda row: str(row.get("decision_ts") or "")):
         if str(trace.get("endpoint") or "") != endpoint:
+            continue
+        trace_id = str(trace.get("decision_trace_id") or "")
+        if eligible_trace_ids is not None and trace_id not in eligible_trace_ids:
+            exclusions["mature_outcome_not_eligible"] += 1
             continue
         if trace.get("payload_replay_exact") is True:
             exact_source_count += 1
@@ -222,10 +227,10 @@ Entry-price replay extension:
     for row in selected:
         trace = row["trace"]
         payload = row["payload"]
+        trace_id = str(trace.get("decision_trace_id") or "")
         exact_payload = quality._replay_exact_payload(
             payload.get("sanitized_user_input")
         )
-        trace_id = str(trace.get("decision_trace_id") or "")
         supplemental = bool(row.get("semantic_replay_supplemental"))
         authority_contract = SUPPLEMENTAL_CONTRACT if supplemental else CONTRACT
         request = {
@@ -651,6 +656,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute-candidate", action="store_true")
     parser.add_argument("--candidate-workers", type=int, default=4)
     parser.add_argument(
+        "--mature-outcomes-only",
+        action="store_true",
+        help=(
+            "Restrict requests to exact traces with a source-quality-passing "
+            "primary outcome metric, and attach paired outcome comparison."
+        ),
+    )
+    parser.add_argument(
         "--allow-approved-cache-redaction-supplemental",
         action="store_true",
         help=(
@@ -668,6 +681,25 @@ def main(argv: list[str] | None = None) -> int:
     control = quality._load_json(quality.control_path(args.source_date[0]))
     traces = _load_rows(quality.TRACE_DIR, "ai_decision_trace", args.source_date)
     payloads = _load_rows(quality.PAYLOAD_DIR, "ai_decision_payloads", args.source_date)
+    labels: list[dict[str, Any]] = []
+    for source_date in args.source_date:
+        labels.extend(
+            quality._load_json(quality.label_report_path(source_date)).get("labels")
+            or []
+        )
+    eligible_trace_ids = None
+    if args.mature_outcomes_only:
+        eligible_trace_ids = {
+            str(row.get("decision_trace_id") or "")
+            for row in labels
+            if row.get("label_status") in {"partial", "mature"}
+            and row.get("source_quality_status") == "pass"
+            and row.get("primary_cohort_eligible") is True
+            and quality._primary_metric(row) is not None
+            and row.get("decision_trace_id")
+        }
+        if not eligible_trace_ids:
+            parser.error("--mature-outcomes-only found no eligible outcome labels")
     requests, source_summary = prepare_stage_requests(
         stage=args.stage,
         dates=args.source_date,
@@ -676,6 +708,7 @@ def main(argv: list[str] | None = None) -> int:
         promotion=promotion,
         traces=traces,
         payloads=payloads,
+        eligible_trace_ids=eligible_trace_ids,
         allow_approved_cache_redaction_supplemental=(
             args.allow_approved_cache_redaction_supplemental
         ),
@@ -731,6 +764,29 @@ def main(argv: list[str] | None = None) -> int:
         requests=requests,
         results=results,
     )
+    if args.mature_outcomes_only:
+        report["mature_outcomes_only"] = True
+        stage_endpoint = {
+            "entry": "analyze_target",
+            "holding": "holding_score",
+            "entry_price": "entry_price",
+        }[args.stage]
+        stage_trace_ids = {
+            str(row.get("decision_trace_id") or "")
+            for row in traces
+            if str(row.get("endpoint") or "") == stage_endpoint
+            and row.get("decision_trace_id")
+        }
+        report["mature_outcome_eligible_trace_count"] = len(
+            (eligible_trace_ids or set()).intersection(stage_trace_ids)
+        )
+        report["outcome_comparison_status"] = "attached_mature_outcomes"
+        report["outcome_comparison"] = quality.build_paired_replay_report(
+            target_date=args.date,
+            requests=requests,
+            results=results,
+            labels=labels,
+        )
     if args.write:
         quality._atomic_write_json(path, report)
     print(json.dumps(report, ensure_ascii=False))
