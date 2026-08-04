@@ -4181,6 +4181,79 @@ def _attach_recovery_confirmation_probe_contract_v1(
     return enriched
 
 
+def build_v2_13_recovery_confirmation_analysis_v1(
+    exact_payload: Any,
+    *,
+    stage: str = "entry",
+) -> dict[str, Any]:
+    """Build the shared offline/live V2.13 pre-outcome analysis contract."""
+
+    analysis = build_anticipatory_reversal_analysis_v1(
+        exact_payload,
+        stage=stage,
+    )
+    analysis = _attach_selective_recovery_probe_contract_v1(analysis)
+    return _attach_recovery_confirmation_probe_contract_v1(analysis)
+
+
+def validate_v2_13_recovery_confirmation_response(
+    *,
+    exact_payload: Any,
+    analysis: dict[str, Any],
+    response: dict[str, Any],
+) -> list[str]:
+    """Validate one V2.13 response without granting order authority."""
+
+    request = {
+        "stage": "entry",
+        "exact_payload": exact_payload,
+        "anticipatory_reversal_analysis": analysis,
+        "candidate": {
+            "prompt_version": (
+                f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
+            ),
+            "semantic_validator_version": (
+                BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+            ),
+            "semantic_repair_version": BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION,
+        },
+    }
+    return validate_replay_candidate_response(request, response)
+
+
+def repair_v2_13_recovery_confirmation_response(
+    *,
+    exact_payload: Any,
+    analysis: dict[str, Any],
+    response: dict[str, Any],
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    """Apply the deterministic V2.13 adapter and return remaining errors."""
+
+    request = {
+        "stage": "entry",
+        "exact_payload": exact_payload,
+        "anticipatory_reversal_analysis": analysis,
+        "candidate": {
+            "prompt_version": (
+                f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
+            ),
+            "semantic_validator_version": (
+                BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+            ),
+            "semantic_repair_version": BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION,
+        },
+    }
+    repaired, repairs = repair_bounded_opportunity_candidate_response(
+        request,
+        response,
+    )
+    return (
+        repaired,
+        repairs,
+        validate_replay_candidate_response(request, repaired),
+    )
+
+
 def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
     holding = (
         exact_payload.get("holding_decision_context")
@@ -6599,22 +6672,26 @@ def prepare_detailed_paired_replay_requests(
             DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         }:
-            anticipatory_analysis = build_anticipatory_reversal_analysis_v1(
-                exact_payload,
-                stage=stage,
-            )
-            if candidate_prompt_version in {
-                DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
-                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
-            }:
-                anticipatory_analysis = _attach_selective_recovery_probe_contract_v1(
-                    anticipatory_analysis
-                )
             if (
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
             ):
-                anticipatory_analysis = _attach_recovery_confirmation_probe_contract_v1(
+                anticipatory_analysis = (
+                    build_v2_13_recovery_confirmation_analysis_v1(
+                        exact_payload,
+                        stage=stage,
+                    )
+                )
+            else:
+                anticipatory_analysis = build_anticipatory_reversal_analysis_v1(
+                    exact_payload,
+                    stage=stage,
+                )
+            if (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION
+            ):
+                anticipatory_analysis = _attach_selective_recovery_probe_contract_v1(
                     anticipatory_analysis
                 )
             candidate_input[ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA] = (

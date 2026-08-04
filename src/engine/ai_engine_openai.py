@@ -67,8 +67,11 @@ from src.engine.scalping.ai_decision_trace import (  # noqa: E402
 )
 from src.engine.scalping.ai_decision_quality import (  # noqa: E402
     build_exact_payload_analysis_v1,
+    build_v2_13_recovery_confirmation_analysis_v1,
+    repair_v2_13_recovery_confirmation_response,
     resolve_candidate_reason_code_conflicts,
     validate_candidate_response,
+    validate_v2_13_recovery_confirmation_response,
 )
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
@@ -100,9 +103,11 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_OVERNIGHT_DECISION_PROMPT,
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
+    decision_quality_v2_13_recovery_confirmation_system_prompt,
 )
 
 
@@ -1716,6 +1721,18 @@ class GPTSniperEngine:
                     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
                     "watching",
                 )
+            if (
+                selected_version
+                == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ):
+                return (
+                    decision_quality_v2_13_recovery_confirmation_system_prompt(
+                        "entry"
+                    ),
+                    "scalping_entry",
+                    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+                    "watching",
+                )
             if selected_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION:
                 return (
                     decision_quality_v2_detailed_system_prompt(
@@ -1761,13 +1778,24 @@ class GPTSniperEngine:
             str(prompt_version or DECISION_QUALITY_DETAILED_PROMPT_VERSION).strip()
             or DECISION_QUALITY_DETAILED_PROMPT_VERSION
         )
-        probe_prompt_selected = (
+        v2_7_probe_prompt_selected = (
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
+        v2_13_prompt_selected = bool(
+            normalized_prompt_version
+            == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        )
+        probe_prompt_selected = bool(
+            v2_7_probe_prompt_selected or v2_13_prompt_selected
+        )
         adapter_version = (
-            "decision_quality_v2_7_probe_entry_v8"
-            if probe_prompt_selected
-            else "decision_quality_v2_7_entry_v5"
+            "decision_quality_v2_13_recovery_confirmation_entry_v1"
+            if v2_13_prompt_selected
+            else (
+                "decision_quality_v2_7_probe_entry_v8"
+                if v2_7_probe_prompt_selected
+                else "decision_quality_v2_7_entry_v5"
+            )
         )
         model_action = str(payload.get("action") or "").strip().upper() or None
         model_edge_state = str(payload.get("edge_state") or "").strip().upper() or None
@@ -1776,6 +1804,11 @@ class GPTSniperEngine:
             if isinstance(payload.get("reason_codes"), list)
             else []
         )
+        model_invalid_reason_codes = [
+            code
+            for code in model_reason_codes
+            if code not in DECISION_QUALITY_V2_REASON_CODES
+        ]
         model_evidence = (
             {str(key): str(value) for key, value in payload.get("evidence", {}).items()}
             if isinstance(payload.get("evidence"), dict)
@@ -1793,11 +1826,27 @@ class GPTSniperEngine:
             "decision_quality_model_reason_codes": model_reason_codes,
             "decision_quality_model_evidence": model_evidence,
         }
-        contract_errors = validate_candidate_response(
-            payload,
-            stage="entry",
-            exact_payload=exact_payload,
-            enforce_live_probe_contract=probe_prompt_selected,
+        v2_13_analysis = (
+            build_v2_13_recovery_confirmation_analysis_v1(
+                exact_payload,
+                stage="entry",
+            )
+            if v2_13_prompt_selected
+            else {}
+        )
+        contract_errors = (
+            validate_v2_13_recovery_confirmation_response(
+                exact_payload=exact_payload,
+                analysis=v2_13_analysis,
+                response=payload,
+            )
+            if v2_13_prompt_selected
+            else validate_candidate_response(
+                payload,
+                stage="entry",
+                exact_payload=exact_payload,
+                enforce_live_probe_contract=v2_7_probe_prompt_selected,
+            )
         )
         repair_fields = {
             "decision_quality_contract_repair_applied": False,
@@ -1805,7 +1854,28 @@ class GPTSniperEngine:
             "decision_quality_contract_original_errors": list(contract_errors),
             "decision_quality_contract_invalid_reason_codes": [],
         }
-        if contract_errors and model_action != "BUY":
+        if contract_errors and model_action != "BUY" and v2_13_prompt_selected:
+            repaired, repair_codes, repaired_errors = (
+                repair_v2_13_recovery_confirmation_response(
+                    exact_payload=exact_payload,
+                    analysis=v2_13_analysis,
+                    response=payload,
+                )
+            )
+            if repair_codes and not repaired_errors:
+                payload = repaired
+                contract_errors = []
+                repair_fields = {
+                    "decision_quality_contract_repair_applied": True,
+                    "decision_quality_contract_repair_codes": repair_codes,
+                    "decision_quality_contract_original_errors": list(
+                        repair_fields["decision_quality_contract_original_errors"]
+                    ),
+                    "decision_quality_contract_invalid_reason_codes": (
+                        model_invalid_reason_codes
+                    ),
+                }
+        if contract_errors and model_action != "BUY" and not v2_13_prompt_selected:
             repaired = dict(payload)
             repair_codes = []
             non_buy_action_aliases = {
@@ -2393,17 +2463,26 @@ class GPTSniperEngine:
                     model_invalid_reason_codes
                 )
         if contract_errors:
+            response_schema = (
+                "decision_quality_v2_13_entry"
+                if v2_13_prompt_selected
+                else "decision_quality_v2_7_entry"
+            )
             return {
                 **payload,
                 **model_fields,
                 **repair_fields,
                 "action": "DROP",
                 "score": 0,
-                "reason": "decision_quality_v2_7_semantic_rejected",
+                "reason": (
+                    "decision_quality_v2_13_semantic_rejected"
+                    if v2_13_prompt_selected
+                    else "decision_quality_v2_7_semantic_rejected"
+                ),
                 "decision_quality_contract_status": "semantic_rejected",
                 "decision_quality_contract_errors": contract_errors,
                 "decision_quality_live_adapter": adapter_version,
-                "decision_quality_response_schema": "decision_quality_v2_7_entry",
+                "decision_quality_response_schema": response_schema,
                 "decision_quality_score_semantics": (
                     "fail_closed_not_model_quality_score"
                 ),
@@ -2414,7 +2493,11 @@ class GPTSniperEngine:
                 "entry_probe_intent_actual_order_submitted": False,
             }
 
-        action = str(payload.get("action") or "DROP").upper()
+        candidate_action = str(payload.get("action") or "DROP").upper()
+        v2_13_buy_probe_selected = bool(
+            v2_13_prompt_selected and candidate_action == "BUY"
+        )
+        action = "WAIT" if v2_13_buy_probe_selected else candidate_action
         confidence = max(0, min(100, int(payload.get("confidence") or 0)))
         if action == "BUY":
             score = max(75, confidence)
@@ -2426,20 +2509,37 @@ class GPTSniperEngine:
             str(code) for code in payload.get("reason_codes") or [] if str(code)
         ]
         evidence = (
-            payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+            dict(payload.get("evidence"))
+            if isinstance(payload.get("evidence"), dict)
+            else {}
         )
+        if v2_13_buy_probe_selected:
+            reason_codes = [
+                (
+                    "recovery_trigger_required"
+                    if code == "recovery_trigger_confirmed"
+                    else code
+                )
+                for code in reason_codes
+            ]
+            if "recovery_trigger_required" not in reason_codes:
+                reason_codes.append("recovery_trigger_required")
+            evidence["trigger"] = "recovery_required"
         entry_probe_intent = bool(
-            probe_prompt_selected
-            and action == "WAIT"
-            and str(payload.get("edge_state") or "").strip().upper() == "EDGE"
-            and str(evidence.get("setup") or "").strip().lower()
-            in {"continuation", "pullback_recovery", "reversal"}
-            and str(evidence.get("positive_edge") or "").strip().lower()
-            in {"moderate", "strong"}
-            and str(evidence.get("adverse_risk") or "").strip().lower()
-            in {"low", "moderate", "high"}
-            and str(evidence.get("trigger") or "").strip().lower()
-            == "recovery_required"
+            v2_13_buy_probe_selected
+            or (
+                v2_7_probe_prompt_selected
+                and action == "WAIT"
+                and str(payload.get("edge_state") or "").strip().upper() == "EDGE"
+                and str(evidence.get("setup") or "").strip().lower()
+                in {"continuation", "pullback_recovery", "reversal"}
+                and str(evidence.get("positive_edge") or "").strip().lower()
+                in {"moderate", "strong"}
+                and str(evidence.get("adverse_risk") or "").strip().lower()
+                in {"low", "moderate", "high"}
+                and str(evidence.get("trigger") or "").strip().lower()
+                == "recovery_required"
+            )
         )
         entry_probe_intent_eligible_before_recent_exit = entry_probe_intent
         recent_exit_context = (
@@ -2480,14 +2580,32 @@ class GPTSniperEngine:
             **repair_fields,
             "action": action,
             "score": score,
-            "reason": ",".join(reason_codes[:4])[:120] or "decision_quality_v2_7",
+            "reason_codes": reason_codes,
+            "evidence": evidence,
+            "reason": ",".join(reason_codes[:4])[:120]
+            or (
+                "decision_quality_v2_13"
+                if v2_13_prompt_selected
+                else "decision_quality_v2_7"
+            ),
             "decision_quality_contract_status": "pass",
             "decision_quality_contract_errors": [],
             "decision_quality_live_adapter": adapter_version,
             "decision_quality_model_confidence": confidence,
-            "decision_quality_response_schema": "decision_quality_v2_7_entry",
+            "decision_quality_response_schema": (
+                "decision_quality_v2_13_entry"
+                if v2_13_prompt_selected
+                else "decision_quality_v2_7_entry"
+            ),
             "decision_quality_score_semantics": (
-                "confidence_clamped_to_legacy_action_band"
+                "candidate_buy_mapped_to_bounded_wait_probe"
+                if v2_13_buy_probe_selected
+                else "confidence_clamped_to_legacy_action_band"
+            ),
+            "decision_quality_runtime_action_mapping": (
+                "v2_13_buy_to_bounded_wait_probe"
+                if v2_13_buy_probe_selected
+                else "model_action_preserved"
             ),
             "entry_probe_intent": entry_probe_intent,
             "entry_probe_intent_status": (
@@ -6663,9 +6781,15 @@ class GPTSniperEngine:
                 in {
                     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
                     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                 }
                 and prompt_type == "scalping_entry"
                 and normalized_profile == "watching"
+            )
+            decision_quality_v2_13_selected = bool(
+                prompt_version
+                == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+                and decision_quality_v2_7_selected
             )
             matrix_runtime = build_holding_exit_matrix_runtime_context(
                 prompt_profile=normalized_profile,
@@ -6714,6 +6838,7 @@ class GPTSniperEngine:
             cache_strategy = f"{cache_strategy}:prompt:{prompt_version}"
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             decision_quality_v2_7_selected = False
+            decision_quality_v2_13_selected = False
         use_hot_entry_input = (
             strategy not in ["KOSPI_ML", "KOSDAQ_ML"]
             and prompt_type == "scalping_entry"
@@ -6746,7 +6871,9 @@ class GPTSniperEngine:
         else:
             input_contract_fields = {
                 "ai_input_schema": (
-                    "decision_quality_v2_7_entry_input"
+                    "decision_quality_v2_13_entry_input"
+                    if decision_quality_v2_13_selected
+                    else "decision_quality_v2_7_entry_input"
                     if decision_quality_v2_7_selected
                     else (
                         "entry_screen_v2"
@@ -7071,11 +7198,19 @@ class GPTSniperEngine:
                             stage="entry",
                             live_entry=True,
                         )
+                        decision_quality_input = {
+                            "exact_payload": exact_payload,
+                            "exact_payload_analysis_v1": exact_payload_analysis,
+                        }
+                        if decision_quality_v2_13_selected:
+                            decision_quality_input[
+                                "anticipatory_reversal_analysis_v1"
+                            ] = build_v2_13_recovery_confirmation_analysis_v1(
+                                exact_payload,
+                                stage="entry",
+                            )
                         formatted_data = json.dumps(
-                            {
-                                "exact_payload": exact_payload,
-                                "exact_payload_analysis_v1": exact_payload_analysis,
-                            },
+                            decision_quality_input,
                             ensure_ascii=False,
                             separators=(",", ":"),
                             default=str,
@@ -7169,7 +7304,9 @@ class GPTSniperEngine:
                 input_contract_fields = self._resolve_ai_input_contract_fields(
                     formatted_data,
                     default_schema=(
-                        "decision_quality_v2_7_entry_input"
+                        "decision_quality_v2_13_entry_input"
+                        if decision_quality_v2_13_selected
+                        else "decision_quality_v2_7_entry_input"
                         if decision_quality_v2_7_selected
                         else (
                             "entry_screen_v2"

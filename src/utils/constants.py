@@ -1267,7 +1267,7 @@ class TradingConfig:
         True  # watching entry hot path 전용 short prompt 사용
     )
     OPENAI_ANALYZE_TARGET_PROMPT_VERSION: str = (
-        "hot_v1"  # hot_v1 | decision_quality_v2_7
+        "hot_v1"  # hot_v1 | decision_quality_v2_7 | decision_quality_v2_13
     )
     OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED: bool = (
         True  # watching entry hot path 전용 핵심 feature JSON 사용

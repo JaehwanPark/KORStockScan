@@ -21,13 +21,16 @@ from src.engine.ai_engine_openai import (
 )
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     decision_quality_v2_detailed_system_prompt,
+    decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
+from src.engine.scalping.entry_ai_gate import evaluate_entry_score_role_gate
 from src.engine import bedrock_nova_provider
 
 
@@ -2878,6 +2881,213 @@ def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatc
     )
 
 
+def test_decision_quality_v2_13_buy_maps_to_guarded_wait_probe(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
+        ),
+    )
+
+    prompt, prompt_type, prompt_version, profile = engine._resolve_scalping_prompt(
+        "watching"
+    )
+    assert prompt == decision_quality_v2_13_recovery_confirmation_system_prompt(
+        "entry"
+    )
+    assert prompt.isascii()
+    assert "recovery_confirmation_probe.eligible=true" in prompt
+    assert prompt_type == "scalping_entry"
+    assert prompt_version == (
+        DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+    )
+    assert profile == "watching"
+
+    exact_payload = {
+        "current": {"price": 10000, "fluctuation_pct": 4.0},
+        "features": {
+            "quote_fresh_for_entry": True,
+            "quote_stale": False,
+            "quote_age_ms": 500,
+            "quote_depth_present": True,
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 500,
+            "spread_bp": 40,
+            "top1_bid_notional": 2_000_000,
+            "top1_ask_notional": 2_000_000,
+            "same_price_buy_absorption": 1,
+            "buy_pressure_10t": 70,
+            "net_aggressive_delta_10t": 50,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -10,
+            "curr_vs_ma5_bp": 5,
+            "price_change_10t_pct": 0.2,
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "entry_momentum_status": "accelerating",
+            "tick_aggressor_trusted_count": 12,
+            "tick_aggressor_pressure_usable": True,
+            "tick_context_quality": "pass",
+            "tick_accel_source": "trusted_aggressor",
+            "tick_acceleration_ratio": 1.6,
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 20,
+            "source_quality": {
+                "status": "fresh_consistent",
+                "decision_window": {
+                    "status": "fresh_consistent",
+                    "provider_call_allowed": True,
+                    "completed_bar_count": 20,
+                },
+            },
+            "structure": {
+                "returns_pct": {
+                    "1": 0.6,
+                    "3": 0.3,
+                    "5": -0.1,
+                    "10": 1.2,
+                    "20": 1.4,
+                    "60": 1.6,
+                },
+                "slopes_pct_per_bar": {
+                    "5": 0.05,
+                    "10": 0.1,
+                    "20": 0.1,
+                    "60": 0.05,
+                },
+                "peak_drawdown_pct": -1.2,
+                "latest_lower_wick_ratio": 0.5,
+                "low_rebound_pct": 0.8,
+                "high_direction": "up",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 1.0,
+                "volume_direction_alignment": "aligned",
+                "regime": "trend",
+                "alignment": "supportive",
+            },
+        },
+    }
+    model_response = {
+        "edge_state": "EDGE",
+        "action": "BUY",
+        "expected_upside_pct": 1.2,
+        "expected_downside_pct": -0.7,
+        "confidence": 60,
+        "reason_codes": [
+            "edge_positive",
+            "recovery_trigger_confirmed",
+            "risk_reward_favorable",
+        ],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "mixed",
+            "tape": "supportive",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "reversal",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    result = engine._normalize_decision_quality_entry_result(
+        model_response,
+        exact_payload=exact_payload,
+        prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    )
+
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["decision_quality_model_action"] == "BUY"
+    assert result["action"] == "WAIT"
+    assert result["score"] == 64
+    assert result["evidence"]["trigger"] == "recovery_required"
+    assert "recovery_trigger_required" in result["reason_codes"]
+    assert "recovery_trigger_confirmed" not in result["reason_codes"]
+    assert result["decision_quality_model_evidence"]["trigger"] == "confirmed"
+    assert result["entry_probe_intent"] is True
+    assert result["entry_probe_intent_status"] == "eligible_wait_probe"
+    assert result["entry_probe_intent_submit_guard_required"] is True
+    assert result["entry_probe_intent_actual_order_submitted"] is False
+    assert result["decision_quality_runtime_action_mapping"] == (
+        "v2_13_buy_to_bounded_wait_probe"
+    )
+    assert result["decision_quality_live_adapter"] == (
+        "decision_quality_v2_13_recovery_confirmation_entry_v1"
+    )
+    role_gate = evaluate_entry_score_role_gate(
+        {**result, "ai_result_source": "live", "ai_parse_ok": True},
+        source_stage="analyze_target",
+        ai_score=result["score"],
+        ai_action=result["action"],
+    )
+    assert role_gate["entry_score_usable_for_recheck"] is True
+    assert role_gate["entry_recheck_probe_intent"] is True
+    assert role_gate["entry_recheck_recovery_trigger"] == "recovery_required"
+
+    unconfirmed_payload = json.loads(json.dumps(exact_payload))
+    unconfirmed_payload["features"].update(
+        {
+            "entry_order_flow_status": "mixed",
+            "tick_acceleration_ratio": 0.5,
+            "net_aggressive_delta_10t": -10,
+        }
+    )
+    rejected = engine._normalize_decision_quality_entry_result(
+        model_response,
+        exact_payload=unconfirmed_payload,
+        prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    )
+    assert rejected["decision_quality_contract_status"] == "semantic_rejected"
+    assert rejected["action"] == "DROP"
+    assert rejected["score"] == 0
+    assert rejected["entry_probe_intent"] is False
+    assert "recovery_confirmation_buy_not_eligible" in (
+        rejected["decision_quality_contract_errors"]
+    )
+
+
+def test_decision_quality_v2_13_repairs_unusable_non_buy_to_safe_wait():
+    engine = _build_engine()
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.2,
+            "expected_downside_pct": -1.0,
+            "confidence": 80,
+            "reason_codes": ["edge_absent"],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "adverse",
+                "tape": "adverse",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "failed",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    )
+
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["action"] == "WAIT"
+    assert result["edge_state"] == "INSUFFICIENT_DATA"
+    assert result["entry_probe_intent"] is False
+    assert result["decision_quality_contract_repair_codes"] == [
+        "unusable_source_fail_closed_wait"
+    ]
+    assert result["decision_quality_model_action"] == "DROP"
+
+
 def test_decision_quality_v2_7_repairs_early_session_drop_to_guarded_wait_probe():
     engine = _build_engine()
     exact_payload = {
@@ -3107,6 +3317,76 @@ def test_analyze_target_probe_prompt_keeps_exact_schema_and_version(monkeypatch)
     assert result["ai_input_schema"] == "decision_quality_v2_7_entry_input"
     assert result["entry_probe_intent"] is False
     assert result["entry_probe_intent_status"] == "not_eligible"
+
+
+def test_analyze_target_v2_13_supplies_shared_recovery_analysis(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=False,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True,
+        ),
+    )
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["payload"] = json.loads(user_input)
+        captured["schema_name"] = kwargs.get("schema_name")
+        return {
+            "edge_state": "NO_EDGE",
+            "action": "DROP",
+            "expected_upside_pct": 0.5,
+            "expected_downside_pct": -1.0,
+            "confidence": 80,
+            "reason_codes": ["edge_absent", "risk_reward_unfavorable"],
+            "evidence": {
+                "trend": "adverse",
+                "liquidity": "mixed",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "no_setup",
+                "positive_edge": "none",
+                "adverse_risk": "high",
+                "trigger": "failed",
+            },
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
+    )
+
+    assert captured["prompt"] == (
+        decision_quality_v2_13_recovery_confirmation_system_prompt("entry")
+    )
+    assert captured["schema_name"] == "decision_quality_v2_7_entry"
+    assert captured["payload"]["exact_payload"]["input_schema"] == (
+        "entry_screen_hot_v1"
+    )
+    shared_analysis = captured["payload"]["anticipatory_reversal_analysis_v1"]
+    assert "selective_recovery_probe" in shared_analysis
+    assert "recovery_confirmation_probe" in shared_analysis
+    assert result["ai_prompt_version"] == (
+        DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+    )
+    assert result["ai_input_schema"] == "decision_quality_v2_13_entry_input"
+    assert result["decision_quality_live_adapter"] == (
+        "decision_quality_v2_13_recovery_confirmation_entry_v1"
+    )
 
 
 def test_decision_quality_v2_7_semantic_failure_is_fail_closed(monkeypatch):
