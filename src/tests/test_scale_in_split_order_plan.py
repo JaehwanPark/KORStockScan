@@ -372,6 +372,13 @@ def test_report_and_preopen_env_handoff(monkeypatch, tmp_path):
                 ],
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
+                    "runtime_refresh_evidence": {
+                        "runtime_policy_refresh_allowed": True,
+                        "real_outcome_joined_sample": 3,
+                        "additional_mfe_mae_joined_sample": 3,
+                        "price_join_coverage": 1.0,
+                        "blockers": [],
+                    },
                     "policy_file": str(policy_file),
                     "policy_version": "scale_in_split_order_plan:test",
                     "candidates": [
@@ -573,7 +580,11 @@ def test_report_allows_source_quality_gap_when_rows_are_excluded(monkeypatch, tm
 
     assert report["source_quality"]["tuning_input_allowed"] is True
     assert report["source_quality"]["raw_row_exclusion_applied"] is True
-    assert report["recommended_policy"]["runtime_apply_allowed"] is True
+    assert report["recommended_policy"]["runtime_apply_allowed"] is False
+    evidence = report["recommended_policy"]["runtime_refresh_evidence"]
+    assert evidence["runtime_policy_refresh_allowed"] is False
+    assert "real_outcome_sample_floor" in evidence["blockers"]
+    assert "additional_mfe_mae_sample_floor" in evidence["blockers"]
 
 
 def test_report_selects_0_2tick_60_40_when_two_tick_touch_high(monkeypatch, tmp_path):
@@ -861,3 +872,43 @@ def test_report_streams_projected_events_without_retaining_large_payload(
     assert contract["source_event_count"] == 3
     assert contract["retained_event_count"] == 2
     assert "large_payload" not in json.dumps(report)
+
+
+def test_runtime_refresh_evidence_requires_outcome_mfe_mae_and_price_coverage():
+    evidence = split_plan._runtime_refresh_evidence(
+        [
+            {
+                "real_outcome_joined_sample": 3,
+                "additional_mfe_mae_joined_sample": 3,
+                "post_submit_observed_sample": 4,
+                "price_observation_join_gap_count": 1,
+            }
+        ]
+    )
+
+    assert evidence["runtime_policy_refresh_allowed"] is True
+    assert evidence["price_join_coverage"] == 0.8
+    assert evidence["blockers"] == []
+
+
+def test_policy_artifact_repeats_runtime_refresh_gate():
+    blocked_evidence = split_plan._runtime_refresh_evidence([])
+    blocked = split_plan._build_policy(
+        "2026-08-04", [], refresh_evidence=blocked_evidence
+    )
+    ready_evidence = split_plan._runtime_refresh_evidence(
+        [
+            {
+                "real_outcome_joined_sample": 3,
+                "additional_mfe_mae_joined_sample": 3,
+                "post_submit_observed_sample": 4,
+                "price_observation_join_gap_count": 0,
+            }
+        ]
+    )
+    ready = split_plan._build_policy("2026-08-04", [], refresh_evidence=ready_evidence)
+
+    assert blocked["runtime_apply_allowed"] is False
+    assert blocked["default_bucket"]["runtime_apply_allowed"] is False
+    assert ready["runtime_apply_allowed"] is True
+    assert ready["default_bucket"]["runtime_apply_allowed"] is True

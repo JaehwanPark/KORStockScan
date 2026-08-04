@@ -1575,15 +1575,30 @@ def _load_previous_runtime_env_selected_families(
     prev_date = _previous_runtime_date(target_date)
     if not prev_date:
         return set(), {}
-    manifest = _load_json(runtime_env_manifest_path(prev_date))
-    if not manifest:
-        return set(), {}
-    families = {
-        str(item)
-        for item in (manifest.get("selected_families") or [])
-        if isinstance(item, str) and item.strip()
-    }
-    return families, manifest
+    prior_manifests: list[tuple[str, Path]] = []
+    for path in RUNTIME_ENV_DIR.glob("threshold_runtime_env_*.json"):
+        candidate_date = path.stem.removeprefix("threshold_runtime_env_")
+        try:
+            date.fromisoformat(candidate_date)
+        except ValueError:
+            continue
+        if candidate_date < target_date:
+            prior_manifests.append((candidate_date, path))
+    prior_manifests.sort(key=lambda item: item[0], reverse=True)
+    for candidate_date, previous_path in prior_manifests:
+        manifest = _load_json(previous_path)
+        if not manifest:
+            continue
+        manifest_target_date = str(manifest.get("target_date") or candidate_date)
+        if manifest_target_date != candidate_date:
+            continue
+        families = {
+            str(item)
+            for item in (manifest.get("selected_families") or [])
+            if isinstance(item, str) and item.strip()
+        }
+        return families, manifest
+    return set(), {}
 
 
 def _hold_carry_forward_blockers(candidate: dict[str, Any]) -> list[str]:
@@ -3342,6 +3357,28 @@ def _select_auto_apply_candidates(
                 "selected_for_runtime_env" if not reject_reason else "not_selected"
             ),
         }
+        previous_family_env = _previous_runtime_env_overrides_for_family(
+            previous_runtime_manifest, family
+        )
+        if reject_reason:
+            selection_change_class = (
+                "previous_family_not_selected"
+                if family in previous_selected_families
+                else "not_selected"
+            )
+        elif lock_applied:
+            selection_change_class = "operator_lock_preserved"
+        elif hold_carry_forward:
+            selection_change_class = "carried_forward_unchanged"
+        elif family not in previous_selected_families:
+            selection_change_class = "newly_enabled"
+        elif previous_family_env and previous_family_env == decision["env_overrides"]:
+            selection_change_class = "retained_unchanged"
+        else:
+            selection_change_class = "policy_refreshed"
+        decision["selection_change_class"] = selection_change_class
+        decision["previous_selected"] = family in previous_selected_families
+        decision["previous_env_overrides"] = previous_family_env
         if candidate.get("quality_update_id"):
             decision["quality_update_id"] = candidate.get("quality_update_id")
             decision["runtime_update_mode"] = candidate.get("runtime_update_mode")
@@ -5337,6 +5374,11 @@ def verify_runtime_env_handoff(
         "selected_families": selected_families,
         "retired_selected_families_blocked": retired_selected_families,
         "removed_selected_families_ignored": removed_selected_families,
+        "selection_change_summary": (
+            manifest.get("selection_change_summary")
+            if isinstance(manifest.get("selection_change_summary"), dict)
+            else {}
+        ),
         "removed_manifest_override_keys_ignored": removed_manifest_override_keys,
         "removed_operator_override_keys_ignored": removed_operator_override_keys,
         "passed": passed,
@@ -5602,6 +5644,76 @@ def _write_runtime_env(
             continue
         if family not in selected_families:
             selected_families.append(family)
+    previous_selected_families, previous_runtime_manifest = (
+        _load_previous_runtime_env_selected_families(target_date)
+    )
+    decisions_by_family = {
+        str(item.get("family") or ""): item
+        for item in (manifest.get("auto_apply_decisions") or [])
+        if isinstance(item, dict) and item.get("family")
+    }
+    selection_change_details: list[dict[str, Any]] = []
+    for family in selected_families:
+        decision = decisions_by_family.get(family) or {}
+        change_class = str(decision.get("selection_change_class") or "")
+        previous_family_env = _previous_runtime_env_overrides_for_family(
+            previous_runtime_manifest, family
+        )
+        current_family_env = _previous_runtime_env_overrides_for_family(
+            {"env_overrides": env_overrides}, family
+        )
+        if not change_class:
+            if family not in previous_selected_families:
+                change_class = "newly_enabled"
+            elif previous_family_env and previous_family_env == current_family_env:
+                change_class = "retained_unchanged"
+            elif previous_family_env or current_family_env:
+                change_class = "policy_refreshed"
+            else:
+                change_class = "retained_provenance_unclassified"
+        selection_change_details.append(
+            {
+                "family": family,
+                "change_class": change_class,
+                "previous_selected": family in previous_selected_families,
+                "previous_env_overrides": previous_family_env,
+                "current_env_overrides": current_family_env,
+            }
+        )
+    selected_family_set = set(selected_families)
+    disabled_or_removed = sorted(previous_selected_families - selected_family_set)
+    selection_change_summary = {
+        "source": "verified_runtime_env_manifest_diff",
+        "previous_target_date": previous_runtime_manifest.get("target_date"),
+        "details": selection_change_details,
+        "newly_enabled": sorted(
+            item["family"]
+            for item in selection_change_details
+            if item["change_class"] == "newly_enabled"
+        ),
+        "policy_refreshed": sorted(
+            item["family"]
+            for item in selection_change_details
+            if item["change_class"] == "policy_refreshed"
+        ),
+        "carried_forward_or_unchanged": sorted(
+            item["family"]
+            for item in selection_change_details
+            if item["change_class"]
+            in {
+                "carried_forward_unchanged",
+                "retained_unchanged",
+                "operator_lock_preserved",
+            }
+        ),
+        "retained_provenance_unclassified": sorted(
+            item["family"]
+            for item in selection_change_details
+            if item["change_class"] == "retained_provenance_unclassified"
+        ),
+        "disabled_or_removed": disabled_or_removed,
+        "removed_selected_families_ignored": removed_selected_families,
+    }
     runtime_env_path(target_date).write_text("\n".join(lines) + "\n", encoding="utf-8")
     runtime_env_manifest_path(target_date).write_text(
         json.dumps(
@@ -5616,6 +5728,7 @@ def _write_runtime_env(
                 "env_overrides": env_overrides,
                 "selected_families": selected_families,
                 "removed_selected_families_ignored": removed_selected_families,
+                "selection_change_summary": selection_change_summary,
             },
             ensure_ascii=False,
             indent=2,

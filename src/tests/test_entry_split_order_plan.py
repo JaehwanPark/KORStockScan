@@ -170,6 +170,14 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert report["recommended_policy"]["candidate_count"] == 1
     assert report["recommended_policy"]["baseline_runtime_defaults_enabled"] is True
     assert report["recommended_policy"]["explicit_bucket_count"] == 0
+    assert report["recommended_policy"]["runtime_apply_scope"] == [
+        "baseline_split_structure"
+    ]
+    assert report["recommended_policy"]["post_apply_attribution"]["required"] is True
+    assert (
+        report["recommended_policy"]["rollback_guard"]["action"]
+        == "carry_forward_previous_runtime_policy"
+    )
     assert (
         report["recommended_policy"]["candidates"][0]["runtime_apply_scope"]
         == "baseline_split_structure"

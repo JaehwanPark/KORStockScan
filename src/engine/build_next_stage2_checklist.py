@@ -572,7 +572,8 @@ def _build_tasks(
                 track="RuntimeStability",
                 source=f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})",
                 lines=(
-                    f"판정 기준: selected_families={', '.join(selected) if selected else '-'}가 runtime event provenance에 찍히는지 확인한다.",
+                    f"전일 postclose candidate_selected_families={', '.join(selected) if selected else '-'}이며 실제 기동 기대 목록으로 직접 사용하지 않는다.",
+                    "판정 기준: 당일 PREOPEN verify가 통과한 threshold_runtime_env의 selected_families와 selection_change_summary(신규 ON/정책 갱신/carry-forward·operator lock 유지/OFF·제외)를 기준으로 runtime event provenance를 확인한다.",
                     "금지: 관찰 결과만으로 장중 runtime을 변경하지 않는다. 사용자 명시 override는 fresh/conflict-free source, 단일 blocker 인과, 기존 bounded_tunable 단일 축, rollback과 즉시 attribution 계약을 모두 충족해야 한다.",
                     "다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.",
                 ),
