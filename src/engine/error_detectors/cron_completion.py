@@ -4,17 +4,21 @@ import json
 import os
 import re
 import time
-from datetime import date, datetime, time as dtime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.utils.constants import PROJECT_ROOT, TRADING_RULES
+from src.utils.constants import PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
 from src.engine.error_detectors.base import (
     BaseDetector,
     DetectionResult,
     register_detector,
+)
+from src.engine.error_detectors.schedule_contract import (
+    evaluate_schedule_contract,
+    load_installed_crontab,
 )
 
 
@@ -34,6 +38,29 @@ def _kst_time_tuple() -> tuple[int, int]:
 def _disabled_job_ids() -> set[str]:
     raw = os.environ.get("KORSTOCKSCAN_DISABLED_CRON_JOBS", "")
     return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+CRON_INSTALL_MARKERS: dict[str, list[str]] = {
+    "final_ensemble_scanner": ["final_ensemble_scanner.py"],
+    "threshold_cycle_preopen": ["THRESHOLD_CYCLE_PREOPEN"],
+    "buy_funnel_sentinel": ["BUY_FUNNEL_SENTINEL_"],
+    "bd_fbuy_accum_pre_intraday": ["BD_FBUY_ACCUM_PRE_INTRADAY"],
+    "holding_exit_sentinel": ["HOLDING_EXIT_SENTINEL_"],
+    "panic_sell_defense": ["PANIC_SELL_DEFENSE_"],
+    "buy_pause_guard": ["KOR_BUY_PAUSE_GUARD_"],
+    "monitor_snapshot": ["RUN_MONITOR_SNAPSHOT_"],
+    "scalp_sim_overnight_preclose": ["SCALP_SIM_OVERNIGHT_PRECLOSE"],
+    "swing_live_dry_run": ["SWING_LIVE_DRY_RUN"],
+    "threshold_cycle_postclose": ["THRESHOLD_CYCLE_POSTCLOSE"],
+    "postclose_done_controller": ["POSTCLOSE_DONE_CONTROLLER"],
+    "swing_model_retrain_postclose": ["SWING_MODEL_RETRAIN_POSTCLOSE"],
+    "tuning_monitoring_postclose": ["TUNING_MONITORING_POSTCLOSE"],
+    "update_kospi": ["UPDATE_KOSPI_EOD_"],
+    "dashboard_db_archive": ["DASHBOARD_DB_ARCHIVE_"],
+    "log_rotation_cleanup": ["LOG_ROTATION_CLEANUP_"],
+    "system_metric_sampler": ["SYSTEM_METRIC_SAMPLER_"],
+    "error_detection_full": ["ERROR_DETECTION_FULL"],
+}
 
 
 CRON_JOB_REGISTRY: list[dict[str, Any]] = [
@@ -242,6 +269,7 @@ class CronCompletionDetector(BaseDetector):
         details: dict = {}
         issues: list[str] = []
         warnings: list[str] = []
+        installed_crontab = load_installed_crontab()
 
         for job in CRON_JOB_REGISTRY:
             log_path = PROJECT_ROOT / job["log"]
@@ -255,7 +283,16 @@ class CronCompletionDetector(BaseDetector):
             if job.get("trading_day_only", False) and not trading_day:
                 details[f"{jid}_status"] = "skip_non_trading_day"
                 continue
-
+            install_markers = CRON_INSTALL_MARKERS.get(jid)
+            if install_markers:
+                schedule_status, schedule_details = evaluate_schedule_contract(
+                    installed_crontab,
+                    markers=install_markers,
+                )
+                details[f"{jid}_schedule_contract"] = schedule_details
+                if schedule_status.startswith("disabled_"):
+                    details[f"{jid}_status"] = schedule_status
+                    continue
             ws_h, ws_m = job["window_start"]
             we_h, we_m = job.get("window_end", (23, 59))
             if isinstance(we_h, str):
@@ -441,6 +478,10 @@ class CronCompletionDetector(BaseDetector):
             "pass",
             "completed",
             "done",
+            "skipped",
+            "skip",
+            "disabled",
+            "disabled_by_parent",
         }:
             return "done"
         if exit_code == 0 and verification_status == "pass_with_pending_done_marker":

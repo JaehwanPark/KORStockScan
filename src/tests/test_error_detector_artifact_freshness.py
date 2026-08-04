@@ -67,6 +67,162 @@ class TestArtifactFreshnessDetector:
             result = detector.check()
             assert result.severity == "fail"
 
+    def test_uninstalled_swing_artifact_is_terminally_disabled(self, tmp_path):
+        artifact = {
+            "id": "swing_live_dry_run_status",
+            "path_template": str(tmp_path / "missing.json"),
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
+                return_value="10 20 * * 1-5 runner # THRESHOLD_CYCLE_POSTCLOSE\n",
+            ),
+        ):
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "pass"
+        assert (
+            result.details["swing_live_dry_run_status_status"]
+            == "disabled_not_installed"
+        )
+
+    def test_parent_disabled_swing_artifact_is_terminally_disabled(self, tmp_path):
+        artifact = {
+            "id": "swing_lifecycle_audit_report",
+            "path_template": str(tmp_path / "missing.md"),
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        crontab = (
+            "10 20 * * 1-5 THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false "
+            "runner # THRESHOLD_CYCLE_POSTCLOSE\n"
+        )
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
+                return_value=crontab,
+            ),
+        ):
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "pass"
+        assert (
+            result.details["swing_lifecycle_audit_report_status"]
+            == "disabled_by_parent"
+        )
+
+    def test_default_disabled_codex_artifact_is_terminally_disabled(self, tmp_path):
+        artifact = {
+            "id": "codex_workorder_runner_report",
+            "path_template": str(tmp_path / "missing.json"),
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
+                return_value=("10 20 * * 1-5 runner # POSTCLOSE_DONE_CONTROLLER\n"),
+            ),
+        ):
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "pass"
+        assert (
+            result.details["codex_workorder_runner_report_status"]
+            == "disabled_by_parent"
+        )
+
+    def test_step_scoped_skip_marker_is_terminal_success(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.artifact_freshness as af
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "threshold_cycle_postclose_cron.log").write_text(
+            "[SKIP] threshold-cycle postclose "
+            f"target_date={today} step=codebase_performance_workorder "
+            "reason=fresh_outputs_no_trigger\n",
+            encoding="utf-8",
+        )
+        artifact = {
+            "id": "codebase_performance_workorder_report",
+            "path_template": "data/report/missing.md",
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        monkeypatch.setattr(af, "PROJECT_ROOT", tmp_path)
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
+                return_value=None,
+            ),
+        ):
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "pass"
+        assert (
+            result.details["codebase_performance_workorder_report_status"]
+            == "pass_terminal_skip"
+        )
+
+    def test_unrelated_step_skip_does_not_close_missing_artifact(
+        self, monkeypatch, tmp_path
+    ):
+        import src.engine.error_detectors.artifact_freshness as af
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "threshold_cycle_postclose_cron.log").write_text(
+            "[SKIP] threshold-cycle postclose "
+            f"target_date={today} step=some_other_report reason=disabled\n",
+            encoding="utf-8",
+        )
+        artifact = {
+            "id": "codebase_performance_workorder_report",
+            "path_template": "data/report/missing.md",
+            "max_staleness_sec": 600,
+            "critical": True,
+        }
+        monkeypatch.setattr(af, "PROJECT_ROOT", tmp_path)
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.load_installed_crontab",
+                return_value=None,
+            ),
+        ):
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["codebase_performance_workorder_report_status"] == "fail"
+
     def test_invalid_critical_json_fails(self, tmp_path):
         artifact_path = tmp_path / "invalid.json"
         artifact_path.write_text("{bad json", encoding="utf-8")
@@ -697,6 +853,14 @@ class TestArtifactFreshnessDetector:
         assert registry["swing_live_dry_run_status"]["window_start"] == (20, 15)
         assert registry["swing_lifecycle_audit_report"]["window_start"] == (20, 10)
         assert registry["swing_runtime_approval_report"]["window_start"] == (20, 10)
+        assert registry["codebase_performance_workorder_report"]["window_start"] == (
+            20,
+            10,
+        )
+        assert registry["codebase_performance_workorder_report"]["window_end"] == (
+            21,
+            40,
+        )
         assert (
             registry["swing_daily_simulation_status"]["json_status_field"] == "status"
         )

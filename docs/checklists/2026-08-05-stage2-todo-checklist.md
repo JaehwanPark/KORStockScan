@@ -18,6 +18,13 @@
 
 ## 사용자 지시 구현
 
+- [x] `[ErrorDetectorInstalledScheduleContract0805] 설치 cron·parent enable·terminal skip 기반 오탐 제거 및 startup provenance 보완` (`Due: 2026-08-05`, `Slot: PREOPEN`, `TimeWindow: 08:15~08:45`, `Track: RuntimeStability`)
+  - Source: [cron_completion.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/cron_completion.py), [artifact_freshness.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/artifact_freshness.py), [process_health.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/process_health.py)
+  - 판정 기준: 설치되지 않은 registry job, crontab parent flag=false인 산출물, exit code 0의 disabled/skipped status, step-scoped `[SKIP]` 산출물을 실패로 경보하지 않는다. crontab 조회 실패는 기대값을 보존하고, 전일 heartbeat만 남은 당일 기동 실패는 current PID crash가 아니라 `startup_not_observed`로 분리한다.
+  - 금지: 중간 step `[SKIP]`을 전체 wrapper 성공으로 확대, crontab 조회 실패 시 감시 비활성, PREOPEN handoff 실패 우회 재기동을 금지한다.
+  - 실행 결과: detector·PREOPEN·wrapper targeted test `310 passed`, Ruff/Black/diff/parser validation 통과. 실제 crontab dry-run에서 미설치 swing job은 `disabled_not_installed`, parent OFF 산출물은 `disabled_by_parent`, 전일 heartbeat는 `startup_not_observed`로 분리됐다. 2026-08-05 PREOPEN 재생성 중 scale-in policy 파일 version/runtime-apply 계약 불일치를 발견해 해당 family만 `runtime_policy_preflight_failed:policy_version_mismatch`로 제외했으며, 재생성 status `succeeded`와 독립 handoff verify `pass`를 확인했다. AI correction provider는 `openai`이고 `provider=none`이 아니다.
+  - 다음 액션: review/commit gate가 닫힌 소스로 supervised bot을 기동한 뒤 새 PID/heartbeat, `/proc/<pid>/environ` handoff와 detector recovery를 확인한다.
+
 - [x] `[RuntimePolicyArchiveIntegrity0805] scale-in 갱신근거·대용량 JSONL retention·운영파일 원자성 보완 및 리뷰` (`Due: 2026-08-05`, `Slot: PREOPEN`, `TimeWindow: 07:50~08:20`, `Track: RuntimeStability`)
   - Source: [scale_in_split_order_plan.py](/home/ubuntu/KORStockScan/src/engine/scalping/scale_in_split_order_plan.py), [compress_db_backfilled_files.py](/home/ubuntu/KORStockScan/src/engine/compress_db_backfilled_files.py), [run_logs_rotation_cleanup_cron.sh](/home/ubuntu/KORStockScan/deploy/run_logs_rotation_cleanup_cron.sh)
   - 판정 기준: real outcome·MFE/MAE·price join refresh evidence가 없는 scale-in policy는 runtime loader와 PREOPEN audit가 함께 거부한다. canonical context/pipeline summary/완료 threshold partition은 gzip-aware consumer 계약과 검증된 atomic 압축을 갖고, system metric malformed row는 격리하며 sentinel/snapshot은 복원 검증 후에만 원본을 교체한다.

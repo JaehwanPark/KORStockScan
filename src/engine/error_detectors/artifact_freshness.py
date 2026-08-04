@@ -18,10 +18,72 @@ from src.engine.error_detectors.base import (
     DetectionResult,
     register_detector,
 )
+from src.engine.error_detectors.schedule_contract import (
+    evaluate_schedule_contract,
+    load_installed_crontab,
+)
 
 
 def _today_kst_str(now_kst: datetime | None = None) -> str:
     return (now_kst or datetime.now()).strftime("%Y-%m-%d")
+
+
+ARTIFACT_SCHEDULE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "codex_workorder_runner_report": {
+        "markers": ["POSTCLOSE_DONE_CONTROLLER"],
+        "parent_env_key": "POSTCLOSE_DONE_CONTROLLER_RUN_CODEX",
+        "parent_default_enabled": False,
+    },
+    "swing_live_dry_run_status": {"markers": ["SWING_LIVE_DRY_RUN"]},
+    "swing_selection_funnel_report": {"markers": ["SWING_LIVE_DRY_RUN"]},
+    "swing_lifecycle_audit_report": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",
+        "parent_default_enabled": False,
+    },
+    "swing_threshold_ai_review_report": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",
+        "parent_default_enabled": False,
+    },
+    "swing_improvement_automation_report": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",
+        "parent_default_enabled": False,
+    },
+    "swing_runtime_approval_report": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",
+        "parent_default_enabled": False,
+    },
+    "swing_pattern_lab_automation_report": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",
+        "parent_default_enabled": False,
+    },
+    "swing_model_retrain_diagnosis": {"markers": ["SWING_MODEL_RETRAIN_POSTCLOSE"]},
+    "swing_bull_period_ai_review": {"markers": ["SWING_MODEL_RETRAIN_POSTCLOSE"]},
+    "swing_model_retrain_report": {"markers": ["SWING_MODEL_RETRAIN_POSTCLOSE"]},
+    "swing_model_retrain_status": {"markers": ["SWING_MODEL_RETRAIN_POSTCLOSE"]},
+    "swing_model_registry_current": {"markers": ["SWING_MODEL_RETRAIN_POSTCLOSE"]},
+    "swing_daily_simulation_status": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",
+        "parent_default_enabled": False,
+    },
+    "swing_daily_simulation_report": {
+        "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
+        "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE",
+        "parent_default_enabled": False,
+    },
+}
+
+ARTIFACT_TERMINAL_SKIP_CONTRACTS: dict[str, dict[str, str]] = {
+    "codebase_performance_workorder_report": {
+        "log": "logs/threshold_cycle_postclose_cron.log",
+        "step": "codebase_performance_workorder",
+    }
+}
 
 
 ARTIFACT_REGISTRY: list[dict[str, Any]] = [
@@ -275,8 +337,8 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "max_staleness_sec": 3600,
         "critical": False,
         "trading_day_only": True,
-        "window_start": (16, 10),
-        "window_end": (17, 0),
+        "window_start": (20, 10),
+        "window_end": (21, 40),
         "suppress_missing_while_cron_in_progress": {
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",
@@ -521,6 +583,7 @@ class ArtifactFreshnessDetector(BaseDetector):
         details: dict = {}
         issues: list[str] = []
         warnings: list[str] = []
+        installed_crontab = load_installed_crontab()
 
         for artifact in ARTIFACT_REGISTRY:
             aid = artifact["id"]
@@ -536,6 +599,17 @@ class ArtifactFreshnessDetector(BaseDetector):
             if trading_day_only and not trading_day:
                 details[f"{aid}_status"] = "skip_non_trading_day"
                 continue
+
+            schedule_contract = ARTIFACT_SCHEDULE_CONTRACTS.get(aid)
+            if schedule_contract:
+                schedule_status, schedule_details = evaluate_schedule_contract(
+                    installed_crontab,
+                    **schedule_contract,
+                )
+                details[f"{aid}_schedule_contract"] = schedule_details
+                if schedule_status.startswith("disabled_"):
+                    details[f"{aid}_status"] = schedule_status
+                    continue
 
             ws_total = ws[0] * 60 + ws[1] if ws else None
 
@@ -566,6 +640,11 @@ class ArtifactFreshnessDetector(BaseDetector):
                 continue
 
             if not exists:
+                terminal_skip = self._terminal_skip_status(aid, today)
+                if terminal_skip:
+                    details[f"{aid}_status"] = "pass_terminal_skip"
+                    details[f"{aid}_terminal_skip"] = terminal_skip
+                    continue
                 alternate_status = self._validate_partitioned_compact(
                     artifact,
                     today,
@@ -692,6 +771,34 @@ class ArtifactFreshnessDetector(BaseDetector):
             details=details,
             recommended_action=self._recommend_action(severity, issues),
         )
+
+    @staticmethod
+    def _terminal_skip_status(aid: str, today: str) -> dict[str, str] | None:
+        contract = ARTIFACT_TERMINAL_SKIP_CONTRACTS.get(aid)
+        if not contract:
+            return None
+        log_path = PROJECT_ROOT / contract["log"]
+        if not log_path.exists():
+            return None
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[
+                -5000:
+            ]
+        except OSError:
+            return None
+        step_token = f"step={contract['step']}"
+        for line in reversed(lines):
+            if (
+                "[SKIP]" in line
+                and f"target_date={today}" in line
+                and step_token in line
+            ):
+                return {
+                    "log": contract["log"],
+                    "step": contract["step"],
+                    "marker": line.strip(),
+                }
+        return None
 
     @staticmethod
     def _classify(issues: list[str], warnings: list[str]) -> tuple[str, str]:

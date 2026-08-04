@@ -8980,6 +8980,61 @@ def test_split_runtime_policy_audit_rejects_scale_in_policy_after_three_trading_
     assert scale_audit["freshness_age_trading_days"] == 4
 
 
+def test_preopen_drops_selected_scale_policy_when_source_file_version_changed(
+    tmp_path,
+):
+    scale_policy = tmp_path / "scale.json"
+    scale_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v1",
+                "policy_version": "regenerated-blocked-version",
+                "generated_at": "2026-08-05T08:00:00+09:00",
+                "runtime_apply_allowed": False,
+                "runtime_refresh_evidence": {
+                    "runtime_policy_refresh_allowed": False,
+                    "blockers": ["real_outcome_refresh_missing"],
+                },
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    selected = [{"family": "scale_in_split_order_plan", "stage": "scale_in"}]
+    decisions = [
+        {
+            "family": "scale_in_split_order_plan",
+            "selected": True,
+            "decision_reason": "deterministic_policy_handoff",
+            "env_overrides": {},
+        }
+    ]
+    env = {
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(scale_policy),
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "report-version-before-regeneration",
+        "KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED": "true",
+    }
+
+    next_selected, next_decisions, next_env = (
+        mod._drop_unusable_selected_split_policies(
+            "2026-08-05", selected, decisions, env
+        )
+    )
+
+    assert next_selected == []
+    assert next_decisions[0]["selected"] is False
+    assert (
+        next_decisions[0]["decision_reason"]
+        == "runtime_policy_preflight_failed:policy_version_mismatch"
+    )
+    assert next_decisions[0]["runtime_policy_preflight"]["policy_version"] == (
+        "regenerated-blocked-version"
+    )
+    assert not any("SCALE_IN_SPLIT_ORDER_POLICY" in key for key in next_env)
+    assert next_env["KORSTOCKSCAN_SCALP_SIM_AI_BUDGET_ENABLED"] == "true"
+
+
 def test_verify_runtime_env_handoff_rejects_selected_disabled_split_policy(
     tmp_path, monkeypatch
 ):
