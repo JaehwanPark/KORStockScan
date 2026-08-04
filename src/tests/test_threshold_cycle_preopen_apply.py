@@ -1401,6 +1401,177 @@ def test_auto_apply_selector_rejects_forbidden_use_violation_candidate():
     assert decisions[0]["decision_reason"] == "forbidden_use_blocked"
 
 
+def test_auto_apply_selector_consumes_postclose_runtime_handoff_contract():
+    candidate = {
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "priority": 10,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "source_quality_gate": "pass",
+        "target_env_keys": [
+            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+        ],
+        "current_values": {"enabled": False, "min_ai_score": 75, "max_ai_score": 100},
+        "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
+        "runtime_handoff_contract": {
+            "decision_authority": "next_preopen_bounded_candidate_only",
+            "runtime_effect": False,
+            "preopen_selection_state": "pending_not_applied",
+            "same_stage_max_selected": 1,
+            "post_apply_attribution_required": True,
+        },
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+    )
+
+    assert len(selected) == 1
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "true"
+    assert decisions[0]["preopen_selection_state"] == "selected_for_runtime_env"
+    assert (
+        decisions[0]["postclose_runtime_handoff_contract"]
+        == candidate["runtime_handoff_contract"]
+    )
+
+
+def test_auto_apply_selector_rejects_incomplete_runtime_handoff_contract():
+    candidate = {
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "priority": 10,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "source_quality_gate": "pass",
+        "target_env_keys": ["ENTRY_OPPORTUNITY_RECHECK_ENABLED"],
+        "current_values": {"enabled": False},
+        "recommended_values": {"enabled": True},
+        "runtime_handoff_contract": {
+            "decision_authority": "next_preopen_bounded_candidate_only",
+            "runtime_effect": False,
+            "preopen_selection_state": "pending_not_applied",
+            "same_stage_max_selected": 1,
+            "post_apply_attribution_required": False,
+        },
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+    )
+
+    assert selected == []
+    assert env == {}
+    assert (
+        decisions[0]["decision_reason"]
+        == "runtime_handoff_post_apply_attribution_missing"
+    )
+    assert decisions[0]["preopen_selection_state"] == "not_selected"
+
+
+def test_auto_apply_selector_rejects_missing_required_runtime_handoff_contract():
+    candidate = {
+        "family": "scale_in_split_order_plan",
+        "stage": "scale_in",
+        "priority": 9,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "target_env_keys": ["SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"],
+        "current_values": {"enabled": False},
+        "recommended_values": {"enabled": True},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-08-04",
+        runtime_handoff_contract_required_families={"scale_in_split_order_plan"},
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == "runtime_handoff_contract_missing"
+    assert decisions[0]["runtime_handoff_contract_required"] is True
+
+
+def test_auto_apply_selector_rejects_runtime_handoff_contract_version_mismatch():
+    candidate = {
+        "family": "entry_split_order_plan",
+        "stage": "submit",
+        "priority": 9,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "target_env_keys": ["ENTRY_SPLIT_ORDER_POLICY_ENABLED"],
+        "current_values": {"enabled": False},
+        "recommended_values": {"enabled": True},
+        "runtime_handoff_contract": {
+            "decision_authority": "next_preopen_bounded_candidate_only",
+            "runtime_effect": False,
+            "preopen_selection_state": "pending_not_applied",
+            "same_stage_max_selected": 1,
+            "post_apply_attribution_required": True,
+        },
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-08-04",
+        runtime_handoff_contract_required_families={"entry_split_order_plan"},
+        runtime_handoff_contract_source_version=0,
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["decision_reason"] == (
+        "runtime_handoff_contract_version_mismatch"
+    )
+
+
+def test_required_runtime_handoff_contract_does_not_replace_operator_lock_authority():
+    candidate = {
+        "family": "score65_74_recovery_probe",
+        "stage": "entry",
+        "priority": 10,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+        "current_values": {"enabled": False},
+        "recommended_values": {"enabled": True},
+    }
+    lock = {
+        "family": "score65_74_recovery_probe",
+        "stage": "entry",
+        "lock_id": "explicit-operator-lock",
+        "env_overrides": {"KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED": "true"},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-08-04",
+        operator_locks=[lock],
+        runtime_handoff_contract_required_families={"score65_74_recovery_probe"},
+    )
+
+    assert [item["family"] for item in selected] == ["score65_74_recovery_probe"]
+    assert decisions[0]["decision_reason"].startswith(
+        "operator_runtime_env_lock_preserved:"
+    )
+    assert decisions[0]["runtime_handoff_contract_required"] is False
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
+
+
 def test_calibration_candidate_dedupe_prefers_first_source():
     first = {
         "family": "scalping_pyramid_quality_gate",
@@ -1572,6 +1743,71 @@ def test_build_preopen_apply_manifest_accepts_calibrated_apply_candidate(
         == "calibrated_apply_candidate"
     )
     assert manifest["calibration_policy"]["rollback_policy"] == "safety_breach_only"
+
+
+def test_build_preopen_apply_manifest_blocks_legacy_candidate_without_handoff_contract(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+
+    (report_dir / "threshold_cycle_2099-01-02.json").write_text(
+        json.dumps(
+            {
+                "date": "2099-01-02",
+                "calibration_candidates": [
+                    {
+                        "family": "scale_in_split_order_plan",
+                        "stage": "scale_in",
+                        "priority": 9,
+                        "calibration_state": "adjust_up",
+                        "allowed_runtime_apply": True,
+                        "target_env_keys": ["SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"],
+                        "current_values": {"enabled": False},
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2099-01-03",
+        source_date="2099-01-02",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decision = next(
+        item
+        for item in manifest["auto_apply_decisions"]
+        if item["family"] == "scale_in_split_order_plan"
+    )
+    assert decision["selected"] is False
+    assert decision["decision_reason"] == (
+        "runtime_handoff_contract_missing," "runtime_handoff_contract_version_mismatch"
+    )
+    assert manifest["runtime_handoff_contract_audit"] == {
+        "required_from_target_date": "2026-08-04",
+        "expected_version": 1,
+        "source_version": 0,
+        "version_match": False,
+        "required_families": ["scale_in_split_order_plan"],
+        "missing_families": ["scale_in_split_order_plan"],
+    }
+    assert (
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"
+        not in manifest["runtime_env_overrides"]
+    )
 
 
 def test_build_preopen_apply_manifest_accepts_efficient_tradeoff_candidate(

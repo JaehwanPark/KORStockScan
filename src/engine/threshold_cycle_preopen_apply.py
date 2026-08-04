@@ -81,6 +81,8 @@ RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provena
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
 ENTRY_CANCEL_WAIT_ACTIVATION_DATE = "2026-06-15"
+RUNTIME_HANDOFF_CONTRACT_VERSION = 1
+RUNTIME_HANDOFF_CONTRACT_REQUIRED_TARGET_DATE = "2026-08-04"
 
 AUTO_APPLY_MODES = {"auto_bounded_live"}
 AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down"}
@@ -952,7 +954,12 @@ def _candidate_source_quality_contract_blocked(candidate: dict[str, Any]) -> boo
     return False
 
 
-def _candidate_apply_contract_blockers(candidate: dict[str, Any]) -> list[str]:
+def _candidate_apply_contract_blockers(
+    candidate: dict[str, Any],
+    *,
+    require_runtime_handoff_contract: bool = False,
+    runtime_handoff_contract_source_version: int = RUNTIME_HANDOFF_CONTRACT_VERSION,
+) -> list[str]:
     blockers: list[str] = []
     if _candidate_source_quality_contract_blocked(candidate):
         blockers.append("source_quality_blocked")
@@ -965,6 +972,32 @@ def _candidate_apply_contract_blockers(candidate: dict[str, Any]) -> list[str]:
         )
     ):
         blockers.append("forbidden_use_blocked")
+    handoff = (
+        candidate.get("runtime_handoff_contract")
+        if isinstance(candidate.get("runtime_handoff_contract"), dict)
+        else None
+    )
+    if require_runtime_handoff_contract and handoff is None:
+        blockers.append("runtime_handoff_contract_missing")
+    if (
+        require_runtime_handoff_contract
+        and runtime_handoff_contract_source_version != RUNTIME_HANDOFF_CONTRACT_VERSION
+    ):
+        blockers.append("runtime_handoff_contract_version_mismatch")
+    if handoff is not None:
+        if (
+            str(handoff.get("decision_authority") or "")
+            != "next_preopen_bounded_candidate_only"
+        ):
+            blockers.append("runtime_handoff_authority_invalid")
+        if handoff.get("runtime_effect") is not False:
+            blockers.append("postclose_runtime_effect_must_be_false")
+        if (_int_or_default(handoff.get("same_stage_max_selected"), 0) or 0) != 1:
+            blockers.append("runtime_handoff_same_stage_limit_invalid")
+        if handoff.get("post_apply_attribution_required") is not True:
+            blockers.append("runtime_handoff_post_apply_attribution_missing")
+        if str(handoff.get("preopen_selection_state") or "") != "pending_not_applied":
+            blockers.append("runtime_handoff_preopen_state_invalid")
     return list(dict.fromkeys(blockers))
 
 
@@ -3117,6 +3150,8 @@ def _select_auto_apply_candidates(
     target_date: str = "",
     include_families: set[str] | None = None,
     operator_locks: list[dict[str, Any]] | None = None,
+    runtime_handoff_contract_required_families: set[str] | None = None,
+    runtime_handoff_contract_source_version: int = RUNTIME_HANDOFF_CONTRACT_VERSION,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     selected_by_stage: dict[str, dict[str, Any]] = {}
     selected_cumulative_quality_by_stage: dict[str, str] = {}
@@ -3146,7 +3181,17 @@ def _select_auto_apply_candidates(
         allowed, reason = _ai_guard_allows_candidate(
             candidate, ai_review, require_ai=require_ai
         )
-        contract_blockers = _candidate_apply_contract_blockers(candidate)
+        runtime_handoff_contract_required = bool(
+            family in (runtime_handoff_contract_required_families or set())
+            and lock is None
+        )
+        contract_blockers = _candidate_apply_contract_blockers(
+            candidate,
+            require_runtime_handoff_contract=runtime_handoff_contract_required,
+            runtime_handoff_contract_source_version=(
+                runtime_handoff_contract_source_version
+            ),
+        )
         cumulative_quality_update = (
             str(candidate.get("runtime_update_mode") or "")
             == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
@@ -3288,6 +3333,13 @@ def _select_auto_apply_candidates(
                         else {}
                     )
                 )
+            ),
+            "postclose_runtime_handoff_contract": candidate.get(
+                "runtime_handoff_contract"
+            ),
+            "runtime_handoff_contract_required": runtime_handoff_contract_required,
+            "preopen_selection_state": (
+                "selected_for_runtime_env" if not reject_reason else "not_selected"
             ),
         }
         if candidate.get("quality_update_id"):
@@ -5765,6 +5817,20 @@ def build_preopen_apply_manifest(
                 and str(item.get("family") or "") in REMOVED_CALIBRATION_FAMILIES
             )
         ]
+        source_runtime_handoff_contract_version = _int_or_default(
+            report.get("runtime_handoff_contract_version"), 0
+        )
+        runtime_handoff_contract_required_families = (
+            {
+                str(item.get("family") or "")
+                for item in calibration_candidates
+                if isinstance(item, dict)
+                and item.get("allowed_runtime_apply") is True
+                and str(item.get("family") or "")
+            }
+            if target_date >= RUNTIME_HANDOFF_CONTRACT_REQUIRED_TARGET_DATE
+            else set()
+        )
         report_source_date = str(report.get("date") or source_date or "")
         latency_candidates, latency_recommendation = (
             _load_latency_classifier_candidates(report_source_date)
@@ -5888,6 +5954,12 @@ def build_preopen_apply_manifest(
                 target_date=target_date,
                 include_families=include_families,
                 operator_locks=operator_runtime_env_locks,
+                runtime_handoff_contract_required_families=(
+                    runtime_handoff_contract_required_families
+                ),
+                runtime_handoff_contract_source_version=(
+                    source_runtime_handoff_contract_version
+                ),
             )
             swing_selected, swing_decisions, swing_env_overrides = (
                 _select_swing_approved_candidates(swing_bundle)
@@ -6105,6 +6177,28 @@ def build_preopen_apply_manifest(
             "candidates": candidates,
             "calibration_candidates": calibration_candidates,
             "source_phase": source_phase or "canonical",
+            "runtime_handoff_contract_audit": {
+                "required_from_target_date": (
+                    RUNTIME_HANDOFF_CONTRACT_REQUIRED_TARGET_DATE
+                ),
+                "expected_version": RUNTIME_HANDOFF_CONTRACT_VERSION,
+                "source_version": source_runtime_handoff_contract_version,
+                "version_match": (
+                    source_runtime_handoff_contract_version
+                    == RUNTIME_HANDOFF_CONTRACT_VERSION
+                ),
+                "required_families": sorted(runtime_handoff_contract_required_families),
+                "missing_families": sorted(
+                    family
+                    for family in runtime_handoff_contract_required_families
+                    if not any(
+                        isinstance(item, dict)
+                        and str(item.get("family") or "") == family
+                        and isinstance(item.get("runtime_handoff_contract"), dict)
+                        for item in calibration_candidates
+                    )
+                ),
+            },
             "source_phase_auto_apply_blocked": intraday_source_auto_apply_blocked,
             "ai_correction_review": {
                 "required": bool(require_ai),

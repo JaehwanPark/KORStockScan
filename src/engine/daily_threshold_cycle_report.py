@@ -50,6 +50,7 @@ SCALE_IN_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "scale_in_split_order_plan"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 3
 THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
+RUNTIME_HANDOFF_CONTRACT_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
 SCALE_IN_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "scale_in_split_order_policy"
@@ -271,6 +272,13 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "soft-stop whipsaw는 당일 1건이 아니라 4월 이후 누적/rolling 지속성과 당일 safety guard를 함께 본다.",
             "daily_only_allowed": False,
         },
+        "sample_denominator_keys": [
+            "soft_stop_micro_grace",
+            "confirmation_started",
+            "confirmation_expired",
+            "post_sell_soft_stop_total",
+        ],
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "allowed_runtime_apply": True,
     },
     "market_regime_continuous_thresholds": {
@@ -461,17 +469,18 @@ CALIBRATION_FAMILY_METADATA = {
         ],
         "primary_key": "enabled",
         "bounds": {},
-        "sample_floor": 0,
-        "sample_window": "operator_requested_seed_with_daily_diagnostic",
+        "sample_floor": 3,
+        "sample_window": "daily_direct_observation_with_rolling_diagnostic",
         "window_policy": {
             "primary": "daily_intraday",
             "secondary": ["rolling_10d"],
-            "use": "모든 AVG_DOWN 물타기 실행에서 기존 scale-in qty를 보존한 50:50 1tick split policy만 다음 PREOPEN bounded env로 연결한다.",
+            "use": "AVG_DOWN 직접 관측 3건부터 기존 scale-in qty를 보존한 split policy만 다음 PREOPEN bounded env로 연결한다. 미달 표본도 source-only seed로 계속 축적한다.",
             "daily_only_allowed": True,
         },
         "sample_denominator_keys": [
             "avg_down_observation_count",
-            "recommended_policy_candidate_count",
+            "real_sample_count",
+            "sim_sample_count",
         ],
         "primary_decision_metric": "qty_preserving_execution_shape_seed",
         "allowed_runtime_apply": True,
@@ -967,6 +976,7 @@ def save_threshold_calibration_report(
     payload = {
         "date": target_date,
         "run_phase": phase,
+        "runtime_handoff_contract_version": RUNTIME_HANDOFF_CONTRACT_VERSION,
         "generated_at": (report.get("meta") or {}).get("generated_at"),
         "source_report": str(report_path_for_date(target_date)),
         "runtime_change": False,
@@ -7795,11 +7805,23 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     policy_version = str(recommended_policy.get("policy_version") or "")
     source_quality_blocked = source_quality.get("tuning_input_allowed") is False
     runtime_apply_allowed = recommended_policy.get("runtime_apply_allowed") is True
+    avg_down_observation_count = (
+        _safe_int(input_summary.get("avg_down_observation_count"), 0) or 0
+    )
+    direct_observation_count = max(
+        avg_down_observation_count,
+        real_sample + sim_sample,
+    )
+    sample_floor = int(
+        CALIBRATION_FAMILY_METADATA["scale_in_split_order_plan"]["sample_floor"]
+    )
+    direct_sample_ready = direct_observation_count >= sample_floor
     recommended = {
         "enabled": bool(candidates)
         and bool(policy_file)
         and not source_quality_blocked
-        and runtime_apply_allowed,
+        and runtime_apply_allowed
+        and direct_sample_ready,
         "policy_file": policy_file,
         "policy_version": policy_version,
     }
@@ -7842,12 +7864,12 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
                 input_summary.get("runtime_three_leg_candidate_count"), 0
             )
             or 0,
-            "avg_down_observation_count": _safe_int(
-                input_summary.get("avg_down_observation_count"), 0
-            )
-            or 0,
+            "avg_down_observation_count": avg_down_observation_count,
             "real_sample_count": real_sample,
             "sim_sample_count": sim_sample,
+            "direct_observation_count": direct_observation_count,
+            "direct_observation_sample_floor": sample_floor,
+            "direct_observation_sample_ready": direct_sample_ready,
             "primary_sample_book": "post_submit_tick_band_counterfactual",
             "source_quality_blocked": bool(source_quality_blocked),
             "source_quality_status": source_quality.get("status"),
@@ -7874,6 +7896,7 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
         "notes": [
             "scale_in_split_order_plan only decomposes AVG_DOWN scale-in orders and never increases requested_qty.",
             "PYRAMID is excluded from v1 because it is not avg-down averaging.",
+            "Policy candidates remain source-only seeds until at least three direct AVG_DOWN/real+sim observations are available.",
             "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
         ],
     }
@@ -10164,9 +10187,8 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
     if output_family == "scale_in_split_order_plan":
         return max(
             _safe_int(source_metrics.get("avg_down_observation_count"), 0) or 0,
-            _safe_int(source_metrics.get("real_sample_count"), 0) or 0,
-            _safe_int(source_metrics.get("sim_sample_count"), 0) or 0,
-            _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0,
+            (_safe_int(source_metrics.get("real_sample_count"), 0) or 0)
+            + (_safe_int(source_metrics.get("sim_sample_count"), 0) or 0),
         )
     if output_family == "entry_price_execution_quality":
         return max(
@@ -10235,6 +10257,9 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
         )
     if output_family == "soft_stop_whipsaw_confirmation":
         return max(
+            _safe_int(source_metrics.get("soft_stop_micro_grace"), 0) or 0,
+            _safe_int(source_metrics.get("confirmation_started"), 0) or 0,
+            _safe_int(source_metrics.get("confirmation_expired"), 0) or 0,
             _safe_int(source_metrics.get("holding_exit_observation_total"), 0) or 0,
             _safe_int(source_metrics.get("post_sell_soft_stop_total"), 0) or 0,
         )
@@ -10560,6 +10585,11 @@ def _calibration_state_for_family(
         market_policy_count = (
             _safe_int(source_metrics.get("market_qty_split_only_count"), 0) or 0
         )
+        direct_observation_count = max(
+            _safe_int(source_metrics.get("avg_down_observation_count"), 0) or 0,
+            (_safe_int(source_metrics.get("real_sample_count"), 0) or 0)
+            + (_safe_int(source_metrics.get("sim_sample_count"), 0) or 0),
+        )
         if not source_metrics.get("report_loaded"):
             return (
                 "hold_sample",
@@ -10574,6 +10604,12 @@ def _calibration_state_for_family(
             return (
                 "hold",
                 "scale_in_split_order_plan recommended policy is not runtime-apply allowed; keep it out of PREOPEN env handoff.",
+            )
+        if direct_observation_count < sample_floor:
+            return (
+                "hold_sample",
+                "scale-in split policy seed는 유지하지만 직접 AVG_DOWN/real+sim 표본이 "
+                f"초기 bounded floor에 미달({direct_observation_count}/{sample_floor})해 PREOPEN 적용은 보류한다.",
             )
         if policy_count > 0 and (
             baseline_policy_count > 0
@@ -11449,6 +11485,14 @@ def _build_calibration_candidates(
             sample_count=sample_count,
             sample_ready=sample_ready,
         )
+        if output_family == "score65_74_recovery_probe":
+            recommended = dict(recommended)
+            if calibration_state == "adjust_up":
+                recommended["enabled"] = True
+            source_metrics = dict(source_metrics)
+            source_metrics["recommended_state_consistent"] = bool(
+                calibration_state != "adjust_up" or recommended.get("enabled") is True
+            )
         sample_floor_status = (
             "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
         )
@@ -11541,6 +11585,24 @@ def _build_calibration_candidates(
             or calibration_state == "approval_required",
             "runtime_change": False,
             "runtime_change_reason": "장중 자동 mutation 금지; 다음 장전 승인된 family만 bounded apply 대상",
+            "runtime_handoff_contract": {
+                "decision_authority": (
+                    "next_preopen_bounded_candidate_only"
+                    if bool(metadata.get("allowed_runtime_apply"))
+                    else "report_only_no_runtime_apply"
+                ),
+                "runtime_effect": False,
+                "current_state_source": "runtime_constants_at_report_build",
+                "recommended_state_source": "postclose_deterministic_calibration",
+                "operator_lock_resolution": "deferred_to_preopen_with_explicit_provenance",
+                "preopen_selection_state": "pending_not_applied",
+                "actual_runtime_state": "not_observed_by_postclose_calibration",
+                "same_stage_max_selected": 1,
+                "post_apply_attribution_required": True,
+                "quantity_change_authority": "forbidden_in_postclose_calibration",
+                "existing_quantity_owner": "position_sizing_dynamic_formula",
+                "hard_safety_bypass_forbidden": True,
+            },
         }
         if output_family == "protect_trailing_smoothing":
             candidate["sample_ready"] = bool(source_metrics.get("sample_ready"))
@@ -11870,6 +11932,11 @@ def _refresh_candidate_from_primary_window(
         recommended = dict(recommended)
         recommended["enabled"] = True
         source_metrics["entry_unlock_probe_ready"] = True
+    if family == "score65_74_recovery_probe":
+        source_metrics = dict(source_metrics)
+        source_metrics["recommended_state_consistent"] = bool(
+            state != "adjust_up" or recommended.get("enabled") is True
+        )
     apply_mode = _apply_mode_for_candidate_state(candidate, state, primary_ready)
     candidate.update(
         {
@@ -15057,6 +15124,7 @@ def build_daily_threshold_cycle_report(
     )
     report = {
         "date": target_date,
+        "runtime_handoff_contract_version": RUNTIME_HANDOFF_CONTRACT_VERSION,
         "meta": {
             "schema_version": THRESHOLD_CYCLE_SCHEMA_VERSION,
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

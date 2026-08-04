@@ -1432,14 +1432,16 @@ export KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED=true
 unset KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE
 renew_enabled_dated_runtime_overrides 2026-07-31 >/dev/null
 record_enabled_dated_runtime_provenance 2026-07-31 >/dev/null
-printf '%s|%s|%s|%s|%s|%s|%s\\n' \
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\\n' \
   "$KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE" \
   "$KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE" \
   "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED" \
   "$KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE" \
   "$KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE" \
   "$KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE" \
-  "$KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_COUNT"
+  "$KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_COUNT" \
+  "$KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWED_KEYS" \
+  "$KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_DATE_PROVENANCE"
 """,
         ],
         text=True,
@@ -1447,9 +1449,32 @@ printf '%s|%s|%s|%s|%s|%s|%s\\n' \
         check=True,
     )
 
-    assert result.stdout.strip() == (
-        "2026-07-31|2026-07-31|true|2026-07-30|2026-07-31|2026-07-31|4"
-    )
+    parts = result.stdout.strip().split("|")
+    assert parts[:7] == [
+        "2026-07-31",
+        "2026-07-31",
+        "true",
+        "2026-07-30",
+        "2026-07-31",
+        "2026-07-31",
+        "4",
+    ]
+    assert parts[7].split(",") == [
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED",
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED",
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED",
+    ]
+    provenance = parts[8].split(",")
+    assert (
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED:2026-07-31:"
+        "source=launcher_auto_renew"
+    ) in provenance
+    assert (
+        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED:2026-07-31:"
+        "source=launcher_auto_renew"
+    ) in provenance
+    assert all("missing" not in item for item in provenance)
 
 
 def test_run_bot_dated_auto_renew_registry_matches_handoff_verifier_registry():

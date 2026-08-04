@@ -2450,6 +2450,24 @@ def test_rising_missed_tp1_nxt_price_jump_recovery_is_nxt_only():
     assert enabled.lane == "nxt_price_jump_recovery"
     assert enabled.log_fields["rising_missed_tp1_positive_support_min"] == 1
     assert enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_lane"] is True
+    assert (
+        enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_runtime_called"]
+        is True
+    )
+    assert (
+        enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_runtime_applied"]
+        is True
+    )
+    assert (
+        enabled.log_fields[
+            "rising_missed_tp1_nxt_price_jump_recovery_runtime_call_reason"
+        ]
+        == "recovery_lane_applied"
+    )
+    assert (
+        enabled.log_fields["rising_missed_tp1_nxt_price_jump_recovery_current_date"]
+        == "2026-07-16"
+    )
     assert enabled.log_fields["threshold_family"] == (
         "rising_missed_nxt_price_jump_recovery"
     )
@@ -4234,6 +4252,198 @@ def test_rising_missed_scout_wait_requires_explicit_probe_intent(monkeypatch):
     assert probe["entry_ai_submit_authority_wait_probe_intent_trace_aligned"] is True
 
 
+def test_rising_missed_wait_probe_blocks_fresh_compound_adverse_exact_context(
+    monkeypatch,
+):
+    now_ts = 1_785_800_055.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_WAIT_PROBE_QUALITY_GUARD_ENABLED", "true"
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "rising_missed_one_share_entry_forced": True,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 65.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": now_ts - 0.2,
+        "last_watching_ai_decision_trace_id": "trace-wait-adverse",
+        "last_watching_ai_attempt_decision_trace_id": "trace-wait-adverse",
+        "last_watching_ai_attempt_trusted": True,
+        "last_watching_ai_attempt_probe_intent": True,
+        "last_watching_ai_attempt_probe_intent_status": "eligible_wait_probe",
+        "last_watching_ai_probe_intent": True,
+        "last_watching_ai_probe_intent_status": "eligible_wait_probe",
+        "last_watching_ai_feature_probe_at": now_ts - 0.2,
+        "last_watching_ai_source_quality_fields": {
+            "entry_context_quality": "complete",
+            "entry_candle_source_quality_status": "fresh_consistent",
+            "quote_fresh_for_entry": True,
+            "entry_liquidity_score": 58.0,
+            "entry_liquidity_status": "thin",
+            "fillability_score": 48.0,
+            "would_fill_now": False,
+            "entry_momentum_score": 42.0,
+            "entry_momentum_status": "fading",
+            "entry_candle_regime": "failed_breakout",
+            "entry_candle_alignment": "adverse",
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_score": 80.0,
+            "tick_context_quality": "fresh_computed",
+            "tick_acceleration_ratio": 1.4,
+            "micro_vwap_available": True,
+            "curr_vs_micro_vwap_bp": -25.1,
+        },
+    }
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
+        latency_signal_score=65.0,
+    )
+
+    assert decision["blocked"] is True
+    assert decision["broker_order_forbidden"] is True
+    assert decision["reason"] == ("rising_missed_wait_probe_composite_adverse_context")
+    assert decision["metric_role"] == "bounded_tunable"
+    assert (
+        decision["entry_ai_submit_authority_wait_probe_quality_composite_adverse"]
+        is True
+    )
+    assert (
+        decision["entry_ai_submit_authority_wait_probe_quality_positive_support_count"]
+        == 2
+    )
+
+
+def test_rising_missed_wait_probe_quality_guard_preserves_bounded_exploration(
+    monkeypatch,
+):
+    now_ts = 1_785_800_055.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_WAIT_PROBE_QUALITY_GUARD_ENABLED", "true"
+    )
+    base_stock = {
+        "strategy": "SCALPING",
+        "rising_missed_one_share_entry_forced": True,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 65.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": now_ts - 0.2,
+        "last_watching_ai_decision_trace_id": "trace-wait-bounded",
+        "last_watching_ai_attempt_decision_trace_id": "trace-wait-bounded",
+        "last_watching_ai_attempt_trusted": True,
+        "last_watching_ai_attempt_probe_intent": True,
+        "last_watching_ai_attempt_probe_intent_status": "eligible_wait_probe",
+        "last_watching_ai_probe_intent": True,
+        "last_watching_ai_probe_intent_status": "eligible_wait_probe",
+        "last_watching_ai_feature_probe_at": now_ts - 0.2,
+        "last_watching_ai_source_quality_fields": {
+            "entry_context_quality": "complete",
+            "entry_candle_source_quality_status": "fresh_consistent",
+            "quote_fresh_for_entry": True,
+            "entry_liquidity_score": 58.0,
+            "entry_liquidity_status": "thin",
+            "fillability_score": 48.0,
+            "would_fill_now": False,
+            "entry_momentum_score": 58.0,
+            "entry_momentum_status": "supportive",
+            "entry_candle_regime": "trend",
+            "entry_candle_alignment": "supportive",
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_score": 70.0,
+            "micro_vwap_available": True,
+            "curr_vs_micro_vwap_bp": 8.0,
+        },
+    }
+
+    allowed = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock=base_stock,
+        latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
+        latency_signal_score=65.0,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_WAIT_PROBE_QUALITY_GUARD_ENABLED", "false"
+    )
+    rollback = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock={
+            **base_stock,
+            "last_watching_ai_source_quality_fields": {
+                **base_stock["last_watching_ai_source_quality_fields"],
+                "entry_momentum_score": 42.0,
+                "entry_momentum_status": "fading",
+                "entry_candle_regime": "failed_breakout",
+                "entry_candle_alignment": "adverse",
+            },
+        },
+        latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
+        latency_signal_score=65.0,
+    )
+
+    assert allowed["blocked"] is False
+    assert allowed["reason"] == "ok"
+    assert (
+        allowed["entry_ai_submit_authority_wait_probe_quality_guard_reason"]
+        == "wait_probe_quality_ok"
+    )
+    assert rollback["blocked"] is False
+    assert (
+        rollback["entry_ai_submit_authority_wait_probe_quality_guard_reason"]
+        == "guard_disabled"
+    )
+
+
+def test_wait_probe_quality_guard_does_not_expand_into_non_scout_entry(monkeypatch):
+    now_ts = 1_785_800_055.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
+    stock = {
+        "strategy": "SCALPING",
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 65.0,
+        "last_watching_ai_result_source": "live",
+        "last_watching_ai_confirmed_at": now_ts - 0.2,
+        "last_watching_ai_decision_trace_id": "trace-normal-wait",
+        "last_watching_ai_attempt_decision_trace_id": "trace-normal-wait",
+        "last_watching_ai_attempt_trusted": True,
+        "last_watching_ai_attempt_probe_intent": True,
+        "last_watching_ai_attempt_probe_intent_status": "eligible_wait_probe",
+        "last_watching_ai_probe_intent": True,
+        "last_watching_ai_probe_intent_status": "eligible_wait_probe",
+        "last_watching_ai_feature_probe_at": now_ts - 0.2,
+        "last_watching_ai_source_quality_fields": {
+            "entry_context_quality": "complete",
+            "entry_candle_source_quality_status": "fresh_consistent",
+            "quote_fresh_for_entry": True,
+            "entry_liquidity_score": 40.0,
+            "entry_liquidity_status": "thin",
+            "fillability_score": 30.0,
+            "would_fill_now": False,
+            "entry_momentum_score": 30.0,
+            "entry_momentum_status": "fading",
+            "entry_candle_regime": "failed_breakout",
+            "entry_candle_alignment": "adverse",
+        },
+    }
+
+    decision = state_handlers._entry_ai_submit_authority_fields(
+        strategy="SCALPING",
+        stock=stock,
+        latency_gate={"ai_action": "WAIT", "ai_score": 65.0},
+        latency_signal_score=65.0,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["entry_ai_submit_authority_wait_probe_intent"] is False
+    assert (
+        decision["entry_ai_submit_authority_wait_probe_quality_guard_reason"]
+        == "not_wait_probe_intent"
+    )
+
+
 def test_rising_missed_scout_rejects_stale_probe_intent_from_other_trace(monkeypatch):
     now_ts = 1_784_778_400.0
     monkeypatch.setattr(state_handlers.time, "time", lambda: now_ts)
@@ -4907,6 +5117,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     )
     assert stock["last_watching_ai_result_source"] == "live"
     assert stock["last_watching_ai_confirmed_at"] == response_completed_at
+    assert stock["last_watching_ai_feature_probe_at"] == response_completed_at
     assert stock["last_watching_ai_probe_intent"] is True
     assert stock["last_watching_ai_probe_intent_status"] == "eligible_wait_probe"
     assert stock["last_watching_ai_attempt_probe_intent"] is True
@@ -10111,7 +10322,12 @@ def test_rising_missed_nxt_downstream_block_registers_source_only_sampler(
 
     sampler = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS["nxt-downstream-1"]
     assert sampler["entry_price"] == 24900
-    assert sampler["entry_price_source"] == "executable_buy_price"
+    assert sampler["entry_price_source"] == (
+        "explicit_executable_prices:executable_ask"
+    )
+    assert sampler["counterfactual_requires_executable_bbo"] is True
+    assert sampler["entry_executable_best_bid"] == 24700
+    assert sampler["entry_executable_best_ask"] == 24900
     assert sampler["source_block_stage"] == "latency_block"
     assert sampler["source_block_reason"] == "latency_state_danger"
     registration = next(
@@ -10136,6 +10352,30 @@ def test_rising_missed_nxt_downstream_block_registers_source_only_sampler(
     assert (
         registration["fields"]["rising_missed_nxt_post_block_source_block_stage"]
         == "latency_block"
+    )
+    assert (
+        registration["fields"][
+            "rising_missed_nxt_post_block_sampler_runtime_active_date"
+        ]
+        == "2026-07-21"
+    )
+    assert (
+        registration["fields"][
+            "rising_missed_nxt_post_block_sampler_runtime_current_date"
+        ]
+        == "2026-07-21"
+    )
+    assert (
+        registration["fields"]["rising_missed_nxt_post_block_sampler_runtime_active"]
+        is True
+    )
+    assert (
+        registration["fields"]["rising_missed_nxt_post_block_sampler_runtime_called"]
+        is True
+    )
+    assert (
+        registration["fields"]["rising_missed_nxt_post_block_sampler_runtime_applied"]
+        is True
     )
     assert published == [
         (
@@ -10172,6 +10412,70 @@ def test_rising_missed_nxt_downstream_block_registers_source_only_sampler(
     assert residual_sampler["source_block_actual_order_submitted"] is True
     assert residual_sampler["source_block_residual_submitted_qty"] == 3
     assert residual_sampler["source_block_residual_submitted_leg_count"] == 1
+
+
+def test_rising_missed_nxt_latency_counterfactual_rejects_mark_only_entry(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 7, 21, 16, 30, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-07-21",
+    )
+    events = []
+    monkeypatch.setattr(state_handlers.time, "time", lambda: start_ts)
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", None)
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: events.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    registered = (
+        state_handlers._maybe_register_rising_missed_nxt_downstream_block_sampler(
+            {"id": 99, "name": "MARK ONLY"},
+            "123499",
+            "latency_block",
+            {
+                "rising_missed_tp1_submit_context_candidate_allowed": True,
+                "rising_missed_tp1_submit_context_fresh": True,
+                "rising_missed_market_session_bucket": "nxt_entry_window",
+                "rising_missed_effective_venue": "NXT",
+                "rising_missed_tp1_evaluation_id": "mark-only-latency",
+                "canonical_mark_price": 10000,
+                "latest_price": 10100,
+                "reason": "latency_state_danger",
+            },
+            now_ts=start_ts,
+        )
+    )
+
+    assert registered is False
+    assert state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS == {}
+    skipped = next(
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_sampler_registration_skipped"
+    )
+    assert (
+        skipped["fields"]["rising_missed_nxt_post_block_sampler_registration_reason"]
+        == "effective_entry_price_missing"
+    )
+    assert (
+        skipped["fields"][
+            "rising_missed_nxt_post_block_counterfactual_requires_executable_bbo"
+        ]
+        is True
+    )
+    assert (
+        skipped["fields"]["rising_missed_nxt_post_block_entry_executable_bbo_source"]
+        == "missing_or_invalid_executable_bbo"
+    )
 
 
 def test_rising_missed_nxt_downstream_block_uses_cached_tp1_pass_context(monkeypatch):
@@ -10218,11 +10522,14 @@ def test_rising_missed_nxt_downstream_block_uses_cached_tp1_pass_context(monkeyp
         actual_order_submitted=False,
         broker_order_forbidden=True,
         latest_price=10100,
+        best_bid_at_submit=10090,
+        best_ask_at_submit=10100,
         reason="latency_state_danger",
     )
 
     sampler = state_handlers._RISING_MISSED_NXT_POST_BLOCK_SAMPLERS["nxt-cached-1"]
     assert sampler["entry_price"] == 10100
+    assert sampler["entry_price_source"] == "submit_bbo:executable_ask"
     assert sampler["source_block_stage"] == "latency_block"
 
 
@@ -10385,6 +10692,90 @@ def test_rising_missed_nxt_post_block_sampler_uses_fresh_0d_bid_as_price_proxy(
     assert "current_price_observed" not in rejected_sample
 
 
+def test_rising_missed_nxt_post_block_sampler_rejects_0b_for_executable_bbo_counterfactual(
+    monkeypatch,
+):
+    start_ts = datetime(2026, 8, 4, 16, 10, tzinfo=state_handlers._KST).timestamp()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE",
+        "2026-08-04",
+    )
+    events = []
+    snapshot = {
+        "curr": 10150,
+        "last_realtime_type_ts": {"0B": start_ts, "0D": start_ts - 30},
+        "last_realtime_type_item": {"0B": "123471_AL", "0D": "123471_AL"},
+        "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+        "last_realtime_type_market_route": {
+            "0B": "krx_nxt_integrated",
+            "0D": "krx_nxt_integrated",
+        },
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda *_args, **_kwargs: None),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: dict(snapshot)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: events.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+
+    assert state_handlers._register_rising_missed_nxt_post_block_sampler(
+        {"id": 14, "name": "NXT TRADE ONLY"},
+        "123471",
+        {
+            "rising_missed_tp1_evaluation_id": "nxt-executable-bbo-1",
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_tp1_effective_price": 10000,
+            "rising_missed_nxt_post_block_counterfactual_requires_executable_bbo": True,
+            "rising_missed_nxt_post_block_entry_executable_best_bid": 9990,
+            "rising_missed_nxt_post_block_entry_executable_best_ask": 10000,
+            "rising_missed_nxt_post_block_entry_executable_bbo_source": "market_data_effective_bbo",
+            "selector_reason": "latency_state_danger",
+            "selector_deferred": False,
+        },
+        now_ts=start_ts,
+    )
+
+    observed = state_handlers.observe_rising_missed_nxt_post_block_samplers(
+        now_ts=start_ts
+    )
+    assert observed["fresh"] == 0
+    assert observed["source_gap"] == 1
+    sample = next(
+        item
+        for item in events
+        if item["stage"] == "rising_missed_nxt_post_block_price_sample"
+    )["fields"]
+    assert sample["rising_missed_nxt_post_block_price_observation_state"] == (
+        "source_gap"
+    )
+    assert sample["rising_missed_nxt_post_block_price_source_reason"] == (
+        "trade_price_not_executable_for_latency_tick_counterfactual"
+    )
+    assert (
+        sample["rising_missed_nxt_post_block_counterfactual_requires_executable_bbo"]
+        is True
+    )
+    assert sample["rising_missed_nxt_post_block_entry_executable_best_bid"] == 9990
+    assert sample["rising_missed_nxt_post_block_entry_executable_best_ask"] == 10000
+    assert sample["rising_missed_nxt_post_block_fresh_sample_count"] == 0
+    assert "current_price_observed" not in sample
+
+
 def test_rising_missed_nxt_post_block_sampler_uses_bounded_rest_for_labels_only(
     monkeypatch,
 ):
@@ -10472,6 +10863,20 @@ def test_rising_missed_nxt_post_block_sampler_uses_bounded_rest_for_labels_only(
         "ka10004_executable_bid_observation_only"
     )
     assert sample["rising_missed_nxt_post_block_rest_fallback_applied"] is True
+    assert (
+        sample["rising_missed_nxt_post_block_rest_fallback_runtime_active_date"]
+        == "2026-07-21"
+    )
+    assert (
+        sample["rising_missed_nxt_post_block_rest_fallback_runtime_current_date"]
+        == "2026-07-21"
+    )
+    assert sample["rising_missed_nxt_post_block_rest_fallback_runtime_active"] is True
+    assert sample["rising_missed_nxt_post_block_rest_fallback_runtime_called"] is True
+    assert (
+        sample["rising_missed_nxt_post_block_rest_fallback_runtime_call_reason"]
+        == "fresh_ka10004_executable_bid_observation_only"
+    )
     assert sample["rising_missed_nxt_post_block_rest_positive_micro_authority"] is False
     assert sample["actual_order_submitted"] is False
     assert sample["allowed_runtime_apply"] is False

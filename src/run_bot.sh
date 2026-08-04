@@ -105,6 +105,10 @@ DATED_RUNTIME_AUTO_RENEW_SPECS=(
 renew_enabled_dated_runtime_overrides() {
     local target_date="$1"
     local spec enabled_key active_date_key enabled_value active_date
+    local renewed_keys="" renewal_records=""
+
+    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWED_KEYS=""
+    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWAL_RECORDS=""
 
     if ! korstockscan_env_true "${KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED:-}"; then
         return 0
@@ -122,14 +126,22 @@ renew_enabled_dated_runtime_overrides() {
         fi
         printf -v "$active_date_key" '%s' "$target_date"
         export "$active_date_key"
-        echo "🔁 enabled dated runtime 자동연장: ${enabled_key} active_date=${active_date:-missing} target_date=${target_date}"
+        if [ -n "$renewed_keys" ]; then
+            renewed_keys="${renewed_keys},"
+            renewal_records="${renewal_records},"
+        fi
+        renewed_keys="${renewed_keys}${enabled_key}"
+        renewal_records="${renewal_records}${enabled_key}:previous=${active_date:-not_persisted_by_contract}:effective=${target_date}:source=launcher_auto_renew"
+        echo "🔁 enabled dated runtime 자동연장: ${enabled_key} previous_active_date=${active_date:-not_persisted_by_contract} effective_active_date=${target_date} provenance=launcher_auto_renew"
     done
+    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWED_KEYS="$renewed_keys"
+    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWAL_RECORDS="$renewal_records"
 }
 
 record_enabled_dated_runtime_provenance() {
     local target_date="$1"
     local spec enabled_key active_date_key enabled_value active_date
-    local active_keys="" active_count=0
+    local active_keys="" active_count=0 active_date_provenance="" active_date_source
 
     for spec in "${DATED_RUNTIME_AUTO_RENEW_SPECS[@]}"; do
         IFS=: read -r enabled_key active_date_key <<< "$spec"
@@ -142,13 +154,26 @@ record_enabled_dated_runtime_provenance() {
             active_keys="${active_keys},"
         fi
         active_keys="${active_keys}${enabled_key}"
+        case ",${KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWED_KEYS:-}," in
+            *,"${enabled_key}",*)
+                active_date_source="launcher_auto_renew"
+                ;;
+            *)
+                active_date_source="preexisting_same_day_active_date"
+                ;;
+        esac
+        if [ -n "$active_date_provenance" ]; then
+            active_date_provenance="${active_date_provenance},"
+        fi
+        active_date_provenance="${active_date_provenance}${enabled_key}:${active_date}:source=${active_date_source}"
         active_count=$((active_count + 1))
     done
     export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_POLICY_VERSION="dated_runtime_auto_renew_v2"
     export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_TARGET_DATE="$target_date"
     export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_KEYS="$active_keys"
     export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_COUNT="$active_count"
-    echo "📌 dated runtime 자동연장 provenance: target_date=${target_date} active_count=${active_count}"
+    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_DATE_PROVENANCE="$active_date_provenance"
+    echo "📌 dated runtime 자동연장 provenance: target_date=${target_date} active_count=${active_count} active_dates=${active_date_provenance:-none}"
 }
 
 entry_split_daily_contract_allows_override() {

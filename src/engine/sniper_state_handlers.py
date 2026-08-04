@@ -5980,9 +5980,7 @@ def _entry_ai_recheck_probe_state_fields(
         "last_watching_ai_attempt_score": float(_safe_float(score, 0.0)),
         "last_watching_ai_attempt_completed_at": float(completed_at),
         "last_watching_ai_attempt_result_source": result_source,
-        "last_watching_ai_attempt_contract_status": (
-            contract_status or "unreported"
-        ),
+        "last_watching_ai_attempt_contract_status": (contract_status or "unreported"),
         "last_watching_ai_attempt_evaluation_status": (
             "evaluated" if trusted_result else "not_evaluated_provider_or_contract"
         ),
@@ -13705,6 +13703,48 @@ _RISING_MISSED_NXT_DOWNSTREAM_BLOCK_STAGES = frozenset(
         "residual_blocked",
     }
 )
+_RISING_MISSED_EXECUTABLE_BBO_COUNTERFACTUAL_STAGES = frozenset(
+    {"latency_block", "rising_missed_tick_speed_entry_block"}
+)
+
+
+def _rising_missed_executable_bbo_from_fields(
+    fields: dict[str, Any],
+) -> tuple[float, float, str]:
+    candidates = (
+        (
+            "market_data_effective_bbo",
+            "market_data_effective_best_bid",
+            "market_data_effective_best_ask",
+        ),
+        ("submit_bbo", "best_bid_at_submit", "best_ask_at_submit"),
+        (
+            "pre_submit_ws_snapshot_refresh_bbo",
+            "pre_submit_ws_snapshot_refresh_best_bid",
+            "pre_submit_ws_snapshot_refresh_best_ask",
+        ),
+        (
+            "pre_submit_rest_orderbook_refresh_bbo",
+            "pre_submit_rest_orderbook_refresh_best_bid",
+            "pre_submit_rest_orderbook_refresh_best_ask",
+        ),
+        (
+            "pre_submit_quote_refresh_bbo",
+            "pre_submit_quote_refresh_best_bid",
+            "pre_submit_quote_refresh_best_ask",
+        ),
+        (
+            "explicit_executable_prices",
+            "executable_sell_price",
+            "executable_buy_price",
+        ),
+    )
+    for source, bid_key, ask_key in candidates:
+        bid = _safe_float(fields.get(bid_key), 0.0)
+        ask = _safe_float(fields.get(ask_key), 0.0)
+        if bid > 0 and ask >= bid:
+            return bid, ask, source
+    return 0.0, 0.0, "missing_or_invalid_executable_bbo"
 
 
 def _maybe_register_rising_missed_nxt_downstream_block_sampler(
@@ -13734,27 +13774,35 @@ def _maybe_register_rising_missed_nxt_downstream_block_sampler(
     ):
         return False
 
-    entry_price = 0.0
-    entry_price_source = "missing"
-    for key in (
-        # This sampler measures the counterfactual result of a blocked BUY.
-        # Use the price that was executable on the buy side at the decision
-        # boundary before any mark, last-trade, or passive reference price.
-        "executable_buy_price",
-        "current_price_observed",
-        "signal_price",
-        "latest_price",
-        "canonical_mark_price",
-        "rising_missed_tp1_effective_price",
-        "rising_missed_tp1_submit_context_anchor_price",
-    ):
-        candidate_price = _safe_float(decision_fields.get(key), 0.0)
-        if candidate_price > 0:
-            entry_price = candidate_price
-            entry_price_source = key
-            break
-    if entry_price <= 0:
-        return False
+    requires_executable_bbo = (
+        normalized_stage in _RISING_MISSED_EXECUTABLE_BBO_COUNTERFACTUAL_STAGES
+    )
+    executable_bid, executable_ask, executable_bbo_source = (
+        _rising_missed_executable_bbo_from_fields(decision_fields)
+    )
+    entry_price = executable_ask if requires_executable_bbo else 0.0
+    entry_price_source = (
+        f"{executable_bbo_source}:executable_ask"
+        if entry_price > 0
+        else "missing_executable_ask"
+    )
+    if not requires_executable_bbo:
+        for key in (
+            "executable_buy_price",
+            "current_price_observed",
+            "signal_price",
+            "latest_price",
+            "canonical_mark_price",
+            "rising_missed_tp1_effective_price",
+            "rising_missed_tp1_submit_context_anchor_price",
+        ):
+            candidate_price = _safe_float(decision_fields.get(key), 0.0)
+            if candidate_price > 0:
+                entry_price = candidate_price
+                entry_price_source = key
+                break
+        if entry_price <= 0:
+            return False
 
     block_reason = str(
         decision_fields.get("effective_reason")
@@ -13789,6 +13837,14 @@ def _maybe_register_rising_missed_nxt_downstream_block_sampler(
             decision_fields.get("residual_submitted_leg_count"), 0
         ),
         "rising_missed_nxt_post_block_entry_price_source": entry_price_source,
+        "rising_missed_nxt_post_block_counterfactual_requires_executable_bbo": (
+            requires_executable_bbo
+        ),
+        "rising_missed_nxt_post_block_entry_executable_best_bid": executable_bid,
+        "rising_missed_nxt_post_block_entry_executable_best_ask": executable_ask,
+        "rising_missed_nxt_post_block_entry_executable_bbo_source": (
+            executable_bbo_source
+        ),
     }
     return _register_rising_missed_nxt_post_block_sampler(
         stock,
@@ -14381,6 +14437,48 @@ def _rising_missed_nxt_post_block_sampler_contract_fields() -> dict[str, Any]:
     }
 
 
+def _rising_missed_nxt_post_block_runtime_provenance_fields(
+    *, now_ts: float | None = None
+) -> dict[str, Any]:
+    observed_ts = time.time() if now_ts is None else float(now_ts)
+    current_date = datetime.fromtimestamp(observed_ts, tz=_KST).strftime("%Y-%m-%d")
+    sampler_enabled = _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED", False
+    )
+    sampler_active_date = str(
+        os.getenv("KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE", "")
+    ).strip()
+    rest_enabled = _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ENABLED", False
+    )
+    rest_active_date = str(
+        os.getenv(
+            "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ACTIVE_DATE",
+            "",
+        )
+    ).strip()
+    return {
+        "rising_missed_nxt_post_block_sampler_runtime_configured": sampler_enabled,
+        "rising_missed_nxt_post_block_sampler_runtime_active_date": (
+            sampler_active_date or "-"
+        ),
+        "rising_missed_nxt_post_block_sampler_runtime_current_date": current_date,
+        "rising_missed_nxt_post_block_sampler_runtime_active": bool(
+            sampler_enabled and sampler_active_date == current_date
+        ),
+        "rising_missed_nxt_post_block_rest_fallback_runtime_configured": (rest_enabled),
+        "rising_missed_nxt_post_block_rest_fallback_runtime_active_date": (
+            rest_active_date or "-"
+        ),
+        "rising_missed_nxt_post_block_rest_fallback_runtime_current_date": (
+            current_date
+        ),
+        "rising_missed_nxt_post_block_rest_fallback_runtime_active": bool(
+            rest_enabled and rest_active_date == current_date
+        ),
+    }
+
+
 def _persist_rising_missed_nxt_post_block_samplers() -> None:
     path = RISING_MISSED_NXT_POST_BLOCK_SAMPLER_STATE_PATH
     try:
@@ -14589,6 +14687,11 @@ def _emit_rising_missed_nxt_post_block_sampler_event(
     stage: str,
     **fields: Any,
 ) -> None:
+    provenance_ts = (
+        _safe_float(sampler.get("last_sample_at"), 0.0)
+        or _safe_float(sampler.get("registered_at"), 0.0)
+        or time.time()
+    )
     emit_pipeline_event(
         "ENTRY_PIPELINE",
         str(sampler.get("stock_name") or sampler.get("stock_code") or ""),
@@ -14597,6 +14700,15 @@ def _emit_rising_missed_nxt_post_block_sampler_event(
         record_id=sampler.get("record_id"),
         fields={
             **_rising_missed_nxt_post_block_sampler_contract_fields(),
+            **_rising_missed_nxt_post_block_runtime_provenance_fields(
+                now_ts=provenance_ts
+            ),
+            "rising_missed_nxt_post_block_sampler_runtime_called": True,
+            "rising_missed_nxt_post_block_sampler_runtime_call_stage": stage,
+            "rising_missed_nxt_post_block_sampler_runtime_applied": bool(
+                stage
+                not in {"rising_missed_nxt_post_block_sampler_registration_skipped"}
+            ),
             "rising_missed_tp1_evaluation_id": sampler.get("evaluation_id") or "-",
             "rising_missed_market_session_bucket": sampler.get("market_session_bucket")
             or "-",
@@ -14620,6 +14732,18 @@ def _emit_rising_missed_nxt_post_block_sampler_event(
                 "entry_price_source"
             )
             or "rising_missed_tp1_effective_price",
+            "rising_missed_nxt_post_block_counterfactual_requires_executable_bbo": bool(
+                sampler.get("counterfactual_requires_executable_bbo")
+            ),
+            "rising_missed_nxt_post_block_entry_executable_best_bid": _safe_float(
+                sampler.get("entry_executable_best_bid"), 0.0
+            ),
+            "rising_missed_nxt_post_block_entry_executable_best_ask": _safe_float(
+                sampler.get("entry_executable_best_ask"), 0.0
+            ),
+            "rising_missed_nxt_post_block_entry_executable_bbo_source": (
+                sampler.get("entry_executable_bbo_source") or "not_applicable"
+            ),
             "rising_missed_nxt_post_block_source_block_actual_order_submitted": bool(
                 sampler.get("source_block_actual_order_submitted")
             ),
@@ -14724,6 +14848,23 @@ def _register_rising_missed_nxt_post_block_sampler(
             or ""
         ).strip(),
         "entry_price": float(entry_price or 0.0),
+        "counterfactual_requires_executable_bbo": bool(
+            fields.get(
+                "rising_missed_nxt_post_block_counterfactual_requires_executable_bbo"
+            )
+        ),
+        "entry_executable_best_bid": _safe_float(
+            fields.get("rising_missed_nxt_post_block_entry_executable_best_bid"),
+            0.0,
+        ),
+        "entry_executable_best_ask": _safe_float(
+            fields.get("rising_missed_nxt_post_block_entry_executable_best_ask"),
+            0.0,
+        ),
+        "entry_executable_bbo_source": str(
+            fields.get("rising_missed_nxt_post_block_entry_executable_bbo_source")
+            or "not_applicable"
+        ),
         "registered_at": observed_ts,
         "expires_at": observed_ts + horizon_sec,
         "last_sample_at": 0.0,
@@ -14950,6 +15091,15 @@ def observe_rising_missed_nxt_post_block_samplers(
             source_reason = "ws_0b_tick_after_sampler_horizon"
         else:
             source_reason = "fresh_absolute_ws_0b_nxt"
+        requires_executable_bbo = bool(
+            due.get("counterfactual_requires_executable_bbo")
+        )
+        if requires_executable_bbo and fresh:
+            # A last trade is not an executable sell touch.  Latency/tick
+            # counterfactuals must use a post-block best bid (or bounded REST
+            # best bid) so a wide spread cannot manufacture MFE.
+            fresh = False
+            source_reason = "trade_price_not_executable_for_latency_tick_counterfactual"
 
         quote_received_at = _safe_float(type_ts.get("0D"), 0.0)
         quote_age_ms = (
@@ -15097,6 +15247,9 @@ def observe_rising_missed_nxt_post_block_samplers(
                 else "not_applicable"
             ),
             "rising_missed_nxt_post_block_price_basis": price_basis,
+            "rising_missed_nxt_post_block_counterfactual_requires_executable_bbo": (
+                requires_executable_bbo
+            ),
             "rising_missed_nxt_post_block_ws_0b_age_ms": (
                 round(age_ms, 3) if age_ms is not None else "-"
             ),
@@ -15115,6 +15268,12 @@ def observe_rising_missed_nxt_post_block_samplers(
             "rising_missed_nxt_post_block_ws_0d_quote_proxy_applied": quote_proxy_fresh,
             "rising_missed_nxt_post_block_rest_fallback_enabled": bool(
                 rest_observation.get("enabled")
+            ),
+            "rising_missed_nxt_post_block_rest_fallback_runtime_called": bool(
+                rest_observation.get("attempted")
+            ),
+            "rising_missed_nxt_post_block_rest_fallback_runtime_call_reason": (
+                rest_observation.get("reason") or "-"
             ),
             "rising_missed_nxt_post_block_rest_fallback_attempted": bool(
                 rest_observation.get("attempted")
@@ -33692,6 +33851,227 @@ def _evaluate_rising_missed_scout_quality_guard(
     }
 
 
+def _rising_missed_wait_probe_quality_guard_fields(
+    stock: dict | None,
+    *,
+    wait_probe_intent: bool,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Veto only fresh, exact WAIT probes with compound adverse context."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    enabled = _env_bool(
+        "KORSTOCKSCAN_RISING_MISSED_WAIT_PROBE_QUALITY_GUARD_ENABLED",
+        True,
+    )
+    source = stock.get("last_watching_ai_source_quality_fields")
+    source = source if isinstance(source, dict) else {}
+    observed_at = _safe_float(stock.get("last_watching_ai_feature_probe_at"), 0.0)
+    age_sec = max(0.0, now_ts - observed_at) if observed_at > 0 else None
+    max_age_sec = max(
+        1.0,
+        _env_float(
+            "KORSTOCKSCAN_RISING_MISSED_WAIT_PROBE_QUALITY_MAX_AGE_SEC",
+            5.0,
+        ),
+    )
+    entry_context_quality = (
+        str(source.get("entry_context_quality") or "missing").strip().lower()
+    )
+    candle_source_quality = (
+        str(source.get("entry_candle_source_quality_status") or "missing")
+        .strip()
+        .lower()
+    )
+    quote_fresh = _boolish_true(source.get("quote_fresh_for_entry"))
+    required_quality_fields = (
+        "quote_fresh_for_entry",
+        "entry_liquidity_score",
+        "entry_liquidity_status",
+        "fillability_score",
+        "would_fill_now",
+        "entry_momentum_score",
+        "entry_momentum_status",
+        "entry_candle_regime",
+        "entry_candle_alignment",
+    )
+    required_quality_fields_present = all(
+        key in source and source.get(key) is not None for key in required_quality_fields
+    )
+    context_usable = bool(
+        age_sec is not None
+        and age_sec <= max_age_sec
+        and entry_context_quality == "complete"
+        and candle_source_quality == "fresh_consistent"
+        and quote_fresh
+        and required_quality_fields_present
+    )
+
+    liquidity_score = _safe_float(source.get("entry_liquidity_score"), 0.0)
+    liquidity_status = (
+        str(source.get("entry_liquidity_status") or "missing").strip().lower()
+    )
+    fillability_score = _safe_float(source.get("fillability_score"), 0.0)
+    would_fill_now = _boolish_true(source.get("would_fill_now"))
+    momentum_score = _safe_float(source.get("entry_momentum_score"), 0.0)
+    momentum_status = (
+        str(source.get("entry_momentum_status") or "missing").strip().lower()
+    )
+    candle_regime = str(source.get("entry_candle_regime") or "missing").strip().lower()
+    candle_alignment = (
+        str(source.get("entry_candle_alignment") or "missing").strip().lower()
+    )
+
+    liquidity_adverse_reasons: list[str] = []
+    if liquidity_score < 60.0:
+        liquidity_adverse_reasons.append("liquidity_score_lt_60")
+    if fillability_score < 50.0:
+        liquidity_adverse_reasons.append("fillability_score_lt_50")
+    if liquidity_status in {"adverse", "thin", "weak"}:
+        liquidity_adverse_reasons.append(f"liquidity_status_{liquidity_status}")
+    if not would_fill_now:
+        liquidity_adverse_reasons.append("would_fill_now_false")
+    liquidity_adverse = len(liquidity_adverse_reasons) >= 2
+    candle_adverse = bool(
+        candle_alignment == "adverse" and candle_regime == "failed_breakout"
+    )
+    momentum_adverse = bool(
+        momentum_score < 50.0 and momentum_status in {"adverse", "fading", "weak"}
+    )
+
+    positive_supports: list[str] = []
+    order_flow_status = (
+        str(source.get("entry_order_flow_status") or "missing").strip().lower()
+    )
+    order_flow_score = _safe_float(source.get("order_flow_pressure_score"), 0.0)
+    if order_flow_status in {"supportive", "strong"} and order_flow_score >= 55.0:
+        positive_supports.append("order_flow")
+    if momentum_score >= 55.0 and momentum_status not in {
+        "adverse",
+        "fading",
+        "weak",
+    }:
+        positive_supports.append("momentum")
+    if (
+        _boolish_true(source.get("micro_vwap_available"))
+        and _safe_float(source.get("curr_vs_micro_vwap_bp"), -999999.0) >= 0.0
+    ):
+        positive_supports.append("micro_vwap")
+    if (
+        _boolish_true(source.get("tick_aggressor_pressure_usable"))
+        and _safe_float(source.get("buy_pressure_10t"), 0.0) >= 60.0
+    ):
+        positive_supports.append("buy_pressure")
+    if (
+        str(source.get("tick_context_quality") or "")
+        .strip()
+        .lower()
+        .startswith("fresh")
+        and _safe_float(source.get("tick_acceleration_ratio"), 0.0) >= 1.0
+    ):
+        positive_supports.append("tick_speed")
+
+    composite_adverse = bool(candle_adverse and liquidity_adverse and momentum_adverse)
+    positive_support_missing = len(positive_supports) == 0
+    blocked = bool(
+        enabled
+        and wait_probe_intent
+        and context_usable
+        and (composite_adverse or positive_support_missing)
+    )
+    if not enabled:
+        reason = "guard_disabled"
+    elif not wait_probe_intent:
+        reason = "not_wait_probe_intent"
+    elif not context_usable:
+        reason = "fresh_exact_entry_context_unavailable"
+    elif composite_adverse:
+        reason = "rising_missed_wait_probe_composite_adverse_context"
+    elif positive_support_missing:
+        reason = "rising_missed_wait_probe_fresh_positive_support_missing"
+    else:
+        reason = "wait_probe_quality_ok"
+
+    return {
+        "entry_ai_submit_authority_wait_probe_quality_guard_enabled": enabled,
+        "entry_ai_submit_authority_wait_probe_quality_guard_blocked": blocked,
+        "entry_ai_submit_authority_wait_probe_quality_guard_reason": reason,
+        "entry_ai_submit_authority_wait_probe_quality_context_usable": context_usable,
+        "entry_ai_submit_authority_wait_probe_quality_required_fields_present": (
+            required_quality_fields_present
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_context_age_sec": (
+            f"{age_sec:.3f}" if age_sec is not None else "not_available"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_max_age_sec": max_age_sec,
+        "entry_ai_submit_authority_wait_probe_quality_entry_context_quality": (
+            entry_context_quality
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_candle_source_quality": (
+            candle_source_quality
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_quote_fresh": quote_fresh,
+        "entry_ai_submit_authority_wait_probe_quality_liquidity_score": (
+            liquidity_score
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_liquidity_status": (
+            liquidity_status
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_fillability_score": (
+            fillability_score
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_would_fill_now": (would_fill_now),
+        "entry_ai_submit_authority_wait_probe_quality_momentum_score": momentum_score,
+        "entry_ai_submit_authority_wait_probe_quality_momentum_status": (
+            momentum_status
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_candle_regime": candle_regime,
+        "entry_ai_submit_authority_wait_probe_quality_candle_alignment": (
+            candle_alignment
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_liquidity_adverse": (
+            liquidity_adverse
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_liquidity_adverse_reasons": (
+            ",".join(liquidity_adverse_reasons) if liquidity_adverse_reasons else "-"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_candle_adverse": candle_adverse,
+        "entry_ai_submit_authority_wait_probe_quality_momentum_adverse": (
+            momentum_adverse
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_composite_adverse": (
+            composite_adverse
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_positive_support_count": len(
+            positive_supports
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_positive_supports": (
+            ",".join(positive_supports) if positive_supports else "-"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_metric_role": ("bounded_tunable"),
+        "entry_ai_submit_authority_wait_probe_quality_decision_authority": (
+            "real_buy_submit_bounded_wait_probe_quality_guard"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_window_policy": (
+            "same_final_trusted_entry_ai_trace_pre_submit"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_sample_floor": (
+            "one_fresh_complete_exact_entry_context"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_primary_decision_metric": (
+            "source_quality_adjusted_ev_pct"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_source_quality_gate": (
+            "fresh_complete_quote_and_candle_context_same_trusted_ai_trace"
+        ),
+        "entry_ai_submit_authority_wait_probe_quality_runtime_effect": blocked,
+        "entry_ai_submit_authority_wait_probe_quality_forbidden_uses": (
+            "buy_authority|quantity_or_cap_change|provider_route_change|"
+            "broker_guard_bypass|stale_quote_bypass|hard_safety_bypass"
+        ),
+    }
+
+
 def _entry_ai_submit_authority_fields(
     *,
     strategy,
@@ -33875,6 +34255,16 @@ def _entry_ai_submit_authority_fields(
         and normalized_action == "wait"
         and (wait_probe_intent or not rising_missed_scout_contract)
     )
+    wait_probe_quality = _rising_missed_wait_probe_quality_guard_fields(
+        stock,
+        wait_probe_intent=bool(wait_probe_intent and rising_missed_scout_contract),
+        now_ts=time.time(),
+    )
+    wait_probe_quality_blocked = bool(
+        wait_probe_quality.get(
+            "entry_ai_submit_authority_wait_probe_quality_guard_blocked"
+        )
+    )
     invalid_action = normalized_action in {
         "",
         "-",
@@ -33890,12 +34280,20 @@ def _entry_ai_submit_authority_fields(
         or fresh_drop_veto
         or wait_observation_only_veto
         or action_authority_unavailable
+        or wait_probe_quality_blocked
     )
     reason = "ok"
     if fresh_drop_veto:
         reason = "fresh_ai_drop_real_buy_veto"
     elif wait_observation_only_veto:
         reason = "fresh_ai_wait_observation_only_probe_veto"
+    elif wait_probe_quality_blocked:
+        reason = str(
+            wait_probe_quality.get(
+                "entry_ai_submit_authority_wait_probe_quality_guard_reason"
+            )
+            or "rising_missed_wait_probe_quality_guard_block"
+        )
     elif action_authority_unavailable and not fresh_prior:
         reason = "entry_ai_result_stale_or_untrusted"
     elif action_authority_unavailable:
@@ -33910,11 +34308,23 @@ def _entry_ai_submit_authority_fields(
         "reason": reason,
         "block_reason": reason,
         "threshold_family": "pre_submit_entry_ai_authority_guard",
-        "metric_role": "safety_veto" if fresh_drop_veto else "source_quality_gate",
+        "metric_role": (
+            "safety_veto"
+            if fresh_drop_veto
+            else (
+                "bounded_tunable"
+                if wait_probe_quality_blocked
+                else "source_quality_gate"
+            )
+        ),
         "decision_authority": (
             "real_buy_submit_fresh_ai_drop_veto"
             if fresh_drop_veto
-            else "real_buy_submit_source_quality_guard"
+            else (
+                "real_buy_submit_bounded_wait_probe_quality_guard"
+                if wait_probe_quality_blocked
+                else "real_buy_submit_source_quality_guard"
+            )
         ),
         "source_quality_gate": "pre_submit_entry_ai_authority_contract",
         "window_policy": "intraday_pre_submit",
@@ -33961,6 +34371,7 @@ def _entry_ai_submit_authority_fields(
         "entry_ai_submit_authority_wait_probe_required": bool(
             fresh_wait_probe_required
         ),
+        **wait_probe_quality,
         "entry_ai_submit_authority_confirmed_age_sec": (
             f"{age_sec:.3f}" if age_sec is not None else "not_available"
         ),
@@ -35010,6 +35421,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 "last_watching_ai_snapshot_id": decision_snapshot_id,
                 "last_watching_ai_decision_trace_id": decision_trace_id,
                 "last_watching_ai_source_quality_fields": source_quality_fields,
+                "last_watching_ai_feature_probe_at": ai_response_completed_at,
                 "last_watching_ai_call_trigger_reason": (
                     "pre_submit_entry_ai_authority_retry"
                 ),
@@ -64066,6 +64478,10 @@ def _evaluate_rising_missed_normal_buy_bridge(
             nxt_price_jump_recovery_enabled=(
                 _rising_missed_nxt_price_jump_recovery_enabled(runtime)
             ),
+            nxt_price_jump_recovery_configured=_env_bool(
+                "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED",
+                False,
+            ),
             nxt_price_jump_recovery_active_date=str(
                 os.getenv(
                     "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE",
@@ -66405,6 +66821,10 @@ def _maybe_submit_rising_missed_one_share_entry(
         current_probe_intent=stock.get("last_watching_ai_probe_intent"),
         nxt_price_jump_recovery_enabled=(
             _rising_missed_nxt_price_jump_recovery_enabled(runtime)
+        ),
+        nxt_price_jump_recovery_configured=_env_bool(
+            "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED",
+            False,
         ),
         nxt_price_jump_recovery_active_date=str(
             os.getenv(

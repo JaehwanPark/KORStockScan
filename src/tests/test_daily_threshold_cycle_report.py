@@ -7,6 +7,25 @@ from types import SimpleNamespace
 from src.engine import daily_threshold_cycle_report as report_mod
 
 
+def test_save_threshold_calibration_report_declares_runtime_handoff_contract_version(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(report_mod, "THRESHOLD_CALIBRATION_REPORT_DIR", tmp_path)
+    report = {
+        "date": "2026-08-03",
+        "meta": {
+            "generated_at": "2026-08-03T20:00:00+09:00",
+            "calibration_run_phase": "postclose",
+        },
+        "calibration_candidates": [],
+    }
+
+    path = report_mod.save_threshold_calibration_report(report)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["runtime_handoff_contract_version"] == 1
+
+
 def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     pipeline_rows = {
         "2026-04-28": [],
@@ -306,6 +325,7 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         completed_rows_loader=lambda start_date, end_date: completed_rows,
     )
 
+    assert report["runtime_handoff_contract_version"] == 1
     assert report["summary"]["completed_valid_rolling_7d"] == 3
     assert report["summary"]["loss_count_rolling_7d"] == 2
     assert "threshold_snapshot" in report
@@ -493,6 +513,23 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
         ]
         is False
     )
+
+
+def test_soft_stop_whipsaw_snapshot_ignores_unrelated_broad_sample_counts():
+    sample_count = report_mod._snapshot_relevant_sample_count(
+        "soft_stop_whipsaw_confirmation",
+        {
+            "sample": {
+                "completed_valid": 370,
+                "soft_stop_micro_grace": 0,
+                "confirmation_started": 0,
+                "confirmation_expired": 0,
+                "post_sell_soft_stop_total": 0,
+            }
+        },
+    )
+
+    assert sample_count == 0
 
 
 def test_score65_74_recovery_probe_reports_effective_score60_aliases():
@@ -2691,6 +2728,15 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
     assert candidate["sample_floor_status"] == "ready"
     assert candidate["recommended_values"]["enabled"] is True
     assert candidate["source_metrics"]["entry_unlock_probe_ready"] is True
+    assert candidate["source_metrics"]["recommended_state_consistent"] is True
+    assert (
+        candidate["runtime_handoff_contract"]["preopen_selection_state"]
+        == "pending_not_applied"
+    )
+    assert candidate["runtime_handoff_contract"]["runtime_effect"] is False
+    assert (
+        candidate["runtime_handoff_contract"]["post_apply_attribution_required"] is True
+    )
     assert "bounded entry probe" in candidate["calibration_reason"]
 
 
@@ -2757,7 +2803,7 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
                 "schema_version": "scale_in_split_order_plan_v1",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
-                    "avg_down_observation_count": 2,
+                    "avg_down_observation_count": 3,
                     "counterfactual_selected_count": 2,
                     "baseline_fallback_count": 0,
                     "price_observation_join_gap_count": 0,
@@ -2806,6 +2852,64 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
     assert candidate["source_metrics"]["counterfactual_selected_count"] == 2
     assert candidate["source_metrics"]["runtime_three_leg_candidate_count"] == 1
     assert "counterfactual" in candidate["calibration_reason"]
+
+
+def test_scale_in_split_order_plan_policy_seed_waits_for_direct_observation_floor(
+    tmp_path, monkeypatch
+):
+    target_date = "2026-07-08"
+    report_dir = tmp_path / "scale_in_split_order_plan"
+    policy_file = tmp_path / "scale_in_split_order_policy_2026-07-08.json"
+    report_dir.mkdir(parents=True)
+    policy_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(report_mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "input_summary": {
+                    "avg_down_observation_count": 0,
+                    "baseline_fallback_count": 1,
+                },
+                "candidate_grid": [
+                    {
+                        "context_bucket": "scalping:seed:normal",
+                        "real_sample_count": 0,
+                        "sim_sample_count": 0,
+                        "policy_mode": "bounded_equal_scale_in_split_baseline",
+                    }
+                ],
+                "recommended_policy": {
+                    "runtime_apply_allowed": True,
+                    "policy_file": str(policy_file),
+                    "policy_version": "scale_in_split_order_plan:seed-only",
+                    "candidates": [
+                        {
+                            "context_bucket": "scalping:seed:normal",
+                            "policy_mode": "bounded_equal_scale_in_split_baseline",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    family = report_mod._build_scale_in_split_order_plan_family(target_date=target_date)
+    candidate = next(
+        item
+        for item in report_mod._build_calibration_candidates([family], {})
+        if item["family"] == "scale_in_split_order_plan"
+    )
+
+    assert family["sample"]["direct_observation_count"] == 0
+    assert family["sample"]["direct_observation_sample_floor"] == 3
+    assert family["recommended"]["enabled"] is False
+    assert candidate["sample_count"] == 0
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["apply_mode"] == "report_only_calibration"
+    assert "0/3" in candidate["calibration_reason"]
 
 
 def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(

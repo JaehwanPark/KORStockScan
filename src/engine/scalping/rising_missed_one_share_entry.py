@@ -172,6 +172,7 @@ def evaluate_rising_missed_tp1_candidate(
     current_probe_intent: Any = False,
     nxt_price_jump_recovery_enabled: bool = False,
     nxt_price_jump_recovery_active_date: str = "",
+    nxt_price_jump_recovery_configured: bool | None = None,
 ) -> RisingMissedTP1CandidateDecision:
     """Return candidate eligibility only; broker submit safety remains downstream."""
     stock = stock if isinstance(stock, dict) else {}
@@ -200,6 +201,7 @@ def evaluate_rising_missed_tp1_candidate(
         if low_rebound_lane
         else "acceleration" if acceleration_lane else "none"
     )
+    lane_before_nxt_price_jump_recovery = lane
     ai_action = (
         str(
             current_ai_action
@@ -292,6 +294,47 @@ def evaluate_rising_missed_tp1_candidate(
         and pressure_ewma >= 70.0
         and support_families["order_flow"]
     )
+    price_jump_recovery_configured = bool(
+        nxt_price_jump_recovery_enabled
+        if nxt_price_jump_recovery_configured is None
+        else nxt_price_jump_recovery_configured
+    )
+    price_jump_recovery_block_reasons = []
+    if not price_jump_recovery_configured:
+        price_jump_recovery_block_reasons.append("runtime_not_configured")
+    elif not nxt_price_jump_recovery_enabled:
+        price_jump_recovery_block_reasons.append("runtime_active_date_mismatch")
+    if lane_before_nxt_price_jump_recovery != "none":
+        price_jump_recovery_block_reasons.append("existing_candidate_lane_owned")
+    if str(decision_input.get("rising_missed_effective_venue") or "").upper() != "NXT":
+        price_jump_recovery_block_reasons.append("effective_venue_not_nxt")
+    if (
+        str(decision_input.get("rising_missed_market_session_bucket") or "").lower()
+        != "nxt_entry_window"
+    ):
+        price_jump_recovery_block_reasons.append("outside_nxt_entry_window")
+    if not _field_present(decision_input.get("rising_missed_nxt_eligible")):
+        price_jump_recovery_block_reasons.append("nxt_eligibility_unproven")
+    if not _has_signature(stock, "LOW_REBOUND_RISING_MISSED"):
+        price_jump_recovery_block_reasons.append("low_rebound_signature_missing")
+    if not _has_signature(stock, "PRICE_JUMP_START"):
+        price_jump_recovery_block_reasons.append("price_jump_signature_missing")
+    if low_rebound_pct < 3.0:
+        price_jump_recovery_block_reasons.append("low_rebound_below_floor")
+    if source_count < 2:
+        price_jump_recovery_block_reasons.append("source_family_count_below_floor")
+    if not input_ready:
+        price_jump_recovery_block_reasons.append("input_not_ready")
+    if effective_quote_age_ms > 1000.0:
+        price_jump_recovery_block_reasons.append("effective_quote_stale")
+    if spread_ratio > TP1_SELECTOR_SPREAD_CAUTION_RATIO:
+        price_jump_recovery_block_reasons.append("spread_above_caution")
+    if micro_confidence < 0.80:
+        price_jump_recovery_block_reasons.append("micro_confidence_below_floor")
+    if true_ofi_ewma <= 0.0:
+        price_jump_recovery_block_reasons.append("true_ofi_nonpositive")
+    if pressure_ewma < 70.0:
+        price_jump_recovery_block_reasons.append("pressure_below_floor")
     if nxt_price_jump_recovery_lane:
         lane = "nxt_price_jump_recovery"
     support_reversal_lane = bool(
@@ -364,8 +407,30 @@ def evaluate_rising_missed_tp1_candidate(
         "rising_missed_tp1_nxt_price_jump_recovery_enabled": bool(
             nxt_price_jump_recovery_enabled
         ),
+        "rising_missed_tp1_nxt_price_jump_recovery_configured": (
+            price_jump_recovery_configured
+        ),
         "rising_missed_tp1_nxt_price_jump_recovery_active_date": (
             nxt_price_jump_recovery_active_date or "-"
+        ),
+        "rising_missed_tp1_nxt_price_jump_recovery_current_date": (current_date or "-"),
+        "rising_missed_tp1_nxt_price_jump_recovery_runtime_called": True,
+        "rising_missed_tp1_nxt_price_jump_recovery_runtime_applied": (
+            nxt_price_jump_recovery_lane
+        ),
+        "rising_missed_tp1_nxt_price_jump_recovery_runtime_call_reason": (
+            "recovery_lane_applied"
+            if nxt_price_jump_recovery_lane
+            else (
+                price_jump_recovery_block_reasons[0]
+                if price_jump_recovery_block_reasons
+                else "recovery_lane_not_applied"
+            )
+        ),
+        "rising_missed_tp1_nxt_price_jump_recovery_runtime_block_reasons": (
+            ",".join(price_jump_recovery_block_reasons)
+            if price_jump_recovery_block_reasons
+            else "-"
         ),
         "rising_missed_tp1_nxt_price_jump_recovery_lane": (
             nxt_price_jump_recovery_lane
@@ -1090,8 +1155,7 @@ def scout_ai_execution_attribution_fields(
     forced = bool(
         source.get("rising_missed_one_share_entry_forced")
         or source.get("rising_missed_one_share_scout")
-        or str(source.get("forced_entry_reason") or "").strip()
-        == FORCED_ENTRY_REASON
+        or str(source.get("forced_entry_reason") or "").strip() == FORCED_ENTRY_REASON
     )
     if not forced:
         return {}

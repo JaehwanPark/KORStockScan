@@ -31,6 +31,9 @@ LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT = 100
 LATENCY_CANARY_FRESH_WS_MAX_AGE_MS = 150.0
 LATENCY_CANARY_TRUE_OFI_NEAR_ZERO_FLOOR = -0.10
 LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS = 90.0
+EXECUTABLE_BBO_COUNTERFACTUAL_STAGES = frozenset(
+    {"latency_block", "rising_missed_tick_speed_entry_block"}
+)
 TP1_GROSS_TARGET_PCT = 1.30
 TP1_ADVERSE_STOP_PCT = -0.70
 TP1_COST_RESERVE_PCT = 0.30
@@ -221,6 +224,53 @@ def _event_price_with_source(row: dict[str, Any]) -> tuple[float | None, str]:
 
 def _event_price(row: dict[str, Any]) -> float | None:
     return _event_price_with_source(row)[0]
+
+
+def _event_executable_bbo(
+    row: dict[str, Any],
+) -> tuple[float | None, float | None, str]:
+    """Return a validated executable top of book without mark-price fallback."""
+
+    fields = _fields(row)
+    candidates = (
+        (
+            "market_data_effective_bbo",
+            "market_data_effective_best_bid",
+            "market_data_effective_best_ask",
+        ),
+        ("submit_bbo", "best_bid_at_submit", "best_ask_at_submit"),
+        (
+            "pre_submit_ws_snapshot_refresh_bbo",
+            "pre_submit_ws_snapshot_refresh_best_bid",
+            "pre_submit_ws_snapshot_refresh_best_ask",
+        ),
+        (
+            "pre_submit_rest_orderbook_refresh_bbo",
+            "pre_submit_rest_orderbook_refresh_best_bid",
+            "pre_submit_rest_orderbook_refresh_best_ask",
+        ),
+        (
+            "pre_submit_quote_refresh_bbo",
+            "pre_submit_quote_refresh_best_bid",
+            "pre_submit_quote_refresh_best_ask",
+        ),
+        (
+            "explicit_executable_prices",
+            "executable_sell_price",
+            "executable_buy_price",
+        ),
+        (
+            "nxt_post_block_ws_0d_bbo",
+            "rising_missed_nxt_post_block_ws_0d_best_bid",
+            "rising_missed_nxt_post_block_ws_0d_best_ask",
+        ),
+    )
+    for source, bid_key, ask_key in candidates:
+        bid = _safe_float(fields.get(bid_key))
+        ask = _safe_float(fields.get(ask_key))
+        if bid is not None and ask is not None and bid > 0 and ask >= bid:
+            return bid, ask, source
+    return None, None, "missing_or_invalid_executable_bbo"
 
 
 def _decision_stage_current_price_unusable(row: dict[str, Any], source: str) -> bool:
@@ -1209,7 +1259,19 @@ def _tp1_counterfactual_decision_context(fields: dict[str, Any]) -> dict[str, An
 def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
     fields = _fields(row)
     reason, bucket, components = _classify_submit_safety_block(row)
-    price = _event_price(row)
+    stage = str(row.get("stage") or "")
+    executable_bid, executable_ask, executable_bbo_source = _event_executable_bbo(row)
+    requires_executable_bbo = stage in EXECUTABLE_BBO_COUNTERFACTUAL_STAGES
+    price = executable_ask if requires_executable_bbo else _event_price(row)
+    block_price_source = (
+        f"{executable_bbo_source}:executable_ask"
+        if requires_executable_bbo and executable_ask is not None
+        else (
+            "missing_executable_ask"
+            if requires_executable_bbo
+            else _event_price_with_source(row)[1]
+        )
+    )
     quote_age = _quote_age_ms(fields)
     return {
         "ts": _event_ts(row),
@@ -1222,9 +1284,21 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
         "components": components,
         "price_delta_since_first_seen_pct": _event_delta_pct(row),
         "block_price": price,
+        "block_price_source": block_price_source,
+        "counterfactual_requires_executable_bbo": requires_executable_bbo,
+        "executable_bbo_state": (
+            "pass"
+            if executable_bid is not None and executable_ask is not None
+            else "source_gap_missing_or_invalid"
+        ),
+        "executable_bbo_source": executable_bbo_source,
+        "block_executable_best_bid": executable_bid,
+        "block_executable_best_ask": executable_ask,
         "mfe_after_block_pct": None,
         "mae_after_block_pct": None,
         "post_block_price_event_count": 0,
+        "post_block_executable_bbo_event_count": 0,
+        "post_block_executable_bbo_source_gap_count": 0,
         "quote_age_ms": quote_age,
         "quote_age_sec": (
             round(quote_age / 1000.0, 3) if quote_age is not None else None
@@ -1358,11 +1432,28 @@ def _build_submit_safety_and_backoff_audit(
             latest_seen_ts is None or parsed_ts > latest_seen_ts
         ):
             latest_seen_ts = parsed_ts
-        price = _tp1_observation_price(row)[0]
+        observation_price = _tp1_observation_price(row)[0]
+        executable_bid, _executable_ask, _executable_bbo_source = _event_executable_bbo(
+            row
+        )
         delta = _event_delta_pct(row)
 
         for block in open_submit_blocks_by_code.get(code, []):
-            _update_block_mfe_mae(block, price)
+            if block.get("counterfactual_requires_executable_bbo"):
+                if executable_bid is None:
+                    block["post_block_executable_bbo_source_gap_count"] = (
+                        _safe_int(
+                            block.get("post_block_executable_bbo_source_gap_count")
+                        )
+                        + 1
+                    )
+                    continue
+                block["post_block_executable_bbo_event_count"] = (
+                    _safe_int(block.get("post_block_executable_bbo_event_count")) + 1
+                )
+                _update_block_mfe_mae(block, executable_bid)
+            else:
+                _update_block_mfe_mae(block, observation_price)
 
         if code in backoff_by_code:
             backoff = backoff_by_code[code]
@@ -1487,6 +1578,21 @@ def _build_submit_safety_and_backoff_audit(
 
     summary = {
         "submit_safety_block_count": len(submit_blocks),
+        "submit_safety_executable_bbo_required_count": sum(
+            bool(item.get("counterfactual_requires_executable_bbo"))
+            for item in submit_blocks
+        ),
+        "submit_safety_executable_bbo_entry_source_gap_count": sum(
+            bool(item.get("counterfactual_requires_executable_bbo"))
+            and item.get("executable_bbo_state") != "pass"
+            for item in submit_blocks
+        ),
+        "submit_safety_executable_bbo_labeled_count": sum(
+            bool(item.get("counterfactual_requires_executable_bbo"))
+            and item.get("executable_bbo_state") == "pass"
+            and _safe_int(item.get("post_block_executable_bbo_event_count")) > 0
+            for item in submit_blocks
+        ),
         "submit_safety_reason_counts": [
             {"reason": key, "count": value}
             for key, value in reason_counts.most_common()
@@ -1596,10 +1702,21 @@ def _build_latency_false_negative_review(
                 "reason": block.get("reason"),
                 "components": block.get("components"),
                 "block_price": block.get("block_price"),
+                "block_price_source": block.get("block_price_source"),
+                "executable_bbo_state": block.get("executable_bbo_state"),
+                "executable_bbo_source": block.get("executable_bbo_source"),
+                "block_executable_best_bid": block.get("block_executable_best_bid"),
+                "block_executable_best_ask": block.get("block_executable_best_ask"),
                 "mfe_after_block_pct": mfe,
                 "mae_after_block_pct": mae,
                 "post_block_price_event_count": block.get(
                     "post_block_price_event_count"
+                ),
+                "post_block_executable_bbo_event_count": block.get(
+                    "post_block_executable_bbo_event_count"
+                ),
+                "post_block_executable_bbo_source_gap_count": block.get(
+                    "post_block_executable_bbo_source_gap_count"
                 ),
                 "price_delta_since_first_seen_pct": block.get(
                     "price_delta_since_first_seen_pct"
@@ -3165,6 +3282,35 @@ def _build_nxt_session_observation(
                         "candidate_reason": fields.get(
                             "rising_missed_tp1_candidate_reason"
                         ),
+                        "nxt_price_jump_recovery_configured": _boolish(
+                            fields.get(
+                                "rising_missed_tp1_nxt_price_jump_recovery_configured"
+                            )
+                        ),
+                        "nxt_price_jump_recovery_active": _boolish(
+                            fields.get(
+                                "rising_missed_tp1_nxt_price_jump_recovery_enabled"
+                            )
+                        ),
+                        "nxt_price_jump_recovery_active_date": fields.get(
+                            "rising_missed_tp1_nxt_price_jump_recovery_active_date"
+                        ),
+                        "nxt_price_jump_recovery_current_date": fields.get(
+                            "rising_missed_tp1_nxt_price_jump_recovery_current_date"
+                        ),
+                        "nxt_price_jump_recovery_runtime_called": _boolish(
+                            fields.get(
+                                "rising_missed_tp1_nxt_price_jump_recovery_runtime_called"
+                            )
+                        ),
+                        "nxt_price_jump_recovery_runtime_applied": _boolish(
+                            fields.get(
+                                "rising_missed_tp1_nxt_price_jump_recovery_runtime_applied"
+                            )
+                        ),
+                        "nxt_price_jump_recovery_runtime_call_reason": fields.get(
+                            "rising_missed_tp1_nxt_price_jump_recovery_runtime_call_reason"
+                        ),
                         "decision_authority": "observe_only_no_runtime_mutation",
                         "runtime_effect": False,
                         "allowed_runtime_apply": False,
@@ -3229,6 +3375,74 @@ def _build_nxt_session_observation(
                     ),
                     "entry_price_source": fields.get(
                         "rising_missed_nxt_post_block_entry_price_source"
+                    ),
+                    "counterfactual_requires_executable_bbo": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_counterfactual_requires_executable_bbo"
+                        )
+                    ),
+                    "entry_executable_best_bid": _safe_float(
+                        fields.get(
+                            "rising_missed_nxt_post_block_entry_executable_best_bid"
+                        )
+                    ),
+                    "entry_executable_best_ask": _safe_float(
+                        fields.get(
+                            "rising_missed_nxt_post_block_entry_executable_best_ask"
+                        )
+                    ),
+                    "entry_executable_bbo_source": fields.get(
+                        "rising_missed_nxt_post_block_entry_executable_bbo_source"
+                    ),
+                    "sampler_runtime_configured": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_sampler_runtime_configured"
+                        )
+                    ),
+                    "sampler_runtime_active_date": fields.get(
+                        "rising_missed_nxt_post_block_sampler_runtime_active_date"
+                    ),
+                    "sampler_runtime_current_date": fields.get(
+                        "rising_missed_nxt_post_block_sampler_runtime_current_date"
+                    ),
+                    "sampler_runtime_active": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_sampler_runtime_active"
+                        )
+                    ),
+                    "sampler_runtime_called": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_sampler_runtime_called"
+                        )
+                    ),
+                    "sampler_runtime_applied": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_sampler_runtime_applied"
+                        )
+                    ),
+                    "rest_fallback_runtime_configured": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_rest_fallback_runtime_configured"
+                        )
+                    ),
+                    "rest_fallback_runtime_active_date": fields.get(
+                        "rising_missed_nxt_post_block_rest_fallback_runtime_active_date"
+                    ),
+                    "rest_fallback_runtime_current_date": fields.get(
+                        "rising_missed_nxt_post_block_rest_fallback_runtime_current_date"
+                    ),
+                    "rest_fallback_runtime_active": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_rest_fallback_runtime_active"
+                        )
+                    ),
+                    "rest_fallback_runtime_called": _boolish(
+                        fields.get(
+                            "rising_missed_nxt_post_block_rest_fallback_runtime_called"
+                        )
+                    ),
+                    "rest_fallback_runtime_call_reason": fields.get(
+                        "rising_missed_nxt_post_block_rest_fallback_runtime_call_reason"
                     ),
                     "source_block_actual_order_submitted": _boolish(
                         fields.get(
@@ -3433,6 +3647,37 @@ def _build_nxt_session_observation(
             ),
             "rising_missed_nxt_post_block_sampler_registered_count": sampler_stage_counts.get(
                 "rising_missed_nxt_post_block_sampler_registered", 0
+            ),
+            "rising_missed_nxt_post_block_sampler_runtime_called_count": sum(
+                1
+                for evaluation_id in {
+                    str(item.get("evaluation_id") or "")
+                    for item in sampler_rows
+                    if item.get("sampler_runtime_called")
+                    and str(item.get("evaluation_id") or "")
+                }
+            ),
+            "rising_missed_nxt_post_block_sampler_runtime_applied_count": sum(
+                1
+                for evaluation_id in {
+                    str(item.get("evaluation_id") or "")
+                    for item in sampler_rows
+                    if item.get("sampler_runtime_applied")
+                    and str(item.get("evaluation_id") or "")
+                }
+            ),
+            "rising_missed_nxt_post_block_rest_fallback_runtime_called_count": sum(
+                1 for item in sampler_rows if item.get("rest_fallback_runtime_called")
+            ),
+            "rising_missed_nxt_price_jump_recovery_runtime_called_count": sum(
+                1
+                for item in evaluation_rows
+                if item.get("nxt_price_jump_recovery_runtime_called")
+            ),
+            "rising_missed_nxt_price_jump_recovery_runtime_applied_count": sum(
+                1
+                for item in evaluation_rows
+                if item.get("nxt_price_jump_recovery_runtime_applied")
             ),
             "rising_missed_nxt_post_block_sampler_registration_skipped_count": (
                 sampler_stage_counts.get(
@@ -3872,7 +4117,10 @@ def build_report(
                 "window_policy": "same_day_intraday_pipeline_events_continuously_updated",
                 "sample_floor": "1_submit_safety_block_event",
                 "primary_decision_metric": "submit_safety_bucket_counts",
-                "source_quality_gate": "pipeline_event_submit_safety_fields_with_quote_ai_micro_provenance",
+                "source_quality_gate": (
+                    "pipeline_event_submit_safety_fields_with_quote_ai_micro_provenance_"
+                    "and_executable_ask_then_post_block_executable_bid_for_latency_tick"
+                ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
             "rising_missed_backoff_opportunity_audit": {
@@ -3891,7 +4139,8 @@ def build_report(
                 "sample_floor": "1_latency_submit_safety_block_with_high_mfe_low_mae",
                 "primary_decision_metric": "latency_false_negative_review_count",
                 "source_quality_gate": (
-                    "submit_safety_blocker_rows_with_post_block_mfe_mae_and_latency_micro_provenance"
+                    "submit_safety_blocker_rows_with_executable_ask_entry_post_block_"
+                    "executable_bid_mfe_mae_and_latency_micro_provenance"
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
@@ -3902,7 +4151,8 @@ def build_report(
                 "sample_floor": "1_latency_false_negative_review_row",
                 "primary_decision_metric": "latency_false_negative_canary_ready_count",
                 "source_quality_gate": (
-                    "latency_false_negative_review_rows_with_spread_true_ofi_ws_age_and_post_block_mfe_mae"
+                    "latency_false_negative_review_rows_with_spread_true_ofi_ws_age_"
+                    "and_executable_bbo_post_block_mfe_mae"
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
@@ -3949,7 +4199,8 @@ def build_report(
                 "sample_floor": "1_nxt_session_rising_missed_tp1_evaluation",
                 "primary_decision_metric": "nxt_session_micro_and_fillability_distribution",
                 "source_quality_gate": (
-                    "absolute_0b_0d_receive_ts_actual_ws_item_route_and_effective_order_resolution"
+                    "absolute_0b_0d_receive_ts_actual_ws_item_route_effective_order_"
+                    "resolution_and_price_jump_runtime_call_provenance"
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
@@ -3962,7 +4213,8 @@ def build_report(
                 ),
                 "primary_decision_metric": "gross_1.30_first_before_adverse_0.70",
                 "source_quality_gate": (
-                    "fresh_absolute_nxt_ws_route_or_bounded_ka10004_receive_observation"
+                    "fresh_absolute_nxt_ws_route_or_bounded_ka10004_receive_observation_"
+                    "with_sampler_and_rest_runtime_call_provenance"
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
@@ -4187,6 +4439,12 @@ def write_outputs(
         f"- initial_quality_fail_count: {summary.get('initial_quality_fail_count')}",
         f"- scale_in_rescue_warning_count: {summary.get('scale_in_rescue_warning_count')}",
         f"- submit_safety_block_count: {summary.get('submit_safety_block_count')}",
+        f"- submit_safety_executable_bbo_required_count: "
+        f"{summary.get('submit_safety_executable_bbo_required_count')}",
+        f"- submit_safety_executable_bbo_entry_source_gap_count: "
+        f"{summary.get('submit_safety_executable_bbo_entry_source_gap_count')}",
+        f"- submit_safety_executable_bbo_labeled_count: "
+        f"{summary.get('submit_safety_executable_bbo_labeled_count')}",
         f"- submit_safety_source_quality_unknown_gate_counts: "
         f"{summary.get('submit_safety_source_quality_unknown_gate_counts')}",
         f"- submit_safety_source_quality_unknown_state_counts: "
@@ -4248,6 +4506,16 @@ def write_outputs(
         f"{summary.get('rising_missed_nxt_order_type_remap_count')}",
         f"- rising_missed_nxt_post_block_sampler_registered_count: "
         f"{summary.get('rising_missed_nxt_post_block_sampler_registered_count')}",
+        f"- rising_missed_nxt_post_block_sampler_runtime_called_count: "
+        f"{summary.get('rising_missed_nxt_post_block_sampler_runtime_called_count')}",
+        f"- rising_missed_nxt_post_block_sampler_runtime_applied_count: "
+        f"{summary.get('rising_missed_nxt_post_block_sampler_runtime_applied_count')}",
+        f"- rising_missed_nxt_post_block_rest_fallback_runtime_called_count: "
+        f"{summary.get('rising_missed_nxt_post_block_rest_fallback_runtime_called_count')}",
+        f"- rising_missed_nxt_price_jump_recovery_runtime_called_count: "
+        f"{summary.get('rising_missed_nxt_price_jump_recovery_runtime_called_count')}",
+        f"- rising_missed_nxt_price_jump_recovery_runtime_applied_count: "
+        f"{summary.get('rising_missed_nxt_price_jump_recovery_runtime_applied_count')}",
         f"- rising_missed_nxt_post_block_source_block_stage_counts: "
         f"{summary.get('rising_missed_nxt_post_block_source_block_stage_counts')}",
         f"- rising_missed_nxt_post_block_source_block_order_submitted_count: "
