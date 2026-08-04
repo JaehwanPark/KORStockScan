@@ -17,6 +17,8 @@ from src.utils import kiwoom_utils
 
 SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_kiwoom_auth_8005_state.json"
 RESTART_FLAG_PATH = PROJECT_ROOT / "restart.flag"
+HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
+PROC_ROOT = Path("/proc")
 
 _EXPLICIT_LOG_NAMES = {
     "bot_history.log",
@@ -31,6 +33,7 @@ _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"_DummySession"),
     re.compile(r"\brun_error_detection\b"),
 ]
+_LOG_TIMESTAMP_PATTERN = re.compile(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
 
 
 def _now_ts() -> float:
@@ -148,9 +151,39 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         if baselined_new_files:
             details["new_files_baselined"] = baselined_new_files
 
+        runtime_identity = _current_runtime_identity()
+        if runtime_identity:
+            details["current_runtime_pid"] = runtime_identity["pid"]
+            details["current_runtime_start_ts"] = runtime_identity["start_ts"]
+            details["current_runtime_start_at"] = (
+                datetime.fromtimestamp(runtime_identity["start_ts"])
+                .astimezone()
+                .isoformat(timespec="seconds")
+            )
+            matches, prior_runtime_matches = _split_prior_runtime_matches(
+                matches,
+                runtime_start_ts=runtime_identity["start_ts"],
+                last_restart_ts=float(state.get("last_restart_ts", 0) or 0),
+            )
+            if prior_runtime_matches:
+                details["prior_runtime_auth_8005_count"] = len(prior_runtime_matches)
+                details["prior_runtime_auth_8005_samples"] = prior_runtime_matches[:5]
+
         if not matches:
             if not self.dry_run:
                 self._save_state(state)
+            if details.get("prior_runtime_auth_8005_count"):
+                return DetectionResult(
+                    detector_id=self.id,
+                    category=self.category,
+                    severity="pass",
+                    summary=(
+                        "Prior-runtime Kiwoom auth 8005 log entries were consumed after "
+                        "PID handoff; no current-runtime auth failure was detected."
+                    ),
+                    details=details,
+                    recommended_action="",
+                )
             return DetectionResult(
                 detector_id=self.id,
                 category=self.category,
@@ -295,6 +328,7 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
                     "file": log_path.name,
                     "line_offset": idx,
                     "message": line[-500:],
+                    "observed_ts": _extract_log_timestamp(line),
                 }
             )
 
@@ -315,3 +349,71 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         SCAN_STATE_PATH.write_text(
             json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+
+def _extract_log_timestamp(line: str) -> float | None:
+    match = _LOG_TIMESTAMP_PATTERN.search(line)
+    if not match:
+        return None
+    try:
+        observed = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    local_tz = datetime.now().astimezone().tzinfo
+    return observed.replace(tzinfo=local_tz).timestamp()
+
+
+def _current_runtime_identity() -> dict | None:
+    try:
+        heartbeat = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        pid = int(heartbeat.get("main_loop", {}).get("pid") or 0)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+
+    try:
+        proc_dir = PROC_ROOT / str(pid)
+        cmdline = (
+            (proc_dir / "cmdline")
+            .read_bytes()
+            .replace(b"\x00", b" ")
+            .decode("utf-8", errors="replace")
+        )
+        if "bot_main.py" not in cmdline:
+            return None
+        proc_stat = (proc_dir / "stat").read_text(encoding="utf-8")
+        stat_fields = proc_stat.rsplit(")", 1)[1].split()
+        start_ticks = int(stat_fields[19])
+        boot_time_line = next(
+            line
+            for line in (PROC_ROOT / "stat").read_text(encoding="utf-8").splitlines()
+            if line.startswith("btime ")
+        )
+        boot_time = int(boot_time_line.split()[1])
+        clock_ticks = int(os.sysconf("SC_CLK_TCK"))
+    except (OSError, StopIteration, IndexError, TypeError, ValueError):
+        return None
+    if clock_ticks <= 0:
+        return None
+    return {"pid": pid, "start_ts": boot_time + (start_ticks / clock_ticks)}
+
+
+def _split_prior_runtime_matches(
+    matches: list[dict], *, runtime_start_ts: float, last_restart_ts: float
+) -> tuple[list[dict], list[dict]]:
+    if last_restart_ts <= 0 or runtime_start_ts < last_restart_ts:
+        return matches, []
+
+    current: list[dict] = []
+    prior: list[dict] = []
+    # Log timestamps have one-second precision. Keep same-second rows current so
+    # an auth failure emitted during the new process startup cannot be hidden.
+    prior_cutoff = runtime_start_ts - 1.0
+    for match in matches:
+        observed_ts = match.get("observed_ts")
+        if isinstance(observed_ts, (int, float)) and observed_ts < prior_cutoff:
+            prior.append(match)
+        else:
+            current.append(match)
+    return current, prior
