@@ -2899,9 +2899,7 @@ def build_pattern_lab_ai_review_report(
         "response_source": (
             "provided_response"
             if provided_ai_response
-            else "provider_call"
-            if ai_status == "parsed"
-            else "deterministic_fallback"
+            else "provider_call" if ai_status == "parsed" else "deterministic_fallback"
         ),
     }
     report = {

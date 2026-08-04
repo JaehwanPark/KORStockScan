@@ -10151,6 +10151,7 @@ def test_gap_provenance_written_during_auto_apply(tmp_path, monkeypatch):
     report_dir.mkdir(parents=True)
     runtime_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
     monkeypatch.setattr(mod, "RUNTIME_GAP_PROVENANCE_DIR", gap_dir)

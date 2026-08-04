@@ -4785,9 +4785,7 @@ def _policy_stage_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
             sim_auto_block_reason = "stage_policy_ev_missing_not_sim_auto_approved"
         elif stage_ev <= 0.0:
             grade_reason = "stage_policy_nonpositive_ev_source_only"
-            sim_auto_block_reason = (
-                "stage_policy_nonpositive_ev_not_sim_auto_approved"
-            )
+            sim_auto_block_reason = "stage_policy_nonpositive_ev_not_sim_auto_approved"
         else:
             grade_reason = "stage_policy_positive_ev_source_quality_pass"
             sim_auto_block_reason = None
