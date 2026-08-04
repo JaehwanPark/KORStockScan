@@ -191,6 +191,74 @@ def test_log_rotation_cleanup_prunes_old_system_metric_samples(tmp_path):
     assert "system_metric_pruned=1" in result.stdout
 
 
+def test_log_rotation_cleanup_quarantines_malformed_system_metric_line(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    log_dir.mkdir(parents=True)
+    sample_path = log_dir / "system_metric_samples.jsonl"
+    valid = {"ts": "2999-01-01T00:00:00+09:00", "epoch": 2}
+    sample_path.write_text(
+        '{"ts":"broken"\n' + json.dumps(valid) + "\n", encoding="utf-8"
+    )
+    env = os.environ.copy()
+    env.update({"PROJECT_DIR": str(project_root), "TARGET_DATE": "2026-05-22"})
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "7"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert [json.loads(line) for line in sample_path.read_text().splitlines()] == [
+        valid
+    ]
+    quarantine_path = log_dir / "system_metric_samples.invalid.jsonl"
+    quarantine = json.loads(quarantine_path.read_text().splitlines()[0])
+    assert quarantine["raw_sha256"]
+    assert quarantine["raw_line"] == '{"ts":"broken"'
+    assert "system_metric_invalid=1" in result.stdout
+
+
+def test_log_rotation_cleanup_verifies_sentinel_and_snapshot_gzip(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    sentinel_dir = project_root / "data" / "runtime" / "sentinel_event_cache"
+    snapshot_dir = project_root / "data" / "threshold_cycle" / "snapshots"
+    log_dir.mkdir(parents=True)
+    sentinel_dir.mkdir(parents=True)
+    snapshot_dir.mkdir(parents=True)
+    sentinel = sentinel_dir / "buy_funnel_events_2026-05-21.jsonl"
+    snapshot = snapshot_dir / "pipeline_events_2026-05-21_20260521_200000.jsonl"
+    sentinel_payload = '{"event":"sentinel"}\n'
+    snapshot_payload = '{"event":"snapshot"}\n'
+    sentinel.write_text(sentinel_payload, encoding="utf-8")
+    snapshot.write_text(snapshot_payload, encoding="utf-8")
+    env = os.environ.copy()
+    env.update({"PROJECT_DIR": str(project_root), "TARGET_DATE": "2026-05-22"})
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "7"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert not sentinel.exists()
+    assert not snapshot.exists()
+    with gzip.open(f"{sentinel}.gz", "rt", encoding="utf-8") as handle:
+        assert handle.read() == sentinel_payload
+    with gzip.open(f"{snapshot}.gz", "rt", encoding="utf-8") as handle:
+        assert handle.read() == snapshot_payload
+    assert "sentinel_compressed=1" in result.stdout
+    assert "snapshot_compressed=1" in result.stdout
+    assert "compression_verify_failures=0" in result.stdout
+
+
 def test_log_rotation_cleanup_prunes_archived_and_stale_active_logs(tmp_path):
     project_root = tmp_path / "project"
     log_dir = project_root / "logs"

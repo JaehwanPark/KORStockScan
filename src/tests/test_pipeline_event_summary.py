@@ -1,3 +1,4 @@
+import gzip
 import json
 from pathlib import Path
 
@@ -6,8 +7,21 @@ import pytest
 from src.engine.pipeline_event_summary import (
     PRODUCER_SUMMARY_STAGES,
     ProducerSummaryCompactor,
+    _rehydrate_summary_for_append,
     update_and_load_pipeline_event_summaries,
 )
+
+
+def test_rehydrate_summary_for_append_restores_archive_atomically(tmp_path):
+    summary_path = tmp_path / "pipeline_event_summary_2026-08-04.jsonl"
+    archived_path = Path(f"{summary_path}.gz")
+    with gzip.open(archived_path, "wt", encoding="utf-8") as handle:
+        handle.write('{"event_count":1}\n')
+
+    _rehydrate_summary_for_append(summary_path)
+
+    assert summary_path.read_text(encoding="utf-8") == '{"event_count":1}\n'
+    assert not archived_path.exists()
 
 
 def _event(

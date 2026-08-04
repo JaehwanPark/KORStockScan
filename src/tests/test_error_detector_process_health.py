@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
-from pathlib import Path
 from datetime import datetime
 
 import pytest
@@ -174,6 +172,34 @@ class TestProcessHealthDetector:
         result = ProcessHealthDetector().check()
 
         assert result.severity == "fail"
+        assert result.details["main_loop_status"] == "startup_not_observed"
+        assert "prior-run PID" in result.summary
+        assert "PREOPEN handoff" in result.recommended_action
+
+    def test_detector_keeps_dead_current_run_pid_classification(self, monkeypatch):
+        monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
+        )
+        data = {
+            "main_loop": {
+                "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "pid": 99999999,
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(data), encoding="utf-8")
+        monkeypatch.setattr(
+            process_health_module.ProcessHealthDetector,
+            "restart_grace_sec",
+            property(lambda self: 0),
+        )
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["main_loop_status"] == "pid_dead"
         assert "no longer alive" in result.summary
 
     def test_detector_passes_when_pid_dead_during_postclose_bot_isolation(
@@ -294,8 +320,8 @@ class TestProcessHealthDetector:
         result = ProcessHealthDetector().check()
 
         assert result.severity == "warning"
-        assert result.details["main_loop_status"] == "pid_dead"
-        assert "startup grace" in result.summary
+        assert result.details["main_loop_status"] == "startup_grace_prior_run_heartbeat"
+        assert "prior-run PID" in result.summary
 
     def test_detector_warns_for_missing_heartbeat_during_startup_grace(
         self, monkeypatch

@@ -4731,6 +4731,30 @@ def _split_runtime_policy_audits(
                 audits.append(audit)
                 continue
             audit["operator_fallback_authorized"] = True
+        if spec["family"] == "scale_in_split_order_plan":
+            refresh_evidence = policy.get("runtime_refresh_evidence")
+            audit["runtime_refresh_evidence"] = refresh_evidence
+            if not isinstance(refresh_evidence, dict):
+                audit.update(
+                    status="fail",
+                    reason="runtime_refresh_evidence_missing",
+                )
+                audits.append(audit)
+                continue
+            if refresh_evidence.get("runtime_policy_refresh_allowed") is not True:
+                audit.update(
+                    status="fail",
+                    reason="runtime_refresh_evidence_not_allowed",
+                )
+                audits.append(audit)
+                continue
+            if refresh_evidence.get("blockers"):
+                audit.update(
+                    status="fail",
+                    reason="runtime_refresh_evidence_blocked",
+                )
+                audits.append(audit)
+                continue
         freshness_value = str(policy.get(str(spec["freshness_field"])) or "").strip()
         audit["freshness_value"] = freshness_value or None
         try:
@@ -4785,6 +4809,61 @@ def _split_runtime_policy_audits(
             audit.update(status="pass", reason="policy_usable")
         audits.append(audit)
     return audits
+
+
+def _drop_unusable_selected_split_policies(
+    target_date: str,
+    selected: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    env_overrides: dict[str, str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    """Fail closed before writing a runtime env that cannot pass handoff verify."""
+
+    selected_families = {
+        str(item.get("family") or "") for item in selected if isinstance(item, dict)
+    }
+    unusable = {
+        str(audit.get("family") or ""): audit
+        for audit in _split_runtime_policy_audits(target_date, env_overrides)
+        if audit.get("status") != "pass"
+        and str(audit.get("family") or "") in selected_families
+    }
+    if not unusable:
+        return selected, decisions, env_overrides
+
+    filtered_selected = [
+        item for item in selected if str(item.get("family") or "") not in unusable
+    ]
+    blocked_prefixes = {
+        str(_FAMILY_ENV_KEY_PREFIXES[family])
+        for family in unusable
+        if family in _FAMILY_ENV_KEY_PREFIXES
+    }
+    filtered_env = {
+        key: value
+        for key, value in env_overrides.items()
+        if not any(str(key).startswith(prefix) for prefix in blocked_prefixes)
+    }
+    updated_decisions: list[dict[str, Any]] = []
+    for decision in decisions:
+        family = str(decision.get("family") or "")
+        audit = unusable.get(family)
+        if audit is None:
+            updated_decisions.append(decision)
+            continue
+        reason = f"runtime_policy_preflight_failed:{audit.get('reason') or 'unknown'}"
+        updated_decisions.append(
+            {
+                **decision,
+                "selected": False,
+                "decision_reason": reason,
+                "env_overrides": {},
+                "preopen_selection_state": "not_selected",
+                "selection_change_class": "blocked_unusable_runtime_policy",
+                "runtime_policy_preflight": audit,
+            }
+        )
+    return filtered_selected, updated_decisions, filtered_env
 
 
 def _read_pid_environ(pid: int) -> dict[str, str]:
@@ -6229,6 +6308,12 @@ def build_preopen_apply_manifest(
                 **lifecycle_bucket_env_overrides,
                 **swing_sim_auto_env_overrides,
             }
+            selected, decisions, env_overrides = _drop_unusable_selected_split_policies(
+                target_date,
+                selected,
+                decisions,
+                env_overrides,
+            )
             env_overrides = {
                 key: value
                 for key, value in env_overrides.items()

@@ -13,7 +13,7 @@ import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from src.engine import scalp_entry_action_decision_matrix as adm_mod
 from src.engine.scalping.ai_decision_trace import (
@@ -24,6 +24,7 @@ from src.engine.scalping.holding_decision_context import (
     OBSERVATION_CONTRACT as HOLDING_CONTEXT_OBSERVATION_CONTRACT,
 )
 from src.engine.sniper_config import CONF
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -2577,21 +2578,15 @@ def _call_openai_endpoint_compare(
     )
 
 
-def _load_context_candidates(target_date: str) -> list[dict[str, Any]]:
-    path = (
+def _load_context_candidates(target_date: str) -> Iterator[dict[str, Any]]:
+    path = existing_or_gzip_path(
         CONTEXT_CANDIDATE_DIR / f"ai_canonical_context_candidates_{target_date}.jsonl"
     )
     if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+        return
+    for row in iter_jsonl(path):
         if isinstance(row, dict) and row.get("schema") == CONTEXT_CANDIDATE_SCHEMA:
-            rows.append(row)
-    return rows
+            yield row
 
 
 def _validation_only_source_context(

@@ -90,7 +90,40 @@ def _load_state() -> dict:
 
 def _save_state(state: dict) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, ensure_ascii=True), encoding="utf-8")
+    tmp_path = STATE_PATH.with_name(f"{STATE_PATH.name}.tmp.{os.getpid()}")
+    payload = json.dumps(state, ensure_ascii=True).encode("utf-8")
+    try:
+        with tmp_path.open("wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, STATE_PATH)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _append_json_line_durable(path: Path, payload: dict) -> None:
+    """Append one indivisible JSON record, reverting a short/failed write."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o664)
+    original_size = os.fstat(fd).st_size
+    try:
+        written = os.write(fd, encoded)
+        if written != len(encoded):
+            os.ftruncate(fd, original_size)
+            raise OSError(f"short_system_metric_write:{written}/{len(encoded)}")
+        os.fsync(fd)
+    except Exception:
+        try:
+            os.ftruncate(fd, original_size)
+            os.fsync(fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(fd)
 
 
 def _cpu_pct(curr: dict[str, int], prev: dict[str, int]) -> dict[str, float]:
@@ -166,8 +199,7 @@ def sample_once() -> dict:
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     with LOCK_PATH.open("w", encoding="utf-8") as lock_fp:
         fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
-        with LOG_PATH.open("a", encoding="utf-8") as fp:
-            fp.write(json.dumps(sample, ensure_ascii=True) + "\n")
+        _append_json_line_durable(LOG_PATH, sample)
         _save_state({"cpu": cpu, "disk": disk, "epoch": int(now_ts)})
     return sample
 

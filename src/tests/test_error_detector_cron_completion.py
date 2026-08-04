@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import tempfile
 import json
 from contextlib import contextmanager
@@ -467,6 +466,54 @@ class TestCronCompletionDetector:
 
         assert result.severity == "pass"
         assert result.details["final_ensemble_scanner_status"] == "disabled_by_env"
+
+    def test_uninstalled_registered_job_is_terminally_disabled(
+        self, monkeypatch, tmp_path
+    ):
+        import src.engine.error_detectors.cron_completion as cc
+
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-08-05")
+        monkeypatch.setattr(
+            cc,
+            "load_installed_crontab",
+            lambda: "10 20 * * 1-5 runner # THRESHOLD_CYCLE_POSTCLOSE\n",
+        )
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "swing_live_dry_run",
+                    "log": "logs/swing_live_dry_run_cron.log",
+                    "window_start": (0, 0),
+                    "window_end": (0, 1),
+                    "mode": "once",
+                    "critical": False,
+                    "trading_day_only": True,
+                }
+            ],
+        )
+
+        with _mock_time(21, 0):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["swing_live_dry_run_status"] == "disabled_not_installed"
+
+    def test_skipped_status_artifact_is_terminal_success(self, tmp_path):
+        today = "2026-08-05"
+        status_path = tmp_path / "status.json"
+        status_path.write_text(
+            json.dumps({"target_date": today, "status": "skipped", "exit_code": 0}),
+            encoding="utf-8",
+        )
+
+        state = CronCompletionDetector._status_artifact_terminal(
+            {"status_artifact": str(status_path)}, today
+        )
+
+        assert state == "done"
 
     def test_once_job_can_pass_with_terminal_status_artifact_without_log_file(
         self, monkeypatch, tmp_path

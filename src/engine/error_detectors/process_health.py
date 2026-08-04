@@ -5,8 +5,6 @@ import os
 import threading
 import time
 from datetime import datetime
-from pathlib import Path
-
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
 from src.utils.market_day import is_krx_trading_day
 
@@ -192,6 +190,19 @@ class ProcessHealthDetector(BaseDetector):
 
             if not pid_ok:
                 details["main_loop_status"] = "pid_dead"
+                expected_start_ts = (
+                    now_ts - seconds_since_start
+                    if seconds_since_start is not None
+                    else None
+                )
+                heartbeat_predates_expected_start = bool(
+                    main_beat is not None
+                    and expected_start_ts is not None
+                    and main_beat < expected_start_ts
+                )
+                details["heartbeat_predates_expected_start"] = (
+                    heartbeat_predates_expected_start
+                )
                 if not expected_running:
                     return DetectionResult(
                         detector_id=self.id,
@@ -201,12 +212,19 @@ class ProcessHealthDetector(BaseDetector):
                         details=details,
                     )
                 if in_startup_grace:
+                    if heartbeat_predates_expected_start:
+                        details["main_loop_status"] = (
+                            "startup_grace_prior_run_heartbeat"
+                        )
                     return DetectionResult(
                         detector_id=self.id,
                         category=self.category,
                         severity="warning",
                         summary=(
-                            f"bot_main.py heartbeat PID {pid} is stale during startup grace window."
+                            "No heartbeat from today's bot startup yet; "
+                            f"latest heartbeat belongs to prior-run PID {pid}."
+                            if heartbeat_predates_expected_start
+                            else f"bot_main.py heartbeat PID {pid} is stale during startup grace window."
                         ),
                         details=details,
                         recommended_action="Recheck after startup grace before restarting bot_main.py.",
@@ -229,6 +247,22 @@ class ProcessHealthDetector(BaseDetector):
                     return self._postclose_isolation_warning(
                         f"bot_main.py PID {pid} is intentionally stopped for postclose resource isolation.",
                         details,
+                    )
+                if heartbeat_predates_expected_start:
+                    details["main_loop_status"] = "startup_not_observed"
+                    return DetectionResult(
+                        detector_id=self.id,
+                        category=self.category,
+                        severity="fail",
+                        summary=(
+                            "No heartbeat was observed for today's expected bot startup; "
+                            f"latest heartbeat belongs to prior-run PID {pid}."
+                        ),
+                        details=details,
+                        recommended_action=(
+                            "Inspect the launcher and PREOPEN handoff verification before "
+                            "attempting a guarded bot restart."
+                        ),
                     )
                 return DetectionResult(
                     detector_id=self.id,

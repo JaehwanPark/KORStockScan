@@ -72,6 +72,7 @@ system_metric_before_size=0
 system_metric_after_size=0
 system_metric_retained=0
 system_metric_pruned=0
+system_metric_invalid=0
 tmp_deleted_count=0
 cache_deleted_count=0
 sentinel_compressed_count=0
@@ -80,6 +81,31 @@ raw_row_exclusion_deleted_count=0
 raw_row_exclusion_backup_deleted_count=0
 compressed_archive_count=0
 archive_pruned_to_backup_limit_count=0
+compression_verify_failure_count=0
+
+compress_file_verified() {
+  local source_path="$1"
+  local gzip_path="${source_path}.gz"
+  local tmp_path="${gzip_path}.tmp.$$"
+  local source_size restored_size
+  source_size="$(stat -c%s "$source_path")"
+  rm -f "$tmp_path"
+  if ! gzip -9 -c -- "$source_path" >"$tmp_path"; then
+    rm -f "$tmp_path"
+    return 1
+  fi
+  if ! gzip -t -- "$tmp_path"; then
+    rm -f "$tmp_path"
+    return 1
+  fi
+  restored_size="$(gzip -cd -- "$tmp_path" | wc -c | tr -d ' ')"
+  if [[ "$restored_size" != "$source_size" ]]; then
+    rm -f "$tmp_path"
+    return 1
+  fi
+  mv -f -- "$tmp_path" "$gzip_path"
+  rm -f -- "$source_path"
+}
 
 shift_log_backup_slot() {
   local base_path="$1"
@@ -180,7 +206,10 @@ if [[ "$ACTIVE_LOG_BACKUP_COUNT" -ge "$ACTIVE_LOG_COMPRESS_MIN_INDEX" ]]; then
     if [[ ! "$archive_index" =~ ^[0-9]+$ || "$archive_index" -lt "$ACTIVE_LOG_COMPRESS_MIN_INDEX" ]]; then
       continue
     fi
-    gzip -f -9 "$archive_path"
+    if ! compress_file_verified "$archive_path"; then
+      compression_verify_failure_count=$((compression_verify_failure_count + 1))
+      exit 1
+    fi
     compressed_archive_count=$((compressed_archive_count + 1))
   done < <(
     find "$LOG_DIR" -maxdepth 1 -type f -name '*.log.[0-9]*' -print0 | sort -z
@@ -203,6 +232,7 @@ prune_system_metric_samples() {
 import json
 import os
 import sys
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -210,8 +240,11 @@ source = Path(sys.argv[1])
 target = Path(sys.argv[2])
 retention_days = int(sys.argv[3])
 cutoff = datetime.now().astimezone() - timedelta(days=retention_days)
+invalid_path = source.with_name("system_metric_samples.invalid.jsonl")
 retained = 0
 pruned = 0
+invalid = 0
+invalid_records = []
 with source.open("r", encoding="utf-8", errors="replace") as src, target.open("w", encoding="utf-8") as dst:
     for line in src:
         stripped = line.strip()
@@ -223,16 +256,34 @@ with source.open("r", encoding="utf-8", errors="replace") as src, target.open("w
             ts = str(payload.get("ts") or "").strip()
             if ts:
                 keep = datetime.fromisoformat(ts) >= cutoff
-        except Exception:
-            keep = True
+        except Exception as exc:
+            invalid += 1
+            invalid_records.append(
+                {
+                    "quarantined_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "reason": f"{type(exc).__name__}:{exc}",
+                    "raw_sha256": hashlib.sha256(stripped.encode("utf-8", errors="replace")).hexdigest(),
+                    "raw_line": stripped[:8192],
+                    "raw_truncated": len(stripped) > 8192,
+                }
+            )
+            continue
         if keep:
             dst.write(stripped + "\n")
             retained += 1
         else:
             pruned += 1
+    dst.flush()
+    os.fsync(dst.fileno())
+if invalid_records:
+    with invalid_path.open("a", encoding="utf-8") as quarantine:
+        for record in invalid_records:
+            quarantine.write(json.dumps(record, ensure_ascii=False) + "\n")
+        quarantine.flush()
+        os.fsync(quarantine.fileno())
 os.replace(target, source)
 os.chmod(source, 0o664)
-print(f"{retained} {pruned} {source.stat().st_size}")
+print(f"{retained} {pruned} {source.stat().st_size} {invalid}")
 PY
 }
 
@@ -241,11 +292,12 @@ if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   if [[ -f "$LOG_DIR/system_metric_samples.jsonl" ]]; then
     system_metric_before_size="$(stat -c%s "$LOG_DIR/system_metric_samples.jsonl" 2>/dev/null || echo 0)"
   fi
-  metric_prune_output="$(prune_system_metric_samples 2>/dev/null || true)"
+  metric_prune_output="$(prune_system_metric_samples 2>/dev/null)"
   if [[ -n "$metric_prune_output" ]]; then
     system_metric_retained="$(echo "$metric_prune_output" | awk '{print $1}' | tail -1)"
     system_metric_pruned="$(echo "$metric_prune_output" | awk '{print $2}' | tail -1)"
     system_metric_after_size="$(echo "$metric_prune_output" | awk '{print $3}' | tail -1)"
+    system_metric_invalid="$(echo "$metric_prune_output" | awk '{print $4}' | tail -1)"
   fi
 fi
 if [[ -f "$LOG_DIR/system_metric_samples.jsonl" ]]; then
@@ -288,7 +340,10 @@ run_data_maintenance() {
       if [[ "$(basename "$event_path")" == *"_${TARGET_DATE}.jsonl" ]]; then
         continue
       fi
-      gzip -f -9 "$event_path"
+      if ! compress_file_verified "$event_path"; then
+        compression_verify_failure_count=$((compression_verify_failure_count + 1))
+        return 1
+      fi
       sentinel_compressed_count=$((sentinel_compressed_count + 1))
     done < <(find "$sentinel_dir" -maxdepth 1 -type f -name '*_events_*.jsonl' -print0 | sort -z)
   fi
@@ -299,7 +354,10 @@ run_data_maintenance() {
       if [[ "$(basename "$snapshot_path")" == "pipeline_events_${TARGET_DATE}_"*".jsonl" ]]; then
         continue
       fi
-      gzip -f -9 "$snapshot_path"
+      if ! compress_file_verified "$snapshot_path"; then
+        compression_verify_failure_count=$((compression_verify_failure_count + 1))
+        return 1
+      fi
       snapshot_compressed_count=$((snapshot_compressed_count + 1))
     done < <(find "$snapshot_dir" -maxdepth 1 -type f -name 'pipeline_events_*.jsonl' -print0 | sort -z)
   fi
@@ -369,6 +427,6 @@ deleted_count="$(find "${archive_log_find_args[@]}" -mtime "+$RETENTION_DAYS" -p
 after_count="$(find "${archive_log_find_args[@]}" | wc -l | tr -d ' ')"
 after_size="$(du -sh "$LOG_DIR" | awk '{print $1}')"
 
-echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS active_log_compress_min_index=$ACTIVE_LOG_COMPRESS_MIN_INDEX system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS raw_row_exclusion_backup_retention_days=$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS active_rotated=$rotated_active_count active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count"
+echo "[LOG_CLEANUP] archive_retention_days=$RETENTION_DAYS active_log_retention_days=$ACTIVE_LOG_RETENTION_DAYS active_log_compress_min_index=$ACTIVE_LOG_COMPRESS_MIN_INDEX system_metric_retention_days=$SYSTEM_METRIC_RETENTION_DAYS raw_row_exclusion_backup_retention_days=$RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS active_rotated=$rotated_active_count active_deleted=$active_deleted_count archive_deleted=$deleted_count archive_compressed=$compressed_archive_count archive_pruned_to_backup_limit=$archive_pruned_to_backup_limit_count archive_before=$before_count archive_after=$after_count size_before=$before_size size_after=$after_size system_metric_retained=$system_metric_retained system_metric_pruned=$system_metric_pruned system_metric_invalid=$system_metric_invalid system_metric_size_before=$system_metric_before_size system_metric_size_after=$system_metric_after_size data_maintenance_enabled=$DATA_MAINTENANCE_ENABLED tmp_deleted=$tmp_deleted_count cache_deleted=$cache_deleted_count sentinel_compressed=$sentinel_compressed_count snapshot_compressed=$snapshot_compressed_count compression_verify_failures=$compression_verify_failure_count raw_row_exclusion_deleted=$raw_row_exclusion_deleted_count raw_row_exclusion_backup_deleted=$raw_row_exclusion_backup_deleted_count"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_rotated=${rotated_active_count} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} archive_compressed=${compressed_archive_count} archive_pruned_to_backup_limit=${archive_pruned_to_backup_limit_count} system_metric_pruned=${system_metric_pruned} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} tmp_deleted=${tmp_deleted_count} cache_deleted=${cache_deleted_count} sentinel_compressed=${sentinel_compressed_count} snapshot_compressed=${snapshot_compressed_count} raw_row_exclusion_deleted=${raw_row_exclusion_deleted_count} raw_row_exclusion_backup_deleted=${raw_row_exclusion_backup_deleted_count} finished_at=${finished_at}"
+echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_rotated=${rotated_active_count} active_deleted=${active_deleted_count} archive_deleted=${deleted_count} archive_compressed=${compressed_archive_count} archive_pruned_to_backup_limit=${archive_pruned_to_backup_limit_count} system_metric_pruned=${system_metric_pruned} system_metric_invalid=${system_metric_invalid} data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} tmp_deleted=${tmp_deleted_count} cache_deleted=${cache_deleted_count} sentinel_compressed=${sentinel_compressed_count} snapshot_compressed=${snapshot_compressed_count} compression_verify_failures=${compression_verify_failure_count} raw_row_exclusion_deleted=${raw_row_exclusion_deleted_count} raw_row_exclusion_backup_deleted=${raw_row_exclusion_backup_deleted_count} finished_at=${finished_at}"
