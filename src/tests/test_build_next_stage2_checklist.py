@@ -127,6 +127,9 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
     assert "stale submit bypass" in text
     assert "[SwingPreFinalAutoAndFinalApprovalPreopen0511]" in text
     assert "[RuntimeEnvIntradayObserve0511]" in text
+    assert "candidate_selected_families=score65_74_recovery_probe" in text
+    assert "selection_change_summary" in text
+    assert "실제 기동 기대 목록으로 직접 사용하지 않는다" in text
     assert "사용자 명시 override는 fresh/conflict-free source" in text
     assert "장중 runtime threshold mutation은 금지한다" not in text
     assert "기존 `bounded_tunable` 단일 축에 한해 허용" in text

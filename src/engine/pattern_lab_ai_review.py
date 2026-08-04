@@ -2111,7 +2111,10 @@ def _implementation_marker_for_conclusion(
     order_prefix = f"order_{REPORT_TYPE}_"
     if normalized_review_id.startswith(order_prefix):
         normalized_review_id = normalized_review_id[len(order_prefix) :]
-    if normalized_review_id == "scalp_entry_adm_sample_floor_below":
+    if normalized_review_id in {
+        "scalp_entry_adm_sample_floor_below",
+        "scalp_entry_adm_source_quality_below_floor",
+    }:
         source_summary = _source_summary(context, "scalping_pattern_lab_automation")
         contracts = (
             source_summary.get("source_quality_contracts")

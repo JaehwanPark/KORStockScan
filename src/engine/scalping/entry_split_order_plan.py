@@ -2261,6 +2261,34 @@ def _policy_payload(
     version_seed = json.dumps(passed, sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha1(version_seed.encode("utf-8")).hexdigest()[:10]
     policy_version = f"{RUNTIME_FAMILY}:{target_date}:{digest}"
+    runtime_apply_scopes = sorted(
+        {
+            str(item.get("runtime_apply_scope") or "")
+            for item in passed
+            if str(item.get("runtime_apply_scope") or "")
+        }
+    )
+    post_apply_attribution = {
+        "required": True,
+        "minimum_observed_split_outcome_sample": SPLIT_VARIANT_OUTCOME_FLOOR_REAL,
+        "metrics": [
+            "fill_rate_delta",
+            "cancel_rate_delta",
+            "missed_upside_rate_delta",
+            "source_quality_adjusted_ev_pct_delta",
+        ],
+        "separate_partial_and_full_fill": True,
+    }
+    rollback_guard = {
+        "action": "carry_forward_previous_runtime_policy",
+        "triggers": [
+            "worse_fill_rate_without_ev_gain",
+            "higher_cancel_rate",
+            "higher_missed_upside_rate",
+            "negative_post_apply_source_quality_adjusted_ev_delta",
+            "source_quality_or_provenance_breach",
+        ],
+    }
     return {
         "schema_version": POLICY_SCHEMA_VERSION,
         "policy_version": policy_version,
@@ -2273,6 +2301,9 @@ def _policy_payload(
         ),
         "explicit_bucket_count": len(explicit_bucket_candidates),
         "preopen_guard_required": True,
+        "runtime_apply_scope": runtime_apply_scopes,
+        "post_apply_attribution": post_apply_attribution,
+        "rollback_guard": rollback_guard,
         "decision_authority": "next_preopen_bounded_entry_split_policy",
         "forbidden_uses": [
             "increase_requested_qty",
@@ -2598,6 +2629,9 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         "candidate_grid": candidate_grid,
         "recommended_policy": {
             "runtime_apply_allowed": runtime_apply_allowed,
+            "runtime_apply_scope": policy.get("runtime_apply_scope") or [],
+            "post_apply_attribution": policy.get("post_apply_attribution") or {},
+            "rollback_guard": policy.get("rollback_guard") or {},
             "baseline_runtime_defaults_enabled": policy.get(
                 "baseline_runtime_defaults_enabled"
             )

@@ -8148,6 +8148,7 @@ def test_hold_carry_forward_previously_enabled_no_blockers(tmp_path, monkeypatch
         "hold_carry_forward_previous_runtime:"
     )
     assert decision["hold_carry_forward"]["previous_selected"] is True
+    assert decision["selection_change_class"] == "carried_forward_unchanged"
     assert (
         decision["env_overrides"][
             "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED"
@@ -8160,6 +8161,49 @@ def test_hold_carry_forward_previously_enabled_no_blockers(tmp_path, monkeypatch
         ]
         == "20"
     )
+    runtime_manifest = json.loads(
+        (runtime_dir / "threshold_runtime_env_2026-06-11.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert runtime_manifest["selection_change_summary"][
+        "carried_forward_or_unchanged"
+    ] == ["soft_stop_whipsaw_confirmation"]
+
+
+def test_previous_runtime_env_uses_latest_manifest_across_calendar_gap(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+
+    (runtime_dir / "threshold_runtime_env_2026-06-12.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-12",
+                "selected_families": ["scale_in_split_order_plan"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_PLAN_ENABLED": "true"
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_dir / "threshold_runtime_env_2026-06-14.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    # Verify artifacts must not be mistaken for runtime manifests.
+    (runtime_dir / "threshold_runtime_env_verify_2026-06-14.json").write_text(
+        json.dumps({"target_date": "2026-06-14", "selected_families": ["wrong"]}),
+        encoding="utf-8",
+    )
+
+    families, manifest = mod._load_previous_runtime_env_selected_families("2026-06-15")
+
+    assert families == {"scale_in_split_order_plan"}
+    assert manifest["target_date"] == "2026-06-12"
 
 
 def test_sell_side_window_hold_carry_forward_keeps_window_keys(tmp_path, monkeypatch):

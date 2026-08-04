@@ -45,6 +45,12 @@ LIVE_AUTO_MAX_MAE_P10_PCT = -5.0
 LIVE_AUTO_MAX_RELOCK_RATE_PCT = 0.0
 LIVE_AUTO_MIN_BBO_COVERAGE_PCT = 100.0
 LIVE_AUTO_MAX_ENTRY_SPREAD_PCT = 1.5
+NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT = 1.0
+LIVE_ELIGIBLE_COHORTS = {
+    "consecutive_limit_down_2plus",
+    "single_limit_down",
+    "near_limit_rebound",
+}
 
 SOURCE_ONLY_FIELDS = {
     "runtime_effect": False,
@@ -283,6 +289,9 @@ def collect_observation_visits(
                         source.get("consecutive_count")
                         or fields.get("consecutive_count")
                     ),
+                    "candidate_kind": str(
+                        source.get("candidate_kind") or "exact_limit_down"
+                    ),
                     "limit_down_close": _safe_int(source.get("limit_down_close")),
                     "lower_limit_price": _safe_int(fields.get("lower_limit_price")),
                     "transitions": [],
@@ -314,6 +323,26 @@ def collect_observation_visits(
                         "confirmation_tick_count": _safe_int(
                             fields.get("confirmation_tick_count")
                         ),
+                        "confirmation_type": "exact_unlock",
+                    }
+                )
+            elif stage == "limit_down_watch_rebound_confirmed":
+                visit["confirmations"].append(
+                    {
+                        "at": emitted_at.isoformat(),
+                        "phase": str(fields.get("phase") or "NEAR_REBOUND_OBSERVING"),
+                        "current_price": _safe_int(fields.get("current_price")),
+                        "open_price": _safe_int(fields.get("open_price")),
+                        "low_price": _safe_int(fields.get("low_price")),
+                        "rebound_from_low_pct": _safe_float(
+                            fields.get("rebound_from_low_pct")
+                        ),
+                        "best_ask": _safe_int(fields.get("best_ask")),
+                        "best_bid": _safe_int(fields.get("best_bid")),
+                        "confirmation_tick_count": _safe_int(
+                            fields.get("confirmation_tick_count")
+                        ),
+                        "confirmation_type": "near_rebound",
                     }
                 )
             elif stage == "limit_down_watch_snapshot":
@@ -322,6 +351,7 @@ def collect_observation_visits(
                         "at": emitted_at.isoformat(),
                         "phase": str(fields.get("phase") or ""),
                         "current_price": _safe_int(fields.get("current_price")),
+                        "open_price": _safe_int(fields.get("open_price")),
                         "high_price": _safe_int(fields.get("high_price")),
                         "low_price": _safe_int(fields.get("low_price")),
                         "best_ask": _safe_int(fields.get("best_ask")),
@@ -390,19 +420,49 @@ def label_observation_visit(visit: dict[str, Any]) -> dict[str, Any]:
         "label_status": "insufficient_ordered_unlock_confirmation",
         **SOURCE_ONLY_FIELDS,
     }
-    confirmations = [
-        row for row in visit.get("confirmations", []) if isinstance(row, dict)
-    ]
-    confirmations.sort(key=lambda row: str(row.get("at") or ""))
-    confirmation = confirmations[0] if confirmations else None
+    cohort = str(visit.get("cohort") or "")
+    if cohort not in LIVE_ELIGIBLE_COHORTS:
+        label["label_status"] = "observation_only_cohort_separate_contract_required"
+        return label
+    if cohort == "near_limit_rebound":
+        label["label_status"] = "insufficient_ordered_rebound_confirmation"
+    confirmation = None
+    confirmation_type = "exact_unlock"
+    if cohort == "near_limit_rebound":
+        confirmation_type = "near_rebound"
+        confirmations = [
+            row
+            for row in visit.get("confirmations", [])
+            if isinstance(row, dict)
+            and row.get("confirmation_type") == "near_rebound"
+            and _safe_int(row.get("confirmation_tick_count")) >= 2
+            and _safe_int(row.get("current_price"))
+            >= _safe_int(row.get("open_price"))
+            > 0
+            and _safe_int(row.get("current_price"))
+            > _safe_int(row.get("low_price"))
+            > 0
+            and (_safe_float(row.get("rebound_from_low_pct")) or 0.0)
+            >= NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT
+        ]
+        confirmations.sort(key=lambda row: str(row.get("at") or ""))
+        confirmation = confirmations[0] if confirmations else None
+        trigger_rows = []
+    else:
+        confirmations = [
+            row for row in visit.get("confirmations", []) if isinstance(row, dict)
+        ]
+        confirmations.sort(key=lambda row: str(row.get("at") or ""))
+        confirmation = confirmations[0] if confirmations else None
+        trigger_rows = unlocked
     if confirmation is None:
-        if len(unlocked) < 2:
+        if len(trigger_rows) < 2:
             return label
-        first_index, first = unlocked[0]
+        first_index, first = trigger_rows[0]
         first_at = _parse_dt(first.get("at"))
         if first_at is None:
             return label
-        for index, row in unlocked[1:]:
+        for index, row in trigger_rows[1:]:
             observed_at = _parse_dt(row.get("at"))
             if (
                 index > first_index
@@ -419,7 +479,10 @@ def label_observation_visit(visit: dict[str, Any]) -> dict[str, Any]:
     current_entry = _safe_int(confirmation.get("current_price"))
     best_ask = _safe_int(confirmation.get("best_ask"))
     entry_price = best_ask if best_ask > 0 else current_entry
-    if entry_price <= lower_limit or entry_price <= 0:
+    if entry_price <= 0 or (
+        cohort in {"consecutive_limit_down_2plus", "single_limit_down"}
+        and entry_price <= lower_limit
+    ):
         return label
 
     after = []
@@ -491,6 +554,7 @@ def label_observation_visit(visit: dict[str, Any]) -> dict[str, Any]:
         {
             "label_status": "pass",
             "entry_at": entry_at.isoformat(),
+            "entry_confirmation_type": confirmation_type,
             "entry_price": entry_price,
             "entry_price_source": "best_ask" if best_ask > 0 else "current_tick_proxy",
             "entry_bbo_available": best_ask > 0 and best_bid > 0,
@@ -548,6 +612,50 @@ def _rows_in_rolling_window(
         if window_start <= row_date <= target:
             selected.append(row)
     return selected
+
+
+def _prior_counterfactual_valid(payload: dict[str, Any], target_date: str) -> bool:
+    if not payload:
+        return True
+    rows = payload.get("rows")
+    try:
+        artifact_date = date.fromisoformat(str(payload.get("target_date") or ""))
+        current_date = date.fromisoformat(target_date)
+    except ValueError:
+        return False
+    row_ids = (
+        [str(row.get("row_id") or "") for row in rows if isinstance(row, dict)]
+        if isinstance(rows, list)
+        else []
+    )
+    cumulative = payload.get("cumulative_update")
+    cumulative_valid = bool(
+        cumulative is None
+        or (
+            isinstance(cumulative, dict)
+            and cumulative.get("mode")
+            == "latest_prior_rolling_rows_plus_current_dedup_by_row_id"
+            and _safe_int(cumulative.get("deduplicated_rolling_row_count")) == len(rows)
+        )
+    )
+    return bool(
+        payload.get("schema_version") == 1
+        and payload.get("report_type") == "limit_down_watch_counterfactual"
+        and artifact_date < current_date
+        and isinstance(rows, list)
+        and len(row_ids) == len(rows)
+        and all(row_ids)
+        and len(set(row_ids)) == len(row_ids)
+        and payload.get("runtime_effect") is False
+        and payload.get("actual_order_submitted") is False
+        and payload.get("broker_order_forbidden") is True
+        and payload.get("allowed_runtime_apply") is False
+        and all(
+            payload.get(field) == expected
+            for field, expected in COUNTERFACTUAL_CONTRACT.items()
+        )
+        and cumulative_valid
+    )
 
 
 def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -634,6 +742,8 @@ def _cell_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         if row.get("label_status") != "pass":
             continue
+        if str(row.get("cohort") or "") not in LIVE_ELIGIBLE_COHORTS:
+            continue
         grouped[
             (
                 str(row.get("cohort") or "unknown"),
@@ -669,7 +779,14 @@ def build_counterfactual(
     prior = _latest_prior_artifact(
         COUNTERFACTUAL_DIR, "limit_down_watch_counterfactual", target_date
     )
-    prior_rows = prior.get("rows") if isinstance(prior.get("rows"), list) else []
+    prior_valid = _prior_counterfactual_valid(prior, target_date)
+    prior_rows = (
+        prior.get("rows") if prior_valid and isinstance(prior.get("rows"), list) else []
+    )
+    source_status = dict(source_status)
+    source_status["prior_counterfactual_present"] = bool(prior)
+    source_status["prior_counterfactual_valid"] = prior_valid
+    source_status["valid"] = bool(source_status.get("valid") and prior_valid)
     deduped = {
         str(row.get("row_id")): row
         for row in [*prior_rows, *current_rows]
@@ -679,6 +796,16 @@ def build_counterfactual(
         _rows_in_rolling_window(deduped.values(), target_date),
         key=lambda row: str(row.get("row_id")),
     )
+    cumulative_update = {
+        "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+        "prior_artifact_target_date": prior.get("target_date"),
+        "prior_input_row_count": len(prior_rows),
+        "current_input_row_count": len(current_rows),
+        "deduplicated_rolling_row_count": len(rows),
+        "duplicate_or_out_of_window_row_count": max(
+            0, len(prior_rows) + len(current_rows) - len(rows)
+        ),
+    }
     metrics = _aggregate_rows(rows)
     cells = _cell_rows(rows)
     eligible_cells = [row for row in cells if row.get("eligible_for_sim") is True]
@@ -708,6 +835,7 @@ def build_counterfactual(
         "source_quality_status": "pass" if source_status["valid"] else "blocked",
         "source_status": source_status,
         "rolling_window_calendar_days": ROLLING_WINDOW_CALENDAR_DAYS,
+        "cumulative_update": cumulative_update,
         **metrics,
         "consecutive_limit_down_2plus_sample_count": sum(
             1
@@ -720,6 +848,12 @@ def build_counterfactual(
             for row in rows
             if row.get("label_status") == "pass"
             and row.get("cohort") == "single_limit_down"
+        ),
+        "near_limit_rebound_sample_count": sum(
+            1
+            for row in rows
+            if row.get("label_status") == "pass"
+            and row.get("cohort") == "near_limit_rebound"
         ),
         "eligible_policy_count": len(eligible_cells),
         "best_eligible_policy_ev_pct": (
@@ -755,7 +889,12 @@ def build_sim_policy_catalog(
                 ),
                 "sample_count": row.get("sample_count"),
                 "observation_date_count": row.get("observation_date_count"),
-                "entry_rule": "two_ordered_unlocked_snapshots_within_30s_above_lower_limit",
+                "entry_rule": (
+                    "two_ordered_near_rebound_snapshots_within_30s_"
+                    "at_or_above_session_open_and_1pct_above_low"
+                    if row.get("cohort") == "near_limit_rebound"
+                    else "two_ordered_unlocked_snapshots_within_30s_above_lower_limit"
+                ),
                 "exit_horizon_sec": SELECTED_EXIT_HORIZON_SEC,
                 "execution_cost_policy": "max_30bp_or_twice_observed_spread",
                 "runtime_effect": False,
@@ -863,6 +1002,8 @@ def build_bounded_live_candidate(
     for row in cells:
         if not isinstance(row, dict):
             continue
+        if str(row.get("cohort") or "") not in LIVE_ELIGIBLE_COHORTS:
+            continue
         ev = _safe_float(row.get("source_quality_adjusted_ev_pct"))
         downside = _safe_float(row.get("downside_p10_pct"))
         mae_p10 = _safe_float(row.get("mae_p10_pct"))
@@ -929,6 +1070,9 @@ def build_bounded_live_candidate(
             "same_day_reentry_allowed": False,
             "overnight_allowed": False,
             "entry_requires_two_ordered_unlocked_ticks": True,
+            "entry_requires_two_ordered_trigger_ticks": True,
+            "near_rebound_requires_session_open_recovery": True,
+            "near_rebound_min_from_low_pct": (NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT),
             "entry_requires_fresh_quote_and_bbo": True,
             "max_entry_spread_pct": LIVE_AUTO_MAX_ENTRY_SPREAD_PCT,
             "relock_or_stale_cancels_unfilled_entry": True,

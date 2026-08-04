@@ -7717,6 +7717,10 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
+            "runtime_apply_scope": recommended_policy.get("runtime_apply_scope") or [],
+            "post_apply_attribution": recommended_policy.get("post_apply_attribution")
+            or {},
+            "rollback_guard": recommended_policy.get("rollback_guard") or {},
             "baseline_runtime_defaults_enabled": (
                 recommended_policy.get("baseline_runtime_defaults_enabled") is True
             ),
@@ -7804,7 +7808,18 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     policy_file = str(recommended_policy.get("policy_file") or "")
     policy_version = str(recommended_policy.get("policy_version") or "")
     source_quality_blocked = source_quality.get("tuning_input_allowed") is False
-    runtime_apply_allowed = recommended_policy.get("runtime_apply_allowed") is True
+    runtime_refresh_evidence = (
+        recommended_policy.get("runtime_refresh_evidence")
+        if isinstance(recommended_policy.get("runtime_refresh_evidence"), dict)
+        else {}
+    )
+    runtime_policy_refresh_allowed = (
+        runtime_refresh_evidence.get("runtime_policy_refresh_allowed") is True
+    )
+    runtime_apply_allowed = bool(
+        recommended_policy.get("runtime_apply_allowed") is True
+        and runtime_policy_refresh_allowed
+    )
     avg_down_observation_count = (
         _safe_int(input_summary.get("avg_down_observation_count"), 0) or 0
     )
@@ -7879,6 +7894,10 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
+            "runtime_policy_refresh_allowed": runtime_policy_refresh_allowed,
+            "runtime_refresh_evidence": runtime_refresh_evidence,
+            "post_apply_attribution": recommended_policy.get("post_apply_attribution"),
+            "rollback_guard": recommended_policy.get("rollback_guard"),
         },
         "current": {
             "enabled": False,
@@ -7897,6 +7916,7 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             "scale_in_split_order_plan only decomposes AVG_DOWN scale-in orders and never increases requested_qty.",
             "PYRAMID is excluded from v1 because it is not avg-down averaging.",
             "Policy candidates remain source-only seeds until at least three direct AVG_DOWN/real+sim observations are available.",
+            "A new runtime policy version also requires real outcome, additional MFE/MAE, and price-join coverage; otherwise PREOPEN carries the prior policy forward.",
             "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
         ],
     }
@@ -10600,16 +10620,24 @@ def _calibration_state_for_family(
                 "source_quality_blocked",
                 "scale_in_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
             )
-        if source_metrics.get("runtime_apply_allowed") is not True:
-            return (
-                "hold",
-                "scale_in_split_order_plan recommended policy is not runtime-apply allowed; keep it out of PREOPEN env handoff.",
-            )
         if direct_observation_count < sample_floor:
             return (
                 "hold_sample",
                 "scale-in split policy seed는 유지하지만 직접 AVG_DOWN/real+sim 표본이 "
                 f"초기 bounded floor에 미달({direct_observation_count}/{sample_floor})해 PREOPEN 적용은 보류한다.",
+            )
+        if source_metrics.get("runtime_apply_allowed") is not True:
+            refresh_evidence = source_metrics.get("runtime_refresh_evidence")
+            blockers = (
+                refresh_evidence.get("blockers")
+                if isinstance(refresh_evidence, dict)
+                else []
+            )
+            return (
+                "hold",
+                "scale_in_split_order_plan direct sample exists but runtime refresh "
+                f"evidence is incomplete(blockers={blockers or ['runtime_apply_not_allowed']}); "
+                "carry the previous PREOPEN policy forward.",
             )
         if policy_count > 0 and (
             baseline_policy_count > 0
@@ -11140,6 +11168,10 @@ def _build_calibration_candidates(
                 "policy_version": family_sample.get("policy_version"),
                 "runtime_apply_allowed": family_sample.get("runtime_apply_allowed")
                 is True,
+                "runtime_apply_scope": family_sample.get("runtime_apply_scope") or [],
+                "post_apply_attribution": family_sample.get("post_apply_attribution")
+                or {},
+                "rollback_guard": family_sample.get("rollback_guard") or {},
                 "baseline_runtime_defaults_enabled": family_sample.get(
                     "baseline_runtime_defaults_enabled"
                 )
@@ -11232,6 +11264,17 @@ def _build_calibration_candidates(
                 "policy_version": family_sample.get("policy_version"),
                 "runtime_apply_allowed": family_sample.get("runtime_apply_allowed")
                 is True,
+                "runtime_policy_refresh_allowed": family_sample.get(
+                    "runtime_policy_refresh_allowed"
+                )
+                is True,
+                "runtime_refresh_evidence": (
+                    family_sample.get("runtime_refresh_evidence")
+                    if isinstance(family_sample.get("runtime_refresh_evidence"), dict)
+                    else {}
+                ),
+                "post_apply_attribution": family_sample.get("post_apply_attribution"),
+                "rollback_guard": family_sample.get("rollback_guard"),
                 "runtime_authority": "next_preopen_bounded_scale_in_split_policy",
                 "requested_qty_authority": "describe_dynamic_scale_in_qty",
             }

@@ -45,6 +45,9 @@ RUNTIME_FALLBACK_VARIANT_ID = "runtime_default_scale_in_equal_50_50_offset_0pct_
 COUNTERFACTUAL_WINDOW_SEC = 180
 ANCHOR_RECONSTRUCT_WINDOW_SEC = 5
 THREE_LEG_RUNTIME_SAMPLE_FLOOR = 20
+RUNTIME_REFRESH_REAL_OUTCOME_FLOOR = 3
+RUNTIME_REFRESH_MFE_MAE_FLOOR = 3
+RUNTIME_REFRESH_PRICE_JOIN_COVERAGE_FLOOR = 0.80
 MAX_SCALE_IN_SPLIT_LEGS = 3
 MAX_POLICY_AGE_KRX_TRADING_DAYS = 3
 _INPUT_PROJECTION_KEYS = (
@@ -931,7 +934,63 @@ def _candidate_for_bucket(
     }
 
 
-def _build_policy(target_date: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _runtime_refresh_evidence(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    real_outcome_joined_sample = sum(
+        _safe_int(item.get("real_outcome_joined_sample"), 0)
+        for item in candidates
+        if isinstance(item, dict)
+    )
+    additional_mfe_mae_joined_sample = sum(
+        _safe_int(item.get("additional_mfe_mae_joined_sample"), 0)
+        for item in candidates
+        if isinstance(item, dict)
+    )
+    observed_price_sample = sum(
+        _safe_int(item.get("post_submit_observed_sample"), 0)
+        for item in candidates
+        if isinstance(item, dict)
+    )
+    price_join_gap_count = sum(
+        _safe_int(item.get("price_observation_join_gap_count"), 0)
+        for item in candidates
+        if isinstance(item, dict)
+    )
+    price_join_denominator = observed_price_sample + price_join_gap_count
+    price_join_coverage = (
+        observed_price_sample / price_join_denominator
+        if price_join_denominator > 0
+        else 0.0
+    )
+    blockers: list[str] = []
+    if real_outcome_joined_sample < RUNTIME_REFRESH_REAL_OUTCOME_FLOOR:
+        blockers.append("real_outcome_sample_floor")
+    if additional_mfe_mae_joined_sample < RUNTIME_REFRESH_MFE_MAE_FLOOR:
+        blockers.append("additional_mfe_mae_sample_floor")
+    if price_join_coverage < RUNTIME_REFRESH_PRICE_JOIN_COVERAGE_FLOOR:
+        blockers.append("price_join_coverage_floor")
+    return {
+        "runtime_policy_refresh_allowed": not blockers,
+        "real_outcome_joined_sample": real_outcome_joined_sample,
+        "real_outcome_sample_floor": RUNTIME_REFRESH_REAL_OUTCOME_FLOOR,
+        "additional_mfe_mae_joined_sample": additional_mfe_mae_joined_sample,
+        "additional_mfe_mae_sample_floor": RUNTIME_REFRESH_MFE_MAE_FLOOR,
+        "price_observation_joined_sample": observed_price_sample,
+        "price_observation_join_gap_count": price_join_gap_count,
+        "price_join_coverage": round(price_join_coverage, 4),
+        "price_join_coverage_floor": RUNTIME_REFRESH_PRICE_JOIN_COVERAGE_FLOOR,
+        "blockers": blockers,
+        "insufficient_evidence_action": "carry_forward_previous_runtime_policy",
+    }
+
+
+def _build_policy(
+    target_date: str,
+    candidates: list[dict[str, Any]],
+    *,
+    refresh_evidence: dict[str, Any],
+) -> dict[str, Any]:
     default_bucket = {
         "context_bucket": "default",
         "leg_count": 2,
@@ -943,7 +1002,10 @@ def _build_policy(target_date: str, candidates: list[dict[str, Any]]) -> dict[st
         "policy_mode": POLICY_MODE_BOUNDED_EQUAL_BASELINE,
         "split_variant_id": BASELINE_SPLIT_VARIANT_ID,
         "selection_reason": "default_qty_preserving_baseline",
-        "runtime_apply_allowed": True,
+        "runtime_apply_allowed": bool(
+            refresh_evidence.get("runtime_policy_refresh_allowed")
+        ),
+        "runtime_refresh_evidence": refresh_evidence,
     }
     policy_version = f"{RUNTIME_FAMILY}:{target_date}:{_policy_hash(candidates, default_bucket=default_bucket)}"
     return {
@@ -951,7 +1013,10 @@ def _build_policy(target_date: str, candidates: list[dict[str, Any]]) -> dict[st
         "policy_version": policy_version,
         "source_report": str(report_paths(target_date)[0]),
         "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
-        "runtime_apply_allowed": True,
+        "runtime_apply_allowed": bool(
+            refresh_evidence.get("runtime_policy_refresh_allowed")
+        ),
+        "runtime_refresh_evidence": refresh_evidence,
         "scope": {
             "stage": "scale_in",
             "add_type": "AVG_DOWN",
@@ -1028,7 +1093,15 @@ def build_report(target_date: str) -> dict[str, Any]:
                     str(item.get("context_bucket") or "default")
                 ] = item
     candidates = list(runtime_candidates_by_bucket.values())
-    policy = _build_policy(target_date, candidates)
+    refresh_evidence = _runtime_refresh_evidence(candidates)
+    runtime_policy_refresh_allowed = bool(
+        candidates and refresh_evidence.get("runtime_policy_refresh_allowed")
+    )
+    policy = _build_policy(
+        target_date,
+        candidates,
+        refresh_evidence=refresh_evidence,
+    )
     policy_file = policy_path(target_date)
     counterfactual_selected_count = sum(
         1
@@ -1090,7 +1163,12 @@ def build_report(target_date: str) -> dict[str, Any]:
                 "real": 0,
                 "sim": 0,
                 "three_leg_runtime": THREE_LEG_RUNTIME_SAMPLE_FLOOR,
+                "runtime_refresh_real_outcome": RUNTIME_REFRESH_REAL_OUTCOME_FLOOR,
+                "runtime_refresh_additional_mfe_mae": RUNTIME_REFRESH_MFE_MAE_FLOOR,
             },
+            "runtime_refresh_price_join_coverage_floor": (
+                RUNTIME_REFRESH_PRICE_JOIN_COVERAGE_FLOOR
+            ),
             "three_leg_runtime_missed_upside_proxy_max_exclusive": 0.40,
             "primary_decision_metric": "post_submit_tick_band_counterfactual_selector",
             "source_quality_gate": "observation_source_quality_audit_tuning_input_allowed",
@@ -1106,13 +1184,35 @@ def build_report(target_date: str) -> dict[str, Any]:
                 "provider_route_change",
                 "bot_restart",
                 "pyramid_scale_in",
+                "runtime_policy_refresh_without_real_outcome_and_mfe_mae",
             ],
         },
         "source_quality": source_quality,
         "input_summary": input_summary,
         "candidate_grid": candidate_grid,
         "recommended_policy": {
-            "runtime_apply_allowed": bool(candidates),
+            "runtime_apply_allowed": runtime_policy_refresh_allowed,
+            "runtime_apply_scope": "qty_preserving_execution_shape_refresh",
+            "runtime_refresh_evidence": refresh_evidence,
+            "post_apply_attribution": {
+                "required": True,
+                "metrics": [
+                    "fill_rate_delta",
+                    "cancel_rate_delta",
+                    "additional_mfe_pct_delta",
+                    "additional_mae_pct_delta",
+                    "missed_upside_rate_delta",
+                ],
+            },
+            "rollback_guard": {
+                "action": "carry_forward_previous_runtime_policy",
+                "triggers": [
+                    "worse_fill_rate",
+                    "higher_cancel_rate",
+                    "higher_additional_mae_without_mfe_gain",
+                    "price_join_coverage_below_floor",
+                ],
+            },
             "policy_file": str(policy_file),
             "policy_version": policy.get("policy_version"),
             "candidates": candidates,

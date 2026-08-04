@@ -62,10 +62,12 @@ POST_SIM_METRIC_CONTRACT = {
 CONTRACT = {
     "metric_role": "diagnostic",
     "decision_authority": "limit_down_source_observation_only",
-    "window_policy": "same_symbol_same_krx_session_ordered_raw_tick",
+    "window_policy": "same_symbol_same_krx_session_ordered_0b_trade_and_0d_quote",
     "sample_floor": "not_applicable_source_observation",
     "primary_decision_metric": "ordered_intraday_path_capture_rate",
-    "source_quality_gate": "official_ka10017_and_completed_ka10081_db_close_match",
+    "source_quality_gate": (
+        "official_ka10017_exact_or_completed_daily_near_limit_ka10081_db_match"
+    ),
     "forbidden_uses": (
         "real_order,buy_analysis,threshold_change,provider_route_change,"
         "order_price_or_quantity_change,cap_change,broker_guard_change,"
@@ -76,6 +78,11 @@ CONTRACT = {
     "broker_order_forbidden": True,
     "allowed_sim_apply": False,
     "allowed_runtime_apply": False,
+}
+LIVE_AUTO_COHORTS = {
+    "consecutive_limit_down_2plus",
+    "single_limit_down",
+    "near_limit_rebound",
 }
 
 
@@ -330,6 +337,8 @@ def _rolling_observation_evidence(
         included_dates.append(str(daily["target_date"]))
         daily_paths = 0
         for group in daily["groups"]:
+            if str(group.get("cohort") or "") not in LIVE_AUTO_COHORTS:
+                continue
             group_registered = _safe_int(group.get("registered_codes"))
             group_paths = _safe_int(group.get("ordered_path_captured_codes"))
             registered += max(0, group_registered)
@@ -392,6 +401,16 @@ def _conversion_artifact_checks(
     counterfactual_ev = _safe_float(
         counterfactual.get("source_quality_adjusted_ev_pct")
     )
+    cumulative_update = (
+        counterfactual.get("cumulative_update")
+        if isinstance(counterfactual.get("cumulative_update"), dict)
+        else {}
+    )
+    cumulative_rows = (
+        counterfactual.get("rows")
+        if isinstance(counterfactual.get("rows"), list)
+        else []
+    )
     counterfactual_checks = {
         "source_only_contract_invalid": _source_only_contract_valid(
             counterfactual, target_date
@@ -415,6 +434,12 @@ def _conversion_artifact_checks(
             (_safe_float(counterfactual.get("best_eligible_policy_ev_pct")) or 0.0)
             > 0.0
         ),
+        "cumulative_update_mode_invalid": cumulative_update.get("mode")
+        == "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+        "cumulative_row_count_mismatch": _safe_int(
+            cumulative_update.get("deduplicated_rolling_row_count")
+        )
+        == len(cumulative_rows),
     }
     counterfactual_issues = (
         ["artifact_missing"]
@@ -552,6 +577,18 @@ def _conversion_artifact_checks(
                 "entry_requires_two_ordered_unlocked_ticks"
             )
             is True,
+            "risk_trigger_confirmation_missing": risk_contract.get(
+                "entry_requires_two_ordered_trigger_ticks"
+            )
+            is True,
+            "risk_near_rebound_open_recovery_missing": risk_contract.get(
+                "near_rebound_requires_session_open_recovery"
+            )
+            is True,
+            "risk_near_rebound_threshold_invalid": _safe_float(
+                risk_contract.get("near_rebound_min_from_low_pct")
+            )
+            == 1.0,
             "risk_fresh_bbo_missing": risk_contract.get(
                 "entry_requires_fresh_quote_and_bbo"
             )
@@ -811,6 +848,7 @@ def build_report(
             reason=str(candidate_summary["source_quality_status"]),
         )
     snapshots: dict[str, dict[str, Any]] = {}
+    quote_snapshots: dict[str, dict[str, Any]] = {}
     transitions: dict[str, list[str]] = defaultdict(list)
     registered_meta: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -826,12 +864,25 @@ def build_report(
             transitions[code].append(str(fields.get("phase") or ""))
         elif stage == "limit_down_watch_snapshot" and code:
             snapshots[code] = fields
+        elif stage == "limit_down_watch_quote_snapshot" and code:
+            quote_snapshots[code] = fields
 
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    report_codes = sorted(set(registered_meta) | set(snapshots))
-    ordered_phases = {"LIMIT_LOCKED", "UNLOCKED", "RELOCKED", "UNLOCKED_AGAIN"}
+    report_codes = sorted(set(registered_meta) | set(snapshots) | set(quote_snapshots))
+    ordered_phases = {
+        "LIMIT_LOCKED",
+        "UNLOCKED",
+        "RELOCKED",
+        "UNLOCKED_AGAIN",
+        "NEAR_REBOUND_OBSERVING",
+    }
     for code in report_codes:
-        fields = snapshots.get(code) or registered_meta.get(code) or {}
+        fields = (
+            snapshots.get(code)
+            or quote_snapshots.get(code)
+            or registered_meta.get(code)
+            or {}
+        )
         key = (
             str(fields.get("cohort") or "unknown"),
             str(fields.get("price_band") or "unknown"),
@@ -843,6 +894,8 @@ def build_report(
                 "price_band": key[1],
                 "registered_codes": 0,
                 "snapshot_codes": 0,
+                "quote_snapshot_codes": 0,
+                "market_data_observed_codes": 0,
                 "observed_codes": 0,
                 "unlocked_codes": 0,
                 "relocked_codes": 0,
@@ -857,6 +910,10 @@ def build_report(
         if code in snapshots:
             row["snapshot_codes"] += 1
             row["observed_codes"] += 1
+        if code in quote_snapshots:
+            row["quote_snapshot_codes"] += 1
+        if code in snapshots or code in quote_snapshots:
+            row["market_data_observed_codes"] += 1
         phases = transitions.get(code, [])
         unlocked = any(phase in {"UNLOCKED", "UNLOCKED_AGAIN"} for phase in phases)
         relocked = "RELOCKED" in phases
@@ -930,7 +987,7 @@ def build_report(
                 or candidate_summary["source_quality_status"]
                 not in {"pass", "pass_with_exclusions", "no_candidate"}
             )
-            else "pass" if snapshots else "no_observation"
+            else "pass" if (snapshots or quote_snapshots) else "no_observation"
         ),
         current_groups=groups,
         current_readiness=current_contract_readiness,
@@ -980,10 +1037,12 @@ def build_report(
         "status": (
             "source_blocked"
             if source_blocked
-            else "pass" if snapshots else "no_observation"
+            else "pass" if (snapshots or quote_snapshots) else "no_observation"
         ),
         "registered_code_count": len(registered_meta),
         "snapshot_code_count": len(snapshots),
+        "quote_snapshot_code_count": len(quote_snapshots),
+        "market_data_observed_code_count": len(set(snapshots) | set(quote_snapshots)),
         "group_count": len(groups),
         "groups": groups,
         "candidate_source_path": str(candidate_path),
@@ -1029,6 +1088,11 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"- status: `{payload.get('status')}`",
         f"- registered_code_count: `{payload.get('registered_code_count')}`",
         f"- snapshot_code_count: `{payload.get('snapshot_code_count')}`",
+        f"- quote_snapshot_code_count: `{payload.get('quote_snapshot_code_count')}`",
+        (
+            "- market_data_observed_code_count: "
+            f"`{payload.get('market_data_observed_code_count')}`"
+        ),
         f"- event_source_required: `{readiness.get('event_source_required')}`",
         (
             "- event_source_read_mode: "
@@ -1107,8 +1171,8 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Cohort / Price Band",
             "",
-            "| cohort | price_band | registered | snapshots | unlocked | relocked | ordered_path_capture_rate |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+            "| cohort | price_band | registered | trade_snapshots | quote_snapshots | market_data_observed | unlocked | relocked | ordered_trade_path_capture_rate |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     groups = payload.get("groups") if isinstance(payload.get("groups"), list) else []
@@ -1117,11 +1181,14 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             continue
         lines.append(
             "| {cohort} | {price_band} | {registered} | {snapshots} | "
-            "{unlocked} | {relocked} | {capture} |".format(
+            "{quote_snapshots} | {market_data_observed} | {unlocked} | "
+            "{relocked} | {capture} |".format(
                 cohort=row.get("cohort") or "unknown",
                 price_band=row.get("price_band") or "unknown",
                 registered=row.get("registered_codes") or 0,
                 snapshots=row.get("snapshot_codes") or 0,
+                quote_snapshots=row.get("quote_snapshot_codes") or 0,
+                market_data_observed=row.get("market_data_observed_codes") or 0,
                 unlocked=row.get("unlocked_codes") or 0,
                 relocked=row.get("relocked_codes") or 0,
                 capture=row.get("ordered_intraday_path_capture_rate"),

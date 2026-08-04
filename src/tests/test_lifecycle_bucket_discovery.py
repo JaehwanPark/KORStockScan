@@ -3278,6 +3278,32 @@ def test_parent_conflict_resolution_empty_when_no_conflict_parents():
     assert resolutions == []
 
 
+def test_parent_conflict_resolution_markdown_has_no_trailing_whitespace():
+    markdown = mod._render_markdown(
+        {
+            "summary": {},
+            "parent_conflict_resolution": [
+                {
+                    "parent_bucket_id": "lifecycle_flow:sample_parent",
+                    "conflict_resolution_state": "resolution_blocked_thin_sample",
+                    "parent_ev_before": 0.1,
+                    "parent_ev_after_exclusion_estimate": 0.1,
+                    "child_count": 2,
+                    "source_quality_gap_child_count": 0,
+                    "strategy_reversal_child_count": 0,
+                    "exclude_child_candidate_count": 0,
+                    "keep_collecting_child_count": 1,
+                    "positive_thin_child_count": 0,
+                    "sim_policy_eligible_after_resolution": False,
+                    "live_policy_blockers": ["sample_below_live_floor"],
+                }
+            ],
+        }
+    )
+
+    assert all(line == line.rstrip() for line in markdown.splitlines())
+
+
 def test_parent_conflict_resolution_children_same_direction_absorbed():
     report = {
         "parent_bucket_summaries": [

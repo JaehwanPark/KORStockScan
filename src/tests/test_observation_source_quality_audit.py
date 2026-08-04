@@ -7371,6 +7371,9 @@ def test_observation_source_quality_reviews_explicit_postclose_unknown_provenanc
                     "prior_probe_residual_source_quality_gate": (
                         "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
                     ),
+                    "prior_probe_residual_scale_in_recheck_authority": (
+                        "evaluation_only_full_scale_in_guards_required"
+                    ),
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
                 },
@@ -7416,6 +7419,9 @@ def test_observation_source_quality_reviews_explicit_postclose_unknown_provenanc
                     "prior_probe_residual_source_quality_gate": (
                         "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
                     ),
+                    "prior_probe_residual_scale_in_recheck_authority": (
+                        "evaluation_only_full_scale_in_guards_required"
+                    ),
                     "source_quality_gate": "stat_action_snapshot_source_only",
                 },
                 record_id=5,
@@ -7436,6 +7442,9 @@ def test_observation_source_quality_reviews_explicit_postclose_unknown_provenanc
                     ),
                     "prior_probe_residual_source_quality_gate": (
                         "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+                    ),
+                    "prior_probe_residual_scale_in_recheck_authority": (
+                        "evaluation_only_full_scale_in_guards_required"
                     ),
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
@@ -7485,3 +7494,152 @@ def test_observation_source_quality_reviews_explicit_postclose_unknown_provenanc
         "residual_blocked": {"prior_probe_residual_failure_signature"},
         "unexplained_unknown_stage": {"__stage", "unexplained_source"},
     }
+
+
+def test_observation_source_quality_reviews_terminal_causal_and_route_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    causal = {
+        "prior_probe_residual_direction_state": "UNKNOWN",
+        "prior_probe_residual_direction_reason": "post_probe_wait_negative_group",
+        "prior_probe_residual_continuation_action": "DEFER",
+        "prior_probe_residual_abort_reason": "residual_revalidation_timeout",
+        "prior_probe_residual_decision_authority": "causal_attribution_only",
+        "prior_probe_residual_source_quality_gate": (
+            "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+        ),
+        "prior_probe_residual_scale_in_recheck_authority": (
+            "evaluation_only_full_scale_in_guards_required"
+        ),
+    }
+    _write_events(
+        tmp_path,
+        "2026-08-04",
+        [
+            _event(
+                "scale_in_order_submitted",
+                {
+                    **causal,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                },
+                record_id=1,
+            ),
+            _event(
+                "scale_in_feature_context_refresh",
+                {
+                    **causal,
+                    "prior_probe_residual_direction_reason": "-",
+                    "prior_probe_residual_continuation_action": "BLOCK",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=2,
+            ),
+            _event(
+                "scale_in_executed",
+                {
+                    **causal,
+                    "prior_probe_residual_continuation_action": None,
+                    "decision_authority": "broker_receipt_observation_only",
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                },
+                record_id=3,
+            ),
+            _event(
+                "residual_blocked",
+                {
+                    **causal,
+                    "entry_split_probe_terminal_failure_signature": (
+                        "residual_revalidation_timeout|UNKNOWN|"
+                        "post_probe_wait_negative_group|orderbook|0/2"
+                    ),
+                    "entry_split_probe_terminal_abort_reason": (
+                        "residual_revalidation_timeout"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=4,
+            ),
+            _event(
+                "scalping_scanner_ws_backoff_watch_retained",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": "missing_tradable_explicit_venue",
+                    "venue_source_quality_status": "reviewed_fail_closed",
+                    "venue_unknown_reviewed_reason": (
+                        "scanner_runtime_event:explicit_target_venue_missing"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": True,
+                },
+                record_id=5,
+            ),
+            _event(
+                "prev_close_gainer_entry_ai_handoff",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "NXT",
+                    "venue_resolution": (
+                        "rising_missed_initial_gate:session_explicit_conflict:"
+                        "consistent_explicit:stock.effective_venue"
+                    ),
+                    "block_reason": "not_rising_missed_candidate",
+                    "decision_authority": (
+                        "source_routing_to_existing_exact_v2_entry_ai"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": False,
+                },
+                record_id=6,
+            ),
+            _event(
+                "scalp_fast_exit_claimed",
+                {
+                    "fast_exit_ws_0d_route": "unknown",
+                    "fast_exit_broker_route": "SOR",
+                    "fast_exit_route_guard_reason": "krx_sor_route_resolved",
+                    "fast_exit_route_source_quality_blocked": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": False,
+                },
+                record_id=7,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-04")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["scale_in_order_submitted"] == {
+        "prior_probe_residual_direction_state": (
+            "reviewed_prior_probe_residual_source_gap"
+        )
+    }
+    assert (
+        reviewed["residual_blocked"]["entry_split_probe_terminal_failure_signature"]
+        == "reviewed_probe_terminal_failure_signature_source_gap"
+    )
+    assert reviewed["scalping_scanner_ws_backoff_watch_retained"]["venue"] == (
+        "reviewed_scanner_venue_fail_closed_provenance"
+    )
+    assert reviewed["prev_close_gainer_entry_ai_handoff"]["venue"] == (
+        "reviewed_observation_only_venue_not_available"
+    )
+    assert reviewed["scalp_fast_exit_claimed"]["fast_exit_ws_0d_route"] == (
+        "reviewed_legacy_fast_exit_route_provenance"
+    )

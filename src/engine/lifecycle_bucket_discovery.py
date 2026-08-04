@@ -6550,7 +6550,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 f"collecting=`{p.get('keep_collecting_child_count', 0)}` "
                 f"positive_thin=`{p.get('positive_thin_child_count', 0)}` "
                 f"sim_eligible=`{p.get('sim_policy_eligible_after_resolution')}` "
-                f"live_blockers=`{p.get('live_policy_blockers', [])}` "
+                f"live_blockers=`{p.get('live_policy_blockers', [])}`"
             )
     lines.extend(
         [

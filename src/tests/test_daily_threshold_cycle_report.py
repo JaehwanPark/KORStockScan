@@ -2821,6 +2821,15 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
                 ],
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
+                    "runtime_refresh_evidence": {
+                        "runtime_policy_refresh_allowed": True,
+                        "real_outcome_joined_sample": 3,
+                        "additional_mfe_mae_joined_sample": 3,
+                        "price_observation_joined_sample": 4,
+                        "price_observation_join_gap_count": 0,
+                        "price_join_coverage": 1.0,
+                        "blockers": [],
+                    },
                     "policy_file": str(policy_file),
                     "policy_version": "scale_in_split_order_plan:test-counterfactual",
                     "candidates": [

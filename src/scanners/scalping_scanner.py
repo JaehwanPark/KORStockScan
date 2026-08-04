@@ -2429,7 +2429,7 @@ def _merge_candidate(candidate_pool, raw_target, source):
                 raw_target.get("LowReboundDisplayChangeRate")
             )
     elif source == LIMIT_DOWN_LIVE_UNLOCK_SOURCE:
-        current["SourceFamily"] = "limit_down_live_auto_unlock_v1"
+        current["SourceFamily"] = "limit_down_live_auto_trigger_v2"
         current["ScannerWatchBudgetOwner"] = LIMIT_DOWN_ROTATION
         for field in (
             "LimitDownLivePolicyKey",
@@ -2437,8 +2437,11 @@ def _merge_candidate(candidate_pool, raw_target, source):
             "LimitDownLivePolicySourceDate",
             "LimitDownLivePolicyVersion",
             "LimitDownLivePolicySampleCount",
+            "LimitDownLiveTriggerType",
             "LimitDownUnlockConfirmed",
             "LimitDownUnlockConfirmedEpoch",
+            "LimitDownReboundConfirmed",
+            "LimitDownReboundConfirmedEpoch",
             "LimitDownLastTickEpoch",
             "LimitDownLowerLimitPrice",
             "LimitDownBestAsk",
@@ -2446,6 +2449,10 @@ def _merge_candidate(candidate_pool, raw_target, source):
             "LimitDownEntrySpreadPct",
             "LimitDownMaxEntrySpreadPct",
             "LimitDownUnlockFromLowerPct",
+            "LimitDownSessionOpenPrice",
+            "LimitDownSessionLowPrice",
+            "LimitDownReboundFromLowPct",
+            "LimitDownMinReboundFromLowPct",
             "LimitDownCohort",
             "LimitDownPriceBand",
             "LimitDownConsecutiveCount",
@@ -2658,8 +2665,15 @@ def _scanner_candidate_pre_filter_reason(target):
 def _limit_down_live_candidate_block_reason(target, *, now_ts=None):
     if target.get("LimitDownLivePolicyMatched") is not True:
         return "limit_down_live_policy_not_matched"
-    if target.get("LimitDownUnlockConfirmed") is not True:
-        return "limit_down_unlock_not_confirmed"
+    trigger_type = str(target.get("LimitDownLiveTriggerType") or "exact_unlock")
+    if trigger_type == "exact_unlock":
+        if target.get("LimitDownUnlockConfirmed") is not True:
+            return "limit_down_unlock_not_confirmed"
+    elif trigger_type == "near_rebound":
+        if target.get("LimitDownReboundConfirmed") is not True:
+            return "limit_down_rebound_not_confirmed"
+    else:
+        return "limit_down_live_trigger_type_invalid"
     policy_key = str(target.get("LimitDownLivePolicyKey") or "")
     expected_key = f"{target.get('LimitDownCohort')}|{target.get('LimitDownPriceBand')}"
     if not policy_key or policy_key != expected_key:
@@ -2683,9 +2697,21 @@ def _limit_down_live_candidate_block_reason(target, *, now_ts=None):
     best_bid = _safe_positive_int(target.get("LimitDownBestBid"))
     spread_pct = _safe_float(target.get("LimitDownEntrySpreadPct"))
     max_spread_pct = _safe_float(target.get("LimitDownMaxEntrySpreadPct"))
-    if not (
-        current > lower_limit > 0 and best_ask >= current and best_ask >= best_bid > 0
-    ):
+    common_quote_valid = best_ask >= current > 0 and best_ask >= best_bid > 0
+    if trigger_type == "exact_unlock":
+        trigger_quote_valid = current > lower_limit > 0
+    else:
+        session_open = _safe_positive_int(target.get("LimitDownSessionOpenPrice"))
+        session_low = _safe_positive_int(target.get("LimitDownSessionLowPrice"))
+        rebound_pct = _safe_float(target.get("LimitDownReboundFromLowPct"))
+        min_rebound_pct = _safe_float(target.get("LimitDownMinReboundFromLowPct"))
+        trigger_quote_valid = bool(
+            current >= session_open > 0
+            and current > session_low > 0
+            and 0.0 < min_rebound_pct <= 3.0
+            and rebound_pct >= min_rebound_pct
+        )
+    if not (common_quote_valid and trigger_quote_valid):
         return "limit_down_live_quote_contract_invalid"
     if not 0.0 < max_spread_pct <= 1.5:
         return "limit_down_live_spread_cap_invalid"
@@ -3473,9 +3499,15 @@ def _scanner_event_fields(target, source_guard=None):
         "limit_down_live_policy_sample_count": _safe_positive_int(
             target.get("LimitDownLivePolicySampleCount")
         ),
+        "limit_down_live_trigger_type": target.get("LimitDownLiveTriggerType")
+        or "exact_unlock",
         "limit_down_unlock_confirmed": target.get("LimitDownUnlockConfirmed"),
         "limit_down_unlock_confirmed_epoch": _safe_float(
             target.get("LimitDownUnlockConfirmedEpoch")
+        ),
+        "limit_down_rebound_confirmed": target.get("LimitDownReboundConfirmed"),
+        "limit_down_rebound_confirmed_epoch": _safe_float(
+            target.get("LimitDownReboundConfirmedEpoch")
         ),
         "limit_down_last_tick_epoch": _safe_float(target.get("LimitDownLastTickEpoch")),
         "limit_down_lower_limit_price": _safe_positive_int(
@@ -3488,6 +3520,18 @@ def _scanner_event_fields(target, source_guard=None):
         ),
         "limit_down_max_entry_spread_pct": _safe_float(
             target.get("LimitDownMaxEntrySpreadPct")
+        ),
+        "limit_down_session_open_price": _safe_positive_int(
+            target.get("LimitDownSessionOpenPrice")
+        ),
+        "limit_down_session_low_price": _safe_positive_int(
+            target.get("LimitDownSessionLowPrice")
+        ),
+        "limit_down_rebound_from_low_pct": _safe_float(
+            target.get("LimitDownReboundFromLowPct")
+        ),
+        "limit_down_min_rebound_from_low_pct": _safe_float(
+            target.get("LimitDownMinReboundFromLowPct")
         ),
         "limit_down_cohort": target.get("LimitDownCohort") or "",
         "limit_down_price_band": target.get("LimitDownPriceBand") or "",
