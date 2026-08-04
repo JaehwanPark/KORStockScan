@@ -50684,15 +50684,17 @@ def _block_ai_score_50_buy_hold_override_if_needed(
         stock,
         not_evaluated_reason="ai_score_50_buy_hold_override_no_tick_audit",
     )
-    _log_entry_pipeline(
-        stock,
-        code,
-        "blocked_ai_score",
-        threshold=entry_buy_score_threshold,
-        cooldown_sec=cooldown_time,
-        blocked_reason="ai_score_50_buy_hold_override",
-        ai_score_50_buy_hold_override=True,
-        **{
+    pipeline_fields = _merge_entry_pipeline_field_groups(
+        _build_ai_overlap_log_fields(
+            stock=stock,
+            ai_score=current_ai_score,
+            momentum_tag=stock.get("entry_momentum_tag"),
+            threshold_profile=stock.get("entry_threshold_profile"),
+            overbought_blocked=False,
+            blocked_stage="blocked_ai_score",
+        ),
+        ai_ops_fields,
+        {
             **_build_observation_contract_fields("entry_score_prior_provenance"),
             "decision_authority": "entry_score_prior_block_observation_only",
             "source_quality_gate": "blocked_ai_score_entry_score_prior_contract",
@@ -50704,17 +50706,16 @@ def _block_ai_score_50_buy_hold_override_if_needed(
                 "broker order submit,score50_fallback_submit"
             ),
         },
-        **_merge_entry_pipeline_field_groups(
-            _build_ai_overlap_log_fields(
-                stock=stock,
-                ai_score=current_ai_score,
-                momentum_tag=stock.get("entry_momentum_tag"),
-                threshold_profile=stock.get("entry_threshold_profile"),
-                overbought_blocked=False,
-                blocked_stage="blocked_ai_score",
-            ),
-            ai_ops_fields,
-        ),
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "blocked_ai_score",
+        threshold=entry_buy_score_threshold,
+        cooldown_sec=cooldown_time,
+        blocked_reason="ai_score_50_buy_hold_override",
+        ai_score_50_buy_hold_override=True,
+        **pipeline_fields,
     )
     return True
 

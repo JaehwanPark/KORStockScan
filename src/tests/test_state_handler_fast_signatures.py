@@ -7457,6 +7457,48 @@ def test_ai_score_50_buy_hold_override_can_be_disabled(monkeypatch):
     )
 
 
+def test_ai_score_50_buy_hold_override_merges_duplicate_contract_fields(monkeypatch):
+    rules = replace(TRADING_RULES, AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True)
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+    captured = {}
+
+    def fake_log(stock, code, stage, **fields):
+        captured.update(fields)
+        captured["code"] = code
+        captured["stage"] = stage
+
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", fake_log)
+    cooldowns = {}
+
+    blocked = handlers._block_ai_score_50_buy_hold_override_if_needed(
+        stock={"id": 1, "name": "test"},
+        code="005930",
+        current_ai_score=50,
+        ai_decision={
+            "ai_result_source": "live",
+            "metric_role": "untrusted_ai_payload_role",
+            "decision_authority": "untrusted_ai_payload_authority",
+            "source_quality_gate": "untrusted_ai_payload_gate",
+        },
+        config={"AI_WAIT_DROP_COOLDOWN": 30, "BUY_SCORE_THRESHOLD": 75},
+        cooldowns=cooldowns,
+        now_ts=123.0,
+    )
+
+    assert blocked is True
+    assert cooldowns["005930"] == 153.0
+    assert captured["stage"] == "blocked_ai_score"
+    assert captured["metric_role"] == "entry_score_prior_provenance"
+    assert captured["decision_authority"] == (
+        "entry_score_prior_block_observation_only"
+    )
+    assert captured["source_quality_gate"] == (
+        "blocked_ai_score_entry_score_prior_contract"
+    )
+    assert captured["actual_order_submitted"] is False
+    assert captured["broker_order_forbidden"] is True
+
+
 def test_watching_buy_analysis_telegram_suppresses_sim_and_probe_context():
     assert _should_publish_watching_buy_analysis_telegram(
         {"scalp_live_simulator": True},
