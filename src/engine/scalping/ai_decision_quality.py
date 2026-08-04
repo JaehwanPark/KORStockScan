@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+    DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION,
     DECISION_QUALITY_V2_9_1_ANTICIPATORY_PROMPT_VERSION,
@@ -34,6 +35,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
+    decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
     decision_quality_v2_9_anticipatory_system_prompt,
@@ -6220,10 +6222,18 @@ def prepare_paired_replay_requests(
             for trace_key, control_key in signature_fields
         ):
             continue
-        candidate_prompt = decision_quality_v2_system_prompt(stage)
+        candidate_prompt = (
+            decision_quality_holding_v2_3_system_prompt()
+            if stage == "holding"
+            else decision_quality_v2_system_prompt(stage)
+        )
         replay_payload = _replay_exact_payload(payload.get("sanitized_user_input"))
         candidate = {
-            "prompt_version": f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{stage}",
+            "prompt_version": (
+                DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
+                if stage == "holding"
+                else f"{DECISION_QUALITY_V2_PROMPT_VERSION}_{stage}"
+            ),
             "system_prompt": candidate_prompt,
             "system_prompt_sha256": _sha256(candidate_prompt),
             "response_schema": DECISION_QUALITY_V2_RESPONSE_SCHEMA,
@@ -6233,45 +6243,53 @@ def prepare_paired_replay_requests(
             "temperature": trace.get("request_temperature"),
             "reasoning_effort": trace.get("request_reasoning_effort"),
         }
+        if stage == "holding":
+            candidate["semantic_validator_version"] = HOLDING_SEMANTIC_VALIDATOR_VERSION
         candidate["contract_sha256"] = _candidate_contract_sha256(candidate)
-        requests.append(
-            {
-                "paired_replay_id": f"pair-{_sha256((trace_id, trace.get('payload_sha256')))[:24]}",
-                "decision_trace_id": trace_id,
-                "stage": stage,
-                "stock_code": label.get("stock_code"),
-                "effective_venue": trace.get("effective_venue"),
-                "session_bucket": trace.get("session_bucket"),
-                "reference_price_type": trace.get("reference_price_type"),
-                "reference_price": trace.get("reference_price"),
-                "best_bid": trace.get("best_bid"),
-                "best_ask": trace.get("best_ask"),
-                "payload_sha256": trace.get("payload_sha256"),
+        request = {
+            "paired_replay_id": f"pair-{_sha256((trace_id, trace.get('payload_sha256')))[:24]}",
+            "decision_trace_id": trace_id,
+            "stage": stage,
+            "stock_code": label.get("stock_code"),
+            "effective_venue": trace.get("effective_venue"),
+            "session_bucket": trace.get("session_bucket"),
+            "reference_price_type": trace.get("reference_price_type"),
+            "reference_price": trace.get("reference_price"),
+            "best_bid": trace.get("best_bid"),
+            "best_ask": trace.get("best_ask"),
+            "payload_sha256": trace.get("payload_sha256"),
+            "exact_payload": replay_payload,
+            "control": {
+                "prompt_version": control.get("prompt_version"),
+                "prompt_sha256": control.get("prompt_sha256"),
+                "provider": control.get("provider_actual"),
+                "model": control.get("model"),
+                "temperature": control.get("request_temperature"),
+                "reasoning_effort": control.get("request_reasoning_effort"),
+                "captured_action": trace.get("action"),
+                "captured_score": trace.get("score"),
+                "captured_reason": trace.get("reason"),
+                "captured_edge_state": trace.get("decision_quality_model_edge_state"),
+                "captured_evidence": trace.get("decision_quality_model_evidence"),
+                "captured_entry_probe_intent": trace.get("entry_probe_intent"),
+                "captured_entry_probe_intent_status": trace.get(
+                    "entry_probe_intent_status"
+                ),
+            },
+            "candidate": candidate,
+            "outcome_join_key": label.get("label_id"),
+            **OFFLINE_CONTRACT,
+        }
+        if stage == "holding":
+            candidate_input = {
                 "exact_payload": replay_payload,
-                "control": {
-                    "prompt_version": control.get("prompt_version"),
-                    "prompt_sha256": control.get("prompt_sha256"),
-                    "provider": control.get("provider_actual"),
-                    "model": control.get("model"),
-                    "temperature": control.get("request_temperature"),
-                    "reasoning_effort": control.get("request_reasoning_effort"),
-                    "captured_action": trace.get("action"),
-                    "captured_score": trace.get("score"),
-                    "captured_reason": trace.get("reason"),
-                    "captured_edge_state": trace.get(
-                        "decision_quality_model_edge_state"
-                    ),
-                    "captured_evidence": trace.get("decision_quality_model_evidence"),
-                    "captured_entry_probe_intent": trace.get("entry_probe_intent"),
-                    "captured_entry_probe_intent_status": trace.get(
-                        "entry_probe_intent_status"
-                    ),
-                },
-                "candidate": candidate,
-                "outcome_join_key": label.get("label_id"),
-                **OFFLINE_CONTRACT,
+                "holding_exact_contract_facts_v1": _holding_contract_facts(
+                    replay_payload
+                ),
             }
-        )
+            request["candidate_input"] = candidate_input
+            request["candidate_input_sha256"] = _sha256(candidate_input)
+        requests.append(request)
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for request in requests:
         grouped[
@@ -7618,11 +7636,6 @@ def build_paired_replay_report(
             "candidate_ev_positive": bucket_candidate_primary_ev > 0,
             "missed_upside_reduced": bucket_missed_upside_reduction > 0,
             "new_missed_upside_not_increased": bucket_new_missed_upside == 0,
-            "candidate_probe_cost_adjusted_ev_positive": (
-                bucket_probe_cost_adjusted_ev is not None
-                and bucket_probe_cost_adjusted_ev > 0
-            ),
-            "candidate_probe_loss_budget_within_cap": bucket_probe_loss_budget_pass,
             "severe_tail_adverse_not_increased": (
                 bucket_candidate_severe_tail <= bucket_control_severe_tail
             ),
@@ -7632,6 +7645,18 @@ def build_paired_replay_report(
             "candidate_action_not_collapsed": bucket_dominant_action_ratio <= 0.90,
             "candidate_exposure_sample_floor_pass": bucket_exposure_floor_pass,
         }
+        if stage == "entry":
+            bucket_quality_checks.update(
+                {
+                    "candidate_probe_cost_adjusted_ev_positive": (
+                        bucket_probe_cost_adjusted_ev is not None
+                        and bucket_probe_cost_adjusted_ev > 0
+                    ),
+                    "candidate_probe_loss_budget_within_cap": (
+                        bucket_probe_loss_budget_pass
+                    ),
+                }
+            )
         bucket_diagnostic_checks = {
             "adverse_first_exposure_not_increased": (
                 bucket_candidate_adverse_exposure <= bucket_control_adverse_exposure
@@ -8095,6 +8120,7 @@ def build_paired_replay_report(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    quality_stages = {str(row.get("stage") or "unknown") for row in comparable_rows}
     quality_checks = {
         "all_pairs_comparable": bool(requests)
         and len(comparable_rows) == len(requests),
@@ -8107,11 +8133,6 @@ def build_paired_replay_report(
         ),
         "missed_upside_reduced": missed_upside_reduction_count > 0,
         "new_missed_upside_not_increased": new_missed_upside_count == 0,
-        "candidate_probe_cost_adjusted_ev_positive": (
-            candidate_probe_cost_adjusted_ev is not None
-            and candidate_probe_cost_adjusted_ev > 0
-        ),
-        "candidate_probe_loss_budget_within_cap": candidate_probe_loss_budget_pass,
         "severe_tail_adverse_not_increased": (
             candidate_probe_severe_tail_count <= control_probe_severe_tail_count
         ),
@@ -8126,6 +8147,18 @@ def build_paired_replay_report(
         "all_stage_venue_buckets_quality_pass": bool(buckets)
         and all(row["candidate_quality_gate_pass"] for row in buckets),
     }
+    if quality_stages == {"entry"}:
+        quality_checks.update(
+            {
+                "candidate_probe_cost_adjusted_ev_positive": (
+                    candidate_probe_cost_adjusted_ev is not None
+                    and candidate_probe_cost_adjusted_ev > 0
+                ),
+                "candidate_probe_loss_budget_within_cap": (
+                    candidate_probe_loss_budget_pass
+                ),
+            }
+        )
     diagnostic_checks = {
         "adverse_first_exposure_not_increased": (
             candidate_adverse_first_exposure_count

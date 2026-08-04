@@ -4714,6 +4714,145 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     assert bucket["candidate_quality_gate_pass"] is False
 
 
+def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():
+    trace = {
+        **_trace(action="EXIT"),
+        "decision_stage": "holding",
+        "endpoint": "holding_score",
+        "prompt_version": "holding_score_v2",
+        "prompt_sha256": "holding-prompt-1",
+    }
+    exact_payload = {
+        "position_context": {"buy_qty": 2, "buy_price": 100},
+        "holding_decision_context": {
+            "schema": quality.HOLDING_CONTEXT_SCHEMA,
+            "execution_pnl": {
+                "estimated_net_executable_pnl_pct": -0.2,
+                "executable_sell_price": 99,
+            },
+            "position_lifecycle": {"remaining_qty": 2},
+            "order_reconciliation": {
+                "position_valid": True,
+                "order_consistent": True,
+            },
+            "source_quality": {
+                "status": "fresh_consistent",
+                "candle_status": "fresh_consistent",
+                "bbo_fresh": True,
+                "position_valid": True,
+                "order_consistent": True,
+            },
+            "candle": {
+                "completed_bar_count": 1,
+                "bars": [{"is_forming": False, "close": 101}],
+            },
+        },
+    }
+    payload = {**_payload(), "sanitized_user_input": exact_payload}
+    label = {
+        **_pending(action="EXIT"),
+        "decision_stage": "holding",
+        "label_status": "mature",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "30m": {
+                "end_return_pct": 0.5,
+                "mfe_pct": 1.0,
+                "mae_pct": -0.3,
+                "first_hit": "target",
+            }
+        },
+    }
+    control_manifest = {
+        "status": "control_manifest_frozen_collect_exact_samples",
+        "controls": [
+            {
+                "endpoint": "holding_score",
+                "prompt_version": "holding_score_v2",
+                "prompt_sha256": "holding-prompt-1",
+                "provider_actual": "openai",
+                "model": "gpt-test",
+                "request_temperature": 0,
+                "request_reasoning_effort": "medium",
+            }
+        ],
+    }
+
+    requests = quality.prepare_paired_replay_requests(
+        control_manifest=control_manifest,
+        traces=[trace],
+        payloads=[payload],
+        labels=[label],
+    )
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request["candidate"]["prompt_version"] == (
+        quality.DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
+    )
+    assert request["candidate"]["semantic_validator_version"] == (
+        quality.HOLDING_SEMANTIC_VALIDATOR_VERSION
+    )
+    assert "Holding decision rules:" in request["candidate"]["system_prompt"]
+    assert request["candidate_input"]["exact_payload"] == exact_payload
+    assert (
+        request["candidate_input"]["holding_exact_contract_facts_v1"][
+            "position_observed"
+        ]
+        is True
+    )
+    assert request["candidate_input_sha256"] == quality._sha256(
+        request["candidate_input"]
+    )
+    assert request["runtime_effect"] is False
+    assert request["actual_order_submitted"] is False
+
+    response = {
+        "edge_state": "EDGE",
+        "action": "HOLD",
+        "expected_upside_pct": 1.0,
+        "expected_downside_pct": -0.5,
+        "confidence": 70,
+        "reason_codes": ["continuation_supported", "risk_reward_favorable"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "mixed",
+            "tape": "mixed",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "not_applicable",
+        },
+    }
+    results = quality.run_paired_replay(
+        requests,
+        control_runner=lambda request: {"action": "EXIT"},
+        candidate_runner=lambda request: response,
+    )
+    report = quality.build_paired_replay_report(
+        target_date="2026-07-27",
+        requests=requests,
+        results=results,
+        labels=[label],
+    )
+
+    assert (
+        "candidate_probe_cost_adjusted_ev_positive"
+        not in report["candidate_quality_checks"]
+    )
+    assert (
+        "candidate_probe_loss_budget_within_cap"
+        not in report["candidate_quality_checks"]
+    )
+    assert (
+        "candidate_probe_cost_adjusted_ev_positive"
+        not in report["buckets"][0]["candidate_quality_checks"]
+    )
+
+
 def test_paired_replay_consumes_tight_stop_entry_path_label():
     report = quality.build_paired_replay_report(
         target_date="2026-07-27",
