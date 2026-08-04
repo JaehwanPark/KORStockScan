@@ -2854,6 +2854,151 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
     }
 
 
+def _real_scale_in_execution_record(
+    row: dict[str, Any], fields: dict[str, Any]
+) -> dict[str, Any] | None:
+    if str(row.get("stage") or "") != "scale_in_executed":
+        return None
+    if not _boolish(fields.get("actual_order_submitted")) or _boolish(
+        fields.get("broker_order_forbidden")
+    ):
+        return None
+    order_no = str(fields.get("order_no") or fields.get("ord_no") or "").strip()
+    fill_price = _safe_float(fields.get("fill_price"), 0.0) or 0.0
+    fill_qty = int(_safe_float(fields.get("fill_qty"), 0) or 0)
+    if not order_no or fill_price <= 0 or fill_qty <= 0:
+        return None
+    add_type = str(fields.get("add_type") or "").strip().upper()
+    add_reason = str(fields.get("add_reason") or "").strip()
+    return {
+        "position_key": _record_key(row, fields),
+        "record_id": row.get("record_id"),
+        "stock_code": str(row.get("stock_code") or ""),
+        "stock_name": str(row.get("stock_name") or ""),
+        "order_no": order_no,
+        "executed_at": row.get("emitted_at"),
+        "add_type": add_type or "UNKNOWN",
+        "add_reason": add_reason or "-",
+        "scale_in_outcome_cohort": (
+            "winner_recovery"
+            if add_reason == "post_probe_winner_recovery_first_leg"
+            else "avg_down"
+            if add_type == "AVG_DOWN"
+            else "normal_pyramid"
+            if add_type == "PYRAMID"
+            else "unknown"
+        ),
+        "fill_price": round(fill_price, 4),
+        "fill_qty": fill_qty,
+        "fill_notional_krw": round(fill_price * fill_qty, 4),
+        "post_add_avg_price": _safe_float(fields.get("new_avg_price"), None),
+        "post_add_position_qty": int(
+            _safe_float(fields.get("new_buy_qty"), 0) or 0
+        ),
+        "closed": False,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "real_scale_in_execution_outcome_observation_only",
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _update_real_scale_in_outcome(
+    item: dict[str, Any], row: dict[str, Any]
+) -> None:
+    emitted_epoch = _event_epoch(row.get("emitted_at"))
+    executed_epoch = _event_epoch(item.get("executed_at"))
+    if (
+        emitted_epoch is None
+        or executed_epoch is None
+        or emitted_epoch < executed_epoch
+        or row.get("pipeline") != "HOLDING_PIPELINE"
+    ):
+        return
+    fields = _fields(row)
+    profit_rate = _safe_float(fields.get("profit_rate"), None)
+    if profit_rate is not None:
+        item["latest_position_profit_pct"] = round(profit_rate, 4)
+        item["latest_position_profit_at"] = row.get("emitted_at")
+    if str(row.get("stage") or "") != "sell_completed":
+        return
+    sell_price = _safe_float(fields.get("sell_price"), None)
+    item["closed"] = profit_rate is not None
+    item["sell_completed_at"] = row.get("emitted_at")
+    item["final_position_profit_pct"] = profit_rate
+    item["sell_price"] = sell_price
+    fill_price = _safe_float(item.get("fill_price"), 0.0) or 0.0
+    if sell_price is not None and fill_price > 0:
+        item["scale_in_leg_gross_return_proxy_pct"] = round(
+            ((sell_price - fill_price) / fill_price) * 100.0,
+            4,
+        )
+
+
+def _real_scale_in_performance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = [item for item in rows if item.get("closed")]
+    active = [item for item in rows if not item.get("closed")]
+
+    def dimension_items(cohort: str) -> dict[str, Any]:
+        cohort_rows = [
+            item for item in rows if item.get("scale_in_outcome_cohort") == cohort
+        ]
+        cohort_closed = [item for item in cohort_rows if item.get("closed")]
+        values = [
+            _safe_float(item.get("final_position_profit_pct"), 0.0) or 0.0
+            for item in cohort_closed
+        ]
+        return {
+            "execution_count": len(cohort_rows),
+            "closed_count": len(cohort_closed),
+            "active_unrealized_count": len(cohort_rows) - len(cohort_closed),
+            "closed_winner_count": sum(1 for value in values if value > 0),
+            "closed_loss_or_flat_count": sum(1 for value in values if value <= 0),
+            "equal_weight_avg_final_position_profit_pct": (
+                round(sum(values) / len(values), 4) if values else None
+            ),
+            "runtime_apply_authority": False,
+        }
+
+    by_cohort = {
+        cohort: dimension_items(cohort)
+        for cohort in ("winner_recovery", "normal_pyramid", "avg_down", "unknown")
+    }
+    return {
+        "execution_count": len(rows),
+        "closed_count": len(closed),
+        "active_unrealized_count": len(active),
+        "winner_recovery_execution_count": by_cohort["winner_recovery"][
+            "execution_count"
+        ],
+        "normal_pyramid_execution_count": by_cohort["normal_pyramid"][
+            "execution_count"
+        ],
+        "avg_down_execution_count": by_cohort["avg_down"]["execution_count"],
+        "winner_recovery_qty_cap_invalid_count": sum(
+            1
+            for item in rows
+            if item.get("scale_in_outcome_cohort") == "winner_recovery"
+            and not item.get("winner_recovery_qty_cap_valid")
+        ),
+        "winner_expansion_vs_avg_down_asymmetry_observed": bool(
+            by_cohort["winner_recovery"]["execution_count"] == 0
+            and by_cohort["normal_pyramid"]["execution_count"] == 0
+            and by_cohort["avg_down"]["execution_count"] > 0
+        ),
+        "by_outcome_cohort": by_cohort,
+        "completed_outcome_available": bool(closed),
+        "source_quality_adjusted_ev_available": False,
+        "source_quality_adjusted_ev_unavailable_reason": (
+            "realized_pnl_krw_and_cost_adjusted_incremental_leg_outcome_missing"
+            if closed
+            else "no_closed_scale_in_position"
+        ),
+    }
+
+
 def build_report(
     target_date: str,
     *,
@@ -2870,12 +3015,49 @@ def build_report(
     one_share_records: dict[str, dict[str, Any]] = {}
     one_share_plans: dict[str, dict[str, Any]] = {}
     real_entry_lifecycle_records: dict[str, dict[str, Any]] = {}
+    real_scale_in_records: dict[str, dict[str, Any]] = {}
 
     for row in iter_jsonl(pipeline_path):
         fields = _fields(row)
         key = _record_key(row, fields)
         if not key:
             continue
+        real_scale_in = _real_scale_in_execution_record(row, fields)
+        if real_scale_in:
+            execution_key = f"{key}:{real_scale_in['order_no']}"
+            existing_execution = real_scale_in_records.get(execution_key)
+            if existing_execution is None:
+                real_scale_in_records[execution_key] = real_scale_in
+            else:
+                prior_notional = _safe_float(
+                    existing_execution.get("fill_notional_krw"), 0.0
+                ) or 0.0
+                prior_qty = int(
+                    _safe_float(existing_execution.get("fill_qty"), 0) or 0
+                )
+                added_notional = _safe_float(
+                    real_scale_in.get("fill_notional_krw"), 0.0
+                ) or 0.0
+                added_qty = int(_safe_float(real_scale_in.get("fill_qty"), 0) or 0)
+                combined_qty = prior_qty + added_qty
+                combined_notional = prior_notional + added_notional
+                existing_execution.update(
+                    {
+                        "fill_qty": combined_qty,
+                        "fill_notional_krw": round(combined_notional, 4),
+                        "fill_price": (
+                            round(combined_notional / combined_qty, 4)
+                            if combined_qty > 0
+                            else 0.0
+                        ),
+                        "post_add_avg_price": real_scale_in.get(
+                            "post_add_avg_price"
+                        ),
+                        "post_add_position_qty": real_scale_in.get(
+                            "post_add_position_qty"
+                        ),
+                    }
+                )
         if str(row.get("stage") or "") in _REAL_ENTRY_LIFECYCLE_STAGES:
             lifecycle_item = real_entry_lifecycle_records.setdefault(
                 key, _real_entry_lifecycle_record(row)
@@ -2978,6 +3160,16 @@ def build_report(
             if "submit" in stage or "receipt" in stage or "submitted" in stage:
                 _update_submit(one_share_records[key], row)
 
+    real_scale_in_by_position: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in real_scale_in_records.values():
+        real_scale_in_by_position[str(item.get("position_key") or "")].append(item)
+    if real_scale_in_by_position:
+        for row in iter_jsonl(pipeline_path):
+            fields = _fields(row)
+            key = _record_key(row, fields)
+            for item in real_scale_in_by_position.get(key, []):
+                _update_real_scale_in_outcome(item, row)
+
     # JSONL writes from independent workers can be physically out of timestamp
     # order. A pyramid event whose own event time is after the terminal sell is
     # not a lifecycle candidate even when it appeared earlier in the file.
@@ -3076,6 +3268,21 @@ def build_report(
             str(item.get("record_id") or ""),
         )
     )
+    real_scale_in_rows = sorted(
+        real_scale_in_records.values(),
+        key=lambda item: (
+            str(item.get("executed_at") or ""),
+            str(item.get("record_id") or ""),
+            str(item.get("order_no") or ""),
+        ),
+    )
+    for item in real_scale_in_rows:
+        winner_recovery = item.get("scale_in_outcome_cohort") == "winner_recovery"
+        item["winner_recovery_qty_cap"] = 1 if winner_recovery else None
+        item["winner_recovery_qty_cap_valid"] = bool(
+            not winner_recovery
+            or int(_safe_float(item.get("fill_qty"), 0) or 0) <= 1
+        )
 
     label_counts = Counter(
         str(item.get("pyramid_feedback_label") or "unknown") for item in rows
@@ -3085,6 +3292,15 @@ def build_report(
     normal_winner_expansion_summary = _normal_winner_expansion_summary(one_share_rows)
     real_entry_lifecycle_summary = _real_entry_lifecycle_summary(
         real_entry_lifecycle_rows
+    )
+    real_scale_in_performance_summary = _real_scale_in_performance_summary(
+        real_scale_in_rows
+    )
+    winner_recovery_qty_cap_invalid_count = int(
+        real_scale_in_performance_summary.get(
+            "winner_recovery_qty_cap_invalid_count", 0
+        )
+        or 0
     )
     pressure_provenance_missing_count = _pressure_provenance_missing_count(
         rows + one_share_rows
@@ -3116,6 +3332,8 @@ def build_report(
         source_quality_status = "micro_vwap_provenance_missing"
     if micro_vwap_provenance_unusable_count:
         source_quality_status = "micro_vwap_provenance_unusable"
+    if winner_recovery_qty_cap_invalid_count:
+        source_quality_status = "winner_recovery_qty_cap_invalid"
     return {
         "schema_version": 4,
         "report_type": REPORT_TYPE,
@@ -3220,6 +3438,18 @@ def build_report(
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
+        "real_scale_in_performance_metric_contract": {
+            "metric_role": "real_scale_in_execution_outcome_attribution",
+            "decision_authority": "real_scale_in_execution_outcome_observation_only",
+            "window_policy": "scale_in_execution_to_same_position_terminal_sell",
+            "sample_floor": "rolling_closed_real_scale_in_positions_ge_20",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": (
+                "record_and_order_joined_real_scale_in_fill_then_terminal_sell; "
+                "active positions remain unrealized and leg return is gross proxy only"
+            ),
+            "forbidden_uses": FORBIDDEN_USES,
+        },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "pyramid_threshold_provenance": pyramid_threshold_provenance,
         "source_quality": {
@@ -3244,6 +3474,9 @@ def build_report(
                 residual_fill_attribution_invalid_count
             ),
             "temporal_inversion_candidate_count": temporal_inversion_candidate_count,
+            "winner_recovery_qty_cap_invalid_count": (
+                winner_recovery_qty_cap_invalid_count
+            ),
         },
         "summary": {
             "pyramid_feedback_row_count": len(rows),
@@ -3279,11 +3512,13 @@ def build_report(
             **one_share_opportunity_summary,
             "normal_winner_expansion": normal_winner_expansion_summary,
             "whole_day_real_entry_lifecycle": real_entry_lifecycle_summary,
+            "real_scale_in_performance": real_scale_in_performance_summary,
         },
         "blocker_metrics": blocker_metrics,
         "pyramid_feedback_rows": rows[:300],
         "one_share_pyramid_opportunity_rows": one_share_rows,
         "whole_day_real_entry_lifecycle_rows": real_entry_lifecycle_rows,
+        "real_scale_in_performance_rows": real_scale_in_rows,
         "normal_winner_expansion_rows": [
             {
                 key: item.get(key)
@@ -3395,6 +3630,7 @@ def write_outputs(
         f"- probe_residual_pyramid_evaluation_seen_count: {summary.get('probe_residual_pyramid_evaluation_seen_count')}",
         f"- normal_winner_expansion: {json.dumps(summary.get('normal_winner_expansion') or {}, ensure_ascii=False, sort_keys=True)}",
         f"- whole_day_real_entry_lifecycle: {json.dumps(summary.get('whole_day_real_entry_lifecycle') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- real_scale_in_performance: {json.dumps(summary.get('real_scale_in_performance') or {}, ensure_ascii=False, sort_keys=True)}",
         f"- pyramid_min_profit_pct: {(report.get('pyramid_threshold_provenance') or {}).get('selected_min_profit_pct')}",
         f"- pyramid_threshold_source: {(report.get('pyramid_threshold_provenance') or {}).get('selection_source')}",
         "",
@@ -3416,6 +3652,28 @@ def write_outputs(
             "blocker={scale_in_blocker_reason} profit={profit_rate} final={final_profit_rate} "
             "ai={current_ai_score} tick={tick_acceleration_ratio} micro_vwap={curr_vs_micro_vwap_bp}".format(
                 **{**item, "final_profit_rate": item.get("final_profit_rate")}
+            )
+        )
+    lines.extend(["", "## Real Scale-In Performance Rows", ""])
+    for item in report.get("real_scale_in_performance_rows") or []:
+        lines.append(
+            "- record_id={record_id} code={stock_code} name={stock_name} "
+            "cohort={scale_in_outcome_cohort} type={add_type} reason={add_reason} "
+            "fill={fill_price}x{fill_qty} closed={closed} latest={latest_position_profit_pct} "
+            "final={final_position_profit_pct} leg_gross_proxy={scale_in_leg_gross_return_proxy_pct}".format(
+                **{
+                    **item,
+                    "closed": bool(item.get("closed")),
+                    "latest_position_profit_pct": item.get(
+                        "latest_position_profit_pct"
+                    ),
+                    "final_position_profit_pct": item.get(
+                        "final_position_profit_pct"
+                    ),
+                    "scale_in_leg_gross_return_proxy_pct": item.get(
+                        "scale_in_leg_gross_return_proxy_pct"
+                    ),
+                }
             )
         )
     lines.extend(["", "## One Share Opportunity Rows", ""])

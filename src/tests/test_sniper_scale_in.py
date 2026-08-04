@@ -17879,6 +17879,416 @@ def test_post_probe_soft_abort_recovery_is_observed_without_order_authority(
     assert stock["entry_split_probe_scale_in_recheck_allowed"] is True
 
 
+def test_post_probe_recovery_does_not_double_count_tick_and_candle_group(
+    monkeypatch,
+):
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda *a, **k: None)
+    base_ts = time.time()
+    stock = {
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "entry_split_probe_terminal_at": base_ts - 1.0,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "last_reversal_features": {
+            "buy_pressure_10t": 55.0,
+            "tick_aggressor_trusted_count": 5,
+            "tick_aggressor_pressure_usable": True,
+            "tick_acceleration_ratio": 1.2,
+            "curr_vs_micro_vwap_bp": 12.0,
+            "micro_vwap_available": True,
+            "minute_candle_window_fresh": True,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh",
+            "tick_context_stale": False,
+            "quote_stale": False,
+            "feature_extracted_at": base_ts,
+        },
+    }
+
+    result = state_handlers._observe_post_probe_hard_abort_recovery(
+        stock,
+        "123456",
+        strategy="SCALPING",
+        curr_price=10100,
+        profit_rate=1.0,
+        peak_profit=1.0,
+        current_ai_score=70,
+        held_sec=10,
+        now_ts=base_ts,
+    )
+
+    assert result["eligible"] is False
+    assert result["confirmation_count"] == 0
+
+
+def test_post_probe_winner_recovery_selects_one_share_first_leg(monkeypatch):
+    base_ts = time.time()
+    active_date = datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED", "true"
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "status": "HOLDING",
+        "effective_venue": "KRX",
+        "buy_qty": 1,
+        "avg_down_count": 0,
+        "pyramid_count": 0,
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_scale_in_forbidden": False,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 2,
+    }
+    pyramid_probe = {
+        "should_add": False,
+        "reason": "rising_missed_scout_pyramid_bridge_blocked:profit_not_enough",
+        "rising_missed_scout_pyramid_bridge_blockers": "profit_not_enough",
+        "pyramid_quality_hard_blockers": "-",
+    }
+
+    result = state_handlers._evaluate_post_probe_winner_recovery_scale_in(
+        stock,
+        "123456",
+        now_ts=base_ts,
+        profit_rate=0.25,
+        peak_profit=0.30,
+        current_ai_score=68,
+        held_sec=15,
+        pyramid_probe=pyramid_probe,
+    )
+
+    assert result["handled"] is True
+    assert result["action"]["reason"] == "post_probe_winner_recovery_first_leg"
+    assert result["action"]["add_type"] == "PYRAMID"
+    assert result["action"]["post_probe_winner_recovery_qty_cap"] == 1
+    assert result["action"]["runtime_effect"] is True
+    assert logs[-1][0] == "post_probe_winner_recovery_selected"
+    assert logs[-1][1]["actual_order_submitted"] is False
+
+
+@pytest.mark.parametrize(
+    ("stock_update", "expected_reason"),
+    [
+        ({"avg_down_count": 1}, "avg_down_already_used"),
+        (
+            {"_post_probe_hard_abort_recovery_confirmation_count": 1},
+            "recovery_confirmation_not_ready",
+        ),
+    ],
+)
+def test_post_probe_winner_recovery_blocks_avg_down_or_unconfirmed_lane(
+    monkeypatch, stock_update, expected_reason
+):
+    base_ts = time.time()
+    active_date = datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "effective_venue": "KRX",
+        "avg_down_count": 0,
+        "pyramid_count": 0,
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_scale_in_forbidden": False,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 2,
+        **stock_update,
+    }
+
+    result = state_handlers._evaluate_post_probe_winner_recovery_scale_in(
+        stock,
+        "123456",
+        now_ts=base_ts,
+        profit_rate=0.2,
+        peak_profit=0.3,
+        current_ai_score=68,
+        held_sec=15,
+        pyramid_probe={
+            "should_add": False,
+            "reason": "rising_missed_scout_pyramid_bridge_blocked:profit_not_enough",
+            "rising_missed_scout_pyramid_bridge_blockers": "profit_not_enough",
+        },
+    )
+
+    assert result["handled"] is True
+    assert result["action"] is None
+    assert logs[-1][0] == "post_probe_winner_recovery_blocked"
+    assert logs[-1][1]["post_probe_winner_recovery_block_reason"] == expected_reason
+
+
+def test_post_probe_winner_recovery_dated_cohort_fails_closed(monkeypatch):
+    base_ts = time.time()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", "1999-01-01"
+    )
+
+    config = state_handlers._post_probe_winner_recovery_runtime_config(
+        {"effective_venue": "KRX"},
+        now_ts=base_ts,
+    )
+    unknown = state_handlers._post_probe_winner_recovery_runtime_config(
+        {"effective_venue": "SOR"},
+        now_ts=base_ts,
+    )
+
+    assert config["active"] is False
+    assert config["reason"] == "active_date_missing_or_mismatch"
+    assert unknown["active"] is False
+    assert unknown["effective_venue"] == "UNKNOWN"
+
+
+def test_post_probe_winner_recovery_lock_bypass_is_once_per_evidence_version():
+    stock = {
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "_post_probe_hard_abort_recovery_state": "STRONG",
+        "_post_probe_hard_abort_recovery_confirmation_count": 2,
+        "_post_probe_hard_abort_recovery_accepted_signature": "evidence-v2",
+    }
+    config = {"active": True}
+
+    assert (
+        state_handlers._post_probe_winner_recovery_gate_recheck_due(stock, config)
+        is True
+    )
+    stock["_post_probe_winner_recovery_gate_bypass_signature"] = "evidence-v2"
+    assert (
+        state_handlers._post_probe_winner_recovery_gate_recheck_due(stock, config)
+        is False
+    )
+    stock["_post_probe_hard_abort_recovery_accepted_signature"] = "evidence-v3"
+    assert (
+        state_handlers._post_probe_winner_recovery_gate_recheck_due(stock, config)
+        is True
+    )
+
+
+def test_active_winner_recovery_lane_preserves_separately_guarded_avg_down(
+    monkeypatch,
+):
+    base_ts = time.time()
+    active_date = datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_refresh_scale_in_reversal_features_if_needed",
+        lambda **kwargs: (kwargs["ws_data"], {}),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_scalping_micro_estimator_log_fields",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_score_runtime_context",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_real_stop_line_avg_down_ai_score_submit_authority",
+        lambda **kwargs: {"allowed": True},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_pyramid",
+        lambda *args, **kwargs: {
+            "should_add": False,
+            "reason": "rising_missed_scout_pyramid_bridge_blocked:profit_not_enough",
+            "rising_missed_scout_pyramid_bridge_blockers": "profit_not_enough",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_pyramid_runtime_prior_context",
+        lambda *args, **kwargs: {"pyramid_runtime_prior_context": {}},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_evaluate_shallow_source_gap_recheck",
+        lambda **kwargs: {
+            "should_add": True,
+            "add_type": "AVG_DOWN",
+            "reason": "late_loss_avg_down_retry",
+        },
+    )
+    stock = {
+        "status": "HOLDING",
+        "effective_venue": "KRX",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "avg_down_count": 0,
+        "pyramid_count": 0,
+        "entry_split_probe_soft_abort": True,
+        "entry_split_probe_scale_in_recheck_allowed": True,
+        "entry_split_probe_scale_in_forbidden": False,
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "_post_probe_hard_abort_recovery_state": "WEAK",
+        "_post_probe_hard_abort_recovery_confirmation_count": 0,
+    }
+
+    result = state_handlers._evaluate_scale_in_signal(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        market_regime="NORMAL",
+        profit_rate=-0.5,
+        peak_profit=0.1,
+        curr_price=9950,
+        ws_data={"curr": 9950},
+        current_ai_score=68,
+        held_sec=30,
+        ai_engine=object(),
+        now_ts=base_ts,
+    )
+
+    assert result["add_type"] == "AVG_DOWN"
+    assert result["reason"] == "late_loss_avg_down_retry"
+
+
+def test_winner_recovery_first_leg_stage_cap_limits_dynamic_sizing(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        MAX_POSITION_PCT=1.0,
+    )
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock={
+            "strategy": "SCALPING",
+            "buy_qty": 1,
+            "buy_price": 10000,
+            "initial_buy_qty": 10,
+            "source_signature": "RISING_MISSED",
+            "effective_venue": "KRX",
+            "scalping_sizing_tier": 5,
+            "scalping_sizing_formula_version": "entry_type_5stage_cap25_v1",
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+            "holding_score_effective": 68,
+            "last_reversal_features": {
+                "buy_pressure_10t": 72,
+                "tick_acceleration_ratio": 1.2,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 10,
+                "tick_aggressor_trusted_count": 5,
+                "tick_aggressor_pressure_usable": True,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "tick_context_quality": "fresh",
+                "tick_context_stale": False,
+                "quote_stale": False,
+            },
+        },
+        resolved_price=10000,
+        deposit=1_000_000,
+        add_type="PYRAMID",
+        strategy="SCALPING",
+        add_reason="post_probe_winner_recovery_first_leg",
+        action={
+            "current_ai_score": 68,
+            "holding_score_source": "live",
+            "holding_score_data_quality": "fresh",
+            "holding_score_effective_usable": True,
+            "holding_score_effective": 68,
+            "profit_rate": 0.25,
+            "peak_profit": 0.30,
+        },
+        price_resolution={"allowed": True},
+        cash_orderable_qty_cap=100,
+        budget_source="test",
+        account_deposit=1_000_000,
+        cash_orderable_amount=1_000_000,
+        effective_venue="KRX",
+        stage_qty_cap=1,
+    )
+
+    assert details["qty"] == 1
+    assert details["scale_in_budget_qty"] == 1
+    assert "stage_qty_cap" in details["binding_caps"]
+
+
+def test_winner_recovery_leg_is_marked_only_after_real_submit_state(monkeypatch):
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "post_probe_winner_recovery_first_leg",
+    }
+    submitted_stock = {}
+
+    def submitted_execute(**kwargs):
+        kwargs["stock"]["pending_add_reason"] = action["reason"]
+        return {"ord_no": "P1"}
+
+    monkeypatch.setattr(state_handlers, "execute_scale_in_order", submitted_execute)
+    result = state_handlers._process_scale_in_action(
+        submitted_stock,
+        "123456",
+        {"curr": 10000},
+        action,
+        1,
+    )
+
+    assert result["ord_no"] == "P1"
+    assert submitted_stock["post_probe_winner_recovery_leg_submitted"] is True
+    assert submitted_stock["post_probe_winner_recovery_leg_qty"] == 1
+
+    blocked_stock = {}
+    monkeypatch.setattr(
+        state_handlers,
+        "execute_scale_in_order",
+        lambda **kwargs: {"status": "blocked", "reason": "qty_zero"},
+    )
+    state_handlers._process_scale_in_action(
+        blocked_stock,
+        "123456",
+        {"curr": 10000},
+        action,
+        1,
+    )
+    assert "post_probe_winner_recovery_leg_submitted" not in blocked_stock
+
+
 def test_post_probe_hard_abort_recovery_resets_on_negative_group(monkeypatch):
     logs = []
     monkeypatch.setattr(

@@ -2111,3 +2111,113 @@ def test_post_sell_pyramid_candidate_is_temporal_source_quality_blocked(tmp_path
     assert summary["closed_candidate_count"] == 0
     assert report["source_quality"]["status"] == "pass"
     assert report["source_quality"]["temporal_inversion_candidate_count"] == 1
+
+
+def test_real_scale_in_performance_separates_winner_recovery_and_avg_down(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-04.jsonl"
+    rows = [
+        _event(
+            701,
+            "111111",
+            "avg-down-open",
+            "scale_in_executed",
+            {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "order_no": "A1",
+                "fill_price": 9900,
+                "fill_qty": 1,
+                "add_type": "AVG_DOWN",
+                "add_reason": "late_loss_avg_down_retry",
+                "new_avg_price": 10000,
+                "new_buy_qty": 2,
+            },
+            emitted_at="2026-08-04T10:00:00+09:00",
+        ),
+        _event(
+            701,
+            "111111",
+            "avg-down-open",
+            "ai_holding_review",
+            {"profit_rate": "-1.25"},
+            emitted_at="2026-08-04T10:01:00+09:00",
+        ),
+        _event(
+            702,
+            "222222",
+            "winner-recovery",
+            "scale_in_executed",
+            {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "order_no": "P1",
+                "fill_price": 10000,
+                "fill_qty": 1,
+                "add_type": "PYRAMID",
+                "add_reason": "post_probe_winner_recovery_first_leg",
+                "new_avg_price": 9950,
+                "new_buy_qty": 2,
+            },
+            emitted_at="2026-08-04T10:02:00+09:00",
+        ),
+        _event(
+            702,
+            "222222",
+            "winner-recovery",
+            "scale_in_executed",
+            {
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "order_no": "P1",
+                "fill_price": 10100,
+                "fill_qty": 1,
+                "add_type": "PYRAMID",
+                "add_reason": "post_probe_winner_recovery_first_leg",
+                "new_avg_price": 10000,
+                "new_buy_qty": 3,
+            },
+            emitted_at="2026-08-04T10:02:01+09:00",
+        ),
+        _event(
+            702,
+            "222222",
+            "winner-recovery",
+            "sell_completed",
+            {"profit_rate": "+1.20", "sell_price": 10150},
+            emitted_at="2026-08-04T10:05:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-04", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["real_scale_in_performance"]
+    items = {
+        item["scale_in_outcome_cohort"]: item
+        for item in report["real_scale_in_performance_rows"]
+    }
+
+    assert summary["execution_count"] == 2
+    assert summary["closed_count"] == 1
+    assert summary["active_unrealized_count"] == 1
+    assert summary["avg_down_execution_count"] == 1
+    assert summary["winner_recovery_execution_count"] == 1
+    assert summary["winner_expansion_vs_avg_down_asymmetry_observed"] is False
+    assert items["avg_down"]["closed"] is not True
+    assert items["avg_down"]["latest_position_profit_pct"] == -1.25
+    assert items["winner_recovery"]["final_position_profit_pct"] == 1.2
+    assert items["winner_recovery"]["fill_qty"] == 2
+    assert items["winner_recovery"]["fill_price"] == 10050
+    assert items["winner_recovery"]["scale_in_leg_gross_return_proxy_pct"] == 0.995
+    assert items["winner_recovery"]["winner_recovery_qty_cap_valid"] is False
+    assert summary["winner_recovery_qty_cap_invalid_count"] == 1
+    assert summary["source_quality_adjusted_ev_available"] is False
+    assert (
+        report["real_scale_in_performance_metric_contract"]["metric_role"]
+        == "real_scale_in_execution_outcome_attribution"
+    )

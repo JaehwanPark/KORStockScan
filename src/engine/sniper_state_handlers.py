@@ -24071,6 +24071,98 @@ def _emit_bad_entry_refined_candidate(
     stock["_bad_entry_refined_candidate_logged_key"] = logged_key
 
 
+def _post_probe_winner_recovery_runtime_config(
+    stock: dict,
+    *,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Resolve the dated, venue-bounded winner-recovery scale-in canary."""
+
+    configured = _env_bool(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", False
+    )
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE") or ""
+    ).strip()
+    current_date = datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat()
+    raw_venue = str(
+        stock.get("rising_missed_effective_venue")
+        or stock.get("effective_venue")
+        or stock.get("scalping_sizing_venue")
+        or ""
+    ).strip().upper()
+    if raw_venue.startswith("PREMARKET_KRX_LIKE"):
+        venue = "PREMARKET_KRX_LIKE"
+        cohort_key = (
+            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED"
+        )
+    elif raw_venue == "NXT" or raw_venue.startswith("NXT_"):
+        venue = "NXT"
+        cohort_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED"
+    elif raw_venue == "KRX" or raw_venue.startswith("KRX_"):
+        venue = "KRX"
+        cohort_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED"
+    else:
+        venue = "UNKNOWN"
+        cohort_key = ""
+    cohort_enabled = bool(cohort_key and _env_bool(cohort_key, True))
+    date_active = bool(active_date and active_date == current_date)
+    active = bool(configured and date_active and cohort_enabled and venue != "UNKNOWN")
+    reason = (
+        "active"
+        if active
+        else "disabled"
+        if not configured
+        else "active_date_missing_or_mismatch"
+        if not date_active
+        else "venue_unproven"
+        if venue == "UNKNOWN"
+        else "cohort_disabled"
+    )
+    return {
+        "configured": configured,
+        "active": active,
+        "reason": reason,
+        "active_date": active_date or "-",
+        "current_date": current_date,
+        "effective_venue": venue,
+        "cohort_enabled": cohort_enabled,
+        "cohort_key": cohort_key or "-",
+    }
+
+
+def _post_probe_winner_recovery_confirmation_ready(stock: dict) -> bool:
+    return bool(
+        str(stock.get("_post_probe_hard_abort_recovery_state") or "").upper()
+        == "STRONG"
+        and _safe_int(
+            stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0
+        )
+        >= 2
+    )
+
+
+def _post_probe_winner_recovery_gate_recheck_due(
+    stock: dict,
+    config: dict[str, Any],
+) -> bool:
+    if not (
+        config.get("active")
+        and stock.get("entry_split_probe_soft_abort")
+        and stock.get("entry_split_probe_scale_in_recheck_allowed")
+        and _post_probe_winner_recovery_confirmation_ready(stock)
+    ):
+        return False
+    signature = str(
+        stock.get("_post_probe_hard_abort_recovery_accepted_signature") or ""
+    ).strip()
+    return bool(
+        signature
+        and signature
+        != str(stock.get("_post_probe_winner_recovery_gate_bypass_signature") or "")
+    )
+
+
 def _observe_post_probe_hard_abort_recovery(
     stock: dict,
     code: str,
@@ -24194,34 +24286,41 @@ def _observe_post_probe_hard_abort_recovery(
 
     positive_groups: list[str] = []
     negative_groups: list[str] = []
-    if buy_price > 0 and curr_price >= buy_price and profit_rate >= 0.0:
-        positive_groups.append("price")
+    price_recovered = bool(
+        buy_price > 0 and curr_price >= buy_price and profit_rate >= 0.0
+    )
+    impulse_positive = tick_accel >= 1.0
+    impulse_negative = tick_accel < 0.8
+    candle_positive = bool(
+        micro_available and candle_fresh and micro_vwap_bp >= 0.0
+    )
+    candle_negative = bool(
+        micro_available and candle_fresh and micro_vwap_bp < 0.0
+    )
+    # Price, tick impulse and the minute-bar VWAP path are one market-path
+    # evidence group.  Counting them independently previously let one source
+    # masquerade as two independent confirmations.
+    if price_recovered and impulse_positive and candle_positive:
+        positive_groups.append("price_candle_impulse")
     else:
-        negative_groups.append("price")
+        if not price_recovered:
+            negative_groups.append("price")
+        if impulse_negative:
+            negative_groups.append("price_tick_impulse")
+        if candle_negative:
+            negative_groups.append("candle_micro_vwap")
     if pressure_usable and trusted_count >= 3:
         if buy_pressure >= 60.0:
             positive_groups.append("signed_tape")
         elif buy_pressure < 50.0:
             negative_groups.append("signed_tape")
-    if tick_accel >= 1.0:
-        positive_groups.append("tick_impulse")
-    elif tick_accel < 0.8:
-        negative_groups.append("tick_impulse")
-    if micro_available and candle_fresh:
-        if micro_vwap_bp >= 0.0:
-            positive_groups.append("micro_vwap")
-        else:
-            negative_groups.append("micro_vwap")
     if large_sell:
         negative_groups.append("large_sell")
 
-    non_price_positive_count = len(
-        {group for group in positive_groups if group != "price"}
-    )
     eligible = bool(
         not source_blockers
-        and "price" in positive_groups
-        and non_price_positive_count >= 2
+        and "price_candle_impulse" in positive_groups
+        and len(set(positive_groups)) >= 2
         and not negative_groups
     )
     state = "STRONG" if eligible else ("SOURCE_BLOCKED" if source_blockers else "WEAK")
@@ -24379,6 +24478,179 @@ def _observe_post_probe_hard_abort_recovery(
         "confirmation_count": confirmation_count,
         "emitted": True,
     }
+
+
+def _evaluate_post_probe_winner_recovery_scale_in(
+    stock: dict,
+    code: str,
+    *,
+    now_ts: float,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    pyramid_probe: dict,
+) -> dict[str, Any]:
+    """Own scale-in selection for a soft-aborted residual position.
+
+    A normal PYRAMID remains available, while a below-threshold recovery gets
+    one share only after two independent fresh confirmations and the existing
+    pyramid quality guard.  A non-selected recovery does not disable the
+    separately guarded AVG_DOWN path; the two arms retain distinct outcome
+    attribution.
+    """
+
+    config = _post_probe_winner_recovery_runtime_config(stock, now_ts=now_ts)
+    lane_eligible = bool(
+        config["active"]
+        and stock.get("entry_split_probe_soft_abort")
+        and stock.get("entry_split_probe_scale_in_recheck_allowed")
+        and not stock.get("entry_split_probe_scale_in_forbidden")
+        and str(stock.get("entry_split_probe_terminal_outcome") or "")
+        == "residual_not_submitted"
+    )
+    if not lane_eligible:
+        return {"handled": False, "action": None, "config": config}
+
+    reason = str(pyramid_probe.get("reason") or "")
+    bridge_blockers = {
+        token.strip()
+        for token in str(
+            pyramid_probe.get("rising_missed_scout_pyramid_bridge_blockers") or ""
+        ).split(",")
+        if token.strip() and token.strip() != "-"
+    }
+    confirmation_ready = _post_probe_winner_recovery_confirmation_ready(stock)
+    already_used = bool(stock.get("post_probe_winner_recovery_leg_submitted"))
+    avg_down_count = _safe_int(stock.get("avg_down_count"), 0)
+    pyramid_count = _safe_int(stock.get("pyramid_count"), 0)
+
+    action: dict[str, Any] | None = None
+    block_reason = "recovery_confirmation_not_ready"
+    if already_used:
+        block_reason = "winner_recovery_leg_already_submitted"
+    elif avg_down_count > 0:
+        block_reason = "avg_down_already_used"
+    elif pyramid_count > 0:
+        block_reason = "pyramid_already_used"
+    elif pyramid_probe.get("should_add"):
+        action = {
+            **pyramid_probe,
+            "post_probe_winner_recovery_lane": True,
+            "post_probe_winner_recovery_mode": "normal_pyramid",
+        }
+    elif not confirmation_ready:
+        block_reason = "recovery_confirmation_not_ready"
+    elif reason.startswith("rising_missed_scout_pyramid_bridge_blocked:") and (
+        bridge_blockers == {"profit_not_enough"}
+    ):
+        action = {
+            **pyramid_probe,
+            "should_add": True,
+            "add_type": "PYRAMID",
+            "reason": "post_probe_winner_recovery_first_leg",
+            "source": "post_probe_winner_recovery",
+            "cohort": "post_probe_winner_recovery",
+            "runtime_family": "post_probe_winner_recovery",
+            "runtime_family_candidate": "post_probe_winner_recovery",
+            "decision_authority": "bounded_post_probe_winner_recovery_scale_in",
+            "metric_role": "bounded_tunable_scale_in",
+            "window_policy": "same_position_cycle_after_soft_residual_abort",
+            "sample_floor": "dated_single_cohort_canary_with_rolling_review",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": (
+                "two_fresh_independent_recovery_confirmations_and_existing_pyramid_quality"
+            ),
+            "runtime_effect": True,
+            "allowed_runtime_apply": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": False,
+            "forbidden_uses": (
+                "residual_bundle_reopen|avg_down|hard_abort_override|ai_guard_bypass|"
+                "source_quality_bypass|account_order_quantity_cooldown_bypass|"
+                "position_cap_release|provider_route_change|hard_exit_deferral"
+            ),
+            "post_probe_winner_recovery_lane": True,
+            "post_probe_winner_recovery_mode": "bounded_first_leg",
+            "post_probe_winner_recovery_qty_cap": 1,
+            "post_probe_winner_recovery_confirmation_count": _safe_int(
+                stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0
+            ),
+            "post_probe_winner_recovery_original_pyramid_reason": reason,
+        }
+    else:
+        block_reason = f"existing_pyramid_guard:{reason or 'unknown'}"
+
+    event_signature = "|".join(
+        (
+            str(config.get("active")),
+            str(confirmation_ready),
+            str(action.get("reason") if action else block_reason),
+            str(_safe_int(stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0)),
+            str(avg_down_count),
+            str(pyramid_count),
+        )
+    )
+    if stock.get("_post_probe_winner_recovery_event_signature") != event_signature:
+        _log_holding_pipeline(
+            stock,
+            code,
+            (
+                "post_probe_winner_recovery_selected"
+                if action
+                else "post_probe_winner_recovery_blocked"
+            ),
+            runtime_family="post_probe_winner_recovery",
+            runtime_family_candidate="post_probe_winner_recovery",
+            decision_authority="bounded_post_probe_winner_recovery_scale_in",
+            metric_role="bounded_tunable_scale_in",
+            window_policy="same_position_cycle_after_soft_residual_abort",
+            sample_floor="dated_single_cohort_canary_with_rolling_review",
+            primary_decision_metric="source_quality_adjusted_ev_pct",
+            source_quality_gate=(
+                "two_fresh_independent_recovery_confirmations_and_existing_pyramid_quality"
+            ),
+            runtime_effect=bool(action),
+            allowed_runtime_apply=bool(action),
+            actual_order_submitted=False,
+            broker_order_forbidden=not bool(action),
+            forbidden_uses=(
+                "residual_bundle_reopen|avg_down|hard_abort_override|ai_guard_bypass|"
+                "source_quality_bypass|account_order_quantity_cooldown_bypass|"
+                "position_cap_release|provider_route_change|hard_exit_deferral"
+            ),
+            post_probe_winner_recovery_action=(
+                action.get("reason") if action else "BLOCK"
+            ),
+            post_probe_winner_recovery_block_reason=(
+                "-" if action else block_reason
+            ),
+            post_probe_winner_recovery_confirmation_ready=confirmation_ready,
+            post_probe_winner_recovery_confirmation_count=_safe_int(
+                stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0
+            ),
+            post_probe_winner_recovery_qty_cap=(
+                action.get("post_probe_winner_recovery_qty_cap", "-")
+                if action
+                else "-"
+            ),
+            post_probe_winner_recovery_original_pyramid_reason=reason or "-",
+            post_probe_winner_recovery_bridge_blockers=(
+                ",".join(sorted(bridge_blockers)) or "-"
+            ),
+            post_probe_winner_recovery_avg_down_count=avg_down_count,
+            post_probe_winner_recovery_pyramid_count=pyramid_count,
+            post_probe_winner_recovery_active_date=config["active_date"],
+            post_probe_winner_recovery_current_date=config["current_date"],
+            effective_venue=config["effective_venue"],
+            post_probe_winner_recovery_cohort_enabled=config["cohort_enabled"],
+            profit_rate=f"{float(profit_rate):+.2f}",
+            peak_profit=f"{float(peak_profit):+.2f}",
+            current_ai_score=f"{float(current_ai_score):.0f}",
+            held_sec=int(held_sec or 0),
+        )
+        stock["_post_probe_winner_recovery_event_signature"] = event_signature
+    return {"handled": True, "action": action, "config": config}
 
 
 def _build_soft_stop_expert_decision(
@@ -37950,6 +38222,9 @@ _ENTRY_SPLIT_PROBE_RUNTIME_KEYS = (
     "entry_split_probe_terminal_failure_signature",
     "probe_expand_forbidden",
     "entry_split_probe_residual_expand_forbidden",
+    "post_probe_winner_recovery_leg_submitted",
+    "post_probe_winner_recovery_leg_submitted_at",
+    "post_probe_winner_recovery_leg_qty",
 )
 
 # Residual submission can be reached by both the fill callback worker and the
@@ -79236,6 +79511,14 @@ def handle_holding_state(
             "shallow_source_gap_recheck_gate_recheck_due"
         )
     )
+    winner_recovery_config = _post_probe_winner_recovery_runtime_config(
+        stock,
+        now_ts=now_ts,
+    )
+    winner_recovery_gate_recheck_due = _post_probe_winner_recovery_gate_recheck_due(
+        stock,
+        winner_recovery_config,
+    )
     pending_scale_in_revalidation = _pending_scale_in_revalidation_context(
         stock,
         strategy=strategy,
@@ -79282,8 +79565,22 @@ def handle_holding_state(
         market_regime=market_regime,
         # The regular 20s de-dup lock would otherwise consume the complete
         # 10-20s source-gap window. All other scale-in safety checks remain.
-        skip_add_judgment_lock=shallow_recheck_gate_recheck_due,
+        skip_add_judgment_lock=(
+            shallow_recheck_gate_recheck_due or winner_recovery_gate_recheck_due
+        ),
     )
+    if winner_recovery_gate_recheck_due:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "_post_probe_winner_recovery_gate_bypass_signature": str(
+                    stock.get(
+                        "_post_probe_hard_abort_recovery_accepted_signature"
+                    )
+                    or ""
+                )
+            },
+        )
     if gate.get("allowed"):
         scale_in_action = _evaluate_scale_in_signal(
             stock=stock,
@@ -80782,6 +81079,66 @@ def _evaluate_scale_in_signal(
                         current_ai_score,
                     )
 
+        winner_recovery_config = _post_probe_winner_recovery_runtime_config(
+            stock,
+            now_ts=now_ts,
+        )
+        if bool(
+            winner_recovery_config.get("active")
+            and stock.get("entry_split_probe_soft_abort")
+            and stock.get("entry_split_probe_scale_in_recheck_allowed")
+            and not stock.get("entry_split_probe_scale_in_forbidden")
+        ):
+            winner_recovery_pyramid = evaluate_scalping_pyramid(
+                stock,
+                profit_rate,
+                peak_profit,
+                is_new_high,
+                current_ai_score=current_ai_score,
+            )
+            winner_recovery_prior = _pyramid_runtime_prior_context(
+                stock,
+                code,
+                now_ts,
+                probe=winner_recovery_pyramid,
+            ).get("pyramid_runtime_prior_context")
+            winner_recovery_pyramid = evaluate_scalping_pyramid(
+                stock,
+                profit_rate,
+                peak_profit,
+                is_new_high,
+                current_ai_score=current_ai_score,
+                runtime_prior_context=winner_recovery_prior,
+            )
+            winner_recovery = _evaluate_post_probe_winner_recovery_scale_in(
+                stock,
+                code,
+                now_ts=now_ts,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                pyramid_probe=winner_recovery_pyramid,
+            )
+            if winner_recovery.get("handled"):
+                winner_recovery_action = winner_recovery.get("action")
+                if winner_recovery_action:
+                    winner_recovery_action.update(
+                        {
+                            "profit_rate": profit_rate,
+                            "peak_profit": peak_profit,
+                            "current_ai_score": current_ai_score,
+                            "is_new_high": is_new_high,
+                            "held_sec": held_sec,
+                            **scale_in_ai_retry_fields,
+                            **scale_in_micro_estimator_fields,
+                        }
+                    )
+                    return winner_recovery_action
+                # A blocked winner-recovery candidate is not authority to
+                # suppress the separately guarded AVG_DOWN arm. Continue with
+                # the existing shallow/reversal/pyramid decision path.
+
         shallow_recheck_action = _evaluate_shallow_source_gap_recheck(
             stock=stock,
             code=code,
@@ -81112,6 +81469,23 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
         action=action,
         admin_id=admin_id,
     )
+    winner_recovery_reason = "post_probe_winner_recovery_first_leg"
+    winner_recovery_submitted = bool(
+        str(action.get("reason") or "") == winner_recovery_reason
+        and (
+            str(stock.get("pending_add_reason") or "") == winner_recovery_reason
+            or str(stock.get("last_add_reason") or "") == winner_recovery_reason
+        )
+    )
+    if winner_recovery_submitted:
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "post_probe_winner_recovery_leg_submitted": True,
+                "post_probe_winner_recovery_leg_submitted_at": time.time(),
+                "post_probe_winner_recovery_leg_qty": 1,
+            },
+        )
     if is_sim_window_action and result is None:
         _log_scalp_sim_scale_in_window_funnel(
             stock=stock,
@@ -81744,6 +82118,21 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         if strategy == "SCALPING"
         else None
     )
+    action_stage_qty_cap = max(
+        0,
+        _safe_int(action.get("post_probe_winner_recovery_qty_cap"), 0),
+    )
+    position_stage_qty_cap = (
+        pre_sizing_initial_qty_limit.get("remaining_scale_in_qty")
+        if pre_sizing_initial_qty_limit is not None
+        else None
+    )
+    if action_stage_qty_cap > 0:
+        position_stage_qty_cap = (
+            min(_safe_int(position_stage_qty_cap, 0), action_stage_qty_cap)
+            if position_stage_qty_cap is not None
+            else action_stage_qty_cap
+        )
     qty_details = describe_dynamic_scale_in_qty(
         stock=stock,
         resolved_price=qty_price,
@@ -81761,12 +82150,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             datetime.now(tz=_KST),
             stock.get("rising_missed_effective_venue") or stock.get("effective_venue"),
         ),
-        stage_qty_cap=(
-            pre_sizing_initial_qty_limit.get("remaining_scale_in_qty")
-            if pre_sizing_initial_qty_limit is not None
-            else None
-        ),
+        stage_qty_cap=position_stage_qty_cap,
     )
+    if action_stage_qty_cap > 0:
+        qty_details["post_probe_winner_recovery_qty_cap"] = action_stage_qty_cap
     qty = int(qty_details.get("qty", 0) or 0)
     template_qty = int(qty_details.get("template_qty", 0) or 0)
     cap_qty = int(qty_details.get("cap_qty", 0) or 0)
@@ -81856,6 +82243,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "scale_in_filled_qty",
             "remaining_scale_in_qty",
             "initial_qty_cap_applied",
+            "post_probe_winner_recovery_qty_cap",
         )
         if key in qty_details
     }
@@ -83005,6 +83393,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             actual_order_submitted=True,
             broker_order_forbidden=False,
             runtime_effect=True,
+            post_probe_winner_recovery_lane=bool(
+                action.get("post_probe_winner_recovery_lane")
+            ),
+            post_probe_winner_recovery_mode=(
+                action.get("post_probe_winner_recovery_mode") or "-"
+            ),
+            post_probe_winner_recovery_confirmation_count=(
+                action.get("post_probe_winner_recovery_confirmation_count") or "-"
+            ),
+            post_probe_winner_recovery_original_pyramid_reason=(
+                action.get("post_probe_winner_recovery_original_pyramid_reason")
+                or "-"
+            ),
             **scale_in_qty_budget_fields,
             **budget_authority_fields,
         )
