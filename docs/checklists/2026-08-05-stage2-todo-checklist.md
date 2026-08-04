@@ -16,6 +16,15 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 사용자 지시 구현
+
+- [x] `[LimitDownObservationEffectiveness0805] 하한가 관찰 포착 및 exact-empty 근접 하한가 보조군 구현·리뷰` (`Due: 2026-08-05`, `Slot: INTRADAY`, `TimeWindow: 09:00~15:30`, `Track: ScalpingLogic`)
+  - Source: [limit_down_watch.py](/home/ubuntu/KORStockScan/src/engine/scalping/limit_down_watch.py), [limit_down_watch_report.py](/home/ubuntu/KORStockScan/src/engine/monitoring/limit_down_watch_report.py), [kiwoom-api-data-contract.md](/home/ubuntu/KORStockScan/docs/kiwoom-api-data-contract.md)
+  - 판정 기준: KRX 장중에만 체류시간을 계산하고 0B 체결과 0D 호가를 분리 포착한다. 공식 전일 하한가가 0건일 때만 전일 저가 `-29.5%~-27%` 및 저가 대비 종가 회복 `5% 이상`인 `near_limit_rebound`를 공식 일봉과 DB 일봉 교차검증 후 관찰 전용으로 등록한다.
+  - 금지: `near_limit_rebound`를 기존 exact 하한가 unlock counterfactual/live-auto 표본에 합치거나 BUY·실주문·provider·threshold·수량·cap·bot 권한으로 사용하지 않는다.
+  - 다음 액션: targeted test와 review gate가 finding 0건이면 완료하고, 자연 0B/0D 및 유형별 postclose 산출물은 런타임 재기동 이후 별도 관찰한다.
+  - 실행 결과 (`2026-08-05 07:43 KST`): 공식 upstream `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 `kiwoom_docs/종목정보.md`, `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`, `kiwoom/specs.py`를 재확인했다. KRX 장중 세션에서만 관찰 등록·체류를 시작하고, 0D 호가를 0B 체결과 분리해 5초 snapshot 및 REG route/item provenance로 기록하며, 유효 빈 소스도 idle heartbeat를 저장한다. exact 0건일 때만 `near_limit_rebound`를 DB 완성일 `2635`행 preflight, `ka10081` 전일/전전일 OHLC, `ka10099` 관리·환기·투자유의 상태로 교차검증한다. 신규 cohort는 exact unlock label/sim/live-auto와 runtime promotion에서 명시적으로 제외했다. 자체리뷰에서 0D 매 이벤트 디스크 쓰기와 관리·환기 필터 결손을 발견해 보완했고 재리뷰 finding=`0`; 관련 `263 passed`, compile, Ruff(기존 비변경 F841 제외), Black, `git diff --check`, checklist parser를 통과했다. 실 API 임시 smoke는 exact/near=`0/0`, status=`pass`, blocked=`0`이며 운영 artifact와 bot 상태는 변경하지 않았다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-04` postclose -> `2026-08-05`)
 

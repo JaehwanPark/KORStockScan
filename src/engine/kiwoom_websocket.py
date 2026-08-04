@@ -28,7 +28,7 @@ from src.engine.sniper_time import (
 from src.engine.scalping.micro_estimator_state import (
     DEFAULT_STORE as MICRO_ESTIMATOR_STORE,
 )
-from src.engine.scalping.limit_down_watch import observe_raw_tick
+from src.engine.scalping.limit_down_watch import observe_raw_market_data
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
@@ -1868,12 +1868,19 @@ class KiwoomWSManager:
         if self._stop_event.is_set():
             return
 
-        if str(realtime_type or "").strip() == "0B":
+        normalized_realtime_type = str(realtime_type or "").strip()
+        if normalized_realtime_type in {"0B", "0D"}:
             try:
-                observe_raw_tick(code, data, time.time())
+                observe_raw_market_data(
+                    code,
+                    data,
+                    time.time(),
+                    realtime_type=normalized_realtime_type,
+                )
             except Exception as exc:
                 log_error(
-                    f"[WS] limit-down raw tick observation failed ({code}): {exc}"
+                    "[WS] limit-down raw market-data observation failed "
+                    f"({code}/{normalized_realtime_type}): {exc}"
                 )
         with self._tick_lock:
             self._pending_tick_events[code] = {"code": code, "data": data}

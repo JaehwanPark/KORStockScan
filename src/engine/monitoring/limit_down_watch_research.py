@@ -45,6 +45,10 @@ LIVE_AUTO_MAX_MAE_P10_PCT = -5.0
 LIVE_AUTO_MAX_RELOCK_RATE_PCT = 0.0
 LIVE_AUTO_MIN_BBO_COVERAGE_PCT = 100.0
 LIVE_AUTO_MAX_ENTRY_SPREAD_PCT = 1.5
+LIVE_ELIGIBLE_COHORTS = {
+    "consecutive_limit_down_2plus",
+    "single_limit_down",
+}
 
 SOURCE_ONLY_FIELDS = {
     "runtime_effect": False,
@@ -283,6 +287,9 @@ def collect_observation_visits(
                         source.get("consecutive_count")
                         or fields.get("consecutive_count")
                     ),
+                    "candidate_kind": str(
+                        source.get("candidate_kind") or "exact_limit_down"
+                    ),
                     "limit_down_close": _safe_int(source.get("limit_down_close")),
                     "lower_limit_price": _safe_int(fields.get("lower_limit_price")),
                     "transitions": [],
@@ -390,6 +397,9 @@ def label_observation_visit(visit: dict[str, Any]) -> dict[str, Any]:
         "label_status": "insufficient_ordered_unlock_confirmation",
         **SOURCE_ONLY_FIELDS,
     }
+    if str(visit.get("cohort") or "") not in LIVE_ELIGIBLE_COHORTS:
+        label["label_status"] = "observation_only_cohort_separate_contract_required"
+        return label
     confirmations = [
         row for row in visit.get("confirmations", []) if isinstance(row, dict)
     ]
@@ -634,6 +644,8 @@ def _cell_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         if row.get("label_status") != "pass":
             continue
+        if str(row.get("cohort") or "") not in LIVE_ELIGIBLE_COHORTS:
+            continue
         grouped[
             (
                 str(row.get("cohort") or "unknown"),
@@ -862,6 +874,8 @@ def build_bounded_live_candidate(
     candidates = []
     for row in cells:
         if not isinstance(row, dict):
+            continue
+        if str(row.get("cohort") or "") not in LIVE_ELIGIBLE_COHORTS:
             continue
         ev = _safe_float(row.get("source_quality_adjusted_ev_pct"))
         downside = _safe_float(row.get("downside_p10_pct"))

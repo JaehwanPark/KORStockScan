@@ -1317,6 +1317,90 @@ def get_nxt_flag_map_ka10099(
     return {code: (code in nxt_enabled_codes) for code in normalized}
 
 
+def get_stock_eligibility_map_ka10099(
+    token, target_codes, mrkt_tps=("0", "10")
+) -> tuple[dict[str, dict], dict]:
+    """Return official management/ventilation/warning eligibility for target codes.
+
+    Missing codes and undocumented values are left ineligible so an observation
+    source cannot silently bypass the same product-quality exclusions used by
+    ``ka10017(stk_cnd=10)``.
+    """
+
+    requested_codes = {
+        normalize_stock_code(code) for code in (target_codes or []) if code
+    }
+    requested_codes = {
+        code for code in requested_codes if code and code.isdigit() and len(code) == 6
+    }
+    if not requested_codes:
+        return {}, {
+            "api_id": "ka10099",
+            "status": "pass",
+            "requested_code_count": 0,
+            "received_code_count": 0,
+            "official_upstream_commit": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+        }
+
+    url = get_api_url("/api/dostk/stkinfo")
+    result: dict[str, dict] = {}
+    requested_markets = [str(value) for value in (mrkt_tps or ("0", "10"))]
+    page_count = 0
+    for mrkt_tp in requested_markets:
+        responses = fetch_kiwoom_api_continuous(
+            url=url,
+            token=token,
+            api_id="ka10099",
+            payload={"mrkt_tp": mrkt_tp},
+            use_continuous=True,
+        )
+        page_count += len(responses or [])
+        for response in responses or []:
+            for item in (response or {}).get("list", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                code = normalize_stock_code(item.get("code"))
+                if code not in requested_codes:
+                    continue
+                audit_info = str(item.get("auditInfo") or "").strip()
+                stock_state = str(item.get("state") or "").strip()
+                order_warning = str(item.get("orderWarning") or "").strip()
+                blocked_reasons = []
+                if "환기" in audit_info or "관리" in audit_info:
+                    blocked_reasons.append("audit_info_excluded")
+                elif audit_info not in {"", "정상"}:
+                    blocked_reasons.append("audit_info_unknown")
+                if "관리" in stock_state:
+                    blocked_reasons.append("management_state_excluded")
+                if not order_warning:
+                    blocked_reasons.append("order_warning_missing")
+                elif order_warning != "0":
+                    blocked_reasons.append("order_warning_excluded")
+                result[code] = {
+                    "eligible": not blocked_reasons,
+                    "audit_info": audit_info,
+                    "state": stock_state,
+                    "order_warning": order_warning,
+                    "market_code": str(item.get("marketCode") or "").strip(),
+                    "blocked_reasons": blocked_reasons,
+                }
+    missing_codes = sorted(requested_codes - set(result))
+    return result, {
+        "api_id": "ka10099",
+        "status": "pass" if not missing_codes else "partial",
+        "requested_markets": requested_markets,
+        "requested_code_count": len(requested_codes),
+        "received_code_count": len(result),
+        "missing_codes": missing_codes,
+        "page_count": page_count,
+        "official_upstream_commit": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+        "official_upstream_paths": [
+            "kiwoom_docs/종목정보.md#종목정보-리스트-ka10099",
+            "kiwoom/specs.py",
+        ],
+    }
+
+
 def get_basic_info_ka10001(token, code):
     """[ka10001] 주식기본정보요청 (1회성 조회)"""
     url = get_api_url("/api/dostk/stkinfo")
@@ -2177,7 +2261,7 @@ def get_previous_limit_down_stocks_ka10017(token):
     """Return the official KRX previous-limit-down list with raw provenance.
 
     Official reference:
-    Kiwoom-Securities/Kiwoom-REST-API@1504d45fa145eb11fdd662a08aa9d873eee55849
+    Kiwoom-Securities/Kiwoom-REST-API@69642586f7d84ba9fd8a6faf1f1537c7fda6568b
     ``kiwoom_docs/종목정보.md`` (ka10017).
     """
 
@@ -2229,7 +2313,7 @@ def get_previous_limit_down_stocks_ka10017(token):
         {
             "request_payload": payload,
             "received_count": len(rows),
-            "official_upstream_commit": ("1504d45fa145eb11fdd662a08aa9d873eee55849"),
+            "official_upstream_commit": ("69642586f7d84ba9fd8a6faf1f1537c7fda6568b"),
             "official_upstream_paths": [
                 "kiwoom_docs/종목정보.md",
                 "examples/국내주식/종목정보/get_domestic_upper_lower_limit_stocks.py",

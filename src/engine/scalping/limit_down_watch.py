@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time as datetime_time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,14 +30,24 @@ LIMIT_DOWN_LIVE_POLICY_VERSION = "limit_down_single_verified_path_live_auto_v1"
 
 DECISION_AUTHORITY = "limit_down_source_observation_only"
 METRIC_ROLE = "diagnostic"
-WINDOW_POLICY = "same_symbol_same_krx_session_ordered_raw_tick"
+WINDOW_POLICY = "same_symbol_same_krx_session_ordered_0b_trade_and_0d_quote"
 SAMPLE_FLOOR = "not_applicable_source_observation"
 PRIMARY_DECISION_METRIC = "ordered_intraday_path_capture_rate"
-SOURCE_QUALITY_GATE = "official_ka10017_and_completed_ka10081_db_close_match"
+SOURCE_QUALITY_GATE = (
+    "official_ka10017_exact_or_completed_daily_near_limit_ka10081_db_match"
+)
 FORBIDDEN_USES = (
     "real_order,buy_analysis,threshold_change,provider_route_change,"
     "order_price_or_quantity_change,cap_change,broker_guard_change,bot_restart_authority"
 )
+NEAR_LIMIT_LOW_MIN_PCT = -29.5
+NEAR_LIMIT_LOW_MAX_PCT = -27.0
+NEAR_LIMIT_MIN_CLOSE_RECOVERY_PCT = 5.0
+NEAR_LIMIT_MIN_DAILY_ROW_COUNT = 2_000
+EXACT_LIMIT_DOWN_COHORTS = {
+    "consecutive_limit_down_2plus",
+    "single_limit_down",
+}
 
 
 def _truthy(value: Any) -> bool:
@@ -147,14 +157,110 @@ class LimitDownCandidate:
     volume: int
     source_api: str = "ka10017"
     source_quality: str = "pass"
+    candidate_kind: str = "exact_limit_down"
+    prior_close: int = 0
+    trigger_low: int = 0
+    trigger_low_change_pct: float | None = None
+    close_recovery_from_low_pct: float | None = None
 
 
 def _candidate_priority(candidate: LimitDownCandidate) -> tuple[int, int, str]:
     return (
-        0 if candidate.consecutive_count >= 2 else 1,
+        (
+            0
+            if candidate.consecutive_count >= 2
+            else 1 if candidate.consecutive_count == 1 else 2
+        ),
         -candidate.volume,
         candidate.code,
     )
+
+
+def _db_near_limit_rebound_rows(
+    db: Any, target_date: date
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return a full-day DB prefilter; ka10081 remains row-level authority."""
+
+    date_query = text("""
+        SELECT quote_date, COUNT(*) AS row_count
+        FROM daily_stock_quotes
+        WHERE quote_date < :target_date
+        GROUP BY quote_date
+        ORDER BY quote_date DESC
+        LIMIT 1
+        """)
+    with db.get_session() as session:
+        source_row = session.execute(
+            date_query, {"target_date": target_date}
+        ).fetchone()
+    if not source_row:
+        return [], {"status": "blocked", "reason": "daily_source_date_missing"}
+    source_date = (
+        source_row[0].date() if isinstance(source_row[0], datetime) else source_row[0]
+    )
+    row_count = _safe_int(source_row[1])
+    if not isinstance(source_date, date) or row_count < NEAR_LIMIT_MIN_DAILY_ROW_COUNT:
+        return [], {
+            "status": "blocked",
+            "reason": "daily_source_incomplete",
+            "source_trade_date": str(source_date or ""),
+            "source_row_count": row_count,
+            "required_row_count": NEAR_LIMIT_MIN_DAILY_ROW_COUNT,
+        }
+
+    candidate_query = text("""
+        SELECT stock_code, stock_name, low_price, close_price, volume, daily_return
+        FROM daily_stock_quotes
+        WHERE quote_date = :source_date
+          AND stock_code ~ '^[0-9]{6}$'
+          AND low_price > 0
+          AND close_price > 0
+          AND daily_return IS NOT NULL
+          AND (1.0 + daily_return) > 0
+          AND ((low_price / (close_price / (1.0 + daily_return))) - 1.0) * 100.0
+                BETWEEN :low_min_pct AND :low_max_pct
+          AND ((close_price / low_price) - 1.0) * 100.0 >= :min_recovery_pct
+        ORDER BY volume DESC NULLS LAST, stock_code
+        """)
+    params = {
+        "source_date": source_date,
+        "low_min_pct": NEAR_LIMIT_LOW_MIN_PCT,
+        "low_max_pct": NEAR_LIMIT_LOW_MAX_PCT,
+        "min_recovery_pct": NEAR_LIMIT_MIN_CLOSE_RECOVERY_PCT,
+    }
+    with db.get_session() as session:
+        rows = session.execute(candidate_query, params).fetchall()
+    normalized = []
+    for row in rows:
+        close_price = _safe_price(row[3])
+        daily_return = _safe_float(row[5], -999.0)
+        denominator = 1.0 + daily_return
+        prior_close = round(close_price / denominator) if denominator > 0 else 0
+        low_price = _safe_price(row[2])
+        normalized.append(
+            {
+                "Code": str(row[0] or "").strip(),
+                "Name": str(row[1] or "").strip(),
+                "SourceTradeDate": source_date.isoformat(),
+                "Low": low_price,
+                "Close": close_price,
+                "PreviousClose": prior_close,
+                "Volume": _safe_int(row[4]),
+                "LowChangePct": _pct(low_price, prior_close),
+                "CloseRecoveryFromLowPct": _pct(close_price, low_price),
+            }
+        )
+    return normalized, {
+        "status": "pass",
+        "source_trade_date": source_date.isoformat(),
+        "source_row_count": row_count,
+        "near_limit_candidate_count": len(normalized),
+        "thresholds": {
+            "low_change_pct_min": NEAR_LIMIT_LOW_MIN_PCT,
+            "low_change_pct_max": NEAR_LIMIT_LOW_MAX_PCT,
+            "close_recovery_from_low_pct_min": NEAR_LIMIT_MIN_CLOSE_RECOVERY_PCT,
+        },
+    }
 
 
 def _db_completed_close(db: Any, code: str, quote_date: date) -> tuple[int, str]:
@@ -203,6 +309,13 @@ def build_candidate_source(
     fetch_daily: Callable[[str, str], Any] | None = None,
     db_close_loader: Callable[[Any, str, date], tuple[int, str]] | None = None,
     latest_completed_date_loader: Callable[[Any, date], date | None] | None = None,
+    near_limit_loader: (
+        Callable[[Any, date], tuple[list[dict[str, Any]], dict[str, Any]]] | None
+    ) = None,
+    near_eligibility_loader: (
+        Callable[[str, list[str]], tuple[dict[str, dict[str, Any]], dict[str, Any]]]
+        | None
+    ) = None,
 ) -> tuple[list[LimitDownCandidate], dict[str, Any]]:
     """Build a fail-closed candidate source from official Kiwoom data."""
 
@@ -215,12 +328,20 @@ def build_candidate_source(
     latest_completed_date_loader = (
         latest_completed_date_loader or _db_latest_completed_date
     )
+    near_limit_loader = near_limit_loader or _db_near_limit_rebound_rows
+    near_eligibility_loader = (
+        near_eligibility_loader or kiwoom_utils.get_stock_eligibility_map_ka10099
+    )
     raw_rows, source_meta = fetch_previous(token)
     candidates: list[LimitDownCandidate] = []
     blocked: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     expected_source_date = latest_completed_date_loader(db, target_date)
     seen_counts: dict[str, str] = {}
+    near_rows: list[dict[str, Any]] = []
+    near_source_meta: dict[str, Any] = {
+        "status": "not_requested_exact_candidates_present"
+    }
 
     for raw in raw_rows or []:
         code = kiwoom_utils.normalize_stock_code((raw or {}).get("Code"))
@@ -317,7 +438,171 @@ def build_candidate_source(
             )
         )
 
+    # The fallback is deliberately narrower than a generic shock scanner and
+    # only runs when the official exact previous-limit-down source is empty.
+    # A malformed or filtered exact row must not be hidden by the fallback.
+    if not (raw_rows or []) and not blocked:
+        near_rows, near_source_meta = near_limit_loader(db, target_date)
+        if near_source_meta.get("status") == "pass":
+            try:
+                eligibility_by_code, eligibility_meta = near_eligibility_loader(
+                    token,
+                    [str((row or {}).get("Code") or "") for row in near_rows],
+                )
+            except Exception as exc:
+                eligibility_by_code = {}
+                eligibility_meta = {
+                    "status": "blocked",
+                    "reason": f"ka10099_exception:{type(exc).__name__}",
+                }
+            near_source_meta = {
+                **near_source_meta,
+                "official_eligibility_source": eligibility_meta,
+            }
+            for raw in near_rows:
+                code = kiwoom_utils.normalize_stock_code((raw or {}).get("Code"))
+                name = str((raw or {}).get("Name") or "").strip()
+                if not code or not code.isdigit() or len(code) != 6:
+                    blocked.append(
+                        {"code": code or "-", "reason": "near_invalid_stock_code"}
+                    )
+                    continue
+                if not kiwoom_utils.is_valid_stock(code, name, token=None):
+                    excluded.append(
+                        {"code": code, "reason": "near_excluded_existing_stock_filter"}
+                    )
+                    continue
+                eligibility = eligibility_by_code.get(code)
+                if not isinstance(eligibility, dict):
+                    blocked.append(
+                        {"code": code, "reason": "near_ka10099_eligibility_missing"}
+                    )
+                    continue
+                if eligibility.get("eligible") is not True:
+                    reasons = [
+                        str(value)
+                        for value in (eligibility.get("blocked_reasons") or [])
+                    ]
+                    known_exclusion = bool(
+                        reasons
+                        and all(
+                            value
+                            in {
+                                "audit_info_excluded",
+                                "management_state_excluded",
+                                "order_warning_excluded",
+                            }
+                            for value in reasons
+                        )
+                    )
+                    target = excluded if known_exclusion else blocked
+                    target.append(
+                        {
+                            "code": code,
+                            "reason": (
+                                "near_ka10099_official_exclusion"
+                                if known_exclusion
+                                else "near_ka10099_eligibility_unknown"
+                            ),
+                            "eligibility_reasons": reasons,
+                        }
+                    )
+                    continue
+                try:
+                    source_date = date.fromisoformat(
+                        str((raw or {}).get("SourceTradeDate") or "")
+                    )
+                except ValueError:
+                    blocked.append(
+                        {"code": code, "reason": "near_source_trade_date_invalid"}
+                    )
+                    continue
+                low_price = _safe_price((raw or {}).get("Low"))
+                close_price = _safe_price((raw or {}).get("Close"))
+                previous_close = _safe_price((raw or {}).get("PreviousClose"))
+                low_change_pct = _pct(low_price, previous_close)
+                recovery_pct = _pct(close_price, low_price)
+                if not (
+                    low_price > 0
+                    and close_price > 0
+                    and previous_close > 0
+                    and low_change_pct is not None
+                    and NEAR_LIMIT_LOW_MIN_PCT
+                    <= low_change_pct
+                    <= NEAR_LIMIT_LOW_MAX_PCT
+                    and recovery_pct is not None
+                    and recovery_pct >= NEAR_LIMIT_MIN_CLOSE_RECOVERY_PCT
+                ):
+                    blocked.append(
+                        {"code": code, "reason": "near_threshold_contract_invalid"}
+                    )
+                    continue
+                daily = fetch_daily(token, code)
+                if daily is None or getattr(daily, "empty", True):
+                    blocked.append({"code": code, "reason": "near_ka10081_missing"})
+                    continue
+                try:
+                    parsed_index = pd.to_datetime(daily.index, errors="coerce")
+                    valid_index = parsed_index.notna()
+                    normalized_daily = daily.loc[valid_index].copy()
+                    normalized_daily.index = parsed_index[valid_index]
+                    completed = normalized_daily[
+                        normalized_daily.index.date <= source_date
+                    ].sort_index(ascending=False)
+                except (AttributeError, TypeError, ValueError):
+                    blocked.append(
+                        {"code": code, "reason": "near_ka10081_invalid_date_index"}
+                    )
+                    continue
+                source_rows = completed[completed.index.date == source_date]
+                prior_rows = completed[completed.index.date < source_date]
+                if source_rows.empty or prior_rows.empty:
+                    blocked.append(
+                        {"code": code, "reason": "near_ka10081_completed_rows_missing"}
+                    )
+                    continue
+                official_source = source_rows.iloc[0]
+                official_prior = prior_rows.iloc[0]
+                official_low = _safe_price(official_source.get("Low"))
+                official_close = _safe_price(official_source.get("Close"))
+                official_previous_close = _safe_price(official_prior.get("Close"))
+                db_close, db_name = db_close_loader(db, code, source_date)
+                if not (
+                    official_low == low_price
+                    and official_close == close_price == db_close
+                    and official_previous_close == previous_close
+                ):
+                    blocked.append(
+                        {
+                            "code": code,
+                            "reason": "near_ka10081_db_ohlc_mismatch",
+                            "source_trade_date": source_date.isoformat(),
+                        }
+                    )
+                    continue
+                candidates.append(
+                    LimitDownCandidate(
+                        code=code,
+                        name=name or db_name or code,
+                        source_trade_date=source_date.isoformat(),
+                        limit_down_close=close_price,
+                        consecutive_count=0,
+                        cohort="near_limit_rebound",
+                        price_band=price_band(close_price),
+                        volume=_safe_int((raw or {}).get("Volume")),
+                        source_api="daily_stock_quotes+ka10081",
+                        candidate_kind="near_limit_rebound",
+                        prior_close=previous_close,
+                        trigger_low=low_price,
+                        trigger_low_change_pct=low_change_pct,
+                        close_recovery_from_low_pct=recovery_pct,
+                    )
+                )
+
     candidates.sort(key=_candidate_priority)
+    fallback_source_blocked = bool(
+        not (raw_rows or []) and near_source_meta.get("status") != "pass"
+    )
     artifact = {
         "schema_version": 1,
         "report_type": "limit_down_watch_candidate_source",
@@ -328,10 +613,23 @@ def build_candidate_source(
             else None
         ),
         "generated_at": datetime.now().isoformat(),
-        "status": "pass" if not blocked else ("partial" if candidates else "blocked"),
+        "status": (
+            "blocked"
+            if blocked and not candidates
+            else "partial" if blocked or fallback_source_blocked else "pass"
+        ),
+        "candidate_source_mode": (
+            "official_exact_limit_down"
+            if raw_rows
+            else "exact_empty_near_limit_rebound_fallback"
+        ),
         "source_meta": source_meta,
+        "near_limit_source_meta": near_source_meta,
         "request_response_hash": _canonical_hash(
             {"rows": raw_rows, "source_meta": source_meta}
+        ),
+        "near_limit_source_hash": _canonical_hash(
+            {"rows": near_rows, "source_meta": near_source_meta}
         ),
         "candidate_count": len(candidates),
         "blocked_count": len(blocked),
@@ -350,7 +648,7 @@ def build_candidate_source(
 
 
 class LimitDownObservationRegistry:
-    """Thread-safe single-code raw-tick sink and trading-signal isolation registry."""
+    """Thread-safe single-code raw market-data sink and signal isolation registry."""
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -383,8 +681,13 @@ class LimitDownObservationRegistry:
         with self._lock:
             return self._code
 
-    def observe_raw_tick(
-        self, code: str, data: dict[str, Any], received_epoch: float | None = None
+    def observe_raw_market_data(
+        self,
+        code: str,
+        data: dict[str, Any],
+        received_epoch: float | None = None,
+        *,
+        realtime_type: str = "0B",
     ) -> None:
         with self._lock:
             if not self._code:
@@ -392,7 +695,14 @@ class LimitDownObservationRegistry:
             normalized = kiwoom_utils.normalize_stock_code(code)
             sink = self._sink if normalized and normalized == self._code else None
         if sink is not None:
-            sink(normalized, dict(data or {}), received_epoch or time.time())
+            payload = dict(data or {})
+            payload["_limit_down_realtime_type"] = str(realtime_type or "").strip()
+            sink(normalized, payload, received_epoch or time.time())
+
+    def observe_raw_tick(
+        self, code: str, data: dict[str, Any], received_epoch: float | None = None
+    ) -> None:
+        self.observe_raw_market_data(code, data, received_epoch, realtime_type="0B")
 
 
 LIMIT_DOWN_OBSERVATION_REGISTRY = LimitDownObservationRegistry()
@@ -404,6 +714,27 @@ def is_observation_only_code(code: str) -> bool:
 
 def observe_raw_tick(code: str, data: dict[str, Any], received_epoch=None) -> None:
     LIMIT_DOWN_OBSERVATION_REGISTRY.observe_raw_tick(code, data, received_epoch)
+
+
+def observe_raw_market_data(
+    code: str,
+    data: dict[str, Any],
+    received_epoch=None,
+    *,
+    realtime_type: str = "0B",
+) -> None:
+    LIMIT_DOWN_OBSERVATION_REGISTRY.observe_raw_market_data(
+        code, data, received_epoch, realtime_type=realtime_type
+    )
+
+
+def _krx_session_phase(now_epoch: float) -> str:
+    current_time = datetime.fromtimestamp(now_epoch).time()
+    if current_time < datetime_time(9, 0):
+        return "PREOPEN"
+    if current_time <= datetime_time(15, 30):
+        return "OPEN"
+    return "ENDED"
 
 
 class LimitDownWatchManager:
@@ -420,6 +751,7 @@ class LimitDownWatchManager:
         self.loaded_date = ""
         self.next_retry_epoch = 0.0
         self.last_snapshot_epoch = 0.0
+        self.last_quote_snapshot_epoch = 0.0
         self.activity: dict[str, dict[str, Any]] = {}
         self.cell_visit_counts: dict[str, int] = {}
         self.active_sim_policy_keys: set[str] = set()
@@ -557,6 +889,7 @@ class LimitDownWatchManager:
             str(row.get("policy_key"))
             for row in policies
             if isinstance(row, dict)
+            and str(row.get("cohort") or "") in EXACT_LIMIT_DOWN_COHORTS
             and str(row.get("policy_key") or "")
             == f"{row.get('cohort')}|{row.get('price_band')}"
         }
@@ -630,6 +963,7 @@ class LimitDownWatchManager:
             str(row.get("policy_key")): dict(row)
             for row in policies
             if isinstance(row, dict)
+            and str(row.get("cohort") or "") in EXACT_LIMIT_DOWN_COHORTS
             and str(row.get("policy_key") or "")
             == f"{row.get('cohort')}|{row.get('price_band')}"
             and _safe_int(row.get("sample_count")) >= 1
@@ -712,7 +1046,7 @@ class LimitDownWatchManager:
     def _activate(self, candidate: LimitDownCandidate, now_epoch: float) -> None:
         info = kiwoom_utils.get_basic_info_ka10001(self.token, candidate.code) or {}
         lower_limit = _safe_price(info.get("LowerLimitPrice"))
-        if lower_limit <= 0:
+        if lower_limit <= 0 and candidate.cohort in EXACT_LIMIT_DOWN_COHORTS:
             self.next_retry_epoch = now_epoch + 300.0
             self.last_visit[candidate.code] = now_epoch
             self._emit(
@@ -730,8 +1064,13 @@ class LimitDownWatchManager:
             _safe_int(self.cell_visit_counts.get(cell_key)) + 1
         )
         self.last_snapshot_epoch = 0.0
+        self.last_quote_snapshot_epoch = 0.0
         self.state = {
-            "phase": "WAITING_FIRST_TICK",
+            "phase": (
+                "WAITING_FIRST_TRADE"
+                if candidate.cohort == "near_limit_rebound"
+                else "WAITING_FIRST_TICK"
+            ),
             "registered_epoch": now_epoch,
             "last_transition_epoch": now_epoch,
             "lower_limit_price": lower_limit,
@@ -741,6 +1080,12 @@ class LimitDownWatchManager:
             "current_price": 0,
             "first_tick_epoch": 0.0,
             "last_tick_epoch": 0.0,
+            "first_quote_epoch": 0.0,
+            "last_quote_epoch": 0.0,
+            "first_market_data_epoch": 0.0,
+            "last_market_data_epoch": 0.0,
+            "quote_count": 0,
+            "trade_tick_count": 0,
             "unlock_count": 0,
             "relock_count": 0,
             "tick_count": 0,
@@ -753,6 +1098,7 @@ class LimitDownWatchManager:
             "requested_ws_route": "krx_regular_or_effective_integrated",
             "requested_ws_code_count": 1,
             "requested_ws_item_count_max": 1,
+            "required_realtime_types": ["0D"],
             "last_reg_request_epoch": 0.0,
             "reg_request_count": 0,
             "selection_policy": "coverage_first_then_evidence_weighted_v2",
@@ -765,6 +1111,9 @@ class LimitDownWatchManager:
             "live_policy_key": cell_key,
             "live_policy_matched": cell_key in self.active_live_policy_keys,
             "live_policy_source_date": self.live_policy_source_date,
+            "candidate_kind": candidate.candidate_kind,
+            "trigger_low_change_pct": candidate.trigger_low_change_pct,
+            "close_recovery_from_low_pct": candidate.close_recovery_from_low_pct,
         }
         LIMIT_DOWN_OBSERVATION_REGISTRY.activate(candidate.code, self.on_raw_tick)
         self._request_registration(now_epoch, reason="initial")
@@ -773,7 +1122,10 @@ class LimitDownWatchManager:
             cohort=candidate.cohort,
             price_band=candidate.price_band,
             consecutive_count=candidate.consecutive_count,
+            candidate_kind=candidate.candidate_kind,
             lower_limit_price=lower_limit,
+            trigger_low_change_pct=candidate.trigger_low_change_pct,
+            close_recovery_from_low_pct=candidate.close_recovery_from_low_pct,
             sim_policy_key=cell_key,
             sim_policy_matched=cell_key in self.active_sim_policy_keys,
             sim_policy_source_date=self.sim_policy_source_date,
@@ -792,6 +1144,7 @@ class LimitDownWatchManager:
                 "codes": [self.active.code],
                 "source": "limit_down_watch_observation",
                 "reason": reason,
+                "required_realtime_types": ("0D",),
             },
         )
         self.state["last_reg_request_epoch"] = now_epoch
@@ -869,6 +1222,8 @@ class LimitDownWatchManager:
             candidate = self.active
             if candidate is None or int(daily_promotion_count or 0) >= 1:
                 return None
+            if candidate.cohort not in EXACT_LIMIT_DOWN_COHORTS:
+                return None
             cell_key = f"{candidate.cohort}|{candidate.price_band}"
             policy = self.live_policy_by_key.get(cell_key)
             if not policy:
@@ -940,8 +1295,21 @@ class LimitDownWatchManager:
         with self._lock:
             if not feature_enabled():
                 self.release(reason="feature_disabled")
+                self._write_state()
                 return
             self._load_candidates(now_epoch)
+            session_phase = _krx_session_phase(now_epoch)
+            if session_phase != "OPEN":
+                if self.active is not None:
+                    self.release(
+                        reason=(
+                            "session_ended"
+                            if session_phase == "ENDED"
+                            else "preopen_wait"
+                        )
+                    )
+                self._write_state()
+                return
             if self.active and self.active.code in active_codes:
                 self.release(reason="active_trade_target_conflict", keep_ws=True)
             if self.active:
@@ -949,7 +1317,9 @@ class LimitDownWatchManager:
                 last_transition = float(
                     self.state.get("last_transition_epoch") or registered
                 )
-                first_tick = float(self.state.get("first_tick_epoch") or 0.0)
+                first_market_data = float(
+                    self.state.get("first_market_data_epoch") or 0.0
+                )
                 last_reg_request = float(
                     self.state.get("last_reg_request_epoch") or registered
                 )
@@ -957,7 +1327,8 @@ class LimitDownWatchManager:
                 dwell = now_epoch - registered
                 unchanged = now_epoch - last_transition
                 should_rotate = dwell >= 600.0 or (
-                    phase in {"WAITING_FIRST_TICK", "LIMIT_LOCKED"}
+                    phase
+                    in {"WAITING_FIRST_TICK", "WAITING_FIRST_TRADE", "LIMIT_LOCKED"}
                     and dwell >= 180.0
                     and unchanged >= 180.0
                 )
@@ -965,22 +1336,101 @@ class LimitDownWatchManager:
                     self.release(reason="rotation_due")
                 elif (
                     self.active is not None
-                    and first_tick <= 0
+                    and first_market_data <= 0
                     and now_epoch - last_reg_request >= 15.0
                 ):
-                    self._request_registration(now_epoch, reason="first_tick_pending")
+                    self._request_registration(
+                        now_epoch, reason="first_market_data_pending"
+                    )
             if self.active is None:
                 candidate = self._pick(active_codes, now_epoch)
                 if candidate is not None:
                     self._activate(candidate, now_epoch)
-            if self.active:
-                self._write_state()
+            self._write_state()
+
+    def _on_raw_quote(
+        self, code: str, data: dict[str, Any], received_epoch: float
+    ) -> None:
+        last_quote_epoch = float(self.state.get("last_quote_epoch") or 0.0)
+        if received_epoch <= last_quote_epoch:
+            return
+        best_ask, best_bid = _top_of_book(data)
+        if best_ask <= 0 and best_bid <= 0:
+            return
+        first_quote = float(self.state.get("first_quote_epoch") or 0.0) <= 0.0
+        self.state["first_quote_epoch"] = (
+            self.state.get("first_quote_epoch") or received_epoch
+        )
+        self.state["last_quote_epoch"] = received_epoch
+        self.state["first_market_data_epoch"] = (
+            self.state.get("first_market_data_epoch") or received_epoch
+        )
+        self.state["last_market_data_epoch"] = received_epoch
+        self.state["quote_count"] = _safe_int(self.state.get("quote_count")) + 1
+        self.state["best_ask"] = best_ask
+        self.state["best_bid"] = best_bid
+        self.state["spread"] = (
+            max(0, best_ask - best_bid) if best_ask > 0 and best_bid > 0 else None
+        )
+        actual_ws_item = str(data.get("last_ws_item") or "")
+        actual_ws_route = str(data.get("last_ws_market_route") or "unknown")
+        self.state["actual_ws_item"] = actual_ws_item
+        self.state["actual_ws_route"] = actual_ws_route
+        self.state["actual_ws_item_count"] = 1 if actual_ws_item else 0
+        activity = self.activity.setdefault(code, {})
+        activity["quote_count"] = _safe_int(activity.get("quote_count")) + 1
+        activity["last_quote_epoch"] = received_epoch
+        if first_quote:
+            self._emit(
+                "limit_down_watch_quote_observed",
+                phase=self.state.get("phase"),
+                cohort=self.active.cohort if self.active else "unknown",
+                price_band=self.active.price_band if self.active else "unknown",
+                best_ask=best_ask,
+                best_bid=best_bid,
+                actual_ws_item=actual_ws_item,
+                actual_ws_route=actual_ws_route,
+                registration_latency_sec=round(
+                    max(
+                        0.0,
+                        received_epoch
+                        - _safe_float(self.state.get("registered_epoch")),
+                    ),
+                    6,
+                ),
+            )
+        if received_epoch - self.last_quote_snapshot_epoch >= 5.0:
+            self.last_quote_snapshot_epoch = received_epoch
+            self._emit(
+                "limit_down_watch_quote_snapshot",
+                phase=self.state.get("phase"),
+                cohort=self.active.cohort if self.active else "unknown",
+                price_band=self.active.price_band if self.active else "unknown",
+                market_data_type="0D",
+                quote_count=self.state.get("quote_count"),
+                trade_tick_count=self.state.get("trade_tick_count"),
+                first_quote_epoch=self.state.get("first_quote_epoch"),
+                last_quote_epoch=self.state.get("last_quote_epoch"),
+                first_tick_epoch=self.state.get("first_tick_epoch"),
+                last_tick_epoch=self.state.get("last_tick_epoch"),
+                current_price=self.state.get("current_price"),
+                best_ask=best_ask,
+                best_bid=best_bid,
+                spread=self.state.get("spread"),
+                actual_ws_item=actual_ws_item,
+                actual_ws_route=actual_ws_route,
+                actual_ws_item_count=self.state.get("actual_ws_item_count"),
+            )
+            self._write_state()
 
     def on_raw_tick(
         self, code: str, data: dict[str, Any], received_epoch: float
     ) -> None:
         with self._lock:
             if self.active is None or code != self.active.code:
+                return
+            if str(data.get("_limit_down_realtime_type") or "0B") == "0D":
+                self._on_raw_quote(code, data, received_epoch)
                 return
             last_epoch = float(self.state.get("last_tick_epoch") or 0.0)
             if received_epoch <= last_epoch:
@@ -995,9 +1445,16 @@ class LimitDownWatchManager:
             low_price = _safe_price(data.get("low") or data.get("low_price"))
             self.state["last_tick_epoch"] = received_epoch
             self.state["tick_count"] = _safe_int(self.state.get("tick_count")) + 1
+            self.state["trade_tick_count"] = (
+                _safe_int(self.state.get("trade_tick_count")) + 1
+            )
             self.state["first_tick_epoch"] = (
                 self.state.get("first_tick_epoch") or received_epoch
             )
+            self.state["first_market_data_epoch"] = (
+                self.state.get("first_market_data_epoch") or received_epoch
+            )
+            self.state["last_market_data_epoch"] = received_epoch
             self.state["current_price"] = current
             if open_price > 0:
                 self.state["open_price"] = self.state.get("open_price") or open_price
@@ -1012,9 +1469,13 @@ class LimitDownWatchManager:
 
             lower_limit = _safe_int(self.state.get("lower_limit_price"))
             previous_phase = str(self.state.get("phase") or "WAITING_FIRST_TICK")
-            locked = current <= lower_limit
+            exact_candidate = self.active.cohort in EXACT_LIMIT_DOWN_COHORTS
+            locked = bool(exact_candidate and current <= lower_limit)
             best_ask, best_bid = _top_of_book(data)
-            if locked:
+            if not exact_candidate:
+                self.state["consecutive_unlocked_tick_count"] = 0
+                self.state["unlock_confirmed_epoch"] = 0.0
+            elif locked:
                 self.state["consecutive_unlocked_tick_count"] = 0
                 self.state["unlock_confirmed_epoch"] = 0.0
                 self.state["live_promotion_eligible_emitted"] = False
@@ -1022,7 +1483,9 @@ class LimitDownWatchManager:
                 self.state["consecutive_unlocked_tick_count"] = (
                     _safe_int(self.state.get("consecutive_unlocked_tick_count")) + 1
                 )
-            if previous_phase == "WAITING_FIRST_TICK":
+            if not exact_candidate and previous_phase == "WAITING_FIRST_TRADE":
+                new_phase = "NEAR_REBOUND_OBSERVING"
+            elif previous_phase == "WAITING_FIRST_TICK":
                 new_phase = "LIMIT_LOCKED" if locked else "UNLOCKED"
                 if not locked:
                     self.state["unlock_count"] = 1
@@ -1068,7 +1531,8 @@ class LimitDownWatchManager:
                     tick_count=self.state.get("tick_count"),
                 )
             if (
-                not locked
+                exact_candidate
+                and not locked
                 and _safe_int(self.state.get("consecutive_unlocked_tick_count")) >= 2
                 and float(self.state.get("unlock_confirmed_epoch") or 0.0) <= 0.0
             ):
@@ -1166,6 +1630,7 @@ class LimitDownWatchManager:
             activity.update(
                 {
                     "tick_count": _safe_int(activity.get("tick_count")) + 1,
+                    "trade_tick_count": _safe_int(activity.get("trade_tick_count")) + 1,
                     "unlock_count": _safe_int(self.state.get("unlock_count")),
                     "trade_value": max(
                         _safe_int(activity.get("trade_value")),
@@ -1181,6 +1646,9 @@ class LimitDownWatchManager:
                     phase=self.state.get("phase"),
                     cohort=self.active.cohort,
                     price_band=self.active.price_band,
+                    market_data_type="0B",
+                    quote_count=self.state.get("quote_count"),
+                    trade_tick_count=self.state.get("trade_tick_count"),
                     high_vs_limit_down_close_pct=self.state.get(
                         "high_vs_limit_down_close_pct"
                     ),
@@ -1200,6 +1668,8 @@ class LimitDownWatchManager:
                     unlock_confirmed_epoch=self.state.get("unlock_confirmed_epoch"),
                     first_tick_epoch=self.state.get("first_tick_epoch"),
                     last_tick_epoch=self.state.get("last_tick_epoch"),
+                    first_quote_epoch=self.state.get("first_quote_epoch"),
+                    last_quote_epoch=self.state.get("last_quote_epoch"),
                     open_price=self.state.get("open_price"),
                     high_price=self.state.get("high_price"),
                     low_price=self.state.get("low_price"),

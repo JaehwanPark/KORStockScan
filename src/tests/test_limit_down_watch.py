@@ -134,7 +134,46 @@ def test_ka10017_previous_limit_down_request_and_parser(monkeypatch):
     assert rows[0]["Code"] == "000001"
     assert rows[0]["CurrentPrice"] == 4000
     assert rows[0]["ConsecutiveCountRaw"] == "2"
-    assert meta["official_upstream_commit"].startswith("1504d45f")
+    assert meta["official_upstream_commit"].startswith("69642586")
+
+
+def test_ka10099_near_candidate_eligibility_is_fail_closed(monkeypatch):
+    def fake_fetch(**kwargs):
+        if kwargs["payload"]["mrkt_tp"] == "0":
+            return [
+                {
+                    "list": [
+                        {
+                            "code": "000010",
+                            "auditInfo": "정상",
+                            "state": "정상",
+                            "orderWarning": "0",
+                            "marketCode": "0",
+                        },
+                        {
+                            "code": "000020",
+                            "auditInfo": "투자주의환기종목",
+                            "state": "관리종목",
+                            "orderWarning": "4",
+                            "marketCode": "0",
+                        },
+                    ]
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows, meta = kiwoom_utils.get_stock_eligibility_map_ka10099(
+        "token", ["000010", "000020", "000030"]
+    )
+
+    assert rows["000010"]["eligible"] is True
+    assert rows["000020"]["eligible"] is False
+    assert "audit_info_excluded" in rows["000020"]["blocked_reasons"]
+    assert meta["status"] == "partial"
+    assert meta["missing_codes"] == ["000030"]
+    assert meta["official_upstream_commit"].startswith("69642586")
 
 
 def test_price_band_boundaries():
@@ -315,6 +354,68 @@ def test_candidate_source_blocks_when_daily_index_has_no_valid_date(
     ]
 
 
+def test_exact_empty_source_uses_verified_near_limit_rebound_fallback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(limit_down_watch, "CANDIDATE_DIR", tmp_path)
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *a, **k: True)
+    daily = pd.DataFrame(
+        {
+            "Low": [10_000, 7_200],
+            "Close": [10_000, 7_600],
+        },
+        index=pd.to_datetime(["2026-08-03", "2026-08-04"]),
+    )
+
+    candidates, artifact = build_candidate_source(
+        "token",
+        object(),
+        target_date=date(2026, 8, 5),
+        fetch_previous=lambda _token: ([], {"api_id": "ka10017"}),
+        fetch_daily=lambda _token, _code: daily,
+        db_close_loader=lambda _db, _code, _date: (7600, "근접반등"),
+        latest_completed_date_loader=lambda _db, _target_date: date(2026, 8, 4),
+        near_limit_loader=lambda _db, _target_date: (
+            [
+                {
+                    "Code": "000010",
+                    "Name": "근접반등",
+                    "SourceTradeDate": "2026-08-04",
+                    "Low": 7200,
+                    "Close": 7600,
+                    "PreviousClose": 10_000,
+                    "Volume": 123_000,
+                }
+            ],
+            {"status": "pass", "source_row_count": 2635},
+        ),
+        near_eligibility_loader=lambda _token, _codes: (
+            {
+                "000010": {
+                    "eligible": True,
+                    "audit_info": "정상",
+                    "state": "정상",
+                    "order_warning": "0",
+                    "blocked_reasons": [],
+                }
+            },
+            {"status": "pass", "api_id": "ka10099"},
+        ),
+    )
+
+    assert [candidate.code for candidate in candidates] == ["000010"]
+    candidate = candidates[0]
+    assert candidate.cohort == "near_limit_rebound"
+    assert candidate.candidate_kind == "near_limit_rebound"
+    assert candidate.consecutive_count == 0
+    assert candidate.trigger_low_change_pct == -28.0
+    assert candidate.close_recovery_from_low_pct == 5.555556
+    assert artifact["status"] == "pass"
+    assert artifact["candidate_source_mode"] == (
+        "exact_empty_near_limit_rebound_fallback"
+    )
+
+
 def test_raw_tick_state_preserves_locked_unlock_relock_order(monkeypatch, tmp_path):
     monkeypatch.setattr(limit_down_watch, "RUNTIME_DIR", tmp_path)
     monkeypatch.setattr(limit_down_watch, "emit_pipeline_event", lambda *a, **k: None)
@@ -411,12 +512,87 @@ def test_raw_tick_emits_source_only_unlock_confirmation_after_second_tick(
     assert manager.state["unlock_confirmed_epoch"] == 11.0
 
 
+def test_raw_0d_quote_is_observed_without_fabricating_trade_or_unlock(
+    monkeypatch, tmp_path
+):
+    emitted = []
+    monkeypatch.setattr(limit_down_watch, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch,
+        "emit_pipeline_event",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+    manager = LimitDownWatchManager("token", object(), _Bus())
+    manager.active = _candidate()
+    manager.state = {
+        "phase": "WAITING_FIRST_TICK",
+        "registered_epoch": 1.0,
+        "lower_limit_price": 2800,
+    }
+
+    manager.on_raw_tick(
+        "000001",
+        {
+            "_limit_down_realtime_type": "0D",
+            "orderbook": {
+                "asks": [{"price": 2800}],
+                "bids": [{"price": 2795}],
+            },
+            "last_ws_item": "000001",
+            "last_ws_market_route": "krx_regular",
+        },
+        10.0,
+    )
+
+    assert manager.state["phase"] == "WAITING_FIRST_TICK"
+    assert manager.state["quote_count"] == 1
+    assert manager.state.get("tick_count", 0) == 0
+    assert manager.state["first_market_data_epoch"] == 10.0
+    assert manager.state["best_ask"] == 2800
+    assert manager.state["best_bid"] == 2795
+    stages = [args[3] for args, _kwargs in emitted if len(args) >= 4]
+    assert "limit_down_watch_quote_observed" in stages
+    assert "limit_down_watch_quote_snapshot" in stages
+    assert "limit_down_watch_unlock_confirmed" not in stages
+
+
+def test_near_limit_rebound_never_creates_live_promotion_target():
+    manager = LimitDownWatchManager("token", _DB(), _Bus())
+    base = _candidate(count=1)
+    manager.active = LimitDownCandidate(
+        **{
+            **base.__dict__,
+            "consecutive_count": 0,
+            "cohort": "near_limit_rebound",
+            "candidate_kind": "near_limit_rebound",
+        }
+    )
+    key = "near_limit_rebound|1000_4999"
+    manager.active_live_policy_keys = {key}
+    manager.live_policy_by_key = {key: {"sample_count": 1}}
+    manager.live_policy_max_entry_spread_pct = 1.5
+    manager.state = {
+        "phase": "UNLOCKED",
+        "consecutive_unlocked_tick_count": 2,
+        "unlock_confirmed_epoch": 99.0,
+        "last_tick_epoch": 100.0,
+        "current_price": 2910,
+        "lower_limit_price": 2800,
+        "best_ask": 2920,
+        "best_bid": 2910,
+    }
+
+    assert manager.live_promotion_target(now_epoch=101.0) is None
+
+
 def test_ws_raw_sink_receives_every_tick_before_latest_tick_coalescing(monkeypatch):
     observed = []
     monkeypatch.setattr(
         kiwoom_websocket,
-        "observe_raw_tick",
-        lambda code, data, _epoch: observed.append((code, data["curr"])),
+        "observe_raw_market_data",
+        lambda code, data, _epoch, *, realtime_type: observed.append(
+            (code, data["curr"], realtime_type)
+        ),
     )
     manager = kiwoom_websocket.KiwoomWSManager.__new__(kiwoom_websocket.KiwoomWSManager)
     manager._stop_event = threading.Event()
@@ -428,7 +604,11 @@ def test_ws_raw_sink_receives_every_tick_before_latest_tick_coalescing(monkeypat
     manager._queue_tick_event("000010", {"curr": 2900}, realtime_type="0D")
     manager._queue_tick_event("000010", {"curr": 3000})
 
-    assert observed == [("000010", 2800), ("000010", 3000)]
+    assert observed == [
+        ("000010", 2800, "0B"),
+        ("000010", 2900, "0D"),
+        ("000010", 3000, "0B"),
+    ]
     assert manager._pending_tick_events["000010"]["data"]["curr"] == 3000
 
 
@@ -443,6 +623,7 @@ def test_normal_scanner_handoff_keeps_ws_and_clears_observation_registry(
         lambda _token, _code: {"LowerLimitPrice": 2800},
     )
     monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "true")
+    monkeypatch.setattr(limit_down_watch, "_krx_session_phase", lambda _epoch: "OPEN")
     bus = _Bus()
     manager = LimitDownWatchManager("token", object(), bus)
     manager.candidates = [_candidate()]
@@ -457,7 +638,8 @@ def test_normal_scanner_handoff_keeps_ws_and_clears_observation_registry(
         "COMMAND_WS_REG",
         "COMMAND_WS_REG",
     ]
-    assert bus.events[-1][1]["reason"] == "first_tick_pending"
+    assert bus.events[-1][1]["reason"] == "first_market_data_pending"
+    assert bus.events[-1][1]["required_realtime_types"] == ("0D",)
 
     assert manager.relinquish_for_trading("000001") is True
     assert LIMIT_DOWN_OBSERVATION_REGISTRY.active_code() == ""
@@ -467,6 +649,40 @@ def test_normal_scanner_handoff_keeps_ws_and_clears_observation_registry(
     ]
     assert manager.last_release["reason"] == "normal_scanner_claimed"
     assert manager.last_release["keep_ws"] is True
+
+
+def test_preopen_wait_persists_idle_heartbeat_and_starts_at_krx_open(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(limit_down_watch, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(limit_down_watch, "emit_pipeline_event", lambda *a, **k: None)
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_basic_info_ka10001",
+        lambda _token, _code: {"LowerLimitPrice": 2800},
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "true")
+    bus = _Bus()
+    manager = LimitDownWatchManager("token", object(), bus)
+    manager.candidates = [_candidate()]
+    preopen = datetime(2026, 8, 5, 8, 30).timestamp()
+    market_open = datetime(2026, 8, 5, 9, 0).timestamp()
+    manager.loaded_date = "2026-08-05"
+
+    manager.reconcile(now_epoch=preopen)
+
+    assert manager.active is None
+    assert bus.events == []
+    state = json.loads(next(tmp_path.glob("limit_down_watch_state_*.json")).read_text())
+    assert state["enabled"] is True
+    assert state["active_slot_count"] == 0
+    assert state["active_candidate"] is None
+
+    manager.reconcile(now_epoch=market_open)
+
+    assert manager.active is not None
+    assert bus.events[0][0] == "COMMAND_WS_REG"
+    assert bus.events[0][1]["required_realtime_types"] == ("0D",)
 
 
 def test_scanner_promotion_handoff_blocks_signal_until_attach_event(
@@ -915,6 +1131,31 @@ def test_limit_down_counterfactual_label_uses_confirmed_unlock_and_cost():
     assert label["broker_order_forbidden"] is True
 
 
+def test_near_limit_rebound_label_is_isolated_from_exact_live_research():
+    row = limit_down_watch_research.label_observation_visit(
+        {
+            "row_id": "2026-08-05:000001:1",
+            "target_date": "2026-08-05",
+            "code": "000001",
+            "cohort": "near_limit_rebound",
+            "price_band": "1000_4999",
+            "snapshots": [
+                {
+                    "at": "2026-08-05T09:00:01",
+                    "phase": "NEAR_REBOUND_OBSERVING",
+                    "current_price": 3000,
+                    "best_ask": 3010,
+                    "best_bid": 3000,
+                }
+            ],
+        }
+    )
+
+    assert row["label_status"] == ("observation_only_cohort_separate_contract_required")
+    assert row["runtime_effect"] is False
+    assert row["broker_order_forbidden"] is True
+
+
 def test_sim_policy_is_independent_by_cohort_and_price_band():
     rows = []
     for index in range(5):
@@ -1185,6 +1426,54 @@ def test_postclose_report_no_observation_stays_fail_closed(tmp_path):
         "ordered_intraday_path_sample_missing"
         in report["evidence_readiness"]["blockers"]
     )
+
+
+def test_postclose_report_counts_quote_only_capture_separately(tmp_path):
+    event_path = tmp_path / "events.jsonl"
+    candidate_path = tmp_path / "candidates.json"
+    rows = [
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_registered",
+            "stock_code": "000001",
+            "fields": _observation_event_fields(
+                cohort="single_limit_down", price_band="1000_4999"
+            ),
+        },
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_quote_snapshot",
+            "stock_code": "000001",
+            "fields": _observation_event_fields(
+                cohort="single_limit_down",
+                price_band="1000_4999",
+                market_data_type="0D",
+                best_ask=2800,
+                best_bid=2795,
+            ),
+        },
+    ]
+    event_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
+        encoding="utf-8",
+    )
+    candidate_path.write_text(
+        json.dumps(
+            _candidate_source_payload({"code": "000001", "source_quality": "pass"})
+        ),
+        encoding="utf-8",
+    )
+
+    report = limit_down_watch_report.build_report(
+        "2026-07-27", event_path=event_path, candidate_path=candidate_path
+    )
+
+    assert report["status"] == "pass"
+    assert report["snapshot_code_count"] == 0
+    assert report["quote_snapshot_code_count"] == 1
+    assert report["market_data_observed_code_count"] == 1
+    assert report["groups"][0]["quote_snapshot_codes"] == 1
+    assert report["groups"][0]["ordered_path_captured_codes"] == 0
 
 
 def test_postclose_report_distinguishes_missing_event_source(tmp_path):
