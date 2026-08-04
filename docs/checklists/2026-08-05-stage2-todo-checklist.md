@@ -18,6 +18,14 @@
 
 ## 사용자 지시 구현
 
+- [x] `[KiwoomAuth8005PidHandoff0805] 8005 graceful 재기동 후 이전 PID 로그 중복경보 귀속 보완` (`Due: 2026-08-05`, `Slot: PREOPEN`, `TimeWindow: 08:48~09:00`, `Track: RuntimeStability`)
+  - Source: [kiwoom_auth_8005_restart.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/kiwoom_auth_8005_restart.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: 최초 fresh 8005는 기존처럼 token cache invalidation과 `restart.flag`를 수행한다. 새 PID 시작 전에 이전 PID가 남긴 timestamped 8005는 PID handoff provenance로 소비하고 중복 cache invalidation·Telegram·restart를 만들지 않으며, timestamp 결손 또는 새 PID 시작 이후 8005는 계속 actionable이어야 한다.
+  - 금지: current-runtime 8005 은폐, cooldown/daily cap 우회, REST same-request retry 1회 확장, threshold/provider/order guard 변경을 금지한다.
+  - 실행 결과: 08:48:26 첫 detector가 `restart.flag`를 생성해 PID `54536 -> 62804`로 교체했고, 새 PID는 08:48:42 token 발급 성공 후 REST 시세/계좌 호출에서 8005가 재발하지 않았다. 08:48:41 cooldown 경보는 이전 PID가 08:48:29까지 남긴 로그를 새 PID가 다시 읽은 중복 귀속으로 판정했다. 공식 Kiwoom upstream `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 `kiwoom/core/client.py`, `kiwoom/core/auth.py`, `kiwoom/core/errors.py`, `postman/kiwoom-openapi.postman_collection.json`을 확인해 8005 one-shot auth recovery와 `/oauth2/token` 계약을 재확인했다.
+  - 검증 결과 (`2026-08-05 08:54 KST`): 이전 PID 행만 있는 handoff는 `pass`와 `prior_runtime_auth_8005_count=1`, 이전·현재 PID 행이 함께 있으면 현재 행만 `fresh_auth_8005_count=1`로 유지되는 회귀를 추가했다. 자체리뷰에서 stale heartbeat PID가 다른 프로세스로 재사용될 때 과거 로그로 잘못 억제될 수 있는 결함을 발견해 `/proc/<pid>/cmdline`의 `bot_main.py` identity를 fail-closed 검증하도록 보완했다. detector·process health·bot scheduler 확대 회귀 `48 passed`, full dry-run `summary_severity=pass`, Black, Ruff, compile, `git diff --check`, checklist parser를 통과했다. producer/consumer·silent-fail·runtime mutation authority 재리뷰 finding=`0`이다.
+  - 다음 액션: 현재 정상 PID는 추가 재기동하지 않는다. 다음 소스 반영 재기동 뒤 자연 PID handoff에서 `prior_runtime_auth_8005_count`와 current-runtime 재발 여부를 확인한다.
+
 - [x] `[ErrorDetectorInstalledScheduleContract0805] 설치 cron·parent enable·terminal skip 기반 오탐 제거 및 startup provenance 보완` (`Due: 2026-08-05`, `Slot: PREOPEN`, `TimeWindow: 08:15~08:45`, `Track: RuntimeStability`)
   - Source: [cron_completion.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/cron_completion.py), [artifact_freshness.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/artifact_freshness.py), [process_health.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/process_health.py)
   - 판정 기준: 설치되지 않은 registry job, crontab parent flag=false인 산출물, exit code 0의 disabled/skipped status, step-scoped `[SKIP]` 산출물을 실패로 경보하지 않는다. crontab 조회 실패는 기대값을 보존하고, 전일 heartbeat만 남은 당일 기동 실패는 current PID crash가 아니라 `startup_not_observed`로 분리한다.

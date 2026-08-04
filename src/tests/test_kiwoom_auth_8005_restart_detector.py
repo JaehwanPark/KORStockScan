@@ -4,6 +4,7 @@ import json
 import tempfile
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from src.engine.error_detectors.kiwoom_auth_8005_restart import (
@@ -139,6 +140,127 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.details["would_restart"] is False
         assert result.details["token_cache_invalidated"] is True
         assert invalidations == ["error_detector_auth_8005"]
+
+    def test_pid_handoff_consumes_prior_runtime_8005_without_alert_or_invalidation(
+        self, monkeypatch
+    ):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        now = time.time()
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module,
+            "_current_runtime_identity",
+            lambda: {"pid": 222, "start_ts": now - 5},
+        )
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "kiwoom_utils_info.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._write_state(log_file, restart_count=1, last_restart_ts=now - 10)
+            prior_at = datetime.fromtimestamp(now - 7).astimezone()
+            _append(
+                log_file,
+                f"[{prior_at:%Y-%m-%d %H:%M:%S}] 인증에 실패했습니다[8005:Token이 유효하지 않습니다]\n",
+            )
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["current_runtime_pid"] == 222
+        assert result.details["prior_runtime_auth_8005_count"] == 1
+        assert "Prior-runtime" in result.summary
+        assert invalidations == []
+        assert not self._restart_flag_path.exists()
+
+    def test_pid_handoff_keeps_current_runtime_8005_actionable(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        now = time.time()
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module,
+            "_current_runtime_identity",
+            lambda: {"pid": 333, "start_ts": now - 5},
+        )
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "kiwoom_utils_info.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._write_state(log_file, restart_count=1, last_restart_ts=now - 10)
+            prior_at = datetime.fromtimestamp(now - 7).astimezone()
+            current_at = datetime.fromtimestamp(now - 3).astimezone()
+            _append(
+                log_file,
+                f"[{prior_at:%Y-%m-%d %H:%M:%S}] 인증에 실패했습니다[8005:Token이 유효하지 않습니다]\n",
+            )
+            _append(
+                log_file,
+                f"[{current_at:%Y-%m-%d %H:%M:%S}] 인증에 실패했습니다[8005:Token이 유효하지 않습니다]\n",
+            )
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "warning"
+        assert result.details["prior_runtime_auth_8005_count"] == 1
+        assert result.details["fresh_auth_8005_count"] == 1
+        assert result.details["restart_suppressed_by_cooldown"] is True
+        assert invalidations == ["error_detector_auth_8005"]
+
+    def test_runtime_identity_rejects_reused_non_bot_pid(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        heartbeat_path = tmp_path / "heartbeat.json"
+        proc_root = tmp_path / "proc"
+        proc_dir = proc_root / "222"
+        proc_dir.mkdir(parents=True)
+        heartbeat_path.write_text(
+            json.dumps({"main_loop": {"pid": 222}}), encoding="utf-8"
+        )
+        (proc_dir / "cmdline").write_bytes(b"/usr/bin/python\x00other_job.py\x00")
+        monkeypatch.setattr(detector_module, "HEARTBEAT_PATH", heartbeat_path)
+        monkeypatch.setattr(detector_module, "PROC_ROOT", proc_root)
+
+        assert detector_module._current_runtime_identity() is None
+
+    def test_runtime_identity_accepts_live_bot_process(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        heartbeat_path = tmp_path / "heartbeat.json"
+        proc_root = tmp_path / "proc"
+        proc_dir = proc_root / "333"
+        proc_dir.mkdir(parents=True)
+        heartbeat_path.write_text(
+            json.dumps({"main_loop": {"pid": 333}}), encoding="utf-8"
+        )
+        (proc_dir / "cmdline").write_bytes(
+            b"/home/ubuntu/KORStockScan/.venv/bin/python\x00bot_main.py\x00"
+        )
+        stat_fields = ["S", *("0" for _ in range(18)), "500"]
+        (proc_dir / "stat").write_text(
+            f"333 (bot_main.py) {' '.join(stat_fields)}\n", encoding="utf-8"
+        )
+        (proc_root / "stat").write_text("btime 1000\n", encoding="utf-8")
+        monkeypatch.setattr(detector_module, "HEARTBEAT_PATH", heartbeat_path)
+        monkeypatch.setattr(detector_module, "PROC_ROOT", proc_root)
+        monkeypatch.setattr(detector_module.os, "sysconf", lambda _key: 100)
+
+        assert detector_module._current_runtime_identity() == {
+            "pid": 333,
+            "start_ts": 1005.0,
+        }
 
     def test_daily_restart_count_threshold_is_fail(self, monkeypatch):
         import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
