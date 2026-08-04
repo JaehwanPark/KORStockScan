@@ -319,6 +319,37 @@ def test_minute_summary_does_not_duplicate_actionable_signal():
     assert report["actionable_signal_count"] == 1
 
 
+def test_same_support_state_transitions_within_two_minutes_are_one_episode():
+    start = datetime(2026, 8, 3, 15, 3, tzinfo=KST)
+    rows = [
+        _row(
+            start,
+            100_000,
+            state="ENTRY_CAUTION",
+            entry_high=100_000,
+            invalidation=99_500,
+            observation_kind="state_transition",
+        ),
+        _row(start + timedelta(seconds=30), 99_900, line_number=2),
+        _row(
+            start + timedelta(minutes=1),
+            100_000,
+            state="ENTRY_CAUTION",
+            entry_high=100_000,
+            invalidation=99_500,
+            observation_kind="state_transition",
+            line_number=3,
+        ),
+        _row(start + timedelta(minutes=3), 100_600, line_number=4),
+    ]
+
+    report = evaluation.build_daily_evaluation(rows, target_date=start.date())
+
+    assert report["candidate_signal_count"] == 2
+    assert report["actionable_signal_count"] == 1
+    assert report["episode_duplicate_signal_count"] == 1
+
+
 def test_completed_bar_that_started_before_signal_is_not_future_mfe():
     signal = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
     rows = [

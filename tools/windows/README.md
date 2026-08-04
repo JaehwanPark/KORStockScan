@@ -7,7 +7,9 @@ the completed-close direction over 1-, 3-, and 5-minute horizons on one compact
 line. It also draws a compact 20-minute line chart from completed one-minute
 closes; no additional graph is created for the three trend horizons. A compact
 advisory line shows the entry state, tick-normalized price range, primary
-reason, and external-risk quality.
+reason, and external-risk quality. A holding-independent exit observation
+temporarily takes display priority when it reaches `EXIT_CAUTION`,
+`EXIT_READY`, or `EXIT_CANCELLED`; it never reads a position or submits a sell.
 
 The implementation contract, state-machine order, formulas, known limits, and
 external-auditor checklist are documented in
@@ -101,6 +103,19 @@ and `KRW=X` data is explicitly labeled `yahoo_best_effort` and
 `BEST_EFFORT_DELAYED`; it is not represented as licensed real-time data.
 Favorable external data cannot create an entry signal. Adverse external data
 can downgrade or hold an otherwise domestic-qualified advisory.
+The separate exit observation uses a rolling 20-bar high, a dynamic drawdown
+band equal to the larger of two ticks or twice the recent median one-minute
+change, the preceding five-bar low, session VWAP, and completed 3/5-minute
+downside direction. `EXIT_CAUTION` records the initial break. `EXIT_READY`
+requires a subsequent completed bar within the three-bar confirmation window
+to remain below broken support with both 3- and 5-minute downside confirmation.
+It becomes `EXIT_CANCELLED` after two
+completed closes reclaim support or five completed bars fail to make a new
+low. These states are `holding_independent=true`, `future_prediction=false`,
+and remain widget observation only. Its source-quality gate requires a fresh
+quote, fresh coherent BBO, and contiguous completed one-minute bars; entry-only
+inputs such as prior-day OHLC, relative strength, flow, and external markets do
+not block this exit observation.
 Session-wide relative weakness may be cleared only when both 15-minute and
 5-minute aligned returns versus every required comparison are no worse than
 -0.5 percentage points; this clears a stale negative veto and cannot promote a
@@ -108,7 +123,13 @@ setup by itself. A high-volume retest may qualify as absorption only after the
 held structure, latest completed close, VWAP, recent resistance, and non-down
 3/5-minute trends agree. A forming-price upside impulse cannot qualify it.
 Structural support owns invalidation, while chase distance is measured from
-the tactical VWAP/support used to form the displayed price range.
+the tactical VWAP/support used to form the displayed price range. A forming-
+price break without confirmation is treated as a pending soft break and
+withdraws the entry
+range. `AVOID` requires either a completed one-minute close below support or a
+two-tick live break accompanied by negative impulse and ask-side pressure.
+After a break, two distinct completed bars must reclaim the broken support
+before an actionable state can be promoted again.
 NXT premarket context is auxiliary-only through 09:30 KST and is then removed;
 it cannot create `ENTRY_READY`. In the NXT aftermarket, the latest regular-KRX
 foreign/program flow is labeled `FROZEN_REGULAR_SESSION` and is never presented
@@ -121,11 +142,13 @@ The AWS collector also sends a plain-text Telegram notice only to the configured
 `ADMIN_ID` when a displayed advisory first becomes `ENTRY_CAUTION` or
 `ENTRY_READY`.  A direct `ENTRY_CAUTION -> ENTRY_READY` upgrade produces one
 additional notice.  Repeated 10-second observations are deduplicated, and a
-non-actionable interval of at least 60 seconds is required before a new episode
+non-actionable interval of at least 120 seconds is required before a new episode
 can notify again.  Telegram failures are isolated from quote collection and do
 not change advisory state, trading runtime, accounts, or orders.  Set
 `KORSTOCKSCAN_SAMSUNG_WIDGET_ENTRY_TELEGRAM_ENABLED=false` on the collector
-service to disable this admin-only notification path.
+service to disable this admin-only notification path. An active
+`EXIT_READY` suppresses a contradictory entry notice; exit states do not add a
+new Telegram message in this implementation.
 
 Only those two actionable states can display a recommended price range. `WATCH`
 and `DATA_WAIT` show `가격대기`, `NO_CHASE` shows `범위이탈`, and `AVOID` shows
@@ -140,6 +163,22 @@ volatility adjusted. The compact detail line separately identifies confirmed-
 bar `UP`, `STABLE`, `MIXED`, or `DOWN`, so a stable setup is not mislabeled as
 an upward forecast. A forming-price downside reversal plus ask-side pressure can
 only veto an advisory; a positive impulse cannot promote one.
+
+## Offline Entry-AI comparison
+
+The symbol-portable part of the widget entry logic can be replayed against
+existing exact Entry-AI payloads and mature 10-minute outcome labels:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.monitoring.widget_mechanical_entry_replay \
+  --target-date YYYY-MM-DD --write
+```
+
+The replay deliberately omits Samsung-specific peer strength, investor flow,
+and external-market inputs, so a portable-core pass is capped at
+`ENTRY_CAUTION`. Its report is diagnostic counterfactual evidence with
+`runtime_effect=false`, `actual_order_submitted=false`, and no authority to
+replace Entry AI or approve a live runtime change.
 
 ## Windows installation
 

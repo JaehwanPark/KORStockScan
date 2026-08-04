@@ -8,6 +8,7 @@ token, submit an order, or control the trading bot.
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import tkinter as tk
@@ -39,6 +40,13 @@ TREND_ASSESSMENT_STATES = {
     "TREND_STABLE",
     "TREND_MIXED",
     "TREND_DOWN",
+}
+EXIT_ADVISORY_STATES = {
+    "DATA_WAIT",
+    "EXIT_WATCH",
+    "EXIT_CAUTION",
+    "EXIT_READY",
+    "EXIT_CANCELLED",
 }
 
 
@@ -107,6 +115,13 @@ class Quote:
     observed_at: datetime | None
     advisory_observed_at: datetime | None
     advisory_valid_until: datetime | None
+    exit_advisory_state: str
+    reference_exit_price: int | None
+    exit_peak_price: int | None
+    exit_peak_drawdown_pct: float | None
+    exit_broken_support: int | None
+    exit_reasons: tuple[str, ...]
+    exit_unmet_conditions: tuple[str, ...]
 
 
 def _aware_datetime(value: object, *, field: str) -> datetime:
@@ -122,11 +137,27 @@ def _aware_datetime(value: object, *, field: str) -> datetime:
 def _optional_positive_int(value: object, *, field: str) -> int | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        raise ValueError(f"invalid_{field}")
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid_{field}") from exc
     if parsed <= 0:
+        raise ValueError(f"invalid_{field}")
+    return parsed
+
+
+def _optional_nonnegative_float(value: object, *, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"invalid_{field}")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid_{field}") from exc
+    if not math.isfinite(parsed) or parsed < 0:
         raise ValueError(f"invalid_{field}")
     return parsed
 
@@ -151,6 +182,20 @@ def advisory_range_text(quote: Quote) -> str:
         "NO_CHASE": " · 범위이탈",
         "AVOID": " · 범위없음",
     }.get(quote.advisory_state, "")
+
+
+def _expected_advisory_sessions(
+    market_venue: str, market_cohort: str, market_session: str
+) -> set[str] | None:
+    return {
+        ("NXT", "PREMARKET_KRX_LIKE", "krx_like_premarket"): {"NXT_PREMARKET"},
+        ("KRX", "KRX", "krx_or_closed"): {
+            "KRX_REGULAR",
+            "SESSION_TRANSITION",
+            "CLOSED",
+        },
+        ("NXT", "NXT", "nxt_aftermarket"): {"NXT_AFTERMARKET"},
+    }.get((market_venue, market_cohort, market_session))
 
 
 def parse_quote_payload(
@@ -281,15 +326,9 @@ def parse_quote_payload(
             raise ValueError("stale_advisory_snapshot")
         if advisory_valid_until < local_received_at:
             raise ValueError("expired_advisory")
-        expected_sessions = {
-            ("NXT", "PREMARKET_KRX_LIKE", "krx_like_premarket"): {"NXT_PREMARKET"},
-            ("KRX", "KRX", "krx_or_closed"): {
-                "KRX_REGULAR",
-                "SESSION_TRANSITION",
-                "CLOSED",
-            },
-            ("NXT", "NXT", "nxt_aftermarket"): {"NXT_AFTERMARKET"},
-        }.get((market_venue, market_cohort, market_session))
+        expected_sessions = _expected_advisory_sessions(
+            market_venue, market_cohort, market_session
+        )
         if (
             expected_sessions is None
             or advisory_payload.get("session") not in expected_sessions
@@ -337,6 +376,91 @@ def parse_quote_payload(
                 external_quality = "DELAYED"
             elif qualities == {"MARKET_CLOSED"}:
                 external_quality = "MARKET_CLOSED"
+    exit_advisory_state = "DATA_WAIT"
+    reference_exit_price = None
+    exit_peak_price = None
+    exit_peak_drawdown_pct = None
+    exit_broken_support = None
+    exit_reasons: tuple[str, ...] = ()
+    exit_unmet_conditions: tuple[str, ...] = ()
+    exit_payload = payload.get("exit_advisory")
+    if exit_payload is not None:
+        if not isinstance(exit_payload, dict):
+            raise ValueError("invalid_exit_advisory")
+        if (
+            exit_payload.get("authority") != "widget_advisory_only"
+            or exit_payload.get("runtime_effect") is not False
+            or exit_payload.get("actual_order_submitted") is not False
+            or exit_payload.get("broker_order_forbidden") is not True
+            or exit_payload.get("holding_independent") is not True
+            or exit_payload.get("future_prediction") is not False
+        ):
+            raise ValueError("invalid_exit_advisory_authority")
+        exit_advisory_state = str(exit_payload.get("state") or "DATA_WAIT").strip()
+        if exit_advisory_state not in EXIT_ADVISORY_STATES:
+            raise ValueError("invalid_exit_advisory_state")
+        reference_exit_price = _optional_positive_int(
+            exit_payload.get("reference_exit_price"), field="reference_exit_price"
+        )
+        exit_peak_price = _optional_positive_int(
+            exit_payload.get("peak_price"), field="exit_peak_price"
+        )
+        exit_broken_support = _optional_positive_int(
+            exit_payload.get("broken_support"), field="exit_broken_support"
+        )
+        exit_peak_drawdown_pct = _optional_nonnegative_float(
+            exit_payload.get("peak_drawdown_pct"),
+            field="exit_peak_drawdown_pct",
+        )
+        exit_actionable = exit_advisory_state in {"EXIT_CAUTION", "EXIT_READY"}
+        exit_source_quality = exit_payload.get("source_quality")
+        if exit_actionable and (
+            reference_exit_price is None
+            or exit_peak_price is None
+            or exit_broken_support is None
+            or not isinstance(exit_source_quality, dict)
+            or exit_source_quality.get("status") != "PASS"
+        ):
+            raise ValueError("invalid_actionable_exit_advisory")
+        exit_observed_at = _aware_datetime(
+            exit_payload.get("observed_at"), field="exit_advisory_observed_at"
+        )
+        exit_valid_until = _aware_datetime(
+            exit_payload.get("valid_until"), field="exit_advisory_valid_until"
+        )
+        outer_observed_at = observed_at or _aware_datetime(
+            payload.get("observed_at_kst"), field="observed_at_kst"
+        )
+        if abs((outer_observed_at - exit_observed_at).total_seconds()) > 1.0:
+            raise ValueError("exit_advisory_observed_at_mismatch")
+        local_received_at = received_at or datetime.now().astimezone()
+        local_received_at = local_received_at.astimezone(outer_observed_at.tzinfo)
+        age_sec = (local_received_at - outer_observed_at).total_seconds()
+        if age_sec < -2 or age_sec > LOCAL_ADVISORY_MAX_AGE_SEC:
+            raise ValueError("stale_exit_advisory_snapshot")
+        if exit_valid_until < local_received_at:
+            raise ValueError("expired_exit_advisory")
+        expected_exit_sessions = _expected_advisory_sessions(
+            market_venue, market_cohort, market_session
+        )
+        if (
+            expected_exit_sessions is None
+            or exit_payload.get("session") not in expected_exit_sessions
+            or (
+                exit_actionable
+                and exit_payload.get("session")
+                not in {"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET"}
+            )
+            or (
+                exit_payload.get("session") in {"SESSION_TRANSITION", "CLOSED"}
+                and exit_advisory_state != "DATA_WAIT"
+            )
+        ):
+            raise ValueError("exit_advisory_session_mismatch")
+        exit_reasons = _string_tuple(exit_payload.get("reasons"), field="exit_reasons")
+        exit_unmet_conditions = _string_tuple(
+            exit_payload.get("unmet_conditions"), field="exit_unmet_conditions"
+        )
     return Quote(
         current_price=price,
         day_low_delta=low_delta,
@@ -359,6 +483,13 @@ def parse_quote_payload(
         observed_at=observed_at,
         advisory_observed_at=advisory_observed_at,
         advisory_valid_until=advisory_valid_until,
+        exit_advisory_state=exit_advisory_state,
+        reference_exit_price=reference_exit_price,
+        exit_peak_price=exit_peak_price,
+        exit_peak_drawdown_pct=exit_peak_drawdown_pct,
+        exit_broken_support=exit_broken_support,
+        exit_reasons=exit_reasons,
+        exit_unmet_conditions=exit_unmet_conditions,
     )
 
 
@@ -585,6 +716,44 @@ class SamsungPriceWidget:
         self._finish_cycle()
 
     def _apply_advisory(self, quote: Quote) -> None:
+        if quote.exit_advisory_state in {
+            "EXIT_CAUTION",
+            "EXIT_READY",
+            "EXIT_CANCELLED",
+        }:
+            exit_labels = {
+                "EXIT_CAUTION": "청산 주의",
+                "EXIT_READY": "청산 신호",
+                "EXIT_CANCELLED": "청산 해제",
+            }
+            exit_colors = {
+                "EXIT_CAUTION": "#ffb86c",
+                "EXIT_READY": "#5ca9ff",
+                "EXIT_CANCELLED": "#7bd88f",
+            }
+            price_text = (
+                f" · {quote.reference_exit_price:,}원"
+                if quote.reference_exit_price is not None
+                else ""
+            )
+            self.advisory_label.configure(
+                text=f"{exit_labels[quote.exit_advisory_state]}{price_text}",
+                fg=exit_colors[quote.exit_advisory_state],
+            )
+            details = []
+            if quote.exit_peak_drawdown_pct is not None:
+                details.append(f"고점-{quote.exit_peak_drawdown_pct:.2f}%")
+            if quote.exit_broken_support is not None:
+                details.append(f"{quote.exit_broken_support:,} 이탈")
+            if quote.exit_advisory_state == "EXIT_READY":
+                details.append("3·5분하락")
+            elif quote.exit_advisory_state == "EXIT_CANCELLED":
+                details.append("지지회복/신저가없음")
+            self.advisory_detail_label.configure(
+                text=" · ".join(details) or "청산 관측 해제",
+                fg=exit_colors[quote.exit_advisory_state],
+            )
+            return
         state_labels = {
             "DATA_WAIT": "데이터 대기",
             "WATCH": "관찰",

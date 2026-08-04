@@ -24,7 +24,7 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "samsung_widget_entry_telegram_notify_state.json"
 )
-DEFAULT_REARM_SEC = 60
+DEFAULT_REARM_SEC = 120
 DEFAULT_RETRY_SEC = 30
 
 ConfigLoader = Callable[[], tuple[str, str]]
@@ -142,6 +142,17 @@ def build_entry_message(payload: dict[str, Any]) -> str:
     valid_until = _parse_timestamp(advisory.get("valid_until"))
     valid_text = valid_until.strftime("%H:%M:%S") if valid_until else "-"
     external = advisory.get("external_risk") or {}
+    derived = advisory.get("derived")
+    invalidation_confirmation = (
+        derived.get("invalidation_confirmation") if isinstance(derived, dict) else None
+    )
+    invalidation_suffix = (
+        " (1분봉 종가 이탈 또는 2틱 이탈+매도압력)"
+        if isinstance(invalidation_confirmation, dict)
+        and invalidation_confirmation.get("policy")
+        == "completed_1m_close_or_two_tick_live_break_with_ask_pressure"
+        else ""
+    )
     lines = [
         "🟠 [삼성전자 진입 알림]",
         f"상태: {state} / {state_label}",
@@ -151,7 +162,8 @@ def build_entry_message(payload: dict[str, Any]) -> str:
             f"{_format_price(advisory.get('entry_price_low'))}"
             f" ~ {_format_price(advisory.get('entry_price_high'))}"
         ),
-        f"무효화 기준: {_format_price(advisory.get('invalidation_price'))}",
+        "무효화 기준: "
+        f"{_format_price(advisory.get('invalidation_price'))}{invalidation_suffix}",
         f"근거: {_format_labels(advisory.get('reasons'), _REASON_LABELS, limit=4)}",
         (
             "주의: "
@@ -242,6 +254,7 @@ class SamsungWidgetEntryTelegramNotifier:
         now = _as_kst(observed_at)
         advisory = payload.get("advisory") or {}
         state = str(advisory.get("state") or "")
+        exit_state = str((payload.get("exit_advisory") or {}).get("state") or "")
         scope = self._scope(payload, now)
         if self._state.get("scope") != scope:
             self._state = {
@@ -251,6 +264,14 @@ class SamsungWidgetEntryTelegramNotifier:
                 "active_state": None,
                 "non_actionable_since": None,
             }
+
+        if exit_state == "EXIT_READY":
+            if self._state.get("active") or not self._state.get("non_actionable_since"):
+                self._state["active"] = False
+                self._state["active_state"] = None
+                self._state["non_actionable_since"] = now.isoformat()
+                self._save()
+            return "exit_advisory_conflict"
 
         if state not in ACTIONABLE_ADVISORY_STATES:
             if self._state.get("active") or not self._state.get("non_actionable_since"):
