@@ -3389,42 +3389,48 @@ def test_pattern_lab_ai_review_keeps_sample_warning_followup_visible():
 
 
 def test_pattern_lab_ai_review_marks_adm_sample_floor_provenance_implemented():
-    status, provenance = mod._implementation_marker_for_conclusion(
-        {
-            "review_id": "scalp_entry_adm_sample_floor_below",
-            "final_state": "source_quality_gap",
-            "final_decision": "block_runtime_use",
-            "source_paths": ["/tmp/scalping_pattern_lab_automation.json"],
-        },
-        {
-            "sources": {
-                "scalping_pattern_lab_automation": {
-                    "summary": {
-                        "source_quality_contracts": {
-                            "scalp_entry_adm": {
-                                "contract_id": "adm_contract",
-                                "source_contract_version": "adm_contract_v1",
-                                "source_contract_status": "implemented",
-                                "sample_count": 2,
-                                "sample_floor": 20,
-                                "sample_floor_status": "hold_sample",
-                                "blocked_reasons": ["joined_sample_below_sample_floor"],
-                            }
+    context = {
+        "sources": {
+            "scalping_pattern_lab_automation": {
+                "summary": {
+                    "source_quality_contracts": {
+                        "scalp_entry_adm": {
+                            "contract_id": "adm_contract",
+                            "source_contract_version": "adm_contract_v1",
+                            "source_contract_status": "implemented",
+                            "sample_count": 2,
+                            "sample_floor": 20,
+                            "sample_floor_status": "hold_sample",
+                            "blocked_reasons": ["joined_sample_below_sample_floor"],
                         }
                     }
                 }
             }
-        },
-    )
+        }
+    }
 
-    assert status == "implemented_but_waiting_sample"
-    assert provenance["sample_count"] == 2
-    assert provenance["sample_floor"] == 20
-    assert provenance["runtime_effect"] is False
-    assert provenance["allowed_runtime_apply"] is False
-    assert provenance["root_cause_closure_status_hint"] == (
-        "handoff_closed_root_cause_open"
-    )
+    for review_id in (
+        "scalp_entry_adm_sample_floor_below",
+        "scalp_entry_adm_source_quality_below_floor",
+    ):
+        status, provenance = mod._implementation_marker_for_conclusion(
+            {
+                "review_id": review_id,
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "source_paths": ["/tmp/scalping_pattern_lab_automation.json"],
+            },
+            context,
+        )
+
+        assert status == "implemented_but_waiting_sample"
+        assert provenance["sample_count"] == 2
+        assert provenance["sample_floor"] == 20
+        assert provenance["runtime_effect"] is False
+        assert provenance["allowed_runtime_apply"] is False
+        assert provenance["root_cause_closure_status_hint"] == (
+            "handoff_closed_root_cause_open"
+        )
 
 
 def test_pattern_lab_ai_review_marks_nonpositive_sim_auto_provenance_implemented():

@@ -2754,14 +2754,17 @@ def _reviewed_unknown_reason_for_stage_field(
             "causal_attribution_only"
         ):
             return False
-        if _field_text("prior_probe_residual_continuation_action") != "DEFER":
-            return False
         if _field_text("prior_probe_residual_source_quality_gate") != (
             "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
         ):
             return False
+        if _field_text("prior_probe_residual_scale_in_recheck_authority") != (
+            "evaluation_only_full_scale_in_guards_required"
+        ):
+            return False
+        continuation_action = _field_text("prior_probe_residual_continuation_action")
         reason = _field_text("prior_probe_residual_direction_reason")
-        if reason not in {
+        deferred_reason = continuation_action == "DEFER" and reason in {
             "post_probe_ai_action_not_fresh",
             "post_probe_ai_action_source_unverified",
             "post_probe_nxt_ai_veto_not_fresh",
@@ -2773,14 +2776,43 @@ def _reviewed_unknown_reason_for_stage_field(
             "post_probe_stale_wait_positive_confirmation_required",
             "post_probe_wait_positive_confirmation_required",
             "post_probe_wait_negative_group",
-        }:
-            return False
-        source_only_snapshot = (
-            stage == "stat_action_decision_snapshot"
-            and _field_text("source_quality_gate") == "stat_action_snapshot_source_only"
+        }
+        explicit_not_evaluated = (
+            continuation_action == "BLOCK"
+            and reason in {"", "-"}
+            and _field_text("prior_probe_residual_abort_reason") not in {"", "-"}
         )
-        return source_only_snapshot or (
-            _is_falseish("actual_order_submitted")
+        receipt_attribution = (
+            continuation_action == ""
+            and stage == "scale_in_executed"
+            and _field_text("decision_authority") == "broker_receipt_observation_only"
+            and _field_text("prior_probe_residual_abort_reason") not in {"", "-"}
+        )
+        if not (deferred_reason or explicit_not_evaluated or receipt_attribution):
+            return False
+        # This is completed probe-residual attribution. A later independent
+        # scale-in submit/fill does not turn the earlier unavailable direction
+        # state into an unreviewed source value.
+        return True
+
+    def _is_reviewed_probe_terminal_failure_signature() -> bool:
+        if (
+            stage != "residual_blocked"
+            or str(key or "") != "entry_split_probe_terminal_failure_signature"
+        ):
+            return False
+        signature = str(value or "").split("|")
+        if len(signature) < 5 or signature[1].strip().upper() != "UNKNOWN":
+            return False
+        return (
+            _field_text("prior_probe_residual_decision_authority")
+            == "causal_attribution_only"
+            and _field_text("prior_probe_residual_source_quality_gate")
+            == "exact_probe_bundle_terminal_snapshot_and_same_position_cycle"
+            and _field_text("prior_probe_residual_scale_in_recheck_authority")
+            == "evaluation_only_full_scale_in_guards_required"
+            and _field_text("entry_split_probe_terminal_abort_reason") not in {"", "-"}
+            and _is_falseish("actual_order_submitted")
             and _is_trueish("broker_order_forbidden")
         )
 
@@ -2807,12 +2839,21 @@ def _reviewed_unknown_reason_for_stage_field(
             return False
         if str(value or "").strip().upper() != "UNKNOWN":
             return False
+        authority = _field_text("decision_authority")
+        resolution = _field_text("venue_resolution")
+        if stage == "prev_close_gainer_entry_ai_handoff":
+            return (
+                authority == "source_routing_to_existing_exact_v2_entry_ai"
+                and "session_explicit_conflict:" in resolution
+                and _field_text("block_reason") == "not_rising_missed_candidate"
+                and _is_falseish("runtime_effect")
+                and _is_falseish("allowed_runtime_apply")
+                and _is_falseish("actual_order_submitted")
+            )
         if not _is_falseish("actual_order_submitted") or not _is_trueish(
             "broker_order_forbidden"
         ):
             return False
-        authority = _field_text("decision_authority")
-        resolution = _field_text("venue_resolution")
         if stage == "rising_missed_watch_not_rising_skipped":
             return (
                 authority == "rising_missed_watch_budget_fast_reject"
@@ -3024,7 +3065,14 @@ def _reviewed_unknown_reason_for_stage_field(
         explicit_reviewed_fail_closed = (
             _field_text("venue_source_quality_status") == "reviewed_fail_closed"
             and bool(_field_text("venue_unknown_reviewed_reason"))
-            and _field_text("venue_unknown_reviewed_reason") == venue_resolution
+            and (
+                _field_text("venue_unknown_reviewed_reason") == venue_resolution
+                or (
+                    venue_resolution == "missing_tradable_explicit_venue"
+                    and _field_text("venue_unknown_reviewed_reason")
+                    == "scanner_runtime_event:explicit_target_venue_missing"
+                )
+            )
         )
         if not explicit_reviewed_fail_closed and (
             not _is_falseish("actual_order_submitted")
@@ -3040,7 +3088,7 @@ def _reviewed_unknown_reason_for_stage_field(
                 "scanner_stale_backoff_canonical_effective_venue",
                 "opening_rotation_no_pullback_continuation_effective_venue",
             }
-            and runtime_event_fail_closed
+            and (runtime_event_fail_closed or explicit_reviewed_fail_closed)
             and (_is_falseish("runtime_effect") or explicit_reviewed_fail_closed)
         ):
             return True
@@ -3209,6 +3257,7 @@ def _reviewed_unknown_reason_for_stage_field(
         if stage not in {
             "scalp_fast_exit_quote_blocked",
             "scalp_fast_exit_venue_blocked",
+            "scalp_fast_exit_claimed",
         }:
             return False
         field = str(key or "")
@@ -3216,6 +3265,13 @@ def _reviewed_unknown_reason_for_stage_field(
         if field == "fast_exit_ws_0d_route":
             if value_text != "unknown":
                 return False
+            if stage == "scalp_fast_exit_claimed":
+                return (
+                    _field_text("fast_exit_broker_route") in {"KRX", "SOR"}
+                    and _field_text("fast_exit_route_guard_reason")
+                    == "krx_sor_route_resolved"
+                    and _is_falseish("fast_exit_route_source_quality_blocked")
+                )
             return (
                 _is_falseish("actual_order_submitted")
                 and _is_trueish("broker_order_forbidden")
@@ -3446,6 +3502,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_entry_order_flow_not_available"
     if _is_reviewed_prior_probe_residual_source_gap():
         return "reviewed_prior_probe_residual_source_gap"
+    if _is_reviewed_probe_terminal_failure_signature():
+        return "reviewed_probe_terminal_failure_signature_source_gap"
     if _is_reviewed_sizing_unknown_venue_fallback():
         return "reviewed_explicit_sizing_unknown_venue_fallback"
     if _is_reviewed_observation_only_venue_not_available():

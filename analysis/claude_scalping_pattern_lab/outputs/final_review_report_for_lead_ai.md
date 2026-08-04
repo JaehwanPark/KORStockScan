@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-08-03 21:20:20
-분석 기간: 2026-06-05 ~ 2026-08-03
+생성일: 2026-08-04 21:03:00
+분석 기간: 2026-06-05 ~ 2026-08-04
 
 ---
 
@@ -11,21 +11,21 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 181 | 66.3% | +0.500% | +15.250% | ✓ |
-| split-entry | 31 | 41.9% | -0.230% | -33.400% | ✓ |
+| full_fill | 193 | 65.8% | +0.470% | +11.750% | ✓ |
+| split-entry | 32 | 43.8% | -0.180% | -31.370% | ✓ |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=63`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=20.6%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=2.2%`
+- `WAIT65~79 total_candidates=108`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=36.1%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=2.8%`
 
 - `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
 ### 1-2. 손실 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_soft_stop_pct`
-- 빈도: 22건 | 손익 중앙값: -3.675% | 기여손익: -86.140%
-- 보유시간 중앙값: 2640.5초
+- 빈도: 25건 | 손익 중앙값: -3.670% | 기여손익: -95.880%
+- 보유시간 중앙값: 3172.0초
 - 선행 조건: 없음
 
 **#2** — 코호트: `full_fill` / 청산규칙: `scalp_hard_stop_pct`
@@ -51,13 +51,13 @@
 ### 1-3. 수익 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 90건 | 손익 중앙값: +1.370% | 기여손익: +142.580%
+- 빈도: 97건 | 손익 중앙값: +1.300% | 기여손익: +149.490%
 
-**#2** — 코호트: `full_fill` / 청산규칙: `scalp_low_profit_stagnation_hard_exit` / 진입모드: `normal`
+**#2** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
+- 빈도: 13건 | 손익 중앙값: +1.100% | 기여손익: +15.160%
+
+**#3** — 코호트: `full_fill` / 청산규칙: `scalp_low_profit_stagnation_hard_exit` / 진입모드: `normal`
 - 빈도: 25건 | 손익 중앙값: +0.550% | 기여손익: +14.700%
-
-**#3** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 12건 | 손익 중앙값: +0.900% | 기여손익: +13.130%
 
 **#4** — 코호트: `full_fill` / 청산규칙: `scalp_profit_stagnation_time_exit` / 진입모드: `normal`
 - 빈도: 1건 | 손익 중앙값: +1.480% | 기여손익: +1.480%
@@ -68,16 +68,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 20158건 | 차단 비율: 98.3% | 관찰 일수: 26일
+- 차단 건수 합계: 24182건 | 차단 비율: 98.6% | 관찰 일수: 27일
 
 **#2** — `latency guard miss`
-- 차단 건수 합계: 3830건 | 차단 비율: 91.8% | 관찰 일수: 26일
+- 차단 건수 합계: 4146건 | 차단 비율: 92.1% | 관찰 일수: 27일
 
 **#3** — `overbought gate miss`
-- 차단 건수 합계: 1484건 | 차단 비율: 81.3% | 관찰 일수: 26일
+- 차단 건수 합계: 2360건 | 차단 비율: 87.0% | 관찰 일수: 27일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 26일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 27일
 
 ---
 
@@ -86,8 +86,8 @@
 ### 2-1. split-entry 코호트 핵심 위험
 
 - rebase_integrity_flag: 16건
-- partial_then_expand_flag: 58건
-- same_symbol_repeat_flag: 1283건
+- partial_then_expand_flag: 59건
+- same_symbol_repeat_flag: 1288건
 - same_ts_multi_rebase_flag: 24건
 
 ### 2-2. 전역 손절 강화 비권고 이유
