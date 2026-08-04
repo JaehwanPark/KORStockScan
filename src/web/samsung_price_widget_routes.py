@@ -304,6 +304,17 @@ def _fresh_collector_snapshot(observed_at: datetime) -> dict | None:
         evaluated_at=observed_at,
     ):
         return None
+    exit_advisory = payload.get("exit_advisory")
+    if (
+        exit_advisory is not None
+        and not samsung_widget_contract.exit_advisory_contract_is_valid(
+            exit_advisory,
+            snapshot_observed_at=persisted_observed_at,
+            context=current_context,
+            evaluated_at=observed_at,
+        )
+    ):
+        return None
     return payload
 
 
@@ -337,6 +348,35 @@ def _fallback_advisory(observed_at: datetime, market_session: str) -> dict:
             "positive_promotion_forbidden": True,
         },
         "provenance": {"source": "direct_quote_fallback_only"},
+        "authority": samsung_widget_contract.ADVISORY_AUTHORITY,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "metric_contract": samsung_widget_contract.METRIC_CONTRACT,
+    }
+
+
+def _fallback_exit_advisory(observed_at: datetime, market_session: str) -> dict:
+    return {
+        "state": "DATA_WAIT",
+        "raw_state": "DATA_WAIT",
+        "session": market_session,
+        "reference_exit_price": None,
+        "peak_price": None,
+        "peak_drawdown_pct": None,
+        "broken_support": None,
+        "reasons": [],
+        "unmet_conditions": ["collector_snapshot_missing_or_stale"],
+        "valid_until": observed_at.replace(
+            hour=20, minute=0, second=0, microsecond=0
+        ).isoformat(),
+        "observed_at": observed_at.isoformat(),
+        "source_quality": {
+            "status": "BLOCKED",
+            "issues": ["collector_snapshot_missing_or_stale"],
+        },
+        "holding_independent": True,
+        "future_prediction": False,
         "authority": samsung_widget_contract.ADVISORY_AUTHORITY,
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -441,6 +481,10 @@ def get_samsung_price():
             "source": f"kiwoom_ka10001_{market_venue.lower()}_quote_only_fallback",
             "token_mode": "shared_cache_only",
             "advisory": _fallback_advisory(
+                observed_at,
+                samsung_widget_contract.session_context(observed_at).name,
+            ),
+            "exit_advisory": _fallback_exit_advisory(
                 observed_at,
                 samsung_widget_contract.session_context(observed_at).name,
             ),

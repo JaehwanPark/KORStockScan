@@ -99,7 +99,6 @@ def test_new_episode_requires_full_non_actionable_rearm_window(tmp_path):
         state_file=tmp_path / "state.json",
         config_loader=lambda: ("TOKEN", "ADMIN"),
         sender=lambda *_args: sent.append(_args),
-        rearm_sec=60,
     )
     now = datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
     watch = _payload("WATCH")
@@ -110,15 +109,15 @@ def test_new_episode_requires_full_non_actionable_rearm_window(tmp_path):
     assert notifier.observe(watch, now + timedelta(seconds=10)) == "not_actionable"
     assert (
         notifier.observe(
-            _payload(observed_at=now + timedelta(seconds=50)),
-            now + timedelta(seconds=50),
+            _payload(observed_at=now + timedelta(seconds=110)),
+            now + timedelta(seconds=110),
         )
         == "rearm_wait"
     )
     assert (
         notifier.observe(
-            _payload(observed_at=now + timedelta(seconds=70)),
-            now + timedelta(seconds=70),
+            _payload(observed_at=now + timedelta(seconds=130)),
+            now + timedelta(seconds=130),
         )
         == "sent"
     )
@@ -251,3 +250,18 @@ def test_message_contains_no_sell_or_order_instruction():
     assert "청산" not in message
     assert "주문" in message
     assert "자동주문 아님" in message
+
+
+def test_exit_advisory_suppresses_conflicting_entry_notice(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    now = datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
+    payload = _payload(observed_at=now)
+    payload["exit_advisory"] = {"state": "EXIT_READY"}
+
+    assert notifier.observe(payload, now) == "exit_advisory_conflict"
+    assert sent == []

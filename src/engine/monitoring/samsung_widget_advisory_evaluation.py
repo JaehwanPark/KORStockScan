@@ -28,6 +28,7 @@ TARGET_RETURN_PCT = 0.5
 FALLBACK_ADVERSE_PCT = -0.3
 MIN_COVERAGE_RATIO = 0.80
 MAX_COVERAGE_GAP_SEC = 120
+SIGNAL_EPISODE_DEDUP_SEC = 120
 SESSION_EXPECTED_MINUTES = {
     "NXT_PREMARKET": 50,
     "KRX_REGULAR": 390,
@@ -364,6 +365,8 @@ def build_daily_evaluation(
     actionable_signals: set[str] = set()
     signal_touch_statuses: dict[str, str] = {}
     candidate_signal_count = 0
+    episode_duplicate_signal_count = 0
+    last_signal_by_episode: dict[tuple[str, str, int], datetime] = {}
     excluded_signal_reasons: dict[str, int] = defaultdict(int)
     for index, row in enumerate(source_rows):
         advisory = row.get("advisory") or {}
@@ -388,6 +391,27 @@ def build_daily_evaluation(
             continue
         if entry_price <= 0:
             continue
+        derived = advisory.get("derived")
+        try:
+            support_key = int(
+                (derived.get("structural_support") if isinstance(derived, dict) else 0)
+                or advisory.get("invalidation_price")
+                or 0
+            )
+        except (TypeError, ValueError):
+            support_key = 0
+        signal_session = str(row.get("market_session") or "unknown")
+        signal_venue = str(row.get("market_venue") or "unknown")
+        episode_key = (signal_session, signal_venue, support_key)
+        previous_episode_signal = last_signal_by_episode.get(episode_key)
+        last_signal_by_episode[episode_key] = row["_observed_at"]
+        if (
+            previous_episode_signal is not None
+            and (row["_observed_at"] - previous_episode_signal).total_seconds()
+            < SIGNAL_EPISODE_DEDUP_SEC
+        ):
+            episode_duplicate_signal_count += 1
+            continue
         actionable_signals.add(row["_observed_at"].isoformat())
         try:
             invalidation = int(advisory.get("invalidation_price") or 0)
@@ -406,8 +430,6 @@ def build_daily_evaluation(
             if isinstance(reasons, list) and reasons and str(reasons[0]).strip()
             else "unspecified"
         )
-        signal_session = str(row.get("market_session") or "unknown")
-        signal_venue = str(row.get("market_venue") or "unknown")
         same_scope_future_rows = [
             candidate
             for candidate in source_rows[index + 1 :]
@@ -502,6 +524,8 @@ def build_daily_evaluation(
         "source_row_count": len(source_rows),
         "candidate_signal_count": candidate_signal_count,
         "actionable_signal_count": len(actionable_signals),
+        "episode_duplicate_signal_count": episode_duplicate_signal_count,
+        "signal_episode_dedup_seconds": SIGNAL_EPISODE_DEDUP_SEC,
         "source_quality_excluded_signal_count": sum(excluded_signal_reasons.values()),
         "source_quality_excluded_signal_reasons": dict(
             sorted(excluded_signal_reasons.items())

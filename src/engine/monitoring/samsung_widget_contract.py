@@ -24,6 +24,10 @@ ADVISORY_STATES = frozenset(
     {"DATA_WAIT", "WATCH", "ENTRY_CAUTION", "ENTRY_READY", "NO_CHASE", "AVOID"}
 )
 ACTIONABLE_ADVISORY_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
+EXIT_ADVISORY_STATES = frozenset(
+    {"DATA_WAIT", "EXIT_WATCH", "EXIT_CAUTION", "EXIT_READY", "EXIT_CANCELLED"}
+)
+ACTIONABLE_EXIT_ADVISORY_STATES = frozenset({"EXIT_CAUTION", "EXIT_READY"})
 TREND_ASSESSMENT_STATES = frozenset(
     {
         "TREND_DATA_WAIT",
@@ -257,3 +261,56 @@ def advisory_contract_is_valid(
             and source_quality.get("status") == "PASS"
         )
     return entry_low is None and entry_high is None
+
+
+def exit_advisory_contract_is_valid(
+    exit_advisory: object,
+    *,
+    snapshot_observed_at: datetime,
+    context: SessionContext,
+    evaluated_at: datetime | None = None,
+    max_clock_skew_sec: float = 1.0,
+) -> bool:
+    """Validate the holding-independent exit observation at the API boundary."""
+    if not isinstance(exit_advisory, dict):
+        return False
+    state = str(exit_advisory.get("state") or "")
+    if state not in EXIT_ADVISORY_STATES:
+        return False
+    if (
+        exit_advisory.get("authority") != ADVISORY_AUTHORITY
+        or exit_advisory.get("session") != context.name
+        or exit_advisory.get("runtime_effect") is not False
+        or exit_advisory.get("actual_order_submitted") is not False
+        or exit_advisory.get("broker_order_forbidden") is not True
+        or exit_advisory.get("holding_independent") is not True
+        or exit_advisory.get("future_prediction") is not False
+    ):
+        return False
+    outer_observed_at = as_kst(snapshot_observed_at)
+    advisory_observed_at = _aware_datetime(exit_advisory.get("observed_at"))
+    valid_until = _aware_datetime(exit_advisory.get("valid_until"))
+    if advisory_observed_at is None or valid_until is None:
+        return False
+    if abs((outer_observed_at - advisory_observed_at).total_seconds()) > max(
+        0.0, float(max_clock_skew_sec)
+    ):
+        return False
+    if valid_until < as_kst(evaluated_at or outer_observed_at):
+        return False
+    source_quality = exit_advisory.get("source_quality")
+    if state in ACTIONABLE_EXIT_ADVISORY_STATES:
+        price_fields = (
+            exit_advisory.get("peak_price"),
+            exit_advisory.get("broken_support"),
+            exit_advisory.get("reference_exit_price"),
+        )
+        return bool(
+            isinstance(source_quality, dict)
+            and source_quality.get("status") == "PASS"
+            and all(
+                isinstance(value, int) and not isinstance(value, bool) and value > 0
+                for value in price_fields
+            )
+        )
+    return isinstance(source_quality, dict)

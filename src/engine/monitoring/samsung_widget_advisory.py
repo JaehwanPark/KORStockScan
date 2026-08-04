@@ -81,6 +81,11 @@ TREND_TICK_MULTIPLIERS = {
 }
 RELATIVE_UNDERPERFORMANCE_LIMIT_PCT = 0.50
 TACTICAL_CHASE_LIMIT_PCT = 0.30
+EXIT_PEAK_LOOKBACK_BARS = 20
+EXIT_SUPPORT_LOOKBACK_BARS = 5
+EXIT_VOLATILITY_LOOKBACK_BARS = 10
+EXIT_NO_NEW_LOW_CANCEL_BARS = 5
+EXIT_PENDING_MAX_BARS = 3
 
 EXTERNAL_THRESHOLDS = {
     "NQ": -0.40,
@@ -429,6 +434,7 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
     confirmed_support: int | None = None
     candidate_support: int | None = None
     support_confirmation = "unconfirmed"
+    confirmed_support_age_bars: int | None = None
     latest_structure_low: int | None = None
     if len(recent) >= 6:
         prior_window = recent[-6:-3]
@@ -461,12 +467,17 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
         if retest_held:
             confirmed_support = second_low
             support_confirmation = "retest_held"
+            confirmed_support_age_bars = len(recent) - 1 - second_index
     elif pivots:
         candidate_support = pivots[-1][1]
 
     if confirmed_support is None and higher_high_and_low and latest_structure_low:
         confirmed_support = latest_structure_low
         support_confirmation = "higher_high_and_low"
+        latest_low_index = max(
+            index for index, bar in enumerate(recent) if bar.low == latest_structure_low
+        )
+        confirmed_support_age_bars = len(recent) - 1 - latest_low_index
     if candidate_support is None:
         candidate_support = latest_structure_low
 
@@ -483,6 +494,7 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
         "confirmed_support": confirmed_support,
         "candidate_support": candidate_support,
         "support_confirmation": support_confirmation,
+        "confirmed_support_age_bars": confirmed_support_age_bars,
         "recent_resistance": recent_resistance,
     }
 
@@ -1087,7 +1099,7 @@ def _source_quality(
     context: SessionContext,
     bars: list[MinuteBar],
     bbo: dict[str, Any],
-    previous_day: dict[str, Any],
+    previous_day: dict[str, Any] | None,
     quote_age_sec: float,
     current_price: int,
 ) -> dict[str, Any]:
@@ -1108,7 +1120,7 @@ def _source_quality(
             issues.append("completed_bar_stale")
     else:
         issues.append("completed_bars_missing")
-    if not previous_day:
+    if previous_day is not None and not previous_day:
         issues.append("previous_day_ohlc_missing")
     if quote_age_sec < 0 or quote_age_sec > 20:
         issues.append("quote_stale")
@@ -1124,10 +1136,13 @@ def _source_quality(
         coherent_high = move_price_by_ticks(best_ask, 1)
         if not coherent_low <= current_price <= coherent_high:
             issues.append("quote_bbo_inconsistent")
+    required_sources = ["quote", "bbo", "completed_1m"]
+    if previous_day is not None:
+        required_sources.append("previous_day_ohlc")
     return {
         "status": "PASS" if not issues else "BLOCKED",
         "issues": issues,
-        "required_sources": ["quote", "bbo", "completed_1m", "previous_day_ohlc"],
+        "required_sources": required_sources,
     }
 
 
@@ -1384,6 +1399,9 @@ def evaluate_advisory(
                     "confirmed_support": None,
                     "candidate_support": candidate_support,
                     "support_confirmation": structure["support_confirmation"],
+                    "confirmed_support_age_bars": structure.get(
+                        "confirmed_support_age_bars"
+                    ),
                     "session_anchor": session_anchor,
                     "recent_resistance": recent_resistance,
                     "minute_trends": trends,
@@ -1398,14 +1416,31 @@ def evaluate_advisory(
             }
         )
         return base
-    invalidation = move_price_by_ticks(structural_support, -1)
-    if current_price <= invalidation or current_price < structural_support:
+    soft_invalidation = move_price_by_ticks(structural_support, -1)
+    hard_invalidation = move_price_by_ticks(structural_support, -2)
+    completed_close_break = bars[-1].close < structural_support
+    live_break_depth_ticks = (
+        _spread_tick_count(current_price, structural_support)
+        if current_price < structural_support
+        else 0
+    )
+    deep_live_break = bool(current_price <= hard_invalidation and live_reversal_veto)
+    confirmed_support_break = completed_close_break or deep_live_break
+    invalidation_confirmation = {
+        "policy": "completed_1m_close_or_two_tick_live_break_with_ask_pressure",
+        "soft_invalidation_price": soft_invalidation,
+        "hard_invalidation_price": hard_invalidation,
+        "completed_close_break": completed_close_break,
+        "deep_live_break": deep_live_break,
+        "live_break_depth_ticks": live_break_depth_ticks,
+    }
+    if confirmed_support_break:
         base.update(
             {
                 "state": "AVOID",
                 "raw_state": "AVOID",
                 "invalidation": "confirmed_support_break",
-                "invalidation_price": invalidation,
+                "invalidation_price": hard_invalidation,
                 "reasons": ["confirmed_support_broken"],
                 "unmet_conditions": list(dict.fromkeys(unmet)),
                 "derived": {
@@ -1414,6 +1449,10 @@ def evaluate_advisory(
                     "structural_support": structural_support,
                     "candidate_support": candidate_support,
                     "support_confirmation": structure["support_confirmation"],
+                    "confirmed_support_age_bars": structure.get(
+                        "confirmed_support_age_bars"
+                    ),
+                    "invalidation_confirmation": invalidation_confirmation,
                     "tactical_support": tactical_support,
                     "session_anchor": session_anchor,
                     "recent_resistance": recent_resistance,
@@ -1422,6 +1461,44 @@ def evaluate_advisory(
                         * 100,
                         4,
                     ),
+                    "minute_trends": trends,
+                    "higher_low": structure["higher_low"],
+                    "higher_high": structure["higher_high"],
+                    "higher_high_and_low": structure["higher_high_and_low"],
+                    "retest_held": structure["retest_held"],
+                    "retest_rebound_confirmed": structure["retest_rebound_confirmed"],
+                },
+                "flow": flow,
+            }
+        )
+        return base
+    if current_price < structural_support:
+        base.update(
+            {
+                "state": "WATCH",
+                "raw_state": "WATCH",
+                "invalidation": "soft_support_break_pending_confirmation",
+                "invalidation_price": hard_invalidation,
+                "reasons": ["support_break_not_yet_confirmed"],
+                "unmet_conditions": list(dict.fromkeys(["soft_support_break", *unmet])),
+                "derived": {
+                    "session_vwap": vwap,
+                    "confirmed_support": structural_support,
+                    "structural_support": structural_support,
+                    "candidate_support": candidate_support,
+                    "support_confirmation": structure["support_confirmation"],
+                    "confirmed_support_age_bars": structure.get(
+                        "confirmed_support_age_bars"
+                    ),
+                    "tactical_support": tactical_support,
+                    "session_anchor": session_anchor,
+                    "recent_resistance": recent_resistance,
+                    "distance_from_structural_support_pct": round(
+                        ((current_price - structural_support) / structural_support)
+                        * 100,
+                        4,
+                    ),
+                    "invalidation_confirmation": invalidation_confirmation,
                     "minute_trends": trends,
                     "higher_low": structure["higher_low"],
                     "higher_high": structure["higher_high"],
@@ -1454,7 +1531,7 @@ def evaluate_advisory(
             "trigger": "dynamic_support_and_vwap_reclaim",
             "trigger_price": trigger_price,
             "invalidation": "confirmed_support_break",
-            "invalidation_price": invalidation,
+            "invalidation_price": hard_invalidation,
             "reasons": reasons,
             "unmet_conditions": list(dict.fromkeys(unmet)),
             "derived": {
@@ -1463,6 +1540,10 @@ def evaluate_advisory(
                 "structural_support": structural_support,
                 "candidate_support": candidate_support,
                 "support_confirmation": structure["support_confirmation"],
+                "confirmed_support_age_bars": structure.get(
+                    "confirmed_support_age_bars"
+                ),
+                "invalidation_confirmation": invalidation_confirmation,
                 "tactical_support": tactical_support,
                 "session_anchor": session_anchor,
                 "recent_resistance": recent_resistance,
@@ -1534,6 +1615,173 @@ def evaluate_advisory(
     else:
         base["state"] = base["raw_state"] = "ENTRY_READY"
     return base
+
+
+class AdvisoryBreakRearmFilter:
+    """Keep a broken support episode closed until two completed bars reclaim it."""
+
+    ACTIONABLE = {"ENTRY_CAUTION", "ENTRY_READY"}
+    REQUIRED_RECLAIM_BARS = 2
+
+    def __init__(self) -> None:
+        self.reset()
+
+    @staticmethod
+    def _scope_for(advisory: dict[str, Any]) -> str:
+        observed_date = str(advisory.get("observed_at") or "")[:10]
+        return f"{observed_date}:{advisory.get('session') or 'UNKNOWN'}"
+
+    @staticmethod
+    def _bar_values(latest_bar: MinuteBar | dict[str, Any] | None) -> tuple[str, int]:
+        if isinstance(latest_bar, MinuteBar):
+            return latest_bar.source_time, latest_bar.close
+        if isinstance(latest_bar, dict):
+            try:
+                return str(latest_bar.get("source_time") or ""), int(
+                    latest_bar.get("close") or 0
+                )
+            except (TypeError, ValueError):
+                return "", 0
+        return "", 0
+
+    def reset(self) -> None:
+        self._scope_key: str | None = None
+        self._locked_support: int | None = None
+        self._break_bar_source_time = ""
+        self._break_kind = ""
+        self._reclaim_bar_source_times: list[str] = []
+
+    def restore(self, advisory: dict[str, Any]) -> bool:
+        continuity = advisory.get("continuity")
+        if not isinstance(continuity, dict):
+            return False
+        self._scope_key = self._scope_for(advisory)
+        if continuity.get("support_break_rearm_required") is not True:
+            return True
+        try:
+            locked_support = int(continuity.get("locked_support") or 0)
+        except (TypeError, ValueError):
+            return False
+        break_bar = str(continuity.get("break_bar_source_time") or "")
+        reclaim_bars = continuity.get("reclaim_bar_source_times")
+        if (
+            locked_support <= 0
+            or len(break_bar) != 14
+            or not isinstance(reclaim_bars, list)
+        ):
+            return False
+        normalized_reclaims = [
+            str(value) for value in reclaim_bars if len(str(value)) == 14
+        ][-self.REQUIRED_RECLAIM_BARS :]
+        self._locked_support = locked_support
+        self._break_bar_source_time = break_bar
+        self._break_kind = str(continuity.get("break_kind") or "restored")
+        self._reclaim_bar_source_times = normalized_reclaims
+        return True
+
+    def _bars_since_break(self, bar_source_time: str) -> int | None:
+        if len(bar_source_time) != 14 or len(self._break_bar_source_time) != 14:
+            return None
+        try:
+            current = datetime.strptime(bar_source_time, "%Y%m%d%H%M%S")
+            broken = datetime.strptime(self._break_bar_source_time, "%Y%m%d%H%M%S")
+        except ValueError:
+            return None
+        return max(0, int((current - broken).total_seconds() // 60))
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return restart-safe widget-only continuity without market authority."""
+        return {
+            "support_break_rearm_required": self._locked_support is not None,
+            "locked_support": self._locked_support,
+            "break_kind": self._break_kind or None,
+            "break_bar_source_time": self._break_bar_source_time or None,
+            "bars_since_break": None,
+            "reclaim_bar_count": len(self._reclaim_bar_source_times),
+            "required_reclaim_bars": self.REQUIRED_RECLAIM_BARS,
+            "reclaim_bar_source_times": list(self._reclaim_bar_source_times),
+        }
+
+    def apply(
+        self,
+        advisory: dict[str, Any],
+        *,
+        latest_bar: MinuteBar | dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        result = json.loads(json.dumps(advisory, ensure_ascii=False))
+        scope_key = self._scope_for(result)
+        if scope_key != self._scope_key:
+            self.reset()
+            self._scope_key = scope_key
+
+        bar_source_time, completed_close = self._bar_values(latest_bar)
+        raw_state = str(result.get("raw_state") or result.get("state") or "")
+        invalidation_kind = str(result.get("invalidation") or "")
+        derived = result.get("derived")
+        support = None
+        if isinstance(derived, dict):
+            try:
+                support = int(derived.get("structural_support") or 0) or None
+            except (TypeError, ValueError):
+                support = None
+        break_detected = invalidation_kind in {
+            "soft_support_break_pending_confirmation",
+            "confirmed_support_break",
+        } and raw_state in {"WATCH", "AVOID"}
+        if break_detected and support:
+            is_new_break_bar = (
+                self._locked_support is None
+                or support != self._locked_support
+                or (bar_source_time and bar_source_time != self._break_bar_source_time)
+            )
+            if is_new_break_bar:
+                self._locked_support = support
+                self._break_bar_source_time = bar_source_time
+                self._reclaim_bar_source_times = []
+            self._break_kind = invalidation_kind
+        elif self._locked_support and bar_source_time > self._break_bar_source_time:
+            confirmed_support = bool(
+                isinstance(derived, dict) and derived.get("confirmed_support")
+            )
+            if (
+                completed_close >= self._locked_support
+                and confirmed_support
+                and bar_source_time not in self._reclaim_bar_source_times
+            ):
+                self._reclaim_bar_source_times.append(bar_source_time)
+                self._reclaim_bar_source_times = self._reclaim_bar_source_times[
+                    -self.REQUIRED_RECLAIM_BARS :
+                ]
+
+        rearm_satisfied = bool(
+            self._locked_support
+            and len(self._reclaim_bar_source_times) >= self.REQUIRED_RECLAIM_BARS
+        )
+        if rearm_satisfied:
+            satisfied_support = self._locked_support
+            self._locked_support = None
+            self._break_bar_source_time = ""
+            self._break_kind = ""
+            self._reclaim_bar_source_times = []
+            result.setdefault("reasons", []).append("post_break_rearm_satisfied")
+            result["continuity"] = {
+                "support_break_rearm_required": False,
+                "rearm_satisfied_support": satisfied_support,
+                "required_reclaim_bars": self.REQUIRED_RECLAIM_BARS,
+            }
+            return result
+
+        if self._locked_support and raw_state in self.ACTIONABLE:
+            result["state"] = "WATCH"
+            result["raw_state"] = "WATCH"
+            result["entry_price_low"] = None
+            result["entry_price_high"] = None
+            result.setdefault("unmet_conditions", []).append("post_break_rearm_pending")
+        result["continuity"] = self.snapshot()
+        result["continuity"]["bars_since_break"] = self._bars_since_break(
+            bar_source_time
+        )
+        return result
 
 
 class AdvisoryPromotionFilter:
@@ -1643,6 +1891,388 @@ class AdvisoryPromotionFilter:
         self._last_observed_at = observed_at
         result["confirmation_streak"] = self._streak
         return result
+
+
+def _exit_downtrend_confirmed(bars: list[MinuteBar], horizon: int) -> bool:
+    """Use completed closes only to confirm short-horizon downside direction."""
+    window = _contiguous_window(bars, horizon + 1)
+    if not window:
+        return False
+    closes = [bar.close for bar in window]
+    deltas = [current - previous for previous, current in zip(closes, closes[1:])]
+    return bool(
+        closes[-1] < closes[0] - get_tick_size(closes[-1])
+        and sum(delta < 0 for delta in deltas) >= max(2, (horizon + 1) // 2)
+    )
+
+
+class ExitAdvisoryStateMachine:
+    """Create holding-independent exit observations from completed minute bars."""
+
+    ACTIONABLE = {"EXIT_CAUTION", "EXIT_READY"}
+
+    def __init__(self) -> None:
+        self.reset()
+
+    @staticmethod
+    def _scope_for(observed_at: datetime, context: SessionContext) -> str:
+        return f"{_as_kst(observed_at).date().isoformat()}:{context.name}"
+
+    def reset(self) -> None:
+        self._scope_key: str | None = None
+        self._state = "EXIT_WATCH"
+        self._last_processed_bar = ""
+        self._broken_support: int | None = None
+        self._peak_price: int | None = None
+        self._caution_bar = ""
+        self._ready_bar = ""
+        self._pending_bars = 0
+        self._reclaim_bars = 0
+        self._lowest_since_ready: int | None = None
+        self._bars_without_new_low = 0
+        self._rearm_support: int | None = None
+        self._rearm_closes = 0
+        self._cancel_reason: str | None = None
+
+    def restore(self, exit_advisory: object) -> bool:
+        if not isinstance(exit_advisory, dict):
+            return False
+        continuity = exit_advisory.get("continuity")
+        if not isinstance(continuity, dict):
+            return False
+        scope_key = str(continuity.get("scope_key") or "")
+        reported_state = str(exit_advisory.get("state") or "")
+        continuity_state = str(continuity.get("state") or "")
+        restorable_states = {
+            "EXIT_WATCH",
+            "EXIT_CAUTION",
+            "EXIT_READY",
+            "EXIT_CANCELLED",
+        }
+        if reported_state == "DATA_WAIT":
+            state = continuity_state
+        elif reported_state in restorable_states and continuity_state in {
+            "",
+            reported_state,
+        }:
+            state = reported_state
+        else:
+            return False
+        last_processed_bar = str(continuity.get("last_processed_bar") or "")
+        if not scope_key or state not in restorable_states:
+            return False
+        if last_processed_bar and len(last_processed_bar) != 14:
+            return False
+        self._scope_key = scope_key
+        self._state = state
+        self._last_processed_bar = last_processed_bar
+        for attribute, key in (
+            ("_broken_support", "broken_support"),
+            ("_peak_price", "peak_price"),
+            ("_lowest_since_ready", "lowest_since_ready"),
+            ("_rearm_support", "rearm_support"),
+        ):
+            try:
+                value = int(continuity.get(key) or 0) or None
+            except (TypeError, ValueError):
+                self.reset()
+                return False
+            setattr(self, attribute, value)
+        self._caution_bar = str(continuity.get("caution_bar") or "")
+        self._ready_bar = str(continuity.get("ready_bar") or "")
+        try:
+            self._pending_bars = max(0, int(continuity.get("pending_bars") or 0))
+            self._reclaim_bars = max(0, int(continuity.get("reclaim_bars") or 0))
+            self._bars_without_new_low = max(
+                0, int(continuity.get("bars_without_new_low") or 0)
+            )
+            self._rearm_closes = max(0, int(continuity.get("rearm_closes") or 0))
+        except (TypeError, ValueError):
+            self.reset()
+            return False
+        self._cancel_reason = str(continuity.get("cancel_reason") or "") or None
+        return True
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "state": self._state,
+            "scope_key": self._scope_key,
+            "last_processed_bar": self._last_processed_bar or None,
+            "broken_support": self._broken_support,
+            "peak_price": self._peak_price,
+            "caution_bar": self._caution_bar or None,
+            "ready_bar": self._ready_bar or None,
+            "pending_bars": self._pending_bars,
+            "reclaim_bars": self._reclaim_bars,
+            "lowest_since_ready": self._lowest_since_ready,
+            "bars_without_new_low": self._bars_without_new_low,
+            "rearm_support": self._rearm_support,
+            "rearm_closes": self._rearm_closes,
+            "cancel_reason": self._cancel_reason,
+        }
+
+    def _clear_episode(self) -> None:
+        self._broken_support = None
+        self._peak_price = None
+        self._caution_bar = ""
+        self._ready_bar = ""
+        self._pending_bars = 0
+        self._reclaim_bars = 0
+        self._lowest_since_ready = None
+        self._bars_without_new_low = 0
+
+    @staticmethod
+    def _valid_until(observed_at: datetime, context: SessionContext) -> str:
+        now = _as_kst(observed_at)
+        end_of_day = datetime.combine(now.date(), NXT_AFTERMARKET_END, tzinfo=KST)
+        session_end = (
+            datetime.combine(now.date(), context.end, tzinfo=KST)
+            if context.end is not None
+            else end_of_day
+        )
+        return min(now + timedelta(seconds=60), session_end, end_of_day).isoformat()
+
+    def _base_payload(
+        self,
+        *,
+        observed_at: datetime,
+        context: SessionContext,
+        source_quality: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "state": self._state,
+            "raw_state": self._state,
+            "session": context.name,
+            "reference_exit_price": None,
+            "peak_price": self._peak_price,
+            "peak_drawdown_pct": None,
+            "broken_support": self._broken_support,
+            "session_vwap": None,
+            "dynamic_drawdown_band": None,
+            "reasons": [],
+            "unmet_conditions": [],
+            "observed_at": _as_kst(observed_at).isoformat(),
+            "valid_until": self._valid_until(observed_at, context),
+            "source_quality": source_quality,
+            "holding_independent": True,
+            "future_prediction": False,
+            "authority": ADVISORY_AUTHORITY,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "metric_contract": METRIC_CONTRACT,
+            "continuity": self.snapshot(),
+        }
+
+    def apply(
+        self,
+        *,
+        observed_at: datetime,
+        context: SessionContext,
+        bars: list[MinuteBar],
+        bbo: dict[str, Any],
+        source_quality: dict[str, Any],
+    ) -> dict[str, Any]:
+        scope_key = self._scope_for(observed_at, context)
+        if scope_key != self._scope_key:
+            self.reset()
+            self._scope_key = scope_key
+        minimum_bars = max(6, context.minimum_bars)
+        if source_quality.get("status") != "PASS" or len(bars) < minimum_bars:
+            payload = self._base_payload(
+                observed_at=observed_at,
+                context=context,
+                source_quality=source_quality,
+            )
+            payload["state"] = payload["raw_state"] = "DATA_WAIT"
+            payload["unmet_conditions"] = list(
+                dict.fromkeys(
+                    [
+                        *source_quality.get("issues", []),
+                        *(
+                            ["exit_minimum_bars_not_met"]
+                            if len(bars) < minimum_bars
+                            else []
+                        ),
+                    ]
+                )
+            )
+            return payload
+        contiguous = _contiguous_window(bars, minimum_bars)
+        if not contiguous:
+            payload = self._base_payload(
+                observed_at=observed_at,
+                context=context,
+                source_quality=source_quality,
+            )
+            payload["state"] = payload["raw_state"] = "DATA_WAIT"
+            payload["unmet_conditions"] = ["exit_completed_bars_not_contiguous"]
+            return payload
+
+        latest = bars[-1]
+        change_window = bars[-(EXIT_VOLATILITY_LOOKBACK_BARS + 1) :]
+        recent_changes = [
+            abs(current.close - previous.close)
+            for previous, current in zip(change_window, change_window[1:])
+        ]
+        median_change = float(median(recent_changes)) if recent_changes else 0.0
+        tick_size = get_tick_size(latest.close)
+        raw_band = max(tick_size * 2, median_change * 2)
+        dynamic_band = max(tick_size, int(math.ceil(raw_band / tick_size) * tick_size))
+        peak_price = max(bar.high for bar in bars[-EXIT_PEAK_LOOKBACK_BARS:])
+        prior_support = min(
+            bar.low for bar in bars[-(EXIT_SUPPORT_LOOKBACK_BARS + 1) : -1]
+        )
+        session_vwap = _session_vwap(bars)
+        trend_3m_down = _exit_downtrend_confirmed(bars, 3)
+        trend_5m_down = _exit_downtrend_confirmed(bars, 5)
+        peak_departed = peak_price - latest.close >= dynamic_band
+        support_broken = latest.close < prior_support
+        below_vwap = bool(session_vwap and latest.close < session_vwap)
+        caution_setup = bool(
+            peak_departed
+            and support_broken
+            and below_vwap
+            and (trend_3m_down or trend_5m_down)
+        )
+
+        is_new_bar = latest.source_time != self._last_processed_bar
+        continuity_gap_reset = False
+        if is_new_bar and self._last_processed_bar:
+            try:
+                current_bar_time = datetime.strptime(latest.source_time, "%Y%m%d%H%M%S")
+                previous_bar_time = datetime.strptime(
+                    self._last_processed_bar, "%Y%m%d%H%M%S"
+                )
+                continuity_gap_reset = (
+                    current_bar_time - previous_bar_time
+                ).total_seconds() != 60
+            except ValueError:
+                continuity_gap_reset = True
+            if continuity_gap_reset:
+                self._state = "EXIT_WATCH"
+                self._cancel_reason = None
+                self._clear_episode()
+                self._rearm_support = None
+                self._rearm_closes = 0
+        if is_new_bar:
+            previous = bars[-2]
+            if self._state == "EXIT_READY" and self._broken_support:
+                if (
+                    self._lowest_since_ready is None
+                    or latest.low < self._lowest_since_ready
+                ):
+                    self._lowest_since_ready = latest.low
+                    self._bars_without_new_low = 0
+                else:
+                    self._bars_without_new_low += 1
+                self._reclaim_bars = (
+                    self._reclaim_bars + 1
+                    if latest.close >= self._broken_support
+                    else 0
+                )
+                if self._reclaim_bars >= 2:
+                    self._state = "EXIT_CANCELLED"
+                    self._cancel_reason = "broken_support_reclaimed_two_bars"
+                    self._clear_episode()
+                    self._rearm_support = None
+                    self._rearm_closes = 0
+                elif self._bars_without_new_low >= EXIT_NO_NEW_LOW_CANCEL_BARS:
+                    rearm_support = self._broken_support
+                    self._state = "EXIT_CANCELLED"
+                    self._cancel_reason = "no_new_low_for_five_completed_bars"
+                    self._clear_episode()
+                    self._rearm_support = rearm_support
+                    self._rearm_closes = 0
+            elif self._state == "EXIT_CAUTION" and self._broken_support:
+                self._pending_bars += 1
+                failed_reclaim = bool(
+                    latest.high >= self._broken_support
+                    and latest.close < self._broken_support
+                )
+                continuation = bool(
+                    latest.close < self._broken_support
+                    and trend_3m_down
+                    and trend_5m_down
+                    and (latest.close <= previous.close or failed_reclaim)
+                )
+                if continuation:
+                    self._state = "EXIT_READY"
+                    self._ready_bar = latest.source_time
+                    self._lowest_since_ready = latest.low
+                    self._bars_without_new_low = 0
+                    self._reclaim_bars = 0
+                elif (
+                    latest.close >= self._broken_support
+                    or self._pending_bars >= EXIT_PENDING_MAX_BARS
+                ):
+                    self._state = "EXIT_WATCH"
+                    self._cancel_reason = None
+                    self._clear_episode()
+            else:
+                if self._state == "EXIT_CANCELLED":
+                    self._state = "EXIT_WATCH"
+                    self._cancel_reason = None
+                if self._rearm_support:
+                    self._rearm_closes = (
+                        self._rearm_closes + 1
+                        if latest.close >= self._rearm_support
+                        else 0
+                    )
+                    if self._rearm_closes >= 2:
+                        self._rearm_support = None
+                        self._rearm_closes = 0
+                elif caution_setup:
+                    self._state = "EXIT_CAUTION"
+                    self._broken_support = prior_support
+                    self._peak_price = peak_price
+                    self._caution_bar = latest.source_time
+                    self._pending_bars = 0
+                    self._cancel_reason = None
+            self._last_processed_bar = latest.source_time
+
+        payload = self._base_payload(
+            observed_at=observed_at,
+            context=context,
+            source_quality=source_quality,
+        )
+        payload["session_vwap"] = session_vwap
+        payload["dynamic_drawdown_band"] = dynamic_band
+        payload["trend_3m_down"] = trend_3m_down
+        payload["trend_5m_down"] = trend_5m_down
+        payload["continuity_gap_reset"] = continuity_gap_reset
+        payload["continuity"] = self.snapshot()
+        if self._peak_price:
+            payload["peak_drawdown_pct"] = round(
+                ((self._peak_price - latest.close) / self._peak_price) * 100, 4
+            )
+        if self._state in self.ACTIONABLE:
+            payload["reference_exit_price"] = _positive_int(bbo.get("best_bid"))
+            payload["reasons"] = [
+                "rolling_peak_drawdown",
+                "prior_five_bar_support_broken",
+                "below_session_vwap",
+                "three_or_five_minute_down",
+            ]
+            if self._state == "EXIT_READY":
+                payload["reasons"].extend(
+                    ["broken_support_reclaim_failed", "three_and_five_minute_down"]
+                )
+        elif self._state == "EXIT_CANCELLED":
+            payload["reasons"] = [self._cancel_reason or "exit_signal_cancelled"]
+        else:
+            checks = {
+                "rolling_peak_drawdown_pending": peak_departed,
+                "prior_five_bar_support_intact": support_broken,
+                "session_vwap_not_broken": below_vwap,
+                "downtrend_not_confirmed": trend_3m_down or trend_5m_down,
+            }
+            payload["unmet_conditions"] = [
+                name for name, passed in checks.items() if not passed
+            ]
+            if self._rearm_support:
+                payload["unmet_conditions"].insert(0, "exit_rearm_pending")
+        return payload
 
 
 def _regular_flow_recoverable_for_aftermarket(
@@ -1969,11 +2599,13 @@ class ObservationRecorder:
         self.directory = directory
         self.retention_days = max(1, int(retention_days))
         self._last_state: str | None = None
+        self._last_exit_state: str | None = None
         self._last_minute: str | None = None
         self._loaded_day: str | None = None
 
     def _restore_current_day(self, target: Path, day_key: str) -> None:
         self._last_state = None
+        self._last_exit_state = None
         self._last_minute = None
         self._loaded_day = day_key
         try:
@@ -1988,13 +2620,16 @@ class ObservationRecorder:
             if not isinstance(row, dict):
                 continue
             advisory = row.get("advisory") or {}
+            exit_advisory = row.get("exit_advisory") or {}
             state = str(advisory.get("state") or "").strip()
+            exit_state = str(exit_advisory.get("state") or "DATA_WAIT").strip()
             observed_at = str(row.get("observed_at_kst") or "")
             if not state or not observed_at.startswith(
                 f"{day_key[:4]}-{day_key[4:6]}-{day_key[6:8]}"
             ):
                 continue
             self._last_state = state
+            self._last_exit_state = exit_state
             try:
                 parsed = datetime.fromisoformat(observed_at)
             except ValueError:
@@ -2008,14 +2643,19 @@ class ObservationRecorder:
         if self._loaded_day != day_key:
             self._restore_current_day(target, day_key)
         advisory = payload.get("advisory") or {}
+        exit_advisory = payload.get("exit_advisory") or {}
         state = str(advisory.get("state") or "DATA_WAIT")
+        exit_state = str(exit_advisory.get("state") or "DATA_WAIT")
         minute = _as_kst(observed_at).strftime("%Y%m%d%H%M")
         previous_state = self._last_state
+        previous_exit_state = self._last_exit_state
         state_changed = state != previous_state
+        exit_state_changed = exit_state != previous_exit_state
         minute_changed = minute != self._last_minute
-        if not state_changed and not minute_changed:
+        if not state_changed and not exit_state_changed and not minute_changed:
             return
         self._last_state = state
+        self._last_exit_state = exit_state
         self._last_minute = minute
         self.directory.mkdir(parents=True, exist_ok=True)
         row = {
@@ -2025,13 +2665,17 @@ class ObservationRecorder:
             "market_session": advisory.get("session") or payload.get("market_session"),
             "legacy_market_session": payload.get("market_session"),
             "observation_kind": (
-                "state_transition" if state_changed else "minute_summary"
+                "state_transition"
+                if state_changed
+                else "exit_state_transition" if exit_state_changed else "minute_summary"
             ),
             "previous_advisory_state": previous_state,
+            "previous_exit_advisory_state": previous_exit_state,
             "latest_completed_bar": (payload.get("observation") or {}).get(
                 "latest_completed_bar"
             ),
             "advisory": advisory,
+            "exit_advisory": exit_advisory,
             "metric_contract": METRIC_CONTRACT,
         }
         with target.open("a", encoding="utf-8") as handle:
@@ -2065,7 +2709,9 @@ class SamsungWidgetCollector:
         self.request_session = request_session
         self.entry_notifier = entry_notifier
         self.request_budget = ReadOnlyRequestBudget()
+        self.break_rearm_filter = AdvisoryBreakRearmFilter()
         self.promotion_filter = AdvisoryPromotionFilter()
+        self.exit_state_machine = ExitAdvisoryStateMachine()
         self.recorder = ObservationRecorder(observation_dir)
         self._minute_cache: dict[str, Any] = {}
         self._relative_cache: dict[str, Any] = {}
@@ -2131,7 +2777,9 @@ class SamsungWidgetCollector:
         self._last_relative_fetch = 0.0
         self._last_flow_fetch = 0.0
         self._promotion_state_restore_attempted = False
+        self.break_rearm_filter.reset()
         self.promotion_filter.reset()
+        self.exit_state_machine.reset()
 
     @staticmethod
     def _peer_request_code(context: SessionContext) -> str:
@@ -2165,9 +2813,8 @@ class SamsungWidgetCollector:
             return
         self._promotion_state_restore_attempted = True
         payload = load_snapshot(self.snapshot_path)
-        if not snapshot_is_fresh(payload, now=observed_at):
-            return
         advisory = payload.get("advisory") or {}
+        exit_advisory = payload.get("exit_advisory") or {}
         if not isinstance(advisory, dict):
             return
         persisted_observed_at = snapshot_observed_at(payload)
@@ -2180,12 +2827,24 @@ class SamsungWidgetCollector:
             or payload.get("market_cohort") != context.market_cohort
             or payload.get("quote_request_code") != context.request_code
             or payload.get("token_mode") != "shared_cache_only"
-            or not advisory_contract_is_valid(
-                advisory,
-                snapshot_observed_at=persisted_observed_at,
-                context=context,
-                evaluated_at=observed_at,
-            )
+            or advisory.get("session") != context.name
+            or advisory.get("authority") != ADVISORY_AUTHORITY
+            or advisory.get("runtime_effect") is not False
+            or persisted_observed_at.date() != _as_kst(observed_at).date()
+        ):
+            return
+        # A broken-support lock spans completed bars and must survive a service
+        # restart longer than the 25-second display freshness window. Promotion
+        # streaks remain freshness-bound below.
+        self.break_rearm_filter.restore(advisory)
+        self.exit_state_machine.restore(exit_advisory)
+        if not snapshot_is_fresh(
+            payload, now=observed_at
+        ) or not advisory_contract_is_valid(
+            advisory,
+            snapshot_observed_at=persisted_observed_at,
+            context=context,
+            evaluated_at=observed_at,
         ):
             return
         self.promotion_filter.restore(advisory)
@@ -2199,6 +2858,16 @@ class SamsungWidgetCollector:
         self._optional_gaps = []
         self._external_fetch_error = None
         if not context.active:
+            closed_advisory = evaluate_advisory(
+                observed_at=now,
+                context=context,
+                current_price=0,
+                bars=[],
+                bbo={},
+                previous_day={},
+                relative={},
+                external_points={},
+            )
             payload = {
                 "schema_version": SNAPSHOT_SCHEMA_VERSION,
                 "status": "closed",
@@ -2209,15 +2878,13 @@ class SamsungWidgetCollector:
                 "market_cohort": context.market_cohort,
                 "market_session": legacy_market_session(context),
                 "token_mode": "shared_cache_only",
-                "advisory": evaluate_advisory(
+                "advisory": closed_advisory,
+                "exit_advisory": self.exit_state_machine.apply(
                     observed_at=now,
                     context=context,
-                    current_price=0,
                     bars=[],
                     bbo={},
-                    previous_day={},
-                    relative={},
-                    external_points={},
+                    source_quality=closed_advisory["source_quality"],
                 ),
             }
             _atomic_write_json(self.snapshot_path, payload)
@@ -2517,6 +3184,9 @@ class SamsungWidgetCollector:
             quote_received_at=_as_kst(quote_received_at).isoformat(),
         )
         self._restore_promotion_state(decision_now, context)
+        advisory = self.break_rearm_filter.apply(
+            advisory, latest_bar=bars[-1] if bars else None
+        )
         advisory = self.promotion_filter.apply(advisory)
         advisory["source_quality"]["auxiliary_status"] = (
             "DATA_LIMITED"
@@ -2526,6 +3196,22 @@ class SamsungWidgetCollector:
         advisory["source_quality"]["auxiliary_gaps"] = list(self._optional_gaps)
         advisory["provenance"]["external_fetch_error"] = self._external_fetch_error
         advisory["provenance"]["cache_scope"] = list(self._active_scope_key or ())
+        exit_source_quality = _source_quality(
+            observed_at=decision_now,
+            context=context,
+            bars=bars,
+            bbo=bbo,
+            previous_day=None,
+            quote_age_sec=quote_age_sec,
+            current_price=current_price,
+        )
+        exit_advisory = self.exit_state_machine.apply(
+            observed_at=decision_now,
+            context=context,
+            bars=bars,
+            bbo=bbo,
+            source_quality=exit_source_quality,
+        )
         day_low = _positive_int(quote.get("low_pric"))
         day_low_delta = (
             current_price - day_low
@@ -2596,6 +3282,7 @@ class SamsungWidgetCollector:
                 "authority": "widget_collector_local_only",
             },
             "advisory": advisory,
+            "exit_advisory": exit_advisory,
         }
         _atomic_write_json(self.snapshot_path, payload)
         self.recorder.record(payload, decision_now)
@@ -2604,21 +3291,49 @@ class SamsungWidgetCollector:
 
     def write_failure(self, reason: str, observed_at: datetime | None = None) -> None:
         now = _as_kst(observed_at or _now_kst())
+        context = session_context(now)
         self.promotion_filter.reset()
         payload = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "status": "unavailable",
+            "symbol": SAMSUNG_CODE,
             "reason": reason,
             "observed_at_kst": now.isoformat(),
+            "market_venue": context.market_venue,
+            "market_cohort": context.market_cohort,
+            "market_session": legacy_market_session(context),
+            "quote_request_code": context.request_code,
             "token_mode": "shared_cache_only",
             "advisory": {
                 "state": "DATA_WAIT",
                 "raw_state": "DATA_WAIT",
+                "session": context.name,
+                "entry_price_low": None,
+                "entry_price_high": None,
+                "observed_at": now.isoformat(),
                 "authority": ADVISORY_AUTHORITY,
                 "runtime_effect": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "source_quality": {"status": "BLOCKED", "issues": [reason]},
+                "continuity": self.break_rearm_filter.snapshot(),
+                "metric_contract": METRIC_CONTRACT,
+            },
+            "exit_advisory": {
+                "state": "DATA_WAIT",
+                "raw_state": "DATA_WAIT",
+                "session": context.name,
+                "reference_exit_price": None,
+                "observed_at": now.isoformat(),
+                "valid_until": now.isoformat(),
+                "authority": ADVISORY_AUTHORITY,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "holding_independent": True,
+                "future_prediction": False,
+                "source_quality": {"status": "BLOCKED", "issues": [reason]},
+                "continuity": self.exit_state_machine.snapshot(),
                 "metric_contract": METRIC_CONTRACT,
             },
         }

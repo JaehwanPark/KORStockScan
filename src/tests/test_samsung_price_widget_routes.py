@@ -130,6 +130,8 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
     assert response.get_json()["advisory"]["state"] == "DATA_WAIT"
     assert response.get_json()["advisory"]["session"] == "KRX_REGULAR"
     assert response.get_json()["advisory"]["runtime_effect"] is False
+    assert response.get_json()["exit_advisory"]["state"] == "DATA_WAIT"
+    assert response.get_json()["exit_advisory"]["holding_independent"] is True
 
 
 def test_samsung_widget_uses_nxt_route_after_krx_close(monkeypatch):
@@ -304,6 +306,57 @@ def test_samsung_widget_rejects_snapshot_with_expired_inner_advisory(
         ),
         encoding="utf-8",
     )
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH", str(snapshot_path))
+
+    assert routes._fresh_collector_snapshot(now) is None
+
+
+def test_samsung_widget_rejects_snapshot_with_runtime_exit_authority(
+    monkeypatch, tmp_path
+):
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    snapshot = {
+        "schema_version": 1,
+        "status": "ok",
+        "symbol": "005930",
+        "current_price": 100_000,
+        "observed_at_kst": now.isoformat(),
+        "token_mode": "shared_cache_only",
+        "market_venue": "KRX",
+        "market_cohort": "KRX",
+        "quote_request_code": "005930",
+        "advisory": {
+            "state": "WATCH",
+            "raw_state": "WATCH",
+            "session": "KRX_REGULAR",
+            "entry_price_low": None,
+            "entry_price_high": None,
+            "observed_at": now.isoformat(),
+            "valid_until": (now + timedelta(seconds=60)).isoformat(),
+            "source_quality": {"status": "PASS", "issues": []},
+            "authority": "widget_advisory_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        "exit_advisory": {
+            "state": "EXIT_READY",
+            "session": "KRX_REGULAR",
+            "reference_exit_price": 99_900,
+            "peak_price": 101_000,
+            "broken_support": 100_000,
+            "observed_at": now.isoformat(),
+            "valid_until": (now + timedelta(seconds=60)).isoformat(),
+            "source_quality": {"status": "PASS", "issues": []},
+            "holding_independent": True,
+            "authority": "widget_advisory_only",
+            "runtime_effect": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+    }
+    snapshot_path = tmp_path / "widget-snapshot.json"
+    snapshot_path.write_text(__import__("json").dumps(snapshot), encoding="utf-8")
     monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH", str(snapshot_path))
 
     assert routes._fresh_collector_snapshot(now) is None

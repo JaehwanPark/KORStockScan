@@ -105,6 +105,284 @@ def _ready_input(current_price=100_400, bbo_age=0.0):
     }
 
 
+def _exit_source_quality():
+    return {"status": "PASS", "issues": []}
+
+
+def test_exit_advisory_requires_a_second_completed_bar_for_ready():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(
+        start,
+        [100_000, 100_300, 100_500, 100_400, 100_200, 100_000, 99_500],
+    )
+    context = advisory.session_context(start + timedelta(minutes=7, seconds=5))
+    machine = advisory.ExitAdvisoryStateMachine()
+    bbo = {"best_bid": 99_400, "best_ask": 99_500}
+
+    caution = machine.apply(
+        observed_at=start + timedelta(minutes=7, seconds=5),
+        context=context,
+        bars=bars,
+        bbo=bbo,
+        source_quality=_exit_source_quality(),
+    )
+    duplicate = machine.apply(
+        observed_at=start + timedelta(minutes=7, seconds=15),
+        context=context,
+        bars=bars,
+        bbo=bbo,
+        source_quality=_exit_source_quality(),
+    )
+    ready_bars = [*bars, *_bars(start + timedelta(minutes=7), [99_000])]
+    ready = machine.apply(
+        observed_at=start + timedelta(minutes=8, seconds=5),
+        context=context,
+        bars=ready_bars,
+        bbo={"best_bid": 98_900, "best_ask": 99_000},
+        source_quality=_exit_source_quality(),
+    )
+
+    assert caution["state"] == "EXIT_CAUTION"
+    assert caution["holding_independent"] is True
+    assert caution["future_prediction"] is False
+    assert duplicate["state"] == "EXIT_CAUTION"
+    assert duplicate["continuity"]["pending_bars"] == 0
+    assert ready["state"] == "EXIT_READY"
+    assert ready["reference_exit_price"] == 98_900
+    assert ready["broken_support"] == caution["broken_support"]
+    assert "broken_support_reclaim_failed" in ready["reasons"]
+
+
+def test_exit_advisory_cancels_after_two_completed_support_reclaims():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(
+        start,
+        [100_000, 100_300, 100_500, 100_400, 100_200, 100_000, 99_500],
+    )
+    context = advisory.session_context(start + timedelta(minutes=7, seconds=5))
+    machine = advisory.ExitAdvisoryStateMachine()
+    quality = _exit_source_quality()
+    machine.apply(
+        observed_at=start + timedelta(minutes=7, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 99_400, "best_ask": 99_500},
+        source_quality=quality,
+    )
+    bars.append(_bars(start + timedelta(minutes=7), [99_000])[0])
+    ready = machine.apply(
+        observed_at=start + timedelta(minutes=8, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 98_900, "best_ask": 99_000},
+        source_quality=quality,
+    )
+    support = ready["broken_support"]
+    assert support is not None
+    bars.extend(
+        [
+            advisory.MinuteBar(
+                "20260803090800", support, support + 100, support, support, 1_000
+            ),
+            advisory.MinuteBar(
+                "20260803090900",
+                support,
+                support + 200,
+                support,
+                support + 100,
+                1_000,
+            ),
+        ]
+    )
+    first_reclaim = machine.apply(
+        observed_at=start + timedelta(minutes=9, seconds=5),
+        context=context,
+        bars=bars[:-1],
+        bbo={"best_bid": support, "best_ask": support + 100},
+        source_quality=quality,
+    )
+    cancelled = machine.apply(
+        observed_at=start + timedelta(minutes=10, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": support, "best_ask": support + 100},
+        source_quality=quality,
+    )
+
+    assert first_reclaim["state"] == "EXIT_READY"
+    assert first_reclaim["continuity"]["reclaim_bars"] == 1
+    assert cancelled["state"] == "EXIT_CANCELLED"
+    assert cancelled["reasons"] == ["broken_support_reclaimed_two_bars"]
+    assert cancelled["reference_exit_price"] is None
+
+
+def test_exit_advisory_no_new_low_cancel_requires_support_rearm():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(
+        start,
+        [100_000, 100_300, 100_500, 100_400, 100_200, 100_000, 99_500],
+    )
+    context = advisory.session_context(start + timedelta(minutes=7, seconds=5))
+    machine = advisory.ExitAdvisoryStateMachine()
+    quality = _exit_source_quality()
+    machine.apply(
+        observed_at=start + timedelta(minutes=7, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 99_400, "best_ask": 99_500},
+        source_quality=quality,
+    )
+    bars.append(_bars(start + timedelta(minutes=7), [99_000])[0])
+    ready = machine.apply(
+        observed_at=start + timedelta(minutes=8, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 98_900, "best_ask": 99_000},
+        source_quality=quality,
+    )
+    support = ready["broken_support"]
+    assert support is not None
+    cancelled = None
+    for offset in range(8, 13):
+        bars.append(
+            advisory.MinuteBar(
+                (start + timedelta(minutes=offset)).strftime("%Y%m%d%H%M%S"),
+                99_000,
+                99_100,
+                98_950,
+                99_000,
+                1_000,
+            )
+        )
+        cancelled = machine.apply(
+            observed_at=start + timedelta(minutes=offset + 1, seconds=5),
+            context=context,
+            bars=bars,
+            bbo={"best_bid": 98_900, "best_ask": 99_000},
+            source_quality=quality,
+        )
+    assert cancelled is not None
+    assert cancelled["state"] == "EXIT_CANCELLED"
+    assert cancelled["continuity"]["rearm_support"] == support
+
+    bars.append(
+        advisory.MinuteBar("20260803091300", 99_000, 99_000, 98_500, 98_500, 1_000)
+    )
+    locked = machine.apply(
+        observed_at=start + timedelta(minutes=14, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 98_400, "best_ask": 98_500},
+        source_quality=quality,
+    )
+
+    assert locked["state"] == "EXIT_WATCH"
+    assert "exit_rearm_pending" in locked["unmet_conditions"]
+
+
+def test_exit_advisory_restores_internal_state_from_failure_data_wait_snapshot():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(
+        start,
+        [100_000, 100_300, 100_500, 100_400, 100_200, 100_000, 99_500],
+    )
+    context = advisory.session_context(start + timedelta(minutes=7, seconds=5))
+    machine = advisory.ExitAdvisoryStateMachine()
+    quality = _exit_source_quality()
+    machine.apply(
+        observed_at=start + timedelta(minutes=7, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 99_400, "best_ask": 99_500},
+        source_quality=quality,
+    )
+    bars.append(_bars(start + timedelta(minutes=7), [99_000])[0])
+    machine.apply(
+        observed_at=start + timedelta(minutes=8, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 98_900, "best_ask": 99_000},
+        source_quality=quality,
+    )
+    for offset in range(8, 13):
+        bars.append(
+            advisory.MinuteBar(
+                (start + timedelta(minutes=offset)).strftime("%Y%m%d%H%M%S"),
+                99_000,
+                99_100,
+                98_950,
+                99_000,
+                1_000,
+            )
+        )
+        machine.apply(
+            observed_at=start + timedelta(minutes=offset + 1, seconds=5),
+            context=context,
+            bars=bars,
+            bbo={"best_bid": 98_900, "best_ask": 99_000},
+            source_quality=quality,
+        )
+
+    continuity = machine.snapshot()
+    persisted = {"state": "DATA_WAIT", "continuity": continuity}
+    restored = advisory.ExitAdvisoryStateMachine()
+
+    assert restored.restore(persisted) is True
+    assert restored.snapshot()["state"] == "EXIT_CANCELLED"
+    assert restored.snapshot()["rearm_support"] == continuity["rearm_support"]
+    assert restored.snapshot()["rearm_support"] is not None
+
+
+def test_exit_advisory_fails_closed_without_fresh_complete_source():
+    now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
+    result = advisory.ExitAdvisoryStateMachine().apply(
+        observed_at=now,
+        context=advisory.session_context(now),
+        bars=[],
+        bbo={},
+        source_quality={"status": "BLOCKED", "issues": ["quote_stale"]},
+    )
+
+    assert result["state"] == "DATA_WAIT"
+    assert result["reference_exit_price"] is None
+    assert "quote_stale" in result["unmet_conditions"]
+
+
+def test_exit_advisory_contract_rejects_runtime_or_holding_authority():
+    now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
+    context = advisory.session_context(now)
+    payload = {
+        "state": "EXIT_READY",
+        "session": context.name,
+        "peak_price": 101_000,
+        "broken_support": 100_000,
+        "reference_exit_price": 99_900,
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(seconds=60)).isoformat(),
+        "source_quality": {"status": "PASS"},
+        "holding_independent": True,
+        "future_prediction": False,
+        "authority": contract.ADVISORY_AUTHORITY,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    assert contract.exit_advisory_contract_is_valid(
+        payload,
+        snapshot_observed_at=now,
+        context=context,
+        evaluated_at=now,
+    )
+    payload["holding_independent"] = False
+    assert not contract.exit_advisory_contract_is_valid(
+        payload,
+        snapshot_observed_at=now,
+        context=context,
+        evaluated_at=now,
+    )
+
+
 def test_trend_band_treats_single_high_price_tick_as_flat():
     bars = _bars(
         datetime(2026, 8, 3, 9, 0, tzinfo=KST),
@@ -966,20 +1244,22 @@ def test_missing_confirmed_support_is_watch_with_candidate_provenance(monkeypatc
     assert result["derived"]["confirmed_support"] is None
 
 
-def test_confirmed_support_break_is_immediate_avoid():
+def test_live_support_break_without_pressure_is_soft_watch():
     inputs = _ready_input()
     inputs["current_price"] = 99_000
     inputs["bbo"] = {"best_bid": 98_900, "best_ask": 99_000, "age_sec": 0}
 
     result = advisory.evaluate_advisory(**inputs)
 
-    assert result["state"] == "AVOID"
+    assert result["state"] == "WATCH"
+    assert result["invalidation"] == "soft_support_break_pending_confirmation"
+    assert "soft_support_break" in result["unmet_conditions"]
     assert result["derived"]["session_vwap"] is not None
     assert result["derived"]["support_confirmation"] != "unconfirmed"
     assert "distance_from_structural_support_pct" in result["derived"]
 
 
-def test_exact_invalidation_boundary_is_immediate_avoid():
+def test_deep_live_break_with_ask_pressure_is_immediate_avoid():
     baseline = advisory.evaluate_advisory(**_ready_input())
     invalidation = baseline["invalidation_price"]
     inputs = _ready_input()
@@ -987,6 +1267,8 @@ def test_exact_invalidation_boundary_is_immediate_avoid():
     inputs["bbo"] = {
         "best_bid": advisory.move_price_by_ticks(invalidation, -1),
         "best_ask": invalidation,
+        "best_bid_qty": 100,
+        "best_ask_qty": 200,
         "age_sec": 0,
     }
 
@@ -994,6 +1276,162 @@ def test_exact_invalidation_boundary_is_immediate_avoid():
 
     assert result["state"] == "AVOID"
     assert result["entry_price_low"] is None
+    assert result["derived"]["invalidation_confirmation"]["deep_live_break"] is True
+
+
+def test_completed_close_below_support_confirms_break(monkeypatch):
+    inputs = _ready_input(current_price=100_000)
+    fixed_support = 100_100
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            "higher_low": True,
+            "higher_high": True,
+            "higher_high_and_low": True,
+            "retest_held": False,
+            "retest_rebound_confirmed": False,
+            "confirmed_support": fixed_support,
+            "candidate_support": fixed_support,
+            "support_confirmation": "higher_high_and_low",
+            "confirmed_support_age_bars": 1,
+            "recent_resistance": 100_000,
+        },
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "AVOID"
+    assert (
+        result["derived"]["invalidation_confirmation"]["completed_close_break"] is True
+    )
+
+
+def test_break_rearm_requires_two_distinct_completed_bars():
+    raw = advisory.evaluate_advisory(**_ready_input())
+    support = raw["derived"]["structural_support"]
+    break_advisory = {
+        **raw,
+        "state": "WATCH",
+        "raw_state": "WATCH",
+        "invalidation": "soft_support_break_pending_confirmation",
+    }
+    filter_ = advisory.AdvisoryBreakRearmFilter()
+    break_bar = advisory.MinuteBar(
+        "20260803090900", support, support, support - 100, support, 1_000
+    )
+    first_reclaim = advisory.MinuteBar(
+        "20260803091000", support, support + 100, support, support, 1_000
+    )
+    second_reclaim = advisory.MinuteBar(
+        "20260803091100", support, support + 100, support, support, 1_000
+    )
+
+    broken = filter_.apply(break_advisory, latest_bar=break_bar)
+    first = filter_.apply(raw, latest_bar=first_reclaim)
+    duplicate = filter_.apply(raw, latest_bar=first_reclaim)
+    second = filter_.apply(raw, latest_bar=second_reclaim)
+
+    assert broken["continuity"]["support_break_rearm_required"] is True
+    assert first["state"] == "WATCH"
+    assert first["continuity"]["reclaim_bar_count"] == 1
+    assert duplicate["continuity"]["reclaim_bar_count"] == 1
+    assert second["raw_state"] == "ENTRY_READY"
+    assert second["continuity"]["support_break_rearm_required"] is False
+    assert "post_break_rearm_satisfied" in second["reasons"]
+
+
+def test_collector_restores_break_lock_beyond_display_freshness(tmp_path):
+    raw = advisory.evaluate_advisory(**_ready_input())
+    support = raw["derived"]["structural_support"]
+    filter_ = advisory.AdvisoryBreakRearmFilter()
+    break_advisory = {
+        **raw,
+        "state": "WATCH",
+        "raw_state": "WATCH",
+        "invalidation": "soft_support_break_pending_confirmation",
+    }
+    persisted = filter_.apply(
+        break_advisory,
+        latest_bar=advisory.MinuteBar(
+            "20260803090900", support, support, support - 100, support, 1_000
+        ),
+    )
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "schema_version": contract.SNAPSHOT_SCHEMA_VERSION,
+                "status": "ok",
+                "symbol": contract.SAMSUNG_CODE,
+                "observed_at_kst": raw["observed_at"],
+                "market_venue": "KRX",
+                "market_cohort": "KRX",
+                "quote_request_code": contract.SAMSUNG_CODE,
+                "token_mode": "shared_cache_only",
+                "advisory": persisted,
+            }
+        ),
+        encoding="utf-8",
+    )
+    collector = advisory.SamsungWidgetCollector(
+        snapshot_path=snapshot_path,
+        observation_dir=tmp_path / "observations",
+    )
+    restart_time = datetime.fromisoformat(raw["observed_at"]) + timedelta(seconds=60)
+    context = advisory.session_context(restart_time)
+
+    collector._restore_promotion_state(restart_time, context)
+    first_reclaim = collector.break_rearm_filter.apply(
+        {**raw, "observed_at": restart_time.isoformat()},
+        latest_bar=advisory.MinuteBar(
+            "20260803091000", support, support + 100, support, support, 1_000
+        ),
+    )
+
+    assert first_reclaim["state"] == "WATCH"
+    assert first_reclaim["continuity"]["reclaim_bar_count"] == 1
+
+
+def test_collector_failure_snapshot_preserves_break_rearm_lock(tmp_path):
+    raw = advisory.evaluate_advisory(**_ready_input())
+    support = raw["derived"]["structural_support"]
+    snapshot_path = tmp_path / "snapshot.json"
+    collector = advisory.SamsungWidgetCollector(
+        snapshot_path=snapshot_path,
+        observation_dir=tmp_path / "observations",
+    )
+    collector.break_rearm_filter.apply(
+        {
+            **raw,
+            "state": "WATCH",
+            "raw_state": "WATCH",
+            "invalidation": "soft_support_break_pending_confirmation",
+        },
+        latest_bar=advisory.MinuteBar(
+            "20260803090900", support, support, support - 100, support, 1_000
+        ),
+    )
+    failure_time = datetime.fromisoformat(raw["observed_at"]) + timedelta(seconds=10)
+    collector.write_failure("temporary_transport_error", failure_time)
+
+    restarted = advisory.SamsungWidgetCollector(
+        snapshot_path=snapshot_path,
+        observation_dir=tmp_path / "restarted-observations",
+    )
+    restart_time = failure_time + timedelta(seconds=60)
+    restarted._restore_promotion_state(
+        restart_time, advisory.session_context(restart_time)
+    )
+    first_reclaim = restarted.break_rearm_filter.apply(
+        {**raw, "observed_at": restart_time.isoformat()},
+        latest_bar=advisory.MinuteBar(
+            "20260803091000", support, support + 100, support, support, 1_000
+        ),
+    )
+
+    assert first_reclaim["state"] == "WATCH"
+    assert first_reclaim["continuity"]["reclaim_bar_count"] == 1
 
 
 def test_quote_bbo_incoherence_blocks_advisory():
@@ -1004,6 +1442,33 @@ def test_quote_bbo_incoherence_blocks_advisory():
 
     assert result["state"] == "DATA_WAIT"
     assert "quote_bbo_inconsistent" in result["source_quality"]["issues"]
+
+
+def test_exit_source_quality_does_not_require_entry_only_previous_day_ohlc():
+    inputs = _ready_input()
+    exit_quality = advisory._source_quality(
+        observed_at=inputs["observed_at"],
+        context=inputs["context"],
+        bars=inputs["bars"],
+        bbo=inputs["bbo"],
+        previous_day=None,
+        quote_age_sec=0.0,
+        current_price=inputs["current_price"],
+    )
+    entry_quality = advisory._source_quality(
+        observed_at=inputs["observed_at"],
+        context=inputs["context"],
+        bars=inputs["bars"],
+        bbo=inputs["bbo"],
+        previous_day={},
+        quote_age_sec=0.0,
+        current_price=inputs["current_price"],
+    )
+
+    assert exit_quality["status"] == "PASS"
+    assert exit_quality["required_sources"] == ["quote", "bbo", "completed_1m"]
+    assert entry_quality["status"] == "BLOCKED"
+    assert "previous_day_ohlc_missing" in entry_quality["issues"]
 
 
 def test_volume_confirmation_requires_both_bar_directions():
@@ -1381,6 +1846,35 @@ def test_observation_recorder_writes_only_state_transition_and_minute_summary(
     ]
     assert len(rows_after_change) == 4
     assert rows_after_change[-1]["previous_advisory_state"] == "ENTRY_CAUTION"
+
+
+def test_exit_state_transition_does_not_create_a_new_entry_signal_row(tmp_path):
+    recorder = advisory.ObservationRecorder(tmp_path)
+    start = datetime(2026, 8, 3, 9, 10, 1, tzinfo=KST)
+
+    def payload(exit_state):
+        return {
+            "current_price": 100_000,
+            "market_venue": "KRX",
+            "market_session": "KRX_REGULAR",
+            "advisory": {"state": "ENTRY_CAUTION", "session": "KRX_REGULAR"},
+            "exit_advisory": {"state": exit_state},
+            "observation": {"latest_completed_bar": None},
+        }
+
+    recorder.record(payload("EXIT_WATCH"), start)
+    recorder.record(payload("EXIT_CAUTION"), start + timedelta(seconds=10))
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "samsung_widget_advisory_20260803.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    assert rows[0]["observation_kind"] == "state_transition"
+    assert rows[1]["observation_kind"] == "exit_state_transition"
+    assert rows[1]["previous_advisory_state"] == "ENTRY_CAUTION"
+    assert rows[1]["previous_exit_advisory_state"] == "EXIT_WATCH"
 
 
 def test_collector_uses_only_read_only_market_data_and_cached_token(

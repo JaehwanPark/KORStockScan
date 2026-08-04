@@ -39,6 +39,29 @@ def _fresh_advisory_payload(payload: dict) -> tuple[dict, datetime]:
     return payload, now
 
 
+def _attach_exit_advisory(payload: dict, now: datetime, *, state: str) -> dict:
+    payload["exit_advisory"] = {
+        "state": state,
+        "session": "KRX_REGULAR",
+        "reference_exit_price": 220_500 if state != "EXIT_CANCELLED" else None,
+        "peak_price": 224_000 if state != "EXIT_CANCELLED" else None,
+        "peak_drawdown_pct": 1.56 if state != "EXIT_CANCELLED" else None,
+        "broken_support": 221_000 if state != "EXIT_CANCELLED" else None,
+        "reasons": ["broken_support_reclaim_failed"],
+        "unmet_conditions": [],
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(seconds=60)).isoformat(),
+        "source_quality": {"status": "PASS", "issues": []},
+        "holding_independent": True,
+        "future_prediction": False,
+        "authority": "widget_advisory_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    return payload
+
+
 def test_widget_payload_parser_accepts_positive_current_price():
     quote = widget.parse_quote_payload(
         {
@@ -148,6 +171,130 @@ def test_widget_payload_parser_accepts_safe_advisory_contract():
     assert quote.entry_price_low == 221000
     assert quote.external_risk_level == "CAUTION"
     assert quote.external_quality == "DELAYED"
+
+
+def test_widget_payload_parser_accepts_holding_independent_exit_ready():
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 220_500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "WATCH",
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    _attach_exit_advisory(payload, now, state="EXIT_READY")
+
+    quote = widget.parse_quote_payload(payload, received_at=now)
+
+    assert quote.exit_advisory_state == "EXIT_READY"
+    assert quote.reference_exit_price == 220_500
+    assert quote.exit_peak_price == 224_000
+    assert quote.exit_peak_drawdown_pct == 1.56
+    assert quote.exit_broken_support == 221_000
+
+
+def test_widget_payload_parser_rejects_exit_runtime_authority():
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 220_500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "WATCH",
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    _attach_exit_advisory(payload, now, state="EXIT_READY")
+    payload["exit_advisory"]["runtime_effect"] = True
+
+    with pytest.raises(ValueError, match="invalid_exit_advisory_authority"):
+        widget.parse_quote_payload(payload, received_at=now)
+
+
+def test_widget_payload_parser_rejects_actionable_exit_without_pass_source():
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 220_500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "WATCH",
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    _attach_exit_advisory(payload, now, state="EXIT_READY")
+    payload["exit_advisory"]["source_quality"]["status"] = "BLOCKED"
+
+    with pytest.raises(ValueError, match="invalid_actionable_exit_advisory"):
+        widget.parse_quote_payload(payload, received_at=now)
+
+
+def test_widget_payload_parser_rejects_exit_session_mismatch():
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 220_500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "WATCH",
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    _attach_exit_advisory(payload, now, state="EXIT_READY")
+    payload["exit_advisory"]["session"] = "NXT_AFTERMARKET"
+
+    with pytest.raises(ValueError, match="exit_advisory_session_mismatch"):
+        widget.parse_quote_payload(payload, received_at=now)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("reference_exit_price", True, "invalid_reference_exit_price"),
+        ("peak_drawdown_pct", float("nan"), "invalid_exit_peak_drawdown_pct"),
+        ("peak_drawdown_pct", float("inf"), "invalid_exit_peak_drawdown_pct"),
+    ],
+)
+def test_widget_payload_parser_rejects_malformed_exit_numbers(
+    field: str, value: object, error: str
+):
+    payload, now = _fresh_advisory_payload(
+        {
+            "status": "ok",
+            "current_price": 220_500,
+            "minute_chart": [],
+            "advisory": {
+                "state": "WATCH",
+                "authority": "widget_advisory_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+        }
+    )
+    _attach_exit_advisory(payload, now, state="EXIT_READY")
+    payload["exit_advisory"][field] = value
+
+    with pytest.raises(ValueError, match=error):
+        widget.parse_quote_payload(payload, received_at=now)
 
 
 def test_widget_watch_detail_prefers_blocker_over_passed_reason():
