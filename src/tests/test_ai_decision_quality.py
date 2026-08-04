@@ -326,6 +326,43 @@ def test_same_trace_outcome_recovery_replaces_conflicting_regenerated_label(
     assert metadata["current_primary_metric_conflict_count"] == 1
 
 
+def test_same_trace_outcome_recovery_ignores_non_recoverable_metric_fields(tmp_path):
+    source_path = tmp_path / "prior_paired.json"
+    source_path.write_text(
+        json.dumps(_paired_outcome_recovery_report(outcome_return_pct=1.0)),
+        encoding="utf-8",
+    )
+    current_label = {
+        **_pending(),
+        "label_status": "partial",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 1.0,
+                "mfe_pct": 1.2,
+                "mae_pct": -0.2,
+                "first_hit": "target",
+                "profit_opportunity_observed": True,
+                "profit_opportunity_sequence": "profit_without_prior_drawdown",
+                "sample_count": 10,
+                "window_basis": "post_decision_same_route",
+            }
+        },
+    }
+
+    _, metadata = quality.recover_same_trace_outcome_labels_from_paired_reports(
+        target_date="2026-07-27",
+        labels=[current_label],
+        traces=[_trace()],
+        payloads=[_payload()],
+        report_paths=[source_path],
+    )
+
+    assert metadata["replaced_current_label_count"] == 1
+    assert metadata["current_primary_metric_conflict_count"] == 0
+
+
 def test_same_trace_outcome_recovery_excludes_conflicting_sources(tmp_path):
     first_path = tmp_path / "first.json"
     second_path = tmp_path / "second.json"
@@ -3657,6 +3694,27 @@ def test_v2_10_bounded_opportunity_accepts_high_risk_one_share_probe_and_fair_co
     assert repairs == ["unusable_source_fail_closed_wait"]
     assert quality.validate_replay_candidate_response(unusable_request, repaired) == []
 
+    structurally_visible_unusable_request = json.loads(json.dumps(trusted_request))
+    structurally_visible_unusable_request["anticipatory_reversal_analysis"] = {
+        **structurally_visible_unusable_request["anticipatory_reversal_analysis"],
+        "source_mode": "unusable",
+        "hard_blockers": ["source_unusable"],
+    }
+    fail_closed, fail_closed_repairs = (
+        quality.repair_bounded_opportunity_candidate_response(
+            structurally_visible_unusable_request,
+            response,
+        )
+    )
+    assert fail_closed_repairs == ["unusable_source_fail_closed_wait"]
+    assert (
+        quality.validate_replay_candidate_response(
+            structurally_visible_unusable_request,
+            fail_closed,
+        )
+        == []
+    )
+
     hard_blocked_request = json.loads(json.dumps(request))
     hard_blocked_request["anticipatory_reversal_analysis"]["hard_blockers"] = [
         "completed_bars_missing"
@@ -3912,11 +3970,13 @@ def test_v2_12_selective_recovery_restricts_generic_bounded_probe_buy():
             "curr_vs_ma5_bp": 5,
             "price_change_10t_pct": 0.2,
             "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "entry_momentum_status": "accelerating",
             "tick_aggressor_trusted_count": 12,
             "tick_aggressor_pressure_usable": True,
             "tick_context_quality": "pass",
             "tick_accel_source": "trusted_aggressor",
-            "tick_acceleration_ratio": 1.2,
+            "tick_acceleration_ratio": 1.6,
         },
         "entry_candle_context": {
             "completed_bar_count": 20,
@@ -4049,6 +4109,75 @@ def test_v2_12_selective_recovery_restricts_generic_bounded_probe_buy():
     )
     assert "selective_recovery_buy_not_eligible" in (
         quality.validate_replay_candidate_response(blocked_request, buy_response)
+    )
+
+    v2_13_request = quality.prepare_detailed_paired_replay_requests(
+        [
+            {
+                **base_request,
+                "paired_replay_id": "pair-v2-13",
+                "decision_trace_id": "trace-v2-13",
+            }
+        ],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+    )[0]
+    v2_13_analysis = v2_13_request["anticipatory_reversal_analysis"]
+    assert v2_13_analysis["selective_recovery_probe"]["eligible"] is True
+    assert v2_13_analysis["recovery_confirmation_probe"]["eligible"] is True
+    assert v2_13_request["candidate"]["system_prompt"].isascii()
+    assert (
+        "V2.12 selective-recovery one-share probe experiment:"
+        not in v2_13_request["candidate"]["system_prompt"]
+    )
+    assert (
+        quality.validate_replay_candidate_response(
+            v2_13_request,
+            buy_response,
+        )
+        == []
+    )
+
+    unconfirmed_payload = json.loads(json.dumps(exact_payload))
+    unconfirmed_payload["features"].update(
+        {
+            "entry_order_flow_status": "mixed",
+            "tick_acceleration_ratio": 0.5,
+            "net_aggressive_delta_10t": -10,
+        }
+    )
+    unconfirmed_request = quality.prepare_detailed_paired_replay_requests(
+        [
+            {
+                **base_request,
+                "paired_replay_id": "pair-v2-13-unconfirmed",
+                "decision_trace_id": "trace-v2-13-unconfirmed",
+                "payload_sha256": quality._sha256(unconfirmed_payload),
+                "exact_payload": unconfirmed_payload,
+            }
+        ],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+    )[0]
+    assert (
+        unconfirmed_request["anticipatory_reversal_analysis"][
+            "selective_recovery_probe"
+        ]["eligible"]
+        is True
+    )
+    assert (
+        unconfirmed_request["anticipatory_reversal_analysis"][
+            "recovery_confirmation_probe"
+        ]["eligible"]
+        is False
+    )
+    assert "recovery_confirmation_buy_not_eligible" in (
+        quality.validate_replay_candidate_response(
+            unconfirmed_request,
+            buy_response,
+        )
     )
 
 

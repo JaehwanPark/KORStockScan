@@ -30,6 +30,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
     DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
@@ -40,6 +41,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_10_bounded_opportunity_system_prompt,
     decision_quality_v2_11_clean_continuation_system_prompt,
     decision_quality_v2_12_selective_recovery_system_prompt,
+    decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
@@ -2806,6 +2808,36 @@ def _primary_metric(label: dict[str, Any]) -> dict[str, Any] | None:
     return metric if isinstance(metric, dict) else None
 
 
+def _paired_outcome_recovery_signature(metric: Any) -> dict[str, Any] | None:
+    """Normalize only the outcome fields preserved by paired-report recovery."""
+
+    if not isinstance(metric, dict):
+        return None
+    numeric_fields = (
+        "end_return_pct",
+        "mfe_pct",
+        "mae_pct",
+        "entry_path_target_pct",
+        "entry_path_adverse_pct",
+        "profit_opportunity_threshold_pct",
+        "pre_profit_mae_pct",
+    )
+    text_fields = (
+        "first_hit",
+        "entry_path_first_hit",
+        "profit_opportunity_hit_at",
+        "below_reference_excursion_at",
+        "profit_opportunity_sequence",
+    )
+    return {
+        **{field: _number(metric.get(field)) for field in numeric_fields},
+        **{field: str(metric.get(field) or "") for field in text_fields},
+        "profit_opportunity_observed": (
+            metric.get("profit_opportunity_observed") is True
+        ),
+    }
+
+
 def _taxonomy(label: dict[str, Any]) -> list[str]:
     action = str(label.get("action") or "").upper()
     preferred = _primary_metric(label) or {}
@@ -4110,6 +4142,45 @@ def _attach_selective_recovery_probe_contract_v1(
     return enriched
 
 
+def _attach_recovery_confirmation_probe_contract_v1(
+    analysis: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach the V2.13-only pre-outcome recovery confirmation contract."""
+
+    enriched = dict(analysis)
+    selective = analysis.get("selective_recovery_probe")
+    selective = selective if isinstance(selective, dict) else {}
+    precursors = analysis.get("precursors")
+    precursors = precursors if isinstance(precursors, dict) else {}
+    bounded = analysis.get("bounded_opportunity")
+    bounded = bounded if isinstance(bounded, dict) else {}
+    edge_facts = bounded.get("qualifying_edge_facts")
+    edge_facts = edge_facts if isinstance(edge_facts, dict) else {}
+    eligible = bool(
+        selective.get("eligible") is True
+        and precursors.get("sell_momentum_decelerating") is True
+        and edge_facts.get("trusted_supportive_trigger") is True
+    )
+    enriched["recovery_confirmation_probe"] = {
+        "eligible": eligible,
+        "execution_policy": (
+            "passive_probe_required" if eligible else "no_counterfactual_exposure"
+        ),
+        "selective_recovery_contract_required": True,
+        "sell_momentum_decelerating_required": True,
+        "trusted_supportive_trigger_required": True,
+        "price_rejection_only_insufficient": True,
+        "after_cost_reward_risk_floor": 0.75,
+        "strictly_negative_downside_required": True,
+        "downstream_submit_guards_required": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    enriched.pop("analysis_sha256", None)
+    enriched["analysis_sha256"] = _sha256(enriched)
+    return enriched
+
+
 def _holding_contract_facts(exact_payload: Any) -> dict[str, Any]:
     holding = (
         exact_payload.get("holding_decision_context")
@@ -4488,10 +4559,15 @@ def validate_replay_candidate_response(
     clean_continuation_contract = candidate_prompt_version in {
         f"{DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION}_entry",
         f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry",
+        f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry",
     }
-    selective_recovery_contract = bool(
+    selective_recovery_contract = candidate_prompt_version in {
+        f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry",
+        f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry",
+    }
+    recovery_confirmation_contract = bool(
         candidate_prompt_version
-        == f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry"
+        == f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
     )
     if stage != "entry":
         return [*errors, "anticipatory_stage_unsupported"]
@@ -4518,10 +4594,32 @@ def validate_replay_candidate_response(
     execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
 
     semantic_errors: list[str] = []
-    if source_mode == "unusable" and not (
-        edge_state == "INSUFFICIENT_DATA" and action == "WAIT"
-    ):
-        semantic_errors.append("anticipatory_unusable_source_requires_wait")
+    source_unusable_fail_closed = bool(
+        source_mode == "unusable"
+        and edge_state == "INSUFFICIENT_DATA"
+        and action == "WAIT"
+    )
+    if source_mode == "unusable":
+        if not source_unusable_fail_closed:
+            semantic_errors.append("anticipatory_unusable_source_requires_wait")
+        else:
+            # The supplemental source contract intentionally owns the fail-closed
+            # state here.  Exact structural facts can remain observable while a
+            # required candle/quote/tape source is unusable; they must not force
+            # EDGE and contradict the required INSUFFICIENT_DATA/WAIT response.
+            source_unusable_superseded_errors = {
+                "entry_structural_edge_floor_misclassified",
+                "entry_blocking_overextension_misclassified",
+                "entry_orderly_pullback_recovery_misclassified",
+                "entry_bounded_reversal_probe_misclassified",
+                "entry_early_session_probe_misclassified",
+                "entry_trusted_supportive_trigger_misclassified",
+            }
+            errors = [
+                error
+                for error in errors
+                if error not in source_unusable_superseded_errors
+            ]
     confidence = _number(response.get("confidence"))
     confidence_cap = _number(analysis.get("confidence_cap"))
     if (
@@ -4549,6 +4647,10 @@ def validate_replay_candidate_response(
         selective_recovery = (
             selective_recovery if isinstance(selective_recovery, dict) else {}
         )
+        recovery_confirmation = analysis.get("recovery_confirmation_probe")
+        recovery_confirmation = (
+            recovery_confirmation if isinstance(recovery_confirmation, dict) else {}
+        )
         if not bounded:
             return [*errors, *semantic_errors, "bounded_opportunity_contract_missing"]
         if clean_continuation_contract and not clean_continuation:
@@ -4562,6 +4664,12 @@ def validate_replay_candidate_response(
                 *errors,
                 *semantic_errors,
                 "selective_recovery_probe_contract_missing",
+            ]
+        if recovery_confirmation_contract and not recovery_confirmation:
+            return [
+                *errors,
+                *semantic_errors,
+                "recovery_confirmation_probe_contract_missing",
             ]
         cost_pct = _number(execution_cost.get("conservative_execution_cost_pct"))
         upside = _number(response.get("expected_upside_pct"))
@@ -4580,16 +4688,31 @@ def validate_replay_candidate_response(
         selective_recovery_eligible = bool(
             selective_recovery_contract and selective_recovery.get("eligible") is True
         )
-        v12_buy_eligible = bool(
-            clean_continuation_eligible or selective_recovery_eligible
+        recovery_confirmation_eligible = bool(
+            recovery_confirmation_contract
+            and recovery_confirmation.get("eligible") is True
         )
-        after_cost_floor = 0.75 if clean_continuation_eligible else 1.0
+        contracted_buy_eligible = bool(
+            clean_continuation_eligible
+            or (
+                recovery_confirmation_eligible
+                if recovery_confirmation_contract
+                else selective_recovery_eligible
+            )
+        )
+        after_cost_floor = (
+            0.75
+            if clean_continuation_eligible or recovery_confirmation_eligible
+            else 1.0
+        )
         if action == "BUY":
             adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
             trigger = str(evidence.get("trigger") or "").strip().lower()
             if bounded.get("eligible_for_one_share_probe") is not True:
                 semantic_errors.append("bounded_opportunity_buy_not_eligible")
-            if selective_recovery_contract and not v12_buy_eligible:
+            if recovery_confirmation_contract and not contracted_buy_eligible:
+                semantic_errors.append("recovery_confirmation_buy_not_eligible")
+            elif selective_recovery_contract and not contracted_buy_eligible:
                 semantic_errors.append("selective_recovery_buy_not_eligible")
             if bounded.get("execution_policy") != "passive_probe_required":
                 semantic_errors.append("bounded_opportunity_passive_probe_required")
@@ -5028,24 +5151,45 @@ def repair_bounded_opportunity_candidate_response(
     selective_recovery = (
         selective_recovery if isinstance(selective_recovery, dict) else {}
     )
+    recovery_confirmation = analysis.get("recovery_confirmation_probe")
+    recovery_confirmation = (
+        recovery_confirmation if isinstance(recovery_confirmation, dict) else {}
+    )
     candidate_prompt_version = str(candidate.get("prompt_version") or "")
     v12_contract = bool(
         candidate_prompt_version
         == f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry"
+    )
+    v13_contract = bool(
+        candidate_prompt_version
+        == f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
     )
     clean_continuation_contract = bool(
         candidate_prompt_version
         in {
             f"{DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION}_entry",
             f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry",
         }
         and clean_continuation.get("eligible") is True
     )
     selective_recovery_contract = bool(
-        v12_contract and selective_recovery.get("eligible") is True
+        (v12_contract or v13_contract) and selective_recovery.get("eligible") is True
     )
-    v12_buy_eligible = bool(clean_continuation_contract or selective_recovery_contract)
-    after_cost_floor = 0.75 if clean_continuation_contract else 1.0
+    recovery_confirmation_contract = bool(
+        v13_contract and recovery_confirmation.get("eligible") is True
+    )
+    contracted_buy_eligible = bool(
+        clean_continuation_contract
+        or (
+            recovery_confirmation_contract
+            if v13_contract
+            else selective_recovery_contract
+        )
+    )
+    after_cost_floor = (
+        0.75 if clean_continuation_contract or recovery_confirmation_contract else 1.0
+    )
 
     if facts["structural_edge_floor"]:
         set_value(repaired, "edge_state", "EDGE", "structural_edge_floor")
@@ -5137,7 +5281,7 @@ def repair_bounded_opportunity_candidate_response(
         adverse_risk = str(evidence.get("adverse_risk") or "")
         bounded_buy_valid = bool(
             bounded.get("eligible_for_one_share_probe") is True
-            and (not v12_contract or v12_buy_eligible)
+            and (not (v12_contract or v13_contract) or contracted_buy_eligible)
             and bounded.get("execution_policy") == "passive_probe_required"
             and adverse_risk in {"low", "moderate", "high"}
             and str(evidence.get("trigger") or "") == "confirmed"
@@ -5443,11 +5587,17 @@ def execute_openai_prompt_v2_candidate(
             in {
                 f"{DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION}_entry",
                 f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry",
+                f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry",
             }
         )
-        selective_recovery_candidate = bool(
-            str(candidate.get("prompt_version") or "")
-            == f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry"
+        candidate_prompt_version = str(candidate.get("prompt_version") or "")
+        selective_recovery_candidate = candidate_prompt_version in {
+            f"{DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry",
+        }
+        recovery_confirmation_candidate = bool(
+            candidate_prompt_version
+            == f"{DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION}_entry"
         )
         if "expected_edge_values_required" in correction_errors:
             correction_rules.append(
@@ -5467,26 +5617,36 @@ def execute_openai_prompt_v2_candidate(
             if bounded_opportunity_candidate:
                 correction_rules.append(
                     (
-                        "For V2.12, EDGE/BUY is allowed only when either "
-                        "clean_continuation_probe.eligible=true with truthful "
-                        "after-cost reward/risk >=0.75 or "
-                        "selective_recovery_probe.eligible=true with truthful "
-                        "after-cost reward/risk >=1.00. Generic bounded opportunity "
-                        "is insufficient. Downstream guards remain mandatory"
-                        if selective_recovery_candidate
+                        "For V2.13, EDGE/BUY is allowed only when either "
+                        "clean_continuation_probe.eligible=true or "
+                        "recovery_confirmation_probe.eligible=true, with truthful "
+                        "after-cost reward/risk >=0.75. V2.12 selective recovery "
+                        "alone is insufficient. Downstream guards remain mandatory"
+                        if recovery_confirmation_candidate
                         else (
-                            "For the V2.11 clean_continuation_probe eligible "
-                            "cohort, EDGE/BUY requires trigger=confirmed, non-blocking "
-                            "low/moderate/high adverse risk, and truthful after-cost "
-                            "reward/risk >=0.75. For other rows keep the V2.10 >=1.00 "
-                            "floor. Downstream guards remain mandatory"
-                            if clean_continuation_candidate
-                            else "For the V2.10 offline one-share probe only, EDGE/BUY "
-                            "requires the deterministic bounded_opportunity contract "
-                            "to be eligible, trigger=confirmed, adverse_risk "
-                            "low/moderate/high but never blocking, and after-cost "
-                            "reward/risk >=1.00. Preserve high risk and adverse "
-                            "wide-spread liquidity; downstream guards remain mandatory"
+                            "For V2.12, EDGE/BUY is allowed only when either "
+                            "clean_continuation_probe.eligible=true with truthful "
+                            "after-cost reward/risk >=0.75 or "
+                            "selective_recovery_probe.eligible=true with truthful "
+                            "after-cost reward/risk >=1.00. Generic bounded opportunity "
+                            "is insufficient. Downstream guards remain mandatory"
+                            if selective_recovery_candidate
+                            else (
+                                "For the V2.11 clean_continuation_probe eligible "
+                                "cohort, EDGE/BUY requires trigger=confirmed, "
+                                "non-blocking low/moderate/high adverse risk, and "
+                                "truthful after-cost reward/risk >=0.75. For other "
+                                "rows keep the V2.10 >=1.00 floor. Downstream guards "
+                                "remain mandatory"
+                                if clean_continuation_candidate
+                                else "For the V2.10 offline one-share probe only, "
+                                "EDGE/BUY requires the deterministic "
+                                "bounded_opportunity contract to be eligible, "
+                                "trigger=confirmed, adverse_risk low/moderate/high "
+                                "but never blocking, and after-cost reward/risk "
+                                ">=1.00. Preserve high risk and adverse wide-spread "
+                                "liquidity; downstream guards remain mandatory"
+                            )
                         )
                     )
                 )
@@ -5541,10 +5701,17 @@ def execute_openai_prompt_v2_candidate(
                     "For V2.10 offline bounded-opportunity BUY, subtract the "
                     "conservative execution cost and require adjusted reward/risk "
                     + (
-                        ">=0.75 only when clean_continuation_probe.eligible=true; "
-                        "otherwise require >=1.00"
-                        if clean_continuation_candidate
-                        else ">=1.00; the inherited 1.25 full-entry floor does not apply"
+                        ">=0.75 when clean_continuation_probe.eligible=true or "
+                        "recovery_confirmation_probe.eligible=true; otherwise "
+                        "BUY is not permitted"
+                        if recovery_confirmation_candidate
+                        else (
+                            ">=0.75 only when clean_continuation_probe.eligible=true; "
+                            "otherwise require >=1.00"
+                            if clean_continuation_candidate
+                            else ">=1.00; the inherited 1.25 full-entry floor does "
+                            "not apply"
+                        )
                     )
                     if bounded_opportunity_candidate
                     else "Do not retain BUY when expected_upside_pct divided by the "
@@ -5559,17 +5726,28 @@ def execute_openai_prompt_v2_candidate(
         ):
             correction_rules.append(
                 (
-                    "For V2.12, EDGE/DROP still requires trigger=failed, "
+                    "For V2.13, EDGE/DROP still requires trigger=failed, "
                     "adverse_risk=blocking, or genuinely unfavorable numeric "
                     "reward/risk. BUY additionally requires clean_continuation_probe "
-                    "or selective_recovery_probe eligibility and its after-cost "
-                    "floor. Otherwise preserve non-blocking structural edge as "
-                    "WAIT with trigger=recovery_required"
-                    if selective_recovery_candidate
-                    else "EDGE/DROP requires trigger=failed, "
-                    "adverse_risk=blocking, or numeric reward/risk below 1.25. "
-                    "If none applies, use BUY for a confirmed low/moderate-risk "
-                    "trigger or WAIT for a recovery_required non-blocking trigger"
+                    "or recovery_confirmation_probe eligibility and the 0.75 "
+                    "after-cost floor. Otherwise preserve non-blocking structural "
+                    "edge as WAIT with trigger=recovery_required"
+                    if recovery_confirmation_candidate
+                    else (
+                        "For V2.12, EDGE/DROP still requires trigger=failed, "
+                        "adverse_risk=blocking, or genuinely unfavorable numeric "
+                        "reward/risk. BUY additionally requires "
+                        "clean_continuation_probe or selective_recovery_probe "
+                        "eligibility and its after-cost floor. Otherwise preserve "
+                        "non-blocking structural edge as WAIT with "
+                        "trigger=recovery_required"
+                        if selective_recovery_candidate
+                        else "EDGE/DROP requires trigger=failed, "
+                        "adverse_risk=blocking, or numeric reward/risk below 1.25. "
+                        "If none applies, use BUY for a confirmed "
+                        "low/moderate-risk trigger or WAIT for a recovery_required "
+                        "non-blocking trigger"
+                    )
                 )
             )
         if "entry_no_edge_setup_invalid" in correction_errors:
@@ -5608,21 +5786,34 @@ def execute_openai_prompt_v2_candidate(
                 (
                     "The exact payload has trusted supportive aggressor tape plus "
                     "completed recovery and structural edge. Preserve EDGE with "
-                    "moderate/strong positive_edge and tape=supportive. For V2.12, "
-                    "BUY still requires clean_continuation_probe or "
-                    "selective_recovery_probe eligibility and its after-cost floor. "
-                    "Otherwise use WAIT with trigger=recovery_required when risk is "
-                    "non-blocking; use DROP only for failed, blocking, or genuinely "
-                    "unfavorable evidence. Keep adverse depth in liquidity/risk"
-                    if selective_recovery_candidate
-                    else "The exact payload has trusted supportive aggressor tape "
-                    "plus a completed 1m/3m recovery and structural edge. Return "
-                    "EDGE with moderate/strong positive_edge, tape=supportive, and "
-                    "trigger=confirmed. WAIT is prohibited for this contract. Keep "
-                    "ask-heavy depth or a wide spread in liquidity/adverse_risk. "
-                    "Return BUY when adverse_risk is low/moderate and numeric "
-                    "reward/risk is at least 1.25; otherwise return DROP with "
-                    "blocking risk or numeric unfavorable reward/risk"
+                    "moderate/strong positive_edge and tape=supportive. For V2.13, "
+                    "recovery_confirmation_probe eligibility certifies this trusted "
+                    "trigger plus sell-momentum deceleration. BUY still requires its "
+                    "truthful 0.75 after-cost floor and non-blocking risk. Do not "
+                    "invent blocking risk from ordinary ask-heavy depth when the "
+                    "deterministic contract has no hard blocker"
+                    if recovery_confirmation_candidate
+                    else (
+                        "The exact payload has trusted supportive aggressor tape plus "
+                        "completed recovery and structural edge. Preserve EDGE with "
+                        "moderate/strong positive_edge and tape=supportive. For V2.12, "
+                        "BUY still requires clean_continuation_probe or "
+                        "selective_recovery_probe eligibility and its after-cost "
+                        "floor. Otherwise use WAIT with trigger=recovery_required "
+                        "when risk is non-blocking; use DROP only for failed, "
+                        "blocking, or genuinely unfavorable evidence. Keep adverse "
+                        "depth in liquidity/risk"
+                        if selective_recovery_candidate
+                        else "The exact payload has trusted supportive aggressor "
+                        "tape plus a completed 1m/3m recovery and structural edge. "
+                        "Return EDGE with moderate/strong positive_edge, "
+                        "tape=supportive, and trigger=confirmed. WAIT is prohibited "
+                        "for this contract. Keep ask-heavy depth or a wide spread in "
+                        "liquidity/adverse_risk. Return BUY when adverse_risk is "
+                        "low/moderate and numeric reward/risk is at least 1.25; "
+                        "otherwise return DROP with blocking risk or numeric "
+                        "unfavorable reward/risk"
+                    )
                 )
             )
         if "entry_thin_tape_sample_overstated" in correction_errors:
@@ -5694,6 +5885,17 @@ def execute_openai_prompt_v2_candidate(
                 "requires truthful after-cost reward/risk >=1.00. Otherwise keep "
                 "valid structural edge as WAIT/recovery_required unless evidence "
                 "is failed, blocking, or unfavorable"
+            )
+        if any(
+            error.startswith("recovery_confirmation_") for error in correction_errors
+        ):
+            correction_rules.append(
+                "For V2.13, BUY requires clean_continuation_probe.eligible=true or "
+                "recovery_confirmation_probe.eligible=true with truthful after-cost "
+                "reward/risk >=0.75 and a strictly negative downside estimate. "
+                "V2.12 selective recovery alone is insufficient. Confirmed recovery "
+                "has trusted supportive tape plus sell-momentum deceleration; do not "
+                "invent blocking risk without a deterministic hard blocker"
             )
         if any(error.startswith("holding_") for error in correction_errors):
             correction_rules.append(
@@ -6285,9 +6487,9 @@ def recover_same_trace_outcome_labels_from_paired_reports(
     for trace_id, recovered_rows in candidates_by_trace.items():
         current = current_by_trace.get(trace_id)
         metric_hashes = {
-            _sha256(_primary_metric(row))
+            _sha256(signature)
             for row in recovered_rows
-            if _primary_metric(row)
+            if (signature := _paired_outcome_recovery_signature(_primary_metric(row)))
         }
         if len(metric_hashes) != 1:
             excluded["conflicting_recovered_outcome"] += 1
@@ -6295,7 +6497,10 @@ def recover_same_trace_outcome_labels_from_paired_reports(
         recovered = recovered_rows[0]
         if isinstance(current, dict) and _primary_metric(current) is not None:
             replaced_current_count += 1
-            if _sha256(_primary_metric(current)) not in metric_hashes:
+            current_signature = _paired_outcome_recovery_signature(
+                _primary_metric(current)
+            )
+            if not current_signature or _sha256(current_signature) not in metric_hashes:
                 current_metric_conflict_count += 1
         if trace_id not in current_by_trace:
             label_order.append(trace_id)
@@ -6348,6 +6553,7 @@ def prepare_detailed_paired_replay_requests(
         DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
         DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
         DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     }
     if candidate_prompt_version not in supported_prompt_versions:
         raise ValueError("unsupported_detailed_candidate_prompt_version")
@@ -6391,22 +6597,37 @@ def prepare_detailed_paired_replay_requests(
             DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
             DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         }:
             anticipatory_analysis = build_anticipatory_reversal_analysis_v1(
                 exact_payload,
                 stage=stage,
             )
+            if candidate_prompt_version in {
+                DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+            }:
+                anticipatory_analysis = _attach_selective_recovery_probe_contract_v1(
+                    anticipatory_analysis
+                )
             if (
                 candidate_prompt_version
-                == DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION
+                == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
             ):
-                anticipatory_analysis = _attach_selective_recovery_probe_contract_v1(
+                anticipatory_analysis = _attach_recovery_confirmation_probe_contract_v1(
                     anticipatory_analysis
                 )
             candidate_input[ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA] = (
                 anticipatory_analysis
             )
             if (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ):
+                prompt = decision_quality_v2_13_recovery_confirmation_system_prompt(
+                    stage
+                )
+            elif (
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION
             ):
@@ -6490,6 +6711,7 @@ def prepare_detailed_paired_replay_requests(
                             DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
                             DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
                             DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+                            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                         }
                         else ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
                     ),
@@ -6513,6 +6735,7 @@ def prepare_detailed_paired_replay_requests(
                 DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
                 DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
                 DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             }:
                 candidate["semantic_repair_version"] = (
                     BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION
@@ -6993,6 +7216,10 @@ def build_paired_replay_report(
         selective_recovery = (
             selective_recovery if isinstance(selective_recovery, dict) else {}
         )
+        recovery_confirmation = anticipatory_analysis.get("recovery_confirmation_probe")
+        recovery_confirmation = (
+            recovery_confirmation if isinstance(recovery_confirmation, dict) else {}
+        )
         execution_cost_contract_applied = bool(
             candidate_contract.get("exposure_semantics")
             == "offline_counterfactual_passive_probe_only"
@@ -7189,6 +7416,9 @@ def build_paired_replay_report(
                 ),
                 "selective_recovery_probe_eligible": (
                     selective_recovery.get("eligible") is True
+                ),
+                "recovery_confirmation_probe_eligible": (
+                    recovery_confirmation.get("eligible") is True
                 ),
             }
         )
@@ -7726,6 +7956,68 @@ def build_paired_replay_report(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    recovery_confirmation_rows = [
+        row for row in comparable_rows if row["recovery_confirmation_probe_eligible"]
+    ]
+    recovery_confirmation_exposure_rows = [
+        row for row in recovery_confirmation_rows if row["candidate_exposure_selected"]
+    ]
+    recovery_confirmation_probe_summary = {
+        "schema": "recovery_confirmation_probe_attribution_v1",
+        "eligible_decision_count": len(recovery_confirmation_rows),
+        "eligible_unique_symbol_count": len(
+            {
+                str(row.get("stock_code") or "")
+                for row in recovery_confirmation_rows
+                if row.get("stock_code")
+            }
+        ),
+        "candidate_exposure_decision_count": len(recovery_confirmation_exposure_rows),
+        "candidate_not_exposed_decision_count": (
+            len(recovery_confirmation_rows) - len(recovery_confirmation_exposure_rows)
+        ),
+        "candidate_exposure_coverage_pct": (
+            len(recovery_confirmation_exposure_rows)
+            / len(recovery_confirmation_rows)
+            * 100.0
+            if recovery_confirmation_rows
+            else None
+        ),
+        "eligible_cohort_after_cost_ev_pct": (
+            fmean(
+                row["outcome_return_pct"]
+                - (row["conservative_execution_cost_pct"] or 0.0)
+                for row in recovery_confirmation_rows
+            )
+            if recovery_confirmation_rows
+            else None
+        ),
+        "candidate_selected_after_cost_ev_pct": (
+            fmean(
+                row["candidate_primary_decision_value_pct"]
+                for row in recovery_confirmation_exposure_rows
+            )
+            if recovery_confirmation_exposure_rows
+            else None
+        ),
+        "profit_opportunity_count": sum(
+            row["profit_opportunity_observed"] for row in recovery_confirmation_rows
+        ),
+        "severe_tail_exposure_count": sum(
+            row["candidate_probe_severe_tail_exposure"]
+            for row in recovery_confirmation_exposure_rows
+        ),
+        "drawdown_recovery_exposure_count": sum(
+            row["candidate_drawdown_recovery_captured"]
+            for row in recovery_confirmation_exposure_rows
+        ),
+        "metric_role": "ai_decision_quality_opportunity_cohort_attribution",
+        "decision_authority": "offline_replay_and_attribution_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
     quality_checks = {
         "all_pairs_comparable": bool(requests)
         and len(comparable_rows) == len(requests),
@@ -7943,6 +8235,7 @@ def build_paired_replay_report(
         "candidate_drop_outcome_trajectory": candidate_drop_trajectory,
         "clean_continuation_probe_summary": clean_continuation_probe_summary,
         "selective_recovery_probe_summary": selective_recovery_probe_summary,
+        "recovery_confirmation_probe_summary": (recovery_confirmation_probe_summary),
         "candidate_edge_state_counts": dict(
             Counter(
                 str(
@@ -10537,6 +10830,7 @@ def main(argv: list[str] | None = None) -> int:
             DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
             DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         ),
         default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     )
@@ -11076,6 +11370,7 @@ def main(argv: list[str] | None = None) -> int:
                     DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
                     DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
                     DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                 }:
                     report["supplemental_analysis_schema"] = (
                         ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA

@@ -626,6 +626,9 @@ DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION = (
 DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION = (
     "decision_quality_v2_12_selective_recovery_probe"
 )
+DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION = (
+    "decision_quality_v2_13_recovery_confirmation_probe"
+)
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -1326,4 +1329,51 @@ def decision_quality_v2_12_selective_recovery_system_prompt(stage: str) -> str:
         decision_quality_v2_11_clean_continuation_system_prompt(normalized)
         + "\n\n"
         + _DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_RULES
+    )
+
+
+_DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_RULES = """
+V2.13 recovery-confirmation one-share probe experiment:
+1. This rule set replaces V2.12 selective-recovery BUY authority with the
+   narrower recovery_confirmation_probe contract. V2.12 selective eligibility
+   alone is observation evidence and cannot produce BUY.
+2. BUY is permitted only when clean_continuation_probe.eligible=true or
+   recovery_confirmation_probe.eligible=true. A recovery-confirmation row has
+   every V2.12 source, spread, cost, drawdown, reclaim, and precursor guard plus
+   sell_momentum_decelerating=true and trusted_supportive_trigger=true. These
+   two facts distinguish confirmed absorption/recovery from price-rejection-only
+   setups; do not infer either fact from outcome labels or narrative.
+3. For either permitted path, require truthful after-cost upside/downside ratio
+   >=0.75, a strictly negative downside estimate, confirmed trigger, and
+   non-blocking low/moderate/high adverse risk. Eligibility is not a fill or
+   submit claim. It is an offline one-share presentation to unchanged downstream
+   guards.
+4. When recovery_confirmation_probe.eligible=true, normal spread and absence of
+   deterministic hard blockers are already exact facts. Do not manufacture
+   blocking risk solely from ordinary ask-heavy depth or transient tape noise.
+   Preserve adverse liquidity truthfully as high non-blocking risk when valid.
+   Use WAIT only for a specifically identified missing confirmation or genuinely
+   unsupported magnitude; use DROP only for failed, blocking, or unfavorable
+   evidence.
+5. A price-rejection-only reversal, missing sell-momentum deceleration, missing
+   trusted supportive trigger, V2.12-only selective eligibility, wide spread,
+   cost >0.25%, peak drawdown <=-2.0%, stale/conflicting source, or hard blocker
+   cannot produce BUY. Preserve structural edge as WAIT/recovery_required when
+   risk remains non-blocking.
+6. Runtime effect, prompt promotion, provider/model changes, thresholds, order
+   price/quantity, broker guards, and bot state remain forbidden. Candidate
+   input excludes outcomes; never infer future returns or optimize to a symbol.
+""".strip()
+
+
+def decision_quality_v2_13_recovery_confirmation_system_prompt(stage: str) -> str:
+    """Return the offline recovery-confirmation one-share candidate prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.13 currently supports entry only")
+    return (
+        decision_quality_v2_11_clean_continuation_system_prompt(normalized)
+        + "\n\n"
+        + _DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_RULES
     )
