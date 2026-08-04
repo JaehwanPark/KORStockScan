@@ -941,6 +941,115 @@ def test_krx_real_sor_holding_uses_integrated_execution_view(
     )
 
 
+def test_krx_real_sor_holding_falls_back_to_fresh_exact_krx_when_al_is_stale(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 8, 4, 9, 15, 30, tzinfo=KST)
+    stock = {
+        **_stock(),
+        "entry_execution_broker_route": "SOR",
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "broker_snapshot_at": now.timestamp() - 0.2,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+    }
+    ws = _ws(now, suffix="_AL", route="krx_nxt_integrated")
+    krx_ticks = [
+        {
+            "price": 10_300 - index,
+            "volume": 5 + index,
+            "aggressor_side": side,
+            "aggressor_source": "ws_executable_quote",
+            "volume_source": "15_abs",
+            "received_at_ms": int(now.timestamp() * 1000) - index * 100,
+            "market_suffix": "",
+            "market_route": "krx_regular",
+        }
+        for index, side in enumerate(("BUY", "SELL", "BUY"))
+    ]
+    ws["recent_trade_ticks_by_route"] = {
+        "KRX|krx_regular": krx_ticks,
+        "_AL|krx_nxt_integrated": list(ws["recent_trade_ticks"]),
+    }
+    ws["realtime_type_snapshots_by_route"] = {
+        "KRX|krx_regular": {
+            "0B": {
+                "observed_epoch": now.timestamp() - 0.1,
+                "item": "000660",
+                "market_suffix": "",
+                "market_route": "krx_regular",
+                "effective_venue": "KRX",
+                "current_price": 10_300,
+            },
+            "0D": {
+                "observed_epoch": now.timestamp() - 0.2,
+                "item": "000660",
+                "market_suffix": "",
+                "market_route": "krx_regular",
+                "effective_venue": "KRX",
+                "orderbook": {
+                    "asks": [{"price": 10_301, "volume": 100}],
+                    "bids": [{"price": 10_299, "volume": 200}],
+                },
+            },
+        },
+        "_AL|krx_nxt_integrated": {
+            "0B": {
+                "observed_epoch": now.timestamp() - 10.0,
+                "item": "000660_AL",
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+                "current_price": 10_280,
+            },
+            "0D": {
+                "observed_epoch": now.timestamp() - 10.0,
+                "item": "000660_AL",
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+                "orderbook": {
+                    "asks": [{"price": 10_281, "volume": 100}],
+                    "bids": [{"price": 10_279, "volume": 200}],
+                },
+            },
+        },
+    }
+
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        ws,
+        stock,
+        "KRX",
+        "krx_regular",
+        "holding_flow",
+        now_ts=now,
+        recent_candles=_candles(
+            16,
+            start=datetime(2026, 8, 4, 9, 0, tzinfo=KST),
+        ),
+        candle_meta={"api_id": "ka10080", "received_count": 16},
+    )
+
+    assert context["request_code"] == "000660"
+    selection = context["market_data_route_selection"]
+    assert selection["integrated_sor_view_selected"] is False
+    assert selection["fallback_to_exact_krx"] is True
+    assert selection["integrated_sor_view_status"]["status"] == "unusable"
+    assert selection["selected_route_partition"]["selected_key"] == ("KRX|krx_regular")
+    snapshot = context["ai_market_snapshot_v1"]
+    assert snapshot["market_data_route"] == "krx_only"
+    assert snapshot["sources"]["bbo"]["value"] == {
+        "best_bid": 10_299,
+        "best_ask": 10_301,
+    }
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+    assert snapshot["ai_input_preflight_v1"]["source_blockers"] == []
+    log_fields = holding_decision_context_log_fields(context)
+    assert log_fields["holding_context_market_data_fallback_to_exact_krx"] is True
+
+
 def test_premarket_uses_nxt_route_and_al_requires_equivalence_proof(monkeypatch):
     _enable(monkeypatch)
     now = datetime(2026, 7, 23, 8, 20, 30, tzinfo=KST)

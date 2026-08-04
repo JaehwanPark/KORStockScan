@@ -325,6 +325,39 @@ def test_route_partition_never_reuses_other_route_price_or_bbo_when_missing():
     assert selected["orderbook"] == {}
 
 
+def test_route_partition_status_requires_executable_price_and_bbo():
+    now = datetime(2026, 8, 4, 9, 15, tzinfo=KST).timestamp()
+    ws = {
+        "realtime_type_snapshots_by_route": {
+            "_AL|krx_nxt_integrated": {
+                "0B": {
+                    "observed_epoch": now - 0.1,
+                    "market_suffix": "_AL",
+                    "market_route": "krx_nxt_integrated",
+                    "current_price": 10_000,
+                },
+                "0D": {
+                    "observed_epoch": now - 0.1,
+                    "market_suffix": "_AL",
+                    "market_route": "krx_nxt_integrated",
+                    "orderbook": {},
+                },
+            }
+        }
+    }
+
+    status = mod.route_realtime_partition_status(
+        ws,
+        suffix="_AL",
+        route="krx_nxt_integrated",
+        now_ts=now,
+    )
+
+    assert status["ready"] is False
+    assert status["status"] == "unusable"
+    assert "0d_executable_bbo_missing_or_invalid" in status["blockers"]
+
+
 def test_program_source_uses_ws_0w_canonical_fields_and_timestamp():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     ws = _ws(now)

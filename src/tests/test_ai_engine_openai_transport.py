@@ -4759,6 +4759,14 @@ def test_decision_quality_v2_7_requires_exact_preflight_even_if_global_gate_off(
     assert result["score"] == 0
     assert result["ai_result_source"] == "input_preflight_blocked"
     assert result["ai_prompt_version"] == DECISION_QUALITY_DETAILED_PROMPT_VERSION
+    assert result["ai_input_preflight_status"] == "blocked"
+    assert result["ai_input_preflight_blockers"] == ["ai_market_snapshot_missing"]
+    assert result["ai_semantic_evaluation_state"] == "INSUFFICIENT_DATA"
+    assert result["decision_evaluation_status"] == (
+        "not_evaluated_provider_or_preflight"
+    )
+    assert result["runtime_fail_closed_action"] == "DROP"
+    assert result["ai_decision_outcome_eligible"] is False
 
 
 def test_hot_entry_keeps_observe_only_snapshot_out_of_model_but_in_trace_metadata(

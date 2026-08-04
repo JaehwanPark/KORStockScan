@@ -469,6 +469,176 @@ def preferred_ws_route(
     return suffix, route
 
 
+def route_realtime_partition_status(
+    ws_data: dict[str, Any] | None,
+    *,
+    suffix: str,
+    route: str,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Describe whether one exact 0B/0D route is usable now.
+
+    This is an observation-only selector input.  It does not infer an
+    underlying venue from an integrated route and does not relax snapshot
+    preflight.  Holding context uses it to avoid choosing a stale SOR view
+    merely because the eventual broker order route is SOR.
+    """
+
+    ws = ws_data if isinstance(ws_data, dict) else {}
+    now_epoch = float(now_ts if now_ts is not None else time.time())
+    normalized_suffix = str(suffix or "").upper()
+    normalized_route = str(route or "").lower()
+    route_key = f"{normalized_suffix or 'KRX'}|{normalized_route}"
+    partitions = ws.get("realtime_type_snapshots_by_route")
+    selected = partitions.get(route_key) if isinstance(partitions, dict) else None
+    canonical_orderbook = (
+        ws.get("orderbook") if isinstance(ws.get("orderbook"), dict) else {}
+    )
+    if not canonical_orderbook:
+        canonical_orderbook = {
+            "bids": [{"price": ws.get("best_bid")}],
+            "asks": [{"price": ws.get("best_ask")}],
+        }
+    source = "route_partition"
+    if isinstance(selected, dict):
+        rows = {name: selected.get(name) for name in _MARKET_TYPES}
+    else:
+        source = "canonical_exact_route"
+        provenance = realtime_type_provenance(ws, now_ts=now_epoch)
+        rows = {
+            name: {
+                "observed_epoch": provenance[name].get("observed_epoch"),
+                "market_suffix": provenance[name].get("market_suffix"),
+                "market_route": provenance[name].get("market_route"),
+                "quality": provenance[name].get("quality"),
+                **(
+                    {"current_price": ws.get("curr")}
+                    if name == "0B"
+                    else {"orderbook": canonical_orderbook}
+                ),
+            }
+            for name in _MARKET_TYPES
+        }
+        exact_rows_missing = all(
+            row.get("observed_epoch") is None for row in rows.values()
+        )
+        aggregate_suffix, aggregate_route = preferred_ws_route(ws, now_ts=now_epoch)
+        aggregate_epoch = _epoch(ws.get("last_ws_update_ts"))
+        aggregate_age_ms = (
+            max(0.0, (now_epoch - aggregate_epoch) * 1000.0)
+            if aggregate_epoch is not None
+            else None
+        )
+        if (
+            not isinstance(partitions, dict)
+            and exact_rows_missing
+            and aggregate_suffix == normalized_suffix
+            and aggregate_route == normalized_route
+            and aggregate_age_ms is not None
+            and aggregate_age_ms <= _FRESH_MS
+        ):
+            source = "legacy_aggregate_route_current"
+            rows = {
+                name: {
+                    "observed_epoch": aggregate_epoch,
+                    "market_suffix": aggregate_suffix,
+                    "market_route": aggregate_route,
+                    **(
+                        {"current_price": ws.get("curr")}
+                        if name == "0B"
+                        else {"orderbook": canonical_orderbook}
+                    ),
+                }
+                for name in _MARKET_TYPES
+            }
+
+    row_status: dict[str, dict[str, Any]] = {}
+    blockers: list[str] = []
+    for realtime_type, row in rows.items():
+        if not isinstance(row, dict):
+            blockers.append(f"{realtime_type.lower()}_missing")
+            row_status[realtime_type] = {
+                "present": False,
+                "fresh": False,
+                "route_exact": False,
+                "age_ms": None,
+            }
+            continue
+        observed_epoch = _epoch(row.get("observed_epoch"))
+        age_ms = (
+            max(0.0, (now_epoch - observed_epoch) * 1000.0)
+            if observed_epoch is not None
+            else None
+        )
+        route_exact = bool(
+            str(row.get("market_suffix") or "").upper() == normalized_suffix
+            and str(row.get("market_route") or "").lower() == normalized_route
+        )
+        fresh = bool(
+            row.get("quality") == "fresh"
+            if source == "canonical_exact_route"
+            else age_ms is not None
+            and age_ms <= _FRESH_MS
+            and observed_epoch <= now_epoch + (_FUTURE_TOLERANCE_MS / 1000.0)
+        )
+        if not route_exact:
+            blockers.append(f"{realtime_type.lower()}_route_mismatch")
+        if not fresh:
+            blockers.append(f"{realtime_type.lower()}_stale_or_missing_timestamp")
+        if realtime_type == "0B":
+            current_price = _safe_float(row.get("current_price"))
+            if current_price is None or current_price <= 0:
+                blockers.append("0b_current_price_missing")
+        else:
+            orderbook = row.get("orderbook")
+            bids = (
+                orderbook.get("bids")
+                if isinstance(orderbook, dict)
+                and isinstance(orderbook.get("bids"), list)
+                else []
+            )
+            asks = (
+                orderbook.get("asks")
+                if isinstance(orderbook, dict)
+                and isinstance(orderbook.get("asks"), list)
+                else []
+            )
+            best_bid = (
+                _safe_float(bids[0].get("price"))
+                if bids and isinstance(bids[0], dict)
+                else None
+            )
+            best_ask = (
+                _safe_float(asks[0].get("price"))
+                if asks and isinstance(asks[0], dict)
+                else None
+            )
+            if (
+                best_bid is None
+                or best_ask is None
+                or best_bid <= 0
+                or best_ask < best_bid
+            ):
+                blockers.append("0d_executable_bbo_missing_or_invalid")
+        row_status[realtime_type] = {
+            "present": True,
+            "fresh": fresh,
+            "route_exact": route_exact,
+            "age_ms": round(age_ms, 3) if age_ms is not None else None,
+        }
+
+    blockers = sorted(set(blockers))
+    return {
+        "ready": not blockers,
+        "status": "fresh_exact" if not blockers else "unusable",
+        "route_key": route_key,
+        "source": source,
+        "blockers": blockers,
+        "rows": row_status,
+        "freshness_limit_ms": _FRESH_MS,
+    }
+
+
 def _route_partitioned_ws_view(
     ws_data: dict[str, Any],
     candle_context: dict[str, Any],
@@ -489,12 +659,16 @@ def _route_partitioned_ws_view(
         if isinstance(candle.get("source_quality"), dict)
         else {}
     )
-    suffix = str(
-        quality.get("route_partition_selected_suffix") or candle.get("ws_suffix") or ""
-    ).upper()
-    route = str(
-        quality.get("route_partition_selected_route") or candle.get("ws_route") or ""
-    ).lower()
+    if bool(quality.get("route_partition_used", False)):
+        # The empty suffix is the canonical KRX route value, not a missing
+        # value.  Using ``or`` here silently replaced it with a concurrent
+        # candle-level ``_AL`` compatibility field and reintroduced route
+        # mixing after the candle owner had selected exact KRX.
+        suffix = str(quality.get("route_partition_selected_suffix") or "").upper()
+        route = str(quality.get("route_partition_selected_route") or "").lower()
+    else:
+        suffix = str(candle.get("ws_suffix") or "").upper()
+        route = str(candle.get("ws_route") or "").lower()
     if not route:
         return ws, {
             "used": False,
@@ -548,6 +722,19 @@ def _route_partitioned_ws_view(
     view["orderbook"] = {}
     view["best_bid"] = 0
     view["best_ask"] = 0
+    view["ask_tot"] = 0
+    view["bid_tot"] = 0
+    route_ticks = ws.get("recent_trade_ticks_by_route")
+    selected_ticks = (
+        route_ticks.get(route_key) if isinstance(route_ticks, dict) else None
+    )
+    # The shared tape buffer may belong to the other concurrent route.  Once
+    # an exact 0B/0D partition is selected, either carry its matching tape or
+    # expose an empty tape so preflight can fail closed without cross-route
+    # evidence.
+    view["recent_trade_ticks"] = [
+        dict(tick) for tick in (selected_ticks or []) if isinstance(tick, dict)
+    ]
 
     excluded_optional_sources: list[str] = []
     program_suffix = str(
@@ -585,6 +772,16 @@ def _route_partitioned_ws_view(
             view["best_bid"] = bids[0].get("price")
         if asks and isinstance(asks[0], dict):
             view["best_ask"] = asks[0].get("price")
+        view["ask_tot"] = quote_row.get("ask_total") or quote_row.get("ask_tot") or 0
+        view["bid_tot"] = quote_row.get("bid_total") or quote_row.get("bid_tot") or 0
+    observed_epochs = [
+        _epoch(row.get("observed_epoch"))
+        for row in rows.values()
+        if isinstance(row, dict)
+    ]
+    observed_epochs = [value for value in observed_epochs if value is not None]
+    if observed_epochs:
+        view["last_ws_update_ts"] = max(observed_epochs)
     view["last_ws_market_suffix"] = suffix
     view["last_ws_market_route"] = route
     return view, {
@@ -593,6 +790,18 @@ def _route_partitioned_ws_view(
         "selected_key": route_key,
         "excluded_optional_sources": excluded_optional_sources,
     }
+
+
+def route_partitioned_ws_view(
+    ws_data: dict[str, Any] | None,
+    candle_context: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Public read-only route view shared by holding and AI preflight owners."""
+
+    return _route_partitioned_ws_view(
+        ws_data if isinstance(ws_data, dict) else {},
+        candle_context if isinstance(candle_context, dict) else {},
+    )
 
 
 def _broker_route_matches_cohort(
@@ -815,9 +1024,7 @@ def _integrated_sor_execution_view_proof(
         "stage_position_contract": (
             _active_holding_position(position)
             if holding_stage
-            else post_probe_position_contract
-            if post_probe_stage
-            else entry_stage
+            else post_probe_position_contract if post_probe_stage else entry_stage
         ),
         "krx_regular_cohort": str(venue or "").strip().upper() == "KRX"
         and session_value == "krx_regular"

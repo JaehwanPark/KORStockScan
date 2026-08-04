@@ -27700,6 +27700,9 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(monkeypatch):
     assert "pre_submit_liquidity_relief_allowed" in by_stage
     assert "pre_submit_liquidity_guard_block" not in by_stage
     assert "order_bundle_submitted" in by_stage
+    assert by_stage["order_bundle_submitted"]["requested_qty"] == 1
+    assert by_stage["order_bundle_submitted"]["submitted_qty"] == 1
+    assert by_stage["order_bundle_submitted"]["submitted_leg_count"] == 1
     assert sent_orders
 
 

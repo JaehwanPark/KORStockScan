@@ -4452,6 +4452,10 @@ def test_emit_scanner_runtime_queue_lag_fills_contract_fields(monkeypatch):
         "position_tag": "SCANNER",
         "added_time": 990.0,
         "entry_armed_at_epoch": 1000.0,
+        "scanner_attach_epoch": 1000.1,
+        "scanner_first_entry_realtime_epoch": 1002.0,
+        "scanner_first_entry_realtime_type": "0B",
+        "scanner_evaluation_anchor_source": "first_post_attach_entry_realtime",
         "scanner_promotion_id": "SCANPROM-000039-1000000",
         "scanner_promotion_emitted_epoch": "1000.000",
         "scanner_promotion_reason": "price_jump_start_acceleration",
@@ -4505,6 +4509,16 @@ def test_emit_scanner_runtime_queue_lag_fills_contract_fields(monkeypatch):
     assert fields["non_real_holding_count"] == 28
     assert fields["pre_scanner_runtime_count"] == 5
     assert fields["queue_lag_sec"] == 12.345
+    assert fields["controllable_queue_lag_sec"] == 10.345
+    assert fields["queue_lag_causal_class"] == "internal_post_usable_ws_queue"
+    assert fields["external_first_ws_delay_excluded"] is True
+    assert fields["external_first_ws_delay_sec"] == 1.9
+    assert fields["scanner_attach_epoch"] == "1000.100"
+    assert fields["scanner_first_entry_realtime_epoch"] == "1002.000"
+    assert fields["scanner_first_entry_realtime_type"] == "0B"
+    assert fields["scanner_evaluation_anchor_source"] == (
+        "first_post_attach_entry_realtime"
+    )
     assert fields["anchor_to_loop_sec"] == 10.0
     assert fields["loop_to_emit_sec"] == 2.345
     assert fields["pre_emit_delay_sec"] == 2.345
@@ -4567,6 +4581,8 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
         "position_tag": "SCANNER",
         "added_time": 990.0,
         "entry_armed_at_epoch": 1000.0,
+        "scanner_first_entry_realtime_epoch": 1001.5,
+        "scanner_first_entry_realtime_type": "0B",
         "scanner_promotion_id": "SCANPROM-000081-1000000",
         "scanner_promotion_emitted_epoch": "1000.000",
         "source_signature": "PRICE_JUMP_START",
@@ -4610,6 +4626,10 @@ def test_emit_scanner_fast_precheck_and_heavy_eval_lag_are_order_forbidden(monke
     assert fast["rising_entry_relief_eligible"] is False
     assert emitted[-1]["stage"] == "scalping_scanner_heavy_eval_lag"
     assert heavy["heavy_queue_wait_sec"] == 0.2
+    assert heavy["queue_lag_causal_class"] == ("internal_post_usable_ws_heavy_queue")
+    assert heavy["external_first_ws_delay_excluded"] is True
+    assert heavy["scanner_first_entry_realtime_epoch"] == "1001.500"
+    assert heavy["scanner_first_entry_realtime_type"] == "0B"
     assert heavy["runtime_effect"] is False
     assert heavy["actual_order_submitted"] is False
     assert heavy["broker_order_forbidden"] is True

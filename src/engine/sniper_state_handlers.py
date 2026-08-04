@@ -17461,6 +17461,26 @@ def _scanner_runtime_queue_lag_fields(
     queue_lag_sec = max(0.0, emit_epoch - anchor_time) if anchor_time > 0 else 0.0
     anchor_to_loop_sec = max(0.0, loop_epoch - anchor_time) if anchor_time > 0 else 0.0
     loop_to_emit_sec = max(0.0, emit_epoch - loop_epoch)
+    scanner_attach_epoch = _safe_float(stock.get("scanner_attach_epoch"), 0.0)
+    first_realtime_epoch = _safe_float(
+        stock.get("scanner_first_entry_realtime_epoch"), 0.0
+    )
+    controllable_anchor = max(anchor_time, first_realtime_epoch)
+    controllable_queue_lag_sec = (
+        max(0.0, emit_epoch - controllable_anchor)
+        if controllable_anchor > 0 and first_realtime_epoch > 0
+        else 0.0
+    )
+    external_first_ws_delay_sec = (
+        max(0.0, first_realtime_epoch - scanner_attach_epoch)
+        if scanner_attach_epoch > 0 and first_realtime_epoch > 0
+        else None
+    )
+    queue_lag_causal_class = (
+        "internal_post_usable_ws_queue"
+        if first_realtime_epoch > 0
+        else "external_first_ws_pending_excluded"
+    )
     return {
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
         or "not_applicable_scanner_promotion_id",
@@ -17476,7 +17496,7 @@ def _scanner_runtime_queue_lag_fields(
         "decision_authority": "real_scalping_scanner_runtime_watchlist_observation_only",
         "window_policy": "intraday_runtime_watchlist",
         "sample_floor": "not_applicable_runtime_observation",
-        "primary_decision_metric": "queue_lag_sec",
+        "primary_decision_metric": "controllable_queue_lag_sec",
         "source_quality_gate": "scalping_scanner_runtime_queue_lag_contract",
         "source_quality_route": "runtime_watchlist_queue_lag_observation_only",
         "runtime_effect": False,
@@ -17494,6 +17514,32 @@ def _scanner_runtime_queue_lag_fields(
         "non_real_holding_count": int(non_real_holding_count or 0),
         "pre_scanner_runtime_count": int(pre_scanner_runtime_count or 0),
         "queue_lag_sec": round(queue_lag_sec, 3),
+        "controllable_queue_lag_sec": round(controllable_queue_lag_sec, 3),
+        "queue_lag_causal_class": queue_lag_causal_class,
+        "external_first_ws_delay_excluded": True,
+        "external_first_ws_delay_sec": (
+            round(external_first_ws_delay_sec, 3)
+            if external_first_ws_delay_sec is not None
+            else None
+        ),
+        "scanner_attach_epoch": (
+            f"{scanner_attach_epoch:.3f}"
+            if scanner_attach_epoch > 0
+            else "not_available_scanner_attach_epoch"
+        ),
+        "scanner_first_entry_realtime_epoch": (
+            f"{first_realtime_epoch:.3f}"
+            if first_realtime_epoch > 0
+            else "not_available_first_entry_realtime_epoch"
+        ),
+        "scanner_first_entry_realtime_type": stock.get(
+            "scanner_first_entry_realtime_type"
+        )
+        or "not_available_first_entry_realtime_type",
+        "scanner_evaluation_anchor_source": stock.get(
+            "scanner_evaluation_anchor_source"
+        )
+        or "first_ws_pending",
         "anchor_to_loop_sec": round(anchor_to_loop_sec, 3),
         "loop_to_emit_sec": round(loop_to_emit_sec, 3),
         "pre_emit_delay_sec": round(loop_to_emit_sec, 3),
@@ -18704,6 +18750,9 @@ def _scanner_heavy_eval_lag_fields(
         (stock or {}).get("_scanner_heavy_queue_enter_epoch"),
         float(now_ts),
     )
+    first_realtime_epoch = _safe_float(
+        (stock or {}).get("scanner_first_entry_realtime_epoch"), 0.0
+    )
     return {
         **_scanner_runtime_event_venue_fields(stock),
         "scanner_promotion_id": scanner_fields.get("scanner_promotion_id")
@@ -18731,6 +18780,21 @@ def _scanner_heavy_eval_lag_fields(
         "heavy_queue_enter_epoch": f"{float(enter_epoch):.3f}",
         "heavy_eval_started_epoch": f"{float(now_ts):.3f}",
         "heavy_queue_wait_sec": round(max(0.0, float(now_ts) - float(enter_epoch)), 3),
+        "queue_lag_causal_class": (
+            "internal_post_usable_ws_heavy_queue"
+            if first_realtime_epoch > 0
+            else "first_ws_provenance_missing"
+        ),
+        "external_first_ws_delay_excluded": True,
+        "scanner_first_entry_realtime_epoch": (
+            f"{first_realtime_epoch:.3f}"
+            if first_realtime_epoch > 0
+            else "not_available_first_entry_realtime_epoch"
+        ),
+        "scanner_first_entry_realtime_type": (stock or {}).get(
+            "scanner_first_entry_realtime_type"
+        )
+        or "not_available_first_entry_realtime_type",
         "target_status": (stock or {}).get("status") or "not_applicable_target_status",
         "target_strategy": normalize_strategy((stock or {}).get("strategy")),
         "target_position_tag": normalize_position_tag(
@@ -62433,6 +62497,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         "order_bundle_submitted",
         entry_mode=entry_mode,
         requested_qty=requested_qty,
+        submitted_qty=submitted_qty,
+        submitted_leg_count=len(successful_orders),
         legs=len(successful_orders),
         wait6579_probe_canary_applied=wait6579_probe_applied,
         reason=latency_gate.get("reason"),
@@ -62529,6 +62595,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         extra_fields={
             "entry_mode": entry_mode,
             "requested_qty": requested_qty,
+            "submitted_qty": submitted_qty,
+            "submitted_leg_count": len(successful_orders),
             "legs": len(successful_orders),
             "order_price": int(latency_gate.get("order_price", 0) or 0),
             "broker_order_submitted": True,

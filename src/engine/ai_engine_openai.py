@@ -6415,6 +6415,21 @@ class GPTSniperEngine:
                 entry_candle_context_log_fields(candle_context)
             )
             input_contract_fields.update(
+                {
+                    key: value
+                    for key, value in ai_market_snapshot_log_fields(
+                        candle_context
+                    ).items()
+                    if key.startswith(
+                        (
+                            "ai_market_snapshot_",
+                            "ai_input_preflight_",
+                            "ai_input_runtime_",
+                        )
+                    )
+                }
+            )
+            input_contract_fields.update(
                 self._capture_prepromotion_context_candidate(
                     endpoint_name="entry_price",
                     symbol=stock_code,
@@ -6812,6 +6827,21 @@ class GPTSniperEngine:
                 entry_candle_context_log_fields(candle_context)
             )
             input_contract_fields.update(
+                {
+                    key: value
+                    for key, value in ai_market_snapshot_log_fields(
+                        candle_context
+                    ).items()
+                    if key.startswith(
+                        (
+                            "ai_market_snapshot_",
+                            "ai_input_preflight_",
+                            "ai_input_runtime_",
+                        )
+                    )
+                }
+            )
+            input_contract_fields.update(
                 self._capture_prepromotion_context_candidate(
                     endpoint_name="analyze_target",
                     symbol=(
@@ -6854,6 +6884,12 @@ class GPTSniperEngine:
                         "action": "DROP",
                         "score": 0,
                         "reason": "ai_input_preflight_blocked",
+                        "ai_semantic_evaluation_state": "INSUFFICIENT_DATA",
+                        "decision_evaluation_status": (
+                            "not_evaluated_provider_or_preflight"
+                        ),
+                        "runtime_fail_closed_action": "DROP",
+                        "ai_decision_outcome_eligible": False,
                         "provider_called": False,
                         **ai_market_snapshot_log_fields(candle_context),
                     }
@@ -8870,6 +8906,12 @@ Do not cut by a single score cutoff. First classify the flow as closest to absor
                     "thesis": "input_preflight_blocked",
                     "evidence": list(holding_preflight.get("blockers") or []),
                     "reason": "ai_input_preflight_blocked_keep_exit_candidate",
+                    "ai_semantic_evaluation_state": "INSUFFICIENT_DATA",
+                    "decision_evaluation_status": (
+                        "not_evaluated_provider_or_preflight"
+                    ),
+                    "runtime_fail_closed_action": "KEEP_EXIT_CANDIDATE",
+                    "ai_decision_outcome_eligible": False,
                     "next_review_sec": 30,
                     "provider_called": False,
                     "holding_context_provider_expected": (

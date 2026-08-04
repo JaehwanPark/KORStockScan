@@ -23,6 +23,8 @@ from src.engine.scalping.ai_market_snapshot import (
     build_ai_market_snapshot,
     enrich_investor_source,
     enrich_position_with_broker_account_snapshot,
+    route_partitioned_ws_view,
+    route_realtime_partition_status,
     runtime_preflight_required,
 )
 from src.engine.scalping.entry_candle_context import (
@@ -794,6 +796,15 @@ def build_holding_decision_context(
             {},
         ):
             candle_ws[key] = position.get(key)
+    integrated_sor_view_status = route_realtime_partition_status(
+        candle_ws,
+        suffix="_AL",
+        route="krx_nxt_integrated",
+        now_ts=now_epoch,
+    )
+    allow_integrated_sor_execution_view = bool(
+        integrated_sor_view_status.get("ready", False)
+    )
     candle = build_session_candle_source(
         token,
         code,
@@ -806,7 +817,7 @@ def build_holding_decision_context(
         recent_candles=recent_candles,
         source_meta=candle_meta,
         broker_route=str(execution_broker_route or ""),
-        allow_integrated_sor_execution_view=True,
+        allow_integrated_sor_execution_view=allow_integrated_sor_execution_view,
     )
     if execution_broker_route is None:
         (
@@ -823,6 +834,15 @@ def build_holding_decision_context(
     request_suffix = _request_suffix(str(candle.get("request_code") or ""))
     ws_suffix = str(candle.get("ws_suffix") or "").upper()
     ws_route = str(candle.get("ws_route") or "").lower()
+    ws, holding_route_partition = route_partitioned_ws_view(ws, candle)
+    selected_route_key = str(holding_route_partition.get("selected_key") or "")
+    selected_ws_route = (
+        selected_route_key.split("|", 1)[1]
+        if bool(holding_route_partition.get("used", False))
+        and "|" in selected_route_key
+        else str(candle.get("ws_route") or "")
+    )
+    ws_route = selected_ws_route
     route_equivalence_proven = bool(candle.get("route_equivalence_proven", False))
     route_ticks, route_tick_partition = select_route_trade_ticks(
         ws,
@@ -1009,9 +1029,7 @@ def build_holding_decision_context(
     broker_position_reconciled = bool(
         broker_qty_present
         and broker_snapshot_age_sec is not None
-        and 0.0
-        <= broker_snapshot_age_sec
-        <= _BROKER_POSITION_FRESH_SEC
+        and 0.0 <= broker_snapshot_age_sec <= _BROKER_POSITION_FRESH_SEC
         and position.get("open_buy_qty") is not None
         and position.get("open_sell_qty") is not None
     )
@@ -1060,8 +1078,21 @@ def build_holding_decision_context(
         "venue": candle.get("venue"),
         "session": candle.get("session"),
         "rest_route": candle.get("rest_route"),
-        "ws_route": candle.get("ws_route"),
+        "ws_route": selected_ws_route,
         "request_code": candle.get("request_code"),
+        "market_data_route_selection": {
+            "integrated_sor_view_status": integrated_sor_view_status,
+            "integrated_sor_view_selected": bool(
+                request_suffix == "_AL" and allow_integrated_sor_execution_view
+            ),
+            "selected_route_partition": holding_route_partition,
+            "fallback_to_exact_krx": bool(
+                str(candle.get("venue") or "").upper() == "KRX"
+                and str(candle.get("session") or "").lower() == "krx_regular"
+                and str(execution_broker_route or "").upper() == "SOR"
+                and request_suffix != "_AL"
+            ),
+        },
         "broker_route_provenance": {
             "route": execution_broker_route,
             "source": execution_broker_route_source,
@@ -1650,6 +1681,29 @@ def holding_decision_context_log_fields(
         "holding_context_model_structure": candle.get("structure", {}),
         "holding_context_candle_alignment": candle.get("alignment"),
         "holding_context_ai_market_snapshot": context.get("ai_market_snapshot_v1", {}),
+        "holding_context_integrated_sor_view_status": (
+            context.get("market_data_route_selection", {})
+            .get("integrated_sor_view_status", {})
+            .get("status")
+        ),
+        "holding_context_integrated_sor_view_blockers": (
+            context.get("market_data_route_selection", {})
+            .get("integrated_sor_view_status", {})
+            .get("blockers", [])
+        ),
+        "holding_context_integrated_sor_view_selected": bool(
+            context.get("market_data_route_selection", {}).get(
+                "integrated_sor_view_selected", False
+            )
+        ),
+        "holding_context_market_data_fallback_to_exact_krx": bool(
+            context.get("market_data_route_selection", {}).get(
+                "fallback_to_exact_krx", False
+            )
+        ),
+        "holding_context_selected_route_partition": context.get(
+            "market_data_route_selection", {}
+        ).get("selected_route_partition", {}),
         "holding_context_tape_state": tape.get("state"),
         "holding_context_tape_source": tape.get("source"),
         "holding_context_tape_sample_count": tape.get("sample_count", 0),
