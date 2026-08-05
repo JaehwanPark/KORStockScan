@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 from dataclasses import replace
@@ -1019,6 +1020,23 @@ def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch, tmp_p
     monkeypatch.setenv(
         "KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock")
     )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "KIWOOM_BASE_URL": "https://example.test",
+                "KIWOOM_APPKEY": "app-key-1234",
+                "KIWOOM_SECRETKEY": "secret-key-5678",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kiwoom_orders.kiwoom_utils, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "DEV_PATH",
+        tmp_path / "missing_dev_config.json",
+    )
 
     class DummyResponse:
         def __init__(self, payload, status_code=200):
@@ -1108,6 +1126,49 @@ def test_order_helper_uses_registered_token_handoff_before_first_post(
 
     assert data == {"return_code": "0"}
     assert posts == [{"authorization": "Bearer FRESH_TOKEN", "api-id": "kt00001"}]
+
+
+def test_order_helper_does_not_publish_failed_retry_token(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json")
+    )
+    responses = [
+        {"return_code": "8005", "return_msg": "Token이 유효하지 않습니다"},
+        {"return_code": "8005", "return_msg": "Token이 유효하지 않습니다"},
+    ]
+
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *args, **kwargs: DummyResponse(responses.pop(0)),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_kiwoom_token_after_auth_failure",
+        lambda **kwargs: "FAILED_REFRESH",
+    )
+
+    _response, data = kiwoom_orders._post_kiwoom_with_auth_retry(
+        "https://example.test/api",
+        {"authorization": "Bearer STARTUP_TOKEN", "api-id": "kt00001"},
+        {},
+        "kt00001",
+    )
+
+    assert data["return_code"] == "8005"
+    assert (
+        kiwoom_orders.kiwoom_utils.resolve_kiwoom_request_token("STARTUP_TOKEN")
+        == "STARTUP_TOKEN"
+    )
 
 
 def test_get_deposit_returns_auth_failure_when_token_refresh_raises(

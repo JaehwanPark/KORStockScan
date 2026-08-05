@@ -250,6 +250,16 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         retry_data = retry_response.json()
     except Exception:
         return retry_response, {}
+    retry_success = (
+        retry_response.status_code == 200
+        and str(retry_data.get("rt_cd", retry_data.get("return_code", ""))) == "0"
+    )
+    if retry_success:
+        kiwoom_utils.register_kiwoom_token_replacement(
+            failed_token,
+            refreshed_token,
+            source=f"order_api_8005_retry:{api_label}:retry_success",
+        )
     return retry_response, retry_data
 
 
