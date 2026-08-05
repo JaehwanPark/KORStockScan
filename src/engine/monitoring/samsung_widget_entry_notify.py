@@ -41,12 +41,17 @@ _REASON_LABELS = {
     "foreign_flow_nonworsening": "외국인 수급 비악화",
     "program_flow_nonworsening": "프로그램 수급 비악화",
     "premarket_aux_supportive": "프리마켓 흐름 보조",
+    "recovery_episode_armed": "반등 구조 연속 확인",
+    "recent_resistance_reclaimed": "직전 저항 회복",
+    "pullback_within_two_ticks": "저항 2틱 이내 눌림",
+    "recent_rebound_volume_grace": "최근 반등 거래량 유지",
 }
 
 _UNMET_LABELS = {
     "foreign_or_program_flow_not_improving": "외국인/프로그램 수급 주의",
     "regular_flow_unavailable": "정규장 수급 확인 제한",
     "premarket_vwap_not_recovered": "프리마켓 VWAP 미회복",
+    "resistance_reclaim_pullback_pending": "저항 돌파 후 눌림 대기",
 }
 
 

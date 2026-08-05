@@ -329,9 +329,27 @@ def evaluate_portable_widget_core(payload_row: dict[str, Any]) -> dict[str, Any]
         result["unmet_conditions"] = ["soft_support_break"]
         return result
 
+    recent_resistance = structure.get("recent_resistance")
+    structure_ok = bool(structure["higher_high_and_low"] or structure["retest_held"])
+    vwap_reclaimed = bool(vwap and current_price >= vwap)
+    resistance_reclaimed = bool(
+        isinstance(recent_resistance, int)
+        and recent_resistance > 0
+        and current_price >= recent_resistance
+        and structure_ok
+    )
+    reclaim_ok = vwap_reclaimed or resistance_reclaimed
     tactical_candidates = [
         value
-        for value in (structural_support, vwap)
+        for value in (
+            structural_support,
+            vwap if vwap_reclaimed else None,
+            (
+                recent_resistance
+                if resistance_reclaimed and not vwap_reclaimed
+                else None
+            ),
+        )
         if isinstance(value, int) and 0 < value <= current_price
     ]
     tactical_support = (
@@ -340,18 +358,6 @@ def evaluate_portable_widget_core(payload_row: dict[str, Any]) -> dict[str, Any]
     if tactical_support is None:
         result["unmet_conditions"] = ["tactical_support_missing"]
         return result
-
-    recent_resistance = structure.get("recent_resistance")
-    structure_ok = bool(structure["higher_high_and_low"] or structure["retest_held"])
-    reclaim_ok = bool(
-        vwap
-        and current_price >= vwap
-        and (
-            recent_resistance is None
-            or current_price >= recent_resistance
-            or structure_ok
-        )
-    )
     trends_ok = trends.get("3m") in {"up", "flat"} and trends.get("5m") in {
         "up",
         "flat",
@@ -392,11 +398,26 @@ def evaluate_portable_widget_core(payload_row: dict[str, Any]) -> dict[str, Any]
     if not all(portable_core_checks.values()):
         return result
 
+    if (
+        resistance_reclaimed
+        and not vwap_reclaimed
+        and isinstance(recent_resistance, int)
+        and current_price > move_price_by_ticks(recent_resistance, 1)
+    ):
+        result["state"] = "WATCH"
+        result["unmet_conditions"] = ["resistance_reclaim_pullback_pending"]
+        return result
+
     chase_pct = ((current_price - tactical_support) / tactical_support) * 100
     result["tactical_chase_pct"] = round(chase_pct, 6)
-    if chase_pct > TACTICAL_CHASE_LIMIT_PCT:
+    two_tick_chase_limit_pct = (
+        (move_price_by_ticks(tactical_support, 2) - tactical_support) / tactical_support
+    ) * 100
+    dynamic_chase_limit_pct = max(TACTICAL_CHASE_LIMIT_PCT, two_tick_chase_limit_pct)
+    result["dynamic_chase_limit_pct"] = round(dynamic_chase_limit_pct, 6)
+    if chase_pct > dynamic_chase_limit_pct:
         result["state"] = "NO_CHASE"
-        result["unmet_conditions"] = ["price_more_than_30bp_above_support"]
+        result["unmet_conditions"] = ["price_above_dynamic_two_tick_chase_limit"]
         return result
     entry_low = max(tactical_support, best_bid)
     entry_high = min(best_ask, move_price_by_ticks(tactical_support, 2))
@@ -599,9 +620,10 @@ def build_report(
                 "three_five_minute_trend",
                 "fresh_bbo_spread_within_two_ticks",
                 "live_negative_reversal_veto",
-                "thirty_bp_chase_limit",
+                "dynamic_thirty_bp_or_two_tick_chase_limit",
                 "dynamic_two_tick_entry_range",
                 "support_break_confirmation",
+                "vwap_or_confirmed_resistance_reclaim",
             ],
             "not_fabricated": [
                 "samsung_vs_sk_hynix_and_kospi_relative_strength",
@@ -612,6 +634,11 @@ def build_report(
             "promotion_filter_replayed": False,
             "promotion_filter_reason": (
                 "AI calls are event-spaced snapshots, not consecutive 10-second widget cycles"
+            ),
+            "recovery_episode_filter_replayed": False,
+            "recovery_episode_filter_reason": (
+                "AI calls do not provide a contiguous per-symbol completed-minute sequence "
+                "for arm, reclaim, and pullback state continuity"
             ),
         },
         "source": {
@@ -719,7 +746,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Scope limits",
             "",
-            "Samsung-specific peer relative strength, investor/program flow, and Yahoo external risk were not fabricated for other symbols. Portable-core passes are therefore capped at `ENTRY_CAUTION`. The 10-second promotion filter is not replayed from event-spaced AI snapshots.",
+            "Samsung-specific peer relative strength, investor/program flow, and Yahoo external risk were not fabricated for other symbols. Portable-core passes are therefore capped at `ENTRY_CAUTION`. The 10-second promotion filter and stateful recovery-episode filter are not replayed from event-spaced AI snapshots.",
             "",
             "The pre-spread AI-ask proxy keeps the Entry-AI executable ask only as a conservative decision-point sensitivity check. It is not the widget recommended-range fill result; rows whose recommended range excludes that ask remain price-noncomparable.",
             "",

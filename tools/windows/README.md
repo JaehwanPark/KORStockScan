@@ -122,8 +122,18 @@ Session-wide relative weakness may be cleared only when both 15-minute and
 setup by itself. A high-volume retest may qualify as absorption only after the
 held structure, latest completed close, VWAP, recent resistance, and non-down
 3/5-minute trends agree. A forming-price upside impulse cannot qualify it.
-Structural support owns invalidation, while chase distance is measured from
-the tactical VWAP/support used to form the displayed price range. A forming-
+The normal reclaim check accepts either session VWAP or a confirmed recent
+resistance reclaim. A resistance-only breakout more than one tick above the
+level waits for a pullback instead of issuing an immediate chase signal. The
+collector keeps the confirmed structure and rebound-volume evidence for at
+most three completed bars; after a completed resistance reclaim, a later
+pullback that holds the level and remains within two ticks may become
+`ENTRY_CAUTION`. A support break, downtrend, stale source, wide spread, or live
+negative reversal cancels that recovery episode. Structural support owns
+invalidation, while chase distance is measured from the most recent tactical
+VWAP/reclaimed-resistance/support anchor. The chase ceiling is the larger of
+30bp or the exact two-tick distance, so it does not contradict the displayed
+two-tick range. A forming-
 price break without confirmation is treated as a pending soft break and
 withdraws the entry
 range. `AVOID` requires either a completed one-minute close below support or a
