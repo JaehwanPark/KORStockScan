@@ -99,6 +99,39 @@ def _candidate_source_payload(*candidates):
     }
 
 
+def test_signal_radar_fallback_resolves_registered_token_before_request(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json")
+    )
+    monkeypatch.setattr(
+        "src.engine.signal_radar.fdr.DataReader",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("fdr down")),
+    )
+    posts = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"rows": [{"cur_prc": str(100 + index)} for index in range(20)]}
+
+    monkeypatch.setattr(
+        "src.engine.signal_radar.requests.post",
+        lambda *args, **kwargs: posts.append(dict(kwargs.get("headers") or {}))
+        or Response(),
+    )
+    kiwoom_utils.register_kiwoom_token_replacement(
+        "STARTUP_TOKEN", "FRESH_TOKEN", source="test"
+    )
+
+    SniperRadar("STARTUP_TOKEN").get_market_regime("STARTUP_TOKEN")
+
+    assert posts[0]["authorization"] == "Bearer FRESH_TOKEN"
+
+
 def test_ka10017_previous_limit_down_request_and_parser(monkeypatch):
     captured = {}
 

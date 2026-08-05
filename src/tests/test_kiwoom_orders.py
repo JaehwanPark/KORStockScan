@@ -1071,6 +1071,45 @@ def test_get_deposit_refreshes_token_and_retries_once_on_8005(monkeypatch, tmp_p
     assert invalidations == []
 
 
+def test_order_helper_uses_registered_token_handoff_before_first_post(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json")
+    )
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "kiwoom_token_cache.lock")
+    )
+    posts = []
+
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"return_code": "0"}
+
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *args, **kwargs: posts.append(dict(kwargs.get("headers") or {}))
+        or DummyResponse(),
+    )
+    kiwoom_orders.kiwoom_utils.register_kiwoom_token_replacement(
+        "STARTUP_TOKEN", "FRESH_TOKEN", source="test"
+    )
+
+    _response, data = kiwoom_orders._post_kiwoom_with_auth_retry(
+        "https://example.test/api",
+        {"authorization": "Bearer STARTUP_TOKEN", "api-id": "kt00001"},
+        {},
+        "kt00001",
+    )
+
+    assert data == {"return_code": "0"}
+    assert posts == [{"authorization": "Bearer FRESH_TOKEN", "api-id": "kt00001"}]
+
+
 def test_get_deposit_returns_auth_failure_when_token_refresh_raises(
     monkeypatch, tmp_path
 ):

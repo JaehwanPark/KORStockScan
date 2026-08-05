@@ -446,10 +446,11 @@ class SniperRadar:
         # 2차: 키움 ka20006 (업종일봉조회요청) 사용
         if token:
             try:
+                active_token = kiwoom_utils.resolve_kiwoom_request_token(token)
                 url = kiwoom_utils.get_api_url("/api/dostk/mrkcond")
                 headers = {
                     "Content-Type": "application/json;charset=UTF-8",
-                    "authorization": f"Bearer {token}",
+                    "authorization": f"Bearer {active_token}",
                     "cont-yn": "N",
                     "api-id": "ka20006",
                 }
