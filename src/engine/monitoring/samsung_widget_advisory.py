@@ -1293,27 +1293,34 @@ def evaluate_advisory(
         if isinstance(raw_candidate_support, int) and raw_candidate_support > 0
         else None
     )
-    tactical_candidates = [
-        value
-        for value in (structural_support, vwap)
-        if isinstance(value, int) and 0 < value <= current_price
-    ]
-    tactical_support = (
-        clamp_price_to_tick(max(tactical_candidates)) if tactical_candidates else None
-    )
     session_anchor = (
         regular_session if context.name == "NXT_AFTERMARKET" else previous_day
     )
     recent_resistance = structure.get("recent_resistance")
     structure_ok = bool(structure["higher_high_and_low"] or structure["retest_held"])
-    reclaim_ok = bool(
-        vwap
-        and current_price >= vwap
-        and (
-            recent_resistance is None
-            or current_price >= recent_resistance
-            or structure_ok
+    vwap_reclaimed = bool(vwap and current_price >= vwap)
+    resistance_reclaimed = bool(
+        isinstance(recent_resistance, int)
+        and recent_resistance > 0
+        and current_price >= recent_resistance
+        and structure_ok
+    )
+    reclaim_ok = vwap_reclaimed or resistance_reclaimed
+    tactical_candidates = [
+        value
+        for value in (
+            structural_support,
+            vwap if vwap_reclaimed else None,
+            (
+                recent_resistance
+                if resistance_reclaimed and not vwap_reclaimed
+                else None
+            ),
         )
+        if isinstance(value, int) and 0 < value <= current_price
+    ]
+    tactical_support = (
+        clamp_price_to_tick(max(tactical_candidates)) if tactical_candidates else None
     )
     trends_ok = trends.get("3m") in {"up", "flat"} and trends.get("5m") in {
         "up",
@@ -1559,6 +1566,17 @@ def evaluate_advisory(
                 "chase_basis": "tactical_support",
                 "structural_chase_pct": round(structural_chase_pct, 4),
                 "tactical_chase_pct": round(tactical_chase_pct, 4),
+                "vwap_reclaimed": vwap_reclaimed,
+                "recent_resistance_reclaimed": resistance_reclaimed,
+                "reclaim_mode": (
+                    "vwap_and_resistance"
+                    if vwap_reclaimed and resistance_reclaimed
+                    else (
+                        "vwap"
+                        if vwap_reclaimed
+                        else "recent_resistance" if resistance_reclaimed else "none"
+                    )
+                ),
                 "minute_trends": trends,
                 "minute_trend_details": trend_details,
                 "trend_assessment": trend_assessment,
@@ -1587,9 +1605,24 @@ def evaluate_advisory(
         base["state"] = base["raw_state"] = "WATCH"
         return base
 
-    if tactical_chase_pct > TACTICAL_CHASE_LIMIT_PCT:
+    if (
+        resistance_reclaimed
+        and not vwap_reclaimed
+        and isinstance(recent_resistance, int)
+        and current_price > move_price_by_ticks(recent_resistance, 1)
+    ):
+        base["state"] = base["raw_state"] = "WATCH"
+        base["unmet_conditions"].append("resistance_reclaim_pullback_pending")
+        return base
+
+    two_tick_chase_limit_pct = (
+        (move_price_by_ticks(tactical_support, 2) - tactical_support) / tactical_support
+    ) * 100
+    dynamic_chase_limit_pct = max(TACTICAL_CHASE_LIMIT_PCT, two_tick_chase_limit_pct)
+    base["derived"]["dynamic_chase_limit_pct"] = round(dynamic_chase_limit_pct, 4)
+    if tactical_chase_pct > dynamic_chase_limit_pct:
         base["state"] = base["raw_state"] = "NO_CHASE"
-        base["reasons"] = ["price_more_than_30bp_above_support"]
+        base["reasons"] = ["price_above_dynamic_two_tick_chase_limit"]
         return base
 
     entry_low = max(tactical_support, best_bid)
@@ -1610,6 +1643,7 @@ def evaluate_advisory(
         or flow_negative
         or flow_data_limited
         or premarket_aux_weak
+        or (resistance_reclaimed and not vwap_reclaimed)
     ):
         base["state"] = base["raw_state"] = "ENTRY_CAUTION"
     else:
@@ -1781,6 +1815,291 @@ class AdvisoryBreakRearmFilter:
         result["continuity"]["bars_since_break"] = self._bars_since_break(
             bar_source_time
         )
+        return result
+
+
+class AdvisoryRecoveryEpisodeFilter:
+    """Carry confirmed rebound evidence into the next resistance pullback."""
+
+    MAX_VOLUME_GRACE_BARS = 3
+    MAX_RECLAIM_WAIT_BARS = 3
+    MAX_PULLBACK_WAIT_BARS = 3
+    REQUIRED_ARM_REASONS = {
+        "low_structure_confirmed",
+        "rebound_volume_confirmed",
+        "three_five_minute_not_down",
+        "relative_strength_not_weak",
+        "spread_within_two_ticks",
+    }
+    REQUIRED_CONTINUATION_REASONS = {
+        "low_structure_confirmed",
+        "three_five_minute_not_down",
+        "relative_strength_not_weak",
+        "spread_within_two_ticks",
+    }
+    NEGATIVE_VETOES = {
+        "external_risk_hold",
+        "recent_rest_prints_descending",
+        "live_price_reversal_with_ask_pressure",
+        "soft_support_break",
+        "post_break_rearm_pending",
+    }
+
+    def __init__(self) -> None:
+        self.reset()
+
+    @staticmethod
+    def _scope_for(advisory: dict[str, Any]) -> str:
+        observed_date = str(advisory.get("observed_at") or "")[:10]
+        return f"{observed_date}:{advisory.get('session') or 'UNKNOWN'}"
+
+    @staticmethod
+    def _bar_values(latest_bar: MinuteBar | dict[str, Any] | None) -> tuple[str, int]:
+        return AdvisoryBreakRearmFilter._bar_values(latest_bar)
+
+    @staticmethod
+    def _bars_between(earlier: str, later: str) -> int | None:
+        if len(earlier) != 14 or len(later) != 14:
+            return None
+        try:
+            start = datetime.strptime(earlier, "%Y%m%d%H%M%S")
+            end = datetime.strptime(later, "%Y%m%d%H%M%S")
+        except ValueError:
+            return None
+        seconds = (end - start).total_seconds()
+        if seconds < 0 or seconds % 60 != 0:
+            return None
+        return int(seconds // 60)
+
+    def reset(self) -> None:
+        self._scope_key: str | None = None
+        self._support: int | None = None
+        self._resistance: int | None = None
+        self._volume_evidence_bar = ""
+        self._reclaimed_bar = ""
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "scope_key": self._scope_key,
+            "armed": self._support is not None and self._resistance is not None,
+            "support": self._support,
+            "resistance": self._resistance,
+            "volume_evidence_bar": self._volume_evidence_bar or None,
+            "reclaimed_bar": self._reclaimed_bar or None,
+            "max_volume_grace_bars": self.MAX_VOLUME_GRACE_BARS,
+            "max_reclaim_wait_bars": self.MAX_RECLAIM_WAIT_BARS,
+            "max_pullback_wait_bars": self.MAX_PULLBACK_WAIT_BARS,
+            "authority": ADVISORY_AUTHORITY,
+            "runtime_effect": False,
+        }
+
+    def restore(self, advisory: dict[str, Any]) -> bool:
+        continuity = advisory.get("recovery_continuity")
+        if not isinstance(continuity, dict):
+            return False
+        expected_scope = self._scope_for(advisory)
+        if continuity.get("scope_key") != expected_scope:
+            return False
+        if continuity.get("armed") is not True:
+            self.reset()
+            self._scope_key = expected_scope
+            return True
+        try:
+            support = int(continuity.get("support") or 0)
+            resistance = int(continuity.get("resistance") or 0)
+        except (TypeError, ValueError):
+            return False
+        volume_bar = str(continuity.get("volume_evidence_bar") or "")
+        reclaimed_bar = str(continuity.get("reclaimed_bar") or "")
+        if (
+            support <= 0
+            or resistance <= support
+            or len(volume_bar) != 14
+            or (reclaimed_bar and len(reclaimed_bar) != 14)
+            or continuity.get("authority") != ADVISORY_AUTHORITY
+            or continuity.get("runtime_effect") is not False
+        ):
+            return False
+        reclaim_delay = (
+            self._bars_between(volume_bar, reclaimed_bar) if reclaimed_bar else 0
+        )
+        if reclaim_delay is None or reclaim_delay > self.MAX_RECLAIM_WAIT_BARS:
+            return False
+        self._scope_key = expected_scope
+        self._support = support
+        self._resistance = resistance
+        self._volume_evidence_bar = volume_bar
+        self._reclaimed_bar = reclaimed_bar
+        return True
+
+    def _expire_if_needed(self, bar_source_time: str) -> None:
+        if self._support is None:
+            return
+        volume_age = self._bars_between(self._volume_evidence_bar, bar_source_time)
+        reclaim_age = self._bars_between(self._reclaimed_bar, bar_source_time)
+        if volume_age is None or volume_age > self.MAX_VOLUME_GRACE_BARS:
+            scope_key = self._scope_key
+            self.reset()
+            self._scope_key = scope_key
+        elif self._reclaimed_bar and (
+            reclaim_age is None or reclaim_age > self.MAX_PULLBACK_WAIT_BARS
+        ):
+            scope_key = self._scope_key
+            self.reset()
+            self._scope_key = scope_key
+
+    def apply(
+        self,
+        advisory: dict[str, Any],
+        *,
+        current_price: int,
+        bbo: dict[str, Any],
+        latest_bar: MinuteBar | dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        result = json.loads(json.dumps(advisory, ensure_ascii=False))
+        scope_key = self._scope_for(result)
+        if scope_key != self._scope_key:
+            self.reset()
+            self._scope_key = scope_key
+        bar_source_time, completed_close = self._bar_values(latest_bar)
+        if not bar_source_time:
+            result["recovery_continuity"] = self.snapshot()
+            return result
+
+        self._expire_if_needed(bar_source_time)
+        derived = result.get("derived")
+        derived = derived if isinstance(derived, dict) else {}
+        reasons = set(result.get("reasons") or [])
+        unmet = set(result.get("unmet_conditions") or [])
+        source_quality = result.get("source_quality")
+        source_pass = bool(
+            isinstance(source_quality, dict) and source_quality.get("status") == "PASS"
+        )
+        try:
+            support = int(derived.get("structural_support") or 0)
+            resistance = int(derived.get("recent_resistance") or 0)
+            best_bid = int(bbo.get("best_bid") or 0)
+            best_ask = int(bbo.get("best_ask") or 0)
+        except (TypeError, ValueError):
+            support = resistance = best_bid = best_ask = 0
+
+        support_broken = bool(self._support and completed_close < self._support)
+        if support_broken:
+            self.reset()
+            self._scope_key = scope_key
+            result["recovery_continuity"] = self.snapshot()
+            return result
+
+        external_risk = result.get("external_risk")
+        external_hold = bool(
+            isinstance(external_risk, dict) and external_risk.get("level") == "HOLD"
+        )
+        if (
+            not source_pass
+            or external_hold
+            or self.NEGATIVE_VETOES.intersection(unmet)
+            or (
+                self._support is not None
+                and not self.REQUIRED_CONTINUATION_REASONS.issubset(reasons)
+            )
+        ):
+            self.reset()
+            self._scope_key = scope_key
+            result["recovery_continuity"] = self.snapshot()
+            return result
+        can_arm = bool(
+            source_pass
+            and support > 0
+            and resistance > support
+            and self.REQUIRED_ARM_REASONS.issubset(reasons)
+            and not external_hold
+            and not self.NEGATIVE_VETOES.intersection(unmet)
+        )
+        if can_arm:
+            if self._support is None:
+                self._support = support
+                self._resistance = resistance
+            self._volume_evidence_bar = bar_source_time
+
+        if self._support and self._resistance:
+            arm_age = self._bars_between(self._volume_evidence_bar, bar_source_time)
+            reclaim_seen = bool(
+                completed_close >= self._resistance or current_price >= self._resistance
+            )
+            if (
+                not self._reclaimed_bar
+                and reclaim_seen
+                and arm_age is not None
+                and arm_age <= self.MAX_RECLAIM_WAIT_BARS
+            ):
+                self._reclaimed_bar = bar_source_time
+
+        reclaim_age = self._bars_between(self._reclaimed_bar, bar_source_time)
+        volume_age = self._bars_between(self._volume_evidence_bar, bar_source_time)
+        anchor = self._resistance or 0
+        upper_bound = move_price_by_ticks(anchor, 2) if anchor > 0 else 0
+        current_safety_pass = bool(
+            source_pass
+            and self.REQUIRED_CONTINUATION_REASONS.issubset(reasons)
+            and not external_hold
+            and not self.NEGATIVE_VETOES.intersection(unmet)
+        )
+        pullback_ready = bool(
+            self._support
+            and anchor > self._support
+            and reclaim_age is not None
+            and 1 <= reclaim_age <= self.MAX_PULLBACK_WAIT_BARS
+            and volume_age is not None
+            and volume_age <= self.MAX_VOLUME_GRACE_BARS
+            and completed_close >= anchor
+            and anchor <= current_price <= upper_bound
+            and best_bid > 0
+            and best_ask >= best_bid
+            and current_safety_pass
+        )
+        if pullback_ready:
+            entry_low = max(anchor, best_bid)
+            entry_high = min(best_ask, upper_bound)
+            if entry_low <= entry_high:
+                result["state"] = result["raw_state"] = "ENTRY_CAUTION"
+                result["entry_price_low"] = entry_low
+                result["entry_price_high"] = entry_high
+                result["trigger"] = "recovery_episode_resistance_reclaim_pullback"
+                result["trigger_price"] = anchor
+                result["invalidation"] = "confirmed_support_break"
+                result["invalidation_price"] = move_price_by_ticks(self._support, -2)
+                result["reasons"] = list(
+                    dict.fromkeys(
+                        [
+                            *(result.get("reasons") or []),
+                            "recovery_episode_armed",
+                            "recent_resistance_reclaimed",
+                            "pullback_within_two_ticks",
+                            "recent_rebound_volume_grace",
+                        ]
+                    )
+                )
+                result["unmet_conditions"] = [
+                    value
+                    for value in result.get("unmet_conditions") or []
+                    if value
+                    not in {
+                        "vwap_or_resistance_reclaimed",
+                        "rebound_volume_confirmed",
+                        "resistance_reclaim_pullback_pending",
+                    }
+                ]
+                result.setdefault("derived", {})["recovery_episode"] = {
+                    "support": self._support,
+                    "reclaimed_resistance": anchor,
+                    "volume_evidence_age_bars": volume_age,
+                    "reclaim_age_bars": reclaim_age,
+                    "entry_anchor": anchor,
+                    "entry_upper_bound": upper_bound,
+                    "authority": ADVISORY_AUTHORITY,
+                    "runtime_effect": False,
+                }
+        result["recovery_continuity"] = self.snapshot()
         return result
 
 
@@ -2710,6 +3029,7 @@ class SamsungWidgetCollector:
         self.entry_notifier = entry_notifier
         self.request_budget = ReadOnlyRequestBudget()
         self.break_rearm_filter = AdvisoryBreakRearmFilter()
+        self.recovery_episode_filter = AdvisoryRecoveryEpisodeFilter()
         self.promotion_filter = AdvisoryPromotionFilter()
         self.exit_state_machine = ExitAdvisoryStateMachine()
         self.recorder = ObservationRecorder(observation_dir)
@@ -2778,6 +3098,7 @@ class SamsungWidgetCollector:
         self._last_flow_fetch = 0.0
         self._promotion_state_restore_attempted = False
         self.break_rearm_filter.reset()
+        self.recovery_episode_filter.reset()
         self.promotion_filter.reset()
         self.exit_state_machine.reset()
 
@@ -2837,6 +3158,7 @@ class SamsungWidgetCollector:
         # restart longer than the 25-second display freshness window. Promotion
         # streaks remain freshness-bound below.
         self.break_rearm_filter.restore(advisory)
+        self.recovery_episode_filter.restore(advisory)
         self.exit_state_machine.restore(exit_advisory)
         if not snapshot_is_fresh(
             payload, now=observed_at
@@ -3187,6 +3509,12 @@ class SamsungWidgetCollector:
         advisory = self.break_rearm_filter.apply(
             advisory, latest_bar=bars[-1] if bars else None
         )
+        advisory = self.recovery_episode_filter.apply(
+            advisory,
+            current_price=current_price,
+            bbo=bbo,
+            latest_bar=bars[-1] if bars else None,
+        )
         advisory = self.promotion_filter.apply(advisory)
         advisory["source_quality"]["auxiliary_status"] = (
             "DATA_LIMITED"
@@ -3317,6 +3645,7 @@ class SamsungWidgetCollector:
                 "broker_order_forbidden": True,
                 "source_quality": {"status": "BLOCKED", "issues": [reason]},
                 "continuity": self.break_rearm_filter.snapshot(),
+                "recovery_continuity": self.recovery_episode_filter.snapshot(),
                 "metric_contract": METRIC_CONTRACT,
             },
             "exit_advisory": {

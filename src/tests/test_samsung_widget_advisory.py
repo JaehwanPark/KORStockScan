@@ -673,6 +673,254 @@ def test_domestic_ready_requires_two_consecutive_observations():
     assert second["state"] == "ENTRY_READY"
 
 
+def test_recent_resistance_reclaim_is_an_alternative_to_vwap(monkeypatch):
+    inputs = _ready_input(current_price=100_400)
+    inputs["bbo"] = {"best_bid": 100_300, "best_ask": 100_400, "age_sec": 0}
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 101_000)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 100_000,
+            "recent_resistance": 100_300,
+            "higher_high": True,
+            "higher_low": True,
+            "higher_high_and_low": True,
+        },
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["raw_state"] == "ENTRY_CAUTION"
+    assert result["derived"]["vwap_reclaimed"] is False
+    assert result["derived"]["recent_resistance_reclaimed"] is True
+    assert result["derived"]["reclaim_mode"] == "recent_resistance"
+    assert result["entry_price_low"] == 100_300
+    assert result["entry_price_high"] == 100_400
+
+
+def test_resistance_only_breakout_waits_for_pullback_above_one_tick(monkeypatch):
+    inputs = _ready_input(current_price=100_500)
+    inputs["bbo"] = {"best_bid": 100_400, "best_ask": 100_500, "age_sec": 0}
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 101_000)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 100_000,
+            "recent_resistance": 100_300,
+            "higher_high": True,
+            "higher_low": True,
+            "higher_high_and_low": True,
+        },
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["raw_state"] == "WATCH"
+    assert "resistance_reclaim_pullback_pending" in result["unmet_conditions"]
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+
+
+def _recovery_episode_advisory(
+    observed_at: datetime,
+    *,
+    volume_confirmed: bool,
+    current_price: int,
+) -> dict:
+    reasons = [
+        "low_structure_confirmed",
+        "three_five_minute_not_down",
+        "relative_strength_not_weak",
+        "spread_within_two_ticks",
+    ]
+    unmet = ["vwap_or_resistance_reclaimed", "regular_flow_unavailable"]
+    if volume_confirmed:
+        reasons.append("rebound_volume_confirmed")
+    else:
+        unmet.append("rebound_volume_confirmed")
+    return {
+        "state": "WATCH",
+        "raw_state": "WATCH",
+        "session": "KRX_REGULAR",
+        "observed_at": observed_at.isoformat(),
+        "valid_until": (observed_at + timedelta(seconds=60)).isoformat(),
+        "entry_price_low": None,
+        "entry_price_high": None,
+        "reasons": reasons,
+        "unmet_conditions": unmet,
+        "source_quality": {"status": "PASS", "issues": []},
+        "external_risk": {"level": "DATA_LIMITED"},
+        "derived": {
+            "structural_support": 244_000,
+            "recent_resistance": 246_000,
+        },
+        "current_price": current_price,
+        "authority": "widget_advisory_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
+    start = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
+    filter_ = advisory.AdvisoryRecoveryEpisodeFilter()
+    armed = filter_.apply(
+        _recovery_episode_advisory(start, volume_confirmed=True, current_price=245_500),
+        current_price=245_500,
+        bbo={"best_bid": 245_500, "best_ask": 246_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103000", 245_000, 246_000, 244_500, 245_750, 77_843
+        ),
+    )
+    breakout = filter_.apply(
+        _recovery_episode_advisory(
+            start + timedelta(minutes=2),
+            volume_confirmed=True,
+            current_price=247_000,
+        ),
+        current_price=247_000,
+        bbo={"best_bid": 246_500, "best_ask": 247_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103200", 245_250, 247_000, 245_000, 246_500, 83_510
+        ),
+    )
+    pullback = filter_.apply(
+        _recovery_episode_advisory(
+            start + timedelta(minutes=3),
+            volume_confirmed=False,
+            current_price=246_000,
+        ),
+        current_price=246_000,
+        bbo={"best_bid": 246_000, "best_ask": 246_500},
+        latest_bar=advisory.MinuteBar(
+            "20260805103300", 246_500, 247_000, 246_000, 246_500, 47_458
+        ),
+    )
+
+    assert armed["state"] == "WATCH"
+    assert breakout["state"] == "WATCH"
+    assert breakout["recovery_continuity"]["reclaimed_bar"] == "20260805103200"
+    restored_filter = advisory.AdvisoryRecoveryEpisodeFilter()
+    assert restored_filter.restore(breakout) is True
+    restored_pullback = restored_filter.apply(
+        _recovery_episode_advisory(
+            start + timedelta(minutes=3),
+            volume_confirmed=False,
+            current_price=246_000,
+        ),
+        current_price=246_000,
+        bbo={"best_bid": 246_000, "best_ask": 246_500},
+        latest_bar=advisory.MinuteBar(
+            "20260805103300", 246_500, 247_000, 246_000, 246_500, 47_458
+        ),
+    )
+    assert pullback == restored_pullback
+    assert pullback["raw_state"] == "ENTRY_CAUTION"
+    assert pullback["entry_price_low"] == 246_000
+    assert pullback["entry_price_high"] == 246_500
+    assert "recent_rebound_volume_grace" in pullback["reasons"]
+    assert "regular_flow_unavailable" in pullback["unmet_conditions"]
+    assert pullback["derived"]["recovery_episode"]["reclaim_age_bars"] == 1
+    assert pullback["runtime_effect"] is False
+    assert pullback["actual_order_submitted"] is False
+    evaluated_at = start + timedelta(minutes=3)
+    assert contract.advisory_contract_is_valid(
+        pullback,
+        snapshot_observed_at=evaluated_at,
+        context=contract.session_context(evaluated_at),
+        evaluated_at=evaluated_at,
+    )
+
+
+def test_recovery_episode_does_not_bypass_source_quality():
+    start = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
+    filter_ = advisory.AdvisoryRecoveryEpisodeFilter()
+    armed = _recovery_episode_advisory(
+        start, volume_confirmed=True, current_price=245_500
+    )
+    armed["source_quality"] = {"status": "BLOCKED", "issues": ["quote_stale"]}
+
+    blocked = filter_.apply(
+        armed,
+        current_price=245_500,
+        bbo={"best_bid": 245_500, "best_ask": 246_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103000", 245_000, 246_000, 244_500, 245_750, 77_843
+        ),
+    )
+
+    assert blocked["state"] == "WATCH"
+    assert blocked["recovery_continuity"]["armed"] is False
+
+
+def test_recovery_episode_is_cancelled_by_completed_support_break():
+    start = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
+    filter_ = advisory.AdvisoryRecoveryEpisodeFilter()
+    filter_.apply(
+        _recovery_episode_advisory(start, volume_confirmed=True, current_price=245_500),
+        current_price=245_500,
+        bbo={"best_bid": 245_500, "best_ask": 246_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103000", 245_000, 246_000, 244_500, 245_750, 77_843
+        ),
+    )
+
+    cancelled = filter_.apply(
+        _recovery_episode_advisory(
+            start + timedelta(minutes=1),
+            volume_confirmed=True,
+            current_price=243_500,
+        ),
+        current_price=243_500,
+        bbo={"best_bid": 243_500, "best_ask": 244_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103100", 244_500, 245_000, 243_500, 243_500, 90_000
+        ),
+    )
+
+    assert cancelled["state"] == "WATCH"
+    assert cancelled["recovery_continuity"]["armed"] is False
+
+
+def test_recovery_episode_is_cancelled_when_continuation_trend_turns_down():
+    start = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
+    filter_ = advisory.AdvisoryRecoveryEpisodeFilter()
+    filter_.apply(
+        _recovery_episode_advisory(start, volume_confirmed=True, current_price=245_500),
+        current_price=245_500,
+        bbo={"best_bid": 245_500, "best_ask": 246_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103000", 245_000, 246_000, 244_500, 245_750, 77_843
+        ),
+    )
+    downtrend = _recovery_episode_advisory(
+        start + timedelta(minutes=1),
+        volume_confirmed=True,
+        current_price=245_500,
+    )
+    downtrend["reasons"].remove("three_five_minute_not_down")
+    downtrend["unmet_conditions"].append("three_five_minute_not_down")
+
+    cancelled = filter_.apply(
+        downtrend,
+        current_price=245_500,
+        bbo={"best_bid": 245_500, "best_ask": 246_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103100", 245_500, 246_000, 245_000, 245_500, 40_000
+        ),
+    )
+
+    assert cancelled["state"] == "WATCH"
+    assert cancelled["recovery_continuity"]["armed"] is False
+
+
 def test_promotion_filter_requires_temporally_consecutive_observations():
     raw = advisory.evaluate_advisory(**_ready_input())
     filter_ = advisory.AdvisoryPromotionFilter()
@@ -1432,6 +1680,40 @@ def test_collector_failure_snapshot_preserves_break_rearm_lock(tmp_path):
 
     assert first_reclaim["state"] == "WATCH"
     assert first_reclaim["continuity"]["reclaim_bar_count"] == 1
+
+
+def test_collector_failure_snapshot_preserves_recovery_episode(tmp_path):
+    observed_at = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
+    snapshot_path = tmp_path / "snapshot.json"
+    collector = advisory.SamsungWidgetCollector(
+        snapshot_path=snapshot_path,
+        observation_dir=tmp_path / "observations",
+    )
+    collector.recovery_episode_filter.apply(
+        _recovery_episode_advisory(
+            observed_at, volume_confirmed=True, current_price=245_500
+        ),
+        current_price=245_500,
+        bbo={"best_bid": 245_500, "best_ask": 246_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103000", 245_000, 246_000, 244_500, 245_750, 77_843
+        ),
+    )
+    collector.write_failure("temporary_transport_error", observed_at)
+
+    restarted = advisory.SamsungWidgetCollector(
+        snapshot_path=snapshot_path,
+        observation_dir=tmp_path / "restarted-observations",
+    )
+    restarted._restore_promotion_state(
+        observed_at + timedelta(seconds=30),
+        advisory.session_context(observed_at),
+    )
+
+    continuity = restarted.recovery_episode_filter.snapshot()
+    assert continuity["armed"] is True
+    assert continuity["support"] == 244_000
+    assert continuity["resistance"] == 246_000
 
 
 def test_quote_bbo_incoherence_blocks_advisory():
