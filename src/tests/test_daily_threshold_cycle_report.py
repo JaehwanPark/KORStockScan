@@ -386,6 +386,11 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     assert whipsaw_candidate["max_step_per_day"] is not None
     assert whipsaw_candidate["sample_window"] == "rolling_10d_with_daily_guard"
     assert whipsaw_candidate["window_policy"]["daily_only_allowed"] is False
+    assert (
+        whipsaw["counterfactual_exploration"]["decision_authority"]
+        == "source_only_counterfactual_no_runtime_change"
+    )
+    assert whipsaw["counterfactual_exploration"]["allowed_runtime_apply"] is False
     protect_trailing = report["threshold_snapshot"]["protect_trailing_smoothing"]
     assert protect_trailing["sample_ready"] is True
     assert protect_trailing["ev_edge_ready"] is False
@@ -399,6 +404,10 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     )
     assert protect_trailing["recommended"]["min_samples"] >= 3
     assert protect_trailing["recommended"]["buffer_pct"] == 1.0
+    assert protect_trailing["counterfactual_exploration"]["candidate_count"] == 27
+    assert (
+        protect_trailing["counterfactual_exploration"]["allowed_runtime_apply"] is False
+    )
     protect_trailing_candidate = next(
         item
         for item in report["calibration_candidates"]
@@ -3678,6 +3687,10 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
     assert holding_family["sample"]["debounce_terminal_reason"] == {"max_defer_sec": 1}
     assert holding_family["sample"]["debounce_profit_delta_avg"] == -0.25
     assert holding_family["recommended"]["holding_bearish_confirm_worsen_pct"] == 0.3
+    assert (
+        holding_family["counterfactual_exploration"]["decision_authority"]
+        == "source_only_counterfactual_no_runtime_change"
+    )
 
     manifest_families = {
         item["family"]
@@ -3685,6 +3698,142 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
         if item["owner_rule"] == "manifest_only_no_runtime_mutation"
     }
     assert {"entry_ofi_ai_smoothing", "holding_flow_ofi_smoothing"} <= manifest_families
+
+
+def test_smoothing_counterfactuals_and_trailing_recheck_outcome_are_report_only():
+    pipeline_rows = [
+        {
+            "stage": "holding_flow_ofi_smoothing_applied",
+            "record_id": 1,
+            "stock_code": "000001",
+            "emitted_at": "2026-08-05T09:00:00+09:00",
+            "fields": {
+                "holding_flow_ofi_usable": True,
+                "holding_flow_ofi_micro_score_raw": "0.80",
+                "holding_flow_ofi_micro_score_smooth": "0.24",
+                "holding_flow_ofi_regime": "neutral",
+                "raw_flow_action": "EXIT",
+                "final_flow_action": "EXIT",
+                "smoothing_action": "NO_CHANGE",
+                "worsen_from_candidate": "0.10",
+            },
+        },
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "record_id": 2,
+            "stock_code": "000002",
+            "emitted_at": "2026-08-05T10:00:00+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": "scr-2",
+                "recheck_position_key": "record:2",
+                "recheck_lane": "shallow",
+                "recheck_invoker": "holding_flow",
+                "counterfactual_executable_sell_price": 10000,
+                "counterfactual_profit_rate": "0.20",
+                "profit_rate": "0.20",
+            },
+        },
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "record_id": 2,
+            "stock_code": "000002",
+            "emitted_at": "2026-08-05T10:00:16+09:00",
+            "fields": {
+                "recheck_state": "ttl_expired",
+                "recheck_id": "scr-2",
+                "recheck_position_key": "record:2",
+                "recheck_deadline_lag_sec": "1.0",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 2,
+            "stock_code": "000002",
+            "emitted_at": "2026-08-05T10:00:17+09:00",
+            "fields": {
+                "exit_rule": "scalp_trailing_take_profit",
+                "profit_rate": "0.80",
+            },
+        },
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-08-05",
+        pipeline_loader=lambda target_date: pipeline_rows,
+        completed_rows_loader=lambda start_date, end_date: [],
+        skip_completed_rows=True,
+    )
+
+    ofi = report["threshold_snapshot"]["holding_flow_ofi_smoothing"]
+    assert ofi["sample"]["ofi_regime"] == {"neutral": 1}
+    assert ofi["counterfactual_exploration"]["candidate_with_exposure_count"] > 0
+    assert ofi["counterfactual_exploration"]["allowed_runtime_apply"] is False
+
+    trailing = report["threshold_snapshot"]["scalp_trailing_take_profit"]
+    attribution = trailing["continuation_recheck_attribution"]
+    assert attribution["armed_count"] == 1
+    assert attribution["comparable_outcome_count"] == 1
+    assert attribution["source_quality_adjusted_ev_pct"] == 0.6
+    assert attribution["deadline"]["max_lag_sec"] == 1.0
+    assert attribution["allowed_runtime_apply"] is False
+
+
+def test_trailing_recheck_unattributed_arms_are_not_false_one_shot_violations():
+    events = [
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "stock_code": "000002",
+            "emitted_at": f"2026-08-05T10:00:0{index}+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "counterfactual_profit_rate": "0.20",
+            },
+        }
+        for index in (1, 2)
+    ]
+
+    attribution = report_mod._build_trailing_continuation_recheck_attribution(events)
+
+    assert attribution["armed_count"] == 2
+    assert attribution["one_shot_violation_count"] == 0
+    assert {row["exclusion_reason"] for row in attribution["rows"]} == {
+        "record_id_missing"
+    }
+
+
+def test_trailing_recheck_requires_executable_counterfactual_price_for_ev():
+    events = [
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "record_id": 9,
+            "stock_code": "000009",
+            "emitted_at": "2026-08-05T10:00:01+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "recheck_id": "scr-9",
+                "recheck_position_key": "record:9",
+                "counterfactual_profit_rate": "0.20",
+                "counterfactual_executable_sell_price": 0,
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 9,
+            "stock_code": "000009",
+            "emitted_at": "2026-08-05T10:00:20+09:00",
+            "fields": {"profit_rate": "0.40"},
+        },
+    ]
+
+    attribution = report_mod._build_trailing_continuation_recheck_attribution(events)
+
+    assert attribution["comparable_outcome_count"] == 0
+    assert attribution["source_quality_adjusted_ev_pct"] is None
+    assert attribution["rows"][0]["exclusion_reason"] == (
+        "counterfactual_executable_sell_price_missing"
+    )
 
 
 def test_scale_in_price_guard_family_generates_manifest_only_candidate():
@@ -3889,6 +4038,28 @@ def test_position_sizing_runtime_fields_survive_event_compaction():
         "submitted_qty": 40,
         "submitted_leg_count": 2,
     }
+
+
+def test_smoothing_attribution_fields_survive_event_compaction():
+    fields = {
+        "recheck_state": "armed",
+        "recheck_contract_version": "bounded_one_shot_attribution_v2",
+        "recheck_id": "scr-1",
+        "recheck_position_key": "record:1",
+        "counterfactual_profit_rate": "+0.2000",
+        "counterfactual_executable_sell_price": 10000,
+        "holding_flow_ofi_regime": "neutral",
+        "holding_flow_ofi_micro_score_raw": "0.2",
+        "holding_flow_ofi_micro_score_smooth": "0.06",
+        "raw_flow_action": "EXIT",
+        "final_flow_action": "EXIT",
+    }
+
+    event = report_mod._compact_threshold_cycle_event(
+        {"stage": "scalp_trailing_continuation_recheck", "fields": fields}
+    )
+
+    assert event["fields"] == fields
 
 
 def test_event_compaction_canonicalizes_repeated_keys_and_categorical_values():

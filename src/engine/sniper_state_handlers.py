@@ -46993,8 +46993,12 @@ def _should_revert_overnight_flow_override_hold(
 _SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS = (
     "scalp_trailing_continuation_recheck_started_at",
     "scalp_trailing_continuation_recheck_until_epoch",
+    "scalp_trailing_continuation_recheck_id",
+    "scalp_trailing_continuation_recheck_position_key",
     "scalp_trailing_continuation_recheck_anchor_profit",
     "scalp_trailing_continuation_recheck_min_profit",
+    "scalp_trailing_continuation_recheck_max_profit",
+    "scalp_trailing_continuation_recheck_counterfactual_sell_price",
     "scalp_trailing_continuation_recheck_lane",
 )
 
@@ -47524,6 +47528,93 @@ def _clear_scalp_trailing_continuation_recheck(stock: dict) -> None:
     )
 
 
+def _scalp_trailing_continuation_position_key(stock: dict, code: str) -> str:
+    record_id = str(stock.get("id") or stock.get("record_id") or "").strip()
+    if record_id and record_id != "-":
+        return f"record:{record_id}"
+
+    raw_started_at = stock.get("holding_started_at") or stock.get("buy_time")
+    if isinstance(raw_started_at, datetime):
+        started_at = raw_started_at.isoformat()
+    else:
+        started_at = str(raw_started_at or "").strip()
+    if started_at and started_at != "-":
+        return f"holding:{code}:{started_at}"
+
+    with ENTRY_LOCK:
+        token = str(
+            stock.get("scalp_trailing_continuation_runtime_position_token") or ""
+        ).strip()
+        if not token:
+            token = uuid4().hex
+            stock["scalp_trailing_continuation_runtime_position_token"] = token
+    return f"runtime:{code}:{token}"
+
+
+def _scalp_trailing_continuation_terminal_fields(
+    stock: dict,
+    *,
+    now_ts: float,
+    until_epoch: float,
+    profit_rate: float,
+) -> dict[str, Any]:
+    anchor_profit = _safe_float(
+        stock.get("scalp_trailing_continuation_recheck_anchor_profit"), profit_rate
+    )
+    min_profit = min(
+        _safe_float(
+            stock.get("scalp_trailing_continuation_recheck_min_profit"), profit_rate
+        ),
+        float(profit_rate),
+    )
+    max_profit = max(
+        _safe_float(
+            stock.get("scalp_trailing_continuation_recheck_max_profit"), profit_rate
+        ),
+        float(profit_rate),
+    )
+    return {
+        "recheck_contract_version": "bounded_one_shot_attribution_v2",
+        "recheck_id": str(stock.get("scalp_trailing_continuation_recheck_id") or "-"),
+        "recheck_position_key": str(
+            stock.get("scalp_trailing_continuation_recheck_position_key") or "-"
+        ),
+        "counterfactual_profit_rate": f"{float(anchor_profit):+.4f}",
+        "counterfactual_executable_sell_price": _safe_int(
+            stock.get("scalp_trailing_continuation_recheck_counterfactual_sell_price"),
+            0,
+        ),
+        "recheck_min_profit_rate": f"{float(min_profit):+.4f}",
+        "recheck_max_profit_rate": f"{float(max_profit):+.4f}",
+        "recheck_profit_delta_pct": f"{float(profit_rate) - float(anchor_profit):+.4f}",
+        "recheck_deadline_lag_sec": f"{max(0.0, float(now_ts) - until_epoch):.3f}",
+        "second_extension_forbidden": True,
+    }
+
+
+def _claim_scalp_trailing_continuation_second_extension_log(
+    stock: dict, position_key: str
+) -> bool:
+    with ENTRY_LOCK:
+        consumed_position_key = str(
+            stock.get("scalp_trailing_continuation_recheck_consumed_position_key") or ""
+        ).strip()
+        if consumed_position_key != position_key:
+            return False
+        logged_position_key = str(
+            stock.get(
+                "scalp_trailing_continuation_recheck_second_extension_logged_position_key"
+            )
+            or ""
+        ).strip()
+        if logged_position_key == position_key:
+            return False
+        stock[
+            "scalp_trailing_continuation_recheck_second_extension_logged_position_key"
+        ] = position_key
+        return True
+
+
 def _clear_scalp_trailing_loss_conversion_recheck(stock: dict) -> None:
     _mutate_stock_state(
         stock,
@@ -47575,12 +47666,20 @@ def _evaluate_scalp_trailing_continuation_recheck(
     if not config["active"]:
         return False
 
+    position_key = _scalp_trailing_continuation_position_key(stock, code)
     started_at = _safe_float(
         stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
     )
     stored_until_epoch = _safe_float(
         stock.get("scalp_trailing_continuation_recheck_until_epoch"), 0.0
     )
+    active_position_key = str(
+        stock.get("scalp_trailing_continuation_recheck_position_key") or ""
+    ).strip()
+    if started_at > 0 and active_position_key not in {"", position_key}:
+        _clear_scalp_trailing_continuation_recheck(stock)
+        started_at = 0.0
+        stored_until_epoch = 0.0
     recheck_already_expired = bool(
         started_at > 0
         and stored_until_epoch > 0
@@ -47965,6 +48064,43 @@ def _evaluate_scalp_trailing_continuation_recheck(
         **_scalp_trailing_continuation_recheck_contract_fields(),
     }
     if started_at <= 0:
+        consumed_position_key = str(
+            stock.get("scalp_trailing_continuation_recheck_consumed_position_key") or ""
+        ).strip()
+        if consumed_position_key == position_key:
+            if _claim_scalp_trailing_continuation_second_extension_log(
+                stock, position_key
+            ):
+                counterfactual_sell_price = _safe_int(
+                    quote_recovery_fields.get("quote_recovery_executable_sell_price"),
+                    0,
+                ) or _safe_int(
+                    (decision_quote_envelope or {}).get(
+                        "exit_quote_envelope_base_best_bid"
+                    ),
+                    0,
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scalp_trailing_continuation_recheck",
+                    recheck_state="second_extension_blocked",
+                    recheck_contract_version="bounded_one_shot_attribution_v2",
+                    recheck_id=str(
+                        stock.get("scalp_trailing_continuation_recheck_consumed_id")
+                        or "-"
+                    ),
+                    recheck_position_key=position_key,
+                    counterfactual_profit_rate=f"{float(profit_rate):+.4f}",
+                    counterfactual_executable_sell_price=counterfactual_sell_price,
+                    recheck_min_profit_rate=f"{float(profit_rate):+.4f}",
+                    recheck_max_profit_rate=f"{float(profit_rate):+.4f}",
+                    recheck_profit_delta_pct="+0.0000",
+                    recheck_deadline_lag_sec="0.000",
+                    second_extension_forbidden=True,
+                    **state_fields,
+                )
+            return False
         if not eligible:
             if float(peak_profit) > config["max_peak_pct"]:
                 _log_holding_pipeline(
@@ -47976,22 +48112,103 @@ def _evaluate_scalp_trailing_continuation_recheck(
                 )
             return False
         until_epoch = float(now_ts) + float(recheck_ttl_sec)
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "scalp_trailing_continuation_recheck_started_at": float(now_ts),
-                "scalp_trailing_continuation_recheck_until_epoch": until_epoch,
-                "scalp_trailing_continuation_recheck_anchor_profit": float(profit_rate),
-                "scalp_trailing_continuation_recheck_min_profit": float(profit_rate),
-                "scalp_trailing_continuation_recheck_lane": recheck_lane,
-            },
+        counterfactual_sell_price = _safe_int(
+            quote_recovery_fields.get("quote_recovery_executable_sell_price"), 0
+        ) or _safe_int(
+            (decision_quote_envelope or {}).get("exit_quote_envelope_base_best_bid"),
+            0,
         )
+        recheck_id = f"scr-{uuid4().hex}"
+        second_extension_blocked = False
+        concurrent_arm = False
+        with ENTRY_LOCK:
+            concurrent_started_at = _safe_float(
+                stock.get("scalp_trailing_continuation_recheck_started_at"), 0.0
+            )
+            concurrent_position_key = str(
+                stock.get("scalp_trailing_continuation_recheck_position_key") or ""
+            ).strip()
+            if concurrent_started_at > 0 and concurrent_position_key == position_key:
+                concurrent_arm = True
+            elif (
+                str(
+                    stock.get(
+                        "scalp_trailing_continuation_recheck_consumed_position_key"
+                    )
+                    or ""
+                ).strip()
+                == position_key
+            ):
+                second_extension_blocked = True
+            else:
+                stock.update(
+                    {
+                        "scalp_trailing_continuation_recheck_started_at": float(now_ts),
+                        "scalp_trailing_continuation_recheck_until_epoch": until_epoch,
+                        "scalp_trailing_continuation_recheck_id": recheck_id,
+                        "scalp_trailing_continuation_recheck_position_key": position_key,
+                        "scalp_trailing_continuation_recheck_anchor_profit": float(
+                            profit_rate
+                        ),
+                        "scalp_trailing_continuation_recheck_min_profit": float(
+                            profit_rate
+                        ),
+                        "scalp_trailing_continuation_recheck_max_profit": float(
+                            profit_rate
+                        ),
+                        "scalp_trailing_continuation_recheck_counterfactual_sell_price": (
+                            counterfactual_sell_price
+                        ),
+                        "scalp_trailing_continuation_recheck_lane": recheck_lane,
+                        "scalp_trailing_continuation_recheck_consumed_position_key": (
+                            position_key
+                        ),
+                        "scalp_trailing_continuation_recheck_consumed_id": recheck_id,
+                    }
+                )
+        if concurrent_arm:
+            return True
+        if second_extension_blocked:
+            if _claim_scalp_trailing_continuation_second_extension_log(
+                stock, position_key
+            ):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "scalp_trailing_continuation_recheck",
+                    recheck_state="second_extension_blocked",
+                    recheck_contract_version="bounded_one_shot_attribution_v2",
+                    recheck_id=str(
+                        stock.get("scalp_trailing_continuation_recheck_consumed_id")
+                        or "-"
+                    ),
+                    recheck_position_key=position_key,
+                    counterfactual_profit_rate=f"{float(profit_rate):+.4f}",
+                    counterfactual_executable_sell_price=counterfactual_sell_price,
+                    recheck_min_profit_rate=f"{float(profit_rate):+.4f}",
+                    recheck_max_profit_rate=f"{float(profit_rate):+.4f}",
+                    recheck_profit_delta_pct="+0.0000",
+                    recheck_deadline_lag_sec="0.000",
+                    second_extension_forbidden=True,
+                    **state_fields,
+                )
+            return False
         _log_holding_pipeline(
             stock,
             code,
             "scalp_trailing_continuation_recheck",
             recheck_state="armed",
             recheck_until_epoch=f"{until_epoch:.3f}",
+            recheck_contract_version="bounded_one_shot_attribution_v2",
+            recheck_id=recheck_id,
+            recheck_position_key=position_key,
+            counterfactual_profit_rate=f"{float(profit_rate):+.4f}",
+            counterfactual_executable_sell_price=counterfactual_sell_price,
+            recheck_min_profit_rate=f"{float(profit_rate):+.4f}",
+            recheck_max_profit_rate=f"{float(profit_rate):+.4f}",
+            recheck_profit_delta_pct="+0.0000",
+            recheck_deadline_lag_sec="0.000",
+            second_extension_forbidden=True,
             **state_fields,
         )
         return True
@@ -48002,6 +48219,12 @@ def _evaluate_scalp_trailing_continuation_recheck(
     )
     elapsed_sec = max(0.0, float(now_ts) - started_at)
     if float(now_ts) >= until_epoch:
+        terminal_fields = _scalp_trailing_continuation_terminal_fields(
+            stock,
+            now_ts=now_ts,
+            until_epoch=until_epoch,
+            profit_rate=profit_rate,
+        )
         _clear_scalp_trailing_continuation_recheck(stock)
         _log_holding_pipeline(
             stock,
@@ -48010,10 +48233,17 @@ def _evaluate_scalp_trailing_continuation_recheck(
             recheck_state="ttl_expired",
             recheck_elapsed_sec=f"{elapsed_sec:.3f}",
             recheck_until_epoch=f"{until_epoch:.3f}",
+            **terminal_fields,
             **state_fields,
         )
         return False
     if not eligible:
+        terminal_fields = _scalp_trailing_continuation_terminal_fields(
+            stock,
+            now_ts=now_ts,
+            until_epoch=until_epoch,
+            profit_rate=profit_rate,
+        )
         _clear_scalp_trailing_continuation_recheck(stock)
         _log_holding_pipeline(
             stock,
@@ -48022,6 +48252,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
             recheck_state="vetoed",
             recheck_elapsed_sec=f"{elapsed_sec:.3f}",
             recheck_until_epoch=f"{until_epoch:.3f}",
+            **terminal_fields,
             **state_fields,
         )
         return False
@@ -48035,10 +48266,23 @@ def _evaluate_scalp_trailing_continuation_recheck(
                     profit_rate,
                 ),
                 float(profit_rate),
-            )
+            ),
+            "scalp_trailing_continuation_recheck_max_profit": max(
+                _safe_float(
+                    stock.get("scalp_trailing_continuation_recheck_max_profit"),
+                    profit_rate,
+                ),
+                float(profit_rate),
+            ),
         },
     )
     if emit_deferred_log:
+        deferred_fields = _scalp_trailing_continuation_terminal_fields(
+            stock,
+            now_ts=now_ts,
+            until_epoch=until_epoch,
+            profit_rate=profit_rate,
+        )
         _log_holding_pipeline(
             stock,
             code,
@@ -48046,6 +48290,7 @@ def _evaluate_scalp_trailing_continuation_recheck(
             recheck_state="deferred",
             recheck_elapsed_sec=f"{elapsed_sec:.3f}",
             recheck_until_epoch=f"{until_epoch:.3f}",
+            **deferred_fields,
             **state_fields,
         )
     return True

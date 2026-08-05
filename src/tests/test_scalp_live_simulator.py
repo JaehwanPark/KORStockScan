@@ -4001,6 +4001,10 @@ def test_swing_probe_state_sync_removes_exited_and_restores_active(tmp_path):
 
 def test_scalp_simulator_threshold_stages_are_included():
     assert (
+        threshold_family_for_stage("scalp_trailing_continuation_recheck")
+        == "scalp_trailing_take_profit"
+    )
+    assert (
         threshold_family_for_stage("pre_submit_liquidity_guard_block")
         == "liquidity_pre_submit_guard_p1"
     )

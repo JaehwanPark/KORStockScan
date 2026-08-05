@@ -60,6 +60,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "soft_stop_absorption_recovered": "soft_stop_expert_defense",
     "protect_trailing_smooth_hold": "protect_trailing_smoothing",
     "protect_trailing_smooth_confirmed": "protect_trailing_smoothing",
+    "scalp_trailing_continuation_recheck": "scalp_trailing_take_profit",
     "adverse_fill_observed": "adverse_fill_detector",
     "scale_in_price_resolved": "scale_in_price_guard",
     "scale_in_price_guard_block": "scale_in_price_guard",

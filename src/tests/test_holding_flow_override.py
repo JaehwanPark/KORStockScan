@@ -1274,6 +1274,85 @@ def test_trailing_continuation_recheck_defers_only_fresh_supportive_shallow_prof
     )
 
 
+def test_trailing_continuation_recheck_is_one_shot_per_position(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    _enable_trailing_continuation_recheck(monkeypatch)
+    now_ts = datetime(
+        2026, 7, 15, 10, 0, tzinfo=timezone(timedelta(hours=9))
+    ).timestamp()
+    stock = {
+        **_stock(),
+        "id": 123,
+        "last_reversal_features": _fresh_reversal_features(),
+    }
+    kwargs = {
+        "stock": stock,
+        "code": "002990",
+        "ws_data": {**_ws(), "last_ws_update_ts": now_ts - 0.1},
+        "micro_fields": _trailing_continuation_micro_fields(),
+        "profit_rate": 0.13,
+        "peak_profit": 0.83,
+        "trailing_peak_worsen": 0.70,
+        "current_ai_score": 71,
+    }
+
+    assert handlers._evaluate_scalp_trailing_continuation_recheck(
+        **kwargs, now_ts=now_ts
+    )
+    assert not handlers._evaluate_scalp_trailing_continuation_recheck(
+        **kwargs, now_ts=now_ts + 16
+    )
+    assert not handlers._evaluate_scalp_trailing_continuation_recheck(
+        **kwargs, now_ts=now_ts + 17
+    )
+    assert not handlers._evaluate_scalp_trailing_continuation_recheck(
+        **kwargs, now_ts=now_ts + 17.5
+    )
+
+    armed = [
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+        and fields.get("recheck_state") == "armed"
+    ]
+    blocked = [
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+        and fields.get("recheck_state") == "second_extension_blocked"
+    ]
+    expired = next(
+        fields
+        for stage, fields in logs
+        if stage == "scalp_trailing_continuation_recheck"
+        and fields.get("recheck_state") == "ttl_expired"
+    )
+    assert len(armed) == 1
+    assert len(blocked) == 1
+    assert armed[0]["recheck_id"] == expired["recheck_id"]
+    assert expired["recheck_contract_version"] == "bounded_one_shot_attribution_v2"
+    assert expired["recheck_deadline_lag_sec"] == "1.000"
+    assert expired["counterfactual_profit_rate"] == "+0.1300"
+    assert stock["scalp_trailing_continuation_recheck_consumed_position_key"] == (
+        "record:123"
+    )
+
+    stock["id"] = 124
+    kwargs["ws_data"]["last_ws_update_ts"] = now_ts + 17.9
+    assert handlers._evaluate_scalp_trailing_continuation_recheck(
+        **kwargs, now_ts=now_ts + 18
+    )
+    assert (
+        sum(
+            stage == "scalp_trailing_continuation_recheck"
+            and fields.get("recheck_state") == "armed"
+            for stage, fields in logs
+        )
+        == 2
+    )
+
+
 def test_trailing_continuation_recheck_defers_high_peak_transient_bearish_estimator(
     monkeypatch,
 ):

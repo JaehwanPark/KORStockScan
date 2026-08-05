@@ -18,6 +18,20 @@
 
 ## 사용자 지시 구현
 
+- [x] `[SmoothingBoundedExploration0805] smoothing 유효기회 탐색·trailing one-shot attribution 보완 및 리뷰` (`Due: 2026-08-05`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:30`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py), [threshold_cycle_registry.py](/home/ubuntu/KORStockScan/src/utils/threshold_cycle_registry.py)
+  - 판정 기준: OFI action smoothing, soft-stop confirmation, protect-trailing smoothing은 현행 threshold를 바꾸지 않는 report-only parameter grid로 유효 전환 노출을 넓히고 forward outcome EV join 전에는 runtime 권한을 열지 않는다. `scalp_trailing_continuation_recheck`는 동일 포지션당 1회만 arm하고 TTL/veto·deadline lag·즉시 청산 counterfactual·실제 완료손익을 compact threshold report까지 연결한다.
+  - 금지: grid 노출 count만으로 live apply, hard/protect/emergency stop 지연, stale/conflict·broker/order guard 우회, provider·수량·cap·bot 변경, 두 번째 trailing 연장을 금지한다.
+  - 실행 결과 (`2026-08-05 12:30 KST`): OFI raw/smooth/regime/action provenance와 protect/soft-stop grid 입력 필드를 compact event에 보존하고, 세 grid를 `runtime_effect=false`, `allowed_runtime_apply=false`, `broker_order_forbidden=true`로 daily/cumulative snapshot에 연결했다. trailing recheck는 포지션 key·recheck id·min/max profit·counterfactual price/profit·deadline lag를 남기며, 동일 포지션의 재연장은 차단 provenance를 1회만 기록한다. record·실행가능 counterfactual 청산가·completed valid profit이 모두 연결된 표본만 `source_quality_adjusted_ev_pct`에 포함하고 record가 없는 arm은 false one-shot violation이 아니라 attribution 제외로 처리한다.
+  - 검증 결과: 1차 관련 회귀 `374 passed` 뒤 자체리뷰에서 반복 차단 로그 오염, record 결손 arm의 false violation, 실행가능 counterfactual 청산가 없는 행의 EV 유입 가능성을 발견해 보완했다. OFI·holding override·daily/EV/postclose threshold 소비자까지 확대한 최종 회귀 `605 passed`, Black, Ruff, compile, checklist parser(`28` open), `git diff --check`를 통과했고 재리뷰 미해결 finding=`0`이다.
+  - 다음 액션: 현재 PID `62804`는 변경 전 소스이므로 runtime 반영으로 간주하지 않는다. 별도 승인된 다음 우아한 재기동 뒤 아래 `SmoothingAttributionRuntimeObserve0805`에서 자연 arm/terminal/차단 provenance를 확인하며, 이 보완만으로 즉시 재기동하지 않는다.
+
+- [ ] `[SmoothingAttributionRuntimeObserve0805] smoothing attribution 신계약 자연 관찰` (`Due: 2026-08-05`, `Slot: INTRADAY`, `TimeWindow: 12:30~15:20`, `Track: ScalpingLogic`)
+  - Source: [pipeline_events_2026-08-05.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-08-05.jsonl), [threshold_events_2026-08-05.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-08-05.jsonl), [error_detector_heartbeat.json](/home/ubuntu/KORStockScan/tmp/error_detector_heartbeat.json)
+  - 판정 기준: 별도 승인된 다음 우아한 재기동이 있는 경우에만 변경 소스 PID를 확인하고, 동일 `recheck_position_key`의 arm은 최대 1회, terminal은 동일 `recheck_id`, second-extension 차단 로그는 최대 1회여야 한다. OFI raw/smooth/regime/action 필드가 threshold compact event에 보존되는지도 함께 확인한다.
+  - 금지: 이 관찰 항목을 근거로 bot 재기동, threshold 완화, hard/protect/emergency stop 변경, provider·주문·수량·cap 변경을 수행하지 않는다.
+  - 다음 액션: 재기동이 없으면 `implemented_runtime_not_reflected`로 다음 승인 재기동 관찰 항목에 이관하고, 자연 표본이 없으면 `runtime_reflected_no_natural_match`로 분리한다. 표본이 있으면 postclose daily/cumulative report에서 comparable outcome과 source-quality gate를 확인한다.
+
 - [x] `[KiwoomAuth8005PidHandoff0805] 8005 graceful 재기동 후 이전 PID 로그 중복경보 귀속 보완` (`Due: 2026-08-05`, `Slot: PREOPEN`, `TimeWindow: 08:48~09:00`, `Track: RuntimeStability`)
   - Source: [kiwoom_auth_8005_restart.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/kiwoom_auth_8005_restart.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 최초 fresh 8005는 기존처럼 token cache invalidation과 `restart.flag`를 수행한다. 새 PID 시작 전에 이전 PID가 남긴 timestamped 8005는 PID handoff provenance로 소비하고 중복 cache invalidation·Telegram·restart를 만들지 않으며, timestamp 결손 또는 새 PID 시작 이후 8005는 계속 actionable이어야 한다.
@@ -93,7 +107,7 @@
 
 - [ ] `[RuntimeEnvIntradayObserve0805] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-08-05`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-08-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-08-04.json)
-  - 판정 기준: selected_families=entry_split_order_plan, scale_in_split_order_plan, score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, ai_watching_score_smoothing_report_only, lifecycle_decision_matrix_runtime, scalping_pyramid_quality_gate, holding_decision_context_v1, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, entry_opportunity_recheck_runtime, weak_context_late_entry_guard_runtime, rising_missed_normal_buy_bridge, persistent_operator_overrides_2026_06_26가 runtime event provenance에 찍히는지 확인한다.
+  - 판정 기준: 전일 postclose `selected_families`는 candidate inventory이므로 실제 runtime 선택으로 간주하지 않는다. 당일 PREOPEN runtime env와 실행 PID env가 함께 선택한 family만 runtime event provenance에 찍히는지 확인하고, retired `ai_watching_score_smoothing_report_only`는 runtime 관찰 대상으로 요구하지 않는다.
   - 금지: 관찰 결과만으로 장중 runtime을 변경하지 않는다. 사용자 명시 override는 fresh/conflict-free source, 단일 blocker 인과, 기존 bounded_tunable 단일 축, rollback과 즉시 attribution 계약을 모두 충족해야 한다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
 

@@ -81,6 +81,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "assumed_fill_price",
     "avg_down_count",
     "blocked_reason",
+    "below_ratio",
     "broker_order_forbidden",
     "broker_qty_cap",
     "budget_authority",
@@ -94,6 +95,9 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "cash_orderable_qty_cap",
     "chosen_action",
     "confirmation_elapsed_sec",
+    "composite_micro_supported",
+    "counterfactual_executable_sell_price",
+    "counterfactual_profit_rate",
     "conditional_1tick_real_override_applied",
     "conditional_1tick_real_override_context",
     "conditional_1tick_real_override_reason",
@@ -109,6 +113,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "formula_version",
     "eligible_actions",
     "emergency_pct",
+    "elapsed_sec",
     "entry_ai_price_ofi_regime",
     "entry_order_lifecycle",
     "entry_passive_probe_applied",
@@ -117,9 +122,14 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "exclusion_reason",
     "exit_decision_source",
     "exit_rule",
+    "final_flow_action",
     "force_reason",
     "held_sec",
     "hold_ok",
+    "holding_flow_ofi_micro_score_raw",
+    "holding_flow_ofi_micro_score_smooth",
+    "holding_flow_ofi_regime",
+    "holding_flow_ofi_usable",
     "last_add_type",
     "latest_strength",
     "latest_price",
@@ -140,9 +150,22 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "qty_source",
     "pre_cap_qty",
     "ratio",
+    "raw_flow_action",
     "reference_time",
     "reference_price",
     "reason",
+    "recheck_contract_version",
+    "recheck_deadline_lag_sec",
+    "recheck_elapsed_sec",
+    "recheck_id",
+    "recheck_invoker",
+    "recheck_lane",
+    "recheck_max_profit_rate",
+    "recheck_min_profit_rate",
+    "recheck_position_key",
+    "recheck_profit_delta_pct",
+    "recheck_state",
+    "recheck_ttl_sec",
     "rejected_actions",
     "resolved_price_vs_curr_bps",
     "resolved_vs_curr_bps",
@@ -160,10 +183,12 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "sim_record_id",
     "simulation_book",
     "smoothing_action",
+    "second_extension_forbidden",
     "spread_bps",
     "spread_ratio",
     "source_count",
     "source_signature",
+    "soft_stop_pct",
     "signal_price",
     "strategy",
     "submitted_leg_count",
@@ -8527,6 +8552,211 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
     }
 
 
+def _build_trailing_continuation_recheck_attribution(
+    events: list[dict],
+) -> dict[str, Any]:
+    recheck_events = _events_for_stage(events, "scalp_trailing_continuation_recheck")
+    armed = [
+        event
+        for event in recheck_events
+        if str(_event_fields(event).get("recheck_state") or "") == "armed"
+    ]
+    terminal = [
+        event
+        for event in recheck_events
+        if str(_event_fields(event).get("recheck_state") or "")
+        in {"ttl_expired", "vetoed"}
+    ]
+    second_extension_blocked = [
+        event
+        for event in recheck_events
+        if str(_event_fields(event).get("recheck_state") or "")
+        == "second_extension_blocked"
+    ]
+
+    def position_key(event: dict) -> str:
+        fields = _event_fields(event)
+        explicit = str(fields.get("recheck_position_key") or "").strip()
+        if explicit and explicit != "-":
+            return explicit
+        record_id = event.get("record_id")
+        if record_id not in (None, "", "-"):
+            return f"record:{record_id}"
+        return f"unattributed:{event.get('stock_code') or '-'}"
+
+    arms_by_position: dict[str, list[dict]] = defaultdict(list)
+    for event in armed:
+        arms_by_position[position_key(event)].append(event)
+    one_shot_violation_keys = sorted(
+        key
+        for key, rows in arms_by_position.items()
+        if not key.startswith("unattributed:") and len(rows) > 1
+    )
+    one_shot_violation_key_set = set(one_shot_violation_keys)
+
+    terminal_by_recheck_id: dict[str, dict] = {}
+    for event in sorted(terminal, key=lambda row: str(row.get("emitted_at") or "")):
+        recheck_id = str(_event_fields(event).get("recheck_id") or "").strip()
+        if recheck_id and recheck_id != "-":
+            terminal_by_recheck_id[recheck_id] = event
+
+    completed_by_record: dict[str, list[dict]] = defaultdict(list)
+    for event in _events_for_stage(events, "sell_completed"):
+        record_id = str(event.get("record_id") or "").strip()
+        profit_rate = _safe_float(_event_fields(event).get("profit_rate"), None)
+        if record_id and profit_rate is not None:
+            completed_by_record[record_id].append(event)
+    for rows in completed_by_record.values():
+        rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
+
+    outcome_rows: list[dict[str, Any]] = []
+    comparable_deltas: list[float] = []
+    counterfactual_values: list[float] = []
+    actual_values: list[float] = []
+    for arm in sorted(armed, key=lambda row: str(row.get("emitted_at") or "")):
+        fields = _event_fields(arm)
+        key = position_key(arm)
+        record_id = str(arm.get("record_id") or "").strip()
+        recheck_id = str(fields.get("recheck_id") or "").strip()
+        counterfactual_profit = _safe_float(
+            fields.get("counterfactual_profit_rate"),
+            _safe_float(fields.get("profit_rate"), None),
+        )
+        counterfactual_sell_price = _safe_int(
+            fields.get("counterfactual_executable_sell_price"), 0
+        )
+        completed = None
+        arm_at = str(arm.get("emitted_at") or "")
+        for candidate in completed_by_record.get(record_id, []):
+            if not arm_at or str(candidate.get("emitted_at") or "") >= arm_at:
+                completed = candidate
+                break
+        actual_profit = (
+            _safe_float(_event_fields(completed).get("profit_rate"), None)
+            if completed is not None
+            else None
+        )
+        terminal_event = terminal_by_recheck_id.get(recheck_id)
+        terminal_fields = _event_fields(terminal_event) if terminal_event else {}
+        exclusion_reason = None
+        if key in one_shot_violation_key_set:
+            exclusion_reason = "one_shot_contract_violation"
+        elif not record_id:
+            exclusion_reason = "record_id_missing"
+        elif counterfactual_profit is None:
+            exclusion_reason = "counterfactual_profit_missing"
+        elif counterfactual_sell_price <= 0:
+            exclusion_reason = "counterfactual_executable_sell_price_missing"
+        elif actual_profit is None:
+            exclusion_reason = "completed_valid_profit_pending"
+        profit_delta = (
+            float(actual_profit) - float(counterfactual_profit)
+            if exclusion_reason is None
+            else None
+        )
+        if profit_delta is not None:
+            comparable_deltas.append(profit_delta)
+            counterfactual_values.append(float(counterfactual_profit))
+            actual_values.append(float(actual_profit))
+        outcome_rows.append(
+            {
+                "recheck_id": recheck_id or None,
+                "recheck_position_key": key,
+                "record_id": arm.get("record_id"),
+                "stock_code": arm.get("stock_code"),
+                "armed_at": arm.get("emitted_at"),
+                "lane": fields.get("recheck_lane"),
+                "invoker": fields.get("recheck_invoker"),
+                "terminal_state": (
+                    terminal_fields.get("recheck_state") if terminal_event else None
+                ),
+                "deadline_lag_sec": _safe_float(
+                    terminal_fields.get("recheck_deadline_lag_sec"), None
+                ),
+                "counterfactual_executable_sell_price": counterfactual_sell_price,
+                "counterfactual_profit_rate": counterfactual_profit,
+                "actual_completed_profit_rate": actual_profit,
+                "profit_delta_pct": (
+                    round(profit_delta, 4) if profit_delta is not None else None
+                ),
+                "outcome_status": (
+                    "comparable" if exclusion_reason is None else "excluded"
+                ),
+                "exclusion_reason": exclusion_reason,
+            }
+        )
+
+    deadline_lags = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("recheck_deadline_lag_sec"), None)
+            for event in terminal
+        )
+        if value is not None
+    ]
+    source_quality_adjusted_ev = (
+        round(_avg(comparable_deltas) or 0.0, 4) if comparable_deltas else None
+    )
+    return {
+        "schema": "scalp_trailing_continuation_recheck_outcome_v1",
+        "metric_role": "primary_ev",
+        "decision_authority": "postclose_attribution_only_no_runtime_change",
+        "window_policy": "clean_baseline_daily_then_rolling_cumulative",
+        "sample_floor": 20,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "one_arm_per_position_with_record_id_executable_counterfactual_price_"
+            "and_completed_valid_profit_rate"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "standalone_live_promotion|second_extension|hard_protect_emergency_stop_bypass|"
+            "stale_quote_bypass|broker_guard_bypass|provider_route_change|quantity_cap_change|bot_restart"
+        ),
+        "armed_count": len(armed),
+        "terminal_count": len(terminal),
+        "second_extension_blocked_count": len(second_extension_blocked),
+        "one_shot_violation_count": len(one_shot_violation_keys),
+        "one_shot_violation_position_keys": one_shot_violation_keys[:20],
+        "comparable_outcome_count": len(comparable_deltas),
+        "pending_or_excluded_outcome_count": len(outcome_rows) - len(comparable_deltas),
+        "counterfactual_immediate_exit": {
+            "equal_weight_avg_profit_pct": (
+                round(_avg(counterfactual_values) or 0.0, 4)
+                if counterfactual_values
+                else None
+            )
+        },
+        "actual_post_recheck_exit": {
+            "equal_weight_avg_profit_pct": (
+                round(_avg(actual_values) or 0.0, 4) if actual_values else None
+            )
+        },
+        "source_quality_adjusted_ev_pct": source_quality_adjusted_ev,
+        "downside": {
+            "counterfactual_severe_tail_count": sum(
+                value <= -2.0 for value in counterfactual_values
+            ),
+            "actual_severe_tail_count": sum(value <= -2.0 for value in actual_values),
+            "profit_delta_p10_pct": (
+                round(_percentile(comparable_deltas, 10, 0.0), 4)
+                if comparable_deltas
+                else None
+            ),
+        },
+        "deadline": {
+            "terminal_with_positive_lag_count": sum(
+                value > 0 for value in deadline_lags
+            ),
+            "max_lag_sec": round(max(deadline_lags), 3) if deadline_lags else None,
+        },
+        "rows": outcome_rows[:100],
+    }
+
+
 def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
     current = {
         "start_pct": float(
@@ -8677,6 +8907,7 @@ def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
     recommended_weak = _clamp(
         _percentile(drawdown_values, 60, current["weak_limit"]), 0.4, 0.8
     )
+    recheck_attribution = _build_trailing_continuation_recheck_attribution(events)
     return {
         "family": "scalp_trailing_take_profit",
         "stage": "holding_exit",
@@ -8702,7 +8933,12 @@ def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
             "pyramid_executed": pyramid_executed,
             "borderline_examples": borderline_examples,
             "strong_ai_boundary_examples": strong_ai_boundary_examples,
+            "continuation_recheck_armed": recheck_attribution["armed_count"],
+            "continuation_recheck_comparable_outcome": recheck_attribution[
+                "comparable_outcome_count"
+            ],
         },
+        "continuation_recheck_attribution": recheck_attribution,
         "apply_ready": sample_ready,
         "current": current,
         "recommended": {
@@ -8716,6 +8952,7 @@ def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
             "weak_borderline은 현행 weak limit 근처에서 잘린 표본이며, missed-upside와 연결되기 전에는 live 변경 근거가 아니다.",
             "would_hold_if_weak_limit_plus_10bp는 +0.10%p 완화 시 같은 tick에서 청산되지 않았을 후보 수다.",
             "would_hold_if_strong_ai_score_relaxed_5pt는 AI strong 경계 5점 이내에서 strong limit를 적용했다면 같은 tick 청산이 보류됐을 후보 수다.",
+            "continuation recheck EV는 동일 포지션 one-shot과 completed valid profit_rate가 모두 연결된 행만 사용한다.",
         ],
     }
 
@@ -8771,6 +9008,93 @@ def _build_soft_stop_family(events: list[dict]) -> dict:
             "rebound/missed-upside 연결이 없으면 grace_sec 추천은 direction-only로 본다.",
             "holding_exit stage는 same-day 다른 live owner와 동시 적용 금지다.",
         ],
+    }
+
+
+def _build_soft_stop_confirmation_counterfactual_grid(
+    grace_touches: list[dict],
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for event in grace_touches:
+        record_id = str(event.get("record_id") or "").strip()
+        if record_id:
+            grouped[record_id].append(event)
+    for rows in grouped.values():
+        rows.sort(
+            key=lambda row: (
+                _safe_float(_event_fields(row).get("elapsed_sec"), 0.0) or 0.0
+            )
+        )
+
+    candidates: list[dict[str, Any]] = []
+    for confirm_sec in (20, 40, 60, 90):
+        for max_worsen_pct in (0.20, 0.30, 0.40, 0.60):
+            reached_confirmation = 0
+            survived_worsen_cap = 0
+            recovered_above_soft_stop = 0
+            for rows in grouped.values():
+                observations = [
+                    (
+                        _safe_float(_event_fields(row).get("elapsed_sec"), None),
+                        _safe_float(_event_fields(row).get("profit_rate"), None),
+                        _safe_float(_event_fields(row).get("soft_stop_pct"), None),
+                    )
+                    for row in rows
+                ]
+                observations = [
+                    item
+                    for item in observations
+                    if item[0] is not None and item[1] is not None
+                ]
+                if not observations:
+                    continue
+                at_or_after = [item for item in observations if item[0] >= confirm_sec]
+                if not at_or_after:
+                    continue
+                reached_confirmation += 1
+                anchor_profit = float(observations[0][1])
+                through_confirmation = [
+                    float(item[1]) for item in observations if item[0] <= confirm_sec
+                ]
+                if through_confirmation and min(through_confirmation) >= (
+                    anchor_profit - max_worsen_pct
+                ):
+                    survived_worsen_cap += 1
+                if any(
+                    item[2] is not None and float(item[1]) >= float(item[2])
+                    for item in at_or_after
+                ):
+                    recovered_above_soft_stop += 1
+            candidates.append(
+                {
+                    "confirm_sec": confirm_sec,
+                    "max_worsen_pct": max_worsen_pct,
+                    "position_count": len(grouped),
+                    "reached_confirmation_count": reached_confirmation,
+                    "survived_worsen_cap_count": survived_worsen_cap,
+                    "recovered_above_soft_stop_count": recovered_above_soft_stop,
+                    "source_quality_adjusted_ev_pct": None,
+                }
+            )
+    return {
+        "schema": "soft_stop_confirmation_counterfactual_grid_v1",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "source_only_counterfactual_no_runtime_change",
+        "window_policy": "daily_path_then_clean_baseline_rolling_post_sell_outcome",
+        "sample_floor": 10,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "record_linked_soft_stop_path_and_post_sell_outcome",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "live_enablement|hard_protect_emergency_stop_delay|standalone_exit_change|"
+            "provider_route_change|quantity_cap_change|bot_restart"
+        ),
+        "candidate_count": len(candidates),
+        "forward_outcome_status": "pending_post_sell_cost_adjusted_ev_join",
+        "candidates": candidates,
     }
 
 
@@ -8836,6 +9160,9 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
         CALIBRATION_FAMILY_METADATA["soft_stop_whipsaw_confirmation"]["sample_floor"]
     )
     sample_ready = len(grace_touches) >= sample_floor
+    counterfactual_grid = _build_soft_stop_confirmation_counterfactual_grid(
+        grace_touches
+    )
     recommended_confirm_sec = int(
         round(_clamp(_percentile(confirmation_elapsed_values, 75, 60.0), 20.0, 120.0))
     )
@@ -8873,13 +9200,78 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
             "buffer_pct": current["buffer_pct"],
             "max_worsen_pct": recommended_max_worsen,
         },
+        "counterfactual_exploration": counterfactual_grid,
         "apply_mode": "calibrated_apply_candidate" if sample_ready else "observe_only",
         "notes": [
             "첫 live calibration family 후보이며 장중 자동 mutation 없이 다음 장전 1회 적용 단위로만 다룬다.",
             "조건 미달은 rollback이 아니라 calibration trigger로 기록한다.",
             "hard/protect/emergency stop, 주문 실패, provenance 손상, same-stage owner 충돌은 safety guard로 우선한다.",
             "GOOD_EXIT 훼손은 +10%p까지 허용하고 soft-stop tail 또는 MISSED_UPSIDE 감소가 있으면 완만 조정/유지 대상이다.",
+            "OFF 상태에서도 record-linked grace path를 report-only duration/worsen grid로 평가해 유효 후보 노출을 수집한다.",
         ],
+    }
+
+
+def _build_protect_trailing_counterfactual_grid(
+    candidate_events: list[dict],
+) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    for min_span_sec in (5, 8, 12):
+        for min_samples in (3, 4, 5):
+            for below_ratio in (0.60, 0.67, 0.75):
+                exposure_count = 0
+                for event in candidate_events:
+                    fields = _event_fields(event)
+                    span = _safe_float(fields.get("sample_span_sec"), None)
+                    sample_count = _safe_int(fields.get("sample_count"), 0)
+                    observed_below_ratio = _safe_float(fields.get("below_ratio"), None)
+                    if (
+                        span is not None
+                        and observed_below_ratio is not None
+                        and span >= min_span_sec
+                        and sample_count >= min_samples
+                        and observed_below_ratio >= below_ratio
+                    ):
+                        exposure_count += 1
+                candidates.append(
+                    {
+                        "min_span_sec": min_span_sec,
+                        "min_samples": min_samples,
+                        "below_ratio": below_ratio,
+                        "candidate_exposure_count": exposure_count,
+                        "source_quality_adjusted_ev_pct": None,
+                    }
+                )
+    candidates.sort(
+        key=lambda row: (
+            -int(row["candidate_exposure_count"]),
+            int(row["min_span_sec"]),
+            int(row["min_samples"]),
+            float(row["below_ratio"]),
+        )
+    )
+    return {
+        "schema": "protect_trailing_smoothing_counterfactual_grid_v1",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "source_only_counterfactual_no_runtime_change",
+        "window_policy": "daily_exposure_then_clean_baseline_rolling_exit_outcome",
+        "sample_floor": 20,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "complete_smoothing_window_and_completed_valid_profit",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "live_parameter_apply|hard_protect_emergency_stop_delay|standalone_exit_change|"
+            "provider_route_change|quantity_cap_change|bot_restart"
+        ),
+        "candidate_count": len(candidates),
+        "candidate_with_exposure_count": sum(
+            int(row["candidate_exposure_count"]) > 0 for row in candidates
+        ),
+        "forward_outcome_status": "pending_completed_cost_adjusted_ev_join",
+        "candidates": candidates,
     }
 
 
@@ -8955,6 +9347,7 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
     emergency_values = [v for v in emergency_values if v is not None]
     profit_values = [v for v in profit_values if v is not None]
     sample_ready = len(candidate_events) >= 20 and (len(confirmed) + len(holds)) >= 20
+    counterfactual_grid = _build_protect_trailing_counterfactual_grid(candidate_events)
     recommended = {
         "window_sec": int(
             round(
@@ -9007,6 +9400,7 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
         "apply_ready": False,
         "current": current,
         "recommended": recommended,
+        "counterfactual_exploration": counterfactual_grid,
         "apply_mode": "report_only_calibration",
         "notes": [
             "protect_trailing confirmation guard는 기존 런타임에 적용되어 있고, 여기의 apply_mode는 guard ON/OFF가 아니라 파라미터 조정 권한만 뜻한다.",
@@ -9014,7 +9408,110 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
             "emergency_pct 이탈은 평탄화 대상이 아니므로 별도 safety로 유지한다.",
             "표본 준비와 EV edge 준비를 분리하며, holding-exit source의 eligible_for_live_review가 false이면 apply 후보를 만들지 않는다.",
             "sample floor 미달이면 추천값은 direction-only이며 리노공업 단일 케이스로 live 재조정하지 않는다.",
+            "직접 이벤트가 적어도 report-only parameter grid에서 exposure를 계산하고 EV join 전에는 live 권한을 열지 않는다.",
         ],
+    }
+
+
+def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for event in applied:
+        fields = _event_fields(event)
+        usable = str(fields.get("holding_flow_ofi_usable") or "").strip().lower()
+        raw_score = _safe_float(fields.get("holding_flow_ofi_micro_score_raw"), None)
+        if usable not in {"true", "1", "yes"} or raw_score is None:
+            continue
+        record_id = str(event.get("record_id") or "").strip()
+        key = record_id or f"stock:{event.get('stock_code') or '-'}"
+        grouped[key].append(event)
+    for rows in grouped.values():
+        rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
+
+    candidates: list[dict[str, Any]] = []
+    for raw_weight in (0.30, 0.50, 0.70):
+        for threshold in (0.10, 0.20, 0.30, 0.45):
+            for persistence in (1, 2):
+                debounce_count = 0
+                confirm_count = 0
+                observed_count = 0
+                for rows in grouped.values():
+                    smooth = 0.0
+                    bullish_count = 0
+                    bearish_count = 0
+                    for event in rows:
+                        fields = _event_fields(event)
+                        raw_score = _safe_float(
+                            fields.get("holding_flow_ofi_micro_score_raw"), None
+                        )
+                        if raw_score is None:
+                            continue
+                        observed_count += 1
+                        smooth = (smooth * (1.0 - raw_weight)) + (
+                            float(raw_score) * raw_weight
+                        )
+                        bullish_count = bullish_count + 1 if smooth >= threshold else 0
+                        bearish_count = bearish_count + 1 if smooth <= -threshold else 0
+                        raw_action = str(
+                            fields.get("raw_flow_action")
+                            or fields.get("raw_action")
+                            or ""
+                        ).upper()
+                        worsen = (
+                            _safe_float(fields.get("worsen_from_candidate"), 0.0) or 0.0
+                        )
+                        if raw_action == "EXIT" and bullish_count >= persistence:
+                            debounce_count += 1
+                        elif (
+                            raw_action in {"HOLD", "TRIM"}
+                            and bearish_count >= persistence
+                            and worsen >= 0.30
+                        ):
+                            confirm_count += 1
+                candidates.append(
+                    {
+                        "raw_weight": raw_weight,
+                        "bullish_threshold": threshold,
+                        "bearish_threshold": -threshold,
+                        "persistence_required": persistence,
+                        "observed_count": observed_count,
+                        "would_debounce_exit_count": debounce_count,
+                        "would_confirm_exit_count": confirm_count,
+                        "effective_transition_exposure_count": (
+                            debounce_count + confirm_count
+                        ),
+                        "source_quality_adjusted_ev_pct": None,
+                    }
+                )
+    candidates.sort(
+        key=lambda row: (
+            -int(row["effective_transition_exposure_count"]),
+            int(row["persistence_required"]),
+            float(row["bullish_threshold"]),
+            -float(row["raw_weight"]),
+        )
+    )
+    return {
+        "schema": "holding_flow_ofi_counterfactual_grid_v1",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "source_only_counterfactual_no_runtime_change",
+        "window_policy": "daily_exposure_then_clean_baseline_rolling_outcome",
+        "sample_floor": 20,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "usable_ofi_raw_score_and_exact_forward_outcome",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "live_threshold_mutation|standalone_exit_change|hard_safety_bypass|"
+            "provider_route_change|quantity_cap_change|bot_restart"
+        ),
+        "candidate_count": len(candidates),
+        "candidate_with_exposure_count": sum(
+            int(row["effective_transition_exposure_count"]) > 0 for row in candidates
+        ),
+        "forward_outcome_status": "pending_exact_mature_outcome_join",
+        "candidates": candidates,
     }
 
 
@@ -9109,6 +9606,7 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         ),
     }
     recommended = dict(current)
+    counterfactual_grid = _build_ofi_action_counterfactual_grid(applied)
     return {
         "family": "holding_flow_ofi_smoothing",
         "stage": "holding_exit",
@@ -9152,12 +9650,14 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
+        "counterfactual_exploration": counterfactual_grid,
         "apply_mode": "manifest_only" if sample_ready else "observe_only",
         "notes": [
             "hard/protect/order safety, max_defer_sec, worsen_floor는 OFI보다 우선한다.",
             "GOOD_EXIT/MISSED_UPSIDE 판정은 sell_completed + valid profit_rate 연결 표본으로만 사후 확인한다.",
             "추천값은 daily + rolling 방향 일치와 family sample floor가 맞을 때만 manifest 후보로 산출한다.",
             "ThresholdOpsTransition0506 전에는 runtime threshold mutation을 열지 않는다.",
+            "자연 유효 전환만 기다리지 않고 raw OFI sequence에 report-only threshold/weight/persistence grid를 적용한다.",
         ],
     }
 
@@ -14665,6 +15165,14 @@ def _threshold_snapshot_from_families(
                 if "cumulative_judgment_quality" in family
                 else {}
             ),
+            **{
+                key: family[key]
+                for key in (
+                    "counterfactual_exploration",
+                    "continuation_recheck_attribution",
+                )
+                if key in family
+            },
         }
         if report_only:
             payload["daily_family_apply_mode"] = family.get("apply_mode")
@@ -15145,6 +15653,14 @@ def build_daily_threshold_cycle_report(
                 if "cumulative_judgment_quality" in family
                 else {}
             ),
+            **{
+                key: family[key]
+                for key in (
+                    "counterfactual_exploration",
+                    "continuation_recheck_attribution",
+                )
+                if key in family
+            },
         }
         for family in families
     }

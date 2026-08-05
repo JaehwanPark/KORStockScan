@@ -4337,6 +4337,23 @@ def _row_contract_violations(
 
 
 def _conditional_required_fields(stage: str, fields: dict[str, Any]) -> tuple[str, ...]:
+    if stage == "scalp_trailing_continuation_recheck":
+        if (
+            str(fields.get("recheck_contract_version") or "").strip()
+            == "bounded_one_shot_attribution_v2"
+        ):
+            return (
+                "recheck_id",
+                "recheck_position_key",
+                "counterfactual_profit_rate",
+                "counterfactual_executable_sell_price",
+                "recheck_min_profit_rate",
+                "recheck_max_profit_rate",
+                "recheck_profit_delta_pct",
+                "recheck_deadline_lag_sec",
+                "second_extension_forbidden",
+            )
+        return ()
     if stage == "shallow_source_gap_recheck":
         if str(fields.get("recheck_state") or "").strip().lower() == "recovered":
             return (
