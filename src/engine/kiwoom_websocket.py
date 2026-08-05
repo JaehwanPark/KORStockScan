@@ -1988,6 +1988,7 @@ class KiwoomWSManager:
         try:
             from src.utils import kiwoom_utils
 
+            previous_token = self.token
             new_token = kiwoom_utils.get_kiwoom_token(self.conf, force_refresh=True)
         except Exception as e:
             log_error(f"❌ [WS TOKEN 재발급] 예외: {e}")
@@ -1999,6 +2000,11 @@ class KiwoomWSManager:
             log_error("❌ [WS TOKEN 재발급] 실패")
             return False
 
+        kiwoom_utils.register_kiwoom_token_replacement(
+            previous_token,
+            new_token,
+            source="websocket_auth_refresh",
+        )
         self.token = new_token
         print("✅ [WS TOKEN 재발급] 성공. 새 토큰으로 재접속합니다.")
         return True

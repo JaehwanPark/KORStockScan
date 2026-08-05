@@ -2363,6 +2363,43 @@ def test_read_only_client_blocks_non_market_data_before_network_call():
         raise AssertionError("account request was not blocked")
 
 
+def test_read_only_client_uses_registered_token_handoff(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "kiwoom_token_cache.json")
+    )
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"return_code": 0, "cur_prc": "10000"}
+
+    class Session:
+        def __init__(self):
+            self.headers = []
+
+        def post(self, *args, **kwargs):
+            self.headers.append(dict(kwargs.get("headers") or {}))
+            return Response()
+
+    advisory.kiwoom_utils.register_kiwoom_token_replacement(
+        "STARTUP_TOKEN", "FRESH_TOKEN", source="test"
+    )
+    session = Session()
+    client = advisory.KiwoomReadOnlyClient("STARTUP_TOKEN", session=session)
+
+    result = client.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": "005930"})
+
+    assert result["cur_prc"] == "10000"
+    assert client.token == "FRESH_TOKEN"
+    assert session.headers[0]["authorization"] == "Bearer FRESH_TOKEN"
+
+
 def test_collector_local_request_budget_reserves_mandatory_quote_and_bbo_calls():
     budget = advisory.ReadOnlyRequestBudget(max_requests_per_minute=4)
 

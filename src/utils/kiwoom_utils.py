@@ -29,6 +29,8 @@ from src.utils.constants import (
 _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
 _KIWOOM_TOKEN_PROCESS_LOCK = threading.RLock()
+_KIWOOM_TOKEN_REPLACEMENTS = {}
+_KIWOOM_TOKEN_REPLACEMENT_LIMIT = 64
 _SCANNER_CODE_NAMESPACE_BLOCK_LOGGED = set()
 KIWOOM_CONNECT_TIMEOUT_SEC = float(os.getenv("KIWOOM_CONNECT_TIMEOUT_SEC", "5"))
 KIWOOM_READ_TIMEOUT_SEC = float(os.getenv("KIWOOM_READ_TIMEOUT_SEC", "20"))
@@ -110,6 +112,82 @@ def _token_preview(token: str | None) -> str:
     if len(token_str) <= 12:
         return "***"
     return f"{token_str[:6]}...{token_str[-6:]}"
+
+
+def _normalize_kiwoom_token(token: str | None) -> str:
+    return str(token or "").replace("Bearer ", "").strip()
+
+
+def _kiwoom_token_replacement_scope() -> str:
+    """Scope in-process token handoffs to the configured shared-cache path."""
+    return str(_kiwoom_token_cache_path().expanduser().resolve())
+
+
+def register_kiwoom_token_replacement(
+    failed_token: str | None,
+    replacement_token: str | None,
+    *,
+    source: str,
+) -> bool:
+    """Remember a one-way token handoff for long-lived runtime consumers.
+
+    Several runtime modules receive a token once during startup.  A successful
+    auth retry must therefore update more than the local request; otherwise the
+    next request starts with the same rejected token and emits another 8005.
+    The mapping is process-local, cache-path scoped, bounded, and never changes
+    the one-retry limit or issues a token by itself.
+    """
+    failed = _normalize_kiwoom_token(failed_token)
+    replacement = _normalize_kiwoom_token(replacement_token)
+    if not failed or not replacement or failed == replacement:
+        return False
+
+    scope = _kiwoom_token_replacement_scope()
+    with _KIWOOM_TOKEN_PROCESS_LOCK:
+        # Collapse a short replacement chain so all old startup references
+        # converge directly on the newest known token.
+        current = replacement
+        seen = {failed}
+        for _ in range(8):
+            next_token = _KIWOOM_TOKEN_REPLACEMENTS.get((scope, current))
+            if not next_token or next_token in seen:
+                break
+            seen.add(current)
+            current = next_token
+        replacement = current
+
+        for key, value in list(_KIWOOM_TOKEN_REPLACEMENTS.items()):
+            if key[0] == scope and value == failed:
+                _KIWOOM_TOKEN_REPLACEMENTS[key] = replacement
+        _KIWOOM_TOKEN_REPLACEMENTS[(scope, failed)] = replacement
+        while len(_KIWOOM_TOKEN_REPLACEMENTS) > _KIWOOM_TOKEN_REPLACEMENT_LIMIT:
+            _KIWOOM_TOKEN_REPLACEMENTS.pop(next(iter(_KIWOOM_TOKEN_REPLACEMENTS)))
+
+    log_info(
+        "🔐 [TOKEN HANDOFF] 장수 caller token을 갱신 token으로 연결 "
+        f"(source={source}, failed={_token_preview(failed)}, "
+        f"replacement={_token_preview(replacement)})"
+    )
+    return True
+
+
+def resolve_kiwoom_request_token(token: str | None) -> str:
+    """Resolve a stale startup token to the latest in-process handoff target."""
+    active = _normalize_kiwoom_token(token)
+    if not active:
+        return active
+    scope = _kiwoom_token_replacement_scope()
+    with _KIWOOM_TOKEN_PROCESS_LOCK:
+        seen = set()
+        for _ in range(8):
+            if active in seen:
+                break
+            seen.add(active)
+            replacement = _KIWOOM_TOKEN_REPLACEMENTS.get((scope, active))
+            if not replacement:
+                break
+            active = replacement
+    return active
 
 
 def _json_load_path(path: Path) -> dict:
@@ -302,7 +380,6 @@ def get_kiwoom_token_after_auth_failure(
     reason_prefix: str = "api_8005_retry",
 ) -> str | None:
     """Refresh after 8005 without deleting a newer token another thread already issued."""
-    reason = f"api_8005_retry:{api_id}"
     try:
         config = None
         target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
@@ -321,6 +398,11 @@ def get_kiwoom_token_after_auth_failure(
                         f"🔐 [{api_id}] 8005 감지 후 이미 갱신된 Kiwoom token 캐시 재사용 "
                         f"(failed={_token_preview(failed)}, cached={_token_preview(cached)})"
                     )
+                    register_kiwoom_token_replacement(
+                        failed,
+                        cached,
+                        source=f"{reason_prefix}:{api_id}:shared_cache",
+                    )
                     return cached
                 _invalidate_kiwoom_token_cache_unlocked(
                     _kiwoom_token_cache_path(),
@@ -334,6 +416,11 @@ def get_kiwoom_token_after_auth_failure(
         log_error(f"❌ [{api_id}] 8005 감지 후 Kiwoom token force refresh 예외: {exc}")
         return None
     if refreshed:
+        register_kiwoom_token_replacement(
+            failed,
+            refreshed,
+            source=f"{reason_prefix}:{api_id}:force_refresh",
+        )
         log_info(
             f"🔐 [{api_id}] 8005 감지 후 Kiwoom token force refresh 성공 (1회 retry 예정)"
         )
@@ -3837,7 +3924,7 @@ def fetch_kiwoom_api_continuous(
     meta = _empty_kiwoom_source_meta(api_id)
     cont_yn = "N"
     next_key = ""
-    active_token = token
+    active_token = resolve_kiwoom_request_token(token)
     auth_retry_used = False
 
     while True:

@@ -2644,11 +2644,14 @@ class KiwoomReadOnlyClient:
             raise RuntimeError(f"forbidden_widget_kiwoom_request:{api_id}:{path}")
         if self.budget is not None:
             self.budget.acquire(optional=optional)
+        active_token = kiwoom_utils.resolve_kiwoom_request_token(self.token)
+        if active_token:
+            self.token = active_token
         response = self.session.post(
             kiwoom_utils.get_api_url(path),
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
-                "authorization": f"Bearer {self.token}",
+                "authorization": f"Bearer {active_token}",
                 "api-id": api_id,
             },
             json=payload,

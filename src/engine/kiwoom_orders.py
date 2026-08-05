@@ -1,5 +1,4 @@
 import requests
-import json
 import re
 import threading
 import time
@@ -200,6 +199,12 @@ def _parse_kiwoom_amount(value, *, field_name):
 def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
     """POST once, then refresh token and retry once only for Kiwoom auth/token failures."""
     active_headers = dict(headers or {})
+    provided_token = (
+        str(active_headers.get("authorization") or "").replace("Bearer ", "").strip()
+    )
+    resolved_token = kiwoom_utils.resolve_kiwoom_request_token(provided_token)
+    if resolved_token and resolved_token != provided_token:
+        active_headers["authorization"] = f"Bearer {resolved_token}"
     response = requests.post(url, headers=active_headers, json=payload, timeout=timeout)
     try:
         data = response.json()
