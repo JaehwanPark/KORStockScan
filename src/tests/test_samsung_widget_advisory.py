@@ -839,6 +839,36 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
     )
 
 
+def test_recovery_episode_ignores_forming_price_only_resistance_touch():
+    start = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
+    filter_ = advisory.AdvisoryRecoveryEpisodeFilter()
+    filter_.apply(
+        _recovery_episode_advisory(start, volume_confirmed=True, current_price=245_500),
+        current_price=245_500,
+        bbo={"best_bid": 245_500, "best_ask": 246_000},
+        latest_bar=advisory.MinuteBar(
+            "20260805103000", 245_000, 246_000, 244_500, 245_750, 77_843
+        ),
+    )
+
+    forming_touch = filter_.apply(
+        _recovery_episode_advisory(
+            start + timedelta(minutes=1),
+            volume_confirmed=True,
+            current_price=246_500,
+        ),
+        current_price=246_500,
+        bbo={"best_bid": 246_000, "best_ask": 246_500},
+        latest_bar=advisory.MinuteBar(
+            "20260805103100", 245_500, 246_000, 245_000, 245_500, 70_000
+        ),
+    )
+
+    assert forming_touch["state"] == "WATCH"
+    assert forming_touch["recovery_continuity"]["armed"] is True
+    assert forming_touch["recovery_continuity"]["reclaimed_bar"] is None
+
+
 def test_recovery_episode_does_not_bypass_source_quality():
     start = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
     filter_ = advisory.AdvisoryRecoveryEpisodeFilter()

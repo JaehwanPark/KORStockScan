@@ -2023,9 +2023,10 @@ class AdvisoryRecoveryEpisodeFilter:
 
         if self._support and self._resistance:
             arm_age = self._bars_between(self._volume_evidence_bar, bar_source_time)
-            reclaim_seen = bool(
-                completed_close >= self._resistance or current_price >= self._resistance
-            )
+            # Recovery continuity is completed-bar evidence. A forming quote may
+            # touch resistance and reverse before the minute closes, so it must
+            # not start the pullback window by itself.
+            reclaim_seen = completed_close >= self._resistance
             if (
                 not self._reclaimed_bar
                 and reclaim_seen
