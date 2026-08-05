@@ -123,6 +123,29 @@ def test_notify_monitor_snapshot_admin_builds_skipped_message():
     assert "lock_file: tmp/run_monitor_snapshot.lock" in message
 
 
+def test_notify_monitor_snapshot_admin_excludes_stage_metrics_from_count():
+    message = _build_message(
+        {
+            "status": "success",
+            "snapshots": {
+                "profile": "full",
+                "trade_review": "/tmp/trade_review.json",
+                "performance_tuning": "/tmp/performance_tuning.json",
+                "stage_metrics": json.dumps(
+                    {"trade_review": {"process_max_rss_kb": 123}}
+                ),
+                "snapshot_manifest": "/tmp/manifest.json",
+            },
+        },
+        target_date="2026-08-05",
+        profile="full",
+        log_file="logs/run_monitor_snapshot.log",
+    )
+
+    assert "snapshot_count: 2" in message
+    assert "stage_metrics" not in message
+
+
 def test_normalize_result_payload_detects_cooldown_skip():
     payload = runtime.normalize_result_payload(
         target_date="2026-04-24",
@@ -136,6 +159,34 @@ def test_normalize_result_payload_detects_cooldown_skip():
         "중복 실행" in payload["next_prompt_hint"]
         or "기존 결과" in payload["next_prompt_hint"]
     )
+
+
+def test_normalize_result_payload_excludes_stage_metrics_from_snapshot_count(tmp_path):
+    result_file = tmp_path / "result.jsonl"
+    result_file.write_text(
+        json.dumps(
+            {
+                "status": "success",
+                "snapshots": {
+                    "profile": "full",
+                    "trade_review": "/tmp/trade_review.json",
+                    "performance_tuning": "/tmp/performance_tuning.json",
+                    "stage_metrics": json.dumps(
+                        {"trade_review": {"process_max_rss_kb": 123}}
+                    ),
+                    "snapshot_manifest": "/tmp/manifest.json",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = runtime.normalize_result_payload(
+        target_date="2026-08-05",
+        profile="full",
+        result_file=str(result_file),
+    )
+
+    assert payload["snapshot_count"] == 2
 
 
 def test_dispatch_monitor_snapshot_job_disables_admin_notice_by_default(
@@ -312,6 +363,16 @@ def test_save_monitor_snapshots_for_date_includes_expected_snapshot_sources(
     assert "wait6579_ev_cohort" in result
     assert "add_blocked_lock" not in result
     assert "snapshot_manifest" in result
+    stage_metrics = json.loads(result["stage_metrics"])
+    assert set(stage_metrics) == {
+        "trade_review",
+        "performance_tuning",
+        "wait6579_ev_cohort",
+        "post_sell_feedback",
+        "missed_entry_counterfactual",
+        "holding_exit_observation",
+    }
+    assert all(item["process_max_rss_kb"] > 0 for item in stage_metrics.values())
     saved = service.load_monitor_snapshot("missed_entry_counterfactual", "2026-04-09")
     assert saved is not None
     assert saved["meta"]["snapshot_kind"] == "missed_entry_counterfactual"

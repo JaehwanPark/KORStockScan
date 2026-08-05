@@ -1,6 +1,7 @@
 import sys
 import types
 import json
+import weakref
 
 from src.engine import sniper_missed_entry_counterfactual as report_mod
 
@@ -28,6 +29,120 @@ def _write_pipeline_events(tmp_path, target_date: str, rows: list[dict]) -> None
     ) as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def test_load_entry_events_streams_and_projects_large_fields(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-08-05"
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "HOLDING_PIPELINE",
+                "stage": "holding_observation",
+                "stock_name": "제외",
+                "stock_code": "000001",
+                "fields": {"exact_payload": "x" * 100_000},
+                "emitted_at": "2026-08-05T09:00:00",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "scalping_scanner_runtime_target_attach",
+                "stock_name": "포함",
+                "stock_code": "005930",
+                "record_id": "runtime-1",
+                "fields": {
+                    "current_price_observed": 72300,
+                    "effective_venue": "KRX",
+                    "scanner_promotion_id": "promotion-1",
+                    "runtime_target_attach_outcome": "attached",
+                    "exact_payload": "x" * 100_000,
+                    "forbidden_uses": ["broker_order_submit"] * 1000,
+                },
+                "emitted_at": "2026-08-05T09:00:01",
+                "emitted_date": target_date,
+            },
+        ],
+    )
+
+    events = report_mod._load_entry_events(target_date)
+
+    assert len(events) == 1
+    assert events[0].fields == {
+        "current_price_observed": "72300",
+        "effective_venue": "KRX",
+        "scanner_promotion_id": "promotion-1",
+        "runtime_target_attach_outcome": "attached",
+    }
+    assert "exact_payload" not in events[0].fields
+
+
+def test_candidate_candle_fetch_releases_prior_symbol_before_next_fetch(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-08-05"
+    rows = []
+    for index, code in enumerate(("111111", "222222"), start=1):
+        rows.extend(
+            [
+                {
+                    "pipeline": "ENTRY_PIPELINE",
+                    "stage": "ai_confirmed",
+                    "stock_name": code,
+                    "stock_code": code,
+                    "record_id": index,
+                    "fields": {"action": "BUY", "ai_score": "90"},
+                    "emitted_at": f"{target_date}T10:0{index}:01",
+                    "emitted_date": target_date,
+                },
+                {
+                    "pipeline": "ENTRY_PIPELINE",
+                    "stage": "latency_block",
+                    "stock_name": code,
+                    "stock_code": code,
+                    "record_id": index,
+                    "fields": {"reason": "latency_state_danger"},
+                    "emitted_at": f"{target_date}T10:0{index}:02",
+                    "emitted_date": target_date,
+                },
+            ]
+        )
+    _write_pipeline_events(tmp_path, target_date, rows)
+
+    class CandleRows(list):
+        pass
+
+    previous_rows = None
+    fetch_count = 0
+
+    def fake_fetch(*args, **kwargs):
+        nonlocal previous_rows, fetch_count
+        if previous_rows is not None:
+            assert previous_rows() is None
+        fetch_count += 1
+        candle_rows = CandleRows()
+        previous_rows = weakref.ref(candle_rows)
+        return candle_rows, report_mod._minute_candle_meta(
+            candle_rows, requested_limit=700
+        )
+
+    monkeypatch.setattr(report_mod, "_fetch_minute_candles_with_meta", fake_fetch)
+    monkeypatch.setitem(
+        sys.modules,
+        "src.utils.kiwoom_utils",
+        types.SimpleNamespace(get_kiwoom_token=lambda: "unused"),
+    )
+
+    report = report_mod.build_missed_entry_counterfactual_report(
+        target_date, token="offline"
+    )
+
+    assert fetch_count == 2
+    assert report["meta"]["input_streaming"]["minute_candle_fetch_count"] == 2
+    assert report["meta"]["input_streaming"]["max_retained_candle_symbol_count"] == 1
 
 
 def test_minute_forward_source_quality_marks_truncated_ka10080_window_partial():

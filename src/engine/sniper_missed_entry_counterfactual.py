@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -15,7 +14,7 @@ from src.engine.scalping.position_sizing_allocator import (
     resolve_scalping_allocation,
 )
 from src.utils.constants import DATA_DIR, TRADING_RULES
-from src.utils.jsonl_io import read_jsonl
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.logger import log_error
 
 MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 6
@@ -61,6 +60,53 @@ _BUY_AVOIDED_CLOSE_PCT = -0.3
 _BUY_TP_PCT = 0.5
 _BUY_SL_PCT = -0.5
 _RISING_MISSED_STAGE = "rising_missed_one_share_entry"
+_EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v1"
+_EVENT_FIELD_KEYS = frozenset(
+    {
+        "action",
+        "ai_reason_numeric_inconsistency",
+        "ai_score",
+        "chosen_action",
+        "cntr_str_available",
+        "current_cntr_str_available",
+        "current_price",
+        "current_price_observed",
+        "effective_venue",
+        "eviction_reason",
+        "existing_runtime_record_id",
+        "guard_blocked_at_ts",
+        "latest_ai_action",
+        "latest_price",
+        "liquidity_relief_skip_reason",
+        "market_session_bucket",
+        "mark_price_at_submit",
+        "no_submit_reason",
+        "pre_submit_ai_action",
+        "price",
+        "price_delta_since_first_seen_pct",
+        "qty",
+        "reason",
+        "rising_missed_class",
+        "rising_missed_effective_venue",
+        "rising_missed_market_session_bucket",
+        "runtime_record_id",
+        "runtime_target_attach_outcome",
+        "runtime_target_attach_reason",
+        "safe_budget",
+        "scanner_block_reason",
+        "scanner_promotion_id",
+        "scanner_promotion_reason",
+        "scanner_real_source_guard_skip_reason",
+        "source_signature",
+        "spread_ratio",
+        "submitted_order_price",
+        "target_buy_price",
+        "terminal_reason",
+        "terminal_stage",
+        "venue",
+        "zero_context_cntr_str_state",
+    }
+)
 _STAGE_LABELS = {
     "latency_block": "지연 리스크 차단",
     "blocked_liquidity": "유동성 차단",
@@ -85,10 +131,6 @@ _STAGE_LABELS = {
 
 def _pipeline_events_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
-
-
-def _load_jsonl(path: Path) -> list[dict]:
-    return read_jsonl(path)
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -436,7 +478,7 @@ def _stage_label(stage: str) -> str:
     return _STAGE_LABELS.get(stage, stage)
 
 
-@dataclass
+@dataclass(slots=True)
 class EntryEvent:
     emitted_at: str
     signal_date: str
@@ -458,15 +500,19 @@ class MissedEntryCounterfactualSummary:
 
 
 def _load_entry_events(target_date: str) -> list[EntryEvent]:
-    rows = _load_jsonl(_pipeline_events_path(target_date))
     events: list[EntryEvent] = []
-    for row in rows:
+    # The live pipeline can exceed multiple gigabytes.  Decode one row at a
+    # time and retain only fields consumed by this report so full-monitor
+    # generation cannot duplicate the entire source in memory.
+    for row in iter_jsonl(_pipeline_events_path(target_date)):
         if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
             continue
         code = str(row.get("stock_code") or "").strip()[:6]
         if not code:
             continue
         emitted_at = str(row.get("emitted_at") or "")
+        raw_fields = row.get("fields")
+        source_fields = raw_fields if isinstance(raw_fields, dict) else {}
         events.append(
             EntryEvent(
                 emitted_at=emitted_at,
@@ -477,7 +523,8 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
                 record_id=str(row.get("record_id") or row.get("id") or ""),
                 fields={
                     str(key): str(value)
-                    for key, value in dict(row.get("fields") or {}).items()
+                    for key, value in source_fields.items()
+                    if str(key) in _EVENT_FIELD_KEYS
                 },
             )
         )
@@ -2664,7 +2711,22 @@ def build_missed_entry_counterfactual_report(
         kiwoom_utils = None
 
     safe_date = str(target_date or datetime.now().strftime("%Y-%m-%d")).strip()
+    pipeline_path = existing_or_gzip_path(_pipeline_events_path(safe_date))
     entry_events = _load_entry_events(safe_date)
+    input_streaming = {
+        "pipeline_source_path": str(pipeline_path),
+        "pipeline_source_size_bytes": (
+            pipeline_path.stat().st_size if pipeline_path.exists() else 0
+        ),
+        "entry_event_count": len(entry_events),
+        "load_mode": "streaming_compact_projection",
+        "field_projection_version": _EVENT_FIELD_PROJECTION_VERSION,
+        "retained_field_key_count": len(_EVENT_FIELD_KEYS),
+        "full_source_materialized": False,
+        "candle_cache_mode": "single_symbol_release_on_code_change",
+        "max_retained_candle_symbol_count": 1 if entry_events else 0,
+        "minute_candle_fetch_count": 0,
+    }
     all_buy_attempts = _build_buy_attempts(
         safe_date,
         include_submitted=True,
@@ -2765,6 +2827,7 @@ def build_missed_entry_counterfactual_report(
                 "schema_version": MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION,
                 "generated_at": datetime.now().isoformat(),
                 "evaluation_mode": "missed_entry_minute_forward",
+                "input_streaming": input_streaming,
                 "thresholds": {
                     "missed_mfe_pct": _BUY_MISSED_MFE_PCT,
                     "missed_close_pct": _BUY_MISSED_CLOSE_PCT,
@@ -2781,37 +2844,38 @@ def build_missed_entry_counterfactual_report(
             log_error(f"[MISSED_ENTRY_CF] token fetch failed: {exc}")
             token = None
 
-    candle_cache: dict[str, tuple[list[dict], dict]] = {}
     evaluations: list[dict] = []
     all_buy_evaluations: list[dict] = []
+    active_candle_code = ""
+    candles: list[dict] = []
+    candle_meta = _minute_candle_meta([], requested_limit=700)
+    candle_fetch_count = 0
 
     for candidate in all_buy_attempts:
         code = str(candidate.get("stock_code") or "").strip()[:6]
         if not code:
             continue
-        if code not in candle_cache:
+        if code != active_candle_code:
+            # _build_buy_attempts emits candidates grouped by symbol.  Drop
+            # the prior symbol's bars before fetching the next one instead of
+            # retaining every 700-bar REST response until report completion.
+            candles = []
+            candle_meta = _minute_candle_meta([], requested_limit=700)
+            active_candle_code = code
             if token is None or kiwoom_utils is None:
-                candle_cache[code] = (
-                    [],
-                    _minute_candle_meta([], requested_limit=700),
-                )
+                candles = []
             else:
                 try:
-                    candle_cache[code] = _fetch_minute_candles_with_meta(
+                    candle_fetch_count += 1
+                    candles, candle_meta = _fetch_minute_candles_with_meta(
                         kiwoom_utils, token, code, limit=700
                     )
                 except Exception as exc:
                     log_error(
                         f"[MISSED_ENTRY_CF] {code} minute candles fetch failed: {exc}"
                     )
-                    candle_cache[code] = (
-                        [],
-                        _minute_candle_meta([], requested_limit=700),
-                    )
-
-        candles, candle_meta = candle_cache.get(
-            code, ([], _minute_candle_meta([], requested_limit=700))
-        )
+                    candles = []
+                    candle_meta = _minute_candle_meta([], requested_limit=700)
         forward_horizon_metrics = {
             str(horizon_min): _compute_window_metrics(candidate, candles, horizon_min)
             for horizon_min in _WATCH_CYCLE_HORIZONS_MIN
@@ -2888,6 +2952,8 @@ def build_missed_entry_counterfactual_report(
             all_buy_evaluations.append(evaluations[-1])
         else:
             all_buy_evaluations.append(evaluations[-1])
+
+    input_streaming["minute_candle_fetch_count"] = candle_fetch_count
 
     # Keep missed-only evaluation slice for the main summary.
     evaluations = [
@@ -3390,6 +3456,7 @@ def build_missed_entry_counterfactual_report(
             "schema_version": MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION,
             "generated_at": datetime.now().isoformat(),
             "evaluation_mode": "missed_entry_minute_forward",
+            "input_streaming": input_streaming,
             "thresholds": {
                 "missed_mfe_pct": _BUY_MISSED_MFE_PCT,
                 "missed_close_pct": _BUY_MISSED_CLOSE_PCT,

@@ -359,3 +359,47 @@ def test_holding_exit_observation_reads_gzip_post_sell_rows(monkeypatch, tmp_pat
         str(tmp_path / "post_sell" / "post_sell_candidates_2026-04-24.jsonl.gz"),
         str(tmp_path / "post_sell" / "post_sell_evaluations_2026-04-24.jsonl.gz"),
     ]
+
+
+def test_target_pipeline_summary_streams_large_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-08-05"
+    _write_jsonl(
+        tmp_path / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+        [
+            {
+                "stage": "order_bundle_submitted",
+                "fields": {"exact_payload": "x" * 100_000},
+            },
+            {
+                "stage": "position_rebased_after_fill",
+                "fields": {"fill_quality": "PARTIAL_FILL"},
+            },
+            {
+                "stage": "diagnostic",
+                "fields": {"legacy_owner": "fallback_single"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "_read_jsonl",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("daily pipeline must not use list loader")
+        ),
+    )
+
+    summary, paths, row_count = report_mod._summarize_target_pipeline_events(
+        target_date
+    )
+
+    assert row_count == 3
+    assert summary == {
+        "order_bundle_submitted_events": 1,
+        "full_fill_events": 0,
+        "partial_fill_events": 1,
+        "fallback_regression_count": 1,
+    }
+    assert paths == [
+        str(tmp_path / "pipeline_events" / f"pipeline_events_{target_date}.jsonl")
+    ]

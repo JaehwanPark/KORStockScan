@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
-from src.utils.constants import DATA_DIR, TRADING_RULES
-from src.utils.jsonl_io import existing_or_gzip_path
+from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 SCHEMA_VERSION = 1
 POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
@@ -844,7 +844,9 @@ def _summarize_target_pipeline_events(target_date: str) -> tuple[dict, list[str]
     fallback_regression = 0
     row_count = 0
     for path in paths:
-        for payload in _read_jsonl(path):
+        # The live pipeline can be multiple gigabytes.  This aggregation only
+        # needs counters, so never materialize the daily source as a list.
+        for payload in iter_jsonl(path):
             row_count += 1
             stage = str(payload.get("stage") or "").strip()
             if stage:
@@ -858,12 +860,12 @@ def _summarize_target_pipeline_events(target_date: str) -> tuple[dict, list[str]
                     counts["partial_fill_events"] += 1
                 else:
                     counts["full_fill_events"] += 1
-            joined = " ".join(str(value) for value in [stage, *(fields or {}).values()])
-            if (
-                "fallback_scout" in joined
-                or "fallback_main" in joined
-                or "fallback_single" in joined
-            ):
+            fallback_tokens = ("fallback_scout", "fallback_main", "fallback_single")
+            fallback_seen = any(token in stage for token in fallback_tokens) or any(
+                any(token in str(value) for token in fallback_tokens)
+                for value in fields.values()
+            )
+            if fallback_seen:
                 fallback_regression += 1
     return (
         {
@@ -985,6 +987,8 @@ def _build_load_distribution_evidence(
         "post_sell_rows_read": int(post_sell_rows),
         "pipeline_event_files_read": pipeline_paths,
         "pipeline_event_rows_read": int(pipeline_rows),
+        "pipeline_event_load_mode": "streaming_counter_projection",
+        "pipeline_event_full_source_materialized": False,
     }
 
 

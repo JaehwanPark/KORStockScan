@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import gzip
+import gc
 import json
 import os
+import resource
 import tempfile
 import time
 from datetime import datetime
@@ -328,10 +330,24 @@ def save_monitor_snapshots_for_date_with_profile(
 
     selected_kinds = allowed_by_profile[normalized_profile]
     selected_entries = [item for item in snapshot_order if item[0] in selected_kinds]
+    stage_metrics: dict[str, dict] = {}
     for idx, (snapshot_kind, build_fn) in enumerate(selected_entries):
         stage_delay = _stage_io_delay_sec(sleep_sec, snapshot_kind)
         if idx > 0 and stage_delay > 0:
             time.sleep(stage_delay)
+        stage_started_at = time.monotonic()
+        print(
+            json.dumps(
+                {
+                    "event": "monitor_snapshot_stage_start",
+                    "target_date": target_date,
+                    "profile": normalized_profile,
+                    "snapshot_kind": snapshot_kind,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
         payload = build_fn()
         payload.setdefault("meta", {})
         payload["meta"]["saved_snapshot_at"] = datetime.now().strftime(
@@ -342,6 +358,28 @@ def save_monitor_snapshots_for_date_with_profile(
         result[snapshot_kind] = str(
             save_monitor_snapshot(snapshot_kind, target_date, payload)
         )
+        stage_metrics[snapshot_kind] = {
+            "duration_sec": round(time.monotonic() - stage_started_at, 3),
+            "process_max_rss_kb": int(
+                resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            ),
+        }
+        print(
+            json.dumps(
+                {
+                    "event": "monitor_snapshot_stage_complete",
+                    "target_date": target_date,
+                    "profile": normalized_profile,
+                    "snapshot_kind": snapshot_kind,
+                    **stage_metrics[snapshot_kind],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        del payload
+        gc.collect()
+    result["stage_metrics"] = json.dumps(stage_metrics, sort_keys=True)
 
     def _finalize_snapshot_manifest() -> dict[str, str]:
         manifest_path = save_monitor_snapshot_manifest(

@@ -987,6 +987,18 @@ def test_stage2_ops_cron_uses_light_snapshot_at_noon():
     assert "run_monitor_snapshot_cron.sh" not in noon_line
 
 
+def test_monitor_snapshot_resource_exit_is_not_immediately_retried():
+    script = Path("deploy/run_monitor_snapshot_safe.sh").read_text(encoding="utf-8")
+
+    assert "124|130|137|143) non_retryable_resource_exit=1" in script
+    assert '"MemoryError"' in script
+    assert '"$non_retryable_resource_exit" -ne 1' in script
+    assert "stopped without retry after resource/external exit" in script
+    assert "monitor_snapshot_stage_(start|complete)" in script
+    assert script.count('write_completion_artifact "" "$output_file" "$$"') == 2
+    assert script.index('"MemoryError"') < script.index('rm -f "$attempt_output"')
+
+
 def test_growing_pipeline_wrappers_bound_cadence_and_cpu_affinity():
     expectations = {
         "deploy/run_rising_missed_intraday_feedback.sh": (

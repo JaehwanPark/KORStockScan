@@ -65,6 +65,7 @@ def _build_message(
             "io_delay_sec",
             "trend_max_dates",
             "io_delay_sec_per_stage",
+            "stage_metrics",
             "snapshot_manifest",
             "status",
             "error",

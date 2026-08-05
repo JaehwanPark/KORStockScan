@@ -191,6 +191,7 @@ snapshot_kinds = [
         "io_delay_sec",
         "trend_max_dates",
         "io_delay_sec_per_stage",
+        "stage_metrics",
         "snapshot_manifest",
     }
 ]
@@ -426,6 +427,7 @@ run_snapshot_once() {
   local attempt_output
   local overall_status=0
   local snapshot_skipped=0
+  local non_retryable_resource_exit=0
 
   : > "$output_file"
 
@@ -486,16 +488,29 @@ run_snapshot_once() {
       fi
     } 9>"$LOCK_FILE" >> "$LOG_FILE" 2>&1
 
+    grep -E '"event"[[:space:]]*:[[:space:]]*"monitor_snapshot_stage_(start|complete)"' "$attempt_output" >> "$LOG_FILE" || true
+    non_retryable_resource_exit=0
+    if [[ "$SNAPSHOT_STATUS" -ne 0 ]]; then
+      case "$SNAPSHOT_STATUS" in
+        124|130|137|143) non_retryable_resource_exit=1 ;;
+      esac
+      if grep -Eq '"error_kind"[[:space:]]*:[[:space:]]*"MemoryError"' "$attempt_output"; then
+        non_retryable_resource_exit=1
+      fi
+    fi
     if [[ "$KEEP_OUTPUT_FILE" == "1" ]]; then
       cat "$attempt_output" >> "$output_file"
     else
       cat "$attempt_output" >> "$output_file"
       rm -f "$attempt_output"
     fi
-
     if [[ "$SNAPSHOT_STATUS" -ne 0 ]]; then
       overall_status=$SNAPSHOT_STATUS
-      if [[ "$attempt" -lt "$MAX_RETRIES" ]]; then
+      # Retrying the same multi-gigabyte workload immediately after timeout,
+      # OOM/SIGKILL, interrupt, or SIGTERM compounds host pressure and can
+      # starve the live bot.  Preserve the failed completion artifact and let
+      # the next scheduled/operator run start only after the cause is fixed.
+      if [[ "$attempt" -lt "$MAX_RETRIES" && "$non_retryable_resource_exit" -ne 1 ]]; then
         echo "[WARN] run_snapshot_once failed attempt=${attempt}/${MAX_RETRIES}. Retrying after ${RETRY_DELAY_SEC}s"
         sleep "$RETRY_DELAY_SEC"
         continue
@@ -506,10 +521,12 @@ run_snapshot_once() {
       else
         cat "$output_file"
       fi
-      if [[ "$KEEP_OUTPUT_FILE" != "1" ]]; then
-        rm -f "$output_file"
+      write_completion_artifact "" "$output_file" "$$"
+      if [[ "$non_retryable_resource_exit" -eq 1 ]]; then
+        echo "[ERROR] run_snapshot_once stopped without retry after resource/external exit status=$SNAPSHOT_STATUS"
+      else
+        echo "[ERROR] run_snapshot_once failed after ${attempt} attempts status=$SNAPSHOT_STATUS"
       fi
-      echo "[ERROR] run_snapshot_once failed after ${MAX_RETRIES} attempts status=$SNAPSHOT_STATUS"
       echo "[ERROR] check log: $output_file"
       echo "[INFO] run_snapshot_once done date=$TARGET_DATE"
       return "$SNAPSHOT_STATUS"
@@ -519,6 +536,7 @@ run_snapshot_once() {
     if [[ "$SNAPSHOT_STATUS" -eq 0 && "$snapshot_skipped" -ne 1 ]]; then
       touch "$COOLDOWN_STATE_FILE"
     fi
+    write_completion_artifact "" "$output_file" "$$"
     if [[ "$KEEP_OUTPUT_FILE" != "1" ]]; then
       rm -f "$output_file"
     fi
