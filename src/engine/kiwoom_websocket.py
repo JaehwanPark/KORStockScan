@@ -251,6 +251,7 @@ class KiwoomWSManager:
         self._pending_future_lock = threading.Lock()
         self._session_ready = threading.Event()
         self._last_token_refresh_at = 0.0
+        self._pending_token_handoff = None
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
         self._recent_reg_request_ts = {}
@@ -2000,14 +2001,29 @@ class KiwoomWSManager:
             log_error("❌ [WS TOKEN 재발급] 실패")
             return False
 
-        kiwoom_utils.register_kiwoom_token_replacement(
-            previous_token,
-            new_token,
-            source="websocket_auth_refresh",
+        origin_token = (
+            self._pending_token_handoff[0]
+            if self._pending_token_handoff
+            else previous_token
         )
+        self._pending_token_handoff = (origin_token, new_token)
         self.token = new_token
         print("✅ [WS TOKEN 재발급] 성공. 새 토큰으로 재접속합니다.")
         return True
+
+    def _commit_ws_token_handoff(self):
+        pending = self._pending_token_handoff
+        if not pending:
+            return False
+        from src.utils import kiwoom_utils
+
+        registered = kiwoom_utils.register_kiwoom_token_replacement(
+            pending[0],
+            pending[1],
+            source="websocket_login_ack_success",
+        )
+        self._pending_token_handoff = None
+        return registered
 
     async def _await_login_ack(self, ws, timeout_sec=5.0):
         deadline = time.time() + max(1.0, float(timeout_sec or 0.0))
@@ -2132,6 +2148,7 @@ class KiwoomWSManager:
                     await ws.send(json.dumps(login_packet))
                     print("🔑 [WS] 로그인 패킷 전송 완료")
                     await self._await_login_ack(ws)
+                    self._commit_ws_token_handoff()
                     await self._send_post_login_bootstrap()
                     self._session_ready.set()
 

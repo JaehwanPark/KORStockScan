@@ -47,6 +47,13 @@ def _patch_cache_paths(monkeypatch, tmp_path):
     )
 
 
+def _patch_config_path(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_config()), encoding="utf-8")
+    monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(kiwoom_utils, "DEV_PATH", tmp_path / "missing_dev_config.json")
+
+
 def test_get_kiwoom_token_reuses_shared_cache(monkeypatch, tmp_path):
     _patch_cache_paths(monkeypatch, tmp_path)
     calls = []
@@ -148,13 +155,19 @@ def test_ws_token_refresh_uses_force_refresh(monkeypatch):
     assert manager._refresh_ws_token() is True
     assert manager.token == "NEW_TOKEN"
     assert calls == [{"force_refresh": True}]
-    assert replacements == [("OLD_TOKEN", "NEW_TOKEN", "websocket_auth_refresh")]
+    assert replacements == []
+    assert manager._pending_token_handoff == ("OLD_TOKEN", "NEW_TOKEN")
+
+    assert manager._commit_ws_token_handoff() is True
+    assert replacements == [("OLD_TOKEN", "NEW_TOKEN", "websocket_login_ack_success")]
+    assert manager._pending_token_handoff is None
 
 
 def test_fetch_kiwoom_api_continuous_refreshes_and_retries_once_on_8005(
     monkeypatch, tmp_path
 ):
     _patch_cache_paths(monkeypatch, tmp_path)
+    _patch_config_path(monkeypatch, tmp_path)
     posts = []
     invalidations = []
 
@@ -253,6 +266,60 @@ def test_auth_retry_handoff_prevents_repeated_first_attempt_8005(monkeypatch, tm
         "Bearer FRESH_TOKEN",
         "Bearer FRESH_TOKEN",
     ]
+
+
+def test_auth_retry_does_not_publish_failed_refresh_token(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
+    responses = [
+        _FakeApiResponse(
+            {
+                "return_code": "8005",
+                "return_msg": "인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
+            }
+        ),
+        _FakeApiResponse(
+            {
+                "return_code": "8005",
+                "return_msg": "인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
+            }
+        ),
+    ]
+    monkeypatch.setattr(
+        kiwoom_utils.requests,
+        "post",
+        lambda *args, **kwargs: responses.pop(0),
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_kiwoom_token", lambda *args, **kwargs: "FAILED_REFRESH"
+    )
+    monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kiwoom_utils, "log_error", lambda *args, **kwargs: None)
+
+    result = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url="https://example.test/api",
+        token="STARTUP_TOKEN",
+        api_id="ka10004",
+        payload={},
+    )
+
+    assert result[-1]["return_code"] == "8005"
+    assert kiwoom_utils.resolve_kiwoom_request_token("STARTUP_TOKEN") == (
+        "STARTUP_TOKEN"
+    )
+
+
+def test_token_handoff_rejects_cycle(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(kiwoom_utils, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kiwoom_utils, "log_error", lambda *args, **kwargs: None)
+
+    assert kiwoom_utils.register_kiwoom_token_replacement(
+        "TOKEN_A", "TOKEN_B", source="test"
+    )
+    assert not kiwoom_utils.register_kiwoom_token_replacement(
+        "TOKEN_B", "TOKEN_A", source="test_reverse"
+    )
+    assert kiwoom_utils.resolve_kiwoom_request_token("TOKEN_A") == "TOKEN_B"
 
 
 def test_fetch_kiwoom_api_continuous_retries_transient_5xx(monkeypatch, tmp_path):

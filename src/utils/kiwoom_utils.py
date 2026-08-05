@@ -149,11 +149,24 @@ def register_kiwoom_token_replacement(
         current = replacement
         seen = {failed}
         for _ in range(8):
-            next_token = _KIWOOM_TOKEN_REPLACEMENTS.get((scope, current))
-            if not next_token or next_token in seen:
-                break
+            if current in seen:
+                log_error(
+                    "❌ [TOKEN HANDOFF] cyclic token replacement rejected "
+                    f"(source={source}, failed={_token_preview(failed)}, "
+                    f"replacement={_token_preview(replacement)})"
+                )
+                return False
             seen.add(current)
+            next_token = _KIWOOM_TOKEN_REPLACEMENTS.get((scope, current))
+            if not next_token:
+                break
             current = next_token
+        else:
+            log_error(
+                "❌ [TOKEN HANDOFF] token replacement depth exceeded "
+                f"(source={source}, failed={_token_preview(failed)})"
+            )
+            return False
         replacement = current
 
         for key, value in list(_KIWOOM_TOKEN_REPLACEMENTS.items()):
@@ -398,11 +411,6 @@ def get_kiwoom_token_after_auth_failure(
                         f"🔐 [{api_id}] 8005 감지 후 이미 갱신된 Kiwoom token 캐시 재사용 "
                         f"(failed={_token_preview(failed)}, cached={_token_preview(cached)})"
                     )
-                    register_kiwoom_token_replacement(
-                        failed,
-                        cached,
-                        source=f"{reason_prefix}:{api_id}:shared_cache",
-                    )
                     return cached
                 _invalidate_kiwoom_token_cache_unlocked(
                     _kiwoom_token_cache_path(),
@@ -416,11 +424,6 @@ def get_kiwoom_token_after_auth_failure(
         log_error(f"❌ [{api_id}] 8005 감지 후 Kiwoom token force refresh 예외: {exc}")
         return None
     if refreshed:
-        register_kiwoom_token_replacement(
-            failed,
-            refreshed,
-            source=f"{reason_prefix}:{api_id}:force_refresh",
-        )
         log_info(
             f"🔐 [{api_id}] 8005 감지 후 Kiwoom token force refresh 성공 (1회 retry 예정)"
         )
@@ -3926,6 +3929,7 @@ def fetch_kiwoom_api_continuous(
     next_key = ""
     active_token = resolve_kiwoom_request_token(token)
     auth_retry_used = False
+    pending_failed_token = ""
 
     while True:
         retry_count = 0
@@ -4027,11 +4031,20 @@ def fetch_kiwoom_api_continuous(
                     reason_prefix="api_8005_retry",
                 )
                 if refreshed_token:
+                    pending_failed_token = active_token
                     active_token = refreshed_token
                     response = None
                     continue
                 all_results.append(res_json)
                 break
+
+        if response_code == "0" and pending_failed_token:
+            register_kiwoom_token_replacement(
+                pending_failed_token,
+                active_token,
+                source=f"api_8005_retry:{api_id}:retry_success",
+            )
+            pending_failed_token = ""
 
         all_results.append(res_json)
         meta["page_count"] = len(all_results)
