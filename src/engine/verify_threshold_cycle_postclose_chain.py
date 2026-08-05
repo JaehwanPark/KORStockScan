@@ -31,6 +31,9 @@ from src.engine.build_code_improvement_workorder import (
     lifecycle_entry_bucket_order_id,
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.monitoring.limit_down_watch_report import (
+    CONTRACT as LIMIT_DOWN_WATCH_CONTRACT,
+)
 from src.engine.threshold_cycle_preopen_apply import (
     runtime_gap_provenance_artifact_path,
 )
@@ -615,24 +618,7 @@ def _limit_down_watch_report_status(
             "schema_version": 1,
             "report_type": "limit_down_watch",
             "target_date": target_date,
-            "metric_role": "diagnostic",
-            "decision_authority": "limit_down_source_observation_only",
-            "window_policy": "same_symbol_same_krx_session_ordered_raw_tick",
-            "sample_floor": "not_applicable_source_observation",
-            "primary_decision_metric": "ordered_intraday_path_capture_rate",
-            "source_quality_gate": (
-                "official_ka10017_and_completed_ka10081_db_close_match"
-            ),
-            "forbidden_uses": (
-                "real_order,buy_analysis,threshold_change,provider_route_change,"
-                "order_price_or_quantity_change,cap_change,broker_guard_change,"
-                "bot_restart_authority"
-            ),
-            "runtime_effect": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "allowed_sim_apply": False,
-            "allowed_runtime_apply": False,
+            **LIMIT_DOWN_WATCH_CONTRACT,
         }
         for field, expected_value in expected.items():
             if report.get(field) != expected_value:
@@ -4960,6 +4946,7 @@ def build_threshold_cycle_postclose_verification(
     log_issues: list[str] = []
     handoff_warnings: list[str] = []
     done_line: str | None = None
+    execution_done_line: str | None = None
 
     for line in run_lines:
         ready_match = _READY_RE.search(line)
@@ -4989,10 +4976,15 @@ def build_threshold_cycle_postclose_verification(
             log_issues.append("postclose_paused_marker_present")
         if _DONE_MARKER in line and f"target_date={target_date}" in line:
             done_line = line
+            if "recovery_action=" not in line:
+                execution_done_line = line
     if done_line and "recovery_action=" in done_line:
         log_issues = [
             item for item in log_issues if item != "postclose_fail_marker_present"
         ]
+    execution_contract_line = execution_done_line or done_line
+    execution_contract_flags = _parse_bool_flags(execution_contract_line or "")
+    execution_contract_flags.update(_parse_bool_flags(done_line or ""))
 
     artifact_status = []
     for label, path in _artifact_paths(target_date).items():
@@ -5270,7 +5262,7 @@ def build_threshold_cycle_postclose_verification(
         )
     lifecycle_bucket_windows = _lifecycle_bucket_windows_status(
         paths=paths,
-        done_line=done_line,
+        done_line=execution_contract_line,
         bridge_report=bridge_report,
         ev_report=ev_report,
         runtime_summary=runtime_summary,
@@ -5283,7 +5275,7 @@ def build_threshold_cycle_postclose_verification(
             for item in (lifecycle_bucket_windows.get("warnings") or [])
             if str(item)
         )
-    preliminary_execution_flags = _parse_bool_flags(done_line or "")
+    preliminary_execution_flags = dict(execution_contract_flags)
     preliminary_execution_flags.update(explicit_execution_flags)
     disabled_stage_flags = {
         stage
@@ -5314,7 +5306,7 @@ def build_threshold_cycle_postclose_verification(
         None
         if swing_handoff_disabled
         else _swing_lifecycle_provider_mismatch_warning(
-            done_line, swing_bucket_discovery_report
+            execution_contract_line, swing_bucket_discovery_report
         )
     )
     if provider_mismatch_warning:
@@ -5551,7 +5543,7 @@ def build_threshold_cycle_postclose_verification(
         "tail_repair_done_reconciliation",
     }
     marker_reconciliation_done = recovery_action == "marker_reconciliation"
-    execution_flags = _parse_bool_flags(done_line or "")
+    execution_flags = dict(execution_contract_flags)
     execution_flags.update(explicit_execution_flags)
     limit_down_watch_verification_enabled = _limit_down_watch_verification_enabled(
         target_date,
@@ -6564,8 +6556,10 @@ def build_threshold_cycle_postclose_verification(
             "disabled_stage_flags": disabled_stage_flags,
             "missing_required_flags": missing_execution_flags,
             "interpretation": (
-                "latest DONE marker was produced by a recovery run with selected heavy stages disabled; "
-                "same-date artifacts are still validated separately"
+                "latest DONE marker was produced by controller recovery action "
+                f"`{recovery_action}` with selected heavy stages disabled; "
+                "the prior full-run execution contract is inherited and same-date "
+                "artifacts are still validated separately"
                 if disabled_stage_flags
                 else (
                     f"latest DONE marker was produced by controller recovery action `{recovery_action}`; execution flags are not asserted by this marker"

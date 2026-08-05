@@ -495,20 +495,7 @@ def _limit_down_live_readiness(**overrides):
 
 
 def _limit_down_metric_contract():
-    return {
-        "metric_role": "diagnostic",
-        "window_policy": "same_symbol_same_krx_session_ordered_raw_tick",
-        "sample_floor": "not_applicable_source_observation",
-        "primary_decision_metric": "ordered_intraday_path_capture_rate",
-        "source_quality_gate": (
-            "official_ka10017_and_completed_ka10081_db_close_match"
-        ),
-        "forbidden_uses": (
-            "real_order,buy_analysis,threshold_change,provider_route_change,"
-            "order_price_or_quantity_change,cap_change,broker_guard_change,"
-            "bot_restart_authority"
-        ),
-    }
+    return dict(mod.LIMIT_DOWN_WATCH_CONTRACT)
 
 
 def _limit_down_conversion(**overrides):
@@ -5190,6 +5177,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         "\n".join(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false swing_strategy_discovery=false swing_lifecycle_matrix=false swing_lifecycle_bucket_discovery=false finished_at=2026-05-12T21:09:00+0900",
                 "[FAIL] threshold-cycle postclose target_date=2026-05-12 reason=command_failed failed_at=2026-05-12T21:10:00+0900",
                 "[DONE] threshold-cycle postclose target_date=2026-05-12 recovery_action=tail_repair_done_reconciliation full_wrapper_rerun=false finished_at=2026-05-12T21:35:00+0900",
             ]
@@ -5199,7 +5187,10 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
 
     tail_repair_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
 
-    assert tail_repair_report["status"] == "pass"
+    assert tail_repair_report["status"] == "warning"
+    assert (
+        tail_repair_report["execution_profile"]["status"] == "recovered_partial_profile"
+    )
     assert (
         tail_repair_report["execution_profile"]["marker_reconciliation_done"] is False
     )
@@ -5210,6 +5201,18 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     )
     assert tail_repair_report["execution_profile"]["required_flags_checked"] is False
     assert tail_repair_report["execution_profile"]["missing_required_flags"] == []
+    assert set(tail_repair_report["execution_profile"]["disabled_stage_flags"]) >= {
+        "swing_lifecycle",
+        "swing_strategy_discovery",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+    }
+    assert (
+        "swing_daily_simulation" not in tail_repair_report["missing_required_artifacts"]
+    )
+    assert (
+        "swing_lifecycle_audit" not in tail_repair_report["missing_required_artifacts"]
+    )
     assert (
         "postclose_fail_marker_present"
         not in tail_repair_report["predecessor_integrity"]["log_issues"]
@@ -5221,7 +5224,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
 
     strict_report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
 
-    assert strict_report["status"] == "pass"
+    assert strict_report["status"] == "warning"
 
 
 def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(

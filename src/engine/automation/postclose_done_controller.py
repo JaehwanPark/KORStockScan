@@ -113,6 +113,42 @@ def _python_bin() -> str:
     return "python"
 
 
+def _workorder_command(
+    target_date: str,
+    verification: dict[str, Any],
+    *,
+    max_orders: str | None = None,
+) -> list[str]:
+    command = [
+        _python_bin(),
+        "-m",
+        "src.engine.build_code_improvement_workorder",
+        "--date",
+        target_date,
+    ]
+    if max_orders:
+        command.extend(["--max-orders", max_orders])
+    execution_profile = (
+        verification.get("execution_profile")
+        if isinstance(verification.get("execution_profile"), dict)
+        else {}
+    )
+    flags = (
+        execution_profile.get("flags")
+        if isinstance(execution_profile.get("flags"), dict)
+        else {}
+    )
+    swing_flags = (
+        "swing_lifecycle",
+        "swing_strategy_discovery",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+    )
+    if all(flags.get(key) is False for key in swing_flags):
+        command.append("--exclude-swing")
+    return command
+
+
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -619,7 +655,7 @@ def _latest_failed_tail_stage(target_date: str) -> str | None:
 
 
 def _tail_stage_repair_actions(
-    target_date: str, failed_stage: str
+    target_date: str, failed_stage: str, verification: dict[str, Any]
 ) -> list[RecoveryAction]:
     workorder_max_orders = os.environ.get("CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS", "12")
     stage_commands = {
@@ -647,15 +683,9 @@ def _tail_stage_repair_actions(
         ),
         "code_improvement_workorder_post_conversion_lane": RecoveryAction(
             "refresh_code_improvement_workorder",
-            [
-                _python_bin(),
-                "-m",
-                "src.engine.build_code_improvement_workorder",
-                "--date",
-                target_date,
-                "--max-orders",
-                workorder_max_orders,
-            ],
+            _workorder_command(
+                target_date, verification, max_orders=workorder_max_orders
+            ),
             "wrapper tail repair from post-conversion workorder stage",
         ),
         "build_next_stage2_checklist": RecoveryAction(
@@ -702,15 +732,9 @@ def _tail_stage_repair_actions(
             ),
             RecoveryAction(
                 "refresh_code_improvement_workorder",
-                [
-                    _python_bin(),
-                    "-m",
-                    "src.engine.build_code_improvement_workorder",
-                    "--date",
-                    target_date,
-                    "--max-orders",
-                    workorder_max_orders,
-                ],
+                _workorder_command(
+                    target_date, verification, max_orders=workorder_max_orders
+                ),
                 "wrapper tail repair workorder refresh before final EV",
             ),
             RecoveryAction(
@@ -940,10 +964,25 @@ def _run_internal_action(
         )
         _write_json(status_path, status_payload)
     finished_at = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+    execution_profile = (
+        verification.get("execution_profile")
+        if isinstance(verification.get("execution_profile"), dict)
+        else {}
+    )
+    inherited_flags = execution_profile.get("flags")
+    flag_text = ""
+    if isinstance(inherited_flags, dict):
+        bool_flags = [
+            f"{key}={'true' if value else 'false'}"
+            for key, value in sorted(inherited_flags.items())
+            if isinstance(key, str) and isinstance(value, bool)
+        ]
+        if bool_flags:
+            flag_text = " " + " ".join(bool_flags)
     _append_log_marker(
         "[DONE] threshold-cycle postclose "
         f"target_date={target_date} recovery_action={recovery_action} "
-        f"full_wrapper_rerun=false finished_at={finished_at}"
+        f"full_wrapper_rerun=false{flag_text} finished_at={finished_at}"
     )
     return 0
 
@@ -983,7 +1022,7 @@ def _recovery_actions(
         )
         return actions
     if "postclose_fail_marker_present" in log_issue_set and failed_tail_stage:
-        return _tail_stage_repair_actions(target_date, failed_tail_stage)
+        return _tail_stage_repair_actions(target_date, failed_tail_stage, verification)
     if log_issue_set & MARKER_RECONCILIATION_LOG_ISSUES and _can_reconcile_marker(
         target_date, verification
     ):
@@ -1081,14 +1120,19 @@ def _recovery_actions(
                 ),
                 RecoveryAction(
                     "refresh_code_improvement_workorder",
+                    _workorder_command(target_date, verification),
+                    "workorder lineage repair after EV and pattern consumers",
+                ),
+                RecoveryAction(
+                    "refresh_threshold_cycle_ev",
                     [
                         _python_bin(),
                         "-m",
-                        "src.engine.build_code_improvement_workorder",
+                        "src.engine.threshold_cycle_ev_report",
                         "--date",
                         target_date,
                     ],
-                    "workorder lineage repair after EV and pattern consumers",
+                    "final EV refresh after pattern audits and workorder lineage repair",
                 ),
                 RecoveryAction(
                     "refresh_runtime_approval_summary",
@@ -1116,13 +1160,7 @@ def _recovery_actions(
         actions.append(
             RecoveryAction(
                 "refresh_code_improvement_workorder",
-                [
-                    _python_bin(),
-                    "-m",
-                    "src.engine.build_code_improvement_workorder",
-                    "--date",
-                    target_date,
-                ],
+                _workorder_command(target_date, verification),
                 "workorder source or lineage issue",
             )
         )

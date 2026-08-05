@@ -204,6 +204,14 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
             "stale_downstream_links": [
                 "threshold_cycle_ev_stale_before_code_improvement_workorder"
             ],
+            "execution_profile": {
+                "flags": {
+                    "swing_lifecycle": False,
+                    "swing_strategy_discovery": False,
+                    "swing_lifecycle_matrix": False,
+                    "swing_lifecycle_bucket_discovery": False,
+                }
+            },
         },
     )
     calls = []
@@ -228,6 +236,11 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
     assert "--reuse-ai-review-if-valid" in joined
     assert "threshold_cycle_ev_report" in joined
     assert "build_code_improvement_workorder" in joined
+    assert any(
+        "src.engine.build_code_improvement_workorder" in " ".join(cmd)
+        and "--exclude-swing" in cmd
+        for cmd in calls
+    )
     assert "runtime_approval_summary" in joined
     action_names = [item["action"] for item in report["actions"]]
     assert action_names == [
@@ -236,6 +249,7 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
         "refresh_pattern_lab_currentness_audit",
         "refresh_pattern_lab_propagation_audit",
         "refresh_code_improvement_workorder",
+        "refresh_threshold_cycle_ev",
         "refresh_runtime_approval_summary",
         "refresh_next_preopen_apply",
         "refresh_runtime_apply_gap_audit",
@@ -332,6 +346,12 @@ def test_postclose_done_controller_reconciles_fail_marker_without_full_wrapper_r
             "status": "fail",
             "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
             "artifact_status": _passable_artifact_status(),
+            "execution_profile": {
+                "flags": {
+                    "daily_ev": True,
+                    "swing_lifecycle": False,
+                }
+            },
         },
     )
     calls = []
@@ -356,6 +376,9 @@ def test_postclose_done_controller_reconciles_fail_marker_without_full_wrapper_r
     assert any(item["action"] == "marker_reconciliation" for item in report["actions"])
     assert report["full_wrapper_rerun_used"] is False
     assert report["selected_recovery_action"] == "marker_reconciliation"
+    marker_text = mod.POSTCLOSE_LOG_PATH.read_text(encoding="utf-8")
+    assert "daily_ev=true" in marker_text
+    assert "swing_lifecycle=false" in marker_text
 
 
 def test_postclose_done_controller_reconciles_repaired_failed_status_without_full_wrapper_rerun(
@@ -763,7 +786,20 @@ def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(
 
 
 def test_tail_stage_repair_actions_refresh_final_ev_after_workorder():
-    actions = mod._tail_stage_repair_actions("2026-06-03", "key_lineage_ledger")
+    actions = mod._tail_stage_repair_actions(
+        "2026-06-03",
+        "key_lineage_ledger",
+        {
+            "execution_profile": {
+                "flags": {
+                    "swing_lifecycle": False,
+                    "swing_strategy_discovery": False,
+                    "swing_lifecycle_matrix": False,
+                    "swing_lifecycle_bucket_discovery": False,
+                }
+            }
+        },
+    )
     action_names = [item.action for item in actions]
 
     assert action_names.index(
@@ -771,6 +807,11 @@ def test_tail_stage_repair_actions_refresh_final_ev_after_workorder():
     ) < action_names.index("refresh_threshold_cycle_ev")
     assert action_names.index("refresh_threshold_cycle_ev") < action_names.index(
         "refresh_runtime_approval_summary"
+    )
+    assert all(
+        "--exclude-swing" in (item.command or [])
+        for item in actions
+        if item.action == "refresh_code_improvement_workorder"
     )
 
 

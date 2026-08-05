@@ -106,6 +106,12 @@
   - 실제 재생성: BUY funnel causal axis=`UPSTREAM_GATE,BUDGET_PASS_COLLAPSE,LATENCY_PRE_SUBMIT,BROKER_RECEIPT`; conversion blocker는 submit drought `6 -> 4`, raw source-quality `28 -> 10`, lifecycle stage underproduction `0 -> 17`, total `50 -> 47`로 재귀속됐다. clean baseline 이후 entry hurdle은 43영업일·overbought 327건을 읽었고 executable BBO/first-hit/joint=`0/0/0`이라 runtime candidate는 열리지 않았다.
   - 금지 유지: threshold/provider/bot/broker/order/quantity/hard-safety 권한 변경 없음. 새 runtime instrumentation은 `runtime_effect=false`이며 현재 PID에는 재기동 전 미반영이다.
 
+- [x] `[PostcloseRecoveryProfile0806] controller recovery 실행계약·Swing OFF·최종 EV 계보 보존` (`Due: 2026-08-06`, `Slot: ADHOC`, `TimeWindow: 08:00~23:59`, `Track: RuntimeStability`)
+  - Source: [postclose_done_controller.py](/home/ubuntu/KORStockScan/src/engine/automation/postclose_done_controller.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py)
+  - 판정: recovery DONE marker가 직전 full-run execution flags를 상속하고, Swing 4개 축이 모두 OFF이면 workorder 재생성도 `--exclude-swing`을 유지하며 workorder 이후 final EV를 다시 생성한다.
+  - 검증: controller/verifier 표적 테스트 `193 passed`; recovery artifact와 disabled-stage flag를 일반 source-quality/runtime 결함으로 오인하지 않는다.
+  - 금지 유지: runtime/order/provider/cap/bot/hard-safety 권한 변경 없음.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
