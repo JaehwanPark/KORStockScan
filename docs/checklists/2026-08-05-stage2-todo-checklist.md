@@ -18,6 +18,14 @@
 
 ## 사용자 지시 구현
 
+- [x] `[DoosanWidgetFirstPullbackV1Implementation0805] 두산에너빌리티 KRX 일 1회 진입·연계청산·관리자 텔레그램 구현 및 리뷰` (`Due: 2026-08-05`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:30`, `Track: ScalpingLogic`)
+  - Source: [doosan_widget_advisory.py](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_advisory.py), [doosan_widget_telegram_notify.py](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_telegram_notify.py), [doosan_price_widget_routes.py](/home/ubuntu/KORStockScan/src/web/doosan_price_widget_routes.py), [korstockscan-doosan-widget-collector.service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-doosan-widget-collector.service)
+  - 판정 기준: clean baseline KRX replay에서 train/holdout 모두 양수였던 세션 낙폭 `-0.50%` 이하·표준 반등거래량을 V1 기본군으로 사용하고, `-1.00%` 이하를 high-confidence로 분리한다. 두 번의 10초 확인, 일 1회 진입 episode, `+1%` 또는 진입 당시 구조지지의 이후 확정 1분봉 종가 이탈 청산, stable event-id 기반 관리자 텔레그램 중복방지·재시도를 검증한다.
+  - 금지: absorption-only 표본의 V1 진입 승격, intrabar 저가 터치만으로 지지이탈 청산, 상대강도/외부시장 결측을 허위 양성근거로 사용, AI·실주문·계좌·수량·provider·bot 권한 연결, 신규 Kiwoom token 발급을 금지한다.
+  - 구현 결과: `DOOSAN_FIRST_PULLBACK_V1`을 KRX 정규장 전용 별도 collector/API로 구현했다. 캐시 토큰의 `ka10001·ka10004·ka10080·ka10081` 읽기만 허용하고, entry/exit event 모두 `widget_advisory_only`, `runtime_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`로 고정했다. 텔레그램은 `ADMIN_ID` 전용이며 entry 종료 뒤 지연 entry 발송을 차단한다. trading bot과 기존 Samsung collector는 재기동하지 않는다.
+  - 공식 참조: Kiwoom upstream `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 `kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`, `kiwoom/specs.py`, `kiwoom/core`, Postman collection을 `2026-08-05T16:55:23+09:00`에 확인했다.
+  - 검증 결과: 두산 단위·route·notification·cached-token-only, 기존 Samsung widget, engine location gate까지 확대 회귀 `143 passed`; Black, Ruff, compile, systemd unit verify, web route registration, checklist parser(`27` open), `git diff --check`를 통과했다. 1차 리뷰의 전용키 우선순위·만료 event 노출, 2차 리뷰의 continuity 손상 복원·portable caution 우회·venue/profile 계약 결손, 최종 리뷰의 invalid actionable episode 선점 결함을 보완했으며 최종 미해결 finding=`0`이다.
+
 - [x] `[FullMonitorSnapshotMemoryBound0805] 15:45 full monitor snapshot 구조적 메모리·재시도 보완 및 재검증` (`Due: 2026-08-05`, `Slot: INTRADAY`, `TimeWindow: 15:45~16:20`, `Track: RuntimeStability`)
   - Source: [sniper_missed_entry_counterfactual.py](/home/ubuntu/KORStockScan/src/engine/sniper_missed_entry_counterfactual.py), [log_archive_service.py](/home/ubuntu/KORStockScan/src/engine/log_archive_service.py), [run_monitor_snapshot_safe.sh](/home/ubuntu/KORStockScan/deploy/run_monitor_snapshot_safe.sh), [run_monitor_snapshot.log](/home/ubuntu/KORStockScan/logs/run_monitor_snapshot.log)
   - 판정 기준: 자동 full snapshot 6종과 manifest 생성을 유지하면서 multi-GB pipeline 입력을 전체 materialize하지 않고, stage별 start/complete·duration·process max RSS를 남긴다. 실제 당일 source dry build peak RSS가 장애 당시보다 유의하게 낮고 targeted/full profile 검증이 완료돼야 한다.

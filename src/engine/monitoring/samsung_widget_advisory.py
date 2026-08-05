@@ -2918,9 +2918,22 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 class ObservationRecorder:
-    def __init__(self, directory: Path, *, retention_days: int = 30) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        retention_days: int = 30,
+        file_prefix: str = "samsung_widget_advisory",
+    ) -> None:
         self.directory = directory
         self.retention_days = max(1, int(retention_days))
+        normalized_prefix = str(file_prefix or "").strip()
+        if not normalized_prefix or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789_"
+            for character in normalized_prefix
+        ):
+            raise ValueError("invalid_observation_file_prefix")
+        self.file_prefix = normalized_prefix
         self._last_state: str | None = None
         self._last_exit_state: str | None = None
         self._last_minute: str | None = None
@@ -2962,7 +2975,7 @@ class ObservationRecorder:
 
     def record(self, payload: dict[str, Any], observed_at: datetime) -> None:
         day_key = _as_kst(observed_at).strftime("%Y%m%d")
-        target = self.directory / f"samsung_widget_advisory_{day_key}.jsonl"
+        target = self.directory / f"{self.file_prefix}_{day_key}.jsonl"
         if self._loaded_day != day_key:
             self._restore_current_day(target, day_key)
         advisory = payload.get("advisory") or {}
@@ -3004,7 +3017,7 @@ class ObservationRecorder:
         with target.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         cutoff = _as_kst(observed_at).date() - timedelta(days=self.retention_days)
-        for path in self.directory.glob("samsung_widget_advisory_*.jsonl"):
+        for path in self.directory.glob(f"{self.file_prefix}_*.jsonl"):
             raw_date = path.stem.rsplit("_", 1)[-1]
             try:
                 artifact_date = datetime.strptime(raw_date, "%Y%m%d").date()

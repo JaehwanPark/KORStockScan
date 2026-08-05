@@ -190,6 +190,65 @@ and external-market inputs, so a portable-core pass is capped at
 `runtime_effect=false`, `actual_order_submitted=false`, and no authority to
 replace Entry AI or approve a live runtime change.
 
+## Doosan Enerbility KRX advisory service
+
+The independent Doosan Enerbility (`034020`) collector exposes
+`GET /api/widget/doosan-price` with the same
+`X-KORStockScan-Widget-Key` header. A Doosan-specific access key can be set with
+`KORSTOCKSCAN_DOOSAN_WIDGET_ACCESS_KEY` (or its `_FILE` form); otherwise the
+existing Samsung widget key is reused. This is an AWS advisory/API surface and
+does not change the Samsung Windows executable.
+
+`DOOSAN_FIRST_PULLBACK_V1` is KRX-regular-only. It starts from the portable
+completed-bar support/VWAP/rebound detector, then requires all of the following:
+
+- current-session return at or below `-0.50%`;
+- `volume_confirmation_mode=standard_rebound` (absorption-only recovery remains
+  `WATCH` in V1);
+- fresh coherent quote and BBO with a spread no wider than two ticks;
+- two consecutive 10-second actionable observations.
+
+A qualifying return at or below `-1.00%` is labeled `HIGH` and normally becomes
+`ENTRY_READY`; a resistance-only reclaim or a carried recovery episode keeps
+the portable base engine's `ENTRY_CAUTION`. The broader `-0.50%` cohort is also
+`ENTRY_CAUTION`. Only the first qualifying entry episode per KRX trade date is
+emitted. The entry reference is the top of the recommended range. Its linked
+exit event is emitted at the
+tick-rounded `+1%` target or when a later completed one-minute candle closes
+below the captured structural support. An intrabar low touch alone does not
+create the support-break exit.
+
+Entry and linked-exit events are sent only to the configured Telegram
+`ADMIN_ID`. Stable event IDs, a local state file, 30-second failure backoff, and
+once-only de-duplication prevent repeated notices; a closed entry event is not
+sent late after its exit. Set
+`KORSTOCKSCAN_DOOSAN_WIDGET_TELEGRAM_ENABLED=false` to disable both Doosan
+notices. Every payload remains `authority=widget_advisory_only`,
+`runtime_effect=false`, `actual_order_submitted=false`, and
+`broker_order_forbidden=true`.
+
+The collector uses the existing cached Kiwoom token and only `ka10001`,
+`ka10004`, `ka10080`, and `ka10081`. It writes atomic state to
+`data/runtime/doosan_widget_advisory_snapshot.json` and retains only state
+transitions and minute summaries for 30 days. Install it independently; this
+does not restart the trading bot:
+
+```bash
+sudo cp deploy/systemd/korstockscan-doosan-widget-collector.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now korstockscan-doosan-widget-collector
+```
+
+Gunicorn must be gracefully reloaded separately before the new API route is
+served. No service reload is performed merely by adding these files.
+
+Official Kiwoom reference gate evidence for this addition was recorded at
+`2026-08-05T16:55:23+09:00` against upstream commit
+`69642586f7d84ba9fd8a6faf1f1537c7fda6568b`. The inspected contract paths were
+`kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`, `kiwoom/specs.py`,
+`kiwoom/core`, and the Postman collection. KRX uses the unsuffixed `034020`
+code; no NXT, auth, account, order, cancel, or continuation flow is added.
+
 ## Windows installation
 
 Copy this `tools/windows` directory to the Windows PC. Run PowerShell:

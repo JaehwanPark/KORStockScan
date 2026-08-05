@@ -1,0 +1,26 @@
+[Unit]
+Description=KORStockScan Doosan Widget Read-Only Advisory Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+Environment="KORSTOCKSCAN_DOOSAN_WIDGET_TELEGRAM_ENABLED=true"
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.doosan_widget_advisory --interval-sec 10
+Restart=always
+RestartSec=3
+Nice=10
+CPUQuota=15%
+MemoryMax=384M
+TasksMax=32
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
