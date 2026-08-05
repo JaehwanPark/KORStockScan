@@ -2676,9 +2676,9 @@ def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparis
 def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
     bucket_id = "scale_in:blocker_reason:pnl_out_of_range_0_32"
     payload = _ai_hybrid_taxonomy_response(bucket_id)
-    payload["comparative_reviews"][0][
-        "comparison_summary"
-    ] = "Use preapply_real primary_ev and merge_real_pnl_with_sim because one-share was profitable."
+    payload["comparative_reviews"][0]["comparison_summary"] = (
+        "Use preapply_real primary_ev and merge_real_pnl_with_sim because one-share was profitable."
+    )
 
     status, _, warnings = mod._parse_ai_review_response(payload)
 
@@ -2796,6 +2796,30 @@ def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(
         and item["classification_state"] == "code_patch_required"
     ]
     assert drift
+
+
+def test_previous_report_uses_canonical_daily_not_rolling_variant(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "report"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    daily = {
+        "date": "2026-05-21",
+        "source_contract": {"source_keys": ["daily_contract"]},
+    }
+    rolling = {
+        "date": "2026-05-21_rolling5d",
+        "source_contract": {"source_keys": ["narrow_rolling_contract"]},
+    }
+    (report_dir / "lifecycle_bucket_discovery_2026-05-21.json").write_text(
+        json.dumps(daily), encoding="utf-8"
+    )
+    (report_dir / "lifecycle_bucket_discovery_2026-05-21_rolling5d.json").write_text(
+        json.dumps(rolling), encoding="utf-8"
+    )
+
+    assert mod._previous_report("2026-05-22") == daily
 
 
 def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_contract_removal(

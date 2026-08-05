@@ -31,6 +31,7 @@ BLOCKER_CLASSES = {
     "safety_or_broker_guard",
     "user_authority",
     "key_lineage",
+    "lifecycle_stage_underproduction",
 }
 SUBMIT_DROUGHT_CLOSURE_AXES = (
     "LATENCY_PRE_SUBMIT",
@@ -110,6 +111,12 @@ def _blocker_class(reason: str, row: dict[str, Any] | None = None) -> str:
             evidence.get("flow_sim_transition_blocker"),
         )
     ).lower()
+    if (
+        "lifecycle_flow_incomplete_stage_contract" in text
+        or "incomplete_lifecycle_flow" in text
+        or "lifecycle_stage_underproduction" in text
+    ):
+        return "lifecycle_stage_underproduction"
     if "key" in text or "catalog" in text or "lineage" in text:
         return "key_lineage"
     if (
@@ -157,8 +164,19 @@ def _candidate_from_lifecycle(
     source_key_id = str(item.get("source_bucket_id") or candidate_id)
     state = str(item.get("classification_state") or "source_only_keep_collecting")
     source_gap = str(item.get("source_dimension_gap") or "")
+    flow_blocker = str(item.get("flow_sim_transition_blocker") or "")
+    recommended_resolution = str(item.get("recommended_resolution") or "")
+    incomplete_lifecycle = (
+        source_gap == "lifecycle_flow_incomplete_stage_contract"
+        or flow_blocker == "lifecycle_flow_incomplete_stage_contract"
+    )
+    not_applicable = recommended_resolution.endswith("not_applicable")
     bridge_state = "ready" if state == "live_auto_apply_ready" else "not_ready"
-    source_quality_state = "blocked" if source_gap else "pass"
+    source_quality_state = (
+        "blocked"
+        if source_gap and not incomplete_lifecycle and not not_applicable
+        else "pass"
+    )
     sample = _safe_int(item.get("sample"))
     required_sample = _safe_int(
         item.get("parent_sample_floor") or item.get("sample_floor"), 0
@@ -167,7 +185,14 @@ def _candidate_from_lifecycle(
         item.get("source_quality_adjusted_ev_pct")
         or item.get("equal_weight_avg_profit_pct")
     )
-    if state == "lifecycle_flow_sim_probe_candidate":
+    if not_applicable:
+        conversion_state, blocker = "terminal_not_applicable", "not_applicable"
+    elif incomplete_lifecycle:
+        conversion_state, blocker = (
+            "source_only_incomplete_lifecycle",
+            "lifecycle_stage_underproduction",
+        )
+    elif state == "lifecycle_flow_sim_probe_candidate":
         conversion_state, blocker = "sim_applied", "sample_floor"
     elif state in {"sim_auto_approved", "entry_only_sim_auto_approved"}:
         conversion_state, blocker = "sim_applied", "complete_parent_flow"
@@ -205,8 +230,11 @@ def _candidate_from_lifecycle(
         "flow_sim_transition_state": item.get("flow_sim_transition_state"),
         "evidence": {
             "classification_state": state,
-            "recommended_resolution": item.get("recommended_resolution"),
-            "flow_sim_transition_blocker": item.get("flow_sim_transition_blocker"),
+            "recommended_resolution": recommended_resolution,
+            "flow_sim_transition_blocker": flow_blocker,
+            "source_dimension_gap": source_gap,
+            "incomplete_lifecycle": incomplete_lifecycle,
+            "not_applicable": not_applicable,
         },
     }
 
@@ -417,6 +445,7 @@ def _conversion_blocker(
         "bridge_contract",
         "key_lineage",
         "submit_drought",
+        "lifecycle_stage_underproduction",
     }:
         remaining_gap_count = 2
     ev = _safe_float(candidate.get("primary_ev"), 0.0) or 0.0
@@ -433,6 +462,7 @@ def _conversion_blocker(
         "post_apply_attribution": 2,
         "safety_or_broker_guard": 5,
         "user_authority": 5,
+        "lifecycle_stage_underproduction": 3,
     }.get(blocker, 3)
     impact = max(
         1,
@@ -490,8 +520,28 @@ def _acceptance_test(blocker_class: str) -> str:
         "safety_or_broker_guard": "hard safety/broker guard remains closed and candidate is not promoted",
         "user_authority": "user-approved full-live/cap/provider/bot authority artifact exists",
         "key_lineage": "same source key is continuous producer->catalog->PREOPEN->runtime->postclose or closes natural_match_0",
+        "lifecycle_stage_underproduction": "required lifecycle stage producers emit joinable submit/holding/exit rows before the flow is treated as a source-quality defect",
     }
     return mapping.get(blocker_class, "blocker closes with machine-readable evidence")
+
+
+def _submit_drought_contract(buy_funnel: dict[str, Any]) -> dict[str, Any]:
+    contract = buy_funnel.get("entry_submit_drought_contract")
+    return contract if isinstance(contract, dict) else {}
+
+
+def _submit_drought_causal_axes(buy_funnel: dict[str, Any]) -> list[str]:
+    contract = _submit_drought_contract(buy_funnel)
+    causal_axes = contract.get("causal_bottleneck_axes")
+    if isinstance(causal_axes, list):
+        return [
+            str(item)
+            for item in causal_axes
+            if str(item) in SUBMIT_DROUGHT_CLOSURE_AXES
+        ]
+    # Backward compatibility for historical reports that predate causal
+    # axis provenance. New reports always carry the explicit list.
+    return list(SUBMIT_DROUGHT_CLOSURE_AXES)
 
 
 def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]:
@@ -511,6 +561,7 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
     )
     if not critical:
         return []
+    selected_axes = _submit_drought_causal_axes(buy_funnel)
     return [
         _conversion_blocker(
             candidate_id=f"submit_drought:{item}",
@@ -518,7 +569,7 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
             reason=f"close_submit_drought_{item.lower()}",
             rank_seed=30,
         )
-        for item in SUBMIT_DROUGHT_CLOSURE_AXES
+        for item in selected_axes
     ]
 
 
@@ -581,6 +632,7 @@ def _buy_funnel_provenance(buy_funnel: dict[str, Any]) -> dict[str, Any]:
         subactions["close_unknown_latency_reason"] = _safe_int(
             root_cause.get("unknown_latency_reason_count")
         )
+    drought_contract = _submit_drought_contract(buy_funnel)
     return {
         "buy_funnel_source_present": bool(buy_funnel),
         "buy_funnel_report_type": buy_funnel.get("report_type"),
@@ -589,6 +641,17 @@ def _buy_funnel_provenance(buy_funnel: dict[str, Any]) -> dict[str, Any]:
         "submit_drought_handoff_state": classification.get(
             "submit_drought_handoff_state"
         ),
+        "submit_drought_causal_bottleneck_axes": _submit_drought_causal_axes(
+            buy_funnel
+        ),
+        "submit_drought_observation_only_axes": drought_contract.get(
+            "observation_only_axes"
+        )
+        or [],
+        "submit_drought_no_current_signal_axes": drought_contract.get(
+            "no_current_signal_axes"
+        )
+        or [],
         "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts")
         or {},
         "submit_drought_quote_freshness_attribution": quote_freshness,
@@ -822,7 +885,10 @@ def build_conversion_lane(
         blocker_class = _blocker_class(
             str(candidate.get("next_blocker") or ""), candidate
         )
-        if candidate.get("conversion_state") != "bounded_real_canary_requestable":
+        if candidate.get("conversion_state") not in {
+            "bounded_real_canary_requestable",
+            "terminal_not_applicable",
+        }:
             blockers.append(
                 _conversion_blocker(
                     candidate_id=str(candidate.get("candidate_id")),
@@ -1230,7 +1296,7 @@ def build_conversion_lane(
         "submit_drought_closure_axis_count": len(submit_drought_axes),
         "submit_drought_closure_axes": submit_drought_axes,
         "submit_drought_split_complete": set(submit_drought_axes)
-        == set(SUBMIT_DROUGHT_CLOSURE_AXES),
+        == set(_submit_drought_causal_axes(buy_funnel)),
         **buy_funnel_provenance,
     }
     return {

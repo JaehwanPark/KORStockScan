@@ -1,5 +1,6 @@
 import gzip
 import json
+from collections import Counter
 
 import pytest
 
@@ -302,12 +303,22 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(
     assert policy_backtest["total"]["eligible_attempts"] == 3
     assert policy_backtest["total"]["conservative_estimated_order_submit_success"] == 0
     overbought = report["summary"]["overbought_gate_counterfactual"]
-    assert overbought["decision"] == "source_only_recovery_design_candidate"
+    assert overbought["decision"] == (
+        "source_quality_blocked_executable_bbo_or_first_hit_missing"
+    )
     assert overbought["evaluated_candidates"] == 6
     assert overbought["missed_winner_count"] == 5
     assert overbought["avoided_loser_count"] == 0
     assert overbought["runtime_effect"] is False
     assert overbought["broker_order_forbidden"] is True
+    assert overbought["runtime_candidate_eligible"] is False
+    assert overbought["reference_price_contract"]["source_quality_ready"] is False
+    assert (
+        overbought["reference_price_contract"][
+            "mark_or_minute_proxy_forbidden_for_recovery_promotion"
+        ]
+        is True
+    )
     assert report["summary"]["code_improvement_order_count"] == 1
     assert (
         report["code_improvement_orders"][0]["order_id"]
@@ -319,6 +330,63 @@ def test_entry_hurdle_backtest_classifies_overblocking_from_existing_artifacts(
     assert report["code_improvement_orders"][0]["runtime_effect"] is False
     assert report["code_improvement_orders"][0]["broker_order_forbidden"] is True
     assert not report["missing_artifacts"]
+    assert "executable BBO / first-hit / joint rows: `0`/`0`/`0`" in (
+        mod.build_markdown(report)
+    )
+
+
+def test_overbought_reference_provenance_accepts_only_executable_bbo_first_hit():
+    totals = Counter()
+    sources = Counter()
+    mod._collect_overbought_reference_provenance(
+        {
+            "full_rows": [
+                {
+                    "terminal_stage": "blocked_overbought",
+                    "price_source": "minute_candle_proxy",
+                    "first_hit": "target_first",
+                },
+                {
+                    "terminal_stage": "blocked_overbought",
+                    "price_source": "fresh_ws_0d_executable_bbo_ask",
+                    "first_hit": "adverse_first",
+                },
+            ]
+        },
+        totals,
+        sources,
+    )
+
+    assert totals == {
+        "observed_rows": 2,
+        "executable_bbo_rows": 1,
+        "first_hit_labeled_rows": 2,
+        "executable_bbo_first_hit_rows": 1,
+    }
+    assert sources == {
+        "fresh_ws_0d_executable_bbo_ask": 1,
+        "minute_candle_proxy": 1,
+    }
+
+
+def test_entry_hurdle_markdown_exposes_joint_overbought_reference_counts():
+    markdown = mod.build_markdown(
+        {
+            "date": "2026-06-07",
+            "runtime_effect": False,
+            "summary": {
+                "overbought_gate_counterfactual": {
+                    "reference_price_contract": {
+                        "executable_bbo_rows": 4,
+                        "first_hit_labeled_rows": 5,
+                        "executable_bbo_first_hit_rows": 3,
+                    }
+                }
+            }
+        }
+    )
+
+    assert "executable BBO / first-hit / joint rows: `4`/`5`/`3`" in markdown
 
 
 def test_entry_hurdle_micro_pressure_relief_requires_trusted_tick_pressure():

@@ -321,6 +321,10 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     )
     assert breakdown["axes"]["BROKER_RECEIPT"]["status"] == "observed"
     assert breakdown["axes"]["SIM_REAL_AUTHORITY"]["status"] == "observed"
+    assert breakdown["causal_bottleneck_axes"] == ["LATENCY_PRE_SUBMIT"]
+    assert breakdown["observation_only_axes"] == ["SIM_REAL_AUTHORITY"]
+    assert "BROKER_RECEIPT" in breakdown["no_current_signal_axes"]
+    assert contract["causal_bottleneck_axes"] == ["LATENCY_PRE_SUBMIT"]
     assert "broker_order_submit" in breakdown["forbidden_uses"]
     assert "provider_route_change" in breakdown["forbidden_uses"]
     root_cause = report["classification"]["submit_drought_root_cause"]

@@ -28632,6 +28632,7 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
         code="456456",
         ws_data={
             "curr": 12_000,
+            "last_ws_update_ts": time.time(),
             "v_pw": 110.0,
             "buy_ratio": 52.0,
             "ask_tot": 50_000,
@@ -28655,6 +28656,18 @@ def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
     assert "scalp_sim_entry_armed" in by_stage
     assert by_stage["blocked_overbought"]["gate_action"] == "risk_context_only"
     assert by_stage["blocked_overbought"]["risk_bucket"] == "chase_risk"
+    assert (
+        by_stage["blocked_overbought"]["counterfactual_entry_executable_best_ask"]
+        == 12_010
+    )
+    assert (
+        by_stage["blocked_overbought"]["counterfactual_entry_price_source"]
+        == "fresh_ws_snapshot_executable_bbo_ask"
+    )
+    assert (
+        by_stage["blocked_overbought"]["counterfactual_entry_bbo_source_quality"]
+        == "pass"
+    )
     assert "pre_submit_overbought_pullback_guard_block" in by_stage
     assert (
         by_stage["pre_submit_overbought_pullback_guard_block"]["broker_order_forbidden"]

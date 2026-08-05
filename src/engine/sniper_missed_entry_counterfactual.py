@@ -71,6 +71,10 @@ _EVENT_FIELD_KEYS = frozenset(
         "current_cntr_str_available",
         "current_price",
         "current_price_observed",
+        "counterfactual_entry_bbo_source_quality",
+        "counterfactual_entry_executable_best_ask",
+        "counterfactual_entry_executable_best_bid",
+        "counterfactual_entry_price_source",
         "effective_venue",
         "eviction_reason",
         "existing_runtime_record_id",
@@ -843,7 +847,31 @@ def _build_buy_attempts(
                 ),
                 None,
             )
-            signal_price = _safe_int(anchor_event.fields.get("target_buy_price"), 0)
+            executable_ask = _safe_int(
+                terminal_event.fields.get("counterfactual_entry_executable_best_ask"),
+                0,
+            )
+            executable_source = str(
+                terminal_event.fields.get("counterfactual_entry_price_source") or ""
+            )
+            executable_quality = str(
+                terminal_event.fields.get("counterfactual_entry_bbo_source_quality")
+                or ""
+            )
+            if (
+                executable_ask > 0
+                and "executable" in executable_source
+                and executable_quality == "pass"
+            ):
+                signal_price = executable_ask
+                signal_price_source = executable_source
+                evaluation_dt = _parse_event_dt(terminal_event.emitted_at) or anchor_dt
+            else:
+                signal_price = _safe_int(anchor_event.fields.get("target_buy_price"), 0)
+                signal_price_source = (
+                    "explicit_target_buy_price" if signal_price > 0 else ""
+                )
+                evaluation_dt = anchor_dt
             ai_score = _safe_float(
                 anchor_event.fields.get("ai_score"),
                 _safe_float(buy_events[-1].fields.get("ai_score"), 0.0),
@@ -865,9 +893,9 @@ def _build_buy_attempts(
 
             candidates.append(
                 {
-                    "candidate_id": f"{anchor_event.code}:{anchor_event.record_id or '-'}:{anchor_dt.strftime('%H%M%S')}",
+                    "candidate_id": f"{anchor_event.code}:{anchor_event.record_id or '-'}:{evaluation_dt.strftime('%H%M%S')}",
                     "signal_date": target_date,
-                    "signal_time": anchor_dt.strftime("%H:%M:%S"),
+                    "signal_time": evaluation_dt.strftime("%H:%M:%S"),
                     "stock_code": anchor_event.code,
                     "stock_name": anchor_event.name,
                     "attempt_status": "ENTERED" if has_submitted else "MISSED",
@@ -877,6 +905,7 @@ def _build_buy_attempts(
                     "terminal_stage": terminal_event.stage,
                     "terminal_stage_label": _stage_label(terminal_event.stage),
                     "signal_price": signal_price,
+                    "signal_price_source": signal_price_source,
                     "ai_score": round(ai_score, 1),
                     "target_qty": _safe_int(
                         (budget_event.fields if budget_event else {}).get("qty"), 0
@@ -2919,9 +2948,21 @@ def build_missed_entry_counterfactual_report(
                 "forward_horizon_metrics": forward_horizon_metrics,
                 "entry_price_used": entry_price_used,
                 "price_source": (
-                    "explicit_target_buy_price"
-                    if _safe_int(candidate.get("signal_price"), 0) > 0
-                    else "minute_candle_proxy"
+                    str(candidate.get("signal_price_source") or "")
+                    or (
+                        "explicit_target_buy_price"
+                        if _safe_int(candidate.get("signal_price"), 0) > 0
+                        else "minute_candle_proxy"
+                    )
+                ),
+                "first_hit": (
+                    "target_first"
+                    if bool(metrics_5m.get("tp05_before_sl05"))
+                    else (
+                        "adverse_first"
+                        if bool(metrics_5m.get("hit_sl_05"))
+                        else "no_hit_within_window"
+                    )
                 ),
                 "minute_candle_source_meta": candle_meta,
                 **source_quality,
@@ -3257,6 +3298,7 @@ def build_missed_entry_counterfactual_report(
             **{key: item.get(key) for key in _COUNTERFACTUAL_SIZING_KEYS},
             "ai_score": round(_safe_float(item.get("ai_score"), 0.0), 1),
             "price_source": str(item.get("price_source") or "minute_candle_proxy"),
+            "first_hit": str(item.get("first_hit") or ""),
             "minute_candle_source_quality": str(
                 item.get("minute_candle_source_quality") or "unknown"
             ),

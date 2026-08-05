@@ -1758,6 +1758,9 @@ def _entry_submit_drought_contract(
         "economic_participation": economic_participation,
         "thresholds": classification.get("submit_drought_thresholds") or {},
         "weak_contract_matches": weak_contract_matches,
+        "causal_bottleneck_axes": observation_breakdown["causal_bottleneck_axes"],
+        "observation_only_axes": observation_breakdown["observation_only_axes"],
+        "no_current_signal_axes": observation_breakdown["no_current_signal_axes"],
         "observation_breakdown": observation_breakdown,
         "source_taxonomy_leakage": taxonomy_leakage,
         "forbidden_uses": [
@@ -1921,6 +1924,24 @@ def _entry_submit_drought_observation_breakdown(
             "next_repair_action": "separate swing/source taxonomy from entry-submit blocker labels",
         },
     }
+    causal_axes = [
+        axis
+        for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER
+        if axes[axis]["status"] == "observed"
+        and int(axes[axis].get("observed_count") or 0) > 0
+        and axis != "SIM_REAL_AUTHORITY"
+    ]
+    no_signal_axes = [
+        axis
+        for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER
+        if axes[axis]["status"] == "no_current_signal"
+        or int(axes[axis].get("observed_count") or 0) <= 0
+    ]
+    observation_only_axes = [
+        axis
+        for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER
+        if axis not in causal_axes and axis not in no_signal_axes
+    ]
     return {
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -1928,6 +1949,9 @@ def _entry_submit_drought_observation_breakdown(
         "decision_authority": "submit_drought_attribution_only",
         "axis_order": list(SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER),
         "axes": {axis: axes[axis] for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER},
+        "causal_bottleneck_axes": causal_axes,
+        "observation_only_axes": observation_only_axes,
+        "no_current_signal_axes": no_signal_axes,
         "forbidden_uses": [
             "broker_order_submit",
             "runtime_apply_candidate",

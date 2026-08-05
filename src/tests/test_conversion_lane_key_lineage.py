@@ -1690,15 +1690,33 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
                     "unknown_latency_reason_count": 7,
                     "unknown_latency_workorder_required": True,
                 },
-            }
+            },
+            "entry_submit_drought_contract": {
+                "causal_bottleneck_axes": [
+                    "LATENCY_PRE_SUBMIT",
+                    "BUDGET_PASS_COLLAPSE",
+                ],
+                "observation_only_axes": ["SIM_REAL_AUTHORITY"],
+                "no_current_signal_axes": ["BROKER_RECEIPT"],
+            },
         },
     )
 
     report = lane.build_conversion_lane(target)
 
     assert report["summary"]["submit_drought_split_complete"] is True
-    assert report["summary"]["submit_drought_closure_axis_count"] == 6
-    assert report["summary"]["submit_funnel_blocker_count"] == 6
+    assert report["summary"]["submit_drought_closure_axis_count"] == 2
+    assert report["summary"]["submit_drought_causal_bottleneck_axes"] == [
+        "LATENCY_PRE_SUBMIT",
+        "BUDGET_PASS_COLLAPSE",
+    ]
+    assert report["summary"]["submit_drought_observation_only_axes"] == [
+        "SIM_REAL_AUTHORITY"
+    ]
+    assert report["summary"]["submit_drought_no_current_signal_axes"] == [
+        "BROKER_RECEIPT"
+    ]
+    assert report["summary"]["submit_funnel_blocker_count"] == 2
     assert report["summary"]["submit_drought_is_ldm_bucket_blocker"] is False
     assert report["summary"]["buy_funnel_source_present"] is True
     assert (
@@ -1744,9 +1762,10 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
         for item in report["conversion_blocker_rank"]
         if item["blocker_class"] == "submit_drought"
     ]
-    assert {item["blocker_axis"] for item in submit_blockers} == set(
-        lane.SUBMIT_DROUGHT_CLOSURE_AXES
-    )
+    assert {item["blocker_axis"] for item in submit_blockers} == {
+        "LATENCY_PRE_SUBMIT",
+        "BUDGET_PASS_COLLAPSE",
+    }
     latency_blocker = next(
         item for item in submit_blockers if item["blocker_axis"] == "LATENCY_PRE_SUBMIT"
     )
@@ -2129,6 +2148,44 @@ def test_conversion_blocker_class_ignores_source_key_field_names():
     }
 
     assert lane._blocker_class("bridge_contract", row) == "bridge_contract"
+
+
+def test_conversion_lane_separates_incomplete_lifecycle_from_source_quality():
+    candidate = lane._candidate_from_lifecycle(
+        {
+            "bucket_id": "lifecycle_flow:incomplete_a",
+            "classification_state": "source_only_keep_collecting",
+            "source_dimension_gap": "lifecycle_flow_incomplete_stage_contract",
+            "flow_sim_transition_blocker": ("lifecycle_flow_incomplete_stage_contract"),
+            "recommended_resolution": "explicit_lifecycle_flow_source_only_blocker",
+            "sample": 8,
+        },
+        "scalp",
+    )
+
+    assert candidate["source_quality_state"] == "pass"
+    assert candidate["conversion_state"] == "source_only_incomplete_lifecycle"
+    assert candidate["next_blocker"] == "lifecycle_stage_underproduction"
+    assert (
+        lane._blocker_class(candidate["next_blocker"], candidate)
+        == "lifecycle_stage_underproduction"
+    )
+
+
+def test_conversion_lane_marks_not_applicable_without_open_blocker():
+    candidate = lane._candidate_from_lifecycle(
+        {
+            "bucket_id": "entry:exit_rule:exit_unknown",
+            "classification_state": "source_only_keep_collecting",
+            "source_dimension_gap": "entry_label_missing",
+            "recommended_resolution": "entry_label_not_applicable",
+        },
+        "scalp",
+    )
+
+    assert candidate["source_quality_state"] == "pass"
+    assert candidate["conversion_state"] == "terminal_not_applicable"
+    assert candidate["next_blocker"] == "not_applicable"
 
 
 def test_sim_policy_catalogs_merge_latest_hypothesis_plan(monkeypatch, tmp_path):

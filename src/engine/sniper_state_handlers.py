@@ -53912,6 +53912,18 @@ def _handle_watching_strategy_branch(
                     else "missing_orderbook_totals"
                 )
             if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
+                overbought_best_ask, overbought_best_bid = _get_best_levels_from_ws(
+                    ws_data
+                )
+                overbought_bbo_valid = bool(
+                    overbought_best_ask > 0
+                    and overbought_best_bid > 0
+                    and overbought_best_ask >= overbought_best_bid
+                    and pre_ai_ws_refresh_fields.get(
+                        "pre_ai_ws_snapshot_refresh_reason"
+                    )
+                    in {"input_snapshot_fresh", "latest_ws_snapshot_fresh"}
+                )
                 overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
                 overbought_risk = _classify_overbought_risk(
                     overlap_snapshot,
@@ -53954,6 +53966,20 @@ def _handle_watching_strategy_branch(
                     risk_bucket=overbought_context.get("risk_bucket"),
                     curr_price=int(curr_price),
                     open_price=f"{open_price:.2f}",
+                    counterfactual_entry_executable_best_ask=(
+                        overbought_best_ask if overbought_bbo_valid else 0
+                    ),
+                    counterfactual_entry_executable_best_bid=(
+                        overbought_best_bid if overbought_bbo_valid else 0
+                    ),
+                    counterfactual_entry_price_source=(
+                        "fresh_ws_snapshot_executable_bbo_ask"
+                        if overbought_bbo_valid
+                        else "missing_fresh_executable_bbo"
+                    ),
+                    counterfactual_entry_bbo_source_quality=(
+                        "pass" if overbought_bbo_valid else "blocked"
+                    ),
                     **_pre_ai_blocked_gate_quality_fields(
                         gate_name="overbought",
                         ws_data=ws_data,

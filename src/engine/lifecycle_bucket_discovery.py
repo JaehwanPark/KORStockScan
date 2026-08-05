@@ -608,13 +608,21 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _previous_report(target_date: str) -> dict[str, Any]:
     latest: dict[str, Any] = {}
+    latest_date = ""
     for path in sorted(REPORT_DIR.glob("lifecycle_bucket_discovery_*.json")):
         report_date = path.stem.removeprefix("lifecycle_bucket_discovery_")
-        if report_date >= target_date:
+        # Rolling/MTD variants contain a deliberately narrower source contract.
+        # They must never become the previous *daily* contract baseline merely
+        # because their suffixed artifact name sorts after the canonical daily
+        # artifact.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", report_date):
+            continue
+        if report_date >= target_date or report_date <= latest_date:
             continue
         payload = _load_json(path)
         if payload:
             latest = payload
+            latest_date = report_date
     return latest
 
 

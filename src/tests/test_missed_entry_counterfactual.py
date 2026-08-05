@@ -79,6 +79,53 @@ def test_load_entry_events_streams_and_projects_large_fields(monkeypatch, tmp_pa
     assert "exact_payload" not in events[0].fields
 
 
+def test_overbought_attempt_uses_terminal_fresh_executable_ask(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-08-05"
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "ai_confirmed",
+                "stock_name": "테스트",
+                "stock_code": "005930",
+                "record_id": "runtime-1",
+                "fields": {"action": "BUY", "ai_score": "85"},
+                "emitted_at": "2026-08-05T10:00:00+09:00",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "blocked_overbought",
+                "stock_name": "테스트",
+                "stock_code": "005930",
+                "record_id": "runtime-1",
+                "fields": {
+                    "counterfactual_entry_executable_best_ask": "70100",
+                    "counterfactual_entry_executable_best_bid": "70000",
+                    "counterfactual_entry_price_source": (
+                        "fresh_ws_0d_executable_bbo_ask"
+                    ),
+                    "counterfactual_entry_bbo_source_quality": "pass",
+                },
+                "emitted_at": "2026-08-05T10:00:03+09:00",
+                "emitted_date": target_date,
+            },
+        ],
+    )
+
+    attempts = report_mod._build_buy_attempts(
+        target_date, events=report_mod._load_entry_events(target_date)
+    )
+
+    assert len(attempts) == 1
+    assert attempts[0]["signal_price"] == 70100
+    assert attempts[0]["signal_price_source"] == "fresh_ws_0d_executable_bbo_ask"
+    assert attempts[0]["signal_time"] == "10:00:03"
+
+
 def test_candidate_candle_fetch_releases_prior_symbol_before_next_fetch(
     monkeypatch, tmp_path
 ):

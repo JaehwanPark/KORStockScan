@@ -372,6 +372,48 @@ def _top_overblocking(
     return {"blocker": key, **row}
 
 
+def _is_executable_bbo_price_source(value: Any) -> bool:
+    source = str(value or "").strip().lower()
+    return bool("executable" in source and ("ask" in source or "bbo" in source))
+
+
+def _collect_overbought_reference_provenance(
+    missed_report: dict[str, Any],
+    totals: Counter[str],
+    price_sources: Counter[str],
+) -> None:
+    rows = missed_report.get("full_rows")
+    if not isinstance(rows, list):
+        rows = missed_report.get("rows")
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("terminal_stage") or "") not in OVERBOUGHT_BLOCKER_KEYS:
+            continue
+        totals["observed_rows"] += 1
+        source = str(row.get("price_source") or "missing")
+        price_sources[source] += 1
+        if _is_executable_bbo_price_source(source):
+            totals["executable_bbo_rows"] += 1
+            executable_bbo = True
+        else:
+            executable_bbo = False
+        first_hit = str(row.get("first_hit") or row.get("opportunity_label") or "")
+        if first_hit in {
+            "target_first",
+            "gross_target_first",
+            "adverse_first",
+            "adverse_stop_first",
+            "no_hit_within_20m",
+            "no_hit_within_window",
+        }:
+            totals["first_hit_labeled_rows"] += 1
+            if executable_bbo:
+                totals["executable_bbo_first_hit_rows"] += 1
+
+
 def _build_implemented_policy_backtest(
     *,
     source_dates: list[str],
@@ -745,6 +787,7 @@ def _overbought_gate_counterfactual(
     *,
     blocker_summary: dict[str, dict[str, Any]],
     window_policy: str,
+    reference_provenance: dict[str, Any],
 ) -> dict[str, Any]:
     top = _top_overblocking(blocker_summary, OVERBOUGHT_BLOCKER_KEYS)
     blocker_rows = {
@@ -764,13 +807,21 @@ def _overbought_gate_counterfactual(
     neutral = sum(
         _safe_int(row.get("neutral_count"), 0) for row in blocker_rows.values()
     )
+    executable_rows = _safe_int(reference_provenance.get("executable_bbo_rows"), 0)
+    first_hit_rows = _safe_int(reference_provenance.get("first_hit_labeled_rows"), 0)
+    joint_rows = _safe_int(reference_provenance.get("executable_bbo_first_hit_rows"), 0)
+    source_quality_ready = (
+        executable_rows >= 3 and first_hit_rows >= 3 and joint_rows >= 3
+    )
     return {
         "metric_role": "sim_probe_ev",
         "decision_authority": "entry_hurdle_backtest_report_only",
         "window_policy": window_policy,
         "sample_floor": "report_only_overbought_blocker_sample_floor_3",
         "primary_decision_metric": "missed_winner_vs_avoided_loser_tradeoff",
-        "source_quality_gate": "clean_baseline_allowed_existing_missed_entry_counterfactual",
+        "source_quality_gate": (
+            "clean_baseline_plus_executable_bbo_entry_reference_and_target_adverse_first_hit"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted_provenance_preserved": True,
@@ -789,13 +840,32 @@ def _overbought_gate_counterfactual(
         ),
         "top_overblocking": top,
         "blocker_tradeoff": blocker_rows,
+        "reference_price_contract": {
+            **reference_provenance,
+            "required_price_source": "fresh_executable_bbo_ask",
+            "required_first_hit_labels": [
+                "target_first",
+                "adverse_first",
+                "no_hit_within_window",
+            ],
+            "source_quality_ready": source_quality_ready,
+            "mark_or_minute_proxy_forbidden_for_recovery_promotion": True,
+        },
+        "runtime_candidate_eligible": bool(top and source_quality_ready),
         "decision": (
             "source_only_recovery_design_candidate"
-            if top
-            else "hold_sample_or_balanced"
+            if top and source_quality_ready
+            else (
+                "source_quality_blocked_executable_bbo_or_first_hit_missing"
+                if top
+                else "hold_sample_or_balanced"
+            )
         ),
         "allowed_next_step": (
-            "Use this evidence to design a bounded source-only overbought recovery candidate; "
+            "Instrument and replay fresh executable BBO entry references with target/adverse first-hit labels "
+            "before designing a bounded source-only recovery candidate; do not promote mark/minute proxy MFE."
+            if top and not source_quality_ready
+            else "Use this evidence to design a bounded source-only overbought recovery candidate; "
             "do not relax live overbought guards without a separate runtime apply contract."
         ),
     }
@@ -816,6 +886,8 @@ def _code_improvement_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
         f"avoided_loser_count={overbought.get('avoided_loser_count')}",
         f"missed_winner_rate={overbought.get('missed_winner_rate')}",
         f"avoided_loser_rate={overbought.get('avoided_loser_rate')}",
+        f"runtime_candidate_eligible={overbought.get('runtime_candidate_eligible')}",
+        f"reference_price_contract={overbought.get('reference_price_contract')}",
         "runtime_effect=false",
         "allowed_runtime_apply=false",
         "actual_order_submitted=false",
@@ -824,7 +896,11 @@ def _code_improvement_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {
             "order_id": "order_overbought_gate_miss_ev_recovery",
-            "title": "overbought gate miss EV recovery",
+            "title": (
+                "overbought gate executable BBO and first-hit provenance"
+                if not overbought.get("runtime_candidate_eligible")
+                else "overbought gate miss EV recovery"
+            ),
             "source_report_type": REPORT_TYPE,
             "lifecycle_stage": "entry_submit",
             "target_subsystem": "entry_funnel",
@@ -854,8 +930,8 @@ def _code_improvement_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "root_cause_closure_status_hint": "implementation_done",
             },
             "expected_ev_effect": (
-                "Expose overbought gate missed-winner vs avoided-loser evidence as source-only provenance "
-                "before any bounded policy design."
+                "Prevent mark/minute proxy MFE from authorizing recovery while preserving executable-BBO "
+                "target/adverse-first evidence for a later bounded policy design."
             ),
             "evidence": evidence,
             "source_paths": [str(path) for path in report.get("source_paths") or []],
@@ -902,6 +978,8 @@ def build_report(
         "latency_pass_recovered_count": 0,
         "order_bundle_submitted_after_refresh_count": 0,
     }
+    overbought_reference_totals: Counter[str] = Counter()
+    overbought_price_sources: Counter[str] = Counter()
     date_rows: list[dict[str, Any]] = []
     missing_artifacts: list[dict[str, str]] = []
 
@@ -933,6 +1011,11 @@ def build_report(
             stage_totals[stage] += count
 
         blocker_rows = _blocker_metrics(missed_report)
+        _collect_overbought_reference_provenance(
+            missed_report,
+            overbought_reference_totals,
+            overbought_price_sources,
+        )
         for key, row in blocker_rows.items():
             bucket = blocker_totals[str(key)]
             bucket["evaluated_candidates"] += _safe_int(
@@ -1058,6 +1141,17 @@ def build_report(
     overbought_gate_counterfactual = _overbought_gate_counterfactual(
         blocker_summary=blocker_summary,
         window_policy=f"{start}_to_{end}",
+        reference_provenance={
+            "observed_rows": overbought_reference_totals["observed_rows"],
+            "executable_bbo_rows": overbought_reference_totals["executable_bbo_rows"],
+            "first_hit_labeled_rows": overbought_reference_totals[
+                "first_hit_labeled_rows"
+            ],
+            "executable_bbo_first_hit_rows": overbought_reference_totals[
+                "executable_bbo_first_hit_rows"
+            ],
+            "price_source_counts": dict(sorted(overbought_price_sources.items())),
+        },
     )
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -1200,6 +1294,11 @@ def build_markdown(report: dict[str, Any]) -> str:
         if isinstance(summary.get("overbought_gate_counterfactual"), dict)
         else {}
     )
+    overbought_reference = (
+        overbought.get("reference_price_contract")
+        if isinstance(overbought.get("reference_price_contract"), dict)
+        else {}
+    )
     lines.extend(
         [
             "",
@@ -1210,6 +1309,10 @@ def build_markdown(report: dict[str, Any]) -> str:
             f"`{overbought.get('avoided_loser_count', 0)}`",
             f"- missed/avoided rate: `{overbought.get('missed_winner_rate', 0.0)}%`/"
             f"`{overbought.get('avoided_loser_rate', 0.0)}%`",
+            f"- executable BBO / first-hit / joint rows: "
+            f"`{overbought_reference.get('executable_bbo_rows', 0)}`/"
+            f"`{overbought_reference.get('first_hit_labeled_rows', 0)}`/"
+            f"`{overbought_reference.get('executable_bbo_first_hit_rows', 0)}`",
             f"- runtime_effect: `{overbought.get('runtime_effect')}`",
             f"- code_improvement_orders: `{summary.get('code_improvement_order_count', 0)}`",
         ]
