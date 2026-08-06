@@ -47,6 +47,9 @@ from src.engine.monitoring.samsung_widget_contract import (
     KST,
     snapshot_observed_at,
 )
+from src.engine.monitoring.widget_advisory_calibration_policy import (
+    WidgetCalibrationPolicyLoader,
+)
 from src.engine.sniper_config import CONF
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 from src.utils import kiwoom_utils
@@ -837,10 +840,14 @@ class HanwhaOceanWidgetCollector:
         observation_dir: Path = contract.DEFAULT_OBSERVATION_DIR,
         request_session: requests.Session | None = None,
         notifier: HanwhaOceanWidgetTelegramNotifier | None = None,
+        calibration_policy_loader: WidgetCalibrationPolicyLoader | None = None,
     ) -> None:
         self.snapshot_path = snapshot_path
         self.request_session = request_session
         self.notifier = notifier
+        self.calibration_policy_loader = (
+            calibration_policy_loader or WidgetCalibrationPolicyLoader()
+        )
         self.request_budget = ReadOnlyRequestBudget()
         self.break_rearm_filter = AdvisoryBreakRearmFilter()
         self.recovery_episode_filter = AdvisoryRecoveryEpisodeFilter()
@@ -1095,7 +1102,18 @@ class HanwhaOceanWidgetCollector:
             bars=bars,
             context=context,
         )
-        advisory = self.promotion_filter.apply(advisory)
+        calibration_policy = self.calibration_policy_loader.resolve(
+            symbol=contract.HANWHA_OCEAN_CODE,
+            session=context.name,
+            observed_date=decision_now.date(),
+        )
+        advisory = self.promotion_filter.apply(
+            advisory,
+            required_confirmations=int(
+                calibration_policy["required_actionable_confirmations"]
+            ),
+            calibration_policy=calibration_policy,
+        )
         advisory["metric_contract"] = contract.METRIC_CONTRACT
         advisory.setdefault("source_quality", {})["auxiliary_status"] = "NOT_APPLICABLE"
         advisory.setdefault("provenance", {})["cache_scope"] = [

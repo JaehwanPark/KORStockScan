@@ -68,12 +68,25 @@ seconds, the route calls only `ka10001` to keep the price visible and returns
 state changes and one observation per completed minute are recorded. JSONL
 older than 30 days is deleted.
 
-The optional daily evaluator runs after the NXT close and materializes mature
-1/3/5/10/20/30/60-minute MFE/MAE plus target/adverse first-hit observations.
+The daily multi-symbol evaluator runs at 20:10 after the NXT close and
+materializes mature 1/3/5/10/20/30/60-minute MFE/MAE plus target/adverse
+first-hit observations for Samsung Electronics, Doosan Enerbility, and Hanwha
+Ocean.
 Daily compact reports remain available after minute JSONL retention cleanup,
 and the rolling artifact declares whether the 60-trading-day floor has been
-met. It is counterfactual observation only and never aggregates with realized
-PnL or changes a runtime threshold. Historical pipeline events that lack the
+met. The first locally source-qualified decisive 10-minute outcome also enters
+a clean-baseline cumulative widget-only calibration. The bounded policy can
+select two or three consecutive 10-second actionable confirmations per symbol
+and session. A verified 20:10 run writes a date-effective policy for the next
+KRX trading day; running collectors load it without a restart. Missing or
+invalid daily evidence carries the last valid value forward, and a day without
+a decisive sample is a no-change policy rather than a failure. This changes
+only widget signal timing (`widget_runtime_effect=true`); it keeps
+`runtime_effect=false`, `trading_runtime_effect=false`, and never changes the
+trading bot, orders, accounts, providers, tokens, or broker guards.
+
+The evaluator never aggregates counterfactual observations with realized PnL.
+Historical pipeline events that lack the
 same-session completed OHLCV, BBO, venue, and exact advisory payload are
 source-quality-ineligible for state-machine replay rather than being silently
 normalized into the 60-day sample.
@@ -81,6 +94,32 @@ Actionable rows with invalid widget authority, runtime flags, timestamps,
 source quality, venue/session, or entry ranges are counted by exclusion reason
 and do not enter MFE/MAE. A normal timer run after 20:00 evaluates that day; a
 `Persistent` catch-up before 20:00 evaluates the previous Korean trading day.
+The compatibility unit name remains `samsung-widget-evaluation`, but its
+service command owns all three widget evaluations and next-day calibration.
+After the outcome-label pipeline has had time to finish, a separate 21:15
+timer rebuilds the exact portable mechanical replay and ranks up to five
+additional KRX collector candidates from as many as 20 clean-baseline dates.
+The ranking uses only source-qualified rows where the portable widget core
+actually produced a signal or a pre-spread candidate; favorable Entry-AI
+outcomes without a portable widget setup are excluded. It then requires
+positive target/adverse and equal-weight end-return evidence, an entry liquidity
+score of at least 60, at least 1% median intraday range, and at least 80%
+fresh-quote coverage. Existing widget codes and manual-control exclusions are
+omitted. The JSON report is written under
+`data/report/widget_collector_expansion_recommendation/` and sent only to
+`ADMIN_ID`; it remains `recommendation_only`, `runtime_effect=false`,
+`collector_created=false`, and `service_started=false`. It never creates or
+starts a collector without a later explicit operator instruction.
+If the exact payload or outcome-label artifact is missing or violates its
+report-only authority contract, the job fails without sending a misleading
+"no candidate" message. The systemd service retries that source-not-ready
+failure every five minutes, bounded to six attempts in 30 minutes.
+
+```bash
+sudo cp deploy/systemd/korstockscan-widget-expansion-recommendation.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now korstockscan-widget-expansion-recommendation.timer
+```
 
 ```bash
 sudo cp deploy/systemd/korstockscan-samsung-widget-evaluation.{service,timer} /etc/systemd/system/
