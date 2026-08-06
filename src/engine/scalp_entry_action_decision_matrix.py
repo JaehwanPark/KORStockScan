@@ -2096,9 +2096,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     unknown_source_quality_gate = (
         "source_quality_blocker"
         if actionable_unknown_roots
-        else "classified_non_actionable"
-        if unknown_affected_row_count
-        else "pass"
+        else "classified_non_actionable" if unknown_affected_row_count else "pass"
     )
     unknown_recommended_route = (
         "source_quality_workorder"

@@ -1,5 +1,5 @@
 [Unit]
-Description=Run Samsung Widget Advisory Evaluation After NXT Close
+Description=Run Multi-Symbol Widget Advisory Calibration After NXT Close
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 20:10:00 Asia/Seoul

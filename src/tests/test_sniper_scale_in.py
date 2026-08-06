@@ -17926,10 +17926,10 @@ def test_post_probe_recovery_does_not_double_count_tick_and_candle_group(
 
 def test_post_probe_winner_recovery_selects_one_share_first_leg(monkeypatch):
     base_ts = time.time()
-    active_date = datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
     )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
     )
@@ -17996,10 +17996,10 @@ def test_post_probe_winner_recovery_blocks_avg_down_or_unconfirmed_lane(
     monkeypatch, stock_update, expected_reason
 ):
     base_ts = time.time()
-    active_date = datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
     )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
     )
@@ -18045,9 +18045,7 @@ def test_post_probe_winner_recovery_blocks_avg_down_or_unconfirmed_lane(
 
 def test_post_probe_winner_recovery_dated_cohort_fails_closed(monkeypatch):
     base_ts = time.time()
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", "1999-01-01"
     )
@@ -18097,10 +18095,10 @@ def test_active_winner_recovery_lane_preserves_separately_guarded_avg_down(
     monkeypatch,
 ):
     base_ts = time.time()
-    active_date = datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true"
+    active_date = (
+        datetime.fromtimestamp(base_ts, tz=state_handlers._KST).date().isoformat()
     )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE", active_date
     )

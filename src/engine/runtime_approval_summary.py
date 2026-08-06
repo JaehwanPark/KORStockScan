@@ -2605,17 +2605,29 @@ def build_runtime_approval_summary(
     swing_discovery_summary = (
         _swing_strategy_discovery_summary(ev_report)
         if include_swing
-        else {"available": False, "status": "disabled_by_operator", "runtime_effect": False}
+        else {
+            "available": False,
+            "status": "disabled_by_operator",
+            "runtime_effect": False,
+        }
     )
     swing_lifecycle_matrix_summary = (
         _swing_lifecycle_matrix_summary(ev_report)
         if include_swing
-        else {"available": False, "status": "disabled_by_operator", "runtime_effect": False}
+        else {
+            "available": False,
+            "status": "disabled_by_operator",
+            "runtime_effect": False,
+        }
     )
     swing_lifecycle_bucket_discovery_summary = (
         _swing_lifecycle_bucket_discovery_summary(ev_report)
         if include_swing
-        else {"available": False, "status": "disabled_by_operator", "runtime_effect": False}
+        else {
+            "available": False,
+            "status": "disabled_by_operator",
+            "runtime_effect": False,
+        }
     )
     institutional_flow_summary = _institutional_flow_context_summary(ev_report)
     microstructure_reaction_summary = _microstructure_reaction_context_summary(
@@ -2940,8 +2952,7 @@ def build_runtime_approval_summary(
                 ),
                 (
                     "producer_gap_discovery_missing"
-                    if include_producer_gap
-                    and not producer_gap_discovery_path.exists()
+                    if include_producer_gap and not producer_gap_discovery_path.exists()
                     else ""
                 ),
                 (

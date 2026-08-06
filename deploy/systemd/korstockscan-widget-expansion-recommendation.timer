@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Widget Collector Expansion Recommendation After Outcome Labels
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 21:15:00 Asia/Seoul
+Persistent=true
+Unit=korstockscan-widget-expansion-recommendation.service
+
+[Install]
+WantedBy=timers.target

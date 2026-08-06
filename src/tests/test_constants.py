@@ -28,9 +28,7 @@ def test_trading_rules_default_latency_danger_thresholds(monkeypatch):
     monkeypatch.delenv(
         "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", raising=False
     )
-    monkeypatch.delenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_AGE_MS", raising=False
-    )
+    monkeypatch.delenv("KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_AGE_MS", raising=False)
     monkeypatch.delenv(
         "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO", raising=False
     )
@@ -476,9 +474,7 @@ def test_retired_latency_canary_profile_cannot_change_danger_thresholds(monkeypa
 
 
 def test_trading_rules_latency_danger_jitter_env_override(monkeypatch):
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", "420"
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", "420")
 
     reloaded = importlib.reload(constants)
 

@@ -181,13 +181,17 @@ def build_report(target_date: str) -> dict[str, Any]:
     evidence_state = (
         "missing_source_hold"
         if not source_path.exists()
-        else "invalid_rows_warning"
-        if invalid_rows
-        else "no_observation_hold"
-        if total_registered == 0 and total_completed == 0
-        else "candidate_ready"
-        if threshold_change_supported
-        else "observed_hold"
+        else (
+            "invalid_rows_warning"
+            if invalid_rows
+            else (
+                "no_observation_hold"
+                if total_registered == 0 and total_completed == 0
+                else (
+                    "candidate_ready" if threshold_change_supported else "observed_hold"
+                )
+            )
+        )
     )
     return {
         "schema_version": 1,

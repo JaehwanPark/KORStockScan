@@ -2536,8 +2536,7 @@ def test_institutional_flow_features_do_not_leak_across_source_dates():
 
     assert joined == 2
     assert (
-        rows[0]["runtime_features"]["institutional_flow_regime"]
-        == "DUAL_ACCUMULATION"
+        rows[0]["runtime_features"]["institutional_flow_regime"] == "DUAL_ACCUMULATION"
     )
     assert rows[1]["runtime_features"]["institutional_flow_regime"] == "DISTRIBUTION"
     attribution = mod._institutional_flow_attribution(rows)

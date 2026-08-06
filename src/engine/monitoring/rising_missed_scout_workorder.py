@@ -1462,11 +1462,11 @@ def build_report(
     outcome_coverage_state = (
         "no_forced_scout"
         if not forced
-        else "no_closed_outcome"
-        if not outcomes
-        else "complete"
-        if joined_forced_count == len(forced)
-        else "partial"
+        else (
+            "no_closed_outcome"
+            if not outcomes
+            else "complete" if joined_forced_count == len(forced) else "partial"
+        )
     )
     return {
         "schema_version": 1,

@@ -382,7 +382,7 @@ def test_entry_hurdle_markdown_exposes_joint_overbought_reference_counts():
                         "executable_bbo_first_hit_rows": 3,
                     }
                 }
-            }
+            },
         }
     )
 

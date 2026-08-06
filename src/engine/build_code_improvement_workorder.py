@@ -3384,9 +3384,7 @@ def _swing_ai_structured_output_eval_contract_status(
     root_cause_hint = (
         "implementation_done"
         if sample_status == "waiting_replay_sample"
-        else "root_cause_closed"
-        if implemented
-        else "needs_followup_workorder"
+        else "root_cause_closed" if implemented else "needs_followup_workorder"
     )
     return {
         "implemented": implemented,
@@ -8329,8 +8327,11 @@ def build_code_improvement_workorder(
                             str(item.order.get("order_id"))
                         )
                 continue
-            if item.decision != "attach_existing_family" and not _is_implemented_status(
-                _repeat_unresolved_original_status(item.order)
+            if (
+                item.decision != "attach_existing_family"
+                and not _is_implemented_status(
+                    _repeat_unresolved_original_status(item.order)
+                )
             ):
                 selected_unimplemented_runtime_effect_false_count += 1
                 selected_unimplemented_route_counts[route] = (

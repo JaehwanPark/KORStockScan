@@ -1,0 +1,24 @@
+[Unit]
+Description=KORStockScan Widget Collector Expansion Recommendation
+After=korstockscan-samsung-widget-evaluation.service
+StartLimitIntervalSec=1800
+StartLimitBurst=6
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+Environment="KORSTOCKSCAN_WIDGET_EXPANSION_TELEGRAM_ENABLED=true"
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_collector_expansion_recommendation --write --notify
+Restart=on-failure
+RestartSec=300
+Nice=10
+CPUQuota=20%
+MemoryMax=512M
+TasksMax=64
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true

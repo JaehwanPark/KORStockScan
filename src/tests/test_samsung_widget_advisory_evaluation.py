@@ -62,15 +62,21 @@ def _row(
 
 def test_daily_evaluation_records_mfe_mae_and_first_hit_without_real_pnl():
     start = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    signal = _row(
+        start,
+        100_000,
+        state="ENTRY_READY",
+        entry_high=100_000,
+        invalidation=99_700,
+        observation_kind="state_transition",
+    )
+    signal["advisory"]["required_actionable_confirmations"] = 3
+    signal["advisory"]["calibration_policy"] = {
+        "policy_version": "widget_advisory_policy_2026-08-03",
+        "effective_date": "2026-08-03",
+    }
     rows = [
-        _row(
-            start,
-            100_000,
-            state="ENTRY_READY",
-            entry_high=100_000,
-            invalidation=99_700,
-            observation_kind="state_transition",
-        ),
+        signal,
         _row(
             start + timedelta(minutes=1),
             100_200,
@@ -106,6 +112,8 @@ def test_daily_evaluation_records_mfe_mae_and_first_hit_without_real_pnl():
     assert horizon_3["mfe_pct"] == 0.7
     assert horizon_3["mae_pct"] == -0.5
     assert horizon_3["first_hit"] == "target_first"
+    assert horizon_3["widget_policy_version"] == ("widget_advisory_policy_2026-08-03")
+    assert horizon_3["required_actionable_confirmations"] == 3
     assert horizon_3["market_venue"] == "KRX"
     assert horizon_3["actual_order_submitted"] is False
     assert report["metric_contract"]["forbidden_uses"]
@@ -411,7 +419,7 @@ def test_evaluation_never_mixes_krx_signal_with_nxt_aftermarket_prices():
 
 
 def test_rolling_report_requires_60_daily_artifacts(tmp_path):
-    start = date(2026, 5, 1)
+    start = evaluation.CLEAN_BASELINE_DATE
     targets = []
     target = start
     while len(targets) < 60:
@@ -420,11 +428,21 @@ def test_rolling_report_requires_60_daily_artifacts(tmp_path):
         target += timedelta(days=1)
     for target in targets:
         payload = {
+            "schema_version": 2,
+            "symbol": "005930",
+            "status": "no_mature_actionable_sample",
             "target_date": target.isoformat(),
             "source_row_count": 1,
             "qualified_trading_day": True,
             "outcomes": [],
+            "target_return_pct": 0.5,
+            "fallback_adverse_pct": -0.3,
+            "metric_contract": {
+                "decision_authority": "widget_advisory_evaluation_only"
+            },
             "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
         }
         path = (
             tmp_path / f"samsung_widget_advisory_evaluation_{target.isoformat()}.json"
@@ -435,6 +453,56 @@ def test_rolling_report_requires_60_daily_artifacts(tmp_path):
     assert report["trading_day_count"] == 60
     assert report["sample_floor_met"] is True
     assert report["runtime_effect"] is False
+
+
+def test_rolling_report_excludes_wrong_symbol_and_authority(tmp_path):
+    target = date(2026, 8, 6)
+    base = {
+        "schema_version": 2,
+        "symbol": "034020",
+        "status": "observed",
+        "target_date": target.isoformat(),
+        "source_row_count": 1,
+        "qualified_trading_day": True,
+        "outcomes": [],
+        "target_return_pct": 1.0,
+        "fallback_adverse_pct": -0.3,
+        "metric_contract": {"decision_authority": "widget_advisory_evaluation_only"},
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    wrong_symbol = {**base, "symbol": "999999"}
+    wrong_authority = {
+        **base,
+        "target_date": "2026-08-05",
+        "metric_contract": {"decision_authority": "wrong"},
+    }
+    malformed_count = {
+        **base,
+        "target_date": "2026-08-04",
+        "source_row_count": "not-an-int",
+    }
+    (tmp_path / "doosan_eval_2026-08-06.json").write_text(
+        json.dumps(wrong_symbol), encoding="utf-8"
+    )
+    (tmp_path / "doosan_eval_2026-08-05.json").write_text(
+        json.dumps(wrong_authority), encoding="utf-8"
+    )
+    (tmp_path / "doosan_eval_2026-08-04.json").write_text(
+        json.dumps(malformed_count), encoding="utf-8"
+    )
+
+    report = evaluation.build_rolling_report(
+        tmp_path,
+        as_of_date=target,
+        report_prefix="doosan_eval",
+        symbol_code="034020",
+        target_return_pct=1.0,
+    )
+
+    assert report["calendar_artifact_count"] == 0
+    assert report["daily_source_paths"] == []
 
 
 def test_summary_keeps_legacy_daily_outcome_without_venue_readable():
@@ -452,3 +520,35 @@ def test_summary_keeps_legacy_daily_outcome_without_venue_readable():
     )
 
     assert summary[0]["market_venue"] == "unknown"
+
+
+def test_daily_evaluation_accepts_explicit_non_samsung_symbol_provenance():
+    start = datetime(2026, 8, 6, 12, 10, tzinfo=KST)
+    signal = _row(
+        start,
+        80_000,
+        state="ENTRY_CAUTION",
+        entry_high=80_000,
+        invalidation=79_700,
+        observation_kind="state_transition",
+    )
+    signal["advisory"]["provenance"]["quote_request_code"] = "034020"
+    rows = [
+        signal,
+        _row(start + timedelta(minutes=1), 80_100, line_number=2),
+        _row(start + timedelta(minutes=10), 80_500, line_number=3),
+    ]
+
+    report = evaluation.build_daily_evaluation(
+        rows,
+        target_date=start.date(),
+        symbol_code="034020",
+        expected_sessions={"KRX_REGULAR": 390},
+        target_return_pct=1.0,
+    )
+
+    assert report["symbol"] == "034020"
+    assert report["source_quality_excluded_signal_count"] == 0
+    assert report["actionable_signal_count"] == 1
+    assert report["outcomes"][0]["target_price"] == 80_800
+    assert report["target_return_pct"] == 1.0

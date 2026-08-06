@@ -985,6 +985,34 @@ def test_promotion_filter_keeps_caution_until_ready_is_confirmed():
     assert filter_.apply(ready)["state"] == "ENTRY_READY"
 
 
+def test_promotion_filter_applies_bounded_three_observation_calibration():
+    ready = advisory.evaluate_advisory(**_ready_input())
+    filter_ = advisory.AdvisoryPromotionFilter()
+    policy = {
+        "policy_version": "widget_advisory_policy_2026-08-04_from_2026-08-03",
+        "effective_date": "2026-08-04",
+        "source_target_date": "2026-08-03",
+        "load_status": "dated_policy_loaded",
+        "decision": "tighten_confirmation",
+        "reason": "cumulative_10m_adverse_first_exceeds_target_first",
+        "authority": "widget_advisory_calibration_only",
+        "widget_runtime_effect": True,
+        "trading_runtime_effect": False,
+        "runtime_effect": False,
+    }
+
+    first = filter_.apply(ready, required_confirmations=3, calibration_policy=policy)
+    second = filter_.apply(ready, required_confirmations=3, calibration_policy=policy)
+    third = filter_.apply(ready, required_confirmations=3, calibration_policy=policy)
+
+    assert first["state"] == "WATCH"
+    assert second["state"] == "WATCH"
+    assert third["state"] == "ENTRY_READY"
+    assert second["required_actionable_confirmations"] == 3
+    assert second["calibration_policy"]["trading_runtime_effect"] is False
+    assert "awaiting_calibrated_10s_confirmation" in second["unmet_conditions"]
+
+
 def test_promotion_filter_applies_ready_to_caution_demotion_immediately():
     ready = advisory.evaluate_advisory(**_ready_input())
     caution = advisory.evaluate_advisory(

@@ -53,6 +53,9 @@ from src.engine.monitoring.samsung_widget_contract import (
     snapshot_observed_at,
     snapshot_is_fresh,
 )
+from src.engine.monitoring.widget_advisory_calibration_policy import (
+    WidgetCalibrationPolicyLoader,
+)
 from src.engine.monitoring.samsung_widget_entry_notify import (
     SamsungWidgetEntryTelegramNotifier,
 )
@@ -2154,8 +2157,19 @@ class AdvisoryPromotionFilter:
         self._visible_state = "DATA_WAIT"
         self._last_observed_at = None
 
-    def apply(self, advisory: dict[str, Any]) -> dict[str, Any]:
+    def apply(
+        self,
+        advisory: dict[str, Any],
+        *,
+        required_confirmations: int = 2,
+        calibration_policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         result = json.loads(json.dumps(advisory, ensure_ascii=False))
+        try:
+            required_confirmations = int(required_confirmations)
+        except (TypeError, ValueError):
+            required_confirmations = 2
+        required_confirmations = max(2, min(3, required_confirmations))
         scope_key = self._scope_for(result)
         try:
             observed_at = datetime.fromisoformat(str(result.get("observed_at") or ""))
@@ -2191,7 +2205,7 @@ class AdvisoryPromotionFilter:
         is_unconfirmed_promotion = (
             raw_state in self.ACTIONABLE
             and raw_rank > visible_rank
-            and self._streak < 2
+            and self._streak < required_confirmations
         )
         if is_unconfirmed_promotion:
             result["state"] = (
@@ -2201,6 +2215,8 @@ class AdvisoryPromotionFilter:
             )
             result.setdefault("unmet_conditions", []).append(
                 "awaiting_second_10s_confirmation"
+                if required_confirmations == 2
+                else "awaiting_calibrated_10s_confirmation"
             )
             if result["state"] == "WATCH":
                 result["entry_price_low"] = None
@@ -2210,6 +2226,23 @@ class AdvisoryPromotionFilter:
             result["state"] = raw_state
         self._last_observed_at = observed_at
         result["confirmation_streak"] = self._streak
+        result["required_actionable_confirmations"] = required_confirmations
+        if isinstance(calibration_policy, dict):
+            result["calibration_policy"] = {
+                key: calibration_policy.get(key)
+                for key in (
+                    "policy_version",
+                    "effective_date",
+                    "source_target_date",
+                    "load_status",
+                    "decision",
+                    "reason",
+                    "authority",
+                    "widget_runtime_effect",
+                    "trading_runtime_effect",
+                    "runtime_effect",
+                )
+            }
         return result
 
 
@@ -3039,11 +3072,15 @@ class SamsungWidgetCollector:
         external_provider: ExternalMarketProvider | None = None,
         request_session: requests.Session | None = None,
         entry_notifier: SamsungWidgetEntryTelegramNotifier | None = None,
+        calibration_policy_loader: WidgetCalibrationPolicyLoader | None = None,
     ) -> None:
         self.snapshot_path = snapshot_path
         self.external_provider = external_provider or YahooExternalMarketProvider()
         self.request_session = request_session
         self.entry_notifier = entry_notifier
+        self.calibration_policy_loader = (
+            calibration_policy_loader or WidgetCalibrationPolicyLoader()
+        )
         self.request_budget = ReadOnlyRequestBudget()
         self.break_rearm_filter = AdvisoryBreakRearmFilter()
         self.recovery_episode_filter = AdvisoryRecoveryEpisodeFilter()
@@ -3532,7 +3569,18 @@ class SamsungWidgetCollector:
             bbo=bbo,
             latest_bar=bars[-1] if bars else None,
         )
-        advisory = self.promotion_filter.apply(advisory)
+        calibration_policy = self.calibration_policy_loader.resolve(
+            symbol=SAMSUNG_CODE,
+            session=context.name,
+            observed_date=decision_now.date(),
+        )
+        advisory = self.promotion_filter.apply(
+            advisory,
+            required_confirmations=int(
+                calibration_policy["required_actionable_confirmations"]
+            ),
+            calibration_policy=calibration_policy,
+        )
         advisory["source_quality"]["auxiliary_status"] = (
             "DATA_LIMITED"
             if self._optional_gaps or self._external_fetch_error

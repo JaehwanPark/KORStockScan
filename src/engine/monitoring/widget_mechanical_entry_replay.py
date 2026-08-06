@@ -844,23 +844,46 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_report_for_date(
+    target_date: date,
+    *,
+    payload_dir: Path = DEFAULT_PAYLOAD_DIR,
+    label_dir: Path = DEFAULT_LABEL_DIR,
+) -> dict[str, Any]:
+    return build_report(
+        _load_jsonl(payload_dir / f"ai_decision_payloads_{target_date}.jsonl"),
+        _load_labels(label_dir / f"ai_decision_outcome_labels_{target_date}.json"),
+        target_date=target_date,
+    )
+
+
+def write_report(
+    report: dict[str, Any],
+    *,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+) -> tuple[Path, Path]:
+    target_date = date.fromisoformat(str(report.get("target_date") or ""))
+    stem = f"widget_mechanical_entry_replay_{target_date}"
+    json_path = output_dir / f"{stem}.json"
+    markdown_path = output_dir / f"{stem}.md"
+    _atomic_write(
+        json_path,
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    _atomic_write(markdown_path, render_markdown(report))
+    return json_path, markdown_path
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     target_date = date.fromisoformat(args.target_date)
-    payload_path = args.payload_dir / f"ai_decision_payloads_{target_date}.jsonl"
-    label_path = args.label_dir / f"ai_decision_outcome_labels_{target_date}.json"
-    report = build_report(
-        _load_jsonl(payload_path),
-        _load_labels(label_path),
-        target_date=target_date,
+    report = build_report_for_date(
+        target_date,
+        payload_dir=args.payload_dir,
+        label_dir=args.label_dir,
     )
     if args.write:
-        stem = f"widget_mechanical_entry_replay_{target_date}"
-        _atomic_write(
-            args.output_dir / f"{stem}.json",
-            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        )
-        _atomic_write(args.output_dir / f"{stem}.md", render_markdown(report))
+        write_report(report, output_dir=args.output_dir)
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

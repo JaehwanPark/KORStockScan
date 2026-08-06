@@ -3738,8 +3738,7 @@ def _latency_danger_reasons(latency_status) -> list[str]:
         getattr(TRADING_RULES, "SCALP_LATENCY_DANGER_MAX_WS_AGE_MS", 450) or 450
     )
     max_ws_jitter_ms = int(
-        getattr(TRADING_RULES, "SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", 260)
-        or 260
+        getattr(TRADING_RULES, "SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS", 260) or 260
     )
     max_spread_ratio = _to_float(
         getattr(TRADING_RULES, "SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO", 0.0100),

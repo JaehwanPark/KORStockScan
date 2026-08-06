@@ -1,6 +1,6 @@
 [Unit]
-Description=KORStockScan Samsung Widget Advisory Daily Evaluation
-After=korstockscan-samsung-widget-collector.service
+Description=KORStockScan Multi-Symbol Widget Advisory Daily Calibration
+After=korstockscan-samsung-widget-collector.service korstockscan-doosan-widget-collector.service korstockscan-hanwha-ocean-widget-collector.service
 
 [Service]
 Type=oneshot
@@ -8,7 +8,7 @@ User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
-ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.samsung_widget_advisory_evaluation --write
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_advisory_calibration --write
 Nice=10
 CPUQuota=20%
 MemoryMax=512M

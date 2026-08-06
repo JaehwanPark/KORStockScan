@@ -2897,9 +2897,7 @@ def test_decision_quality_v2_13_buy_maps_to_guarded_wait_probe(monkeypatch):
     prompt, prompt_type, prompt_version, profile = engine._resolve_scalping_prompt(
         "watching"
     )
-    assert prompt == decision_quality_v2_13_recovery_confirmation_system_prompt(
-        "entry"
-    )
+    assert prompt == decision_quality_v2_13_recovery_confirmation_system_prompt("entry")
     assert prompt.isascii()
     assert "recovery_confirmation_probe.eligible=true" in prompt
     assert prompt_type == "scalping_entry"

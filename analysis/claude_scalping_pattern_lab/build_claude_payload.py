@@ -116,9 +116,7 @@ def _load_feedback_sources() -> dict:
             "freshness": (
                 "same_day"
                 if source_date == target_date
-                else "latest_available_lte_target"
-                if source_date
-                else "missing"
+                else "latest_available_lte_target" if source_date else "missing"
             ),
             "runtime_effect": False,
             "decision_authority": "source_quality_only",

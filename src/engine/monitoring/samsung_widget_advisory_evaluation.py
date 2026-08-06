@@ -23,6 +23,7 @@ from src.utils.market_day import is_krx_trading_day
 from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
 
 DEFAULT_OUTPUT_DIR = Path("data/report/samsung_widget_advisory_evaluation")
+CLEAN_BASELINE_DATE = date(2026, 6, 5)
 HORIZONS_MINUTES = (1, 3, 5, 10, 20, 30, 60)
 TARGET_RETURN_PCT = 0.5
 FALLBACK_ADVERSE_PCT = -0.3
@@ -48,12 +49,19 @@ EVALUATION_CONTRACT = {
     "legacy_real_replay_policy": (
         "exclude_sources_without_same-session_completed_ohlcv_bbo_venue_and_advisory"
     ),
+    "allowed_consumers": [
+        "diagnostic_daily_and_rolling_report",
+        "bounded_widget_advisory_calibration_v1",
+    ],
+    "widget_calibration_sample_floor": (
+        "one_source_qualified_decisive_10m_outcome_starts_cumulative_widget_only_learning"
+    ),
     "target_policy": "entry_reference_plus_0.5pct_tick_ceil",
     "adverse_policy": "dynamic_invalidation_else_entry_minus_0.3pct_tick_floor",
     "forbidden_uses": [
         "real_order_submission",
         "real_execution_quality_approval",
-        "automatic_threshold_or_runtime_apply",
+        "automatic_real_trading_threshold_or_runtime_apply",
         "provider_or_bot_change",
         "realized_pnl_aggregation",
     ],
@@ -70,7 +78,20 @@ def _parse_time(value: object) -> datetime | None:
     return parsed.astimezone(KST)
 
 
-def _signal_contract_issue(row: dict[str, Any], advisory: object) -> str | None:
+def _positive_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _signal_contract_issue(
+    row: dict[str, Any],
+    advisory: object,
+    *,
+    symbol_code: str = SAMSUNG_CODE,
+) -> str | None:
     if row.get("observation_kind") != "state_transition":
         return "observation_kind_missing_or_invalid"
     metric_contract = row.get("metric_contract")
@@ -108,7 +129,7 @@ def _signal_contract_issue(row: dict[str, Any], advisory: object) -> str | None:
     if advisory.get("session") != session or venue not in {"KRX", "NXT"}:
         return "advisory_session_or_venue_mismatch"
     provenance = advisory.get("provenance")
-    expected_request_code = f"{SAMSUNG_CODE}_NX" if venue == "NXT" else SAMSUNG_CODE
+    expected_request_code = f"{symbol_code}_NX" if venue == "NXT" else symbol_code
     if (
         not isinstance(provenance, dict)
         or provenance.get("market_venue") != venue
@@ -321,13 +342,20 @@ def _coverage(
     }
 
 
-def _session_coverage(source_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _session_coverage(
+    source_rows: list[dict[str, Any]],
+    *,
+    expected_sessions: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    session_expectations = (
+        SESSION_EXPECTED_MINUTES if expected_sessions is None else expected_sessions
+    )
     grouped: dict[tuple[str, str], set[str]] = defaultdict(set)
     total_grouped: dict[tuple[str, str], set[str]] = defaultdict(set)
     for row in source_rows:
         session = str(row.get("market_session") or "unknown")
         venue = str(row.get("market_venue") or "unknown")
-        if session not in SESSION_EXPECTED_MINUTES:
+        if session not in session_expectations:
             continue
         minute_key = row["_observed_at"].strftime("%Y%m%d%H%M")
         total_grouped[(session, venue)].add(minute_key)
@@ -338,7 +366,7 @@ def _session_coverage(source_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         if isinstance(source_quality, dict) and source_quality.get("status") == "PASS":
             grouped[(session, venue)].add(minute_key)
     result: list[dict[str, Any]] = []
-    for session, expected in SESSION_EXPECTED_MINUTES.items():
+    for session, expected in session_expectations.items():
         venue = "KRX" if session == "KRX_REGULAR" else "NXT"
         observed = len(grouped.get((session, venue), set()))
         total_observed = len(total_grouped.get((session, venue), set()))
@@ -358,8 +386,18 @@ def _session_coverage(source_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def build_daily_evaluation(
-    rows: list[dict[str, Any]], *, target_date: date
+    rows: list[dict[str, Any]],
+    *,
+    target_date: date,
+    symbol_code: str = SAMSUNG_CODE,
+    expected_sessions: dict[str, int] | None = None,
+    target_return_pct: float = TARGET_RETURN_PCT,
+    fallback_adverse_pct: float = FALLBACK_ADVERSE_PCT,
 ) -> dict[str, Any]:
+    if target_return_pct <= 0:
+        raise ValueError("target_return_pct_must_be_positive")
+    if fallback_adverse_pct >= 0:
+        raise ValueError("fallback_adverse_pct_must_be_negative")
     source_rows = [row for row in rows if row["_observed_at"].date() == target_date]
     outcomes: list[dict[str, Any]] = []
     actionable_signals: set[str] = set()
@@ -379,7 +417,11 @@ def build_daily_evaluation(
         if observation_kind == "minute_summary":
             continue
         candidate_signal_count += 1
-        contract_issue = _signal_contract_issue(row, advisory)
+        contract_issue = _signal_contract_issue(
+            row,
+            advisory,
+            symbol_code=symbol_code,
+        )
         if contract_issue is not None:
             excluded_signal_reasons[contract_issue] += 1
             continue
@@ -417,14 +459,18 @@ def build_daily_evaluation(
             invalidation = int(advisory.get("invalidation_price") or 0)
         except (TypeError, ValueError):
             invalidation = 0
-        target_price = _ceil_to_tick(entry_price * (1 + TARGET_RETURN_PCT / 100))
+        target_price = _ceil_to_tick(entry_price * (1 + target_return_pct / 100))
         adverse_price = (
             invalidation
             if 0 < invalidation < entry_price
-            else clamp_price_to_tick(entry_price * (1 + FALLBACK_ADVERSE_PCT / 100))
+            else clamp_price_to_tick(entry_price * (1 + fallback_adverse_pct / 100))
         )
         signal_time = row["_observed_at"]
         reasons = advisory.get("reasons")
+        calibration_policy = advisory.get("calibration_policy")
+        calibration_policy = (
+            calibration_policy if isinstance(calibration_policy, dict) else {}
+        )
         primary_reason = (
             str(reasons[0])
             if isinstance(reasons, list) and reasons and str(reasons[0]).strip()
@@ -479,6 +525,13 @@ def build_daily_evaluation(
                     "market_venue": signal_venue,
                     "advisory_state": state,
                     "primary_reason": primary_reason,
+                    "widget_policy_version": calibration_policy.get("policy_version"),
+                    "widget_policy_effective_date": calibration_policy.get(
+                        "effective_date"
+                    ),
+                    "required_actionable_confirmations": advisory.get(
+                        "required_actionable_confirmations"
+                    ),
                     "entry_touch_status": touch_status,
                     "entry_touched_at_kst": (
                         touch_time.isoformat() if touch_time is not None else None
@@ -510,7 +563,10 @@ def build_daily_evaluation(
             )
 
     summary = _summarize_outcomes(outcomes)
-    session_coverage = _session_coverage(source_rows)
+    session_coverage = _session_coverage(
+        source_rows,
+        expected_sessions=expected_sessions,
+    )
     qualified_trading_day = bool(session_coverage) and all(
         row["qualified"] for row in session_coverage
     )
@@ -519,6 +575,7 @@ def build_daily_evaluation(
     ]
     return {
         "schema_version": 2,
+        "symbol": symbol_code,
         "status": "observed" if outcomes else "no_mature_actionable_sample",
         "target_date": target_date.isoformat(),
         "source_row_count": len(source_rows),
@@ -545,7 +602,16 @@ def build_daily_evaluation(
         "summary": summary,
         "reason_cohort_summary": _summarize_reason_cohorts(outcomes),
         "outcomes": outcomes,
-        "metric_contract": EVALUATION_CONTRACT,
+        "metric_contract": {
+            **EVALUATION_CONTRACT,
+            "target_policy": f"entry_reference_plus_{target_return_pct:g}pct_tick_ceil",
+            "adverse_policy": (
+                "dynamic_invalidation_else_entry_minus_"
+                f"{abs(fallback_adverse_pct):g}pct_tick_floor"
+            ),
+        },
+        "target_return_pct": target_return_pct,
+        "fallback_adverse_pct": fallback_adverse_pct,
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
@@ -677,9 +743,21 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def build_rolling_report(output_dir: Path, *, as_of_date: date) -> dict[str, Any]:
+def build_rolling_report(
+    output_dir: Path,
+    *,
+    as_of_date: date,
+    report_prefix: str = "samsung_widget_advisory_evaluation",
+    symbol_code: str = SAMSUNG_CODE,
+    target_return_pct: float = TARGET_RETURN_PCT,
+    fallback_adverse_pct: float = FALLBACK_ADVERSE_PCT,
+) -> dict[str, Any]:
+    if target_return_pct <= 0:
+        raise ValueError("target_return_pct_must_be_positive")
+    if fallback_adverse_pct >= 0:
+        raise ValueError("fallback_adverse_pct_must_be_negative")
     daily_reports: list[dict[str, Any]] = []
-    for path in sorted(output_dir.glob("samsung_widget_advisory_evaluation_*.json")):
+    for path in sorted(output_dir.glob(f"{report_prefix}_*.json")):
         if path.name.endswith("_rolling_60d.json"):
             continue
         try:
@@ -687,12 +765,46 @@ def build_rolling_report(output_dir: Path, *, as_of_date: date) -> dict[str, Any
             target_date = date.fromisoformat(str(payload.get("target_date") or ""))
         except (OSError, ValueError, TypeError):
             continue
-        if (
-            target_date <= as_of_date
+        report_symbol = payload.get("symbol")
+        legacy_samsung_symbol = (
+            symbol_code == SAMSUNG_CODE
+            and report_prefix == "samsung_widget_advisory_evaluation"
+            and report_symbol in {None, ""}
+        )
+        metric_contract = payload.get("metric_contract")
+        if not (
+            CLEAN_BASELINE_DATE <= target_date <= as_of_date
             and is_krx_trading_day(target_date)
-            and int(payload.get("source_row_count") or 0) > 0
+            and payload.get("schema_version") == 2
+            and (report_symbol == symbol_code or legacy_samsung_symbol)
+            and payload.get("status") in {"observed", "no_mature_actionable_sample"}
+            and _positive_int(payload.get("source_row_count")) is not None
+            and payload.get("runtime_effect") is False
+            and payload.get("actual_order_submitted") is False
+            and payload.get("broker_order_forbidden") is True
+            and isinstance(metric_contract, dict)
+            and metric_contract.get("decision_authority")
+            == "widget_advisory_evaluation_only"
         ):
-            daily_reports.append(payload)
+            continue
+        try:
+            report_target_return = float(payload.get("target_return_pct"))
+        except (TypeError, ValueError):
+            report_target_return = TARGET_RETURN_PCT if legacy_samsung_symbol else None
+        try:
+            report_fallback_adverse = float(payload.get("fallback_adverse_pct"))
+        except (TypeError, ValueError):
+            report_fallback_adverse = (
+                FALLBACK_ADVERSE_PCT if legacy_samsung_symbol else None
+            )
+        if (
+            report_target_return is None
+            or abs(report_target_return - target_return_pct) > 1e-9
+            or report_fallback_adverse is None
+            or abs(report_fallback_adverse - fallback_adverse_pct) > 1e-9
+        ):
+            continue
+        daily_reports.append(payload)
     calendar_reports = daily_reports[-60:]
     qualified_reports = [
         report
@@ -707,6 +819,7 @@ def build_rolling_report(output_dir: Path, *, as_of_date: date) -> dict[str, Any
     ]
     return {
         "schema_version": 2,
+        "symbol": symbol_code,
         "status": "observed" if outcomes else "no_mature_actionable_sample",
         "as_of_date": as_of_date.isoformat(),
         "calendar_artifact_count": len(calendar_reports),
@@ -718,10 +831,17 @@ def build_rolling_report(output_dir: Path, *, as_of_date: date) -> dict[str, Any
         "day_clustered_summary": _day_clustered_summary(qualified_reports),
         "reason_cohort_summary": _summarize_reason_cohorts(outcomes),
         "daily_source_paths": [
-            f"samsung_widget_advisory_evaluation_{report['target_date']}.json"
+            f"{report_prefix}_{report['target_date']}.json"
             for report in qualified_reports
         ],
-        "metric_contract": EVALUATION_CONTRACT,
+        "metric_contract": {
+            **EVALUATION_CONTRACT,
+            "target_policy": f"entry_reference_plus_{target_return_pct:g}pct_tick_ceil",
+            "adverse_policy": (
+                "dynamic_invalidation_else_entry_minus_"
+                f"{abs(fallback_adverse_pct):g}pct_tick_floor"
+            ),
+        },
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,

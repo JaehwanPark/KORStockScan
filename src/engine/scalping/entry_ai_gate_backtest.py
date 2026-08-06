@@ -1315,9 +1315,7 @@ def build_report(
             "counterfactual_rows": len(counterfactual),
             "effective_source_date_count": len(effective_source_dates),
             "artifact_excluded_date_count": len(artifact_excluded_dates),
-            "source_quality_excluded_date_count": len(
-                source_quality_excluded_dates
-            ),
+            "source_quality_excluded_date_count": len(source_quality_excluded_dates),
             "counterfactual_context_joined_count": sum(
                 count
                 for status, count in context_join_counts.items()
