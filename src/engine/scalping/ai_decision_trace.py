@@ -1689,6 +1689,49 @@ def record_ai_decision_trace(
                 )
                 else []
             ),
+            "entry_setup_family": _optional(merged, "entry_setup_family"),
+            "entry_setup_state": _optional(merged, "entry_setup_state"),
+            "entry_ai_risk_verdict": _optional(merged, "entry_ai_risk_verdict"),
+            "entry_ai_risk_codes": (
+                [str(code) for code in merged.get("entry_ai_risk_codes") or []]
+                if isinstance(merged.get("entry_ai_risk_codes"), list)
+                else []
+            ),
+            "entry_ai_veto_corroborated": (
+                bool(merged.get("entry_ai_veto_corroborated"))
+                if "entry_ai_veto_corroborated" in merged
+                else None
+            ),
+            "entry_setup_live_policy_status": _optional(
+                merged, "entry_setup_live_policy_status"
+            ),
+            "entry_setup_live_policy_source_date": _optional(
+                merged, "entry_setup_live_policy_source_date"
+            ),
+            "entry_setup_live_policy_target_date": _optional(
+                merged, "entry_setup_live_policy_target_date"
+            ),
+            "entry_setup_live_policy_activation_sha256": _optional(
+                merged, "entry_setup_live_policy_activation_sha256"
+            ),
+            "entry_setup_live_policy_candidate_contract_sha256": _optional(
+                merged, "entry_setup_live_policy_candidate_contract_sha256"
+            ),
+            "entry_setup_live_policy_runtime_effect": (
+                bool(merged.get("entry_setup_live_policy_runtime_effect"))
+                if "entry_setup_live_policy_runtime_effect" in merged
+                else None
+            ),
+            "entry_probe_first_required": (
+                bool(merged.get("entry_probe_first_required"))
+                if "entry_probe_first_required" in merged
+                else None
+            ),
+            "entry_ai_full_entry_forbidden": (
+                bool(merged.get("entry_ai_full_entry_forbidden"))
+                if "entry_ai_full_entry_forbidden" in merged
+                else None
+            ),
             "entry_probe_intent": (
                 bool(merged.get("entry_probe_intent"))
                 if "entry_probe_intent" in merged
@@ -1823,6 +1866,31 @@ def record_ai_decision_trace(
             "score": trace_row["score"],
             "confidence": trace_row["confidence"],
             "reason_codes": trace_row["reason_codes"],
+            "entry_setup_family": trace_row["entry_setup_family"],
+            "entry_setup_state": trace_row["entry_setup_state"],
+            "entry_ai_risk_verdict": trace_row["entry_ai_risk_verdict"],
+            "entry_ai_risk_codes": trace_row["entry_ai_risk_codes"],
+            "entry_ai_veto_corroborated": trace_row["entry_ai_veto_corroborated"],
+            "entry_setup_live_policy_status": trace_row[
+                "entry_setup_live_policy_status"
+            ],
+            "entry_setup_live_policy_source_date": trace_row[
+                "entry_setup_live_policy_source_date"
+            ],
+            "entry_setup_live_policy_target_date": trace_row[
+                "entry_setup_live_policy_target_date"
+            ],
+            "entry_setup_live_policy_activation_sha256": trace_row[
+                "entry_setup_live_policy_activation_sha256"
+            ],
+            "entry_setup_live_policy_candidate_contract_sha256": trace_row[
+                "entry_setup_live_policy_candidate_contract_sha256"
+            ],
+            "entry_setup_live_policy_runtime_effect": trace_row[
+                "entry_setup_live_policy_runtime_effect"
+            ],
+            "entry_probe_first_required": trace_row["entry_probe_first_required"],
+            "entry_ai_full_entry_forbidden": trace_row["entry_ai_full_entry_forbidden"],
             "entry_probe_intent": trace_row["entry_probe_intent"],
             "entry_probe_intent_status": trace_row["entry_probe_intent_status"],
             "entry_probe_intent_prompt_version": trace_row[

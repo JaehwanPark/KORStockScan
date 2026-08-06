@@ -73,6 +73,15 @@ from src.engine.scalping.ai_decision_quality import (  # noqa: E402
     validate_candidate_response,
     validate_v2_13_recovery_confirmation_response,
 )
+from src.engine.scalping.entry_setup_evidence import (  # noqa: E402
+    ENTRY_RISK_ADJUDICATION_SCHEMA,
+    build_entry_setup_evidence,
+    compose_entry_decision,
+    validate_entry_risk_adjudication,
+)
+from src.engine.scalping.entry_setup_live_policy import (  # noqa: E402
+    resolve_live_prompt_policy,
+)
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     entry_candle_context_log_fields,
@@ -104,10 +113,12 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
+    decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
 )
 
 
@@ -1692,7 +1703,7 @@ class GPTSniperEngine:
             )
         return failure_count
 
-    def _resolve_scalping_prompt(self, prompt_profile):
+    def _resolve_scalping_prompt(self, prompt_profile, *, prompt_version_override=None):
         profile = str(prompt_profile or "shared").strip().lower()
         split_enabled = bool(
             getattr(TRADING_RULES, "SCALPING_PROMPT_SPLIT_ENABLED", True)
@@ -1707,10 +1718,9 @@ class GPTSniperEngine:
 
         if profile == "watching":
             selected_version = str(
-                getattr(
-                    TRADING_RULES,
-                    "OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
-                    "hot_v1",
+                prompt_version_override
+                or getattr(
+                    TRADING_RULES, "OPENAI_ANALYZE_TARGET_PROMPT_VERSION", "hot_v1"
                 )
                 or "hot_v1"
             ).strip()
@@ -1729,6 +1739,18 @@ class GPTSniperEngine:
                     decision_quality_v2_13_recovery_confirmation_system_prompt("entry"),
                     "scalping_entry",
                     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+                    "watching",
+                )
+            if (
+                selected_version
+                == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ):
+                return (
+                    decision_quality_v2_14_setup_risk_adjudicator_system_prompt(
+                        "entry"
+                    ),
+                    "scalping_entry",
+                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     "watching",
                 )
             if selected_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION:
@@ -1764,18 +1786,260 @@ class GPTSniperEngine:
             )
         return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v2", "shared"
 
+    def _normalize_entry_setup_v2_14_result(
+        self,
+        result,
+        *,
+        exact_payload,
+        setup_evidence,
+        live_policy,
+    ):
+        """Map the risk-only V2.14 response to the canonical WAIT probe path."""
+
+        risk = dict(result or {}) if isinstance(result, dict) else {}
+        policy = dict(live_policy or {}) if isinstance(live_policy, dict) else {}
+        contract_errors = validate_entry_risk_adjudication(
+            risk,
+            setup_evidence=setup_evidence,
+        )
+        if (
+            policy.get("enabled") is not True
+            or policy.get("status") != "active_bounded_krx_canary"
+            or policy.get("selected_prompt_version")
+            != DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ):
+            contract_errors.append("entry_setup_v2_14_live_policy_invalid")
+        composed = compose_entry_decision(
+            setup_evidence=setup_evidence,
+            risk_adjudication=risk,
+        )
+        composed_for_live = {
+            key: value
+            for key, value in composed.items()
+            if key
+            not in {
+                "runtime_effect",
+                "allowed_runtime_apply",
+                "actual_order_submitted",
+                "broker_order_forbidden",
+            }
+        }
+        contract_errors.extend(composed.get("entry_ai_contract_errors") or [])
+        contract_errors = list(dict.fromkeys(map(str, contract_errors)))
+        policy_fields = {
+            "entry_setup_live_policy_status": policy.get("status"),
+            "entry_setup_live_policy_source_date": policy.get("source_date"),
+            "entry_setup_live_policy_target_date": policy.get("target_date"),
+            "entry_setup_live_policy_activation_sha256": policy.get(
+                "activation_artifact_sha256"
+            ),
+            "entry_setup_live_policy_candidate_contract_sha256": policy.get(
+                "candidate_contract_sha256"
+            ),
+            "entry_setup_live_policy_effective_venue": policy.get("effective_venue"),
+            "entry_setup_live_policy_session_bucket": policy.get("session_bucket"),
+            "entry_setup_live_policy_runtime_effect": bool(
+                policy.get("runtime_effect") is True
+            ),
+        }
+        if contract_errors:
+            return {
+                **risk,
+                **policy_fields,
+                "action": "DROP",
+                "score": 0,
+                "reason": "entry_setup_v2_14_semantic_rejected",
+                "edge_state": "INSUFFICIENT_DATA",
+                "decision_quality_contract_status": "semantic_rejected",
+                "decision_quality_contract_errors": contract_errors,
+                "decision_quality_live_adapter": (
+                    "entry_setup_v2_14_krx_bounded_probe_v1"
+                ),
+                "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+                "decision_quality_score_semantics": (
+                    "fail_closed_not_model_quality_score"
+                ),
+                "entry_probe_intent": False,
+                "entry_probe_intent_status": "semantic_rejected",
+                "entry_probe_intent_prompt_version": (
+                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                ),
+                "entry_probe_intent_submit_guard_required": True,
+                "entry_probe_intent_actual_order_submitted": False,
+                "entry_probe_first_required": True,
+                "entry_ai_full_entry_forbidden": True,
+            }
+
+        probe_intent = composed.get("entry_probe_intent") is True
+        action = "WAIT" if probe_intent else str(composed.get("action") or "DROP")
+        action = action.strip().upper()
+        recent_exit_context = (
+            exact_payload.get("recent_exit_context")
+            if isinstance(exact_payload, dict)
+            and isinstance(exact_payload.get("recent_exit_context"), dict)
+            else {}
+        )
+        recent_exit_policy = str(
+            recent_exit_context.get("reentry_policy") or ""
+        ).strip()
+        recent_exit_probe_blocked = False
+        recent_exit_price_vs_exit_pct = None
+        if (
+            probe_intent
+            and recent_exit_policy == "fresh_post_exit_confirmation_required"
+        ):
+            try:
+                exit_price = float(recent_exit_context.get("exit_price") or 0.0)
+                current_price = float(
+                    (exact_payload.get("current") or {}).get("price") or 0.0
+                )
+            except (TypeError, ValueError):
+                exit_price = 0.0
+                current_price = 0.0
+            if exit_price > 0.0 and current_price > 0.0:
+                recent_exit_price_vs_exit_pct = (
+                    (current_price - exit_price) / exit_price * 100.0
+                )
+            recent_exit_probe_blocked = bool(
+                exit_price <= 0.0 or current_price <= 0.0 or current_price > exit_price
+            )
+            if recent_exit_probe_blocked:
+                probe_intent = False
+
+        verdict = str(risk.get("risk_verdict") or "INSUFFICIENT").upper()
+        setup_family = str(composed.get("entry_setup_family") or "NO_VALID_SETUP")
+        evidence = {
+            "setup": (composed.get("evidence") or {}).get("setup", "no_setup"),
+            "trigger": "recovery_required" if probe_intent else "failed",
+            "positive_edge": "moderate" if probe_intent else "none",
+            "adverse_risk": {
+                "PASS": "low",
+                "CAUTION": "moderate",
+                "VETO": "high",
+            }.get(verdict, "insufficient"),
+            "trend": "mixed" if probe_intent else "insufficient",
+            "liquidity": "mixed" if probe_intent else "insufficient",
+            "tape": "mixed" if probe_intent else "insufficient",
+            "risk": {
+                "PASS": "low",
+                "CAUTION": "medium",
+                "VETO": "high",
+            }.get(verdict, "insufficient"),
+            "uncertainty": "medium" if probe_intent else "high",
+        }
+        confidence = risk.get("confidence")
+        confidence = (
+            confidence
+            if isinstance(confidence, int) and not isinstance(confidence, bool)
+            else 0
+        )
+        # The legacy recheck handoff accepts a 69-74 score band.  V2.14 does
+        # not ask the model to score entry quality, so using model confidence
+        # here would create an accidental AI score gate.  Keep one neutral
+        # compatibility prior for every deterministically eligible probe.
+        score = (
+            70
+            if probe_intent
+            else (
+                50
+                if action == "WAIT"
+                else min(49, max(0, round(49 * (1.0 - confidence / 100.0))))
+            )
+        )
+        return {
+            **risk,
+            **composed_for_live,
+            **policy_fields,
+            "action": action,
+            "score": score,
+            "reason": str(composed.get("entry_composed_reason") or "")[:120],
+            "edge_state": composed.get("edge_state"),
+            "evidence": evidence,
+            "decision_quality_model_risk_verdict": verdict,
+            "decision_quality_contract_status": "pass",
+            "decision_quality_contract_errors": [],
+            "decision_quality_contract_repair_applied": False,
+            "decision_quality_contract_repair_codes": [],
+            "decision_quality_live_adapter": ("entry_setup_v2_14_krx_bounded_probe_v1"),
+            "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+            "decision_quality_score_semantics": (
+                "fixed_compatibility_prior_not_ai_quality_gate"
+                if probe_intent
+                else "deterministic_setup_veto_or_insufficient"
+            ),
+            "decision_quality_runtime_action_mapping": (
+                "v2_14_probe_candidate_to_bounded_wait_probe"
+                if probe_intent
+                else "v2_14_composed_non_exposure_preserved"
+            ),
+            "entry_probe_intent": probe_intent,
+            "entry_probe_intent_status": (
+                "eligible_wait_probe"
+                if probe_intent
+                else (
+                    "recent_clean_profit_reentry_not_confirmed"
+                    if recent_exit_probe_blocked
+                    else "not_eligible"
+                )
+            ),
+            "entry_probe_intent_prompt_version": (
+                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ),
+            "entry_probe_intent_eligibility_path": (
+                f"v2_14_krx_bounded:{setup_family.lower()}:{verdict.lower()}"
+            ),
+            "entry_probe_intent_authority": (
+                "bounded_krx_canary_existing_submit_guard_required"
+            ),
+            "entry_probe_intent_submit_guard_required": True,
+            "entry_probe_intent_actual_order_submitted": False,
+            "entry_probe_first_required": True,
+            "entry_ai_full_entry_forbidden": True,
+            "entry_setup_composer_runtime_effect": False,
+            "entry_setup_composer_allowed_runtime_apply": False,
+            "entry_setup_composer_actual_order_submitted": False,
+            "entry_setup_composer_broker_order_forbidden": True,
+            "entry_setup_live_adapter_runtime_effect": True,
+            "entry_recent_exit_context_status": (
+                "active"
+                if recent_exit_policy == "fresh_post_exit_confirmation_required"
+                else "not_applicable"
+            ),
+            "entry_recent_exit_probe_blocked": recent_exit_probe_blocked,
+            "entry_recent_exit_price_vs_exit_pct": (
+                round(recent_exit_price_vs_exit_pct, 6)
+                if recent_exit_price_vs_exit_pct is not None
+                else None
+            ),
+            "entry_probe_intent_rollback_condition": (
+                "next_postclose_cumulative_gate_fail_or_policy_contract_gap"
+            ),
+        }
+
     def _normalize_decision_quality_entry_result(
         self,
         result,
         *,
         exact_payload,
         prompt_version=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
+        entry_setup_evidence=None,
+        live_policy=None,
     ):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         normalized_prompt_version = (
             str(prompt_version or DECISION_QUALITY_DETAILED_PROMPT_VERSION).strip()
             or DECISION_QUALITY_DETAILED_PROMPT_VERSION
         )
+        if (
+            normalized_prompt_version
+            == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ):
+            return self._normalize_entry_setup_v2_14_result(
+                result,
+                exact_payload=exact_payload,
+                setup_evidence=entry_setup_evidence,
+                live_policy=live_policy,
+            )
         v2_7_probe_prompt_selected = (
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
         )
@@ -2918,6 +3182,16 @@ class GPTSniperEngine:
                 "reason_codes": ["insufficient_core_data"],
                 "openai_transport_fail_closed": True,
             }
+        elif request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+            payload = {
+                "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+                "risk_verdict": "INSUFFICIENT",
+                "risk_codes": ["SOURCE_QUALITY_GAP"],
+                "supporting_fact_ids": [],
+                "contradicting_fact_ids": [],
+                "confidence": 0,
+                "openai_transport_fail_closed": True,
+            }
         else:
             return None
         roundtrip_ms = max(
@@ -3493,6 +3767,10 @@ class GPTSniperEngine:
             elif request.schema_name == "decision_quality_v2_7_entry":
                 safe_prompt = decision_quality_v2_detailed_system_prompt(
                     "entry", live_entry=True
+                )
+            elif request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+                safe_prompt = (
+                    decision_quality_v2_14_setup_risk_adjudicator_system_prompt("entry")
                 )
             else:
                 safe_prompt = (
@@ -6843,12 +7121,66 @@ class GPTSniperEngine:
         matrix_runtime = None
         entry_adm_runtime = None
         lifecycle_ai_runtime = None
+        entry_setup_live_policy = {}
+        entry_setup_evidence = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             prompt_type = "swing"
             prompt = SWING_SYSTEM_PROMPT
         else:
+            pre_prompt_snapshot = (
+                candle_context.get("ai_market_snapshot_v1")
+                if isinstance(candle_context, dict)
+                and isinstance(candle_context.get("ai_market_snapshot_v1"), dict)
+                else {}
+            )
+            configured_entry_prompt_version = str(
+                getattr(
+                    TRADING_RULES,
+                    "OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
+                    "hot_v1",
+                )
+                or "hot_v1"
+            ).strip()
+            entry_setup_live_policy = resolve_live_prompt_policy(
+                configured_prompt_version=configured_entry_prompt_version,
+                effective_venue=(
+                    pre_prompt_snapshot.get("effective_venue")
+                    or (
+                        candle_context.get("venue")
+                        if isinstance(candle_context, dict)
+                        else None
+                    )
+                    or (
+                        ws_data.get("effective_venue")
+                        if isinstance(ws_data, dict)
+                        else None
+                    )
+                    or (ws_data.get("venue") if isinstance(ws_data, dict) else None)
+                ),
+                session_bucket=(
+                    pre_prompt_snapshot.get("session_bucket")
+                    or (
+                        candle_context.get("session")
+                        if isinstance(candle_context, dict)
+                        else None
+                    )
+                    or (
+                        ws_data.get("session_bucket")
+                        if isinstance(ws_data, dict)
+                        else None
+                    )
+                    or (ws_data.get("session") if isinstance(ws_data, dict) else None)
+                ),
+            )
             prompt, prompt_type, prompt_version, normalized_profile = (
-                self._resolve_scalping_prompt(prompt_profile)
+                self._resolve_scalping_prompt(
+                    prompt_profile,
+                    prompt_version_override=(
+                        entry_setup_live_policy.get("selected_prompt_version")
+                        if entry_setup_live_policy.get("enabled") is True
+                        else None
+                    ),
+                )
             )
             decision_quality_v2_7_selected = (
                 prompt_version
@@ -6856,6 +7188,7 @@ class GPTSniperEngine:
                     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
                     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
                     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                 }
                 and prompt_type == "scalping_entry"
                 and normalized_profile == "watching"
@@ -6864,6 +7197,12 @@ class GPTSniperEngine:
                 prompt_version
                 == DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
                 and decision_quality_v2_7_selected
+            )
+            decision_quality_v2_14_selected = bool(
+                prompt_version
+                == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                and decision_quality_v2_7_selected
+                and entry_setup_live_policy.get("enabled") is True
             )
             matrix_runtime = build_holding_exit_matrix_runtime_context(
                 prompt_profile=normalized_profile,
@@ -6910,9 +7249,15 @@ class GPTSniperEngine:
             cache_strategy = f"{cache_strategy}:{entry_adm_cache_token}"
             cache_strategy = f"{cache_strategy}:{lifecycle_ai_runtime.get('cache_token', 'disabled')}"
             cache_strategy = f"{cache_strategy}:prompt:{prompt_version}"
+            if decision_quality_v2_14_selected:
+                cache_strategy = (
+                    f"{cache_strategy}:entry_setup_policy:"
+                    f"{entry_setup_live_policy.get('activation_artifact_sha256', '-') }"
+                )
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             decision_quality_v2_7_selected = False
             decision_quality_v2_13_selected = False
+            decision_quality_v2_14_selected = False
         use_hot_entry_input = (
             strategy not in ["KOSPI_ML", "KOSDAQ_ML"]
             and prompt_type == "scalping_entry"
@@ -6945,33 +7290,37 @@ class GPTSniperEngine:
         else:
             input_contract_fields = {
                 "ai_input_schema": (
-                    "decision_quality_v2_13_entry_input"
-                    if decision_quality_v2_13_selected
+                    "entry_setup_v2_14_live_input"
+                    if decision_quality_v2_14_selected
                     else (
-                        "decision_quality_v2_7_entry_input"
-                        if decision_quality_v2_7_selected
+                        "decision_quality_v2_13_entry_input"
+                        if decision_quality_v2_13_selected
                         else (
-                            "entry_screen_v2"
-                            if bool(
-                                getattr(
-                                    TRADING_RULES,
-                                    "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
-                                    False,
-                                )
-                            )
+                            "decision_quality_v2_7_entry_input"
+                            if decision_quality_v2_7_selected
                             else (
-                                "entry_screen_hot_v1"
-                                if use_hot_entry_input
-                                else (
-                                    "entry_screen_compact_v1"
-                                    if bool(
-                                        getattr(
-                                            TRADING_RULES,
-                                            "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
-                                            True,
-                                        )
+                                "entry_screen_v2"
+                                if bool(
+                                    getattr(
+                                        TRADING_RULES,
+                                        "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
+                                        False,
                                     )
-                                    else "entry_screen_legacy_text_v1"
+                                )
+                                else (
+                                    "entry_screen_hot_v1"
+                                    if use_hot_entry_input
+                                    else (
+                                        "entry_screen_compact_v1"
+                                        if bool(
+                                            getattr(
+                                                TRADING_RULES,
+                                                "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                                                True,
+                                            )
+                                        )
+                                        else "entry_screen_legacy_text_v1"
+                                    )
                                 )
                             )
                         )
@@ -7278,12 +7627,26 @@ class GPTSniperEngine:
                             "exact_payload": exact_payload,
                             "exact_payload_analysis_v1": exact_payload_analysis,
                         }
-                        if decision_quality_v2_13_selected:
+                        if (
+                            decision_quality_v2_13_selected
+                            or decision_quality_v2_14_selected
+                        ):
                             decision_quality_input[
                                 "anticipatory_reversal_analysis_v1"
                             ] = build_v2_13_recovery_confirmation_analysis_v1(
                                 exact_payload,
                                 stage="entry",
+                            )
+                        if decision_quality_v2_14_selected:
+                            entry_setup_evidence = build_entry_setup_evidence(
+                                exact_payload=exact_payload,
+                                exact_analysis=exact_payload_analysis,
+                                recovery_analysis=decision_quality_input[
+                                    "anticipatory_reversal_analysis_v1"
+                                ],
+                            )
+                            decision_quality_input["entry_setup_evidence_v1"] = (
+                                entry_setup_evidence
                             )
                         formatted_data = json.dumps(
                             decision_quality_input,
@@ -7380,33 +7743,37 @@ class GPTSniperEngine:
                 input_contract_fields = self._resolve_ai_input_contract_fields(
                     formatted_data,
                     default_schema=(
-                        "decision_quality_v2_13_entry_input"
-                        if decision_quality_v2_13_selected
+                        "entry_setup_v2_14_live_input"
+                        if decision_quality_v2_14_selected
                         else (
-                            "decision_quality_v2_7_entry_input"
-                            if decision_quality_v2_7_selected
+                            "decision_quality_v2_13_entry_input"
+                            if decision_quality_v2_13_selected
                             else (
-                                "entry_screen_v2"
-                                if bool(
-                                    getattr(
-                                        TRADING_RULES,
-                                        "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
-                                        False,
-                                    )
-                                )
+                                "decision_quality_v2_7_entry_input"
+                                if decision_quality_v2_7_selected
                                 else (
-                                    "entry_screen_hot_v1"
-                                    if use_hot_entry_input
-                                    else (
-                                        "entry_screen_compact_v1"
-                                        if bool(
-                                            getattr(
-                                                TRADING_RULES,
-                                                "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
-                                                True,
-                                            )
+                                    "entry_screen_v2"
+                                    if bool(
+                                        getattr(
+                                            TRADING_RULES,
+                                            "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED",
+                                            False,
                                         )
-                                        else "entry_screen_legacy_text_v1"
+                                    )
+                                    else (
+                                        "entry_screen_hot_v1"
+                                        if use_hot_entry_input
+                                        else (
+                                            "entry_screen_compact_v1"
+                                            if bool(
+                                                getattr(
+                                                    TRADING_RULES,
+                                                    "OPENAI_SCALPING_COMPACT_INPUT_ENABLED",
+                                                    True,
+                                                )
+                                            )
+                                            else "entry_screen_legacy_text_v1"
+                                        )
                                     )
                                 )
                             )
@@ -7443,6 +7810,23 @@ class GPTSniperEngine:
                     "ai_trace_prompt_type": prompt_type,
                 }
             )
+            if decision_quality_v2_14_selected:
+                trace_metadata_extra.update(
+                    {
+                        "entry_setup_live_policy_status": (
+                            entry_setup_live_policy.get("status")
+                        ),
+                        "entry_setup_live_policy_source_date": (
+                            entry_setup_live_policy.get("source_date")
+                        ),
+                        "entry_setup_live_policy_activation_sha256": (
+                            entry_setup_live_policy.get("activation_artifact_sha256")
+                        ),
+                        "entry_setup_live_policy_candidate_contract_sha256": (
+                            entry_setup_live_policy.get("candidate_contract_sha256")
+                        ),
+                    }
+                )
             snapshot = (
                 candle_context.get("ai_market_snapshot_v1")
                 if isinstance(candle_context, dict)
@@ -7484,9 +7868,13 @@ class GPTSniperEngine:
                     "holding_exit_v1"
                     if prompt_type == "scalping_holding"
                     else (
-                        "decision_quality_v2_7_entry"
-                        if decision_quality_v2_7_selected
-                        else "entry_v1"
+                        ENTRY_RISK_ADJUDICATION_SCHEMA
+                        if decision_quality_v2_14_selected
+                        else (
+                            "decision_quality_v2_7_entry"
+                            if decision_quality_v2_7_selected
+                            else "entry_v1"
+                        )
                     )
                 ),
                 endpoint_name="analyze_target",
@@ -7520,6 +7908,8 @@ class GPTSniperEngine:
                         result,
                         exact_payload=exact_payload,
                         prompt_version=prompt_version,
+                        entry_setup_evidence=entry_setup_evidence,
+                        live_policy=entry_setup_live_policy,
                     )
                 result = self._apply_remote_entry_guard(
                     result,

@@ -32,6 +32,15 @@ project_dir = path.parents[3]
 apply_plan_path = project_dir / "data" / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target_date}.json"
 runtime_env_path = project_dir / "data" / "threshold_cycle" / "runtime_env" / f"threshold_runtime_env_{target_date}.env"
 runtime_env_manifest_path = project_dir / "data" / "threshold_cycle" / "runtime_env" / f"threshold_runtime_env_{target_date}.json"
+entry_setup_activation_path = project_dir / "data" / "runtime" / "entry_setup_v2_14_live_policy" / f"entry_setup_v2_14_live_policy_{target_date}.json"
+entry_setup_activation = {}
+if entry_setup_activation_path.exists():
+    try:
+        entry_setup_activation = json.loads(
+            entry_setup_activation_path.read_text(encoding="utf-8")
+        )
+    except Exception:
+        entry_setup_activation = {"status": "malformed"}
 payload = {}
 if path.exists():
     try:
@@ -57,6 +66,15 @@ payload.update(
         "apply_plan_exists": apply_plan_path.exists(),
         "runtime_env_exists": runtime_env_path.exists(),
         "runtime_env_manifest_exists": runtime_env_manifest_path.exists(),
+        "entry_setup_live_policy_path": str(entry_setup_activation_path),
+        "entry_setup_live_policy_exists": entry_setup_activation_path.exists(),
+        "entry_setup_live_policy_status": entry_setup_activation.get("status"),
+        "entry_setup_live_policy_runtime_effect": entry_setup_activation.get(
+            "runtime_effect"
+        ),
+        "entry_setup_live_policy_blocking_reasons": entry_setup_activation.get(
+            "blocking_reasons"
+        ) or [],
     }
 )
 payload.setdefault("started_at", payload["updated_at"])
@@ -156,6 +174,12 @@ printf '%s\n' "$manifest_payload"
 manifest_json="$(printf '%s\n' "$manifest_payload" | extract_manifest_json)"
 printf '%s\n' "$manifest_json" > "$MANIFEST_CAPTURE_FILE"
 handle_preopen_apply_result "$MANIFEST_CAPTURE_FILE" "${manifest_exit_code:-1}"
+PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
+  --target-date "$TARGET_DATE" \
+  --runtime-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env" \
+  --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env" \
+  --dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env" \
+  --write
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 preopen_reason="completed"
 if "$VENV_PY" - "$MANIFEST_CAPTURE_FILE" <<'PY'

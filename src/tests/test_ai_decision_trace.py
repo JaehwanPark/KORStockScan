@@ -1409,6 +1409,19 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
             ),
             "entry_probe_intent_submit_guard_required": True,
             "entry_probe_intent_actual_order_submitted": False,
+            "entry_setup_family": "CLEAN_CONTINUATION",
+            "entry_setup_state": "READY",
+            "entry_ai_risk_verdict": "PASS",
+            "entry_ai_risk_codes": ["NO_BLOCKING_RISK"],
+            "entry_ai_veto_corroborated": False,
+            "entry_setup_live_policy_status": "active_bounded_krx_canary",
+            "entry_setup_live_policy_source_date": "2026-08-06",
+            "entry_setup_live_policy_target_date": "2026-08-07",
+            "entry_setup_live_policy_activation_sha256": "activation-sha",
+            "entry_setup_live_policy_candidate_contract_sha256": "candidate-sha",
+            "entry_setup_live_policy_runtime_effect": True,
+            "entry_probe_first_required": True,
+            "entry_ai_full_entry_forbidden": True,
             "entry_recent_exit_context_status": "active",
             "entry_recent_exit_probe_blocked": True,
             "entry_recent_exit_price_vs_exit_pct": 0.273723,
@@ -1440,6 +1453,16 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
     assert pending_row["entry_probe_intent"] is True
     assert pending_row["entry_probe_intent_status"] == "eligible_wait_probe"
     assert pending_row["entry_probe_intent_actual_order_submitted"] is False
+    assert trace_row["entry_setup_family"] == "CLEAN_CONTINUATION"
+    assert trace_row["entry_setup_state"] == "READY"
+    assert trace_row["entry_ai_risk_verdict"] == "PASS"
+    assert trace_row["entry_ai_risk_codes"] == ["NO_BLOCKING_RISK"]
+    assert trace_row["entry_setup_live_policy_status"] == ("active_bounded_krx_canary")
+    assert trace_row["entry_setup_live_policy_runtime_effect"] is True
+    assert pending_row["entry_setup_live_policy_source_date"] == "2026-08-06"
+    assert pending_row["entry_setup_live_policy_target_date"] == "2026-08-07"
+    assert pending_row["entry_probe_first_required"] is True
+    assert pending_row["entry_ai_full_entry_forbidden"] is True
     assert pending_row["entry_recent_exit_context_status"] == "active"
     assert pending_row["entry_recent_exit_probe_blocked"] is True
     assert pending_row["entry_recent_exit_price_vs_exit_pct"] == 0.273723

@@ -627,6 +627,27 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
     )
 
 
+def test_entry_setup_paired_replay_has_separate_late_offline_cron():
+    installer = Path("deploy/install_threshold_cycle_cron.sh").read_text(
+        encoding="utf-8"
+    )
+    runner = Path("deploy/run_ai_entry_setup_paired_replay_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "5 21 * * 1-5" in installer
+    assert "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE" in installer
+    assert "run_ai_entry_setup_paired_replay_postclose.sh" in installer
+    assert "src.engine.scalping.entry_setup_paired_replay_batch" in runner
+    assert "--max-new-requests-per-cohort" in runner
+    assert "--candidate-workers" in runner
+    assert "--write" in runner
+    assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
+    assert "sleep 15" in runner
+    assert "run_bot.sh" not in runner
+    assert "tmux" not in runner
+
+
 def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
@@ -1658,6 +1679,23 @@ def test_preopen_wrapper_treats_operator_lock_ready_manifest_as_succeeded():
     assert "operator_runtime_env_lock_preserved_missing_source_report" in script
     assert "runtime_env_handoff_verification" in script
     assert "extract_manifest_json" in script
+    assert "src.engine.scalping.entry_setup_live_policy" in script
+    assert '--target-date "$TARGET_DATE"' in script
+    assert (
+        '--runtime-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"'
+        in script
+    )
+    assert (
+        '--operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env"'
+        in script
+    )
+    assert (
+        '--dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env"'
+        in script
+    )
+    assert '"entry_setup_live_policy_status"' in script
+    assert '"entry_setup_live_policy_blocking_reasons"' in script
+    assert "--write" in script
 
 
 def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_report(
@@ -1668,11 +1706,21 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
     apply_dir = project / "data/threshold_cycle/apply_plans"
     runtime_dir = project / "data/threshold_cycle/runtime_env"
     engine_dir = project / "src/engine"
+    scalping_dir = engine_dir / "scalping"
     apply_dir.mkdir(parents=True)
     runtime_dir.mkdir(parents=True)
     engine_dir.mkdir(parents=True)
+    scalping_dir.mkdir(parents=True)
     (project / "src/__init__.py").write_text("", encoding="utf-8")
     (engine_dir / "__init__.py").write_text("", encoding="utf-8")
+    (scalping_dir / "__init__.py").write_text("", encoding="utf-8")
+    (scalping_dir / "entry_setup_live_policy.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "date = sys.argv[sys.argv.index('--target-date') + 1]\n"
+        "print(json.dumps({'target_date': date, 'status': 'inactive_fallback_v2_13'}))\n",
+        encoding="utf-8",
+    )
     (engine_dir / "threshold_cycle_preopen_apply.py").write_text(
         "import json\n"
         "import sys\n"
