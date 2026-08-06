@@ -2347,17 +2347,19 @@ def _pred_pre_signal_direction(value):
     return "unknown"
 
 
-def get_previous_limit_down_stocks_ka10017(token):
-    """Return the official KRX previous-limit-down list with raw provenance.
+def _get_previous_price_limit_stocks_ka10017(token, *, updown_tp, source_label):
+    """Return one official KRX previous-price-limit list with provenance.
 
-    Official reference:
-    Kiwoom-Securities/Kiwoom-REST-API@69642586f7d84ba9fd8a6faf1f1537c7fda6568b
-    ``kiwoom_docs/종목정보.md`` (ka10017).
+    Official reference: Kiwoom-Securities/Kiwoom-REST-API commit
+    ``69642586f7d84ba9fd8a6faf1f1537c7fda6568b`` and its ka10017 docs.
     """
 
+    normalized_type = str(updown_tp or "").strip()
+    if normalized_type not in {"6", "7"}:
+        raise ValueError("ka10017 previous price-limit type must be 6 or 7")
     payload = {
         "mrkt_tp": "000",
-        "updown_tp": "7",
+        "updown_tp": normalized_type,
         "sort_tp": "2",
         "stk_cnd": "10",
         "trde_qty_tp": "00000",
@@ -2403,14 +2405,46 @@ def get_previous_limit_down_stocks_ka10017(token):
         {
             "request_payload": payload,
             "received_count": len(rows),
+            "source_label": str(source_label or "").strip(),
             "official_upstream_commit": ("69642586f7d84ba9fd8a6faf1f1537c7fda6568b"),
             "official_upstream_paths": [
                 "kiwoom_docs/종목정보.md",
                 "examples/국내주식/종목정보/get_domestic_upper_lower_limit_stocks.py",
             ],
+            "official_reference_verified_at": "2026-08-06T15:40:00+09:00",
         }
     )
     return rows, source_meta
+
+
+def get_previous_limit_down_stocks_ka10017(token):
+    """Return the official KRX previous-limit-down list with raw provenance.
+
+    Official reference:
+    Kiwoom-Securities/Kiwoom-REST-API@69642586f7d84ba9fd8a6faf1f1537c7fda6568b
+    ``kiwoom_docs/종목정보.md`` (ka10017).
+    """
+
+    return _get_previous_price_limit_stocks_ka10017(
+        token,
+        updown_tp="7",
+        source_label="previous_limit_down",
+    )
+
+
+def get_previous_limit_up_stocks_ka10017(token):
+    """Return the official KRX previous-limit-up list with raw provenance.
+
+    Official reference verified at ``2026-08-06T15:40+09:00``:
+    Kiwoom-Securities/Kiwoom-REST-API@69642586f7d84ba9fd8a6faf1f1537c7fda6568b
+    ``kiwoom_docs/종목정보.md`` and the official ka10017 example.
+    """
+
+    return _get_previous_price_limit_stocks_ka10017(
+        token,
+        updown_tp="6",
+        source_label="previous_limit_up",
+    )
 
 
 def rank_change_sign_diagnostics(rank_change_sign, rank_change):

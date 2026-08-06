@@ -711,7 +711,15 @@ LIMIT_DOWN_OBSERVATION_REGISTRY = LimitDownObservationRegistry()
 
 
 def is_observation_only_code(code: str) -> bool:
-    return LIMIT_DOWN_OBSERVATION_REGISTRY.is_observation_only(code)
+    if LIMIT_DOWN_OBSERVATION_REGISTRY.is_observation_only(code):
+        return True
+    # Keep the websocket/radar integration surface stable while allowing the
+    # rising-owned upper-limit observer to share the same signal-isolation gate.
+    from src.engine.scalping.upper_limit_watch import (
+        UPPER_LIMIT_OBSERVATION_REGISTRY,
+    )
+
+    return UPPER_LIMIT_OBSERVATION_REGISTRY.is_observation_only(code)
 
 
 def observe_raw_tick(code: str, data: dict[str, Any], received_epoch=None) -> None:
@@ -726,6 +734,13 @@ def observe_raw_market_data(
     realtime_type: str = "0B",
 ) -> None:
     LIMIT_DOWN_OBSERVATION_REGISTRY.observe_raw_market_data(
+        code, data, received_epoch, realtime_type=realtime_type
+    )
+    from src.engine.scalping.upper_limit_watch import (
+        UPPER_LIMIT_OBSERVATION_REGISTRY,
+    )
+
+    UPPER_LIMIT_OBSERVATION_REGISTRY.observe_raw_market_data(
         code, data, received_epoch, realtime_type=realtime_type
     )
 
