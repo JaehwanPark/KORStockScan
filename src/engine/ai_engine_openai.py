@@ -2511,6 +2511,51 @@ class GPTSniperEngine:
             if isinstance(payload.get("evidence"), dict)
             else {}
         )
+        clean_continuation = (
+            v2_13_analysis.get("clean_continuation_probe")
+            if isinstance(v2_13_analysis.get("clean_continuation_probe"), dict)
+            else {}
+        )
+        execution_cost = (
+            v2_13_analysis.get("execution_cost")
+            if isinstance(v2_13_analysis.get("execution_cost"), dict)
+            else {}
+        )
+        try:
+            expected_upside_pct = float(payload.get("expected_upside_pct"))
+            expected_downside_pct = float(payload.get("expected_downside_pct"))
+            conservative_cost_pct = float(
+                execution_cost.get("conservative_execution_cost_pct")
+            )
+        except (TypeError, ValueError):
+            expected_upside_pct = None
+            expected_downside_pct = None
+            conservative_cost_pct = None
+        clean_wait_after_cost_ratio = (
+            max(0.0, expected_upside_pct - conservative_cost_pct)
+            / abs(expected_downside_pct - conservative_cost_pct)
+            if expected_upside_pct is not None
+            and expected_downside_pct is not None
+            and expected_downside_pct < 0
+            and conservative_cost_pct is not None
+            else None
+        )
+        v2_13_clean_wait_probe_selected = bool(
+            v2_13_prompt_selected
+            and candidate_action == "WAIT"
+            and clean_continuation.get("eligible") is True
+            and str(payload.get("edge_state") or "").strip().upper() == "EDGE"
+            and str(evidence.get("setup") or "").strip().lower()
+            in {"continuation", "pullback_recovery"}
+            and str(evidence.get("positive_edge") or "").strip().lower()
+            in {"moderate", "strong"}
+            and str(evidence.get("adverse_risk") or "").strip().lower()
+            in {"low", "moderate", "high"}
+            and str(evidence.get("trigger") or "").strip().lower()
+            == "recovery_required"
+            and clean_wait_after_cost_ratio is not None
+            and clean_wait_after_cost_ratio >= 0.75
+        )
         if v2_13_buy_probe_selected:
             reason_codes = [
                 (
@@ -2525,6 +2570,7 @@ class GPTSniperEngine:
             evidence["trigger"] = "recovery_required"
         entry_probe_intent = bool(
             v2_13_buy_probe_selected
+            or v2_13_clean_wait_probe_selected
             or (
                 v2_7_probe_prompt_selected
                 and action == "WAIT"
@@ -2598,12 +2644,20 @@ class GPTSniperEngine:
             "decision_quality_score_semantics": (
                 "candidate_buy_mapped_to_bounded_wait_probe"
                 if v2_13_buy_probe_selected
-                else "confidence_clamped_to_legacy_action_band"
+                else (
+                    "clean_continuation_wait_mapped_to_bounded_wait_probe"
+                    if v2_13_clean_wait_probe_selected
+                    else "confidence_clamped_to_legacy_action_band"
+                )
             ),
             "decision_quality_runtime_action_mapping": (
                 "v2_13_buy_to_bounded_wait_probe"
                 if v2_13_buy_probe_selected
-                else "model_action_preserved"
+                else (
+                    "v2_13_clean_wait_to_bounded_wait_probe"
+                    if v2_13_clean_wait_probe_selected
+                    else "model_action_preserved"
+                )
             ),
             "entry_probe_intent": entry_probe_intent,
             "entry_probe_intent_status": (
@@ -2620,6 +2674,28 @@ class GPTSniperEngine:
                 )
             ),
             "entry_probe_intent_prompt_version": normalized_prompt_version,
+            "entry_probe_intent_eligibility_path": (
+                "v2_13_recovery_confirmation_model_buy"
+                if v2_13_buy_probe_selected
+                else (
+                    "v2_13_clean_continuation_wait"
+                    if v2_13_clean_wait_probe_selected
+                    else (
+                        "v2_7_edge_wait"
+                        if v2_7_probe_prompt_selected
+                        and entry_probe_intent_eligible_before_recent_exit
+                        else "not_eligible"
+                    )
+                )
+            ),
+            "entry_probe_intent_after_cost_reward_risk": (
+                round(clean_wait_after_cost_ratio, 6)
+                if clean_wait_after_cost_ratio is not None
+                else None
+            ),
+            "entry_probe_intent_rollback_condition": (
+                "disable_wait_probe_owner_or_restore_model_buy_only_mapping"
+            ),
             "entry_probe_intent_authority": (
                 "candidate_only_existing_submit_guard_required"
             ),

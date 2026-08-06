@@ -6002,6 +6002,12 @@ def _entry_ai_recheck_probe_state_fields(
                 "last_watching_ai_probe_intent_prompt_version": str(
                     decision.get("entry_probe_intent_prompt_version") or ""
                 ),
+                "last_watching_ai_probe_intent_eligibility_path": str(
+                    decision.get("entry_probe_intent_eligibility_path") or ""
+                ),
+                "last_watching_ai_probe_intent_after_cost_reward_risk": (
+                    decision.get("entry_probe_intent_after_cost_reward_risk")
+                ),
                 "last_watching_ai_probe_intent_submit_guard_required": True,
             }
         )
@@ -35817,6 +35823,12 @@ def _retry_entry_ai_submit_authority_before_block(
                 "last_watching_ai_probe_intent_prompt_version": str(
                     ai_decision.get("entry_probe_intent_prompt_version") or ""
                 ),
+                "last_watching_ai_probe_intent_eligibility_path": str(
+                    ai_decision.get("entry_probe_intent_eligibility_path") or ""
+                ),
+                "last_watching_ai_probe_intent_after_cost_reward_risk": (
+                    ai_decision.get("entry_probe_intent_after_cost_reward_risk")
+                ),
                 "last_watching_ai_probe_intent_submit_guard_required": True,
             }
             if trusted_result
@@ -55278,6 +55290,17 @@ def _handle_watching_strategy_branch(
                                         )
                                         or ""
                                     ),
+                                    "last_watching_ai_probe_intent_eligibility_path": str(
+                                        ai_decision.get(
+                                            "entry_probe_intent_eligibility_path"
+                                        )
+                                        or ""
+                                    ),
+                                    "last_watching_ai_probe_intent_after_cost_reward_risk": (
+                                        ai_decision.get(
+                                            "entry_probe_intent_after_cost_reward_risk"
+                                        )
+                                    ),
                                     "last_watching_ai_probe_intent_submit_guard_required": True,
                                 }
                                 if trusted_result
@@ -65663,6 +65686,12 @@ def _record_scanner_entry_ai_attempt(
             ),
             "last_watching_ai_probe_intent_prompt_version": str(
                 ai_decision.get("entry_probe_intent_prompt_version") or ""
+            ),
+            "last_watching_ai_probe_intent_eligibility_path": str(
+                ai_decision.get("entry_probe_intent_eligibility_path") or ""
+            ),
+            "last_watching_ai_probe_intent_after_cost_reward_risk": (
+                ai_decision.get("entry_probe_intent_after_cost_reward_risk")
             ),
             "last_watching_ai_probe_intent_submit_guard_required": True,
         },

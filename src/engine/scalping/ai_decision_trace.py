@@ -1698,6 +1698,15 @@ def record_ai_decision_trace(
             "entry_probe_intent_prompt_version": _optional(
                 merged, "entry_probe_intent_prompt_version"
             ),
+            "entry_probe_intent_eligibility_path": _optional(
+                merged, "entry_probe_intent_eligibility_path"
+            ),
+            "entry_probe_intent_after_cost_reward_risk": _safe_number(
+                _optional(merged, "entry_probe_intent_after_cost_reward_risk")
+            ),
+            "entry_probe_intent_rollback_condition": _optional(
+                merged, "entry_probe_intent_rollback_condition"
+            ),
             "entry_probe_intent_authority": _optional(
                 merged, "entry_probe_intent_authority"
             ),
@@ -1818,6 +1827,15 @@ def record_ai_decision_trace(
             "entry_probe_intent_status": trace_row["entry_probe_intent_status"],
             "entry_probe_intent_prompt_version": trace_row[
                 "entry_probe_intent_prompt_version"
+            ],
+            "entry_probe_intent_eligibility_path": trace_row[
+                "entry_probe_intent_eligibility_path"
+            ],
+            "entry_probe_intent_after_cost_reward_risk": trace_row[
+                "entry_probe_intent_after_cost_reward_risk"
+            ],
+            "entry_probe_intent_rollback_condition": trace_row[
+                "entry_probe_intent_rollback_condition"
             ],
             "entry_probe_intent_authority": trace_row["entry_probe_intent_authority"],
             "entry_probe_intent_submit_guard_required": trace_row[

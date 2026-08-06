@@ -3050,6 +3050,61 @@ def test_decision_quality_v2_13_buy_maps_to_guarded_wait_probe(monkeypatch):
     )
 
 
+def test_decision_quality_v2_13_clean_wait_maps_to_guarded_probe(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "build_v2_13_recovery_confirmation_analysis_v1",
+        lambda *_args, **_kwargs: {
+            "clean_continuation_probe": {"eligible": True},
+            "execution_cost": {"conservative_execution_cost_pct": 0.2},
+        },
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "validate_v2_13_recovery_confirmation_response",
+        lambda **_kwargs: [],
+    )
+
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "edge_state": "EDGE",
+            "action": "WAIT",
+            "expected_upside_pct": 1.0,
+            "expected_downside_pct": -0.8,
+            "confidence": 58,
+            "reason_codes": ["edge_positive", "recovery_trigger_required"],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "adverse",
+                "tape": "mixed",
+                "risk": "high",
+                "uncertainty": "medium",
+                "setup": "pullback_recovery",
+                "positive_edge": "moderate",
+                "adverse_risk": "high",
+                "trigger": "recovery_required",
+            },
+        },
+        exact_payload={},
+        prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    )
+
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["action"] == "WAIT"
+    assert result["entry_probe_intent"] is True
+    assert result["entry_probe_intent_status"] == "eligible_wait_probe"
+    assert (
+        result["entry_probe_intent_eligibility_path"] == "v2_13_clean_continuation_wait"
+    )
+    assert result["entry_probe_intent_after_cost_reward_risk"] == pytest.approx(0.8)
+    assert result["decision_quality_runtime_action_mapping"] == (
+        "v2_13_clean_wait_to_bounded_wait_probe"
+    )
+    assert result["entry_probe_intent_submit_guard_required"] is True
+    assert result["entry_probe_intent_actual_order_submitted"] is False
+
+
 def test_decision_quality_v2_13_repairs_unusable_non_buy_to_safe_wait():
     engine = _build_engine()
     result = engine._normalize_decision_quality_entry_result(

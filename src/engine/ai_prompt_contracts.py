@@ -1542,6 +1542,19 @@ V2.13 recovery-confirmation one-share probe experiment:
 6. Runtime effect, prompt promotion, provider/model changes, thresholds, order
    price/quantity, broker guards, and bot state remain forbidden. Candidate
    input excludes outcomes; never infer future returns or optimize to a symbol.
+7. The action value must be exactly one JSON enum token: BUY, WAIT, or DROP.
+   Never append explanations, stage labels, parentheses, or suffixes to action.
+   Put explanations only in canonical reason_codes and evidence.
+8. expected_downside_pct is always zero or negative. evidence.risk uses only
+   low/medium/high/insufficient; blocking belongs only in evidence.adverse_risk.
+   evidence.tape uses supportive/mixed/adverse/insufficient, so neutral maps to
+   mixed. A wide_but_observable spread requires liquidity=adverse.
+9. A contract-valid EDGE/WAIT on clean_continuation_probe.eligible=true may be
+   retained by the runtime adapter as bounded one-share recheck intent when its
+   truthful after-cost ratio is at least 0.75 and adverse_risk is non-blocking.
+   This does not submit an order: fresh micro confirmation and every existing
+   submit, account, quantity, cooldown, broker, post-probe, and hard-safety guard
+   remain authoritative.
 """.strip()
 
 

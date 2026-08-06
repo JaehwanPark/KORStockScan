@@ -26,6 +26,8 @@ def _entry_ai_stock() -> dict:
         "last_watching_ai_probe_intent_prompt_version": (
             "decision_quality_v2_7_probe_v1"
         ),
+        "last_watching_ai_probe_intent_eligibility_path": "not_eligible",
+        "last_watching_ai_probe_intent_after_cost_reward_risk": 0.0,
     }
 
 
@@ -86,6 +88,10 @@ def test_submit_authority_refreshes_scout_parent_to_current_wait_probe() -> None
             "last_watching_ai_attempt_contract_status": "pass",
             "last_watching_ai_probe_intent": True,
             "last_watching_ai_probe_intent_status": "eligible_wait_probe",
+            "last_watching_ai_probe_intent_eligibility_path": (
+                "v2_13_clean_continuation_wait"
+            ),
+            "last_watching_ai_probe_intent_after_cost_reward_risk": 0.875,
         }
     )
 
@@ -103,6 +109,10 @@ def test_submit_authority_refreshes_scout_parent_to_current_wait_probe() -> None
     assert fields["scout_ai_parent_score"] == 65
     assert fields["scout_ai_parent_probe_intent"] is True
     assert fields["scout_ai_parent_probe_intent_status"] == "eligible_wait_probe"
+    assert fields["scout_ai_parent_probe_intent_eligibility_path"] == (
+        "v2_13_clean_continuation_wait"
+    )
+    assert fields["scout_ai_parent_probe_intent_after_cost_reward_risk"] == 0.875
 
 
 def test_non_scout_has_no_execution_attribution() -> None:

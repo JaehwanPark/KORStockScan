@@ -1399,6 +1399,11 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
             "entry_probe_intent": True,
             "entry_probe_intent_status": "eligible_wait_probe",
             "entry_probe_intent_prompt_version": "decision_quality_v2_7_probe_v1",
+            "entry_probe_intent_eligibility_path": ("v2_13_clean_continuation_wait"),
+            "entry_probe_intent_after_cost_reward_risk": 0.875,
+            "entry_probe_intent_rollback_condition": (
+                "disable_wait_probe_owner_or_restore_model_buy_only_mapping"
+            ),
             "entry_probe_intent_authority": (
                 "candidate_only_existing_submit_guard_required"
             ),
@@ -1420,6 +1425,15 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
     assert trace_row["entry_probe_intent_status"] == "eligible_wait_probe"
     assert trace_row["entry_probe_intent_submit_guard_required"] is True
     assert trace_row["entry_probe_intent_actual_order_submitted"] is False
+    assert (
+        trace_row["entry_probe_intent_eligibility_path"]
+        == "v2_13_clean_continuation_wait"
+    )
+    assert trace_row["entry_probe_intent_after_cost_reward_risk"] == 0.875
+    assert pending_row["entry_probe_intent_eligibility_path"] == (
+        "v2_13_clean_continuation_wait"
+    )
+    assert pending_row["entry_probe_intent_after_cost_reward_risk"] == 0.875
     assert trace_row["entry_recent_exit_context_status"] == "active"
     assert trace_row["entry_recent_exit_probe_blocked"] is True
     assert trace_row["entry_recent_exit_price_vs_exit_pct"] == 0.273723

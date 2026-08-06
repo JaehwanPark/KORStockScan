@@ -5126,7 +5126,6 @@ def validate_replay_candidate_response(
             and liquidity == "adverse"
             and trigger == "confirmed"
             and after_cost_ratio is not None
-            and after_cost_ratio >= after_cost_floor
         ):
             # High risk is tolerated by the offline one-share experiment but it
             # does not compel exposure. Preserve the model's truthful DROP and
@@ -5407,11 +5406,13 @@ def repair_bounded_opportunity_candidate_response(
     request: dict[str, Any],
     response: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """Close V2.10 semantic conflicts without creating probe exposure.
+    """Close representational semantic conflicts without creating BUY exposure.
 
-    This deterministic offline adapter may preserve an EDGE as WAIT or demote an
-    invalid BUY to WAIT/DROP.  It never promotes a non-BUY response to BUY and it
-    never changes numeric upside/downside estimates.
+    This adapter is shared by offline replay and the selected live entry prompt.
+    It may preserve an EDGE as WAIT or demote an invalid BUY to WAIT/DROP.  It
+    never promotes a non-BUY response to BUY.  Sign-only normalization preserves
+    the magnitude of a model downside estimate while closing the documented
+    negative-downside convention.
     """
 
     candidate = request.get("candidate")
@@ -5469,6 +5470,67 @@ def repair_bounded_opportunity_candidate_response(
     evidence = repaired.get("evidence")
     if not isinstance(evidence, dict):
         return repaired, repairs
+
+    raw_action = str(repaired.get("action") or "").strip().upper()
+    if raw_action not in STAGE_ACTIONS["entry"]:
+        # The model occasionally returns a prose-decorated non-BUY action even
+        # though the prompt asks for an enum.  Preserve its no-exposure intent;
+        # never infer BUY from a non-canonical token.
+        canonical_action = None
+        drop_markers = (
+            raw_action.startswith("DROP"),
+            "NO_EDGE_DROP" in raw_action,
+            "ENTRY_DECISION: DROP" in raw_action,
+            "DECISION_NO_EDGE_DROP" in raw_action,
+            raw_action == "STAGE_NO_ENTRY",
+        )
+        wait_markers = (
+            "WAIT" in raw_action,
+            "RECOVERY_REQUIRED" in raw_action,
+            "OBSERVATION" in raw_action,
+            "EVALUATE" in raw_action,
+            "PASSIVE_PROBE" in raw_action,
+        )
+        if any(drop_markers):
+            canonical_action = "DROP"
+        elif any(wait_markers):
+            canonical_action = "WAIT"
+        elif "DROP" in raw_action or "NO_ENTRY" in raw_action:
+            canonical_action = "DROP"
+        if canonical_action is not None:
+            set_value(
+                repaired,
+                "action",
+                canonical_action,
+                "non_buy_action_enum_normalized",
+            )
+
+    action = str(repaired.get("action") or "").strip().upper()
+    if action in {"WAIT", "DROP"}:
+        downside = _number(repaired.get("expected_downside_pct"))
+        if downside is not None and downside > 0:
+            set_value(
+                repaired,
+                "expected_downside_pct",
+                -downside,
+                "non_buy_downside_sign_normalized",
+            )
+
+    evidence_aliases = {
+        "risk": {"blocking": "high", "moderate": "medium"},
+        "tape": {"neutral": "mixed"},
+        "adverse_risk": {"medium": "moderate"},
+    }
+    for field, aliases in evidence_aliases.items():
+        value = str(evidence.get(field) or "").strip().lower()
+        normalized = aliases.get(value)
+        if normalized is not None:
+            set_value(
+                evidence,
+                field,
+                normalized,
+                f"{field}_enum_normalized",
+            )
     facts = _entry_contract_facts(request.get("exact_payload"))
     bounded = analysis.get("bounded_opportunity")
     bounded = bounded if isinstance(bounded, dict) else {}
@@ -5538,6 +5600,22 @@ def repair_bounded_opportunity_candidate_response(
         if evidence.get("positive_edge") not in {"moderate", "strong"}:
             set_value(evidence, "positive_edge", "moderate", "structural_edge_strength")
 
+    if (
+        facts["adverse_distribution_no_edge"]
+        and not facts["structural_edge_floor"]
+        and str(repaired.get("edge_state") or "").strip().upper() == "NO_EDGE"
+        and str(repaired.get("action") or "").strip().upper() == "DROP"
+    ):
+        set_value(evidence, "trend", "adverse", "adverse_distribution_trend")
+        set_value(evidence, "setup", "no_setup", "adverse_distribution_setup")
+        set_value(
+            evidence,
+            "positive_edge",
+            "none",
+            "adverse_distribution_strength",
+        )
+        set_value(evidence, "trigger", "failed", "adverse_distribution_trigger")
+
     if facts["bounded_reversal_probe_candidate"]:
         set_value(repaired, "edge_state", "EDGE", "bounded_reversal_edge")
         set_value(repaired, "action", "WAIT", "bounded_reversal_wait")
@@ -5585,6 +5663,13 @@ def repair_bounded_opportunity_candidate_response(
         set_value(evidence, "adverse_risk", "blocking", "blocking_overextension_risk")
     spread = analysis.get("spread")
     spread = spread if isinstance(spread, dict) else {}
+    if spread.get("regime") == "wide_but_observable":
+        set_value(
+            evidence,
+            "liquidity",
+            "adverse",
+            "wide_spread_liquidity_aligned",
+        )
     bounded_wide_spread = bool(
         facts["ask_wall_wide_spread"]
         and spread.get("regime") == "wide_but_observable"
@@ -5610,6 +5695,12 @@ def repair_bounded_opportunity_candidate_response(
             "adverse_risk",
             "blocking",
             "deterministic_hard_blocker_risk",
+        )
+        set_value(
+            evidence,
+            "risk",
+            "high",
+            "deterministic_hard_blocker_risk_level",
         )
         if not facts["trusted_supportive_trigger"]:
             set_value(
@@ -5674,6 +5765,12 @@ def repair_bounded_opportunity_candidate_response(
         "insufficient",
     }:
         set_value(evidence, "adverse_risk", "high", "wait_nonblocking_risk")
+    if (
+        action == "DROP"
+        and evidence.get("adverse_risk") == "blocking"
+        and evidence.get("trigger") == "recovery_required"
+    ):
+        set_value(evidence, "trigger", "failed", "blocking_drop_trigger_alignment")
 
     edge_state = str(repaired.get("edge_state") or "")
     trigger = str(evidence.get("trigger") or "")
@@ -5722,6 +5819,12 @@ def repair_bounded_opportunity_candidate_response(
     if repaired.get("reason_codes") != normalized_codes:
         repaired["reason_codes"] = normalized_codes
         repairs.append("reason_code_evidence_alignment")
+    resolved_codes, conflicts_resolved = resolve_candidate_reason_code_conflicts(
+        repaired
+    )
+    if conflicts_resolved:
+        repaired["reason_codes"] = resolved_codes
+        repairs.append("reason_code_conflicts_resolved")
     return repaired, list(dict.fromkeys(repairs))
 
 
@@ -6550,6 +6653,12 @@ def prepare_paired_replay_requests(
                 "captured_entry_probe_intent": trace.get("entry_probe_intent"),
                 "captured_entry_probe_intent_status": trace.get(
                     "entry_probe_intent_status"
+                ),
+                "captured_entry_probe_intent_eligibility_path": trace.get(
+                    "entry_probe_intent_eligibility_path"
+                ),
+                "captured_entry_probe_intent_after_cost_reward_risk": trace.get(
+                    "entry_probe_intent_after_cost_reward_risk"
                 ),
             },
             "candidate": candidate,
@@ -11721,6 +11830,12 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                         "entry_probe_intent_status": control.get(
                             "captured_entry_probe_intent_status"
+                        ),
+                        "entry_probe_intent_eligibility_path": control.get(
+                            "captured_entry_probe_intent_eligibility_path"
+                        ),
+                        "entry_probe_intent_after_cost_reward_risk": control.get(
+                            "captured_entry_probe_intent_after_cost_reward_risk"
                         ),
                         "result_source": "captured_natural_control",
                     }

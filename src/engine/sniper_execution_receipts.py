@@ -225,6 +225,8 @@ _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS = (
     "rising_missed_scout_parent_ai_prompt_version",
     "rising_missed_scout_parent_ai_probe_intent",
     "rising_missed_scout_parent_ai_probe_intent_status",
+    "rising_missed_scout_parent_ai_probe_intent_eligibility_path",
+    "rising_missed_scout_parent_ai_probe_intent_after_cost_reward_risk",
 )
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "buy_execution_notified",

@@ -99,6 +99,15 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _optional_float(value: Any) -> float | None:
+    if value in (None, "", "-"):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(value))
@@ -1140,6 +1149,14 @@ def freeze_scout_ai_parent_fields(stock: dict[str, Any] | None) -> dict[str, Any
         "rising_missed_scout_parent_ai_probe_intent_status": str(
             source.get("last_watching_ai_probe_intent_status") or ""
         ).strip(),
+        "rising_missed_scout_parent_ai_probe_intent_eligibility_path": str(
+            source.get("last_watching_ai_probe_intent_eligibility_path") or ""
+        ).strip(),
+        "rising_missed_scout_parent_ai_probe_intent_after_cost_reward_risk": (
+            _optional_float(
+                source.get("last_watching_ai_probe_intent_after_cost_reward_risk")
+            )
+        ),
     }
 
 
@@ -1233,6 +1250,19 @@ def scout_ai_execution_attribution_fields(
             source.get("rising_missed_scout_parent_ai_probe_intent_status")
             or frozen["rising_missed_scout_parent_ai_probe_intent_status"]
             or "not_reported"
+        ),
+        "scout_ai_parent_probe_intent_eligibility_path": str(
+            source.get("rising_missed_scout_parent_ai_probe_intent_eligibility_path")
+            or frozen["rising_missed_scout_parent_ai_probe_intent_eligibility_path"]
+            or "not_reported"
+        ),
+        "scout_ai_parent_probe_intent_after_cost_reward_risk": _optional_float(
+            source.get(
+                "rising_missed_scout_parent_ai_probe_intent_after_cost_reward_risk",
+                frozen[
+                    "rising_missed_scout_parent_ai_probe_intent_after_cost_reward_risk"
+                ],
+            )
         ),
         "scout_ai_action_used_as_submit_authority": False,
         "scout_ai_parent_actual_order_submitted": False,

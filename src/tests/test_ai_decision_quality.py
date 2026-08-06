@@ -4301,6 +4301,64 @@ def test_v2_9_1_semantic_repair_completes_adverse_distribution_reasons():
     )
 
 
+def test_v2_13_repair_closes_non_buy_enum_sign_and_evidence_aliases():
+    analysis = {
+        "schema": quality.ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA,
+        "stage": "entry",
+        "source_mode": "fresh_dual",
+        "spread": {"regime": "wide_but_observable"},
+        "execution_cost": {"conservative_execution_cost_pct": 0.2},
+        "precursors": {},
+        "hard_blockers": [],
+        "bounded_opportunity": {
+            "eligible_for_one_share_probe": False,
+            "execution_policy": "no_counterfactual_exposure",
+            "qualifying_edge_facts": {},
+        },
+        "clean_continuation_probe": {"eligible": False},
+        "selective_recovery_probe": {"eligible": False},
+        "recovery_confirmation_probe": {"eligible": False},
+    }
+    response = {
+        "edge_state": "EDGE",
+        "action": "WAIT (RECOVERY_REQUIRED)",
+        "expected_upside_pct": 1.0,
+        "expected_downside_pct": 0.8,
+        "confidence": 58,
+        "reason_codes": ["edge_positive", "recovery_trigger_required"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "supportive",
+            "tape": "neutral",
+            "risk": "blocking",
+            "uncertainty": "medium",
+            "setup": "pullback_recovery",
+            "positive_edge": "moderate",
+            "adverse_risk": "medium",
+            "trigger": "recovery_required",
+        },
+    }
+
+    repaired, repair_codes, errors = (
+        quality.repair_v2_13_recovery_confirmation_response(
+            exact_payload={},
+            analysis=analysis,
+            response=response,
+        )
+    )
+
+    assert errors == []
+    assert repaired["action"] == "WAIT"
+    assert repaired["expected_downside_pct"] == -0.8
+    assert repaired["evidence"]["risk"] == "high"
+    assert repaired["evidence"]["tape"] == "mixed"
+    assert repaired["evidence"]["adverse_risk"] == "moderate"
+    assert repaired["evidence"]["liquidity"] == "adverse"
+    assert "non_buy_action_enum_normalized" in repair_codes
+    assert "non_buy_downside_sign_normalized" in repair_codes
+    assert "wide_spread_liquidity_aligned" in repair_codes
+
+
 def test_three_way_comparison_uses_only_common_comparable_rows():
     one_pass = {
         "requests": [{"candidate": {"prompt_version": "decision_quality_v2_6_entry"}}],
