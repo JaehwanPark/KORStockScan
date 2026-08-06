@@ -8552,6 +8552,160 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
     }
 
 
+def _completed_valid_profit_index(events: list[dict]) -> dict[str, list[dict]]:
+    """Index sell-completed rows that have a record id and valid profit rate."""
+    completed_by_record: dict[str, list[dict]] = defaultdict(list)
+    for event in _events_for_stage(events, "sell_completed"):
+        record_id = str(event.get("record_id") or "").strip()
+        profit_rate = _safe_float(_event_fields(event).get("profit_rate"), None)
+        if not record_id or profit_rate is None:
+            continue
+        completed_by_record[record_id].append(event)
+    for rows in completed_by_record.values():
+        rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
+    return completed_by_record
+
+
+def _record_profit_path_index(events: list[dict]) -> dict[str, list[dict]]:
+    """Index record-linked profit observations for diagnostic forward excursions."""
+    paths: dict[str, list[dict]] = defaultdict(list)
+    for event in events:
+        record_id = str(event.get("record_id") or "").strip()
+        profit_rate = _safe_float(_event_fields(event).get("profit_rate"), None)
+        emitted_at = str(event.get("emitted_at") or "")
+        if not record_id or profit_rate is None or not emitted_at:
+            continue
+        paths[record_id].append(event)
+    for rows in paths.values():
+        rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
+    return paths
+
+
+def _forward_profit_path_metrics(
+    paths_by_record: dict[str, list[dict]],
+    *,
+    record_id: str,
+    after_at: str,
+    through_at: str,
+    anchor_profit_rate: float,
+) -> dict[str, float] | None:
+    values = [
+        float(value)
+        for event in paths_by_record.get(record_id, [])
+        if (not after_at or str(event.get("emitted_at") or "") >= after_at)
+        and (not through_at or str(event.get("emitted_at") or "") <= through_at)
+        if (value := _safe_float(_event_fields(event).get("profit_rate"), None))
+        is not None
+    ]
+    if not values:
+        return None
+    return {
+        "forward_mfe_profit_rate_pct": max(values),
+        "forward_mae_profit_rate_pct": min(values),
+        "forward_mfe_delta_pct": max(values) - anchor_profit_rate,
+        "forward_mae_delta_pct": min(values) - anchor_profit_rate,
+    }
+
+
+def _next_completed_valid_outcome(
+    completed_by_record: dict[str, list[dict]],
+    *,
+    record_id: str,
+    after_at: str,
+) -> dict | None:
+    if not record_id or not after_at:
+        return None
+    for candidate in completed_by_record.get(record_id, []):
+        completed_at = str(candidate.get("emitted_at") or "")
+        if completed_at and completed_at >= after_at:
+            return candidate
+    return None
+
+
+def _counterfactual_ev_summary(rows: list[dict]) -> dict[str, Any]:
+    control_values = [float(row["control_profit_rate"]) for row in rows]
+    candidate_values = [float(row["counterfactual_profit_rate"]) for row in rows]
+    deltas = [
+        candidate - control
+        for candidate, control in zip(candidate_values, control_values)
+    ]
+    forward_mfe_deltas = [
+        float(row["forward_mfe_delta_pct"])
+        for row in rows
+        if row.get("forward_mfe_delta_pct") is not None
+    ]
+    forward_mae_deltas = [
+        float(row["forward_mae_delta_pct"])
+        for row in rows
+        if row.get("forward_mae_delta_pct") is not None
+    ]
+    return {
+        "mature_outcome_count": len(rows),
+        "control_equal_weight_avg_profit_pct": (
+            round(_avg(control_values) or 0.0, 4) if control_values else None
+        ),
+        "counterfactual_equal_weight_avg_profit_pct": (
+            round(_avg(candidate_values) or 0.0, 4) if candidate_values else None
+        ),
+        "source_quality_adjusted_ev_pct": (
+            round(_avg(deltas) or 0.0, 4) if deltas else None
+        ),
+        "ev_delta_basis": "event_net_profit_rate_vs_completed_valid_profit_rate",
+        "forward_path_joined_count": min(
+            len(forward_mfe_deltas), len(forward_mae_deltas)
+        ),
+        "forward_mfe_delta_avg_pct": (
+            round(_avg(forward_mfe_deltas) or 0.0, 4) if forward_mfe_deltas else None
+        ),
+        "forward_mae_delta_avg_pct": (
+            round(_avg(forward_mae_deltas) or 0.0, 4) if forward_mae_deltas else None
+        ),
+        "profit_delta_p10_pct": (
+            round(_percentile(deltas, 10, 0.0), 4) if deltas else None
+        ),
+        "control_severe_tail_count": sum(value <= -2.0 for value in control_values),
+        "counterfactual_severe_tail_count": sum(
+            value <= -2.0 for value in candidate_values
+        ),
+        "severe_tail_non_inferiority": (
+            sum(value <= -2.0 for value in candidate_values)
+            <= sum(value <= -2.0 for value in control_values)
+            if rows
+            else None
+        ),
+    }
+
+
+def _counterfactual_grid_readiness(
+    candidates: list[dict],
+    *,
+    exposure_key: str,
+    sample_floor: int,
+) -> dict[str, Any]:
+    exposure_ready_count = sum(
+        _safe_int(row.get(exposure_key), 0) >= sample_floor for row in candidates
+    )
+    outcome_ready_count = sum(
+        _safe_int(row.get("mature_outcome_count"), 0) >= sample_floor
+        for row in candidates
+    )
+    ev_edge_ready_count = sum(
+        _safe_int(row.get("mature_outcome_count"), 0) >= sample_floor
+        and (_safe_float(row.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0) > 0.0
+        and row.get("severe_tail_non_inferiority") is True
+        for row in candidates
+    )
+    return {
+        "exposure_ready": exposure_ready_count > 0,
+        "exposure_ready_candidate_count": exposure_ready_count,
+        "outcome_ready": outcome_ready_count > 0,
+        "outcome_ready_candidate_count": outcome_ready_count,
+        "ev_edge_ready": ev_edge_ready_count > 0,
+        "ev_edge_ready_candidate_count": ev_edge_ready_count,
+        "runtime_apply_ready": False,
+    }
+
+
 def _build_trailing_continuation_recheck_attribution(
     events: list[dict],
 ) -> dict[str, Any]:
@@ -8584,8 +8738,24 @@ def _build_trailing_continuation_recheck_attribution(
             return f"record:{record_id}"
         return f"unattributed:{event.get('stock_code') or '-'}"
 
+    def is_v2_event(event: dict) -> bool:
+        fields = _event_fields(event)
+        return str(
+            fields.get("recheck_contract_version") or ""
+        ).strip() == "bounded_one_shot_attribution_v2" and str(
+            fields.get("recheck_id") or ""
+        ).strip() not in {
+            "",
+            "-",
+        }
+
+    v2_armed = [event for event in armed if is_v2_event(event)]
+    legacy_armed = [event for event in armed if not is_v2_event(event)]
+    v2_terminal = [event for event in terminal if is_v2_event(event)]
+    legacy_terminal = [event for event in terminal if not is_v2_event(event)]
+
     arms_by_position: dict[str, list[dict]] = defaultdict(list)
-    for event in armed:
+    for event in v2_armed:
         arms_by_position[position_key(event)].append(event)
     one_shot_violation_keys = sorted(
         key
@@ -8595,19 +8765,12 @@ def _build_trailing_continuation_recheck_attribution(
     one_shot_violation_key_set = set(one_shot_violation_keys)
 
     terminal_by_recheck_id: dict[str, dict] = {}
-    for event in sorted(terminal, key=lambda row: str(row.get("emitted_at") or "")):
+    for event in sorted(v2_terminal, key=lambda row: str(row.get("emitted_at") or "")):
         recheck_id = str(_event_fields(event).get("recheck_id") or "").strip()
         if recheck_id and recheck_id != "-":
             terminal_by_recheck_id[recheck_id] = event
 
-    completed_by_record: dict[str, list[dict]] = defaultdict(list)
-    for event in _events_for_stage(events, "sell_completed"):
-        record_id = str(event.get("record_id") or "").strip()
-        profit_rate = _safe_float(_event_fields(event).get("profit_rate"), None)
-        if record_id and profit_rate is not None:
-            completed_by_record[record_id].append(event)
-    for rows in completed_by_record.values():
-        rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
+    completed_by_record = _completed_valid_profit_index(events)
 
     outcome_rows: list[dict[str, Any]] = []
     comparable_deltas: list[float] = []
@@ -8627,10 +8790,11 @@ def _build_trailing_continuation_recheck_attribution(
         )
         completed = None
         arm_at = str(arm.get("emitted_at") or "")
-        for candidate in completed_by_record.get(record_id, []):
-            if not arm_at or str(candidate.get("emitted_at") or "") >= arm_at:
-                completed = candidate
-                break
+        completed = _next_completed_valid_outcome(
+            completed_by_record,
+            record_id=record_id,
+            after_at=arm_at,
+        )
         actual_profit = (
             _safe_float(_event_fields(completed).get("profit_rate"), None)
             if completed is not None
@@ -8639,7 +8803,9 @@ def _build_trailing_continuation_recheck_attribution(
         terminal_event = terminal_by_recheck_id.get(recheck_id)
         terminal_fields = _event_fields(terminal_event) if terminal_event else {}
         exclusion_reason = None
-        if key in one_shot_violation_key_set:
+        if not is_v2_event(arm):
+            exclusion_reason = "legacy_contract_not_comparable"
+        elif key in one_shot_violation_key_set:
             exclusion_reason = "one_shot_contract_violation"
         elif not record_id:
             exclusion_reason = "record_id_missing"
@@ -8647,6 +8813,8 @@ def _build_trailing_continuation_recheck_attribution(
             exclusion_reason = "counterfactual_profit_missing"
         elif counterfactual_sell_price <= 0:
             exclusion_reason = "counterfactual_executable_sell_price_missing"
+        elif terminal_event is None:
+            exclusion_reason = "v2_terminal_event_missing"
         elif actual_profit is None:
             exclusion_reason = "completed_valid_profit_pending"
         profit_delta = (
@@ -8690,7 +8858,7 @@ def _build_trailing_continuation_recheck_attribution(
         value
         for value in (
             _safe_float(_event_fields(event).get("recheck_deadline_lag_sec"), None)
-            for event in terminal
+            for event in v2_terminal
         )
         if value is not None
     ]
@@ -8718,11 +8886,27 @@ def _build_trailing_continuation_recheck_attribution(
         ),
         "armed_count": len(armed),
         "terminal_count": len(terminal),
+        "v2_armed_count": len(v2_armed),
+        "legacy_armed_count": len(legacy_armed),
+        "v2_terminal_count": len(v2_terminal),
+        "legacy_terminal_count": len(legacy_terminal),
+        "legacy_contract_excluded_count": len(legacy_armed),
         "second_extension_blocked_count": len(second_extension_blocked),
         "one_shot_violation_count": len(one_shot_violation_keys),
         "one_shot_violation_position_keys": one_shot_violation_keys[:20],
         "comparable_outcome_count": len(comparable_deltas),
         "pending_or_excluded_outcome_count": len(outcome_rows) - len(comparable_deltas),
+        "exclusion_reason_counts": dict(
+            sorted(
+                Counter(
+                    str(row.get("exclusion_reason") or "-")
+                    for row in outcome_rows
+                    if row.get("outcome_status") != "comparable"
+                ).items()
+            )
+        ),
+        "outcome_ready": len(comparable_deltas) >= 20,
+        "runtime_apply_ready": False,
         "counterfactual_immediate_exit": {
             "equal_weight_avg_profit_pct": (
                 round(_avg(counterfactual_values) or 0.0, 4)
@@ -9012,32 +9196,43 @@ def _build_soft_stop_family(events: list[dict]) -> dict:
 
 
 def _build_soft_stop_confirmation_counterfactual_grid(
-    grace_touches: list[dict],
+    confirmation_events: list[dict],
+    events: list[dict],
 ) -> dict[str, Any]:
     grouped: dict[str, list[dict]] = defaultdict(list)
-    for event in grace_touches:
+    for event in confirmation_events:
         record_id = str(event.get("record_id") or "").strip()
         if record_id:
             grouped[record_id].append(event)
     for rows in grouped.values():
         rows.sort(
             key=lambda row: (
-                _safe_float(_event_fields(row).get("elapsed_sec"), 0.0) or 0.0
+                _safe_float(_event_fields(row).get("confirmation_elapsed_sec"), 0.0)
+                or 0.0
             )
         )
 
+    completed_by_record = _completed_valid_profit_index(events)
+    paths_by_record = _record_profit_path_index(events)
     candidates: list[dict[str, Any]] = []
+    max_observation_gap_sec = 10.0
     for confirm_sec in (20, 40, 60, 90):
         for max_worsen_pct in (0.20, 0.30, 0.40, 0.60):
             reached_confirmation = 0
             survived_worsen_cap = 0
+            complete_observation_path_count = 0
             recovered_above_soft_stop = 0
-            for rows in grouped.values():
+            outcome_rows: list[dict] = []
+            exclusion_reasons: Counter = Counter()
+            for record_id, rows in grouped.items():
                 observations = [
                     (
-                        _safe_float(_event_fields(row).get("elapsed_sec"), None),
+                        _safe_float(
+                            _event_fields(row).get("confirmation_elapsed_sec"), None
+                        ),
                         _safe_float(_event_fields(row).get("profit_rate"), None),
-                        _safe_float(_event_fields(row).get("soft_stop_pct"), None),
+                        _safe_float(_event_fields(row).get("additional_worsen"), None),
+                        row,
                     )
                     for row in rows
                 ]
@@ -9052,38 +9247,117 @@ def _build_soft_stop_confirmation_counterfactual_grid(
                 if not at_or_after:
                     continue
                 reached_confirmation += 1
+                horizon_observation = at_or_after[0]
+                path_to_horizon = [
+                    item for item in observations if item[0] <= horizon_observation[0]
+                ]
+                elapsed_path = sorted({float(item[0]) for item in path_to_horizon})
+                observation_path_complete = (
+                    bool(elapsed_path)
+                    and elapsed_path[0] <= max_observation_gap_sec
+                    and float(horizon_observation[0])
+                    <= confirm_sec + max_observation_gap_sec
+                    and all(
+                        (right - left) <= max_observation_gap_sec
+                        for left, right in zip(elapsed_path, elapsed_path[1:])
+                    )
+                )
+                if not observation_path_complete:
+                    exclusion_reasons["confirmation_observation_path_incomplete"] += 1
+                    continue
+                complete_observation_path_count += 1
                 anchor_profit = float(observations[0][1])
                 through_confirmation = [
-                    float(item[1]) for item in observations if item[0] <= confirm_sec
+                    item for item in observations if item[0] <= confirm_sec
                 ]
-                if through_confirmation and min(through_confirmation) >= (
-                    anchor_profit - max_worsen_pct
-                ):
+                survived = bool(through_confirmation) and all(
+                    item[2] is not None and float(item[2]) <= max_worsen_pct
+                    for item in through_confirmation
+                )
+                if survived:
                     survived_worsen_cap += 1
-                if any(
-                    item[2] is not None and float(item[1]) >= float(item[2])
+                recovered = any(
+                    str(_event_fields(item[3]).get("rebound_above_sell") or "").lower()
+                    in {"true", "1", "yes"}
+                    or str(
+                        _event_fields(item[3]).get("rebound_above_buy") or ""
+                    ).lower()
+                    in {"true", "1", "yes"}
                     for item in at_or_after
-                ):
+                )
+                if recovered:
                     recovered_above_soft_stop += 1
+                if not survived:
+                    exclusion_reasons["worsen_cap_breached"] += 1
+                    continue
+                completed = _next_completed_valid_outcome(
+                    completed_by_record,
+                    record_id=record_id,
+                    after_at=str(rows[0].get("emitted_at") or ""),
+                )
+                if completed is None:
+                    exclusion_reasons["completed_valid_profit_pending"] += 1
+                    continue
+                completed_profit = _safe_float(
+                    _event_fields(completed).get("profit_rate"), None
+                )
+                if completed_profit is None:
+                    exclusion_reasons["profit_rate_missing"] += 1
+                    continue
+                completed_at = str(completed.get("emitted_at") or "")
+                path_metrics = _forward_profit_path_metrics(
+                    paths_by_record,
+                    record_id=record_id,
+                    after_at=str(rows[0].get("emitted_at") or ""),
+                    through_at=completed_at,
+                    anchor_profit_rate=anchor_profit,
+                )
+                outcome_row = {
+                    "record_id": record_id,
+                    "control_profit_rate": anchor_profit,
+                    "counterfactual_profit_rate": float(completed_profit),
+                }
+                if path_metrics:
+                    outcome_row.update(path_metrics)
+                outcome_rows.append(outcome_row)
+            outcome_summary = _counterfactual_ev_summary(outcome_rows)
             candidates.append(
                 {
                     "confirm_sec": confirm_sec,
                     "max_worsen_pct": max_worsen_pct,
                     "position_count": len(grouped),
                     "reached_confirmation_count": reached_confirmation,
+                    "complete_observation_path_count": (
+                        complete_observation_path_count
+                    ),
                     "survived_worsen_cap_count": survived_worsen_cap,
                     "recovered_above_soft_stop_count": recovered_above_soft_stop,
-                    "source_quality_adjusted_ev_pct": None,
+                    **outcome_summary,
+                    "outcome_exclusion_reason_counts": dict(
+                        sorted(exclusion_reasons.items())
+                    ),
                 }
             )
+    sample_floor = 10
+    readiness = _counterfactual_grid_readiness(
+        candidates,
+        exposure_key="survived_worsen_cap_count",
+        sample_floor=sample_floor,
+    )
+    mature_count = max(
+        [_safe_int(row.get("mature_outcome_count"), 0) for row in candidates] or [0]
+    )
     return {
         "schema": "soft_stop_confirmation_counterfactual_grid_v1",
         "metric_role": "sim_probe_ev",
         "decision_authority": "source_only_counterfactual_no_runtime_change",
         "window_policy": "daily_path_then_clean_baseline_rolling_post_sell_outcome",
-        "sample_floor": 10,
+        "sample_floor": sample_floor,
+        "max_observation_gap_sec": max_observation_gap_sec,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "record_linked_soft_stop_path_and_post_sell_outcome",
+        "source_quality_gate": (
+            "record_linked_actual_whipsaw_confirmation_path_and_post_sell_outcome"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -9093,7 +9367,16 @@ def _build_soft_stop_confirmation_counterfactual_grid(
             "provider_route_change|quantity_cap_change|bot_restart"
         ),
         "candidate_count": len(candidates),
-        "forward_outcome_status": "pending_post_sell_cost_adjusted_ev_join",
+        "forward_outcome_status": (
+            "mature_outcome_ready"
+            if readiness["outcome_ready"]
+            else (
+                "partial_post_sell_cost_adjusted_ev_join"
+                if mature_count > 0
+                else "pending_post_sell_cost_adjusted_ev_join"
+            )
+        ),
+        **readiness,
         "candidates": candidates,
     }
 
@@ -9159,10 +9442,11 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
     sample_floor = int(
         CALIBRATION_FAMILY_METADATA["soft_stop_whipsaw_confirmation"]["sample_floor"]
     )
-    sample_ready = len(grace_touches) >= sample_floor
     counterfactual_grid = _build_soft_stop_confirmation_counterfactual_grid(
-        grace_touches
+        confirmations,
+        events,
     )
+    manifest_candidate_ready = bool(counterfactual_grid.get("ev_edge_ready"))
     recommended_confirm_sec = int(
         round(_clamp(_percentile(confirmation_elapsed_values, 75, 60.0), 20.0, 120.0))
     )
@@ -9192,7 +9476,12 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
             ),
             "sample_floor": sample_floor,
         },
-        "apply_ready": sample_ready,
+        "exposure_ready": bool(counterfactual_grid.get("exposure_ready")),
+        "outcome_ready": bool(counterfactual_grid.get("outcome_ready")),
+        "ev_edge_ready": bool(counterfactual_grid.get("ev_edge_ready")),
+        "manifest_candidate_ready": manifest_candidate_ready,
+        "runtime_apply_ready": False,
+        "apply_ready": manifest_candidate_ready,
         "current": current,
         "recommended": {
             "enabled": True,
@@ -9201,45 +9490,120 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
             "max_worsen_pct": recommended_max_worsen,
         },
         "counterfactual_exploration": counterfactual_grid,
-        "apply_mode": "calibrated_apply_candidate" if sample_ready else "observe_only",
+        "apply_mode": (
+            "manifest_only" if manifest_candidate_ready else "report_only_calibration"
+        ),
         "notes": [
             "첫 live calibration family 후보이며 장중 자동 mutation 없이 다음 장전 1회 적용 단위로만 다룬다.",
             "조건 미달은 rollback이 아니라 calibration trigger로 기록한다.",
             "hard/protect/emergency stop, 주문 실패, provenance 손상, same-stage owner 충돌은 safety guard로 우선한다.",
             "GOOD_EXIT 훼손은 +10%p까지 허용하고 soft-stop tail 또는 MISSED_UPSIDE 감소가 있으면 완만 조정/유지 대상이다.",
-            "OFF 상태에서도 record-linked grace path를 report-only duration/worsen grid로 평가해 유효 후보 노출을 수집한다.",
+            "실제로 시작된 record-linked whipsaw confirmation 경로만 report-only duration/worsen grid와 성숙 결과에 사용한다.",
         ],
     }
 
 
 def _build_protect_trailing_counterfactual_grid(
-    candidate_events: list[dict],
+    hold_events: list[dict],
+    matched_events: list[dict],
+    events: list[dict],
 ) -> dict[str, Any]:
+    completed_by_record = _completed_valid_profit_index(events)
+    paths_by_record = _record_profit_path_index(events)
+    hold_event_ids = {id(event) for event in hold_events}
     candidates: list[dict[str, Any]] = []
     for min_span_sec in (5, 8, 12):
         for min_samples in (3, 4, 5):
             for below_ratio in (0.60, 0.67, 0.75):
                 exposure_count = 0
-                for event in candidate_events:
+                matched_observation_count = 0
+                transition_events: list[dict] = []
+                for event in matched_events:
                     fields = _event_fields(event)
                     span = _safe_float(fields.get("sample_span_sec"), None)
                     sample_count = _safe_int(fields.get("sample_count"), 0)
                     observed_below_ratio = _safe_float(fields.get("below_ratio"), None)
+                    median_price = _safe_float(fields.get("median_price"), None)
+                    buffered_stop_price = _safe_float(
+                        fields.get("buffered_stop_price"), None
+                    )
                     if (
                         span is not None
                         and observed_below_ratio is not None
+                        and median_price is not None
+                        and buffered_stop_price is not None
                         and span >= min_span_sec
                         and sample_count >= min_samples
+                        and median_price <= buffered_stop_price
                         and observed_below_ratio >= below_ratio
                     ):
-                        exposure_count += 1
+                        matched_observation_count += 1
+                        if id(event) in hold_event_ids:
+                            exposure_count += 1
+                            transition_events.append(event)
+                outcome_rows: list[dict] = []
+                exclusion_reasons: Counter = Counter()
+                seen_records: set[str] = set()
+                for event in sorted(
+                    transition_events,
+                    key=lambda row: str(row.get("emitted_at") or ""),
+                ):
+                    record_id = str(event.get("record_id") or "").strip()
+                    if not record_id:
+                        exclusion_reasons["record_id_missing"] += 1
+                        continue
+                    if record_id in seen_records:
+                        exclusion_reasons["duplicate_position_transition"] += 1
+                        continue
+                    candidate_profit = _safe_float(
+                        _event_fields(event).get("profit_rate"), None
+                    )
+                    if candidate_profit is None:
+                        exclusion_reasons["decision_profit_rate_missing"] += 1
+                        continue
+                    completed = _next_completed_valid_outcome(
+                        completed_by_record,
+                        record_id=record_id,
+                        after_at=str(event.get("emitted_at") or ""),
+                    )
+                    if completed is None:
+                        exclusion_reasons["completed_valid_profit_pending"] += 1
+                        continue
+                    completed_profit = _safe_float(
+                        _event_fields(completed).get("profit_rate"), None
+                    )
+                    if completed_profit is None:
+                        exclusion_reasons["completed_valid_profit_pending"] += 1
+                        continue
+                    seen_records.add(record_id)
+                    completed_at = str(completed.get("emitted_at") or "")
+                    path_metrics = _forward_profit_path_metrics(
+                        paths_by_record,
+                        record_id=record_id,
+                        after_at=str(event.get("emitted_at") or ""),
+                        through_at=completed_at,
+                        anchor_profit_rate=float(candidate_profit),
+                    )
+                    outcome_row = {
+                        "record_id": record_id,
+                        "control_profit_rate": float(completed_profit),
+                        "counterfactual_profit_rate": float(candidate_profit),
+                    }
+                    if path_metrics:
+                        outcome_row.update(path_metrics)
+                    outcome_rows.append(outcome_row)
+                outcome_summary = _counterfactual_ev_summary(outcome_rows)
                 candidates.append(
                     {
                         "min_span_sec": min_span_sec,
                         "min_samples": min_samples,
                         "below_ratio": below_ratio,
+                        "matched_observation_count": matched_observation_count,
                         "candidate_exposure_count": exposure_count,
-                        "source_quality_adjusted_ev_pct": None,
+                        **outcome_summary,
+                        "outcome_exclusion_reason_counts": dict(
+                            sorted(exclusion_reasons.items())
+                        ),
                     }
                 )
     candidates.sort(
@@ -9250,12 +9614,21 @@ def _build_protect_trailing_counterfactual_grid(
             float(row["below_ratio"]),
         )
     )
+    sample_floor = 20
+    readiness = _counterfactual_grid_readiness(
+        candidates,
+        exposure_key="candidate_exposure_count",
+        sample_floor=sample_floor,
+    )
+    mature_count = max(
+        [_safe_int(row.get("mature_outcome_count"), 0) for row in candidates] or [0]
+    )
     return {
         "schema": "protect_trailing_smoothing_counterfactual_grid_v1",
         "metric_role": "sim_probe_ev",
         "decision_authority": "source_only_counterfactual_no_runtime_change",
         "window_policy": "daily_exposure_then_clean_baseline_rolling_exit_outcome",
-        "sample_floor": 20,
+        "sample_floor": sample_floor,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": "complete_smoothing_window_and_completed_valid_profit",
         "runtime_effect": False,
@@ -9270,7 +9643,16 @@ def _build_protect_trailing_counterfactual_grid(
         "candidate_with_exposure_count": sum(
             int(row["candidate_exposure_count"]) > 0 for row in candidates
         ),
-        "forward_outcome_status": "pending_completed_cost_adjusted_ev_join",
+        "forward_outcome_status": (
+            "mature_outcome_ready"
+            if readiness["outcome_ready"]
+            else (
+                "partial_completed_cost_adjusted_ev_join"
+                if mature_count > 0
+                else "pending_completed_cost_adjusted_ev_join"
+            )
+        ),
+        **readiness,
         "candidates": candidates,
     }
 
@@ -9347,7 +9729,12 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
     emergency_values = [v for v in emergency_values if v is not None]
     profit_values = [v for v in profit_values if v is not None]
     sample_ready = len(candidate_events) >= 20 and (len(confirmed) + len(holds)) >= 20
-    counterfactual_grid = _build_protect_trailing_counterfactual_grid(candidate_events)
+    counterfactual_grid = _build_protect_trailing_counterfactual_grid(
+        holds,
+        candidate_events,
+        events,
+    )
+    manifest_candidate_ready = bool(counterfactual_grid.get("ev_edge_ready"))
     recommended = {
         "window_sec": int(
             round(
@@ -9393,15 +9780,31 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
             ),
         },
         "sample_ready": sample_ready,
-        "ev_edge_ready": False,
+        "exposure_ready": bool(counterfactual_grid.get("exposure_ready")),
+        "outcome_ready": bool(counterfactual_grid.get("outcome_ready")),
+        "ev_edge_ready": bool(counterfactual_grid.get("ev_edge_ready")),
+        "manifest_candidate_ready": manifest_candidate_ready,
+        "runtime_apply_ready": False,
         "candidate_readiness": (
-            "sample_ready_but_no_ev_edge" if sample_ready else "hold_sample"
+            "ev_edge_ready"
+            if manifest_candidate_ready
+            else (
+                "outcome_ready_no_ev_edge"
+                if counterfactual_grid.get("outcome_ready")
+                else (
+                    "exposure_ready_outcome_pending"
+                    if counterfactual_grid.get("exposure_ready")
+                    else "hold_sample"
+                )
+            )
         ),
-        "apply_ready": False,
+        "apply_ready": manifest_candidate_ready,
         "current": current,
         "recommended": recommended,
         "counterfactual_exploration": counterfactual_grid,
-        "apply_mode": "report_only_calibration",
+        "apply_mode": (
+            "manifest_only" if manifest_candidate_ready else "report_only_calibration"
+        ),
         "notes": [
             "protect_trailing confirmation guard는 기존 런타임에 적용되어 있고, 여기의 apply_mode는 guard ON/OFF가 아니라 파라미터 조정 권한만 뜻한다.",
             "protect_trailing smoothing 값은 장중 자동 변경하지 않고 장후 report와 다음 장전 manifest 후보로만 산출한다.",
@@ -9413,7 +9816,9 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
     }
 
 
-def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]:
+def _build_ofi_action_counterfactual_grid(
+    applied: list[dict], events: list[dict]
+) -> dict[str, Any]:
     grouped: dict[str, list[dict]] = defaultdict(list)
     for event in applied:
         fields = _event_fields(event)
@@ -9427,6 +9832,8 @@ def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]
     for rows in grouped.values():
         rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
 
+    completed_by_record = _completed_valid_profit_index(events)
+    paths_by_record = _record_profit_path_index(events)
     candidates: list[dict[str, Any]] = []
     for raw_weight in (0.30, 0.50, 0.70):
         for threshold in (0.10, 0.20, 0.30, 0.45):
@@ -9434,6 +9841,7 @@ def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]
                 debounce_count = 0
                 confirm_count = 0
                 observed_count = 0
+                transition_events: list[tuple[dict, str]] = []
                 for rows in grouped.values():
                     smooth = 0.0
                     bullish_count = 0
@@ -9461,12 +9869,93 @@ def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]
                         )
                         if raw_action == "EXIT" and bullish_count >= persistence:
                             debounce_count += 1
+                            transition_events.append((event, "DEBOUNCE_EXIT"))
                         elif (
                             raw_action in {"HOLD", "TRIM"}
                             and bearish_count >= persistence
                             and worsen >= 0.30
                         ):
                             confirm_count += 1
+                            transition_events.append((event, "CONFIRM_EXIT"))
+
+                outcome_rows: list[dict] = []
+                exclusion_reasons: Counter = Counter()
+                seen_records: set[str] = set()
+                for event, transition in transition_events:
+                    record_id = str(event.get("record_id") or "").strip()
+                    fields = _event_fields(event)
+                    if not record_id:
+                        exclusion_reasons["record_id_missing"] += 1
+                        continue
+                    if record_id in seen_records:
+                        exclusion_reasons["duplicate_position_transition"] += 1
+                        continue
+                    trace_id = str(fields.get("ai_decision_trace_id") or "").strip()
+                    snapshot_id = str(fields.get("ai_input_snapshot_id") or "").strip()
+                    if trace_id in {"", "-"} or snapshot_id in {"", "-"}:
+                        exclusion_reasons["exact_trace_snapshot_missing"] += 1
+                        continue
+                    immediate_profit = _safe_float(fields.get("profit_rate"), None)
+                    if immediate_profit is None:
+                        exclusion_reasons["decision_profit_rate_missing"] += 1
+                        continue
+                    actual_smoothing_action = str(
+                        fields.get("smoothing_action") or ""
+                    ).upper()
+                    final_flow_action = str(
+                        fields.get("final_flow_action") or ""
+                    ).upper()
+                    if transition == "DEBOUNCE_EXIT" and (
+                        actual_smoothing_action != "DEBOUNCE_EXIT"
+                        or final_flow_action not in {"HOLD", "TRIM"}
+                    ):
+                        exclusion_reasons["counterfactual_hold_path_unobserved"] += 1
+                        continue
+                    if transition == "CONFIRM_EXIT" and (
+                        actual_smoothing_action != "NO_CHANGE"
+                        or final_flow_action not in {"HOLD", "TRIM"}
+                    ):
+                        exclusion_reasons["control_hold_path_unobserved"] += 1
+                        continue
+                    completed = _next_completed_valid_outcome(
+                        completed_by_record,
+                        record_id=record_id,
+                        after_at=str(event.get("emitted_at") or ""),
+                    )
+                    if completed is None:
+                        exclusion_reasons["completed_valid_profit_pending"] += 1
+                        continue
+                    completed_profit = _safe_float(
+                        _event_fields(completed).get("profit_rate"), None
+                    )
+                    if completed_profit is None:
+                        exclusion_reasons["completed_valid_profit_pending"] += 1
+                        continue
+                    seen_records.add(record_id)
+                    completed_at = str(completed.get("emitted_at") or "")
+                    path_metrics = _forward_profit_path_metrics(
+                        paths_by_record,
+                        record_id=record_id,
+                        after_at=str(event.get("emitted_at") or ""),
+                        through_at=completed_at,
+                        anchor_profit_rate=float(immediate_profit),
+                    )
+                    if transition == "DEBOUNCE_EXIT":
+                        control_profit = float(immediate_profit)
+                        counterfactual_profit = float(completed_profit)
+                    else:
+                        control_profit = float(completed_profit)
+                        counterfactual_profit = float(immediate_profit)
+                    outcome_row = {
+                        "record_id": record_id,
+                        "transition": transition,
+                        "control_profit_rate": control_profit,
+                        "counterfactual_profit_rate": counterfactual_profit,
+                    }
+                    if path_metrics:
+                        outcome_row.update(path_metrics)
+                    outcome_rows.append(outcome_row)
+                outcome_summary = _counterfactual_ev_summary(outcome_rows)
                 candidates.append(
                     {
                         "raw_weight": raw_weight,
@@ -9479,7 +9968,10 @@ def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]
                         "effective_transition_exposure_count": (
                             debounce_count + confirm_count
                         ),
-                        "source_quality_adjusted_ev_pct": None,
+                        **outcome_summary,
+                        "outcome_exclusion_reason_counts": dict(
+                            sorted(exclusion_reasons.items())
+                        ),
                     }
                 )
     candidates.sort(
@@ -9490,14 +9982,25 @@ def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]
             -float(row["raw_weight"]),
         )
     )
+    sample_floor = 20
+    readiness = _counterfactual_grid_readiness(
+        candidates,
+        exposure_key="effective_transition_exposure_count",
+        sample_floor=sample_floor,
+    )
+    mature_count = max(
+        [_safe_int(row.get("mature_outcome_count"), 0) for row in candidates] or [0]
+    )
     return {
         "schema": "holding_flow_ofi_counterfactual_grid_v1",
         "metric_role": "sim_probe_ev",
         "decision_authority": "source_only_counterfactual_no_runtime_change",
         "window_policy": "daily_exposure_then_clean_baseline_rolling_outcome",
-        "sample_floor": 20,
+        "sample_floor": sample_floor,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "usable_ofi_raw_score_and_exact_forward_outcome",
+        "source_quality_gate": (
+            "usable_ofi_raw_score_exact_trace_snapshot_and_observed_action_path"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -9510,7 +10013,16 @@ def _build_ofi_action_counterfactual_grid(applied: list[dict]) -> dict[str, Any]
         "candidate_with_exposure_count": sum(
             int(row["effective_transition_exposure_count"]) > 0 for row in candidates
         ),
-        "forward_outcome_status": "pending_exact_mature_outcome_join",
+        "forward_outcome_status": (
+            "mature_outcome_ready"
+            if readiness["outcome_ready"]
+            else (
+                "partial_exact_mature_outcome_join"
+                if mature_count > 0
+                else "pending_exact_mature_outcome_join"
+            )
+        ),
+        **readiness,
         "candidates": candidates,
     }
 
@@ -9581,9 +10093,6 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         )
         if value is not None
     ]
-    sample_ready = (
-        effective_action_count >= 20 and len(debounced) >= 5 and len(confirmed) >= 5
-    )
     current = {
         "ofi_stale_threshold_ms": int(
             getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700
@@ -9606,7 +10115,8 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         ),
     }
     recommended = dict(current)
-    counterfactual_grid = _build_ofi_action_counterfactual_grid(applied)
+    counterfactual_grid = _build_ofi_action_counterfactual_grid(applied, events)
+    manifest_candidate_ready = bool(counterfactual_grid.get("ev_edge_ready"))
     return {
         "family": "holding_flow_ofi_smoothing",
         "stage": "holding_exit",
@@ -9647,11 +10157,18 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
                 else None
             ),
         },
-        "apply_ready": sample_ready,
+        "exposure_ready": bool(counterfactual_grid.get("exposure_ready")),
+        "outcome_ready": bool(counterfactual_grid.get("outcome_ready")),
+        "ev_edge_ready": bool(counterfactual_grid.get("ev_edge_ready")),
+        "manifest_candidate_ready": manifest_candidate_ready,
+        "runtime_apply_ready": False,
+        "apply_ready": manifest_candidate_ready,
         "current": current,
         "recommended": recommended,
         "counterfactual_exploration": counterfactual_grid,
-        "apply_mode": "manifest_only" if sample_ready else "observe_only",
+        "apply_mode": (
+            "manifest_only" if manifest_candidate_ready else "report_only_calibration"
+        ),
         "notes": [
             "hard/protect/order safety, max_defer_sec, worsen_floor는 OFI보다 우선한다.",
             "GOOD_EXIT/MISSED_UPSIDE 판정은 sell_completed + valid profit_rate 연결 표본으로만 사후 확인한다.",
@@ -11441,6 +11958,11 @@ def _calibration_state_for_family(
 def _build_calibration_candidates(
     families: list[dict], report_source_context: dict | None = None
 ) -> list[dict]:
+    source_only_smoothing_families = {
+        "holding_flow_ofi_smoothing",
+        "soft_stop_whipsaw_confirmation",
+        "protect_trailing_smoothing",
+    }
     family_by_name = {str(family.get("family") or ""): family for family in families}
     candidates: list[dict] = []
     for output_family, metadata in sorted(
@@ -11464,6 +11986,18 @@ def _build_calibration_candidates(
         source_metrics = dict(
             _source_metrics_for_family(output_family, report_source_context)
         )
+        if output_family in source_only_smoothing_families:
+            source_metrics.update(
+                {
+                    "counterfactual_exposure_ready": bool(family.get("exposure_ready")),
+                    "counterfactual_outcome_ready": bool(family.get("outcome_ready")),
+                    "counterfactual_ev_edge_ready": bool(family.get("ev_edge_ready")),
+                    "counterfactual_manifest_candidate_ready": bool(
+                        family.get("manifest_candidate_ready")
+                    ),
+                    "counterfactual_runtime_apply_ready": False,
+                }
+            )
         if output_family == "lifecycle_decision_matrix_runtime":
             family_sample = (
                 family.get("sample") if isinstance(family.get("sample"), dict) else {}
@@ -12023,8 +12557,8 @@ def _build_calibration_candidates(
                 recommended = dict(recommended)
                 recommended.update(source_recommended)
         sample_ready = bool(family.get("apply_ready")) or source_ready
-        if output_family == "protect_trailing_smoothing":
-            sample_ready = sample_count >= sample_floor
+        if output_family in source_only_smoothing_families:
+            sample_ready = bool(family.get("manifest_candidate_ready"))
         calibration_state, calibration_reason = _calibration_state_for_family(
             output_family,
             family,
@@ -12061,6 +12595,7 @@ def _build_calibration_candidates(
         runtime_apply_candidate = (
             sample_ready
             and bool(metadata.get("allowed_runtime_apply"))
+            and output_family not in source_only_smoothing_families
             and calibration_state
             not in {
                 "freeze",
@@ -12128,7 +12663,8 @@ def _build_calibration_candidates(
                     else "report_only_calibration"
                 )
             ),
-            "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply")),
+            "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply"))
+            and output_family not in source_only_smoothing_families,
             "human_approval_required": bool(metadata.get("human_approval_required"))
             or calibration_state == "approval_required",
             "runtime_change": False,
@@ -12137,6 +12673,7 @@ def _build_calibration_candidates(
                 "decision_authority": (
                     "next_preopen_bounded_candidate_only"
                     if bool(metadata.get("allowed_runtime_apply"))
+                    and output_family not in source_only_smoothing_families
                     else "report_only_no_runtime_apply"
                 ),
                 "runtime_effect": False,
@@ -12152,10 +12689,31 @@ def _build_calibration_candidates(
                 "hard_safety_bypass_forbidden": True,
             },
         }
-        if output_family == "protect_trailing_smoothing":
-            candidate["sample_ready"] = bool(source_metrics.get("sample_ready"))
-            candidate["ev_edge_ready"] = bool(source_metrics.get("ev_edge_ready"))
-            candidate["candidate_readiness"] = source_metrics.get("candidate_readiness")
+        if output_family in source_only_smoothing_families:
+            candidate["exposure_ready"] = bool(family.get("exposure_ready"))
+            candidate["outcome_ready"] = bool(family.get("outcome_ready"))
+            candidate["sample_ready"] = bool(family.get("manifest_candidate_ready"))
+            candidate["ev_edge_ready"] = bool(family.get("ev_edge_ready"))
+            candidate["manifest_candidate_ready"] = bool(
+                family.get("manifest_candidate_ready")
+            )
+            candidate["runtime_apply_ready"] = False
+            candidate["candidate_readiness"] = family.get(
+                "candidate_readiness",
+                (
+                    "ev_edge_ready"
+                    if family.get("manifest_candidate_ready")
+                    else (
+                        "outcome_ready_no_ev_edge"
+                        if family.get("outcome_ready")
+                        else (
+                            "exposure_ready_outcome_pending"
+                            if family.get("exposure_ready")
+                            else "hold_sample"
+                        )
+                    )
+                ),
+            )
             candidate["threshold_version"] = (
                 f"{output_family}:{candidate['apply_mode']}:{sample_floor_status}"
             )
@@ -15141,7 +15699,7 @@ def _threshold_snapshot_from_families(
             "stage": family["stage"],
             "sample": family["sample"],
             "apply_ready": False if report_only else family["apply_ready"],
-            "sample_ready": family["apply_ready"],
+            "sample_ready": family.get("sample_ready", family["apply_ready"]),
             "weight_source_ready": family.get(
                 "weight_source_ready", family["apply_ready"]
             ),
@@ -15168,6 +15726,12 @@ def _threshold_snapshot_from_families(
             **{
                 key: family[key]
                 for key in (
+                    "exposure_ready",
+                    "outcome_ready",
+                    "ev_edge_ready",
+                    "manifest_candidate_ready",
+                    "runtime_apply_ready",
+                    "candidate_readiness",
                     "counterfactual_exploration",
                     "continuation_recheck_attribution",
                 )
@@ -15625,7 +16189,15 @@ def build_daily_threshold_cycle_report(
             "candidate_grid": family.get("candidate_grid", []),
             **{
                 key: family[key]
-                for key in ("sample_ready", "ev_edge_ready", "candidate_readiness")
+                for key in (
+                    "sample_ready",
+                    "exposure_ready",
+                    "outcome_ready",
+                    "ev_edge_ready",
+                    "manifest_candidate_ready",
+                    "runtime_apply_ready",
+                    "candidate_readiness",
+                )
                 if key in family
             },
             **(
@@ -15674,7 +16246,15 @@ def build_daily_threshold_cycle_report(
             "notes": family["notes"],
             **{
                 key: family[key]
-                for key in ("sample_ready", "ev_edge_ready", "candidate_readiness")
+                for key in (
+                    "sample_ready",
+                    "exposure_ready",
+                    "outcome_ready",
+                    "ev_edge_ready",
+                    "manifest_candidate_ready",
+                    "runtime_apply_ready",
+                    "candidate_readiness",
+                )
                 if key in family
             },
         }

@@ -369,18 +369,18 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     soft_stop = report["threshold_snapshot"]["soft_stop_micro_grace"]
     assert soft_stop["apply_ready"] is True
     whipsaw = report["threshold_snapshot"]["soft_stop_whipsaw_confirmation"]
-    assert whipsaw["apply_ready"] is True
+    assert whipsaw["apply_ready"] is False
+    assert whipsaw["runtime_apply_ready"] is False
+    assert whipsaw["outcome_ready"] is False
     whipsaw_candidate = next(
         item
         for item in report["calibration_candidates"]
         if item["family"] == "soft_stop_whipsaw_confirmation"
     )
-    assert whipsaw_candidate["apply_mode"] == "calibrated_apply_candidate"
-    assert whipsaw_candidate["calibration_state"] in {
-        "adjust_up",
-        "adjust_down",
-        "hold",
-    }
+    assert whipsaw_candidate["apply_mode"] == "report_only_calibration"
+    assert whipsaw_candidate["calibration_state"] == "hold_sample"
+    assert whipsaw_candidate["allowed_runtime_apply"] is False
+    assert whipsaw_candidate["runtime_apply_ready"] is False
     assert whipsaw_candidate["safety_revert_required"] is False
     assert whipsaw_candidate["target_env_keys"]
     assert whipsaw_candidate["max_step_per_day"] is not None
@@ -394,7 +394,7 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     protect_trailing = report["threshold_snapshot"]["protect_trailing_smoothing"]
     assert protect_trailing["sample_ready"] is True
     assert protect_trailing["ev_edge_ready"] is False
-    assert protect_trailing["candidate_readiness"] == "sample_ready_but_no_ev_edge"
+    assert protect_trailing["candidate_readiness"] == "hold_sample"
     assert protect_trailing["apply_ready"] is False
     assert protect_trailing["apply_mode"] == "report_only_calibration"
     assert protect_trailing["runtime_baseline_active"] is True
@@ -413,14 +413,11 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         for item in report["calibration_candidates"]
         if item["family"] == "protect_trailing_smoothing"
     )
-    assert protect_trailing_candidate["calibration_state"] == "hold_no_edge"
+    assert protect_trailing_candidate["calibration_state"] == "hold_sample"
     assert protect_trailing_candidate["apply_mode"] == "report_only_calibration"
-    assert protect_trailing_candidate["sample_ready"] is True
+    assert protect_trailing_candidate["sample_ready"] is False
     assert protect_trailing_candidate["ev_edge_ready"] is False
-    assert (
-        protect_trailing_candidate["candidate_readiness"]
-        == "sample_ready_but_no_ev_edge"
-    )
+    assert protect_trailing_candidate["candidate_readiness"] == "hold_sample"
     scalp_trailing = report["threshold_snapshot"]["scalp_trailing_take_profit"]
     assert scalp_trailing["sample"]["weak_borderline"] == 1
     assert scalp_trailing["sample"]["would_hold_if_weak_limit_plus_10bp"] == 1
@@ -1548,8 +1545,13 @@ def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     assert candidates["soft_stop_whipsaw_confirmation"]["source_sample_count"] == 20
     assert (
-        candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"] == "ready"
+        candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"]
+        == "hold_sample"
     )
+    assert (
+        candidates["soft_stop_whipsaw_confirmation"]["allowed_runtime_apply"] is False
+    )
+    assert candidates["soft_stop_whipsaw_confirmation"]["outcome_ready"] is False
     assert (
         candidates["soft_stop_whipsaw_confirmation"]["window_policy"]["primary"]
         == "rolling_10d"
@@ -3534,7 +3536,7 @@ def test_holding_exit_matrix_does_not_create_implicit_exit_proxy_without_profit_
     assert proxy_summary["per_action_samples"]["exit_only"] == 0
 
 
-def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
+def test_ofi_ai_smoothing_requires_mature_counterfactual_ev_for_manifest_candidate():
     pipeline_rows = []
     for record_id in range(1, 7):
         pipeline_rows.append(
@@ -3669,8 +3671,10 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
     assert entry_family["recommended"]["entry_skip_demotion_confidence_upper"] == 90
 
     holding_family = report["threshold_snapshot"]["holding_flow_ofi_smoothing"]
-    assert holding_family["apply_ready"] is True
-    assert holding_family["apply_mode"] == "manifest_only"
+    assert holding_family["apply_ready"] is False
+    assert holding_family["apply_mode"] == "report_only_calibration"
+    assert holding_family["runtime_apply_ready"] is False
+    assert holding_family["outcome_ready"] is False
     assert holding_family["sample"]["exit_debounce"] == 6
     assert holding_family["sample"]["bearish_confirm"] == 15
     assert holding_family["sample"]["no_change"] == 1
@@ -3697,7 +3701,8 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
         for item in report["apply_candidate_list"]
         if item["owner_rule"] == "manifest_only_no_runtime_mutation"
     }
-    assert {"entry_ofi_ai_smoothing", "holding_flow_ofi_smoothing"} <= manifest_families
+    assert "entry_ofi_ai_smoothing" in manifest_families
+    assert "holding_flow_ofi_smoothing" not in manifest_families
 
 
 def test_smoothing_counterfactuals_and_trailing_recheck_outcome_are_report_only():
@@ -3742,6 +3747,7 @@ def test_smoothing_counterfactuals_and_trailing_recheck_outcome_are_report_only(
             "emitted_at": "2026-08-05T10:00:16+09:00",
             "fields": {
                 "recheck_state": "ttl_expired",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
                 "recheck_id": "scr-2",
                 "recheck_position_key": "record:2",
                 "recheck_deadline_lag_sec": "1.0",
@@ -3780,6 +3786,318 @@ def test_smoothing_counterfactuals_and_trailing_recheck_outcome_are_report_only(
     assert attribution["allowed_runtime_apply"] is False
 
 
+def test_smoothing_counterfactual_grids_join_mature_cost_aware_outcomes():
+    events = [
+        {
+            "stage": "holding_flow_ofi_smoothing_applied",
+            "record_id": 11,
+            "stock_code": "000011",
+            "emitted_at": "2026-08-05T09:00:00+09:00",
+            "fields": {
+                "holding_flow_ofi_usable": True,
+                "holding_flow_ofi_micro_score_raw": "0.80",
+                "raw_flow_action": "EXIT",
+                "final_flow_action": "HOLD",
+                "smoothing_action": "DEBOUNCE_EXIT",
+                "profit_rate": "0.20",
+                "worsen_from_candidate": "0.10",
+                "ai_decision_trace_id": "trace-11",
+                "ai_input_snapshot_id": "snapshot-11",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 11,
+            "emitted_at": "2026-08-05T09:01:00+09:00",
+            "fields": {"profit_rate": "0.80"},
+        },
+        {
+            "stage": "soft_stop_whipsaw_confirmation",
+            "record_id": 12,
+            "emitted_at": "2026-08-05T10:00:00+09:00",
+            "fields": {
+                "confirmation_elapsed_sec": "0",
+                "profit_rate": "-1.50",
+                "additional_worsen": "0.00",
+            },
+        },
+        {
+            "stage": "soft_stop_whipsaw_confirmation",
+            "record_id": 12,
+            "emitted_at": "2026-08-05T10:00:10+09:00",
+            "fields": {
+                "confirmation_elapsed_sec": "10",
+                "profit_rate": "-1.55",
+                "additional_worsen": "0.05",
+            },
+        },
+        {
+            "stage": "soft_stop_whipsaw_confirmation",
+            "record_id": 12,
+            "emitted_at": "2026-08-05T10:00:20+09:00",
+            "fields": {
+                "confirmation_elapsed_sec": "20",
+                "profit_rate": "-1.60",
+                "additional_worsen": "0.10",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 12,
+            "emitted_at": "2026-08-05T10:01:00+09:00",
+            "fields": {"profit_rate": "-1.10"},
+        },
+        {
+            "stage": "protect_trailing_smooth_hold",
+            "record_id": 13,
+            "emitted_at": "2026-08-05T11:00:00+09:00",
+            "fields": {
+                "sample_span_sec": "5",
+                "sample_count": "3",
+                "below_ratio": "0.75",
+                "median_price": "9900",
+                "buffered_stop_price": "10000",
+                "profit_rate": "-0.50",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 13,
+            "emitted_at": "2026-08-05T11:01:00+09:00",
+            "fields": {"profit_rate": "-1.00"},
+        },
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-08-05",
+        pipeline_loader=lambda target_date: events,
+        completed_rows_loader=lambda start_date, end_date: [],
+        skip_completed_rows=True,
+    )
+
+    ofi_grid = report["threshold_snapshot"]["holding_flow_ofi_smoothing"][
+        "counterfactual_exploration"
+    ]
+    ofi_candidate = next(
+        row
+        for row in ofi_grid["candidates"]
+        if row["raw_weight"] == 0.7
+        and row["bullish_threshold"] == 0.1
+        and row["persistence_required"] == 1
+    )
+    assert ofi_candidate["mature_outcome_count"] == 1
+    assert ofi_candidate["source_quality_adjusted_ev_pct"] == 0.6
+    assert ofi_candidate["forward_mfe_delta_avg_pct"] == 0.6
+    assert ofi_candidate["forward_mae_delta_avg_pct"] == 0.0
+    assert ofi_grid["forward_outcome_status"] == "partial_exact_mature_outcome_join"
+
+    soft_grid = report["threshold_snapshot"]["soft_stop_whipsaw_confirmation"][
+        "counterfactual_exploration"
+    ]
+    soft_candidate = next(
+        row
+        for row in soft_grid["candidates"]
+        if row["confirm_sec"] == 20 and row["max_worsen_pct"] == 0.2
+    )
+    assert soft_candidate["mature_outcome_count"] == 1
+    assert soft_candidate["source_quality_adjusted_ev_pct"] == 0.4
+    assert soft_candidate["forward_mfe_delta_avg_pct"] == 0.4
+    assert soft_candidate["forward_mae_delta_avg_pct"] == -0.1
+    assert soft_grid["runtime_apply_ready"] is False
+
+    protect_grid = report["threshold_snapshot"]["protect_trailing_smoothing"][
+        "counterfactual_exploration"
+    ]
+    protect_candidate = next(
+        row
+        for row in protect_grid["candidates"]
+        if row["min_span_sec"] == 5
+        and row["min_samples"] == 3
+        and row["below_ratio"] == 0.6
+    )
+    assert protect_candidate["mature_outcome_count"] == 1
+    assert protect_candidate["source_quality_adjusted_ev_pct"] == 0.5
+    assert protect_candidate["forward_mfe_delta_avg_pct"] == 0.0
+    assert protect_candidate["forward_mae_delta_avg_pct"] == -0.5
+    assert protect_grid["runtime_apply_ready"] is False
+
+
+def test_smoothing_counterfactuals_exclude_unobserved_action_paths():
+    events = [
+        {
+            "stage": "holding_flow_ofi_smoothing_applied",
+            "record_id": 21,
+            "emitted_at": "2026-08-05T09:00:00+09:00",
+            "fields": {
+                "holding_flow_ofi_usable": True,
+                "holding_flow_ofi_micro_score_raw": "0.80",
+                "raw_flow_action": "EXIT",
+                "final_flow_action": "EXIT",
+                "smoothing_action": "NO_CHANGE",
+                "profit_rate": "0.20",
+                "ai_decision_trace_id": "trace-21",
+                "ai_input_snapshot_id": "snapshot-21",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 21,
+            "emitted_at": "2026-08-05T09:01:00+09:00",
+            "fields": {"profit_rate": "0.80"},
+        },
+        {
+            "stage": "soft_stop_micro_grace",
+            "record_id": 22,
+            "emitted_at": "2026-08-05T10:00:00+09:00",
+            "fields": {
+                "elapsed_sec": "60",
+                "profit_rate": "-1.50",
+                "soft_stop_pct": "-1.50",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 22,
+            "emitted_at": "2026-08-05T10:01:00+09:00",
+            "fields": {"profit_rate": "0.50"},
+        },
+        {
+            "stage": "protect_trailing_smooth_confirmed",
+            "record_id": 23,
+            "emitted_at": "2026-08-05T11:00:00+09:00",
+            "fields": {
+                "sample_span_sec": "12",
+                "sample_count": "5",
+                "below_ratio": "0.90",
+                "median_price": "9900",
+                "buffered_stop_price": "10000",
+                "profit_rate": "-0.50",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 23,
+            "emitted_at": "2026-08-05T11:01:00+09:00",
+            "fields": {"profit_rate": "-1.00"},
+        },
+        {
+            "stage": "soft_stop_whipsaw_confirmation",
+            "record_id": 24,
+            "emitted_at": "2026-08-05T12:00:00+09:00",
+            "fields": {
+                "confirmation_elapsed_sec": "0",
+                "profit_rate": "-1.50",
+                "additional_worsen": "0.00",
+            },
+        },
+        {
+            "stage": "soft_stop_whipsaw_confirmation",
+            "record_id": 24,
+            "emitted_at": "2026-08-05T12:00:20+09:00",
+            "fields": {
+                "confirmation_elapsed_sec": "20",
+                "profit_rate": "-1.55",
+                "additional_worsen": "0.05",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 24,
+            "emitted_at": "2026-08-05T12:00:30+09:00",
+            "fields": {"profit_rate": "-1.00"},
+        },
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-08-05",
+        pipeline_loader=lambda target_date: events,
+        completed_rows_loader=lambda start_date, end_date: [],
+        skip_completed_rows=True,
+    )
+
+    ofi_candidate = next(
+        row
+        for row in report["threshold_snapshot"]["holding_flow_ofi_smoothing"][
+            "counterfactual_exploration"
+        ]["candidates"]
+        if row["raw_weight"] == 0.7
+        and row["bullish_threshold"] == 0.1
+        and row["persistence_required"] == 1
+    )
+    assert ofi_candidate["mature_outcome_count"] == 0
+    assert ofi_candidate["outcome_exclusion_reason_counts"] == {
+        "counterfactual_hold_path_unobserved": 1
+    }
+
+    soft_grid = report["threshold_snapshot"]["soft_stop_whipsaw_confirmation"][
+        "counterfactual_exploration"
+    ]
+    assert max(row["mature_outcome_count"] for row in soft_grid["candidates"]) == 0
+    assert soft_grid["forward_outcome_status"] == (
+        "pending_post_sell_cost_adjusted_ev_join"
+    )
+    soft_candidate = next(
+        row
+        for row in soft_grid["candidates"]
+        if row["confirm_sec"] == 20 and row["max_worsen_pct"] == 0.2
+    )
+    assert soft_candidate["outcome_exclusion_reason_counts"] == {
+        "confirmation_observation_path_incomplete": 1
+    }
+
+    protect_candidate = next(
+        row
+        for row in report["threshold_snapshot"]["protect_trailing_smoothing"][
+            "counterfactual_exploration"
+        ]["candidates"]
+        if row["min_span_sec"] == 5
+        and row["min_samples"] == 3
+        and row["below_ratio"] == 0.6
+    )
+    assert protect_candidate["matched_observation_count"] == 1
+    assert protect_candidate["candidate_exposure_count"] == 0
+    assert protect_candidate["mature_outcome_count"] == 0
+
+
+def test_trailing_recheck_splits_legacy_from_v2_contract_violations():
+    events = [
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "record_id": 1,
+            "emitted_at": f"2026-08-05T09:00:0{index}+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "counterfactual_profit_rate": "0.20",
+            },
+        }
+        for index in (1, 2)
+    ]
+    events.extend(
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "record_id": 2,
+            "emitted_at": f"2026-08-05T10:00:0{index}+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": f"scr-v2-{index}",
+                "recheck_position_key": "record:2",
+                "counterfactual_profit_rate": "0.20",
+                "counterfactual_executable_sell_price": 10000,
+            },
+        }
+        for index in (1, 2)
+    )
+
+    attribution = report_mod._build_trailing_continuation_recheck_attribution(events)
+
+    assert attribution["legacy_armed_count"] == 2
+    assert attribution["v2_armed_count"] == 2
+    assert attribution["one_shot_violation_count"] == 1
+    assert attribution["one_shot_violation_position_keys"] == ["record:2"]
+    assert attribution["exclusion_reason_counts"]["legacy_contract_not_comparable"] == 2
+
+
 def test_trailing_recheck_unattributed_arms_are_not_false_one_shot_violations():
     events = [
         {
@@ -3788,6 +4106,8 @@ def test_trailing_recheck_unattributed_arms_are_not_false_one_shot_violations():
             "emitted_at": f"2026-08-05T10:00:0{index}+09:00",
             "fields": {
                 "recheck_state": "armed",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": f"scr-{index}",
                 "counterfactual_profit_rate": "0.20",
             },
         }
@@ -3812,6 +4132,7 @@ def test_trailing_recheck_requires_executable_counterfactual_price_for_ev():
             "emitted_at": "2026-08-05T10:00:01+09:00",
             "fields": {
                 "recheck_state": "armed",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
                 "recheck_id": "scr-9",
                 "recheck_position_key": "record:9",
                 "counterfactual_profit_rate": "0.20",
@@ -3834,6 +4155,35 @@ def test_trailing_recheck_requires_executable_counterfactual_price_for_ev():
     assert attribution["rows"][0]["exclusion_reason"] == (
         "counterfactual_executable_sell_price_missing"
     )
+
+
+def test_trailing_recheck_v2_requires_matching_terminal_event_for_ev():
+    events = [
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "record_id": 10,
+            "emitted_at": "2026-08-05T10:00:01+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": "scr-10",
+                "recheck_position_key": "record:10",
+                "counterfactual_profit_rate": "0.20",
+                "counterfactual_executable_sell_price": 10000,
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 10,
+            "emitted_at": "2026-08-05T10:00:20+09:00",
+            "fields": {"profit_rate": "0.40"},
+        },
+    ]
+
+    attribution = report_mod._build_trailing_continuation_recheck_attribution(events)
+
+    assert attribution["comparable_outcome_count"] == 0
+    assert attribution["rows"][0]["exclusion_reason"] == "v2_terminal_event_missing"
 
 
 def test_scale_in_price_guard_family_generates_manifest_only_candidate():
