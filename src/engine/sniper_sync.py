@@ -1426,15 +1426,10 @@ def periodic_account_sync():
                         sell_order_no = str(
                             target_snapshot.get("sell_odno") or ""
                         ).strip()
-                        prior_partial_qty = max(
-                            _to_int(
-                                target_snapshot.get("early_volatility_tp_filled_qty")
-                            ),
-                            _to_int(
-                                target_snapshot.get(
-                                    "nxt_rising_missed_tp1_partial_filled_qty"
-                                )
-                            ),
+                        prior_partial_qty = _to_int(
+                            target_snapshot.get(
+                                "nxt_rising_missed_tp1_partial_filled_qty"
+                            )
                         )
                         exact_execution = None
                         exact_execution_reason = "prior_status_not_sell_ordered"

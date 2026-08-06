@@ -9799,18 +9799,18 @@ def test_rising_missed_premarket_canonicalization_replaces_unknown_placeholder()
     assert fields["venue_resolution"] == ("canonicalized:rising_missed_effective_venue")
 
 
-def test_execution_cohort_requires_canonical_broker_route():
+def test_scalping_execution_cohort_requires_canonical_broker_route():
     krx_ts = datetime(2026, 7, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
     premarket_ts = datetime(2026, 7, 24, 8, 30, tzinfo=state_handlers._KST).timestamp()
 
-    assert state_handlers._early_volatility_tp_execution_cohort(krx_ts, "SOR") == (
+    assert state_handlers._scalping_execution_cohort(krx_ts, "SOR") == (
         "KRX"
     )
-    assert state_handlers._early_volatility_tp_execution_cohort(krx_ts, "KRX") == (
+    assert state_handlers._scalping_execution_cohort(krx_ts, "KRX") == (
         "UNKNOWN"
     )
     assert (
-        state_handlers._early_volatility_tp_execution_cohort(premarket_ts, "NXT")
+        state_handlers._scalping_execution_cohort(premarket_ts, "NXT")
         == "PREMARKET_KRX_LIKE"
     )
 

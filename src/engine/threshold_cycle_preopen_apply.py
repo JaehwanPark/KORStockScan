@@ -4379,18 +4379,6 @@ def _dated_runtime_auto_renew_expected_env(
 
 LAUNCHER_SAFE_DISABLE_SPECS: tuple[dict[str, str], ...] = (
     {
-        "enabled_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_ENABLED",
-        "active_date_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_ACTIVE_DATE",
-    },
-    {
-        "enabled_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED",
-        "active_date_key": ("KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ACTIVE_DATE"),
-    },
-    {
-        "enabled_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_NXT_ENABLED",
-        "active_date_key": "KORSTOCKSCAN_EARLY_VOLATILITY_TP_NXT_ACTIVE_DATE",
-    },
-    {
         "enabled_key": "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED",
         "active_date_key": "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE",
     },

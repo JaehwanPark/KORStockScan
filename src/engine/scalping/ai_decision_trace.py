@@ -641,10 +641,7 @@ def _request_context(
         or metadata.get("probe_bundle_id"),
         "position_cycle_id": _first_value(
             parsed,
-            (
-                "position_cycle_id",
-                "early_volatility_tp_position_cycle_id",
-            ),
+            ("position_cycle_id",),
         )
         or metadata.get("position_cycle_id"),
         "broker_order_no": _first_value(

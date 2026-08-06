@@ -614,7 +614,6 @@ def _holding_execution_route(
         "entry_execution_broker_route",
         "broker_route",
         "last_fill_broker_route",
-        "early_volatility_tp_broker_route",
         "entry_order_exchange",
         "exchange",
         "market_route",
@@ -1208,7 +1207,6 @@ def build_holding_decision_context(
             "partial_tp_realized_qty": _first_present(
                 position,
                 "partial_tp_realized_qty",
-                "early_volatility_tp_filled_qty",
                 "nxt_rising_missed_tp1_partial_filled_qty",
                 default=0,
             ),

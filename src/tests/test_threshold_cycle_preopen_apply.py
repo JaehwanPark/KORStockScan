@@ -9689,49 +9689,18 @@ def test_verify_runtime_env_handoff_pid_uses_operator_runtime_overrides(
     ]
 
 
-def test_verify_runtime_env_handoff_pid_accepts_launcher_safe_disable(
-    tmp_path, monkeypatch
-):
-    runtime_dir = tmp_path / "runtime_env"
-    runtime_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(
-        mod, "authoritative_ai_context_runtime_env", lambda *_args, **_kwargs: {}
-    )
-    (runtime_dir / "threshold_runtime_env_2026-07-28.json").write_text(
-        json.dumps(
-            {
-                "target_date": "2026-07-28",
-                "selected_families": ["persistent_operator_overrides_2026_06_26"],
-                "env_overrides": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-    (runtime_dir / "operator_runtime_overrides.env").write_text(
-        "\n".join(
-            [
-                "export KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED=true",
-                "export KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ACTIVE_DATE=2026-07-24",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        mod,
-        "_read_pid_environ",
-        lambda _pid: {
-            "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED": "false",
-            "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ACTIVE_DATE": "2026-07-24",
+def test_launcher_pid_expected_env_disables_expired_guard():
+    expected, disabled = mod._launcher_pid_expected_env(
+        "2026-07-28",
+        {
+            "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE": "2026-07-24",
         },
     )
 
-    result = mod.verify_runtime_env_handoff("2026-07-28", pid=12345)
-
-    assert result["status"] == "pass"
-    assert result["pid_mismatches"] == []
-    assert result["launcher_safe_disabled_keys"] == [
-        "KORSTOCKSCAN_EARLY_VOLATILITY_TP_PREMARKET_ENABLED"
+    assert expected["KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED"] == "false"
+    assert disabled == [
+        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED"
     ]
 
 
