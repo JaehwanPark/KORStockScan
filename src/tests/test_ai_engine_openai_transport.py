@@ -2847,6 +2847,7 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
         lambda **_kwargs: {
             "enabled": True,
             "status": "active_bounded_krx_canary",
+            "canary_mode": "performance_bounded",
             "selected_prompt_version": (
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
             ),
@@ -2940,6 +2941,7 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
     assert "allowed_runtime_apply" not in result
     assert result["entry_setup_composer_broker_order_forbidden"] is True
     assert result["entry_setup_live_adapter_runtime_effect"] is True
+    assert result["entry_setup_live_policy_mode"] == "performance_bounded"
 
 
 def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatch):
@@ -3226,6 +3228,8 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     live_policy = {
         "enabled": True,
         "status": "active_bounded_krx_canary",
+        "canary_mode": "one_share_exploration",
+        "maximum_daily_exploration_probes": 3,
         "selected_prompt_version": (
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
         ),
@@ -3253,6 +3257,8 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert result["entry_probe_intent"] is True
     assert result["entry_probe_first_required"] is True
     assert result["entry_ai_full_entry_forbidden"] is True
+    assert result["entry_setup_live_policy_mode"] == "one_share_exploration"
+    assert result["entry_setup_live_policy_max_daily_exploration_probes"] == 3
     assert "broker_order_forbidden" not in result
     role_gate = evaluate_entry_score_role_gate(
         {**result, "ai_result_source": "live", "ai_parse_ok": True},

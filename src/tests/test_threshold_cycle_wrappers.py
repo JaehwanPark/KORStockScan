@@ -355,6 +355,12 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     context_idx = script.index(
         'src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode context'
     )
+    assert (
+        scalping_pyramid_feedback_idx
+        < observation_preflight_idx
+        < scalping_pyramid_calibration_idx
+        < scalping_avg_down_recovery_idx
+    )
     assert observation_preflight_idx < scale_in_cf_idx < lifecycle_matrix_idx
     assert (
         rising_missed_feedback_idx
@@ -433,12 +439,12 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < rising_missed_feedback_idx
         < rising_missed_scout_idx
         < scalping_pyramid_feedback_idx
+        < observation_preflight_idx
         < scalping_pyramid_calibration_idx
         < scalping_avg_down_recovery_idx
         < entry_adm_idx
         < entry_ai_gate_idx
         < microstructure_idx
-        < observation_preflight_idx
         < lifecycle_matrix_idx
         < context_attribution_idx
         < context_idx
@@ -643,6 +649,7 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "--candidate-workers" in runner
     assert "--write" in runner
     assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
+    assert 'MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"' in runner
     assert "sleep 15" in runner
     assert "run_bot.sh" not in runner
     assert "tmux" not in runner

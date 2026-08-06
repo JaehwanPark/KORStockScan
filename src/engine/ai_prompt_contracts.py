@@ -1611,9 +1611,11 @@ V2.14 setup-risk adjudicator contract:
    Invented or misclassified IDs are a schema rejection. Do not paraphrase IDs.
 8. For setup_state=INVALID return VETO and include at least one exact ID from
    invalidation_facts in contradicting_fact_ids; prefer a risk code already
-   listed in corroborated_risk_codes. For setup_state=WAIT_CONFIRMATION return
-   CAUTION or VETO and cite at least one exact ID from contradicting_facts or
-   invalidation_facts. For setup_state=READY return PASS, CAUTION, or VETO.
+   listed in corroborated_risk_codes. An ID from contradicting_facts does not
+   replace this mandatory invalidation_facts citation. For
+   setup_state=WAIT_CONFIRMATION return CAUTION or VETO and cite at least one
+   exact ID from contradicting_facts or invalidation_facts. For
+   setup_state=READY return PASS, CAUTION, or VETO.
 9. WAIT_CONFIRMATION never grants direct submit authority. Ordinary trigger or
    fragile-liquidity confirmation gaps may remain eligible for an offline
    one-share probe observation behind every downstream guard. A current

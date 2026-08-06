@@ -53,9 +53,12 @@ def _valid_detailed_report():
             "session_bucket": "KRX_REGULAR",
         },
         "requests": [{"candidate": {"prompt_version": prompt_version}}],
+        "request_count": 1,
         "candidate_execution_selection": {
+            "policy": policy.EXPECTED_CANDIDATE_SELECTION_POLICY,
             "outcome_blind": True,
             "contract_pass": True,
+            "checkpoint_evaluated_setup_state_counts": {"READY": 1},
         },
         "promotion_report_integrity_pass": True,
         "promotion_quality_gate_pass": True,
@@ -66,6 +69,9 @@ def _valid_detailed_report():
         "candidate_primary_decision_ev_pct": 0.31,
         "candidate_execution_cost_adjusted_ev_pct": 0.24,
         "candidate_exposure_sample_floor": {"pass": False},
+        "candidate_probe_arm_decision_count": 12,
+        "candidate_probe_arm_unique_symbol_count": 4,
+        "candidate_probe_arm_sample_floor": {"pass": True},
         "candidate_contract_sha256": "candidate-contract-sha",
         "cumulative_learning": {
             "schema": "anticipatory_reversal_cumulative_learning_v2",
@@ -87,6 +93,9 @@ def _valid_detailed_report():
             "candidate_exposure_unique_symbol_count": 4,
             "candidate_primary_decision_ev_pct": 0.28,
             "candidate_exposure_probe_cost_adjusted_ev_pct": 0.21,
+            "candidate_probe_arm_decision_count": 12,
+            "candidate_probe_arm_unique_symbol_count": 4,
+            "exploration_evidence_floor": {"pass": True},
             "opportunity_capture_tradeoff": {"net_missed_upside_value_pct": 0.16},
             "candidate_probe_risk_budget": {"pass": True},
             "runtime_effect": False,
@@ -101,7 +110,12 @@ def _valid_detailed_report():
 
 
 def _valid_batch_report():
-    selection = {"outcome_blind": True, "contract_pass": True}
+    selection = {
+        "policy": policy.EXPECTED_CANDIDATE_SELECTION_POLICY,
+        "outcome_blind": True,
+        "contract_pass": True,
+        "checkpoint_evaluated_setup_state_counts": {"READY": 1},
+    }
     return {
         "schema": policy.BATCH_SCHEMA,
         "target_date": SOURCE_DATE,
@@ -114,6 +128,7 @@ def _valid_batch_report():
                 "effective_venue": "KRX",
                 "session_bucket": "KRX_REGULAR",
                 "status": "completed_offline_only",
+                "evaluated_request_count": 1,
                 "promotion_quality_gate_pass": True,
                 "candidate_execution_selection": selection,
             },
@@ -121,6 +136,7 @@ def _valid_batch_report():
                 "effective_venue": "NXT",
                 "session_bucket": "NXT_AFTERMARKET",
                 "status": "completed_offline_only",
+                "evaluated_request_count": 1,
                 "promotion_quality_gate_pass": False,
                 "candidate_execution_selection": selection,
             },
@@ -179,6 +195,7 @@ def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp
         candidate["promotion_metrics"]["daily_candidate_exposure_decision_count"] == 2
     )
     assert candidate["promotion_metrics"]["candidate_exposure_decision_count"] == 12
+    assert candidate["canary_mode"] == policy.PERFORMANCE_CANARY_MODE
 
     krx = policy.resolve_live_prompt_policy(
         configured_prompt_version=(
@@ -189,6 +206,7 @@ def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
     assert krx["enabled"] is True
+    assert krx["canary_mode"] == policy.PERFORMANCE_CANARY_MODE
     assert krx["selected_prompt_version"] == (
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     )
@@ -250,6 +268,8 @@ def test_failed_promotion_writes_inactive_preopen_fallback(monkeypatch, tmp_path
     _configure_paths(monkeypatch, tmp_path)
     detailed = _valid_detailed_report()
     detailed["promotion_quality_gate_pass"] = False
+    detailed["candidate_probe_arm_sample_floor"] = {"pass": False}
+    detailed["cumulative_learning"]["exploration_evidence_floor"] = {"pass": False}
     policy._atomic_write_json(policy.detailed_report_path(SOURCE_DATE), detailed)
     batch = _valid_batch_report()
     batch["cohorts"][0]["promotion_quality_gate_pass"] = False
@@ -266,6 +286,106 @@ def test_failed_promotion_writes_inactive_preopen_fallback(monkeypatch, tmp_path
     assert activation["status"] == "inactive_fallback_v2_13"
     assert activation["runtime_effect"] is False
     assert "candidate_not_live_ready" in activation["blocking_reasons"]
+
+
+def test_exploration_probe_cap_ledger_is_daily_durable_and_deduplicated(
+    monkeypatch, tmp_path
+):
+    _configure_paths(monkeypatch, tmp_path)
+
+    assert policy.read_exploration_probe_submit_count(TARGET_DATE) == 0
+    assert (
+        policy.record_exploration_probe_submission(
+            trade_date=TARGET_DATE,
+            stock_code="005930",
+            broker_order_no="order-1",
+        )
+        == 1
+    )
+    assert (
+        policy.record_exploration_probe_submission(
+            trade_date=TARGET_DATE,
+            stock_code="005930",
+            broker_order_no="order-1",
+        )
+        == 1
+    )
+    assert (
+        policy.record_exploration_probe_submission(
+            trade_date=TARGET_DATE,
+            stock_code="000660",
+            broker_order_no="order-2",
+        )
+        == 2
+    )
+    assert policy.read_exploration_probe_submit_count(TARGET_DATE) == 2
+
+
+def test_exploration_probe_cap_ledger_corruption_fails_closed(monkeypatch, tmp_path):
+    _configure_paths(monkeypatch, tmp_path)
+    path = policy.exploration_probe_cap_path(TARGET_DATE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", encoding="utf-8")
+
+    assert policy.read_exploration_probe_submit_count(TARGET_DATE) is None
+
+
+def test_exploration_probe_cap_failure_marker_survives_restart(monkeypatch, tmp_path):
+    _configure_paths(monkeypatch, tmp_path)
+    policy.mark_exploration_probe_cap_fail_closed(
+        trade_date=TARGET_DATE,
+        reason="atomic_replace_failed",
+    )
+
+    assert policy.read_exploration_probe_submit_count(TARGET_DATE) is None
+
+
+def test_negative_performance_can_use_guarded_one_share_exploration(
+    monkeypatch, tmp_path
+):
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    detailed = _valid_detailed_report()
+    detailed["promotion_quality_gate_pass"] = False
+    cumulative = detailed["cumulative_learning"]
+    cumulative["promotion_quality_gate_pass"] = False
+    cumulative["promotion_quality_checks"] = {
+        key: False for key in policy.CUMULATIVE_PROMOTION_CHECK_KEYS
+    }
+    cumulative["promotion_evidence_floor"] = {"pass": False}
+    cumulative["candidate_exposure_decision_count"] = 0
+    cumulative["candidate_exposure_unique_symbol_count"] = 0
+    cumulative["candidate_probe_risk_budget"] = {"pass": False}
+    policy._atomic_write_json(policy.detailed_report_path(SOURCE_DATE), detailed)
+    batch = _valid_batch_report()
+    batch["cohorts"][0]["promotion_quality_gate_pass"] = False
+    policy._atomic_write_json(policy.batch_report_path(SOURCE_DATE), batch)
+
+    published = policy.publish_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        write=True,
+    )
+    activation = policy.write_preopen_activation(target_date=TARGET_DATE)
+    candidate = policy._read_json(policy.live_candidate_path(SOURCE_DATE))
+
+    assert published["status"] == "bounded_exploration_apply_ready"
+    assert candidate["canary_mode"] == policy.EXPLORATION_CANARY_MODE
+    assert candidate["risk_contract"]["residual_multi_leg_forbidden"] is True
+    assert candidate["risk_contract"]["scale_in_forbidden"] is True
+    assert candidate["risk_contract"]["maximum_daily_exploration_probes"] == 3
+    assert activation["status"] == "active_bounded_canary"
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=(
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
+    )
+    assert resolved["enabled"] is True
+    assert resolved["canary_mode"] == policy.EXPLORATION_CANARY_MODE
+    assert resolved["maximum_daily_exploration_probes"] == 3
 
 
 def test_malformed_candidate_source_paths_fail_closed_without_exception(

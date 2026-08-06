@@ -1705,6 +1705,12 @@ def record_ai_decision_trace(
             "entry_setup_live_policy_status": _optional(
                 merged, "entry_setup_live_policy_status"
             ),
+            "entry_setup_live_policy_mode": _optional(
+                merged, "entry_setup_live_policy_mode"
+            ),
+            "entry_setup_live_policy_max_daily_exploration_probes": _optional(
+                merged, "entry_setup_live_policy_max_daily_exploration_probes"
+            ),
             "entry_setup_live_policy_source_date": _optional(
                 merged, "entry_setup_live_policy_source_date"
             ),
@@ -1873,6 +1879,10 @@ def record_ai_decision_trace(
             "entry_ai_veto_corroborated": trace_row["entry_ai_veto_corroborated"],
             "entry_setup_live_policy_status": trace_row[
                 "entry_setup_live_policy_status"
+            ],
+            "entry_setup_live_policy_mode": trace_row["entry_setup_live_policy_mode"],
+            "entry_setup_live_policy_max_daily_exploration_probes": trace_row[
+                "entry_setup_live_policy_max_daily_exploration_probes"
             ],
             "entry_setup_live_policy_source_date": trace_row[
                 "entry_setup_live_policy_source_date"

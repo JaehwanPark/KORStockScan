@@ -1415,6 +1415,8 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
             "entry_ai_risk_codes": ["NO_BLOCKING_RISK"],
             "entry_ai_veto_corroborated": False,
             "entry_setup_live_policy_status": "active_bounded_krx_canary",
+            "entry_setup_live_policy_mode": "one_share_exploration",
+            "entry_setup_live_policy_max_daily_exploration_probes": 3,
             "entry_setup_live_policy_source_date": "2026-08-06",
             "entry_setup_live_policy_target_date": "2026-08-07",
             "entry_setup_live_policy_activation_sha256": "activation-sha",
@@ -1459,6 +1461,8 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
     assert trace_row["entry_ai_risk_codes"] == ["NO_BLOCKING_RISK"]
     assert trace_row["entry_setup_live_policy_status"] == ("active_bounded_krx_canary")
     assert trace_row["entry_setup_live_policy_runtime_effect"] is True
+    assert trace_row["entry_setup_live_policy_mode"] == "one_share_exploration"
+    assert pending_row["entry_setup_live_policy_max_daily_exploration_probes"] == 3
     assert pending_row["entry_setup_live_policy_source_date"] == "2026-08-06"
     assert pending_row["entry_setup_live_policy_target_date"] == "2026-08-07"
     assert pending_row["entry_probe_first_required"] is True

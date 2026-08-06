@@ -991,6 +991,14 @@ if [ "$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE" = "true" ] || [ "$RUN_S
     "$PROJECT_DIR/data/report/scalping_pyramid_intraday_feedback/scalping_pyramid_intraday_feedback_${TARGET_DATE}.md" \
     "scalping_pyramid_intraday_feedback_postclose"
 fi
+if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
+  wait_for_postclose_resources "observation_source_quality_preflight"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
+    "observation_source_quality_preflight"
+fi
 if [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "true" ] || [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "scalping_pyramid_quality_calibration"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_pyramid_quality_calibration \
@@ -1067,14 +1075,6 @@ if [ "$RUN_MICROSTRUCTURE_REACTION_CONTEXT" = "true" ] || [ "$RUN_MICROSTRUCTURE
   else
     echo "[WARN] optional microstructure_reaction_context failed target_date=$TARGET_DATE"
   fi
-fi
-if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
-  wait_for_postclose_resources "observation_source_quality_preflight"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
-    "observation_source_quality_preflight"
 fi
 if [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "true" ] || [ "$RUN_LIFECYCLE_DECISION_MATRIX" = "1" ]; then
   wait_for_postclose_resources "scale_in_incremental_counterfactual"

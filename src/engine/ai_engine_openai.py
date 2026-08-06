@@ -1828,6 +1828,10 @@ class GPTSniperEngine:
         contract_errors = list(dict.fromkeys(map(str, contract_errors)))
         policy_fields = {
             "entry_setup_live_policy_status": policy.get("status"),
+            "entry_setup_live_policy_mode": policy.get("canary_mode"),
+            "entry_setup_live_policy_max_daily_exploration_probes": policy.get(
+                "maximum_daily_exploration_probes"
+            ),
             "entry_setup_live_policy_source_date": policy.get("source_date"),
             "entry_setup_live_policy_target_date": policy.get("target_date"),
             "entry_setup_live_policy_activation_sha256": policy.get(
@@ -7815,6 +7819,14 @@ class GPTSniperEngine:
                     {
                         "entry_setup_live_policy_status": (
                             entry_setup_live_policy.get("status")
+                        ),
+                        "entry_setup_live_policy_mode": (
+                            entry_setup_live_policy.get("canary_mode")
+                        ),
+                        "entry_setup_live_policy_max_daily_exploration_probes": (
+                            entry_setup_live_policy.get(
+                                "maximum_daily_exploration_probes"
+                            )
                         ),
                         "entry_setup_live_policy_source_date": (
                             entry_setup_live_policy.get("source_date")

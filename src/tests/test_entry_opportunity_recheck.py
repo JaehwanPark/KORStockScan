@@ -90,6 +90,61 @@ def test_edge_wait_recovery_intent_can_arm_one_share_probe_path():
     assert "quantity_or_cap_change" not in decision.fields["forbidden_uses"]
 
 
+def test_exploration_can_bind_recovery_cap_to_verified_probe_submissions():
+    state = EntryOpportunityRecheckState(
+        trade_date="2026-07-02",
+        daily_buy_recovery_count=3,
+        daily_exploration_probe_submit_count=2,
+    )
+
+    decision = _decision(
+        state=state,
+        buy_recovery_cap_observed_count=state.daily_exploration_probe_submit_count,
+    )
+
+    assert decision.allowed is True
+    assert (
+        decision.fields["entry_opportunity_recheck_buy_recovery_cap_basis"]
+        == "caller_verified_submissions"
+    )
+    state.record_exploration_probe_submit()
+    capped = _decision(
+        state=state,
+        buy_recovery_cap_observed_count=state.daily_exploration_probe_submit_count,
+    )
+    assert capped.reason == "daily_buy_recovery_cap_exhausted"
+
+
+def test_exploration_probe_submit_count_resets_on_new_trade_date():
+    state = EntryOpportunityRecheckState(
+        trade_date="2026-07-01",
+        daily_exploration_probe_submit_count=3,
+    )
+
+    state.reset_if_new_day("2026-07-02")
+
+    assert state.daily_exploration_probe_submit_count == 0
+
+
+def test_durable_exploration_cap_survives_state_trade_date_reset():
+    state = EntryOpportunityRecheckState(trade_date="2026-07-01")
+    state.sync_exploration_probe_submit_count(3)
+    durable_count = state.daily_exploration_probe_submit_count
+
+    decision = _decision(
+        state=state,
+        today="2026-07-02",
+        buy_recovery_cap_observed_count=durable_count,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "daily_buy_recovery_cap_exhausted"
+    assert (
+        decision.fields["entry_opportunity_recheck_buy_recovery_cap_observed_count"]
+        == 3
+    )
+
+
 def test_score_bounds_are_prior_not_fail_closed_but_canonical_wait_still_required():
     low = _decision(ai_score=69.9)
     high = _decision(ai_score=75.0)

@@ -98,6 +98,7 @@ def test_batch_runs_krx_and_nxt_as_separate_outcome_blind_cohorts(
                     "policy": quality.CANDIDATE_EXECUTION_SELECTION_POLICY,
                     "outcome_blind": True,
                     "contract_pass": True,
+                    "checkpoint_evaluated_setup_state_counts": {"READY": 30},
                 },
             },
         )
@@ -178,3 +179,79 @@ def test_nxt_failure_does_not_cancel_completed_krx_candidate(monkeypatch):
     assert report["cohorts"][1]["status"] == "failed_offline_cohort"
     assert report["krx_bounded_live_candidate"]["status"] == ("live_auto_apply_ready")
     assert published[0]["batch_report"] is report
+
+
+def test_cohort_rejects_stale_candidate_execution_selection_policy(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(quality, "RUNTIME_DIR", tmp_path / "runtime")
+    monkeypatch.setattr(
+        quality,
+        "DETAILED_PAIRED_REPORT_DIR",
+        tmp_path / "detailed",
+    )
+
+    def fake_quality_cli(argv):
+        venue = argv[argv.index("--venue") + 1]
+        session = argv[argv.index("--session-bucket") + 1]
+        mode = argv[argv.index("--mode") + 1]
+        if mode == "control":
+            quality._atomic_write_json(
+                quality.control_path(
+                    "2026-08-06",
+                    effective_venue=venue,
+                    session_bucket=session,
+                ),
+                {
+                    "status": "control_manifest_frozen_collect_exact_samples",
+                    "controls": [
+                        {
+                            "decision_stage": "entry",
+                            "provider_actual": "openai",
+                            "sample_count": 30,
+                        }
+                    ],
+                },
+            )
+            return
+        quality._atomic_write_json(
+            quality.detailed_paired_path(
+                "2026-08-06",
+                candidate_prompt_version=(
+                    batch.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                ),
+                effective_venue=venue,
+                session_bucket=session,
+            ),
+            {
+                "prepared_request_count": 30,
+                "request_count": 30,
+                "result_count": 30,
+                "candidate_execution_performed": True,
+                "provider_failed_count": 0,
+                "candidate_provider_none_count": 0,
+                "candidate_execution_selection": {
+                    "policy": "deterministic_outcome_blind_symbol_round_robin_v1",
+                    "outcome_blind": True,
+                    "contract_pass": True,
+                    "checkpoint_evaluated_setup_state_counts": {"READY": 30},
+                },
+            },
+        )
+
+    monkeypatch.setattr(batch, "_run_quality_cli", fake_quality_cli)
+
+    try:
+        batch._cohort_result(
+            target_date="2026-08-06",
+            as_of=datetime(2026, 8, 6, 21, 5, tzinfo=quality.KST),
+            venue="KRX",
+            session_bucket="KRX_REGULAR",
+            max_new_requests=30,
+            workers=2,
+            timeout_sec=45.0,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "candidate_execution_contract_failed:KRX:KRX_REGULAR"
+    else:
+        raise AssertionError("stale selection policy must fail closed")

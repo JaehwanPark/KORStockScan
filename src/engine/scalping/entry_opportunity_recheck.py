@@ -72,6 +72,7 @@ class EntryOpportunityRecheckState:
     trade_date: str = ""
     daily_recheck_count: int = 0
     daily_buy_recovery_count: int = 0
+    daily_exploration_probe_submit_count: int = 0
     symbol_recheck_counts: dict[str, int] = field(default_factory=dict)
     effective_max_daily_recheck: int = 0
     effective_max_daily_buy_recovery: int = 0
@@ -85,6 +86,7 @@ class EntryOpportunityRecheckState:
         self.trade_date = resolved
         self.daily_recheck_count = 0
         self.daily_buy_recovery_count = 0
+        self.daily_exploration_probe_submit_count = 0
         self.symbol_recheck_counts.clear()
         self.effective_max_daily_recheck = 0
         self.effective_max_daily_buy_recovery = 0
@@ -109,6 +111,15 @@ class EntryOpportunityRecheckState:
 
     def record_buy_recovery(self) -> None:
         self.daily_buy_recovery_count += 1
+
+    def record_exploration_probe_submit(self) -> None:
+        self.daily_exploration_probe_submit_count += 1
+
+    def sync_exploration_probe_submit_count(self, value: Any) -> None:
+        self.daily_exploration_probe_submit_count = max(
+            self.daily_exploration_probe_submit_count,
+            max(0, _safe_int(value, 0)),
+        )
 
     def record_recovery_mark(
         self,
@@ -522,6 +533,7 @@ def evaluate_blocked_ai_score_recheck(
     ai_recovery_trigger: Any = None,
     microstructure_confirmed: Any = False,
     microstructure_fields: Mapping[str, Any] | None = None,
+    buy_recovery_cap_observed_count: int | None = None,
     state: EntryOpportunityRecheckState | None = None,
     config: EntryOpportunityRecheckConfig | None = None,
     today: str | None = None,
@@ -529,6 +541,12 @@ def evaluate_blocked_ai_score_recheck(
     config = config or config_from_env()
     state = state or EntryOpportunityRecheckState()
     state.reset_if_new_day(today)
+
+    effective_buy_recovery_cap_count = (
+        int(state.daily_buy_recovery_count)
+        if buy_recovery_cap_observed_count is None
+        else max(0, _safe_int(buy_recovery_cap_observed_count, 0))
+    )
 
     score = _safe_float(ai_score, -1.0)
     action = str(ai_action or "").strip().upper()
@@ -573,6 +591,14 @@ def evaluate_blocked_ai_score_recheck(
         "entry_opportunity_recheck_daily_count": int(state.daily_recheck_count),
         "entry_opportunity_recheck_daily_buy_recovery_count": int(
             state.daily_buy_recovery_count
+        ),
+        "entry_opportunity_recheck_buy_recovery_cap_observed_count": (
+            effective_buy_recovery_cap_count
+        ),
+        "entry_opportunity_recheck_buy_recovery_cap_basis": (
+            "armed_rechecks"
+            if buy_recovery_cap_observed_count is None
+            else "caller_verified_submissions"
         ),
         "entry_opportunity_recheck_symbol_count": int(state.symbol_count(code)),
         "entry_opportunity_recheck_ai_contract_status": contract_status or "unreported",
@@ -762,7 +788,7 @@ def evaluate_blocked_ai_score_recheck(
         )
     if (
         daily_buy_recovery_limit <= 0
-        or state.daily_buy_recovery_count >= daily_buy_recovery_limit
+        or effective_buy_recovery_cap_count >= daily_buy_recovery_limit
     ):
         return _decision(
             allowed=False,

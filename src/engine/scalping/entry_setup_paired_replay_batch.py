@@ -93,6 +93,24 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _selection_checkpoint_contract_pass(
+    selection: dict[str, Any], *, evaluated_request_count: int
+) -> bool:
+    counts = selection.get("checkpoint_evaluated_setup_state_counts")
+    if not isinstance(counts, dict) or not counts:
+        return False
+    if set(counts) - {"READY", "WAIT_CONFIRMATION", "OTHER"}:
+        return False
+    try:
+        normalized = [int(value) for value in counts.values()]
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        all(value >= 0 for value in normalized)
+        and sum(normalized) == int(evaluated_request_count)
+    )
+
+
 def _wait_for_predecessor(
     *, target_date: str, wait_sec: int, interval_sec: int
 ) -> tuple[bool, dict[str, Any]]:
@@ -202,6 +220,11 @@ def _cohort_result(
             or report.get("provider_failed_count") != 0
             or report.get("candidate_provider_none_count") != 0
             or not isinstance(selection, dict)
+            or selection.get("policy") != quality.CANDIDATE_EXECUTION_SELECTION_POLICY
+            or not _selection_checkpoint_contract_pass(
+                selection,
+                evaluated_request_count=request_count,
+            )
             or selection.get("outcome_blind") is not True
             or selection.get("contract_pass") is not True
         ):
@@ -225,6 +248,15 @@ def _cohort_result(
         ),
         "candidate_exposure_unique_symbol_count": report.get(
             "candidate_exposure_unique_symbol_count"
+        ),
+        "candidate_probe_arm_decision_count": report.get(
+            "candidate_probe_arm_decision_count"
+        ),
+        "candidate_probe_arm_unique_symbol_count": report.get(
+            "candidate_probe_arm_unique_symbol_count"
+        ),
+        "candidate_probe_arm_sample_floor": report.get(
+            "candidate_probe_arm_sample_floor"
         ),
         "promotion_quality_gate_pass": report.get("promotion_quality_gate_pass"),
         "candidate_exposure_floor_feasibility": report.get(

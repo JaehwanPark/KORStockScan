@@ -3850,11 +3850,11 @@ def test_v2_10_bounded_opportunity_accepts_high_risk_one_share_probe_and_fair_co
         ],
     )
     assert report["control_entry_probe_intent_count"] == 1
-    assert (
-        report["control_primary_decision_ev_pct"]
-        == report["candidate_primary_decision_ev_pct"]
-    )
-    assert report["candidate_primary_decision_ev_delta_pct"] == 0.0
+    assert report["control_primary_decision_ev_pct"] == 0.0
+    assert report["candidate_primary_decision_ev_pct"] > 0.0
+    assert report["paired_comparisons"][0]["control_probe_armed"] is True
+    assert report["paired_comparisons"][0]["control_exposure_selected"] is False
+    assert report["candidate_primary_decision_ev_delta_pct"] > 0.0
 
 
 def test_v2_11_clean_continuation_requires_truthful_guard_delegated_probe():
@@ -6160,6 +6160,83 @@ def test_paired_replay_allows_bounded_third_semantic_correction():
     assert len(results[0]["candidate_attempts"]) == 3
 
 
+def test_v2_14_invalid_setup_uses_fail_closed_ledger_citation_repair():
+    setup_evidence = quality.build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={
+            "schema": "exact_payload_analysis_v1",
+            "source_quality": {
+                "status": "fresh_consistent",
+                "completed_bar_count": 20,
+            },
+            "executable_liquidity": {"execution_cost_state": "low"},
+            "contradictions": ["multi_horizon_direction_conflict"],
+            "deterministic_contract_facts": {
+                "structural_edge_floor": True,
+                "early_session_structural_edge_floor": False,
+                "early_session_probe_candidate": False,
+                "orderly_pullback_recovery": False,
+                "trusted_supportive_trigger": True,
+                "adverse_distribution_no_edge": False,
+                "blocking_overextension": True,
+                "ask_wall_wide_spread": False,
+            },
+        },
+        recovery_analysis={
+            "schema": "anticipatory_reversal_analysis_v1",
+            "source_mode": "fresh_dual",
+            "hard_blockers": [],
+            "clean_continuation_probe": {"eligible": True},
+            "recovery_confirmation_probe": {"eligible": False},
+        },
+    )
+    invalid_response = {
+        "schema": "entry_setup_risk_adjudication_v1",
+        "risk_verdict": "VETO",
+        "risk_codes": ["OVEREXTENSION_CHASE"],
+        "supporting_fact_ids": ["structural_edge_floor"],
+        "contradicting_fact_ids": ["multi_horizon_direction_conflict"],
+        "confidence": 80,
+    }
+    request = {
+        "paired_replay_id": "pair-v2-14-invalid",
+        "decision_trace_id": "trace-v2-14-invalid",
+        "stage": "entry",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "payload_sha256": "payload-v2-14-invalid",
+        "entry_setup_evidence": setup_evidence,
+        "candidate": {
+            "semantic_validator_version": (
+                quality.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+            ),
+            "system_prompt_sha256": "candidate-prompt-v2-14",
+        },
+        **quality.OFFLINE_CONTRACT,
+    }
+
+    results = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _request: {"action": "WAIT"},
+        candidate_runner=lambda _request: invalid_response,
+    )
+
+    assert results[0]["status"] == "pass"
+    assert results[0]["candidate_response"]["action"] == "DROP"
+    assert results[0]["candidate_semantic_repairs"] == [
+        "invalid_setup_invalidation_fact_copied_from_ledger"
+    ]
+    assert len(results[0]["candidate_attempts"]) == (
+        quality.CANDIDATE_SCHEMA_MAX_ATTEMPTS + 1
+    )
+    repair_provenance = results[0]["candidate_attempts"][-1]["provider_provenance"]
+    assert repair_provenance["provider"] == "deterministic_offline_adapter"
+    assert repair_provenance["runtime_effect"] is False
+    assert repair_provenance["semantic_repair_version"] == (
+        quality.ENTRY_RISK_ADJUDICATION_REPAIR_VERSION
+    )
+
+
 def test_openai_candidate_parse_gap_is_retryable_and_secret_free(monkeypatch):
     captured = {}
 
@@ -6295,6 +6372,68 @@ def test_v2_12_semantic_correction_preserves_nonblocking_wait(monkeypatch):
     assert "WAIT is prohibited for this contract" not in instructions
 
 
+def test_v2_14_correction_names_mandatory_invalidation_fact_path(monkeypatch):
+    captured = {}
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                id="resp-v2-14-correction",
+                output_text=json.dumps(
+                    {
+                        "schema": "entry_setup_risk_adjudication_v1",
+                        "risk_verdict": "VETO",
+                        "risk_codes": ["STRUCTURE_INVALIDATED"],
+                        "supporting_fact_ids": [],
+                        "contradicting_fact_ids": ["no_supported_setup"],
+                        "confidence": 80,
+                    }
+                ),
+                usage=SimpleNamespace(
+                    input_tokens=10,
+                    output_tokens=10,
+                    total_tokens=20,
+                ),
+            )
+
+    class FakeOpenAI:
+        def __init__(self, *, api_key, max_retries):
+            assert api_key == "test-secret"
+            assert max_retries == 0
+            self.responses = FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    request = {
+        "paired_replay_id": "pair-v2-14-correction",
+        "stage": "entry",
+        "candidate_input": {"entry_setup_evidence_v1": {"setup_state": "INVALID"}},
+        "candidate_schema_correction_errors": [
+            "entry_risk_invalid_setup_invalidation_fact_required"
+        ],
+        "control": {"provider": "openai", "model": "gpt-test"},
+        "candidate": {
+            "provider": "openai",
+            "model": "gpt-test",
+            "system_prompt": "V2.14 base prompt.",
+            "prompt_version": "decision_quality_v2_14_setup_risk_entry",
+            "semantic_validator_version": (
+                quality.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+            ),
+        },
+        **quality.OFFLINE_CONTRACT,
+    }
+
+    quality.execute_openai_prompt_v2_candidate(
+        request,
+        api_keys=["test-secret"],
+    )
+
+    instructions = captured["instructions"]
+    assert "entry_setup_evidence_v1.invalidation_facts" in instructions
+    assert "A contradicting_facts-only citation" in instructions
+
+
 def test_candidate_execution_checkpoint_is_outcome_blind_and_symbol_diverse():
     pending = [
         {
@@ -6324,6 +6463,7 @@ def test_candidate_execution_checkpoint_is_outcome_blind_and_symbol_diverse():
     assert len({row["stock_code"] for row in selected}) == 5
     assert metadata["policy"] == quality.CANDIDATE_EXECUTION_SELECTION_POLICY
     assert metadata["outcome_blind"] is True
+
     assert metadata["contract_pass"] is True
     assert reranked_metadata["forbidden_selection_fields"] == [
         "outcome_return_pct",
@@ -6332,6 +6472,44 @@ def test_candidate_execution_checkpoint_is_outcome_blind_and_symbol_diverse():
         "first_hit",
         "profit_opportunity_observed",
     ]
+
+
+def test_candidate_execution_checkpoint_prioritizes_ready_without_using_outcomes():
+    pending = []
+    for state, count in (("READY", 12), ("WAIT_CONFIRMATION", 12), ("INVALID", 12)):
+        for index in range(count):
+            pending.append(
+                {
+                    "paired_replay_id": f"{state}-{index}",
+                    "decision_trace_id": f"trace-{state}-{index}",
+                    "stock_code": f"{index + (100 if state == 'READY' else 200):06d}",
+                    "stage": "entry",
+                    "effective_venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                    "entry_setup_evidence": {"setup_state": state},
+                    "outcome_return_pct": 99 if state == "INVALID" else -99,
+                }
+            )
+
+    selected, metadata = quality.select_pending_candidate_execution_requests(
+        pending,
+        max_new_requests=10,
+    )
+
+    assert len(selected) == 10
+    assert metadata["selected_setup_state_counts"] == {
+        "READY": 6,
+        "WAIT_CONFIRMATION": 3,
+        "OTHER": 1,
+    }
+    assert metadata["outcome_blind"] is True
+
+    one, one_metadata = quality.select_pending_candidate_execution_requests(
+        pending,
+        max_new_requests=1,
+    )
+    assert (one[0]["entry_setup_evidence"] or {})["setup_state"] == "READY"
+    assert one_metadata["selected_setup_state_counts"] == {"READY": 1}
 
 
 def test_candidate_execution_checkpoint_retry_does_not_expand_distinct_quota():
@@ -6368,6 +6546,45 @@ def test_candidate_execution_checkpoint_retry_does_not_expand_distinct_quota():
     assert metadata["distinct_execution_count"] == 30
     assert metadata["distinct_execution_cap_pass"] is True
     assert metadata["contract_pass"] is True
+
+
+def test_stale_selection_policy_does_not_consume_new_checkpoint_quota():
+    existing = {
+        "requests": [
+            {"paired_replay_id": "old-1"},
+            {"paired_replay_id": "old-2"},
+            {"paired_replay_id": "not-current"},
+        ]
+    }
+
+    stale = quality._valid_checkpoint_attempted_pair_ids(
+        existing,
+        valid_pair_ids={"old-1", "old-2"},
+        selection_contract_pass=False,
+    )
+    current = quality._valid_checkpoint_attempted_pair_ids(
+        existing,
+        valid_pair_ids={"old-1", "old-2"},
+        selection_contract_pass=True,
+    )
+
+    assert stale == set()
+    assert current == {"old-1", "old-2"}
+
+
+def test_checkpoint_setup_state_counts_preserve_full_retry_census():
+    requests = [
+        {"entry_setup_evidence": {"setup_state": "READY"}},
+        {"entry_setup_evidence": {"setup_state": "WAIT_CONFIRMATION"}},
+        {"entry_setup_evidence": {"setup_state": "INVALID"}},
+        {"entry_setup_evidence": {"setup_state": "READY"}},
+    ]
+
+    assert quality._checkpoint_setup_state_counts(requests) == {
+        "READY": 2,
+        "WAIT_CONFIRMATION": 1,
+        "OTHER": 1,
+    }
 
 
 def test_opportunity_capture_gate_allows_positive_incremental_probe_with_guarded_risk():

@@ -9,6 +9,7 @@ falls back to the configured V2.13 owner on every contract gap.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -40,6 +41,23 @@ CANARY_ENV_KEY = "KORSTOCKSCAN_ENTRY_SETUP_V2_14_KRX_CANARY_ENABLED"
 CANARY_VENUE = "KRX"
 CANARY_SESSION = "KRX_REGULAR"
 CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
+PERFORMANCE_CANARY_MODE = "performance_bounded"
+EXPLORATION_CANARY_MODE = "one_share_exploration"
+EXPECTED_CANDIDATE_SELECTION_POLICY = (
+    "deterministic_outcome_blind_setup_state_symbol_round_robin_v3"
+)
+EXPLORATION_MAX_DAILY_PROBES = 3
+PERFORMANCE_PROMOTION_ERROR_CODES = frozenset(
+    {
+        "krx_batch_promotion_gate_not_passed",
+        "detailed_promotion_quality_not_passed",
+        "cumulative_promotion_gate_not_passed",
+        "cumulative_promotion_checks_incomplete",
+        "cumulative_exposure_floor_not_passed",
+        "cumulative_exposure_counts_below_floor",
+        "cumulative_probe_risk_budget_not_passed",
+    }
+)
 CUMULATIVE_PROMOTION_CHECK_KEYS = (
     "cohort_isolated",
     "candidate_exposure_sample_floor_pass",
@@ -54,6 +72,8 @@ CUMULATIVE_PROMOTION_CHECK_KEYS = (
 
 _CACHE_LOCK = threading.Lock()
 _ACTIVATION_CACHE: dict[str, Any] = {}
+_EXPLORATION_CAP_LOCK = threading.Lock()
+EXPLORATION_CAP_LEDGER_SCHEMA = "entry_setup_exploration_probe_cap_v1"
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -305,6 +325,104 @@ def activation_path(target_date: str) -> Path:
     return ACTIVATION_DIR / f"entry_setup_v2_14_live_policy_{target_date}.json"
 
 
+def exploration_probe_cap_path(trade_date: str) -> Path:
+    return ACTIVATION_DIR / f"entry_setup_exploration_probe_cap_{trade_date}.json"
+
+
+def exploration_probe_cap_failure_path(trade_date: str) -> Path:
+    return ACTIVATION_DIR / (
+        f"entry_setup_exploration_probe_cap_{trade_date}.failed.json"
+    )
+
+
+def read_exploration_probe_submit_count(trade_date: str) -> int | None:
+    """Return the durable daily accepted-probe count, or None on corruption."""
+
+    path = exploration_probe_cap_path(trade_date)
+    if exploration_probe_cap_failure_path(trade_date).exists():
+        return None
+    if not path.exists():
+        return 0
+    payload = _read_json(path)
+    signatures = payload.get("accepted_probe_signatures")
+    if (
+        payload.get("schema") != EXPLORATION_CAP_LEDGER_SCHEMA
+        or payload.get("trade_date") != trade_date
+        or not isinstance(signatures, list)
+        or any(not isinstance(value, str) or not value for value in signatures)
+        or len(set(signatures)) != len(signatures)
+        or payload.get("accepted_probe_count") != len(signatures)
+    ):
+        return None
+    return len(signatures)
+
+
+def mark_exploration_probe_cap_fail_closed(*, trade_date: str, reason: str) -> None:
+    """Persist a same-day fail-closed marker after a ledger write failure."""
+
+    _atomic_write_json(
+        exploration_probe_cap_failure_path(trade_date),
+        {
+            "schema": "entry_setup_exploration_probe_cap_failure_v1",
+            "trade_date": trade_date,
+            "recorded_at": datetime.now(KST).isoformat(),
+            "reason": str(reason or "ledger_write_failed")[:240],
+            "decision_authority": "daily_one_share_exploration_submit_cap",
+            "runtime_effect": True,
+            "fail_closed": True,
+        },
+    )
+
+
+def record_exploration_probe_submission(
+    *, trade_date: str, stock_code: str, broker_order_no: str
+) -> int:
+    """Durably deduplicate a broker-accepted one-share exploration probe."""
+
+    normalized_code = str(stock_code or "").strip()[:6]
+    normalized_order_no = str(broker_order_no or "").strip()
+    if not normalized_code or not normalized_order_no:
+        raise ValueError("exploration_probe_identity_missing")
+    signature = hashlib.sha256(
+        f"{trade_date}:{normalized_code}:{normalized_order_no}".encode("utf-8")
+    ).hexdigest()
+    with _EXPLORATION_CAP_LOCK:
+        path = exploration_probe_cap_path(trade_date)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_suffix(f"{path.suffix}.lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            current_count = read_exploration_probe_submit_count(trade_date)
+            if current_count is None:
+                raise ValueError("exploration_probe_cap_ledger_invalid")
+            payload = _read_json(path) if path.exists() else {}
+            signatures = list(payload.get("accepted_probe_signatures") or [])
+            if signature not in signatures:
+                signatures.append(signature)
+            _atomic_write_json(
+                path,
+                {
+                    "schema": EXPLORATION_CAP_LEDGER_SCHEMA,
+                    "trade_date": trade_date,
+                    "updated_at": datetime.now(KST).isoformat(),
+                    "accepted_probe_count": len(signatures),
+                    "accepted_probe_signatures": signatures,
+                    "identity_contract": (
+                        "sha256(trade_date:stock_code:broker_order_no)"
+                    ),
+                    "decision_authority": "daily_one_share_exploration_submit_cap",
+                    "runtime_effect": True,
+                    "actual_order_submitted": True,
+                    "forbidden_uses": [
+                        "order_submission",
+                        "quantity_or_cap_increase",
+                        "broker_or_safety_guard_bypass",
+                    ],
+                },
+            )
+            return len(signatures)
+
+
 def detailed_report_path(source_date: str) -> Path:
     return DETAILED_REPORT_DIR / (
         "ai_prompt_detailed_paired_replay_"
@@ -329,6 +447,24 @@ def _batch_evidence(batch_report: dict[str, Any]) -> dict[str, Any]:
         "actual_order_submitted": batch_report.get("actual_order_submitted"),
         "broker_order_forbidden": batch_report.get("broker_order_forbidden"),
     }
+
+
+def _selection_checkpoint_contract_pass(
+    selection: dict[str, Any], *, evaluated_request_count: int
+) -> bool:
+    counts = selection.get("checkpoint_evaluated_setup_state_counts")
+    if not isinstance(counts, dict) or not counts:
+        return False
+    if set(counts) - {"READY", "WAIT_CONFIRMATION", "OTHER"}:
+        return False
+    try:
+        normalized = [int(value) for value in counts.values()]
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        all(value >= 0 for value in normalized)
+        and sum(normalized) == int(evaluated_request_count)
+    )
 
 
 def _candidate_source_errors(
@@ -371,6 +507,15 @@ def _candidate_source_errors(
             or selection.get("contract_pass") is not True
         ):
             errors.append("krx_execution_selection_invalid")
+        elif selection.get("policy") != EXPECTED_CANDIDATE_SELECTION_POLICY:
+            errors.append("krx_execution_selection_policy_stale")
+        elif not _selection_checkpoint_contract_pass(
+            selection,
+            evaluated_request_count=int(
+                krx_rows[0].get("evaluated_request_count") or 0
+            ),
+        ):
+            errors.append("krx_execution_selection_checkpoint_invalid")
         if krx_rows[0].get("promotion_quality_gate_pass") is not True:
             errors.append("krx_batch_promotion_gate_not_passed")
 
@@ -402,6 +547,13 @@ def _candidate_source_errors(
         or selection.get("contract_pass") is not True
     ):
         errors.append("detailed_execution_selection_invalid")
+    elif selection.get("policy") != EXPECTED_CANDIDATE_SELECTION_POLICY:
+        errors.append("detailed_execution_selection_policy_stale")
+    elif not _selection_checkpoint_contract_pass(
+        selection,
+        evaluated_request_count=int(detailed_report.get("request_count") or 0),
+    ):
+        errors.append("detailed_execution_selection_checkpoint_invalid")
     if detailed_report.get("promotion_report_integrity_pass") is not True:
         errors.append("detailed_promotion_integrity_not_passed")
     if detailed_report.get("promotion_quality_gate_pass") is not True:
@@ -480,6 +632,41 @@ def _candidate_source_errors(
     return list(dict.fromkeys(errors))
 
 
+def _exploration_source_errors(
+    *,
+    source_errors: list[str],
+    detailed_report: dict[str, Any],
+) -> list[str]:
+    """Validate learning authority without weakening performance promotion."""
+
+    errors = [
+        error
+        for error in source_errors
+        if error not in PERFORMANCE_PROMOTION_ERROR_CODES
+    ]
+    daily_floor = detailed_report.get("candidate_probe_arm_sample_floor")
+    daily_floor = daily_floor if isinstance(daily_floor, dict) else {}
+    cumulative = detailed_report.get("cumulative_learning")
+    cumulative = cumulative if isinstance(cumulative, dict) else {}
+    cumulative_floor = cumulative.get("exploration_evidence_floor")
+    cumulative_floor = cumulative_floor if isinstance(cumulative_floor, dict) else {}
+    if daily_floor.get("pass") is not True:
+        errors.append("daily_probe_arm_floor_not_passed")
+    if cumulative_floor.get("pass") is not True:
+        errors.append("cumulative_probe_arm_floor_not_passed")
+    try:
+        arm_rows = int(cumulative.get("candidate_probe_arm_decision_count") or 0)
+        arm_symbols = int(
+            cumulative.get("candidate_probe_arm_unique_symbol_count") or 0
+        )
+    except (TypeError, ValueError):
+        arm_rows = 0
+        arm_symbols = 0
+    if arm_rows < 10 or arm_symbols < 3:
+        errors.append("cumulative_probe_arm_counts_below_floor")
+    return list(dict.fromkeys(errors))
+
+
 def build_live_candidate(
     *,
     source_date: str,
@@ -495,7 +682,18 @@ def build_live_candidate(
     detailed_sha256 = _safe_file_sha256(detailed_path)
     if not detailed_sha256:
         errors.append("detailed_report_file_unreadable")
-    ready = not errors
+    performance_ready = not errors
+    exploration_errors = _exploration_source_errors(
+        source_errors=errors,
+        detailed_report=detailed_report,
+    )
+    exploration_ready = bool(not performance_ready and not exploration_errors)
+    ready = performance_ready or exploration_ready
+    canary_mode = (
+        PERFORMANCE_CANARY_MODE
+        if performance_ready
+        else EXPLORATION_CANARY_MODE if exploration_ready else None
+    )
     cumulative = detailed_report.get("cumulative_learning")
     cumulative = cumulative if isinstance(cumulative, dict) else {}
     opportunity = detailed_report.get("opportunity_capture_tradeoff")
@@ -509,8 +707,14 @@ def build_live_candidate(
         "source_date": source_date,
         "effective_date": _next_krx_trading_date(source_date),
         "generated_at": datetime.now(KST).isoformat(),
-        "status": "live_auto_apply_ready" if ready else "blocked",
-        "blocking_reasons": errors,
+        "status": (
+            "live_auto_apply_ready"
+            if performance_ready
+            else "bounded_exploration_apply_ready" if exploration_ready else "blocked"
+        ),
+        "canary_mode": canary_mode,
+        "blocking_reasons": exploration_errors if not ready else [],
+        "performance_promotion_blocking_reasons": errors,
         "selected_prompt_version": (
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
         ),
@@ -536,6 +740,18 @@ def build_live_candidate(
             "candidate_exposure_unique_symbol_count": cumulative.get(
                 "candidate_exposure_unique_symbol_count"
             ),
+            "daily_candidate_probe_arm_decision_count": detailed_report.get(
+                "candidate_probe_arm_decision_count"
+            ),
+            "daily_candidate_probe_arm_unique_symbol_count": detailed_report.get(
+                "candidate_probe_arm_unique_symbol_count"
+            ),
+            "candidate_probe_arm_decision_count": cumulative.get(
+                "candidate_probe_arm_decision_count"
+            ),
+            "candidate_probe_arm_unique_symbol_count": cumulative.get(
+                "candidate_probe_arm_unique_symbol_count"
+            ),
             "candidate_primary_decision_ev_pct": cumulative.get(
                 "candidate_primary_decision_ev_pct"
             ),
@@ -549,6 +765,9 @@ def build_live_candidate(
                 "net_missed_upside_value_pct"
             ),
             "bounded_probe_risk_budget": cumulative.get("candidate_probe_risk_budget"),
+            "probe_arm_counterfactual_risk": cumulative.get(
+                "candidate_probe_arm_risk_budget"
+            ),
         },
         "source_provenance": {
             "batch_report_path": str(batch_report_path(source_date)),
@@ -564,7 +783,12 @@ def build_live_candidate(
             "ai_full_entry_forbidden": True,
             "fresh_submit_revalidation_required": True,
             "post_probe_direction_recheck_required": True,
-            "residual_multi_leg_existing_owner_required": True,
+            "residual_multi_leg_existing_owner_required": performance_ready,
+            "residual_multi_leg_forbidden": exploration_ready,
+            "scale_in_forbidden": exploration_ready,
+            "maximum_daily_exploration_probes": (
+                EXPLORATION_MAX_DAILY_PROBES if exploration_ready else None
+            ),
             "account_order_quantity_cooldown_guards_required": True,
             "hard_protect_emergency_exit_guards_required": True,
             "same_stage_prompt_owner_count": 1,
@@ -575,9 +799,21 @@ def build_live_candidate(
         "window_policy": (
             "clean_baseline_cumulative_same_contract_krx_regular_plus_current_full_day"
         ),
-        "sample_floor": "candidate_exposure_10_rows_3_symbols",
-        "primary_decision_metric": "candidate_probe_cost_adjusted_ev_pct",
-        "source_quality_gate": "promotion_integrity_and_cumulative_quality_pass",
+        "sample_floor": (
+            "candidate_exposure_10_rows_3_symbols"
+            if performance_ready
+            else "candidate_probe_arm_10_rows_3_symbols"
+        ),
+        "primary_decision_metric": (
+            "candidate_probe_cost_adjusted_ev_pct"
+            if performance_ready
+            else "guard_filtered_one_share_probe_outcome"
+        ),
+        "source_quality_gate": (
+            "promotion_integrity_and_cumulative_quality_pass"
+            if performance_ready
+            else "report_integrity_and_cumulative_probe_arm_floor_pass"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": ready,
         "actual_order_submitted": False,
@@ -611,7 +847,11 @@ def publish_live_candidate(
     return {
         "path": str(path),
         "status": candidate["status"],
+        "canary_mode": candidate.get("canary_mode"),
         "blocking_reasons": candidate["blocking_reasons"],
+        "performance_promotion_blocking_reasons": candidate.get(
+            "performance_promotion_blocking_reasons"
+        ),
         "effective_date": candidate["effective_date"],
         "artifact_sha256": candidate["artifact_sha256"],
         "allowed_runtime_apply": candidate["allowed_runtime_apply"],
@@ -636,7 +876,17 @@ def _validate_candidate_artifact(
         errors.append("candidate_next_trading_date_mismatch")
     if candidate.get("schema") != LIVE_CANDIDATE_SCHEMA:
         errors.append("candidate_schema_invalid")
-    if candidate.get("status") != "live_auto_apply_ready":
+    canary_mode = str(candidate.get("canary_mode") or "")
+    expected_status = (
+        "live_auto_apply_ready"
+        if canary_mode == PERFORMANCE_CANARY_MODE
+        else (
+            "bounded_exploration_apply_ready"
+            if canary_mode == EXPLORATION_CANARY_MODE
+            else None
+        )
+    )
+    if not expected_status or candidate.get("status") != expected_status:
         errors.append("candidate_not_live_ready")
     if candidate.get("effective_date") != target_date:
         errors.append("candidate_effective_date_mismatch")
@@ -685,13 +935,17 @@ def _validate_candidate_artifact(
     ):
         errors.append("candidate_detailed_report_hash_mismatch")
     detailed = _read_json(detailed_path) if detailed_sha256 else {}
-    errors.extend(
-        _candidate_source_errors(
-            source_date=source_date,
-            batch_report=batch,
+    source_errors = _candidate_source_errors(
+        source_date=source_date,
+        batch_report=batch,
+        detailed_report=detailed,
+    )
+    if canary_mode == EXPLORATION_CANARY_MODE:
+        source_errors = _exploration_source_errors(
+            source_errors=source_errors,
             detailed_report=detailed,
         )
-    )
+    errors.extend(source_errors)
     if candidate_path != live_candidate_path(source_date):
         errors.append("candidate_path_invalid")
     errors.extend(
@@ -712,9 +966,20 @@ def _runtime_candidate_contract_errors(
     )
     if candidate.get("artifact_sha256") != expected_artifact_sha:
         errors.append("runtime_candidate_artifact_sha256_invalid")
+    canary_mode = str(candidate.get("canary_mode") or "")
+    expected_status = (
+        "live_auto_apply_ready"
+        if canary_mode == PERFORMANCE_CANARY_MODE
+        else (
+            "bounded_exploration_apply_ready"
+            if canary_mode == EXPLORATION_CANARY_MODE
+            else None
+        )
+    )
     if (
         candidate.get("schema") != LIVE_CANDIDATE_SCHEMA
-        or candidate.get("status") != "live_auto_apply_ready"
+        or not expected_status
+        or candidate.get("status") != expected_status
         or candidate.get("effective_date") != target_date
         or candidate.get("selected_prompt_version")
         != DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
@@ -738,7 +1003,6 @@ def _runtime_candidate_contract_errors(
         "ai_full_entry_forbidden",
         "fresh_submit_revalidation_required",
         "post_probe_direction_recheck_required",
-        "residual_multi_leg_existing_owner_required",
         "account_order_quantity_cooldown_guards_required",
         "hard_protect_emergency_exit_guards_required",
         "nxt_promotion_separate",
@@ -747,6 +1011,26 @@ def _runtime_candidate_contract_errors(
             errors.append(f"runtime_candidate_risk_contract_invalid:{key}")
     if risk_contract.get("same_stage_prompt_owner_count") != 1:
         errors.append("runtime_candidate_same_stage_owner_invalid")
+    if canary_mode == PERFORMANCE_CANARY_MODE:
+        if risk_contract.get("residual_multi_leg_existing_owner_required") is not True:
+            errors.append(
+                "runtime_candidate_risk_contract_invalid:"
+                "residual_multi_leg_existing_owner_required"
+            )
+        if (
+            risk_contract.get("residual_multi_leg_forbidden") is not False
+            or risk_contract.get("scale_in_forbidden") is not False
+        ):
+            errors.append("runtime_candidate_performance_expansion_contract_invalid")
+    elif canary_mode == EXPLORATION_CANARY_MODE:
+        if (
+            risk_contract.get("residual_multi_leg_existing_owner_required") is not False
+            or risk_contract.get("residual_multi_leg_forbidden") is not True
+            or risk_contract.get("scale_in_forbidden") is not True
+            or risk_contract.get("maximum_daily_exploration_probes")
+            != EXPLORATION_MAX_DAILY_PROBES
+        ):
+            errors.append("runtime_candidate_exploration_risk_contract_invalid")
     return errors
 
 
@@ -788,11 +1072,17 @@ def build_preopen_activation(
     if selected is not None and not candidate_file_sha256:
         errors.append("candidate_file_unreadable")
     active = not errors
+    canary_mode = candidate.get("canary_mode") if active else None
+    candidate_risk_contract = candidate.get("risk_contract")
+    candidate_risk_contract = (
+        candidate_risk_contract if isinstance(candidate_risk_contract, dict) else {}
+    )
     activation = {
         "schema": PREOPEN_ACTIVATION_SCHEMA,
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(),
         "status": "active_bounded_canary" if active else "inactive_fallback_v2_13",
+        "canary_mode": canary_mode,
         "blocking_reasons": list(dict.fromkeys(errors)),
         "selected_prompt_version": (
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
@@ -818,6 +1108,13 @@ def build_preopen_activation(
             "preopen_only": True,
             "one_share_probe_first_required": True,
             "ai_full_entry_forbidden": True,
+            "residual_multi_leg_forbidden": candidate_risk_contract.get(
+                "residual_multi_leg_forbidden"
+            ),
+            "scale_in_forbidden": candidate_risk_contract.get("scale_in_forbidden"),
+            "maximum_daily_exploration_probes": candidate_risk_contract.get(
+                "maximum_daily_exploration_probes"
+            ),
             "nxt_control_unchanged": True,
             "configured_v2_13_owner_required": True,
             "automatic_fallback_on_any_contract_gap": True,
@@ -882,6 +1179,7 @@ def resolve_live_prompt_policy(
         "session_bucket": _normalize_session(session_bucket),
         "activation_path": str(activation_path(target_date)),
         "runtime_effect": False,
+        "canary_mode": None,
     }
     if fallback != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
         result["status"] = "fallback_same_stage_owner_conflict"
@@ -913,6 +1211,22 @@ def resolve_live_prompt_policy(
         activation_contract if isinstance(activation_contract, dict) else {}
     )
     candidate_file_sha256 = str(activation.get("candidate_file_sha256") or "")
+    canary_mode = str(activation.get("canary_mode") or "")
+    activation_mode_contract_valid = bool(
+        (
+            canary_mode == PERFORMANCE_CANARY_MODE
+            and activation_contract.get("residual_multi_leg_forbidden") is False
+            and activation_contract.get("scale_in_forbidden") is False
+            and activation_contract.get("maximum_daily_exploration_probes") is None
+        )
+        or (
+            canary_mode == EXPLORATION_CANARY_MODE
+            and activation_contract.get("residual_multi_leg_forbidden") is True
+            and activation_contract.get("scale_in_forbidden") is True
+            and activation_contract.get("maximum_daily_exploration_probes")
+            == EXPLORATION_MAX_DAILY_PROBES
+        )
+    )
     if (
         activation.get("schema") != PREOPEN_ACTIVATION_SCHEMA
         or activation.get("target_date") != target_date
@@ -932,6 +1246,7 @@ def resolve_live_prompt_policy(
         or activation_contract.get("nxt_control_unchanged") is not True
         or activation_contract.get("configured_v2_13_owner_required") is not True
         or activation_contract.get("automatic_fallback_on_any_contract_gap") is not True
+        or not activation_mode_contract_valid
         or not candidate_path.is_file()
         or not candidate_file_sha256
         or _safe_file_sha256(candidate_path) != candidate_file_sha256
@@ -949,6 +1264,8 @@ def resolve_live_prompt_policy(
         "candidate_contract_sha256"
     ):
         candidate_errors.append("runtime_candidate_prompt_contract_sha_mismatch")
+    if candidate.get("canary_mode") != canary_mode:
+        candidate_errors.append("runtime_candidate_canary_mode_mismatch")
     if candidate_errors:
         result["status"] = "fallback_candidate_contract_invalid"
         result["runtime_contract_errors"] = list(dict.fromkeys(candidate_errors))
@@ -963,6 +1280,12 @@ def resolve_live_prompt_policy(
             "source_date": activation.get("source_date"),
             "candidate_contract_sha256": activation.get("candidate_contract_sha256"),
             "activation_artifact_sha256": artifact_sha,
+            "canary_mode": canary_mode,
+            "maximum_daily_exploration_probes": (
+                EXPLORATION_MAX_DAILY_PROBES
+                if canary_mode == EXPLORATION_CANARY_MODE
+                else None
+            ),
             "runtime_effect": True,
         }
     )

@@ -17,6 +17,9 @@ ENTRY_RISK_ADJUDICATION_SCHEMA = "entry_setup_risk_adjudication_v1"
 ENTRY_DECISION_COMPOSER_SCHEMA = "entry_decision_composer_v1"
 ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v7"
 ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v7"
+ENTRY_RISK_ADJUDICATION_REPAIR_VERSION = (
+    "entry_setup_risk_fail_closed_invalidation_citation_v1"
+)
 
 TAIL_RISK_CALIBRATION_VERSION = "entry_tail_risk_calibration_v2"
 TAIL_RISK_SPREAD_FLOOR_BP = 100.0
@@ -636,6 +639,42 @@ def validate_entry_risk_adjudication(
     if setup.get("setup_state") == "WAIT_CONFIRMATION" and verdict == "PASS":
         errors.append("entry_risk_wait_confirmation_pass")
     return list(dict.fromkeys(errors))
+
+
+def repair_invalid_entry_risk_adjudication(
+    response: Any,
+    *,
+    setup_evidence: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    """Attach a ledger-backed invalidation citation to a fail-closed VETO.
+
+    This bounded offline repair runs only when the deterministic setup is
+    already INVALID and the provider already returned VETO. It cannot promote
+    an exposure, change risk codes, or invent evidence; it copies one exact
+    invalidation ID from the validated setup ledger and leaves any other
+    contract error for the caller to reject.
+    """
+
+    result = json.loads(json.dumps(_as_dict(response)))
+    setup = _as_dict(setup_evidence)
+    if validate_entry_setup_evidence(setup):
+        return result, []
+    if (
+        setup.get("setup_state") != "INVALID"
+        or str(result.get("risk_verdict") or "").strip().upper() != "VETO"
+    ):
+        return result, []
+    cited = result.get("contradicting_fact_ids")
+    invalidations = [str(value) for value in setup.get("invalidation_facts") or []]
+    if not isinstance(cited, list) or not invalidations:
+        return result, []
+    cited_ids = [str(value) for value in cited]
+    if set(cited_ids).intersection(invalidations):
+        return result, []
+    result["contradicting_fact_ids"] = list(
+        dict.fromkeys([invalidations[0], *cited_ids])
+    )[:8]
+    return result, ["invalid_setup_invalidation_fact_copied_from_ledger"]
 
 
 def compose_entry_decision(

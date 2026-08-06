@@ -39056,6 +39056,172 @@ def test_post_probe_nxt_requires_speed_and_distinguishes_wait_from_drop_authorit
     assert ai_drop["post_probe_hard_veto"] is True
 
 
+def test_entry_setup_exploration_probe_never_submits_residual(monkeypatch):
+    aborts = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_abort_entry_split_probe_residual",
+        lambda stock, code, reason, **kwargs: aborts.append(
+            (code, reason, kwargs.get("preserve_position"))
+        ),
+    )
+    stock = {
+        "entry_split_probe_phase": "probe_filled",
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_split_probe_requested_qty": 10,
+        "entry_filled_qty": 1,
+        "entry_split_probe_fill_price": 10_000,
+    }
+
+    submitted = state_handlers._submit_entry_split_probe_residual_locked(
+        stock,
+        "123456",
+        {},
+        now_ts=1_000.0,
+        now_dt=datetime(2026, 8, 7, 9, 10),
+    )
+
+    assert submitted is False
+    assert aborts == [("123456", "entry_setup_bounded_exploration_probe_only", True)]
+
+
+def test_entry_setup_exploration_micro_relief_is_bounded_and_source_qualified():
+    probe = {
+        "buy_pressure": 61.0,
+        "tick_accel": 1.10,
+        "micro_vwap_bp": -2.0,
+        "micro_vwap_available": True,
+        "minute_candle_window_fresh": True,
+        "minute_candle_context_quality": "fresh_completed",
+        "large_sell_print": False,
+    }
+
+    strong = state_handlers._score65_74_recovery_probe_micro_guard(probe)
+    relieved = state_handlers._entry_setup_exploration_micro_relief(
+        probe,
+        source_quality_ok=True,
+    )
+    stale = state_handlers._entry_setup_exploration_micro_relief(
+        probe,
+        source_quality_ok=False,
+    )
+    large_sell = state_handlers._entry_setup_exploration_micro_relief(
+        {**probe, "large_sell_print": True},
+        source_quality_ok=True,
+    )
+
+    assert strong["allowed"] is False
+    assert relieved["entry_setup_exploration_micro_relief_allowed"] is True
+    assert relieved["entry_setup_exploration_micro_relief_support_count"] == 2
+    assert stale["entry_setup_exploration_micro_relief_allowed"] is False
+    assert large_sell["entry_setup_exploration_micro_relief_allowed"] is False
+
+
+def test_superseded_unsubmitted_exploration_arm_is_cleared():
+    stock = {
+        "entry_opportunity_recheck_armed": True,
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_split_probe_residual_expand_forbidden": True,
+        "entry_split_probe_scale_in_forbidden": True,
+        "probe_expand_forbidden": True,
+        "entry_setup_live_policy_mode": "one_share_exploration",
+        "entry_setup_live_policy_max_daily_exploration_probes": 3,
+    }
+
+    cleared = state_handlers._clear_superseded_entry_setup_exploration_arm(
+        stock,
+        current_policy_mode="performance_bounded",
+    )
+
+    assert cleared is True
+    assert stock["entry_opportunity_recheck_armed"] is False
+    assert "entry_opportunity_recheck_exploration_probe_only" not in stock
+    assert "entry_split_probe_scale_in_forbidden" not in stock
+
+
+def test_submitted_exploration_probe_restrictions_cannot_be_superseded():
+    stock = {
+        "entry_split_probe_phase": "probe_submitted",
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_split_probe_residual_expand_forbidden": True,
+        "entry_split_probe_scale_in_forbidden": True,
+    }
+
+    cleared = state_handlers._clear_superseded_entry_setup_exploration_arm(
+        stock,
+        current_policy_mode="performance_bounded",
+    )
+
+    assert cleared is False
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+
+
+def test_non_exploration_scale_in_block_is_not_cleared_as_stale_arm():
+    stock = {
+        "entry_split_probe_scale_in_forbidden": True,
+        "probe_expand_forbidden": True,
+    }
+
+    cleared = state_handlers._clear_superseded_entry_setup_exploration_arm(
+        stock,
+        current_policy_mode="performance_bounded",
+    )
+
+    assert cleared is False
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    assert stock["probe_expand_forbidden"] is True
+
+
+def test_exploration_submit_cap_guard_rechecks_qty_and_durable_count(monkeypatch):
+    stock = {
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_setup_live_policy_max_daily_exploration_probes": 3,
+    }
+    monkeypatch.setattr(
+        state_handlers,
+        "read_exploration_probe_submit_count",
+        lambda trade_date: 2,
+    )
+
+    available = state_handlers._entry_setup_exploration_submit_cap_guard(
+        stock,
+        qty=1,
+        now_ts=datetime(2026, 8, 7, 9, 10, tzinfo=state_handlers._KST).timestamp(),
+    )
+    wrong_qty = state_handlers._entry_setup_exploration_submit_cap_guard(
+        stock,
+        qty=2,
+        now_ts=datetime(2026, 8, 7, 9, 10, tzinfo=state_handlers._KST).timestamp(),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "read_exploration_probe_submit_count",
+        lambda trade_date: 3,
+    )
+    exhausted = state_handlers._entry_setup_exploration_submit_cap_guard(
+        stock,
+        qty=1,
+        now_ts=datetime(2026, 8, 7, 9, 10, tzinfo=state_handlers._KST).timestamp(),
+    )
+    duplicate_bundle_leg = state_handlers._entry_setup_exploration_submit_cap_guard(
+        stock,
+        qty=1,
+        now_ts=datetime(2026, 8, 7, 9, 10, tzinfo=state_handlers._KST).timestamp(),
+        order_already_submitted=True,
+    )
+
+    assert available["allowed"] is True
+    assert available["entry_setup_exploration_daily_probe_count"] == 2
+    assert wrong_qty["allowed"] is False
+    assert wrong_qty["reason"] == "exploration_probe_qty_not_one"
+    assert exhausted["allowed"] is False
+    assert exhausted["reason"] == "exploration_probe_daily_cap_exhausted"
+    assert duplicate_bundle_leg["allowed"] is False
+    assert (
+        duplicate_bundle_leg["reason"] == "exploration_probe_bundle_already_submitted"
+    )
+
+
 def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
     state_handlers.TRADING_RULES = _dynamic_soft_stop_grace_config()
     pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)

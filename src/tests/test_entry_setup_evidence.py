@@ -7,6 +7,7 @@ from src.engine.scalping.entry_setup_evidence import (
     build_entry_setup_evidence,
     compose_entry_decision,
     entry_risk_adjudication_openai_schema,
+    repair_invalid_entry_risk_adjudication,
     validate_entry_risk_adjudication,
 )
 
@@ -312,12 +313,16 @@ def test_report_attributes_tail_fragility_as_bounded_probe_stress(
     )
 
     row = report["paired_comparisons"][0]
-    assert row["candidate_exposure_selected"] is True
+    assert row["candidate_exposure_selected"] is False
+    assert row["candidate_probe_armed"] is True
     assert row["entry_recheck_intent"] is False
     assert row["entry_ai_bounded_risk_codes"] == ["LIQUIDITY_FRAGILE"]
-    assert report["candidate_probe_loss_budget_breach_count"] == 1
-    assert report["candidate_probe_severe_tail_exposure_count"] == 1
+    assert report["candidate_probe_loss_budget_breach_count"] == 0
+    assert report["candidate_probe_severe_tail_exposure_count"] == 0
     assert report["candidate_probe_risk_budget"]["pass"] is False
+    assert report["candidate_probe_arm_risk_budget"]["loss_budget_breach_count"] == 1
+    assert report["candidate_probe_arm_risk_budget"]["severe_tail_count"] == 1
+    assert report["candidate_probe_arm_risk_budget"]["pass"] is False
 
 
 def test_risk_adjudication_rejects_invented_facts_and_semantic_drift():
@@ -386,6 +391,40 @@ def test_risk_adjudication_rejects_invented_facts_and_semantic_drift():
             ),
             setup_evidence=waiting,
         )
+    )
+
+
+def test_invalid_entry_risk_repair_copies_only_ledger_invalidation_and_stays_veto():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={
+            **_exact_analysis(blocking_overextension=True),
+            "contradictions": ["multi_horizon_direction_conflict"],
+        },
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+    response = _risk(
+        "VETO",
+        ["STRUCTURE_INVALIDATED", "CONFIRMATION_MISSING"],
+        support=["structural_edge_floor"],
+        contradict=["multi_horizon_direction_conflict"],
+    )
+
+    repaired, repairs = repair_invalid_entry_risk_adjudication(
+        response,
+        setup_evidence=evidence,
+    )
+
+    assert repairs == ["invalid_setup_invalidation_fact_copied_from_ledger"]
+    assert repaired["risk_verdict"] == "VETO"
+    assert repaired["risk_codes"] == response["risk_codes"]
+    assert repaired["contradicting_fact_ids"][0] in evidence["invalidation_facts"]
+    assert (
+        validate_entry_risk_adjudication(
+            repaired,
+            setup_evidence=evidence,
+        )
+        == []
     )
 
 
@@ -605,6 +644,9 @@ def test_v2_14_detailed_replay_composes_risk_only_response(monkeypatch):
     assert request["candidate"]["system_prompt"].isascii()
     assert request["candidate"]["semantic_validator_version"] == (
         quality.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+    )
+    assert request["candidate"]["semantic_repair_version"] == (
+        quality.ENTRY_RISK_ADJUDICATION_REPAIR_VERSION
     )
     assert request["candidate"]["tail_risk_observation_contract_sha256"] == (
         quality._sha256(quality.TAIL_RISK_OBSERVATION_CONTRACT)
@@ -843,7 +885,7 @@ def test_entry_recheck_transition_attributes_later_ready_probe_same_route():
     assert rows[0]["entry_recheck_confirmation_delay_sec"] == 60.0
 
 
-def test_wait_probe_is_attributed_as_exposure_not_false_wait():
+def test_wait_probe_is_attributed_as_arm_not_unsubmitted_exposure():
     report = quality.build_paired_replay_report(
         target_date="2026-08-05",
         requests=[
@@ -895,7 +937,10 @@ def test_wait_probe_is_attributed_as_exposure_not_false_wait():
     )
 
     row = report["paired_comparisons"][0]
-    assert row["candidate_exposure_selected"] is True
-    assert "false_buy" in row["candidate_error_taxonomy"]
-    assert "false_buy_tight_stop_adverse_first" in row["candidate_error_taxonomy"]
-    assert "false_wait" not in row["candidate_error_taxonomy"]
+    assert row["candidate_exposure_selected"] is False
+    assert row["candidate_probe_armed"] is True
+    assert "false_buy" not in row["candidate_error_taxonomy"]
+    assert "false_buy_tight_stop_adverse_first" not in row["candidate_error_taxonomy"]
+    assert "false_wait" in row["candidate_error_taxonomy"]
+    assert report["candidate_probe_arm_risk_budget"]["evaluable_count"] == 1
+    assert report["candidate_probe_arm_risk_budget"]["pass"] is True

@@ -51,12 +51,14 @@ from src.engine.ai_prompt_contracts import (
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_RISK_ADJUDICATION_SCHEMA,
+    ENTRY_RISK_ADJUDICATION_REPAIR_VERSION,
     ENTRY_SETUP_EVIDENCE_SCHEMA,
     ENTRY_SETUP_EVIDENCE_VERSION,
     TAIL_RISK_OBSERVATION_CONTRACT,
     build_entry_setup_evidence,
     compose_entry_decision,
     entry_risk_adjudication_openai_schema,
+    repair_invalid_entry_risk_adjudication,
     validate_entry_risk_adjudication,
 )
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
@@ -126,7 +128,7 @@ PAIRED_CANDIDATE_MAX_SEVERE_TAIL_RATE_PCT = 20.0
 PAIRED_CANDIDATE_CATASTROPHIC_LOSS_PCT = -5.0
 ENTRY_RECHECK_MAX_WAIT_SEC = 300
 CANDIDATE_EXECUTION_SELECTION_POLICY = (
-    "deterministic_outcome_blind_symbol_round_robin_v1"
+    "deterministic_outcome_blind_setup_state_symbol_round_robin_v3"
 )
 ANTICIPATORY_LEARNING_MIN_ROWS = 1
 ANTICIPATORY_LEARNING_MIN_SYMBOLS = 1
@@ -3263,15 +3265,34 @@ def _decision_exposure_selected(
     action: Any,
     response: dict[str, Any],
 ) -> bool:
-    """Map action or captured live probe intent to offline exposure semantics."""
+    """Map only an immediate action to offline exposure semantics.
 
+    ``entry_probe_intent`` is an arm for the live recheck owner, not an order.
+    Treating an armed WAIT as exposure incorrectly charges its entire future path
+    to Entry AI even when freshness, strong-micro, latency, cap, or submit guards
+    would stop it before the one-share probe.
+    """
+
+    _ = (stage, response)
+    return str(action or "").strip().upper() in EXPOSURE_ACTIONS
+
+
+def _decision_probe_armed(
+    *,
+    stage: str,
+    action: Any,
+    response: dict[str, Any],
+) -> bool:
+    """Identify an Entry probe candidate before downstream submit guards."""
+
+    if str(stage or "").strip().lower() != "entry":
+        return False
     if str(action or "").strip().upper() in EXPOSURE_ACTIONS:
         return True
     return bool(
-        str(stage or "").strip().lower() == "entry"
-        and response.get("entry_probe_intent") is True
+        response.get("entry_probe_intent") is True
         and response.get("entry_probe_intent_status")
-        in {None, "", "eligible_wait_probe"}
+        in {None, "", "eligible_wait_probe", "eligible_offline_probe"}
     )
 
 
@@ -6731,6 +6752,17 @@ def execute_openai_prompt_v2_candidate(
                 "CONFIRMATION_MISSING are bounded CAUTION risks, not structural "
                 "blocking risks"
             )
+            if (
+                "entry_risk_invalid_setup_invalidation_fact_required"
+                in correction_errors
+            ):
+                correction_rules.append(
+                    "The ledger setup_state is INVALID. Set risk_verdict=VETO and "
+                    "copy at least one exact string from "
+                    "entry_setup_evidence_v1.invalidation_facts into "
+                    "contradicting_fact_ids. A contradicting_facts-only citation "
+                    "does not satisfy this requirement"
+                )
             if "entry_risk_supporting_fact_ids_invented" in correction_errors:
                 correction_rules.append(
                     "supporting_fact_ids may contain only exact IDs listed under "
@@ -7628,6 +7660,13 @@ def prepare_detailed_paired_replay_requests(
                 candidate["semantic_repair_version"] = (
                     ANTICIPATORY_SEMANTIC_REPAIR_VERSION
                 )
+            elif (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ):
+                candidate["semantic_repair_version"] = (
+                    ENTRY_RISK_ADJUDICATION_REPAIR_VERSION
+                )
             elif candidate_prompt_version in {
                 DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
                 DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
@@ -7784,6 +7823,43 @@ def run_paired_replay(
         semantic_validator_version = str(
             (request.get("candidate") or {}).get("semantic_validator_version") or ""
         )
+        if (
+            candidate_errors
+            and not provider_failed
+            and semantic_validator_version
+            == ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+        ):
+            repaired_response, semantic_repairs = (
+                repair_invalid_entry_risk_adjudication(
+                    candidate_response,
+                    setup_evidence=request.get("entry_setup_evidence"),
+                )
+            )
+            if semantic_repairs:
+                repaired_errors = validate_replay_candidate_response(
+                    request,
+                    repaired_response,
+                )
+                candidate_attempts.append(
+                    {
+                        "attempt_number": len(candidate_attempts) + 1,
+                        "status": (
+                            "pass" if not repaired_errors else "schema_rejected"
+                        ),
+                        "schema_errors": list(repaired_errors),
+                        "provider_provenance": {
+                            "provider": "deterministic_offline_adapter",
+                            "provider_none": False,
+                            "runtime_effect": False,
+                            "semantic_repair_version": (
+                                ENTRY_RISK_ADJUDICATION_REPAIR_VERSION
+                            ),
+                            "repairs": list(semantic_repairs),
+                        },
+                    }
+                )
+                candidate_response = repaired_response
+                candidate_errors = repaired_errors
         if (
             candidate_errors
             and not provider_failed
@@ -8230,12 +8306,20 @@ def _anticipatory_cumulative_learning_summary(
     exposure_rows = [
         row for row in cumulative_rows if row.get("candidate_exposure_selected") is True
     ]
+    probe_arm_rows = [
+        row for row in cumulative_rows if row.get("candidate_probe_armed") is True
+    ]
     recheck_rows = [
         row for row in cumulative_rows if row.get("entry_recheck_intent") is True
     ]
     exposure_symbols = {
         str(row.get("stock_code") or "")
         for row in exposure_rows
+        if row.get("stock_code")
+    }
+    probe_arm_symbols = {
+        str(row.get("stock_code") or "")
+        for row in probe_arm_rows
         if row.get("stock_code")
     }
     control_values = [
@@ -8291,6 +8375,20 @@ def _anticipatory_cumulative_learning_summary(
         _number(row.get("candidate_probe_worst_loss_pct")) for row in exposure_rows
     ]
     cumulative_probe_risk_budget = _bounded_probe_risk_budget(exposure_rows)
+    cumulative_probe_arm_risk_budget = _bounded_probe_risk_budget(
+        [
+            {
+                **row,
+                "candidate_probe_worst_loss_pct": row.get(
+                    "candidate_probe_arm_worst_loss_pct"
+                ),
+                "candidate_probe_severe_tail_exposure": row.get(
+                    "candidate_probe_arm_severe_tail_exposure"
+                ),
+            }
+            for row in probe_arm_rows
+        ]
+    )
     cumulative_exposure_cost_contract_complete = bool(exposure_rows) and all(
         row.get("candidate_execution_cost_contract_applied") is True
         and _number(row.get("candidate_execution_cost_pct")) is not None
@@ -8381,6 +8479,18 @@ def _anticipatory_cumulative_learning_summary(
         ),
         "candidate_exposure_decision_count": len(exposure_rows),
         "candidate_exposure_unique_symbol_count": len(exposure_symbols),
+        "candidate_probe_arm_decision_count": len(probe_arm_rows),
+        "candidate_probe_arm_unique_symbol_count": len(probe_arm_symbols),
+        "exploration_evidence_floor": {
+            "decision_rows": PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS,
+            "unique_symbols": PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS,
+            "pass": bool(
+                len(probe_arm_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+                and len(probe_arm_symbols) >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+            ),
+            "authority": "bounded_one_share_exploration_candidate_only",
+            "performance_promotion_authority": False,
+        },
         "primary_decision_metric": "candidate_primary_decision_ev_pct",
         "control_source_quality_adjusted_ev_pct": (
             fmean(control_values) if control_values else None
@@ -8411,6 +8521,13 @@ def _anticipatory_cumulative_learning_summary(
             for row in exposure_rows
         ),
         "candidate_probe_risk_budget": cumulative_probe_risk_budget,
+        "candidate_probe_arm_risk_budget": {
+            **cumulative_probe_arm_risk_budget,
+            "metric_role": "counterfactual_exploration_risk_diagnostic",
+            "decision_authority": "diagnostic_only_not_performance_promotion_veto",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "candidate_recheck_intent_count": len(recheck_rows),
         "candidate_recheck_unique_symbol_count": len(
             {
@@ -8633,6 +8750,16 @@ def build_paired_replay_report(
             action=candidate_action,
             response=candidate_response,
         )
+        control_probe_armed = _decision_probe_armed(
+            stage=comparison_stage,
+            action=control_action,
+            response=control_response,
+        )
+        candidate_probe_armed = _decision_probe_armed(
+            stage=comparison_stage,
+            action=candidate_action,
+            response=candidate_response,
+        )
         control_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and control_exposure_selected
@@ -8751,6 +8878,8 @@ def build_paired_replay_report(
                 "candidate_decision_value_pct": candidate_value,
                 "control_exposure_selected": control_exposure_selected,
                 "candidate_exposure_selected": candidate_exposure_selected,
+                "control_probe_armed": control_probe_armed,
+                "candidate_probe_armed": candidate_probe_armed,
                 "control_entry_probe_intent": (
                     control_response.get("entry_probe_intent") is True
                 ),
@@ -8799,12 +8928,21 @@ def build_paired_replay_report(
                     if candidate_exposure_selected
                     else 0.0
                 ),
+                "candidate_probe_arm_worst_loss_pct": (
+                    probe_path_risk["probe_worst_loss_pct"]
+                    if candidate_probe_armed
+                    else 0.0
+                ),
                 "control_probe_severe_tail_exposure": bool(
                     control_exposure_selected
                     and probe_path_risk["probe_severe_tail_adverse"]
                 ),
                 "candidate_probe_severe_tail_exposure": bool(
                     candidate_exposure_selected
+                    and probe_path_risk["probe_severe_tail_adverse"]
+                ),
+                "candidate_probe_arm_severe_tail_exposure": bool(
+                    candidate_probe_armed
                     and probe_path_risk["probe_severe_tail_adverse"]
                 ),
                 "control_drawdown_recovery_captured": bool(
@@ -8934,6 +9072,9 @@ def build_paired_replay_report(
         bucket_exposure_rows = [
             row for row in rows if row["candidate_exposure_selected"]
         ]
+        bucket_probe_arm_rows = [
+            row for row in rows if row.get("candidate_probe_armed") is True
+        ]
         bucket_probe_cost_contract_complete = bool(bucket_exposure_rows) and all(
             row["candidate_execution_cost_contract_applied"]
             and row["candidate_execution_cost_pct"] is not None
@@ -8963,6 +9104,11 @@ def build_paired_replay_report(
         bucket_exposure_symbols = {
             str(row.get("stock_code") or "")
             for row in bucket_exposure_rows
+            if row.get("stock_code")
+        }
+        bucket_probe_arm_symbols = {
+            str(row.get("stock_code") or "")
+            for row in bucket_probe_arm_rows
             if row.get("stock_code")
         }
         bucket_exposure_floor_pass = (
@@ -9073,6 +9219,10 @@ def build_paired_replay_report(
                 "candidate_exposure_decision_count": len(bucket_exposure_rows),
                 "candidate_exposure_unique_symbol_count": len(bucket_exposure_symbols),
                 "candidate_exposure_sample_floor_pass": (bucket_exposure_floor_pass),
+                "candidate_probe_arm_decision_count": len(bucket_probe_arm_rows),
+                "candidate_probe_arm_unique_symbol_count": len(
+                    bucket_probe_arm_symbols
+                ),
                 "candidate_dominant_action_ratio": (bucket_dominant_action_ratio),
                 "candidate_quality_checks": bucket_quality_checks,
                 "diagnostic_checks_not_quality_veto": bucket_diagnostic_checks,
@@ -9157,6 +9307,9 @@ def build_paired_replay_report(
     candidate_exposure_rows = [
         row for row in comparable_rows if row["candidate_exposure_selected"]
     ]
+    candidate_probe_arm_rows = [
+        row for row in comparable_rows if row.get("candidate_probe_armed") is True
+    ]
     candidate_probe_cost_contract_complete = bool(candidate_exposure_rows) and all(
         row["candidate_execution_cost_contract_applied"]
         and row["candidate_execution_cost_pct"] is not None
@@ -9171,6 +9324,20 @@ def build_paired_replay_report(
         else None
     )
     candidate_probe_risk_budget = _bounded_probe_risk_budget(candidate_exposure_rows)
+    candidate_probe_arm_risk_budget = _bounded_probe_risk_budget(
+        [
+            {
+                **row,
+                "candidate_probe_worst_loss_pct": row.get(
+                    "candidate_probe_arm_worst_loss_pct"
+                ),
+                "candidate_probe_severe_tail_exposure": row.get(
+                    "candidate_probe_arm_severe_tail_exposure"
+                ),
+            }
+            for row in candidate_probe_arm_rows
+        ]
+    )
     control_probe_severe_tail_count = sum(
         row["control_probe_severe_tail_exposure"] for row in comparable_rows
     )
@@ -9190,6 +9357,17 @@ def build_paired_replay_report(
             if row.get("stock_code")
         }
     )
+    candidate_probe_arm_symbol_count = len(
+        {
+            str(row.get("stock_code") or "")
+            for row in candidate_probe_arm_rows
+            if row.get("stock_code")
+        }
+    )
+    candidate_probe_arm_floor_pass = bool(
+        len(candidate_probe_arm_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+        and candidate_probe_arm_symbol_count >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+    )
     candidate_exposure_count_floor_pass = (
         len(candidate_exposure_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
         and candidate_exposure_symbol_count >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
@@ -9203,6 +9381,9 @@ def build_paired_replay_report(
         for row in comparable_rows
     }
     promotion_cohort_isolated = len(cohort_keys) == 1
+    selected_cohort_venue = (
+        next(iter(cohort_keys))[1] if promotion_cohort_isolated else "UNKNOWN"
+    )
     candidate_contract_hashes = {
         str((request.get("candidate") or {}).get("contract_sha256") or "")
         for request in requests
@@ -9520,15 +9701,21 @@ def build_paired_replay_report(
         "promotion_floor_pass"
         if candidate_exposure_sample_floor_pass
         else (
-            "ready_exposure_drought_review_required"
-            if len(ready_opportunity_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
-            and len(ready_opportunity_symbols) >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+            "bounded_exploration_arm_floor_pass"
+            if candidate_probe_arm_floor_pass
             else (
-                "sequential_recheck_sample_route_available"
-                if len(recheck_opportunity_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
-                and len(recheck_opportunity_symbols)
+                "ready_exposure_drought_review_required"
+                if len(ready_opportunity_rows) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+                and len(ready_opportunity_symbols)
                 >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
-                else "natural_sample_keep_collecting"
+                else (
+                    "sequential_recheck_sample_route_available"
+                    if len(recheck_opportunity_rows)
+                    >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+                    and len(recheck_opportunity_symbols)
+                    >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+                    else "natural_sample_keep_collecting"
+                )
             )
         )
     )
@@ -9855,6 +10042,26 @@ def build_paired_replay_report(
                 "fixed_promotion_floor_not_auto_lowered; one_sample_starts_learning"
             ),
         },
+        "candidate_probe_arm_decision_count": len(candidate_probe_arm_rows),
+        "candidate_probe_arm_unique_symbol_count": candidate_probe_arm_symbol_count,
+        "candidate_probe_arm_sample_floor": {
+            "decision_rows": PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS,
+            "unique_symbols": PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS,
+            "pass": candidate_probe_arm_floor_pass,
+            "authority": "bounded_one_share_exploration_candidate_only",
+            "performance_promotion_authority": False,
+            "interpretation": (
+                "A WAIT probe intent arms the downstream recheck owner but is not "
+                "counted as an order or immediate performance exposure."
+            ),
+        },
+        "candidate_probe_arm_risk_budget": {
+            **candidate_probe_arm_risk_budget,
+            "metric_role": "counterfactual_exploration_risk_diagnostic",
+            "decision_authority": "diagnostic_only_not_performance_promotion_veto",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "candidate_exposure_floor_feasibility": {
             "status": exposure_floor_feasibility_status,
             "ready_decision_count": len(ready_opportunity_rows),
@@ -9862,14 +10069,23 @@ def build_paired_replay_report(
             "recheck_decision_count": len(recheck_opportunity_rows),
             "recheck_unique_symbol_count": len(recheck_opportunity_symbols),
             "next_action": (
-                "review_ready_to_exposure_composer_drought"
+                (
+                    "allow_krx_one_share_exploration_with_residual_and_scale_in_forbidden"
+                    if selected_cohort_venue == "KRX"
+                    else "keep_nxt_control_and_collect_separate_cohort_evidence"
+                )
                 if exposure_floor_feasibility_status
-                == "ready_exposure_drought_review_required"
+                == "bounded_exploration_arm_floor_pass"
                 else (
-                    "attribute_next_exact_recheck_transition_before_relaxation"
+                    "review_ready_to_exposure_composer_drought"
                     if exposure_floor_feasibility_status
-                    == "sequential_recheck_sample_route_available"
-                    else "collect_natural_same_cohort_exact_samples"
+                    == "ready_exposure_drought_review_required"
+                    else (
+                        "attribute_next_exact_recheck_transition_before_relaxation"
+                        if exposure_floor_feasibility_status
+                        == "sequential_recheck_sample_route_available"
+                        else "collect_natural_same_cohort_exact_samples"
+                    )
                 )
             ),
         },
@@ -12565,6 +12781,19 @@ def _parse_control_prompt_versions(values: list[str]) -> dict[str, str]:
     return selected
 
 
+def _candidate_execution_setup_state(row: dict[str, Any]) -> str:
+    evidence = row.get("entry_setup_evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    state = str(evidence.get("setup_state") or "OTHER").strip().upper()
+    return state if state in {"READY", "WAIT_CONFIRMATION"} else "OTHER"
+
+
+def _checkpoint_setup_state_counts(
+    requests: list[dict[str, Any]],
+) -> dict[str, int]:
+    return dict(Counter(_candidate_execution_setup_state(row) for row in requests))
+
+
 def select_pending_candidate_execution_requests(
     pending_requests: list[dict[str, Any]],
     *,
@@ -12634,33 +12863,99 @@ def select_pending_candidate_execution_requests(
             }
         )
 
-    by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in unseen_rows:
-        symbol = _normalize_stock_code(row.get("stock_code")) or "UNKNOWN"
-        by_symbol[symbol].append(row)
-    for symbol_rows in by_symbol.values():
-        symbol_rows.sort(key=rank)
+    def select_diverse(
+        candidates: list[dict[str, Any]],
+        quota: int,
+        *,
+        already_selected_ids: set[str],
+        already_selected_symbols: set[str],
+    ) -> list[dict[str, Any]]:
+        by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in candidates:
+            pair_id = str(row.get("paired_replay_id") or "")
+            if pair_id in already_selected_ids:
+                continue
+            symbol = _normalize_stock_code(row.get("stock_code")) or "UNKNOWN"
+            by_symbol[symbol].append(row)
+        for symbol_rows in by_symbol.values():
+            symbol_rows.sort(key=rank)
+        symbol_order = sorted(
+            by_symbol,
+            key=lambda symbol: (
+                symbol in already_selected_symbols,
+                _sha256(
+                    {
+                        "policy": CANDIDATE_EXECUTION_SELECTION_POLICY,
+                        "symbol": symbol,
+                    }
+                ),
+            ),
+        )
+        picked: list[dict[str, Any]] = []
+        depth = 0
+        while len(picked) < quota:
+            added = False
+            for symbol in symbol_order:
+                symbol_rows = by_symbol[symbol]
+                if depth < len(symbol_rows):
+                    picked.append(symbol_rows[depth])
+                    already_selected_ids.add(
+                        str(symbol_rows[depth].get("paired_replay_id") or "")
+                    )
+                    already_selected_symbols.add(symbol)
+                    added = True
+                    if len(picked) >= quota:
+                        break
+            if not added:
+                break
+            depth += 1
+        return picked
 
-    symbol_order = sorted(
-        by_symbol,
-        key=lambda symbol: _sha256(
-            {"policy": CANDIDATE_EXECUTION_SELECTION_POLICY, "symbol": symbol}
+    # The checkpoint is still outcome-blind. It deliberately spends more of a
+    # bounded provider budget on decision-time READY evidence so an INVALID-heavy
+    # symbol census cannot make a feasible promotion/exploration sample appear
+    # impossible. WAIT_CONFIRMATION remains represented for transition learning.
+    stratum_weights = {"READY": 0.60, "WAIT_CONFIRMATION": 0.30, "OTHER": 0.10}
+    raw_stratum_quotas = {
+        key: remaining_new_quota * weight for key, weight in stratum_weights.items()
+    }
+    stratum_quotas = {key: int(value) for key, value in raw_stratum_quotas.items()}
+    quota_remainder_order = sorted(
+        stratum_weights,
+        key=lambda key: (
+            -(raw_stratum_quotas[key] - stratum_quotas[key]),
+            {"READY": 0, "WAIT_CONFIRMATION": 1, "OTHER": 2}[key],
         ),
     )
+    for key in quota_remainder_order[
+        : remaining_new_quota - sum(stratum_quotas.values())
+    ]:
+        stratum_quotas[key] += 1
     selected_new: list[dict[str, Any]] = []
-    depth = 0
-    while len(selected_new) < remaining_new_quota:
-        added = False
-        for symbol in symbol_order:
-            symbol_rows = by_symbol[symbol]
-            if depth < len(symbol_rows):
-                selected_new.append(symbol_rows[depth])
-                added = True
-                if len(selected_new) >= remaining_new_quota:
-                    break
-        if not added:
-            break
-        depth += 1
+    selected_ids: set[str] = set()
+    selected_symbols: set[str] = set()
+    for stratum in ("READY", "WAIT_CONFIRMATION", "OTHER"):
+        selected_new.extend(
+            select_diverse(
+                [
+                    row
+                    for row in unseen_rows
+                    if _candidate_execution_setup_state(row) == stratum
+                ],
+                stratum_quotas[stratum],
+                already_selected_ids=selected_ids,
+                already_selected_symbols=selected_symbols,
+            )
+        )
+    if len(selected_new) < remaining_new_quota:
+        selected_new.extend(
+            select_diverse(
+                unseen_rows,
+                remaining_new_quota - len(selected_new),
+                already_selected_ids=selected_ids,
+                already_selected_symbols=selected_symbols,
+            )
+        )
     selected = [*retry_rows, *selected_new]
     distinct_execution_count = len(attempted_ids) + len(selected_new)
     cap_pass = bool(limit <= 0 or distinct_execution_count <= limit)
@@ -12674,6 +12969,7 @@ def select_pending_candidate_execution_requests(
             "stage",
             "effective_venue",
             "session_bucket",
+            "entry_setup_evidence.setup_state",
         ],
         "forbidden_selection_fields": [
             "outcome_return_pct",
@@ -12695,12 +12991,35 @@ def select_pending_candidate_execution_requests(
                 if _normalize_stock_code(row.get("stock_code"))
             }
         ),
+        "selected_setup_state_counts": dict(
+            Counter(_candidate_execution_setup_state(row) for row in selected_new)
+        ),
+        "setup_state_target_weights": stratum_weights,
         "distinct_execution_count": distinct_execution_count,
         "distinct_execution_cap": limit if limit > 0 else None,
         "distinct_execution_cap_pass": cap_pass,
         "contract_pass": bool(
             cap_pass and len(selected_new) == min(remaining_new_quota, len(unseen_rows))
         ),
+    }
+
+
+def _valid_checkpoint_attempted_pair_ids(
+    existing_report: dict[str, Any],
+    *,
+    valid_pair_ids: set[str],
+    selection_contract_pass: bool,
+) -> set[str]:
+    """Prevent a stale selection policy from consuming the new call quota."""
+
+    if not selection_contract_pass:
+        return set()
+    return {
+        paired_replay_id
+        for row in existing_report.get("requests") or []
+        if isinstance(row, dict)
+        and (paired_replay_id := str(row.get("paired_replay_id") or ""))
+        and paired_replay_id in valid_pair_ids
     }
 
 
@@ -13269,10 +13588,23 @@ def main(argv: list[str] | None = None) -> int:
                 existing_selection = existing_report.get(
                     "candidate_execution_selection"
                 )
+                existing_selection_policy = (
+                    str(existing_selection.get("policy") or "")
+                    if isinstance(existing_selection, dict)
+                    else ""
+                )
                 existing_selection_contract_pass = bool(
                     isinstance(existing_selection, dict)
                     and existing_selection.get("outcome_blind") is True
                     and existing_selection.get("contract_pass") is True
+                    and (
+                        existing_selection_policy
+                        == CANDIDATE_EXECUTION_SELECTION_POLICY
+                        or (
+                            args.candidate_max_new_requests <= 0
+                            and existing_selection_policy == "complete_eligible_census"
+                        )
+                    )
                 )
                 request_by_pair = {
                     str(request.get("paired_replay_id") or ""): request
@@ -13337,13 +13669,11 @@ def main(argv: list[str] | None = None) -> int:
                 completed_pair_ids = {
                     str(row.get("paired_replay_id") or "") for row in existing_results
                 }
-                existing_attempted_pair_ids = {
-                    paired_replay_id
-                    for row in existing_report.get("requests") or []
-                    if isinstance(row, dict)
-                    and (paired_replay_id := str(row.get("paired_replay_id") or ""))
-                    and paired_replay_id in request_by_pair
-                }
+                existing_attempted_pair_ids = _valid_checkpoint_attempted_pair_ids(
+                    existing_report,
+                    valid_pair_ids=set(request_by_pair),
+                    selection_contract_pass=existing_selection_contract_pass,
+                )
                 pending_requests = [
                     request
                     for request in requests
@@ -13424,6 +13754,16 @@ def main(argv: list[str] | None = None) -> int:
                         "eligible_request_count": len(requests),
                         "reused_valid_result_count": len(existing_results),
                         "evaluated_request_count": len(evaluated_requests),
+                        "checkpoint_evaluated_setup_state_counts": (
+                            _checkpoint_setup_state_counts(evaluated_requests)
+                        ),
+                        "checkpoint_evaluated_unique_symbol_count": len(
+                            {
+                                _normalize_stock_code(request.get("stock_code"))
+                                for request in evaluated_requests
+                                if _normalize_stock_code(request.get("stock_code"))
+                            }
+                        ),
                         "evaluation_coverage_pct": (
                             len(evaluated_requests) / len(requests) * 100.0
                             if requests

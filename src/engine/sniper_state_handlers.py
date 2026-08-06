@@ -74,6 +74,11 @@ from src.engine.scalping.ai_market_snapshot import (
     runtime_preflight_required,
 )
 from src.engine.scalping.ai_decision_trace import record_ai_decision_trace
+from src.engine.scalping.entry_setup_live_policy import (
+    mark_exploration_probe_cap_fail_closed,
+    read_exploration_probe_submit_count,
+    record_exploration_probe_submission,
+)
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     build_entry_candle_context,
@@ -39485,6 +39490,10 @@ def _abort_entry_split_probe_residual(
         "post_probe_fresh_bbo_unavailable",
     }
     observed_at = float(time.time() if now_ts is None else now_ts)
+    bounded_exploration_probe_only = bool(
+        reason == "entry_setup_bounded_exploration_probe_only"
+        or stock.get("entry_opportunity_recheck_exploration_probe_only")
+    )
     action_guard_active = _rising_missed_ai_action_guard_active(now_ts=observed_at)
     source_quality_timeout = bool(
         reason == "residual_revalidation_timeout"
@@ -39584,16 +39593,21 @@ def _abort_entry_split_probe_residual(
             or directional_soft_abort
         )
     )
-    scale_in_recheck_allowed = bool(soft_abort or rising_missed_normal_winner_recheck)
+    scale_in_recheck_allowed = bool(
+        not bounded_exploration_probe_only
+        and (soft_abort or rising_missed_normal_winner_recheck)
+    )
     residual_expand_forbidden = bool(
-        preserve_position and action_guard_active and not soft_abort
+        preserve_position
+        and (bounded_exploration_probe_only or (action_guard_active and not soft_abort))
     )
     set_fields = {
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_abort_reason": reason,
         "entry_split_probe_abort_detail_reason": timeout_cause,
         "entry_split_probe_scale_in_forbidden": bool(
-            preserve_position and not scale_in_recheck_allowed
+            preserve_position
+            and (bounded_exploration_probe_only or not scale_in_recheck_allowed)
         ),
         # This flag remains terminal for the original residual bundle. A later
         # scale-in is owned by the ordinary scale-in path and must pass all of
@@ -39631,6 +39645,7 @@ def _abort_entry_split_probe_residual(
         ),
         "entry_split_probe_source_quality_recheck_pending": False,
         "post_probe_confirmation_grant_active": False,
+        "entry_setup_bounded_exploration_probe_only": (bounded_exploration_probe_only),
     }
     hard_negative_reasons = {
         "buy_authority_not_available",
@@ -50526,6 +50541,183 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
     }
 
 
+def _entry_setup_exploration_micro_relief(
+    probe: dict | None,
+    *,
+    source_quality_ok: bool,
+) -> dict[str, Any]:
+    """Allow a fresh, supportive 1-share observation without full strong micro.
+
+    This is not an ordinary entry relaxation. The caller may use it only for the
+    date-scoped V2.14 ``one_share_exploration`` mode, whose residual and scale-in
+    paths are terminally disabled.
+    """
+
+    probe = probe if isinstance(probe, dict) else {}
+    buy_pressure = _safe_float(probe.get("buy_pressure"), 0.0)
+    tick_accel = _safe_float(probe.get("tick_accel"), 0.0)
+    micro_vwap_bp = _safe_float(probe.get("micro_vwap_bp"), 0.0)
+    micro_vwap_available = _buy_recovery_probe_micro_vwap_usable(probe)
+    large_sell_print = _truthy_field(probe.get("large_sell_print"))
+    checks = {
+        "buy_pressure": buy_pressure >= 60.0,
+        "tick_accel": tick_accel >= 1.05,
+        "micro_vwap": micro_vwap_available and micro_vwap_bp >= 0.0,
+    }
+    support_count = sum(checks.values())
+    allowed = bool(
+        source_quality_ok
+        and not large_sell_print
+        and micro_vwap_available
+        and micro_vwap_bp >= -5.0
+        and support_count >= 2
+    )
+    return {
+        "entry_setup_exploration_micro_relief_allowed": allowed,
+        "entry_setup_exploration_micro_relief_support_count": support_count,
+        "entry_setup_exploration_micro_relief_checks": checks,
+        "entry_setup_exploration_micro_relief_source_quality_ok": bool(
+            source_quality_ok
+        ),
+        "entry_setup_exploration_micro_relief_large_sell_print": large_sell_print,
+        "entry_setup_exploration_micro_relief_min_support_count": 2,
+        "entry_setup_exploration_micro_relief_min_buy_pressure": 60.0,
+        "entry_setup_exploration_micro_relief_min_tick_accel": 1.05,
+        "entry_setup_exploration_micro_relief_min_micro_vwap_bp": 0.0,
+        "entry_setup_exploration_micro_relief_hard_micro_vwap_floor_bp": -5.0,
+        "entry_setup_exploration_micro_relief_authority": (
+            "one_share_exploration_only_residual_and_scale_in_forbidden"
+        ),
+    }
+
+
+def _clear_superseded_entry_setup_exploration_arm(
+    stock: dict | None,
+    *,
+    current_policy_mode: Any,
+) -> bool:
+    """Clear an unsubmitted exploration arm after a newer policy decision.
+
+    Once a probe is submitting or submitted, terminal one-share restrictions
+    must remain attached to its lifecycle. Before submission, however, a newer
+    non-exploration decision owns the Entry stage and stale terminal flags must
+    not leak into that decision.
+    """
+
+    if not isinstance(stock, dict):
+        return False
+    if str(current_policy_mode or "").strip() == "one_share_exploration":
+        return False
+    active_probe_phases = {
+        "probe_submitting",
+        "probe_submitted",
+        "probe_filled",
+        "probe_recheck_pending",
+    }
+    if str(stock.get("entry_split_probe_phase") or "").strip() in active_probe_phases:
+        return False
+    explicit_exploration_keys = (
+        "entry_opportunity_recheck_exploration_probe_only",
+        "entry_setup_bounded_exploration_probe_only",
+    )
+    exploration_keys = (
+        *explicit_exploration_keys,
+        "entry_split_probe_residual_expand_forbidden",
+        "entry_split_probe_scale_in_forbidden",
+        "probe_expand_forbidden",
+    )
+    if not any(_truthy_field(stock.get(key)) for key in explicit_exploration_keys):
+        return False
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "entry_opportunity_recheck_armed": False,
+            "entry_opportunity_recheck_pending": False,
+            "entry_opportunity_recheck_pending_status": (
+                "superseded_by_new_non_exploration_ai_decision"
+            ),
+        },
+        pop_fields=[
+            *exploration_keys,
+            "entry_setup_live_policy_mode",
+            "entry_setup_live_policy_max_daily_exploration_probes",
+            "entry_opportunity_recheck_pending_recheck_after_epoch",
+        ],
+    )
+    return True
+
+
+def _entry_setup_exploration_submit_cap_guard(
+    stock: dict | None,
+    *,
+    qty: int,
+    now_ts: float,
+    order_already_submitted: bool = False,
+) -> dict[str, Any]:
+    """Recheck one-share shape and the durable accepted-order cap at submit."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    active = _truthy_field(
+        stock.get("entry_opportunity_recheck_exploration_probe_only")
+    )
+    maximum = max(
+        0,
+        _safe_int(
+            stock.get("entry_setup_live_policy_max_daily_exploration_probes"),
+            0,
+        ),
+    )
+    fields = {
+        "allowed": True,
+        "reason": "not_exploration_order",
+        "entry_setup_exploration_submit_cap_active": active,
+        "entry_setup_exploration_max_daily_probes": maximum,
+    }
+    if not active:
+        return fields
+    if order_already_submitted:
+        fields.update(
+            {
+                "allowed": False,
+                "reason": "exploration_probe_bundle_already_submitted",
+                "entry_setup_exploration_cap_ledger_ok": True,
+            }
+        )
+        return fields
+    if int(qty) != 1:
+        fields.update(
+            {
+                "allowed": False,
+                "reason": "exploration_probe_qty_not_one",
+                "entry_setup_exploration_cap_ledger_ok": True,
+            }
+        )
+        return fields
+    trade_date = datetime.fromtimestamp(now_ts, _KST).date().isoformat()
+    persisted = read_exploration_probe_submit_count(trade_date)
+    allowed = bool(persisted is not None and maximum > 0 and persisted < maximum)
+    fields.update(
+        {
+            "allowed": allowed,
+            "reason": (
+                "exploration_probe_submit_cap_available"
+                if allowed
+                else (
+                    "exploration_probe_cap_ledger_invalid"
+                    if persisted is None
+                    else "exploration_probe_daily_cap_exhausted"
+                )
+            ),
+            "entry_setup_exploration_trade_date": trade_date,
+            "entry_setup_exploration_cap_ledger_ok": persisted is not None,
+            "entry_setup_exploration_daily_probe_count": (
+                persisted if persisted is not None else maximum
+            ),
+        }
+    )
+    return fields
+
+
 def _score65_74_recovery_probe_repeat_guard(
     stock: dict | None,
     code: str | None,
@@ -56908,6 +57100,29 @@ def _handle_watching_strategy_branch(
                     or stock.get("last_watching_ai_action")
                     or "WAIT"
                 ).upper()
+                if ai_call_executed:
+                    exploration_arm_cleared = (
+                        _clear_superseded_entry_setup_exploration_arm(
+                            stock,
+                            current_policy_mode=(ai_decision or {}).get(
+                                "entry_setup_live_policy_mode"
+                            ),
+                        )
+                    )
+                    if exploration_arm_cleared:
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "entry_setup_exploration_arm_superseded",
+                            current_ai_action=current_ai_action,
+                            current_entry_setup_live_policy_mode=(
+                                (ai_decision or {}).get("entry_setup_live_policy_mode")
+                                or "fallback_or_performance"
+                            ),
+                            actual_order_submitted=False,
+                            broker_order_forbidden=True,
+                            runtime_effect=True,
+                        )
                 fresh_canonical_wait_probe = bool(
                     ai_call_executed
                     and _canonical_wait_probe_handoff_active(
@@ -57001,6 +57216,59 @@ def _handle_watching_strategy_branch(
                             (recheck_feature_probe or {}).get("large_sell_print")
                         )
                     )
+                    bounded_exploration_probe_only = bool(
+                        (ai_decision or {}).get("entry_setup_live_policy_mode")
+                        == "one_share_exploration"
+                    )
+                    bounded_exploration_max_daily_probes = max(
+                        0,
+                        _safe_int(
+                            (ai_decision or {}).get(
+                                "entry_setup_live_policy_max_daily_exploration_probes"
+                            ),
+                            0,
+                        ),
+                    )
+                    bounded_exploration_persisted_probe_count = 0
+                    bounded_exploration_observed_probe_count = 0
+                    bounded_exploration_cap_ledger_ok = True
+                    if bounded_exploration_probe_only:
+                        persisted_probe_count = read_exploration_probe_submit_count(
+                            now_dt.date().isoformat()
+                        )
+                        bounded_exploration_cap_ledger_ok = (
+                            persisted_probe_count is not None
+                        )
+                        bounded_exploration_persisted_probe_count = (
+                            max(0, _safe_int(persisted_probe_count, 0))
+                            if bounded_exploration_cap_ledger_ok
+                            else bounded_exploration_max_daily_probes
+                        )
+                        _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
+                            bounded_exploration_persisted_probe_count
+                        )
+                        bounded_exploration_observed_probe_count = (
+                            _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_exploration_probe_submit_count
+                        )
+                    bounded_exploration_micro_relief = (
+                        _entry_setup_exploration_micro_relief(
+                            recheck_feature_probe,
+                            source_quality_ok=recheck_micro_source_quality_ok,
+                        )
+                    )
+                    recheck_micro_confirmed = bool(
+                        (
+                            recheck_micro_guard.get("allowed")
+                            and recheck_micro_source_quality_ok
+                        )
+                        or (
+                            bounded_exploration_probe_only
+                            and bounded_exploration_micro_relief.get(
+                                "entry_setup_exploration_micro_relief_allowed"
+                            )
+                            is True
+                        )
+                    )
                     recheck_evidence = (
                         (ai_decision or {}).get("evidence")
                         if isinstance((ai_decision or {}).get("evidence"), dict)
@@ -57031,10 +57299,7 @@ def _handle_watching_strategy_branch(
                             "entry_probe_intent_status"
                         ),
                         ai_recovery_trigger=recheck_evidence.get("trigger"),
-                        microstructure_confirmed=bool(
-                            recheck_micro_guard.get("allowed")
-                            and recheck_micro_source_quality_ok
-                        ),
+                        microstructure_confirmed=recheck_micro_confirmed,
                         microstructure_fields={
                             "entry_opportunity_recheck_buy_pressure": (
                                 recheck_micro_guard.get("buy_pressure")
@@ -57060,14 +57325,59 @@ def _handle_watching_strategy_branch(
                             "entry_opportunity_recheck_large_sell_print": _truthy_field(
                                 (recheck_feature_probe or {}).get("large_sell_print")
                             ),
+                            "entry_opportunity_recheck_micro_confirmation_mode": (
+                                "strong_micro"
+                                if recheck_micro_guard.get("allowed")
+                                and recheck_micro_source_quality_ok
+                                else (
+                                    "bounded_exploration_relief"
+                                    if recheck_micro_confirmed
+                                    else "not_confirmed"
+                                )
+                            ),
+                            **bounded_exploration_micro_relief,
+                            "entry_setup_exploration_cap_ledger_ok": (
+                                bounded_exploration_cap_ledger_ok
+                            ),
+                            "entry_setup_exploration_persisted_probe_count": (
+                                bounded_exploration_persisted_probe_count
+                            ),
                             **recheck_refresh_fields,
                         },
+                        buy_recovery_cap_observed_count=(
+                            bounded_exploration_observed_probe_count
+                            if bounded_exploration_probe_only
+                            else None
+                        ),
                         state=_ENTRY_OPPORTUNITY_RECHECK_STATE,
                         today=now_dt.date().isoformat(),
                     )
                     should_log_recheck_block = False
                     recheck_log_fields = dict(entry_opportunity_recheck.fields)
-                    if entry_opportunity_recheck.allowed:
+                    bounded_exploration_cap_blocked = bool(
+                        entry_opportunity_recheck.allowed
+                        and bounded_exploration_probe_only
+                        and bounded_exploration_observed_probe_count
+                        >= bounded_exploration_max_daily_probes
+                    )
+                    if bounded_exploration_cap_blocked:
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "entry_opportunity_recheck_exploration_cap_block",
+                            **recheck_log_fields,
+                            entry_setup_live_policy_mode=("one_share_exploration"),
+                            entry_setup_exploration_daily_probe_count=(
+                                bounded_exploration_observed_probe_count
+                            ),
+                            entry_setup_exploration_max_daily_probes=(
+                                bounded_exploration_max_daily_probes
+                            ),
+                            actual_order_submitted=False,
+                            broker_order_forbidden=True,
+                            runtime_effect=True,
+                        )
+                    elif entry_opportunity_recheck.allowed:
                         _ENTRY_OPPORTUNITY_RECHECK_STATE.record_recheck(code)
                         _ENTRY_OPPORTUNITY_RECHECK_STATE.record_buy_recovery()
                         recheck_fields = dict(entry_opportunity_recheck.fields)
@@ -57084,21 +57394,45 @@ def _handle_watching_strategy_branch(
                                 ),
                             }
                         )
+                        recheck_stock_fields = {
+                            "entry_opportunity_recheck_armed": True,
+                            "entry_opportunity_recheck_source_stage": "blocked_ai_score",
+                            "entry_opportunity_recheck_score": float(
+                                current_ai_score or 0.0
+                            ),
+                            "entry_opportunity_recheck_reason": (
+                                entry_opportunity_recheck.reason
+                            ),
+                            "entry_opportunity_recheck_at": now_ts,
+                            "entry_opportunity_recheck_probe_only": True,
+                            "entry_opportunity_recheck_ai_action": current_ai_action,
+                            "entry_opportunity_recheck_probe_intent": True,
+                            "entry_opportunity_recheck_pending": False,
+                            "entry_setup_live_policy_mode": (
+                                (ai_decision or {}).get("entry_setup_live_policy_mode")
+                            ),
+                            "entry_setup_live_policy_max_daily_exploration_probes": (
+                                bounded_exploration_max_daily_probes
+                                if bounded_exploration_probe_only
+                                else None
+                            ),
+                        }
+                        if bounded_exploration_probe_only:
+                            recheck_stock_fields.update(
+                                {
+                                    "entry_opportunity_recheck_exploration_probe_only": (
+                                        True
+                                    ),
+                                    "entry_split_probe_residual_expand_forbidden": (
+                                        True
+                                    ),
+                                    "entry_split_probe_scale_in_forbidden": True,
+                                    "probe_expand_forbidden": True,
+                                }
+                            )
                         _mutate_stock_state(
                             stock,
-                            set_fields={
-                                "entry_opportunity_recheck_armed": True,
-                                "entry_opportunity_recheck_source_stage": "blocked_ai_score",
-                                "entry_opportunity_recheck_score": float(
-                                    current_ai_score or 0.0
-                                ),
-                                "entry_opportunity_recheck_reason": entry_opportunity_recheck.reason,
-                                "entry_opportunity_recheck_at": now_ts,
-                                "entry_opportunity_recheck_probe_only": True,
-                                "entry_opportunity_recheck_ai_action": current_ai_action,
-                                "entry_opportunity_recheck_probe_intent": True,
-                                "entry_opportunity_recheck_pending": False,
-                            },
+                            set_fields=recheck_stock_fields,
                             pop_fields=[
                                 "entry_opportunity_recheck_pending_recheck_after_epoch"
                             ],
@@ -62127,7 +62461,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "probe_confirmation_last_at": 0.0,
                     "probe_confirmation_last_state": "UNKNOWN",
                     "probe_confirmation_last_signature": "",
-                    "probe_expand_forbidden": False,
+                    "probe_expand_forbidden": bool(
+                        stock.get("probe_expand_forbidden")
+                        or stock.get("entry_opportunity_recheck_exploration_probe_only")
+                    ),
+                    "entry_split_probe_residual_expand_forbidden": bool(
+                        stock.get("entry_split_probe_residual_expand_forbidden")
+                        or stock.get("entry_opportunity_recheck_exploration_probe_only")
+                    ),
+                    "entry_split_probe_scale_in_forbidden": bool(
+                        stock.get("entry_split_probe_scale_in_forbidden")
+                        or stock.get("entry_opportunity_recheck_exploration_probe_only")
+                    ),
                 },
             )
             update_probe_runtime_bundle(
@@ -62172,8 +62517,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 probe_confirmation_last_at=0.0,
                 probe_confirmation_last_state="UNKNOWN",
                 probe_confirmation_last_signature="",
-                probe_expand_forbidden=False,
-                entry_split_probe_scale_in_forbidden=False,
+                probe_expand_forbidden=bool(
+                    stock.get("probe_expand_forbidden")
+                    or stock.get("entry_opportunity_recheck_exploration_probe_only")
+                ),
+                entry_split_probe_residual_expand_forbidden=bool(
+                    stock.get("entry_split_probe_residual_expand_forbidden")
+                    or stock.get("entry_opportunity_recheck_exploration_probe_only")
+                ),
+                entry_split_probe_scale_in_forbidden=bool(
+                    stock.get("entry_split_probe_scale_in_forbidden")
+                    or stock.get("entry_opportunity_recheck_exploration_probe_only")
+                ),
             )
 
     msg = msg or (
@@ -62719,6 +63074,29 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     },
                 )
                 break
+        exploration_submit_cap_guard = _entry_setup_exploration_submit_cap_guard(
+            stock,
+            qty=qty,
+            now_ts=now_ts,
+            order_already_submitted=bool(successful_orders),
+        )
+        if not exploration_submit_cap_guard.get("allowed", False):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_setup_exploration_pre_broker_cap_block",
+                tag=request["tag"],
+                qty=qty,
+                **{
+                    key: value
+                    for key, value in exploration_submit_cap_guard.items()
+                    if key != "allowed"
+                },
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+            )
+            break
         res = kiwoom_orders.send_buy_order(
             code,
             qty,
@@ -62993,6 +63371,71 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     {"effective_venue": entry_execution_cohort},
                 ),
             )
+            if stock.get("entry_opportunity_recheck_exploration_probe_only"):
+                exploration_ledger_committed = False
+                try:
+                    durable_exploration_count = record_exploration_probe_submission(
+                        trade_date=datetime.fromtimestamp(now_ts, _KST)
+                        .date()
+                        .isoformat(),
+                        stock_code=code,
+                        broker_order_no=ord_no,
+                    )
+                except (OSError, ValueError) as exc:
+                    try:
+                        mark_exploration_probe_cap_fail_closed(
+                            trade_date=datetime.fromtimestamp(now_ts, _KST)
+                            .date()
+                            .isoformat(),
+                            reason=str(exc),
+                        )
+                    except OSError:
+                        pass
+                    durable_exploration_count = _safe_int(
+                        stock.get(
+                            "entry_setup_live_policy_max_daily_exploration_probes"
+                        ),
+                        0,
+                    )
+                    _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
+                        durable_exploration_count
+                    )
+                    log_error(
+                        f"[ENTRY_SETUP_EXPLORATION_CAP] {stock.get('name')}({code}) "
+                        f"ledger write failed: {exc}"
+                    )
+                else:
+                    exploration_ledger_committed = True
+                    _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
+                        durable_exploration_count
+                    )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    (
+                        "entry_setup_exploration_probe_cap_committed"
+                        if exploration_ledger_committed
+                        else "entry_setup_exploration_probe_cap_fail_closed"
+                    ),
+                    entry_setup_exploration_daily_probe_count=(
+                        _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_exploration_probe_submit_count
+                    ),
+                    entry_setup_exploration_max_daily_probes=_safe_int(
+                        stock.get(
+                            "entry_setup_live_policy_max_daily_exploration_probes"
+                        ),
+                        0,
+                    ),
+                    entry_setup_exploration_cap_basis=(
+                        "durable_broker_accepted_probe_orders"
+                    ),
+                    entry_setup_exploration_cap_ledger_ok=(
+                        exploration_ledger_committed
+                    ),
+                    actual_order_submitted=True,
+                    broker_order_forbidden=False,
+                    runtime_effect=True,
+                )
         log_info(
             f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
             f"tag={request['tag']} qty={qty} price={broker_price} guard_price={price} "
@@ -73477,6 +73920,19 @@ def _submit_entry_split_probe_residual_locked(
     revalidation_started_monotonic = time.monotonic()
     phase = str(stock.get("entry_split_probe_phase") or "").strip()
     if phase not in {"probe_filled", "probe_recheck_pending"}:
+        return False
+
+    if bool(
+        stock.get("entry_opportunity_recheck_exploration_probe_only")
+        or stock.get("entry_setup_bounded_exploration_probe_only")
+    ):
+        _abort_entry_split_probe_residual(
+            stock,
+            code,
+            "entry_setup_bounded_exploration_probe_only",
+            preserve_position=True,
+            now_ts=now_ts,
+        )
         return False
 
     requested_qty = _safe_int(stock.get("entry_split_probe_requested_qty"), 0)
