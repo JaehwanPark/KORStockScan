@@ -629,6 +629,9 @@ DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION = (
 DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION = (
     "decision_quality_v2_13_recovery_confirmation_probe"
 )
+DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION = (
+    "decision_quality_v2_14_setup_risk_adjudicator"
+)
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -1569,3 +1572,74 @@ def decision_quality_v2_13_recovery_confirmation_system_prompt(stage: str) -> st
         + "\n\n"
         + _DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_RULES
     )
+
+
+_DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES = """
+V2.14 setup-risk adjudicator contract:
+1. This risk-only classifier has no direct runtime or order authority. In paired
+   replay it is offline; in the bounded KRX canary, a separate deterministic
+   adapter may map an eligible result only to the existing one-share probe path.
+   It never submits an order and never chooses price, quantity, provider, model,
+   threshold, broker behavior, or bot state.
+2. Read entry_setup_evidence_v1 as the authoritative deterministic setup ledger.
+   Do not create a setup, positive fact, contradiction, invalidation, or risk fact
+   that is absent from that ledger. Never use a stock name or symbol-specific rule.
+3. Return PASS only for setup_state=READY with no blocking risk. PASS uses only
+   risk_codes=["NO_BLOCKING_RISK"]. External submit and hard-safety guards remain
+   mandatory and are not represented by PASS.
+4. Return CAUTION when a READY setup has fragile-but-observable liquidity,
+   bounded adverse tape, weak reward/risk, or a missing non-blocking
+   confirmation. CAUTION is an offline one-share probe/recheck observation, not
+   direct entry authority.
+5. Return VETO only for a concrete current risk. A VETO can block the composed
+   offline exposure only for SOURCE_QUALITY_GAP, STRUCTURE_INVALIDATED,
+   DISTRIBUTION_RISK, OVEREXTENSION_CHASE, or LIQUIDITY_UNUSABLE when the same
+   code is present in entry_setup_evidence_v1.corroborated_risk_codes.
+   LIQUIDITY_FRAGILE, ADVERSE_TAPE, REWARD_RISK_WEAK, and
+   CONFIRMATION_MISSING are bounded risks: use CAUTION for READY whenever
+   possible, and retain an AI VETO carrying only those codes as one-share probe
+   observation behind all existing submit and post-probe guards rather than
+   deterministic entry rejection.
+6. Return INSUFFICIENT when setup_state=INSUFFICIENT or exact source quality is
+   unusable. Include SOURCE_QUALITY_GAP. Never return INSUFFICIENT for READY,
+   WAIT_CONFIRMATION, or INVALID when the ledger source is usable. Missing data
+   is not adverse evidence.
+7. supporting_fact_ids must copy exact IDs from positive_facts.
+   contradicting_fact_ids must copy exact IDs from contradicting_facts or
+   invalidation_facts. Each array may be empty, but PASS requires at least one
+   supporting fact and CAUTION/VETO requires at least one contradicting fact.
+   Invented or misclassified IDs are a schema rejection. Do not paraphrase IDs.
+8. For setup_state=INVALID return VETO and include at least one exact ID from
+   invalidation_facts in contradicting_fact_ids; prefer a risk code already
+   listed in corroborated_risk_codes. For setup_state=WAIT_CONFIRMATION return
+   CAUTION or VETO and cite at least one exact ID from contradicting_facts or
+   invalidation_facts. For setup_state=READY return PASS, CAUTION, or VETO.
+9. WAIT_CONFIRMATION never grants direct submit authority. Ordinary trigger or
+   fragile-liquidity confirmation gaps may remain eligible for an offline
+   one-share probe observation behind every downstream guard. A current
+   LARGE_SELL_EXHAUSTION_RECHECK remains recheck-only and is not immediate probe
+   evidence. Do not return PASS for WAIT_CONFIRMATION.
+10. Use only these risk codes: NO_BLOCKING_RISK, SOURCE_QUALITY_GAP,
+   STRUCTURE_INVALIDATED, DISTRIBUTION_RISK, OVEREXTENSION_CHASE,
+   LIQUIDITY_UNUSABLE, LIQUIDITY_FRAGILE, ADVERSE_TAPE,
+   REWARD_RISK_WEAK, CONFIRMATION_MISSING.
+
+Return JSON only:
+{
+  "schema": "entry_setup_risk_adjudication_v1",
+  "risk_verdict": "PASS" | "CAUTION" | "VETO" | "INSUFFICIENT",
+  "risk_codes": ["canonical risk code"],
+  "supporting_fact_ids": ["exact ledger fact id"],
+  "contradicting_fact_ids": ["exact ledger fact id"],
+  "confidence": 0
+}
+""".strip()
+
+
+def decision_quality_v2_14_setup_risk_adjudicator_system_prompt(stage: str) -> str:
+    """Return the offline, risk-only V2.14 entry candidate prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.14 currently supports entry only")
+    return _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES

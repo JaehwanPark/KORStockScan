@@ -122,6 +122,85 @@ def test_control_manifest_freezes_exact_post_promotion_signature():
     assert report["runtime_effect"] is False
 
 
+def test_control_manifest_surfaces_same_version_prompt_sha_drift_by_cohort():
+    second_trace = {
+        **_trace(),
+        "decision_trace_id": "trace-2",
+        "decision_ts": "2026-07-27T09:01:00+09:00",
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_REGULAR_OVERLAP",
+        "payload_sha256": "payload-2",
+        "prompt_sha256": "prompt-2",
+    }
+    second_payload = {
+        **_payload(),
+        "payload_sha256": "payload-2",
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_REGULAR_OVERLAP",
+        "sanitized_user_input": {
+            "entry_candle_context": {
+                "schema": quality.ENTRY_CONTEXT_SCHEMA,
+                "venue": "NXT",
+                "session": "nxt_regular_overlap",
+                "input_bundle_version": quality.INPUT_BUNDLE_VERSION,
+                "bars": [
+                    {
+                        "t": "09:01",
+                        "o": 100,
+                        "h": 101,
+                        "l": 99,
+                        "c": 100,
+                        "v": 10,
+                        "forming": False,
+                    }
+                ],
+            }
+        },
+    }
+
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[_trace(), second_trace],
+        payloads=[_payload(), second_payload],
+    )
+
+    assert report["prompt_version_sha_drift_count"] == 1
+    assert report["prompt_version_sha_drift"][0]["prompt_sha256_values"] == [
+        "prompt-1",
+        "prompt-2",
+    ]
+    assert len(report["prompt_signature_cohorts"]) == 2
+
+
+def test_cohort_filter_and_artifact_paths_do_not_mix_krx_and_nxt():
+    rows = [
+        {"effective_venue": "KRX", "session_bucket": "krx_regular"},
+        {
+            "effective_venue": "NXT",
+            "session_bucket": "nxt_regular_overlap",
+        },
+    ]
+
+    filtered = quality._filter_rows_for_cohort(
+        rows,
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+    )
+
+    assert filtered == [rows[0]]
+    assert quality.control_path(
+        "2026-08-06",
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+    ).name.endswith("_venue_krx_session_krx_regular.json")
+
+
 def test_daily_materialization_builds_ordered_chain_without_candidate_execution():
     label = {
         **_pending(),
@@ -142,6 +221,7 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
         "target_date": "2026-07-27",
         "status": "mature_label_rows_available",
         "summary": {"mature": 1},
+        "outcome_as_of": "2026-07-27T16:30:00+09:00",
         "labels": [label],
         **quality.OFFLINE_CONTRACT,
     }
@@ -185,6 +265,7 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
     assert materialization["reports"]["baseline"]["eligible_sample_count"] == 1
     paired = materialization["reports"]["paired"]
     assert paired["prepared_request_count"] == 1
+    assert paired["outcome_as_of"] == "2026-07-27T16:30:00+09:00"
     assert paired["request_count"] == 1
     assert paired["status"] == ("paired_replay_requests_ready_candidate_not_executed")
     assert paired["sample_floor_buckets"][0]["pass"] is True
@@ -4754,7 +4835,7 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     }
     assert report["candidate_exposure_decision_count"] == 0
     assert report["candidate_exposure_sample_floor"]["pass"] is False
-    assert report["status"] == "paired_replay_complete_candidate_quality_rejected"
+    assert report["status"] == "paired_replay_complete_hold_sample_offline_only"
     assert report["candidate_quality_gate_pass"] is False
     bucket = report["buckets"][0]
     assert bucket["stage"] == "entry"
@@ -4764,12 +4845,14 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     assert bucket["control_drawdown_recovery_capture_count"] == 0
     assert bucket["candidate_drawdown_recovery_capture_count"] == 0
     assert (
-        bucket["candidate_quality_checks"]["candidate_probe_loss_budget_within_cap"]
+        bucket["candidate_quality_checks"]["candidate_probe_bounded_risk_budget_pass"]
         is False
     )
     assert bucket["diagnostic_checks_not_quality_veto"] == {
         "adverse_first_exposure_not_increased": True,
         "tight_stop_adverse_first_exposure_not_increased": True,
+        "severe_tail_adverse_not_increased": True,
+        "candidate_action_not_collapsed": False,
     }
     assert bucket["candidate_quality_gate_pass"] is False
 
@@ -4904,7 +4987,7 @@ def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():
         not in report["candidate_quality_checks"]
     )
     assert (
-        "candidate_probe_loss_budget_within_cap"
+        "candidate_probe_bounded_risk_budget_pass"
         not in report["candidate_quality_checks"]
     )
     assert (
@@ -5041,7 +5124,7 @@ def test_wide_spread_drawdown_recovery_uses_bounded_probe_risk_not_adverse_veto(
     assert report["candidate_probe_loss_budget_breach_count"] == 0
     assert report["candidate_drawdown_recovery_capture_count"] == 1
     assert (
-        report["candidate_quality_checks"]["candidate_probe_loss_budget_within_cap"]
+        report["candidate_quality_checks"]["candidate_probe_bounded_risk_budget_pass"]
         is True
     )
     assert (
@@ -5052,6 +5135,84 @@ def test_wide_spread_drawdown_recovery_uses_bounded_probe_risk_not_adverse_veto(
     )
     assert report["probe_risk_contract"]["adverse_first_role"] == (
         "diagnostic_not_absolute_quality_veto"
+    )
+
+
+def test_paired_report_can_pass_promotion_from_same_cohort_cumulative_gate(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        quality,
+        "_anticipatory_cumulative_learning_summary",
+        lambda **_kwargs: {
+            "schema": "anticipatory_reversal_cumulative_learning_v2",
+            "promotion_quality_gate_pass": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+    )
+    candidate_contract = {
+        "prompt_version": "v214_entry",
+        "system_prompt_sha256": "v214-prompt",
+        "response_schema_sha256": "v214-schema",
+        "exposure_semantics": "offline_counterfactual_passive_probe_only",
+    }
+    candidate_contract["contract_sha256"] = quality._candidate_contract_sha256(
+        candidate_contract
+    )
+    report = quality.build_paired_replay_report(
+        target_date="2026-08-06",
+        requests=[
+            {
+                "decision_trace_id": "cumulative-trace",
+                "paired_replay_id": "cumulative-pair",
+                "decision_ts": "2026-08-06T09:00:00+09:00",
+                "stock_code": "005930",
+                "candidate": candidate_contract,
+                "anticipatory_reversal_analysis": {
+                    "execution_cost": {"conservative_execution_cost_pct": 0.1}
+                },
+            }
+        ],
+        results=[
+            {
+                "decision_trace_id": "cumulative-trace",
+                "paired_replay_id": "cumulative-pair",
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "candidate_contract_sha256": candidate_contract["contract_sha256"],
+                "control_response": {"action": "DROP"},
+                "candidate_response": {"action": "BUY", "edge_state": "EDGE"},
+            }
+        ],
+        labels=[
+            {
+                "decision_trace_id": "cumulative-trace",
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 0.8,
+                        "mfe_pct": 1.0,
+                        "mae_pct": -0.3,
+                        "first_hit": "target",
+                    }
+                },
+            }
+        ],
+    )
+
+    assert report["candidate_exposure_sample_floor"]["pass"] is False
+    assert report["candidate_quality_gate_pass"] is False
+    assert report["promotion_quality_gate_pass"] is True
+    assert report["promotion_quality_gate_basis"] == (
+        "cumulative_same_contract_venue_session"
+    )
+    assert report["status"] == (
+        "paired_replay_complete_cumulative_quality_pass_offline_only"
     )
 
 
@@ -5261,6 +5422,57 @@ def test_paired_report_requires_diverse_candidate_exposure_sample():
             "candidate_exposure_sample_floor_pass"
         ]
         is False
+    )
+
+    contract_split_requests = []
+    for index, request in enumerate(requests):
+        candidate = {
+            "prompt_version": "candidate-a" if index < 5 else "candidate-b",
+            "system_prompt_sha256": "prompt-a" if index < 5 else "prompt-b",
+            "response_schema_sha256": "schema",
+        }
+        candidate["contract_sha256"] = quality._candidate_contract_sha256(candidate)
+        contract_split_requests.append({**request, "candidate": candidate})
+    contract_split_results = [
+        {
+            **result,
+            "candidate_contract_sha256": contract_split_requests[index]["candidate"][
+                "contract_sha256"
+            ],
+        }
+        for index, result in enumerate(results)
+    ]
+    contract_split_report = quality.build_paired_replay_report(
+        target_date="2026-07-29",
+        requests=contract_split_requests,
+        results=contract_split_results,
+        labels=labels,
+    )
+    assert contract_split_report["promotion_quality_gate_pass"] is False
+    assert contract_split_report["status"] == (
+        "paired_replay_complete_candidate_contract_split_required"
+    )
+
+    tampered_report = quality.build_paired_replay_report(
+        target_date="2026-07-29",
+        requests=[
+            {
+                **requests[0],
+                "candidate": {
+                    "prompt_version": "candidate-a",
+                    "system_prompt_sha256": "prompt-a",
+                    "response_schema_sha256": "schema",
+                    "contract_sha256": "tampered",
+                },
+            }
+        ],
+        results=results[:1],
+        labels=labels[:1],
+    )
+    assert tampered_report["paired_comparable_count"] == 0
+    assert tampered_report["candidate_contract_integrity_rejected_count"] == 1
+    assert tampered_report["status"] == (
+        "candidate_contract_integrity_rejected_no_runtime_apply"
     )
 
     false_wait_results = [dict(row) for row in results]
@@ -6081,3 +6293,111 @@ def test_v2_12_semantic_correction_preserves_nonblocking_wait(monkeypatch):
     assert "For V2.12" in instructions
     assert "WAIT with trigger=recovery_required" in instructions
     assert "WAIT is prohibited for this contract" not in instructions
+
+
+def test_candidate_execution_checkpoint_is_outcome_blind_and_symbol_diverse():
+    pending = [
+        {
+            "paired_replay_id": f"pair-{index}",
+            "decision_trace_id": f"trace-{index}",
+            "stock_code": "000001" if index < 8 else f"{index:06d}",
+            "stage": "entry",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "outcome_return_pct": 99 if index == 0 else -99,
+        }
+        for index in range(12)
+    ]
+
+    selected, metadata = quality.select_pending_candidate_execution_requests(
+        pending,
+        max_new_requests=5,
+    )
+    reranked, reranked_metadata = quality.select_pending_candidate_execution_requests(
+        [{**row, "outcome_return_pct": -row["outcome_return_pct"]} for row in pending],
+        max_new_requests=5,
+    )
+
+    assert [row["paired_replay_id"] for row in selected] == [
+        row["paired_replay_id"] for row in reranked
+    ]
+    assert len({row["stock_code"] for row in selected}) == 5
+    assert metadata["policy"] == quality.CANDIDATE_EXECUTION_SELECTION_POLICY
+    assert metadata["outcome_blind"] is True
+    assert metadata["contract_pass"] is True
+    assert reranked_metadata["forbidden_selection_fields"] == [
+        "outcome_return_pct",
+        "outcome_mfe_pct",
+        "outcome_mae_pct",
+        "first_hit",
+        "profit_opportunity_observed",
+    ]
+
+
+def test_candidate_execution_checkpoint_retry_does_not_expand_distinct_quota():
+    pending = [
+        {
+            "paired_replay_id": f"pair-{index}",
+            "decision_trace_id": f"trace-{index}",
+            "stock_code": f"{index:06d}",
+            "stage": "entry",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+        }
+        for index in range(40)
+    ]
+    attempted_ids = {f"pair-{index}" for index in range(30)}
+    failed_ids = {"pair-4", "pair-17"}
+    retry_pending = [
+        row
+        for row in pending
+        if row["paired_replay_id"] in failed_ids
+        or row["paired_replay_id"] not in attempted_ids
+    ]
+
+    selected, metadata = quality.select_pending_candidate_execution_requests(
+        retry_pending,
+        max_new_requests=30,
+        previously_attempted_pair_ids=attempted_ids,
+    )
+
+    assert {row["paired_replay_id"] for row in selected} == failed_ids
+    assert metadata["retry_selected_count"] == 2
+    assert metadata["selected_new_count"] == 0
+    assert metadata["deferred_new_count"] == 10
+    assert metadata["distinct_execution_count"] == 30
+    assert metadata["distinct_execution_cap_pass"] is True
+    assert metadata["contract_pass"] is True
+
+
+def test_opportunity_capture_gate_allows_positive_incremental_probe_with_guarded_risk():
+    rows = [
+        {
+            "stock_code": "000001",
+            "control_exposure_selected": False,
+            "candidate_exposure_selected": True,
+            "control_primary_decision_value_pct": 0.0,
+            "candidate_primary_decision_value_pct": 0.4,
+            "control_missed_upside": True,
+            "candidate_missed_upside": False,
+        },
+        {
+            "stock_code": "000002",
+            "control_exposure_selected": True,
+            "candidate_exposure_selected": False,
+            "control_primary_decision_value_pct": 0.1,
+            "candidate_primary_decision_value_pct": 0.0,
+            "control_missed_upside": False,
+            "candidate_missed_upside": True,
+        },
+    ]
+
+    tradeoff = quality._opportunity_capture_tradeoff(rows)
+
+    assert tradeoff["incremental_candidate_exposure_count"] == 1
+    assert tradeoff["incremental_candidate_exposure_cost_adjusted_ev_pct"] == 0.4
+    assert tradeoff["forgone_control_exposure_count"] == 1
+    assert tradeoff["net_missed_upside_reduction_count"] == 0
+    assert tradeoff["net_missed_upside_value_pct"] == pytest.approx(0.3)
+    assert tradeoff["opportunity_capture_expanded"] is True
+    assert tradeoff["missed_upside_tradeoff_not_worse"] is True

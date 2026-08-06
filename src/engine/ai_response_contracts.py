@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from src.engine.scalping.entry_setup_evidence import (
+    entry_risk_adjudication_openai_schema,
+)
+
 AI_REASON_LANGUAGE_POLICY = "english_ascii_only"
 AI_REASON_LANGUAGE_FALLBACK = "Reason unavailable: non-English output from AI"
 SWING_AI_STRUCTURED_OUTPUT_EVAL_SCHEMA_NAME = "swing_ai_structured_output_eval_v1"
@@ -463,6 +467,7 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "evidence",
         ],
     },
+    "entry_setup_risk_adjudication_v1": entry_risk_adjudication_openai_schema(),
     "entry_price_v1": {
         "type": "object",
         "properties": {

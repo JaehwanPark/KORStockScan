@@ -22,15 +22,21 @@ from src.engine.ai_engine_openai import (
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_WATCHING_HOT_SYSTEM_PROMPT,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
+    decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.scalping.entry_ai_gate import evaluate_entry_score_role_gate
+from src.engine.scalping.entry_setup_evidence import (
+    ENTRY_RISK_ADJUDICATION_SCHEMA,
+    build_entry_setup_evidence,
+)
 from src.engine import bedrock_nova_provider
 
 
@@ -2820,6 +2826,122 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
     )
 
 
+def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
+            OPENAI_ANALYZE_TARGET_HOT_INPUT_ENABLED=False,
+            OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "resolve_live_prompt_policy",
+        lambda **_kwargs: {
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "selected_prompt_version": (
+                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ),
+            "source_date": "2026-08-06",
+            "target_date": "2026-08-07",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "activation_artifact_sha256": "activation-sha",
+            "candidate_contract_sha256": "candidate-sha",
+            "runtime_effect": True,
+        },
+    )
+    setup_evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10100}},
+        exact_analysis={
+            "schema": "exact_payload_analysis_v1",
+            "source_quality": {"status": "pass", "completed_bar_count": 20},
+            "executable_liquidity": {"execution_cost_state": "low"},
+            "contradictions": [],
+            "deterministic_contract_facts": {
+                "structural_edge_floor": True,
+                "early_session_structural_edge_floor": False,
+                "early_session_probe_candidate": False,
+                "orderly_pullback_recovery": False,
+                "trusted_supportive_trigger": True,
+                "adverse_distribution_no_edge": False,
+                "blocking_overextension": False,
+                "ask_wall_wide_spread": False,
+            },
+        },
+        recovery_analysis={
+            "schema": "anticipatory_reversal_analysis_v1",
+            "source_mode": "fresh_dual",
+            "hard_blockers": [],
+            "clean_continuation_probe": {"eligible": True},
+            "recovery_confirmation_probe": {"eligible": False},
+        },
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "build_entry_setup_evidence",
+        lambda **_kwargs: setup_evidence,
+    )
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["payload"] = json.loads(user_input)
+        captured["schema_name"] = kwargs.get("schema_name")
+        captured["metadata_extra"] = kwargs.get("metadata_extra")
+        return {
+            "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+            "risk_verdict": "PASS",
+            "risk_codes": ["NO_BLOCKING_RISK"],
+            "supporting_fact_ids": ["structural_edge_floor"],
+            "contradicting_fact_ids": [],
+            "confidence": 1,
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+    candle_context = _allowed_entry_candle_context()
+    candle_context["venue"] = "KRX"
+    candle_context["session"] = "KRX_REGULAR"
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=candle_context,
+    )
+
+    assert captured["prompt"] == (
+        decision_quality_v2_14_setup_risk_adjudicator_system_prompt("entry")
+    )
+    assert captured["schema_name"] == ENTRY_RISK_ADJUDICATION_SCHEMA
+    assert captured["payload"]["entry_setup_evidence_v1"] == setup_evidence
+    assert captured["metadata_extra"]["entry_setup_live_policy_status"] == (
+        "active_bounded_krx_canary"
+    )
+    assert result["ai_prompt_version"] == (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    )
+    assert result["ai_input_schema"] == "entry_setup_v2_14_live_input"
+    assert result["action"] == "WAIT"
+    assert result["score"] == 70
+    assert result["entry_probe_intent"] is True
+    assert result["entry_probe_first_required"] is True
+    assert result["entry_ai_full_entry_forbidden"] is True
+    assert "broker_order_forbidden" not in result
+    assert "allowed_runtime_apply" not in result
+    assert result["entry_setup_composer_broker_order_forbidden"] is True
+    assert result["entry_setup_live_adapter_runtime_effect"] is True
+
+
 def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatch):
     engine = _build_engine()
     monkeypatch.setattr(
@@ -3048,6 +3170,115 @@ def test_decision_quality_v2_13_buy_maps_to_guarded_wait_probe(monkeypatch):
     assert "recovery_confirmation_buy_not_eligible" in (
         rejected["decision_quality_contract_errors"]
     )
+
+
+def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score():
+    engine = _build_engine()
+    prompt, prompt_type, prompt_version, profile = engine._resolve_scalping_prompt(
+        "watching",
+        prompt_version_override=(
+            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ),
+    )
+    assert prompt == decision_quality_v2_14_setup_risk_adjudicator_system_prompt(
+        "entry"
+    )
+    assert prompt_type == "scalping_entry"
+    assert prompt_version == (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    )
+    assert profile == "watching"
+
+    setup_evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={
+            "schema": "exact_payload_analysis_v1",
+            "source_quality": {"status": "pass", "completed_bar_count": 20},
+            "executable_liquidity": {"execution_cost_state": "low"},
+            "contradictions": [],
+            "deterministic_contract_facts": {
+                "structural_edge_floor": True,
+                "early_session_structural_edge_floor": False,
+                "early_session_probe_candidate": False,
+                "orderly_pullback_recovery": False,
+                "trusted_supportive_trigger": True,
+                "adverse_distribution_no_edge": False,
+                "blocking_overextension": False,
+                "ask_wall_wide_spread": False,
+            },
+        },
+        recovery_analysis={
+            "schema": "anticipatory_reversal_analysis_v1",
+            "source_mode": "fresh_dual",
+            "hard_blockers": [],
+            "clean_continuation_probe": {"eligible": True},
+            "recovery_confirmation_probe": {"eligible": False},
+        },
+    )
+    risk_response = {
+        "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+        "risk_verdict": "PASS",
+        "risk_codes": ["NO_BLOCKING_RISK"],
+        "supporting_fact_ids": ["structural_edge_floor"],
+        "contradicting_fact_ids": [],
+        "confidence": 1,
+    }
+    live_policy = {
+        "enabled": True,
+        "status": "active_bounded_krx_canary",
+        "selected_prompt_version": (
+            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ),
+        "source_date": "2026-08-06",
+        "target_date": "2026-08-07",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "activation_artifact_sha256": "activation-sha",
+        "candidate_contract_sha256": "candidate-sha",
+        "runtime_effect": True,
+    }
+    result = engine._normalize_decision_quality_entry_result(
+        risk_response,
+        exact_payload={"current": {"price": 10000}},
+        prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
+        entry_setup_evidence=setup_evidence,
+        live_policy=live_policy,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["score"] == 70
+    assert result["decision_quality_score_semantics"] == (
+        "fixed_compatibility_prior_not_ai_quality_gate"
+    )
+    assert result["entry_probe_intent"] is True
+    assert result["entry_probe_first_required"] is True
+    assert result["entry_ai_full_entry_forbidden"] is True
+    assert "broker_order_forbidden" not in result
+    role_gate = evaluate_entry_score_role_gate(
+        {**result, "ai_result_source": "live", "ai_parse_ok": True},
+        source_stage="analyze_target",
+        ai_score=result["score"],
+        ai_action=result["action"],
+    )
+    assert role_gate["entry_score_usable_for_recheck"] is True
+
+    blocked_reentry = engine._normalize_decision_quality_entry_result(
+        risk_response,
+        exact_payload={
+            "current": {"price": 10100},
+            "recent_exit_context": {
+                "exit_price": 10000,
+                "reentry_policy": "fresh_post_exit_confirmation_required",
+            },
+        },
+        prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
+        entry_setup_evidence=setup_evidence,
+        live_policy=live_policy,
+    )
+    assert blocked_reentry["action"] == "WAIT"
+    assert blocked_reentry["entry_probe_intent"] is False
+    assert blocked_reentry["entry_recent_exit_probe_blocked"] is True
+    assert blocked_reentry["entry_recent_exit_price_vs_exit_pct"] == 1.0
 
 
 def test_decision_quality_v2_13_clean_wait_maps_to_guarded_probe(monkeypatch):
