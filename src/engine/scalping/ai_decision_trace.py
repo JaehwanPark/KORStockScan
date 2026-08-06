@@ -1358,9 +1358,9 @@ def record_ai_decision_trace(
             in {"timeout", "exception", "error"}
             else str(result_source or "-")
         )
-        preflight_status = str(
-            _optional(merged, "ai_input_preflight_status") or ""
-        ).strip().lower()
+        preflight_status = (
+            str(_optional(merged, "ai_input_preflight_status") or "").strip().lower()
+        )
         preflight_allowed = (
             _safe_bool(merged.get("ai_input_preflight_allowed"))
             if "ai_input_preflight_allowed" in merged
@@ -1378,16 +1378,18 @@ def record_ai_decision_trace(
             )
         if preflight_allowed is False:
             outcome_label_exclusion_reasons.append("input_preflight_not_allowed")
-        if preflight_status in {
-            "blocked",
-            "fail",
-            "failed",
-            "source_quality_blocked",
-        } or normalized_result_source == "input_preflight_blocked":
+        if (
+            preflight_status
+            in {
+                "blocked",
+                "fail",
+                "failed",
+                "source_quality_blocked",
+            }
+            or normalized_result_source == "input_preflight_blocked"
+        ):
             outcome_label_exclusion_reasons.append("input_preflight_blocked")
-        outcome_label_exclusion_reasons = sorted(
-            set(outcome_label_exclusion_reasons)
-        )
+        outcome_label_exclusion_reasons = sorted(set(outcome_label_exclusion_reasons))
         stage = _decision_stage(prompt_type, decision_stage)
         reference_price_type = _optional(merged, "ai_trace_reference_price_type")
         reference_price = _safe_number(_optional(merged, "ai_trace_reference_price"))

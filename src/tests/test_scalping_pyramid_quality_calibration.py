@@ -118,9 +118,10 @@ def test_pyramid_quality_calibration_excludes_blocked_source_date(
 
     assert candidate["sample_count"] == 1
     assert candidate["cumulative_quality_window"]["source_dates"] == ["2026-07-02"]
-    assert candidate["cumulative_quality_window"][
-        "source_quality_excluded_date_count"
-    ] == 1
+    assert (
+        candidate["cumulative_quality_window"]["source_quality_excluded_date_count"]
+        == 1
+    )
     assert report["source_quality"]["input_paths"] == [str(allowed)]
 
 
@@ -210,10 +211,9 @@ def test_pyramid_quality_calibration_blocks_pressure_provenance_missing_report(
     assert "rolling_closed_pyramid_rows_lt_20" in candidate["calibration_reason"]
     assert candidate["source_quality_gate"] == "source_quality_blocked"
     assert candidate["source_quality_status"] == "blocked"
-    assert (
-        candidate["source_metrics"]["source_quality_exclusion_reasons"]
-        == {"pressure_provenance_invalid": 20}
-    )
+    assert candidate["source_metrics"]["source_quality_exclusion_reasons"] == {
+        "pressure_provenance_invalid": 20
+    }
 
 
 def test_pyramid_quality_calibration_blocks_pressure_provenance_unusable_report(
@@ -243,10 +243,9 @@ def test_pyramid_quality_calibration_blocks_pressure_provenance_unusable_report(
     assert candidate["calibration_state"] == "hold_sample"
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["target_env_keys"] == []
-    assert (
-        candidate["source_metrics"]["source_quality_exclusion_reasons"]
-        == {"pressure_provenance_invalid": 20}
-    )
+    assert candidate["source_metrics"]["source_quality_exclusion_reasons"] == {
+        "pressure_provenance_invalid": 20
+    }
 
 
 def test_pyramid_quality_calibration_blocks_micro_vwap_provenance_report(
@@ -276,10 +275,9 @@ def test_pyramid_quality_calibration_blocks_micro_vwap_provenance_report(
     assert candidate["calibration_state"] == "hold_sample"
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["target_env_keys"] == []
-    assert (
-        candidate["source_metrics"]["source_quality_exclusion_reasons"]
-        == {"micro_vwap_provenance_invalid": 20}
-    )
+    assert candidate["source_metrics"]["source_quality_exclusion_reasons"] == {
+        "micro_vwap_provenance_invalid": 20
+    }
 
 
 def test_pyramid_quality_calibration_keeps_valid_rows_from_mixed_quality_report(
@@ -312,9 +310,10 @@ def test_pyramid_quality_calibration_keeps_valid_rows_from_mixed_quality_report(
     assert candidate["allowed_runtime_apply"] is True
     assert candidate["source_metrics"]["source_quality_excluded_row_count"] == 2
     assert report["runtime_update_contract"]["max_runtime_apply_count"] == 1
-    assert report["runtime_update_contract"]["quality_update_id"] == candidate[
-        "quality_update_id"
-    ]
+    assert (
+        report["runtime_update_contract"]["quality_update_id"]
+        == candidate["quality_update_id"]
+    )
 
 
 def test_pyramid_quality_calibration_uses_all_one_share_rows_for_thresholds(

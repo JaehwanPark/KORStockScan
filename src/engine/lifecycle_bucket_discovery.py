@@ -2387,10 +2387,9 @@ def _entry_source_taxonomy_allows_sim_exploration(
         dimensions.get("entry_source_parent_contract_state") or ""
     ).strip()
     consume_data_raw = dimensions.get("entry_source_parent_consume_data")
-    consume_data_explicitly_false = (
-        consume_data_raw is not None
-        and str(consume_data_raw).strip().lower() in {"false", "0", "no", "off"}
-    )
+    consume_data_explicitly_false = consume_data_raw is not None and str(
+        consume_data_raw
+    ).strip().lower() in {"false", "0", "no", "off"}
     return (
         contract_state != "new_axis_pending_taxonomy"
         and not consume_data_explicitly_false
@@ -2406,9 +2405,7 @@ def _entry_source_taxonomy_allows_live_conversion(
         dimensions.get("entry_source_parent_contract_state") or ""
     ).strip()
     consume_data = (
-        str(dimensions.get("entry_source_parent_consume_data") or "")
-        .strip()
-        .lower()
+        str(dimensions.get("entry_source_parent_consume_data") or "").strip().lower()
         == "true"
     )
     runtime_effect_allowed = (
@@ -3006,19 +3003,13 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
         parent_granularity_status = str(
             parent.get("parent_granularity_status") or "unknown"
         )
-        parent_granularity_pass = bool(
-            parent.get("parent_granularity_floor_passed")
-        )
+        parent_granularity_pass = bool(parent.get("parent_granularity_floor_passed"))
         sim_source_quality_pass = bool(
             parent.get("parent_sim_exploration_source_quality_passed", True)
         )
-        taxonomy_source_pass = _entry_source_taxonomy_allows_sim_exploration(
-            dimensions
-        )
+        taxonomy_source_pass = _entry_source_taxonomy_allows_sim_exploration(dimensions)
         live_source_quality_pass = bool(
-            parent.get(
-                "parent_live_source_quality_passed", sim_source_quality_pass
-            )
+            parent.get("parent_live_source_quality_passed", sim_source_quality_pass)
         )
         taxonomy_live_pass = _entry_source_taxonomy_allows_live_conversion(dimensions)
         ev_positive = ev is not None and ev > 0
@@ -3180,9 +3171,7 @@ def _build_active_sim_priority_seeds(report: dict[str, Any]) -> list[dict[str, A
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "retired_reason": (
-                "consecutive_sim_exploration_ineligible"
-                if status == "retired"
-                else ""
+                "consecutive_sim_exploration_ineligible" if status == "retired" else ""
             ),
         }
         if (
@@ -3398,9 +3387,7 @@ def _active_sim_priority_diagnostics(
         source_quality_pass = bool(
             parent.get("parent_sim_exploration_source_quality_passed", True)
         )
-        taxonomy_source_pass = _entry_source_taxonomy_allows_sim_exploration(
-            dimensions
-        )
+        taxonomy_source_pass = _entry_source_taxonomy_allows_sim_exploration(dimensions)
         if not observable_prefix:
             blocked_observable_prefix_count += 1
         if ev is None or ev <= 0:
@@ -6990,9 +6977,7 @@ def _write_sim_auto_approval(report: dict[str, Any]) -> None:
         ),
         "approved_evidence_grade_counts": dict(sorted(grade_counts.items())),
         "source_quality_status": (
-            "pass"
-            if (approved_bucket_ids or active_status_priority_seeds)
-            else "empty"
+            "pass" if (approved_bucket_ids or active_status_priority_seeds) else "empty"
         ),
         "blocked_reasons": (
             []

@@ -253,9 +253,9 @@ def prepare_stage_requests(
             "record_id": trace.get("record_id"),
             "decision_ts": trace.get("decision_ts"),
             "source_date": str(trace.get("decision_ts") or "")[:10],
-            "stage": "holding"
-            if normalized_stage == "holding_flow"
-            else normalized_stage,
+            "stage": (
+                "holding" if normalized_stage == "holding_flow" else normalized_stage
+            ),
             "coverage_stage": normalized_stage,
             "endpoint": endpoint,
             "stock_code": trace.get("stock_code"),
@@ -1351,9 +1351,7 @@ def build_entry_price_selection_outcome_comparison(
         "status": (
             "candidate_quality_pass_offline_only"
             if quality_gate_pass
-            else "candidate_quality_rejected"
-            if rows
-            else "no_comparable_rows"
+            else "candidate_quality_rejected" if rows else "no_comparable_rows"
         ),
         "quality_gate_pass": quality_gate_pass,
         "quality_checks": quality_checks,

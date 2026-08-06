@@ -168,15 +168,17 @@ def test_avg_down_calibration_excludes_blocked_source_date(tmp_path, monkeypatch
     assert candidate["cumulative_quality_window"]["source_dates"] == ["2026-07-09"]
     assert candidate["source_metrics"]["shallow_raw_submit_pass_avg_down_count"] == 1
     assert report["source_quality"]["input"] == [str(allowed)]
-    assert report["source_quality"]["source_quality_excluded_dates"][0][
-        "source_date"
-    ] == "2026-07-10"
+    assert (
+        report["source_quality"]["source_quality_excluded_dates"][0]["source_date"]
+        == "2026-07-10"
+    )
     assert candidate["runtime_update_mode"] == "single_cumulative_quality_update"
     assert candidate["max_runtime_apply_count"] == 1
     assert candidate["post_apply_attribution_required"] is True
-    assert report["runtime_update_contract"]["quality_update_id"] == candidate[
-        "quality_update_id"
-    ]
+    assert (
+        report["runtime_update_contract"]["quality_update_id"]
+        == candidate["quality_update_id"]
+    )
     assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 0
 
 

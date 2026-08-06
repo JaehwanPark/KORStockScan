@@ -1047,20 +1047,12 @@ def _calibration_candidate(
         "allowed_runtime_apply": allowed,
         "safety_revert_required": False,
         "source_quality_gate": (
-            (
-                "pass_with_row_exclusions"
-                if row_exclusion_counts
-                else "pass"
-            )
+            ("pass_with_row_exclusions" if row_exclusion_counts else "pass")
             if source_contract_pass
             else "source_quality_blocked"
         ),
         "source_quality_status": (
-            (
-                "pass_with_row_exclusions"
-                if row_exclusion_counts
-                else "pass"
-            )
+            ("pass_with_row_exclusions" if row_exclusion_counts else "pass")
             if source_contract_pass
             else "blocked"
         ),
@@ -1199,9 +1191,7 @@ def build_report(
                 bool(candidate.get("allowed_runtime_apply"))
             ),
             "quality_update_id": candidate.get("quality_update_id"),
-            "cumulative_quality_window": candidate.get(
-                "cumulative_quality_window"
-            ),
+            "cumulative_quality_window": candidate.get("cumulative_quality_window"),
             "post_apply_attribution_required": True,
             "runtime_effect": False,
         },

@@ -224,7 +224,11 @@ def test_feedback_report_consumes_attribution_from_every_lifecycle_stage(
     scout = _armed_scout_stock()
     events = []
     for stage, emitted_at, pipeline in (
-        ("rising_missed_one_share_entry", "2026-08-03T08:05:00+09:00", "ENTRY_PIPELINE"),
+        (
+            "rising_missed_one_share_entry",
+            "2026-08-03T08:05:00+09:00",
+            "ENTRY_PIPELINE",
+        ),
         ("probe_submitted", "2026-08-03T08:05:01+09:00", "ENTRY_PIPELINE"),
         ("probe_filled", "2026-08-03T08:05:02+09:00", "HOLDING_PIPELINE"),
         ("order_bundle_submitted", "2026-08-03T08:05:03+09:00", "ENTRY_PIPELINE"),

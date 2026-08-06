@@ -891,9 +891,10 @@ def test_active_sim_priority_sim_exploration_does_not_require_parent_count_floor
     assert floor_gap["sim_exploration_decoupled_from_parent_count"] is True
     assert floor_gap["parent_granularity_required_for_live_only"] is True
     assert "parent_granularity_not_target" in floor_gap["live_conversion_blockers"]
-    assert "entry_source_taxonomy_not_runtime_ready" in floor_gap[
-        "live_conversion_blockers"
-    ]
+    assert (
+        "entry_source_taxonomy_not_runtime_ready"
+        in floor_gap["live_conversion_blockers"]
+    )
     assert floor_gap["live_conversion_taxonomy_runtime_ready"] is False
     assert floor_gap["active_collection_reason"] == (
         "positive_ev_parent_needs_sim_collection"
@@ -975,9 +976,7 @@ def test_active_sim_priority_blocks_bad_source_quality_and_pending_taxonomy(
                 "dimension_filters": {
                     "entry_score_parent": "score_watch_recovery",
                     "entry_source_parent": "entry_source_observed_other",
-                    "entry_source_parent_contract_state": (
-                        "new_axis_pending_taxonomy"
-                    ),
+                    "entry_source_parent_contract_state": ("new_axis_pending_taxonomy"),
                     "entry_source_parent_consume_data": "True",
                 },
             },
@@ -997,9 +996,10 @@ def test_active_sim_priority_blocks_bad_source_quality_and_pending_taxonomy(
     assert seeds["parent_pending_taxonomy"]["source_quality_status"] == (
         "taxonomy_blocked"
     )
-    assert "source_quality_not_passed" in seeds["parent_pending_taxonomy"][
-        "live_conversion_blockers"
-    ]
+    assert (
+        "source_quality_not_passed"
+        in seeds["parent_pending_taxonomy"]["live_conversion_blockers"]
+    )
     assert all(
         seed["sim_exploration_decoupled_from_parent_count"] is False
         for seed in seeds.values()
@@ -2834,9 +2834,9 @@ def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparis
 def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
     bucket_id = "scale_in:blocker_reason:pnl_out_of_range_0_32"
     payload = _ai_hybrid_taxonomy_response(bucket_id)
-    payload["comparative_reviews"][0]["comparison_summary"] = (
-        "Use preapply_real primary_ev and merge_real_pnl_with_sim because one-share was profitable."
-    )
+    payload["comparative_reviews"][0][
+        "comparison_summary"
+    ] = "Use preapply_real primary_ev and merge_real_pnl_with_sim because one-share was profitable."
 
     status, _, warnings = mod._parse_ai_review_response(payload)
 

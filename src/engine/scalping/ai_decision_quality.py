@@ -410,7 +410,9 @@ def resolve_candidate_reason_code_conflicts(
             "confirmed": "recovery_trigger_confirmed",
             "recovery_required": "recovery_trigger_required",
             "failed": "recovery_trigger_failed",
-        }.get(trigger),
+        }.get(
+            trigger
+        ),
     }
     try:
         upside = float(response.get("expected_upside_pct"))
@@ -4820,9 +4822,11 @@ def _entry_price_response_errors(
     if facts["skip_permitted"]:
         errors.append("entry_price_explicit_blocker_requires_skip")
     action_bases = {
-        "USE_DEFENSIVE": {"DEFENSIVE"}
-        if facts["candidate_prices"].get("DEFENSIVE") is not None
-        else {"BEST_BID"},
+        "USE_DEFENSIVE": (
+            {"DEFENSIVE"}
+            if facts["candidate_prices"].get("DEFENSIVE") is not None
+            else {"BEST_BID"}
+        ),
         "USE_REFERENCE": {"REFERENCE"},
         "IMPROVE_LIMIT": {"RESOLVED", "BEST_ASK"},
     }
@@ -7602,16 +7606,12 @@ def build_paired_replay_report(
         control_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and control_exposure_selected
-            else 0.0
-            if execution_cost_contract_applied
-            else None
+            else 0.0 if execution_cost_contract_applied else None
         )
         candidate_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and candidate_exposure_selected
-            else 0.0
-            if execution_cost_contract_applied
-            else None
+            else 0.0 if execution_cost_contract_applied else None
         )
         control_primary_value = (
             (outcome if control_exposure_selected else 0.0)

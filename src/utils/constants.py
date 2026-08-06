@@ -759,9 +759,7 @@ class TradingConfig:
         120  # OPEN_RECLAIM 양전환 이력 케이스 near_ai_exit 지속 필요시간
     )
     SCALP_LATENCY_DANGER_MAX_WS_AGE_MS: int = 450
-    SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS: int = (
-        260  # DANGER 상세 원인 분류 기준
-    )
+    SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS: int = 260  # DANGER 상세 원인 분류 기준
     SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO: float = (
         0.0100  # DANGER 상세 원인 분류 및 hard-safety provenance 기준
     )
@@ -1533,9 +1531,7 @@ def _build_trading_rules() -> TradingConfig:
         )
     env_ws_jitter = _env_int("KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_JITTER_MS")
     env_ws_age = _env_int("KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_WS_AGE_MS")
-    env_spread_ratio = _env_float(
-        "KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO"
-    )
+    env_spread_ratio = _env_float("KORSTOCKSCAN_SCALP_LATENCY_DANGER_MAX_SPREAD_RATIO")
     env_entry_latency_max_ws_age_caution = _env_int(
         "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION"
     )

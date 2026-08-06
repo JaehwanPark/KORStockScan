@@ -1561,9 +1561,7 @@ def test_cache_trace_separates_provider_call_from_decision_origin(
     assert not trace._outcome_path(trace._date_text()).exists()
 
 
-def test_string_false_provider_flag_cannot_create_outcome_label(
-    monkeypatch, tmp_path
-):
+def test_string_false_provider_flag_cannot_create_outcome_label(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
 
     fields = trace.record_ai_decision_trace(

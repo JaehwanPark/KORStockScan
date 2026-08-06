@@ -1819,9 +1819,9 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
     item["post_probe_counterfactual_source_quality_reasons"] = (
         counterfactual_source_quality_reasons
     )
-    item[
-        "post_probe_counterfactual_source_quality_valid"
-    ] = not counterfactual_source_quality_reasons
+    item["post_probe_counterfactual_source_quality_valid"] = (
+        not counterfactual_source_quality_reasons
+    )
     item["post_probe_counterfactual_first_leg_profit_proxy_krw"] = (
         round(first_leg_notional * final_profit / 100.0, 2)
         if first_leg_notional > 0 and final_profit is not None
@@ -2882,19 +2882,17 @@ def _real_scale_in_execution_record(
         "scale_in_outcome_cohort": (
             "winner_recovery"
             if add_reason == "post_probe_winner_recovery_first_leg"
-            else "avg_down"
-            if add_type == "AVG_DOWN"
-            else "normal_pyramid"
-            if add_type == "PYRAMID"
-            else "unknown"
+            else (
+                "avg_down"
+                if add_type == "AVG_DOWN"
+                else "normal_pyramid" if add_type == "PYRAMID" else "unknown"
+            )
         ),
         "fill_price": round(fill_price, 4),
         "fill_qty": fill_qty,
         "fill_notional_krw": round(fill_price * fill_qty, 4),
         "post_add_avg_price": _safe_float(fields.get("new_avg_price"), None),
-        "post_add_position_qty": int(
-            _safe_float(fields.get("new_buy_qty"), 0) or 0
-        ),
+        "post_add_position_qty": int(_safe_float(fields.get("new_buy_qty"), 0) or 0),
         "closed": False,
         "actual_order_submitted": True,
         "broker_order_forbidden": False,
@@ -2905,9 +2903,7 @@ def _real_scale_in_execution_record(
     }
 
 
-def _update_real_scale_in_outcome(
-    item: dict[str, Any], row: dict[str, Any]
-) -> None:
+def _update_real_scale_in_outcome(item: dict[str, Any], row: dict[str, Any]) -> None:
     emitted_epoch = _event_epoch(row.get("emitted_at"))
     executed_epoch = _event_epoch(item.get("executed_at"))
     if (
@@ -3029,15 +3025,13 @@ def build_report(
             if existing_execution is None:
                 real_scale_in_records[execution_key] = real_scale_in
             else:
-                prior_notional = _safe_float(
-                    existing_execution.get("fill_notional_krw"), 0.0
-                ) or 0.0
-                prior_qty = int(
-                    _safe_float(existing_execution.get("fill_qty"), 0) or 0
+                prior_notional = (
+                    _safe_float(existing_execution.get("fill_notional_krw"), 0.0) or 0.0
                 )
-                added_notional = _safe_float(
-                    real_scale_in.get("fill_notional_krw"), 0.0
-                ) or 0.0
+                prior_qty = int(_safe_float(existing_execution.get("fill_qty"), 0) or 0)
+                added_notional = (
+                    _safe_float(real_scale_in.get("fill_notional_krw"), 0.0) or 0.0
+                )
                 added_qty = int(_safe_float(real_scale_in.get("fill_qty"), 0) or 0)
                 combined_qty = prior_qty + added_qty
                 combined_notional = prior_notional + added_notional
@@ -3050,9 +3044,7 @@ def build_report(
                             if combined_qty > 0
                             else 0.0
                         ),
-                        "post_add_avg_price": real_scale_in.get(
-                            "post_add_avg_price"
-                        ),
+                        "post_add_avg_price": real_scale_in.get("post_add_avg_price"),
                         "post_add_position_qty": real_scale_in.get(
                             "post_add_position_qty"
                         ),
@@ -3280,8 +3272,7 @@ def build_report(
         winner_recovery = item.get("scale_in_outcome_cohort") == "winner_recovery"
         item["winner_recovery_qty_cap"] = 1 if winner_recovery else None
         item["winner_recovery_qty_cap_valid"] = bool(
-            not winner_recovery
-            or int(_safe_float(item.get("fill_qty"), 0) or 0) <= 1
+            not winner_recovery or int(_safe_float(item.get("fill_qty"), 0) or 0) <= 1
         )
 
     label_counts = Counter(
@@ -3667,9 +3658,7 @@ def write_outputs(
                     "latest_position_profit_pct": item.get(
                         "latest_position_profit_pct"
                     ),
-                    "final_position_profit_pct": item.get(
-                        "final_position_profit_pct"
-                    ),
+                    "final_position_profit_pct": item.get("final_position_profit_pct"),
                     "scale_in_leg_gross_return_proxy_pct": item.get(
                         "scale_in_leg_gross_return_proxy_pct"
                     ),

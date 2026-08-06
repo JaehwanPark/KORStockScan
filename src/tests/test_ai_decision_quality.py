@@ -413,9 +413,9 @@ def test_cached_semantic_repair_requires_current_version_and_exact_repair_list()
 
     assert quality._semantic_repair_provenance_matches(result, request) is True
     stale = json.loads(json.dumps(result))
-    stale["candidate_attempts"][0]["provider_provenance"]["semantic_repair_version"] = (
-        "bounded_opportunity_fail_safe_repair_v1"
-    )
+    stale["candidate_attempts"][0]["provider_provenance"][
+        "semantic_repair_version"
+    ] = "bounded_opportunity_fail_safe_repair_v1"
     assert quality._semantic_repair_provenance_matches(stale, request) is False
     stale_list = json.loads(json.dumps(result))
     stale_list["candidate_attempts"][0]["provider_provenance"]["repairs"] = []
@@ -4653,9 +4653,8 @@ def test_paired_replay_uses_same_exact_payload_and_has_no_runtime_authority():
     )
     assert results[0]["same_payload_confirmed"] is True
     assert results[0]["status"] == "pass"
-    assert (
-        results[0]["candidate_contract_sha256"]
-        == (requests[0]["candidate"]["contract_sha256"])
+    assert results[0]["candidate_contract_sha256"] == (
+        requests[0]["candidate"]["contract_sha256"]
     )
     report = quality.build_paired_replay_report(
         target_date="2026-07-27",

@@ -214,9 +214,7 @@ def build_pattern_lab_propagation_audit(
             severity=(
                 "source_quality_blocker"
                 if scalping_status == "fail"
-                else "warning"
-                if scalping_status == "warning"
-                else "info"
+                else "warning" if scalping_status == "warning" else "info"
             ),
             finding=scalping_finding,
             source_paths=[scalping_path],
@@ -229,9 +227,7 @@ def build_pattern_lab_propagation_audit(
             severity=(
                 "source_quality_blocker"
                 if claude_status == "fail"
-                else "warning"
-                if claude_status == "warning"
-                else "info"
+                else "warning" if claude_status == "warning" else "info"
             ),
             finding=claude_finding,
             source_paths=[scalping_path],
@@ -281,9 +277,7 @@ def build_pattern_lab_propagation_audit(
                 severity=(
                     "source_quality_blocker"
                     if swing_status == "fail"
-                    else "warning"
-                    if swing_status == "warning"
-                    else "info"
+                    else "warning" if swing_status == "warning" else "info"
                 ),
                 finding=swing_finding,
                 source_paths=[swing_path],

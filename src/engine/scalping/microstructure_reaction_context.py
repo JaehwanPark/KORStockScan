@@ -1713,9 +1713,11 @@ def _attach_time_exact_outcomes(
                 "cost_adjusted_counterfactual_return_pct": outcome.get(
                     "cost_adjusted_counterfactual_return_pct"
                 ),
-                "forward_horizon_metrics": outcome.get("forward_horizon_metrics")
-                if isinstance(outcome.get("forward_horizon_metrics"), dict)
-                else {},
+                "forward_horizon_metrics": (
+                    outcome.get("forward_horizon_metrics")
+                    if isinstance(outcome.get("forward_horizon_metrics"), dict)
+                    else {}
+                ),
             }
         )
     return path, source_status
@@ -1846,9 +1848,9 @@ def _microstructure_exploration_funnel(
         "outcome_join_status_counts": dict(sorted(outcome_join_counts.items())),
         "post_observation_outcome_join_complete": len(joined_opportunities)
         == len(unsubmitted_opportunities),
-        "outcome_source_path": str(outcome_source_path)
-        if outcome_source_path.exists()
-        else None,
+        "outcome_source_path": (
+            str(outcome_source_path) if outcome_source_path.exists() else None
+        ),
         "outcome_source_status": outcome_source_status,
         "required_downstream_join": (
             "generate attempt-time outcome rows for no_matching_watch_cycle or "
@@ -2330,26 +2332,30 @@ def _clean_baseline_cumulative_opportunity_exploration(
         ),
         "source_quality_adjusted_ev_pct": source_quality_adjusted_ev_pct,
         "source_quality_adjusted_ev_evaluable_count": ev_count,
-        "primary_horizon_avg_mfe_pct": round(
-            sum(
-                _safe_float(row.get("primary_mfe_sum_pct"), 0.0)
-                for row in decision_rows
+        "primary_horizon_avg_mfe_pct": (
+            round(
+                sum(
+                    _safe_float(row.get("primary_mfe_sum_pct"), 0.0)
+                    for row in decision_rows
+                )
+                / horizon_count,
+                6,
             )
-            / horizon_count,
-            6,
-        )
-        if horizon_count
-        else None,
-        "primary_horizon_avg_mae_pct": round(
-            sum(
-                _safe_float(row.get("primary_mae_sum_pct"), 0.0)
-                for row in decision_rows
+            if horizon_count
+            else None
+        ),
+        "primary_horizon_avg_mae_pct": (
+            round(
+                sum(
+                    _safe_float(row.get("primary_mae_sum_pct"), 0.0)
+                    for row in decision_rows
+                )
+                / horizon_count,
+                6,
             )
-            / horizon_count,
-            6,
-        )
-        if horizon_count
-        else None,
+            if horizon_count
+            else None
+        ),
         "primary_horizon_evaluable_count": horizon_count,
         "sample_floor_met": sample_floor_met,
         "daily_rows": rows,

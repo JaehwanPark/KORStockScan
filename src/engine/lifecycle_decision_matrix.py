@@ -3588,9 +3588,7 @@ def _submit_bucket_row(
     source_quality = (
         "source_quality_blocker"
         if unknown_bucket
-        else "pass"
-        if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR
-        else "hold_sample"
+        else "pass" if len(rows) >= SUBMIT_BUCKET_SAMPLE_FLOOR else "hold_sample"
     )
     unknown_context = _unknown_taxonomy_context(
         bucket_type=bucket_type,
@@ -5939,9 +5937,7 @@ def _flow_record(
     scale_in_applicability = (
         "applied"
         if "applied" in scale_in_states
-        else "considered_not_applied"
-        if scale_in_rows
-        else "not_applicable"
+        else "considered_not_applied" if scale_in_rows else "not_applicable"
     )
     complete = all(stage_presence[stage] for stage in LIFECYCLE_FLOW_REQUIRED_STAGES)
     ev = _flow_ev(by_stage)
@@ -6003,9 +5999,7 @@ def _flow_record(
             else (
                 "real"
                 if real_flow and joined_flow
-                else "sim_probe"
-                if joined_flow
-                else "none"
+                else "sim_probe" if joined_flow else "none"
             )
         ),
     }
@@ -6074,9 +6068,7 @@ def _flow_record(
             1.0
             if _safe_float(labels.get("profit_rate"), None)
             and _safe_float(labels.get("profit_rate"), 0.0) > 0
-            else 0.0
-            if labels.get("profit_rate") is not None
-            else None
+            else 0.0 if labels.get("profit_rate") is not None else None
         ),
         "outcome_state": (
             "completed" if exit_row and ev is not None else "open_or_unjoined"
@@ -7019,9 +7011,7 @@ def _aggregate_existing_daily_lifecycle_reports(
     institutional_attribution = _institutional_flow_attribution(
         institutional_example_rows
     )
-    institutional_attribution["sample_scope"] = (
-        "daily_report_examples_max50_per_date"
-    )
+    institutional_attribution["sample_scope"] = "daily_report_examples_max50_per_date"
     institutional_attribution["full_joined_row_count"] = sum(
         item["joined_rows"] for item in institutional_sources_by_date.values()
     )
@@ -7271,14 +7261,10 @@ def build_lifecycle_decision_matrix_report(
     ) = _summarize_scale_in_counterfactual_source_statuses(
         cf_source_statuses, cf_enriched
     )
-    institutional_feature_maps_by_date: dict[
-        str, dict[str, dict[str, Any]]
-    ] = {}
+    institutional_feature_maps_by_date: dict[str, dict[str, dict[str, Any]]] = {}
     institutional_sources_by_date: dict[str, dict[str, Any]] = {}
     for source_date in source_dates:
-        feature_map, source_summary = _load_institutional_flow_feature_map(
-            source_date
-        )
+        feature_map, source_summary = _load_institutional_flow_feature_map(source_date)
         institutional_feature_maps_by_date[source_date] = feature_map
         institutional_sources_by_date[source_date] = source_summary
     institutional_joined_rows = _apply_institutional_flow_features(
@@ -7300,9 +7286,7 @@ def build_lifecycle_decision_matrix_report(
         ),
         "status": institutional_sources_by_date.get(target_date, {}).get("status"),
         "available_source_date_count": sum(
-            1
-            for item in institutional_sources_by_date.values()
-            if item.get("artifact")
+            1 for item in institutional_sources_by_date.values() if item.get("artifact")
         ),
         "joined_rows": institutional_joined_rows,
         "date_scoped_join": True,

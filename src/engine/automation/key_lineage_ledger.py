@@ -1281,9 +1281,11 @@ def _swing_rows(
     for policy_id, policy in sorted(catalog_by_id.items()):
         observed = policy_id in observed_ids
         preopen_selected = policy_id in preopen_ids
-        status = str(
-            policy.get("status") or policy.get("approval_state") or ""
-        ).strip().lower()
+        status = (
+            str(policy.get("status") or policy.get("approval_state") or "")
+            .strip()
+            .lower()
+        )
         if observed:
             state, blocker = "matched", ""
         elif status == "retired":
@@ -1827,9 +1829,7 @@ def build_key_lineage_ledger(
             "not_instrumented_count": state_counts.get("not_instrumented", 0),
             "natural_match_0_count": state_counts.get("natural_match_0", 0),
             "cooldown_intentional_count": state_counts.get("cooldown_intentional", 0),
-            "retired_intentional_count": state_counts.get(
-                "retired_intentional", 0
-            ),
+            "retired_intentional_count": state_counts.get("retired_intentional", 0),
             "lineage_blocker_count": len(blockers),
             "positive_ev_runtime_observed_count": positive_ev_runtime_observed_count,
             "positive_ev_sample_floor_blocked_count": positive_ev_sample_floor_blocked_count,
@@ -2210,9 +2210,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Exclude Swing lineage when Swing postclose work is operator-disabled.",
     )
     args = parser.parse_args(argv)
-    report = build_key_lineage_ledger(
-        args.date, include_swing=not args.exclude_swing
-    )
+    report = build_key_lineage_ledger(args.date, include_swing=not args.exclude_swing)
     json_path, md_path = write_key_lineage_ledger(report)
     print(
         json.dumps(
