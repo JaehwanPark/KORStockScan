@@ -1093,6 +1093,7 @@ _SCALP_SIM_AUTO_POLICY_CACHE: dict[str, object] = {
     "rows_by_bucket_id": {},
     "active_seeds": [],
     "active_seeds_by_prefix": {},
+    "active_seed_ids_by_prefix": {},
     "hypotheses": [],
     "approved_row_count": 0,
 }
@@ -1368,6 +1369,11 @@ def _scalp_active_seed_match_fields(
         if isinstance(cache.get("active_seeds_by_prefix"), dict)
         else {}
     )
+    seed_ids_by_prefix = (
+        cache.get("active_seed_ids_by_prefix")
+        if isinstance(cache.get("active_seed_ids_by_prefix"), dict)
+        else {}
+    )
     entry_source_contract = normalize_entry_source_parent(source_stage)
     candidate_prefix = {
         "entry_score_parent": _scalp_score_parent_from_value(score_value),
@@ -1422,9 +1428,15 @@ def _scalp_active_seed_match_fields(
         relaxed.pop("submit_quality_parent", None)
         probes.append(_scalp_active_seed_prefix_key(relaxed))
     seed = None
+    matched_seed_ids: list[str] = []
     for key in probes:
         if key and key in seeds_by_prefix:
             seed = seeds_by_prefix[key]
+            matched_seed_ids = [
+                str(item).strip()
+                for item in (seed_ids_by_prefix.get(key) or [])
+                if str(item).strip()
+            ]
             break
     if not isinstance(seed, dict):
         return {
@@ -1452,6 +1464,8 @@ def _scalp_active_seed_match_fields(
         "scalp_sim_active_priority_seed_matched": True,
         "active_seed_match_eligible": True,
         "active_seed_id": seed.get("active_seed_id"),
+        "active_seed_matched_ids": matched_seed_ids
+        or [str(seed.get("active_seed_id") or "").strip()],
         "source_parent_bucket_id": seed.get("source_parent_bucket_id"),
         "active_seed_status": seed.get("status"),
         "active_seed_match_source": "current_preopen_active_policy",
@@ -1632,6 +1646,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "active_seed_ids_by_prefix": {},
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
@@ -1655,6 +1670,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "active_seed_ids_by_prefix": {},
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
@@ -1681,6 +1697,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "active_seed_ids_by_prefix": {},
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
@@ -1718,6 +1735,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 "rows_by_bucket_id": {},
                 "active_seeds": [],
                 "active_seeds_by_prefix": {},
+                "active_seed_ids_by_prefix": {},
                 "policy_date": policy_date or None,
                 "runtime_apply_date": runtime_apply_date or None,
                 "expected_policy_source_date": expected_policy_source_date or None,
@@ -1752,6 +1770,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
     approved_rows: list[dict] = []
     active_seeds: list[dict] = []
     active_seeds_by_prefix: dict[str, dict] = {}
+    active_seed_ids_by_prefix: dict[str, list[str]] = {}
     hypotheses: list[dict] = []
     if schema_version == "lifecycle_bucket_catalog_v1":
         for row in catalog_buckets:
@@ -1800,12 +1819,19 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             continue
         active_seeds.append(seed)
         active_seeds_by_prefix[prefix_key] = seed
+        active_seed_ids_by_prefix.setdefault(prefix_key, []).append(
+            str(seed.get("active_seed_id") or "").strip()
+        )
         if "submit_quality_parent" in prefix:
             relaxed_prefix = dict(prefix)
             relaxed_prefix.pop("submit_quality_parent", None)
             relaxed_key = _scalp_active_seed_prefix_key(relaxed_prefix)
             if relaxed_key and relaxed_key not in active_seeds_by_prefix:
                 active_seeds_by_prefix[relaxed_key] = seed
+            if relaxed_key:
+                active_seed_ids_by_prefix.setdefault(relaxed_key, []).append(
+                    str(seed.get("active_seed_id") or "").strip()
+                )
     plan = (
         payload.get("hypothesis_observation_plan")
         if isinstance(payload.get("hypothesis_observation_plan"), dict)
@@ -1836,6 +1862,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         status = "policy_source_date_missing"
         active_seeds = []
         active_seeds_by_prefix = {}
+        active_seed_ids_by_prefix = {}
     if (
         status == "loaded"
         and expected_policy_source_date
@@ -1845,6 +1872,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         status = "policy_stale_source_date_mismatch"
         active_seeds = []
         active_seeds_by_prefix = {}
+        active_seed_ids_by_prefix = {}
     _SCALP_SIM_AUTO_POLICY_CACHE.update(
         {
             "path": str(path),
@@ -1863,6 +1891,10 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             "rows_by_bucket_id": rows_by_bucket_id,
             "active_seeds": active_seeds,
             "active_seeds_by_prefix": active_seeds_by_prefix,
+            "active_seed_ids_by_prefix": {
+                key: sorted(set(value))
+                for key, value in active_seed_ids_by_prefix.items()
+            },
             "hypotheses": hypotheses,
             "approved_row_count": len(rows_by_source_bucket_id)
             or len(rows_by_bucket_id),
@@ -8248,6 +8280,7 @@ _SCALP_SIM_CANDIDATE_WINDOW_CONTEXT_KEYS = (
 _SCALP_SIM_ACTIVE_SEED_CONTEXT_KEYS = (
     "scalp_sim_active_priority_seed_matched",
     "active_seed_id",
+    "active_seed_matched_ids",
     "source_parent_bucket_id",
     "active_seed_status",
     "active_seed_match_source",

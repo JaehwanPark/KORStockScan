@@ -384,6 +384,7 @@ def _event_field_values(
     untracked_value_limit, line_bytes_limit = _event_io_guard_config()
     field_keys = {
         "active_seed_id",
+        "active_seed_matched_ids",
         "active_sim_priority_seed_id",
         "scalp_sim_active_priority_seed_id",
         "priority_policy_id",
@@ -527,7 +528,48 @@ def _event_field_values(
                     inferred_parent_seed_ids = active_seed_prefix_index.get(
                         prefix_key, []
                     )
-                    if not seed_id and len(inferred_parent_seed_ids) == 1:
+                    matched_value = fields.get("scalp_sim_active_priority_seed_matched")
+                    matched = (
+                        "true"
+                        if matched_value is True
+                        else (
+                            "false"
+                            if matched_value is False
+                            else str(matched_value or "").strip().lower()
+                        )
+                    )
+                    explicit_matched_seed_ids = fields.get("active_seed_matched_ids")
+                    if isinstance(explicit_matched_seed_ids, str):
+                        try:
+                            explicit_matched_seed_ids = json.loads(
+                                explicit_matched_seed_ids
+                            )
+                        except Exception:
+                            explicit_matched_seed_ids = [explicit_matched_seed_ids]
+                    matched_seed_ids = {
+                        str(item).strip()
+                        for item in (
+                            explicit_matched_seed_ids
+                            if isinstance(explicit_matched_seed_ids, list)
+                            else []
+                        )
+                        if str(item).strip()
+                    }
+                    if matched == "true":
+                        matched_seed_ids.update(inferred_parent_seed_ids)
+                    for matched_seed_id in sorted(matched_seed_ids):
+                        _bounded_add(
+                            values,
+                            key="active_seed_matched_ids",
+                            value=matched_seed_id,
+                            tracked_values=tracked_values,
+                            untracked_value_limit=untracked_value_limit,
+                        )
+                    if (
+                        not seed_id
+                        and matched == "true"
+                        and len(inferred_parent_seed_ids) == 1
+                    ):
                         seed_id = inferred_parent_seed_ids[0]
                         fields["active_seed_id"] = seed_id
                         fields["active_seed_id_inferred_from_observable_prefix"] = True
@@ -547,18 +589,17 @@ def _event_field_values(
                             "active_seed_candidate_inferred_parent_seed_id_prefix_counts"
                         ]
                         prefix_counts[prefix_key] = prefix_counts.get(prefix_key, 0) + 1
-                    elif not seed_id and len(inferred_parent_seed_ids) > 1:
+                    elif (
+                        not seed_id
+                        and matched == "true"
+                        and len(inferred_parent_seed_ids) > 1
+                    ):
                         fields["active_seed_id_inference_source"] = (
                             "catalog_active_observable_prefix_ambiguous"
                         )
                         policy_diag[
                             "active_seed_candidate_ambiguous_parent_seed_prefix_event_count"
                         ] += 1
-                    matched = (
-                        str(fields.get("scalp_sim_active_priority_seed_matched") or "")
-                        .strip()
-                        .lower()
-                    )
                     explicit_eligible = _bool_field(
                         fields.get("active_seed_match_eligible"), None
                     )
@@ -612,7 +653,8 @@ def _event_field_values(
                                 "active_seed_candidate_raw_followup_without_seed_id_event_count"
                             ] += 1
                     if eligible:
-                        if seed_id:
+                        has_seed_lineage = bool(seed_id or matched_seed_ids)
+                        if has_seed_lineage:
                             policy_diag[
                                 "active_seed_candidate_matched_event_count"
                             ] += 1
@@ -632,7 +674,7 @@ def _event_field_values(
                                 policy_diag[
                                     "active_seed_candidate_followup_unmatched_event_count"
                                 ] += 1
-                        if not seed_id:
+                        if not has_seed_lineage and matched != "false":
                             policy_diag[
                                 "active_seed_candidate_without_seed_id_event_count"
                             ] += 1
@@ -859,7 +901,29 @@ def _event_field_values(
                     policy_diag["zero_count_data_consumed"] = True
             for key in field_keys:
                 value = fields.get(key) if isinstance(fields, dict) else None
-                if str(value or "").strip():
+                if isinstance(value, list):
+                    for item in value:
+                        if str(item or "").strip():
+                            target_key = key
+                            if (
+                                key
+                                in {
+                                    "active_seed_id",
+                                    "active_seed_matched_ids",
+                                    "active_sim_priority_seed_id",
+                                    "scalp_sim_active_priority_seed_id",
+                                }
+                                and active_count == 0
+                            ):
+                                target_key = "pre_policy_active_seed_id"
+                            _bounded_add(
+                                values,
+                                key=target_key,
+                                value=str(item),
+                                tracked_values=tracked_values,
+                                untracked_value_limit=untracked_value_limit,
+                            )
+                elif str(value or "").strip():
                     if key in {
                         "active_seed_id",
                         "active_sim_priority_seed_id",
@@ -1148,6 +1212,7 @@ def _scalp_rows(
     )
     observed_ids = set().union(
         events.get("active_seed_id", set()),
+        events.get("active_seed_matched_ids", set()),
         events.get("active_sim_priority_seed_id", set()),
         events.get("scalp_sim_active_priority_seed_id", set()),
     )
@@ -1503,6 +1568,7 @@ def _tracked_event_values(
             bucket_ids.add(bucket_id)
     return {
         "active_seed_id": scalp_ids,
+        "active_seed_matched_ids": scalp_ids,
         "active_sim_priority_seed_id": scalp_ids,
         "scalp_sim_active_priority_seed_id": scalp_ids,
         "priority_policy_id": swing_ids,
@@ -2000,8 +2066,9 @@ def build_key_lineage_ledger(
             )
             or {},
             "active_seed_candidate_validation_scope": (
-                "eligible new_entry/followup events validate active_seed_id; "
-                "diagnostic or observation-only events are not_match_eligible"
+                "matched eligible new_entry/followup events validate one or more "
+                "active seed ids; explicit natural no-match events do not require "
+                "a parent seed id"
             ),
             "panic_scale_in_event_count": _safe_int(
                 active_policy_observation.get("panic_scale_in_event_count")

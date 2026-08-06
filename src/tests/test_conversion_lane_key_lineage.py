@@ -399,13 +399,13 @@ def test_key_lineage_splits_active_seed_new_entry_from_followup_context(
     assert (
         report["summary"]["active_seed_candidate_not_match_eligible_event_count"] == 1
     )
-    assert report["summary"]["active_seed_candidate_without_seed_id_event_count"] == 2
+    assert report["summary"]["active_seed_candidate_without_seed_id_event_count"] == 0
     assert (
         report["summary"]["active_seed_candidate_raw_without_seed_id_event_count"] == 3
     )
     assert (
         report["summary"]["active_seed_candidate_followup_without_seed_id_event_count"]
-        == 1
+        == 0
     )
     assert (
         report["summary"][
@@ -416,20 +416,15 @@ def test_key_lineage_splits_active_seed_new_entry_from_followup_context(
     assert report["summary"][
         "active_seed_candidate_not_match_eligible_reason_counts"
     ] == {"diagnostic_followup_without_seed_context": 1}
-    assert report["summary"]["active_seed_candidate_without_seed_id_reason_counts"] == {
-        "new_entry_without_seed_id": 1,
-        "followup_missing_parent_seed_id": 1,
-    }
-    assert report["summary"][
-        "active_seed_candidate_missing_parent_seed_lookup_key_counts"
-    ] == {
-        '{"entry_score_parent":"score_mid_recovery"}': 1,
-    }
     assert (
-        report["summary"]["active_seed_candidate_lineage_closure_status"]
-        == "closed_with_producer_followup"
+        report["summary"]["active_seed_candidate_without_seed_id_reason_counts"] == {}
     )
-    assert report["summary"]["active_seed_candidate_lineage_followup_required"] is True
+    assert (
+        report["summary"]["active_seed_candidate_missing_parent_seed_lookup_key_counts"]
+        == {}
+    )
+    assert report["summary"]["active_seed_candidate_lineage_closure_status"] == "closed"
+    assert report["summary"]["active_seed_candidate_lineage_followup_required"] is False
     assert report["summary"]["active_seed_candidate_followup_stage_counts"] == {
         "scalp_sim_holding_started": 1,
         "scalp_sim_panic_scale_in_blocked": 1,
@@ -737,7 +732,7 @@ def test_key_lineage_event_io_guard_skips_oversized_lines(monkeypatch, tmp_path)
     assert report["summary"]["event_io_guard"]["oversized_line_skipped_count"] == 1
 
 
-def test_active_seed_candidate_without_seed_details_split_new_entry_and_followup(
+def test_active_seed_candidate_natural_no_match_does_not_require_seed_lineage(
     monkeypatch, tmp_path
 ):
     _patch_dirs(monkeypatch, tmp_path)
@@ -823,18 +818,13 @@ def test_active_seed_candidate_without_seed_details_split_new_entry_and_followup
 
     assert summary["active_seed_candidate_event_count"] == 3
     assert summary["active_seed_candidate_followup_event_count"] == 2
-    assert summary["active_seed_candidate_followup_without_seed_id_event_count"] == 1
-    assert summary["active_seed_candidate_without_seed_id_reason_counts"] == {
-        "followup_missing_parent_seed_id": 1,
-        "new_entry_without_seed_id": 1,
-    }
-    assert summary["active_seed_candidate_without_seed_id_detail_counts"] == {
-        "parent_seed_id_not_propagated_to_followup": 1,
-        "taxonomy_pending_or_natural_no_match": 1,
-    }
-    assert summary["active_seed_candidate_missing_parent_seed_stage_counts"] == {
-        "scalp_sim_holding_started": 1
-    }
+    assert summary["active_seed_candidate_followup_without_seed_id_event_count"] == 0
+    assert (
+        summary["active_seed_candidate_raw_followup_without_seed_id_event_count"] == 1
+    )
+    assert summary["active_seed_candidate_without_seed_id_reason_counts"] == {}
+    assert summary["active_seed_candidate_without_seed_id_detail_counts"] == {}
+    assert summary["active_seed_candidate_missing_parent_seed_stage_counts"] == {}
 
 
 def test_key_lineage_infers_followup_parent_seed_from_unique_observable_prefix(
@@ -888,15 +878,33 @@ def test_key_lineage_infers_followup_parent_seed_from_unique_observable_prefix(
     event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
     event_path.parent.mkdir(parents=True, exist_ok=True)
     event_path.write_text(
-        json.dumps(
-            {
-                "stage": "scalp_sim_holding_started",
-                "fields": {
-                    "scalp_sim_auto_policy_active_seed_count": "1",
-                    "active_seed_candidate_observable_prefix": prefix_text,
-                    "scalp_sim_active_priority_seed_matched": False,
+        "\n".join(
+            json.dumps(event)
+            for event in [
+                {
+                    "stage": "scalp_sim_holding_started",
+                    "fields": {
+                        "scalp_sim_auto_policy_active_seed_count": "1",
+                        "active_seed_candidate_observable_prefix": prefix_text,
+                        "scalp_sim_active_priority_seed_matched": True,
+                    },
                 },
-            }
+                {
+                    "stage": "scalp_sim_entry_ai_price_skip_order",
+                    "fields": {
+                        "scalp_sim_auto_policy_active_seed_count": "1",
+                        "active_seed_candidate_observable_prefix": json.dumps(
+                            {
+                                "entry_score_parent": "score_watch_recovery",
+                                "entry_source_parent": "entry_source_blocked_ai_score",
+                            },
+                            sort_keys=True,
+                        ),
+                        "scalp_sim_active_priority_seed_matched": False,
+                        "active_seed_match_eligible": True,
+                    },
+                },
+            ]
         )
         + "\n",
         encoding="utf-8",
@@ -906,10 +914,11 @@ def test_key_lineage_infers_followup_parent_seed_from_unique_observable_prefix(
     summary = report["summary"]
 
     assert summary["same_key_continuity_pass_count"] == 1
-    assert summary["active_seed_candidate_raw_without_seed_id_event_count"] == 1
+    assert summary["active_seed_candidate_raw_without_seed_id_event_count"] == 2
     assert summary["active_seed_candidate_without_seed_id_event_count"] == 0
     assert summary["active_seed_candidate_followup_without_seed_id_event_count"] == 0
     assert summary["active_seed_candidate_inferred_parent_seed_id_event_count"] == 1
+    assert summary["active_seed_candidate_followup_unmatched_event_count"] == 1
     assert summary["active_seed_candidate_inferred_parent_seed_id_stage_counts"] == {
         "scalp_sim_holding_started": 1
     }
@@ -918,7 +927,7 @@ def test_key_lineage_infers_followup_parent_seed_from_unique_observable_prefix(
     assert "inferred_parent_seed_id=`1`" in ledger._render_markdown(report)
 
 
-def test_key_lineage_keeps_ambiguous_observable_prefix_as_followup_gap(
+def test_key_lineage_attributes_shared_observable_prefix_to_all_active_seeds(
     monkeypatch, tmp_path
 ):
     _patch_dirs(monkeypatch, tmp_path)
@@ -980,6 +989,7 @@ def test_key_lineage_keeps_ambiguous_observable_prefix_as_followup_gap(
                     "active_seed_candidate_observable_prefix": json.dumps(
                         prefix, sort_keys=True
                     ),
+                    "scalp_sim_active_priority_seed_matched": True,
                 },
             }
         )
@@ -994,8 +1004,9 @@ def test_key_lineage_keeps_ambiguous_observable_prefix_as_followup_gap(
         summary["active_seed_candidate_ambiguous_parent_seed_prefix_event_count"] == 1
     )
     assert summary["active_seed_candidate_inferred_parent_seed_id_event_count"] == 0
-    assert summary["active_seed_candidate_without_seed_id_event_count"] == 1
-    assert summary["active_seed_candidate_lineage_followup_required"] is True
+    assert summary["active_seed_candidate_without_seed_id_event_count"] == 0
+    assert summary["active_seed_candidate_lineage_followup_required"] is False
+    assert summary["same_key_continuity_pass_count"] == 2
 
 
 def test_runtime_lineage_uses_target_apply_catalog_not_next_catalog(

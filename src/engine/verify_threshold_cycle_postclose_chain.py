@@ -3646,29 +3646,56 @@ def _active_sim_priority_handoff_status(
                 candidate_prefix_counts.get(prefix_key, 0) + 1
             )
         seed_id = str(fields.get("active_seed_id") or "").strip()
+        runtime_catalog_ids, runtime_inactive_ids, runtime_active_ids_by_prefix = (
+            referenced_scalp_catalog_seed_sets(fields.get("scalp_sim_auto_policy_file"))
+        )
+        prefix_mapping = _load_json_string_mapping(prefix_raw) if prefix_raw else {}
+        runtime_prefix_key = (
+            json.dumps(prefix_mapping, ensure_ascii=True, sort_keys=True)
+            if isinstance(prefix_mapping, dict) and prefix_mapping
+            else prefix_raw
+        )
+        same_prefix_active_ids = runtime_active_ids_by_prefix.get(
+            runtime_prefix_key, set()
+        )
+        matched_seed_ids_value = fields.get("active_seed_matched_ids")
+        if isinstance(matched_seed_ids_value, str):
+            try:
+                matched_seed_ids_value = json.loads(matched_seed_ids_value)
+            except Exception:
+                matched_seed_ids_value = [matched_seed_ids_value]
+        matched_seed_ids = {
+            str(item).strip()
+            for item in (
+                matched_seed_ids_value
+                if isinstance(matched_seed_ids_value, list)
+                else []
+            )
+            if str(item).strip()
+        }
+        if truthy(fields.get("scalp_sim_active_priority_seed_matched")):
+            matched_seed_ids.update(same_prefix_active_ids)
+        observed_seed_ids.update(matched_seed_ids)
+        referenced_runtime_seed_ids.update(
+            seed
+            for seed in matched_seed_ids
+            if seed in runtime_catalog_ids or seed in preopen_seed_ids
+        )
+        for matched_seed_id in matched_seed_ids:
+            if matched_seed_id in runtime_inactive_ids:
+                inactive_consumed.add(matched_seed_id)
+            elif (
+                matched_seed_id not in runtime_catalog_ids
+                and matched_seed_id not in preopen_seed_ids
+                and matched_seed_id not in catalog_seed_ids
+            ):
+                unknown_consumed.add(matched_seed_id)
         if seed_id:
             observed_seed_ids.add(seed_id)
-            runtime_catalog_ids, runtime_inactive_ids, runtime_active_ids_by_prefix = (
-                referenced_scalp_catalog_seed_sets(
-                    fields.get("scalp_sim_auto_policy_file")
-                )
-            )
             if seed_id in runtime_catalog_ids:
                 referenced_runtime_seed_ids.add(seed_id)
             elif seed_id in preopen_seed_ids:
                 referenced_runtime_seed_ids.add(seed_id)
-            prefix_raw = str(
-                fields.get("active_seed_candidate_observable_prefix") or ""
-            ).strip()
-            prefix_mapping = _load_json_string_mapping(prefix_raw) if prefix_raw else {}
-            runtime_prefix_key = (
-                json.dumps(prefix_mapping, ensure_ascii=True, sort_keys=True)
-                if isinstance(prefix_mapping, dict) and prefix_mapping
-                else prefix_raw
-            )
-            same_prefix_active_ids = runtime_active_ids_by_prefix.get(
-                runtime_prefix_key, set()
-            )
             # Runtime events must be validated against the policy file that was
             # actually loaded by that runtime.  The postclose catalog for
             # target_date can legitimately move yesterday's active seeds to
@@ -3688,12 +3715,11 @@ def _active_sim_priority_handoff_status(
                 and seed_id not in preopen_seed_ids
             ):
                 unknown_consumed.add(seed_id)
-            if truthy(fields.get("actual_order_submitted")) or not truthy(
-                fields.get("broker_order_forbidden")
-            ):
-                missing.append(
-                    "active_sim_priority_runtime_forbidden_contract_violation"
-                )
+        if (seed_id or matched_seed_ids) and (
+            truthy(fields.get("actual_order_submitted"))
+            or not truthy(fields.get("broker_order_forbidden"))
+        ):
+            missing.append("active_sim_priority_runtime_forbidden_contract_violation")
         policy_id = str(fields.get("priority_policy_id") or "").strip()
         if policy_id:
             observed_swing_policy_ids.add(policy_id)

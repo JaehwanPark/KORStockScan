@@ -1,35 +1,35 @@
 {
-  "timestamp": "2026-08-06T08:48:52.458362",
+  "timestamp": "2026-08-06T16:20:50.265357",
   "vix_close": 15.8100004196167,
   "vix_ma3": 16.05666669209798,
   "vix_peak_passed": true,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 75.02999877929688,
-  "wti_rsi": 40.50424146575037,
-  "wti_macd": -0.11209401401482921,
-  "wti_macd_signal": 0.5805033734721943,
+  "wti_close": 75.23999786376953,
+  "wti_rsi": 41.840981241592715,
+  "wti_macd": -0.46863731108875584,
+  "wti_macd_signal": 0.438858687666147,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -18.613735988363665,
+  "wti_from_recent_high_pct": -18.38594655468171,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 59.6571428571429,
+  "fng_value": 60.4285714285714,
   "fng_prev": 59.6571428571429,
   "fng_description": "greed",
   "fng_extreme_fear": false,
-  "fng_recovery": false,
+  "fng_recovery": true,
   "allow_swing_entry": true,
-  "swing_score": 95,
-  "swing_entry_recovery_gate_score": 95,
+  "swing_score": 115,
+  "swing_entry_recovery_gate_score": 115,
   "recovery_gate_state": "READY",
   "swing_recovery_gate_label": "READY",
   "recovery_gate_reason": "recovery_signal_ready",
   "oil_only_recovery_prior": false,
-  "market_regime_continuous_score": 83.3686,
+  "market_regime_continuous_score": 83.7543,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
     "vix_level": 24.19,
-    "fear_greed_level": 14.8286,
+    "fear_greed_level": 15.2143,
     "domestic_breadth": 32.55,
     "oil_relief": 10.0,
     "local_model": 1.8
@@ -41,23 +41,24 @@
   "reasons": [
     "VIX 3일선 하향 이탈",
     "원유 반전 시그널",
+    "공포탐욕지수 회복",
     "국내 breadth 상승장(20일선 위 65.1%)"
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 59.6571428571429,
+    "fng_curr": 60.4285714285714,
     "fng_prev": 59.6571428571429,
     "score_threshold": 70,
     "component_scores": {
       "vix": 25,
       "oil": 35,
-      "fng": 0,
+      "fng": 20,
       "local_breadth": 35
     },
     "vix_signal": "below_ma3",
     "oil_signal": "reversal",
-    "fng_signal": "none",
-    "legacy_recovery_gate_score": 95,
+    "fng_signal": "recovery",
+    "legacy_recovery_gate_score": 115,
     "legacy_recovery_gate_threshold": 70,
     "legacy_recovery_gate_label": "READY",
     "legacy_recovery_gate_reason": "recovery_signal_ready",
@@ -71,7 +72,7 @@
       },
       "component_scores": {
         "vix_level": 24.19,
-        "fear_greed_level": 14.8286,
+        "fear_greed_level": 15.2143,
         "domestic_breadth": 32.55,
         "oil_relief": 10.0,
         "local_model": 1.8
@@ -98,5 +99,5 @@
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-08-06",
-  "cached_at": "2026-08-06T08:48:52.464264+09:00"
+  "cached_at": "2026-08-06T16:20:50.277459+09:00"
 }

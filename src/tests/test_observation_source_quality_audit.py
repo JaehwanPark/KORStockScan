@@ -2272,6 +2272,23 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
                 },
                 record_id=5,
             ),
+            _event(
+                "entry_ai_price_feature_packet_source_block",
+                {
+                    "entry_order_flow_status": "unknown",
+                    "entry_context_quality": "stale",
+                    "entry_context_missing_features": (
+                        "quote_freshness,order_flow_pressure"
+                    ),
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": (
+                        "entry_price_input_source_quality_fail_closed"
+                    ),
+                    "runtime_effect": True,
+                },
+                record_id=7,
+            ),
         ],
     )
 
@@ -2304,6 +2321,26 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
     )
     assert reviewed["entry_ai_price_canary_applied"]["entry_order_flow_status"] == (
         "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["entry_ai_price_feature_packet_source_block"][
+            "entry_order_flow_status"
+        ]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "entry_ai_price_feature_packet_source_block",
+            "entry_order_flow_status",
+            "unknown",
+            {
+                "entry_context_quality": "stale",
+                "entry_context_missing_features": "order_flow_pressure",
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+            },
+        )
+        is None
     )
 
 

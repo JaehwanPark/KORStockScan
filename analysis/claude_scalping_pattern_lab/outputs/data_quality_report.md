@@ -1,7 +1,7 @@
 # 데이터 품질 보고서
 
-생성일: 2026-08-05 21:01:30
-분석 기간: 2026-06-05 ~ 2026-08-05
+생성일: 2026-08-06 21:04:33
+분석 기간: 2026-06-05 ~ 2026-08-06
 
 ---
 
@@ -28,9 +28,9 @@
 
 ## 2. funnel_fact
 
-- 날짜 수: 28
+- 날짜 수: 29
 - 서버: ['local']
-- 기간 합계 latency_block_events: 4146
+- 기간 합계 latency_block_events: 4766
 - 기간 합계 submitted_events: 354
 
 ---
@@ -39,7 +39,7 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 3426 |
+| 총 record 수 | 3430 |
 | multi_rebase (split-entry) | 64 |
 | partial_then_expand | 59 |
 | rebase_integrity 이상 | 16 |

@@ -2474,6 +2474,59 @@ def test_scalp_sim_active_seed_ignores_inactive_catalog_seed(monkeypatch, tmp_pa
     assert cache["active_seeds_by_prefix"] == {}
 
 
+def test_scalp_sim_active_seed_preserves_all_same_prefix_lineage_ids(
+    monkeypatch, tmp_path
+):
+    catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
+    prefix = {
+        "entry_score_parent": "score_watch_recovery",
+        "entry_source_parent": "entry_source_wait6579",
+    }
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_lifecycle",
+                        "source_parent_bucket_id": "parent_lifecycle",
+                        "status": "active",
+                        "observable_prefix": prefix,
+                    },
+                    {
+                        "active_seed_id": "active_seed_rising_prior",
+                        "source_parent_bucket_id": "parent_rising_prior",
+                        "status": "active",
+                        "observable_prefix": prefix,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(
+        CONFIG,
+        SCALP_SIM_AUTO_POLICY_ENABLED=True,
+        SCALP_SIM_AUTO_POLICY_FILE=str(catalog_path),
+        SCALP_SIM_AUTO_POLICY_VERSION="scalp_sim_auto_approval:2026-06-01",
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    state_handlers._SCALP_SIM_AUTO_POLICY_CACHE.clear()
+
+    fields = state_handlers._scalp_active_seed_match_fields(
+        score_value=61,
+        source_stage="first_ai_wait",
+        fields={},
+    )
+
+    assert fields["scalp_sim_active_priority_seed_matched"] is True
+    assert fields["active_seed_id"] == "active_seed_rising_prior"
+    assert fields["active_seed_matched_ids"] == [
+        "active_seed_lifecycle",
+        "active_seed_rising_prior",
+    ]
+
+
 def test_scalp_sim_active_seed_blocks_stale_apply_date_policy(monkeypatch, tmp_path):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
