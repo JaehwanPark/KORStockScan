@@ -537,6 +537,359 @@ def _limit_down_observer_activation(**overrides):
     return payload
 
 
+def _upper_limit_source(target_date="2026-08-06", **overrides):
+    payload = {
+        "schema_version": 1,
+        "report_type": "upper_limit_watch_candidate_source",
+        "target_date": target_date,
+        "generated_at": f"{target_date}T09:00:00+09:00",
+        "status": "pass",
+        "candidate_count": 0,
+        "candidates": [],
+        **mod.UPPER_LIMIT_OBSERVATION_CONTRACT,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _upper_limit_report(target_date="2026-08-06", **overrides):
+    payload = {
+        "schema_version": 1,
+        "report_type": "upper_limit_watch_report",
+        "target_date": target_date,
+        "generated_at": f"{target_date}T20:20:00+09:00",
+        "status": "pass",
+        "candidate_count": 0,
+        "visit_count": 0,
+        "trigger_count": 0,
+        "ordered_labeled_path_count": 0,
+        "ordered_path_capture_rate_pct": 0.0,
+        "bounded_live_ready_candidate_count": 0,
+        "source_status": {
+            "valid": True,
+            "candidate_source": {
+                "valid": True,
+                "status": "pass",
+                "candidate_count": 0,
+            },
+            "matching_event_count": 0,
+            "invalid_row_count": 0,
+            "contract_violation_count": 0,
+        },
+        **mod.UPPER_LIMIT_OBSERVATION_CONTRACT,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _upper_limit_counterfactual(target_date="2026-08-06", **overrides):
+    payload = {
+        "schema_version": 1,
+        "report_type": "upper_limit_watch_counterfactual",
+        "target_date": target_date,
+        "generated_at": f"{target_date}T20:20:00+09:00",
+        "status": "pass",
+        "source_quality_status": "pass",
+        "source_status": {
+            "valid": True,
+            "candidate_source": {
+                "valid": True,
+                "status": "pass",
+                "candidate_count": 0,
+            },
+        },
+        "sample_count": 0,
+        "policy_cells": [],
+        "rows": [],
+        "cumulative_update": {
+            "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+            "prior_artifact_valid": True,
+            "prior_row_count": 0,
+            "current_row_count": 0,
+            "rolling_row_count": 0,
+        },
+        **mod.UPPER_LIMIT_COUNTERFACTUAL_CONTRACT,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _upper_limit_bounded(target_date="2026-08-06", **overrides):
+    payload = {
+        "schema_version": 1,
+        "report_type": "upper_limit_watch_bounded_live_candidate",
+        "target_date": target_date,
+        "generated_at": f"{target_date}T20:20:00+09:00",
+        "status": "blocked",
+        "ready_candidate_count": 0,
+        "candidates": [],
+        "decision_authority": "upper_limit_live_auto_eligibility_candidate",
+        "operator_approval_required": False,
+        "preopen_consumer_implemented": True,
+        "activation_mode": "latest_valid_prior_date_policy_auto_loaded",
+        "sample_floor": "1_verified_ordered_path_per_cohort_price_band_trigger",
+        "forbidden_uses": (
+            "direct_broker_submission_from_observer,hard_safety_bypass,"
+            "stale_quote_bypass,provider_route_change,bot_restart,scale_in,reentry,overnight"
+        ),
+        "risk_contract": {
+            "max_concurrent_positions": 1,
+            "max_daily_entries": 1,
+            "quantity_owner": "position_sizing_dynamic_formula",
+            "scale_in_allowed": False,
+            "same_day_reentry_allowed": False,
+            "overnight_allowed": False,
+            "entry_requires_two_ordered_trigger_ticks": True,
+            "entry_requires_fresh_quote_and_bbo": True,
+            "max_entry_spread_pct": 1.5,
+            "normal_scalping_ai_and_submit_guards_required": True,
+            "upper_limit_entry_proximity_guard_required": True,
+            "hard_safety_priority": "unchanged_and_unbypassable",
+        },
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_artifact_paths_include_upper_limit_watch_chain():
+    paths = mod._artifact_paths("2026-08-06")
+
+    assert str(paths["upper_limit_watch_candidate_source"]).endswith(
+        "data/report/upper_limit_watch_candidate_source/upper_limit_watch_candidate_source_2026-08-06.json"
+    )
+    assert str(paths["upper_limit_watch"]).endswith(
+        "data/report/upper_limit_watch/upper_limit_watch_report_2026-08-06.json"
+    )
+    assert str(paths["upper_limit_watch_counterfactual"]).endswith(
+        "data/report/upper_limit_watch_counterfactual/upper_limit_watch_counterfactual_2026-08-06.json"
+    )
+    assert str(paths["upper_limit_watch_bounded_live_candidate"]).endswith(
+        "data/threshold_cycle/bounded_live_candidates/upper_limit_watch_bounded_live_candidate_2026-08-06.json"
+    )
+
+
+def test_upper_limit_watch_report_flag_required_from_rollout_date():
+    assert mod._upper_limit_watch_report_required("2026-08-05") is False
+    assert mod._upper_limit_watch_report_required("2026-08-06") is True
+
+
+def test_upper_limit_watch_report_stays_verified_during_marker_recovery():
+    assert (
+        mod._upper_limit_watch_verification_enabled(
+            "2026-08-06",
+            execution_flags={},
+            recovery_done=True,
+        )
+        is True
+    )
+    assert (
+        mod._upper_limit_watch_verification_enabled(
+            "2026-08-06",
+            execution_flags={"upper_limit_watch_report": False},
+            recovery_done=True,
+        )
+        is False
+    )
+    assert (
+        mod._upper_limit_watch_verification_enabled(
+            "2026-08-06",
+            execution_flags={},
+            recovery_done=False,
+        )
+        is False
+    )
+
+
+def test_upper_limit_watch_status_passes_valid_no_candidate_day():
+    status = mod._upper_limit_watch_report_status(
+        _upper_limit_report(),
+        _upper_limit_counterfactual(),
+        _upper_limit_bounded(),
+        _upper_limit_source(),
+        enabled=True,
+        target_date="2026-08-06",
+    )
+
+    assert status["status"] == "pass"
+    assert status["warnings"] == []
+    assert status["allowed_runtime_apply"] is False
+
+
+def test_upper_limit_watch_status_surfaces_missing_candidate_source():
+    source_status = {
+        "valid": False,
+        "candidate_source": {
+            "valid": False,
+            "status": "missing",
+            "candidate_count": 0,
+        },
+        "matching_event_count": 0,
+        "invalid_row_count": 0,
+        "contract_violation_count": 0,
+    }
+    status = mod._upper_limit_watch_report_status(
+        _upper_limit_report(status="source_blocked", source_status=source_status),
+        _upper_limit_counterfactual(
+            status="source_blocked",
+            source_quality_status="blocked",
+            source_status=source_status,
+        ),
+        _upper_limit_bounded(),
+        {},
+        enabled=True,
+        target_date="2026-08-06",
+    )
+
+    assert status["status"] == "warning"
+    assert {
+        "upper_limit_watch_candidate_source_missing",
+        "upper_limit_watch_source_blocked",
+    }.issubset(status["warnings"])
+
+
+def test_upper_limit_watch_status_surfaces_invalid_cumulative_source():
+    status = mod._upper_limit_watch_report_status(
+        _upper_limit_report(status="source_blocked"),
+        _upper_limit_counterfactual(
+            status="source_blocked",
+            source_quality_status="blocked",
+            cumulative_update={
+                "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+                "prior_artifact_valid": False,
+                "prior_row_count": 0,
+                "current_row_count": 0,
+                "rolling_row_count": 0,
+            },
+        ),
+        _upper_limit_bounded(),
+        _upper_limit_source(),
+        enabled=True,
+        target_date="2026-08-06",
+    )
+
+    assert status["status"] == "warning"
+    assert status["warnings"] == [
+        "upper_limit_watch_cumulative_source_invalid",
+        "upper_limit_watch_source_blocked",
+    ]
+
+
+def test_upper_limit_watch_status_surfaces_live_auto_ready_policy():
+    policy = {
+        "policy_key": "single_limit_up_one_price_locked|10k_30k|pullback_reclaim",
+        "cohort": "single_limit_up_one_price_locked",
+        "price_band": "10k_30k",
+        "trigger_type": "pullback_reclaim",
+        "sample_count": 1,
+        "observation_date_count": 1,
+        "source_quality_adjusted_ev_pct": 1.0,
+        "downside_p10_pct": 1.0,
+        "mae_p10_pct": -1.0,
+        "entry_bbo_coverage_pct": 100.0,
+    }
+    status = mod._upper_limit_watch_report_status(
+        _upper_limit_report(bounded_live_ready_candidate_count=1),
+        _upper_limit_counterfactual(
+            sample_count=1,
+            rows=[{"row_id": "2026-08-06:000001:1"}],
+            policy_cells=[policy],
+            cumulative_update={
+                "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+                "prior_artifact_valid": True,
+                "prior_row_count": 0,
+                "current_row_count": 1,
+                "rolling_row_count": 1,
+            },
+        ),
+        _upper_limit_bounded(
+            status="live_auto_apply_ready",
+            ready_candidate_count=1,
+            candidates=[policy],
+            allowed_runtime_apply=True,
+        ),
+        _upper_limit_source(),
+        enabled=True,
+        target_date="2026-08-06",
+    )
+
+    assert status["status"] == "warning"
+    assert status["warnings"] == ["upper_limit_watch_auto_live_policy_ready"]
+    assert status["allowed_runtime_apply"] is True
+
+
+def test_upper_limit_watch_status_rejects_source_blocked_runtime_candidate():
+    policy = {
+        "policy_key": "single_limit_up_one_price_locked|10k_30k|pullback_reclaim",
+        "cohort": "single_limit_up_one_price_locked",
+        "price_band": "10k_30k",
+        "trigger_type": "pullback_reclaim",
+        "sample_count": 1,
+        "observation_date_count": 1,
+        "source_quality_adjusted_ev_pct": 1.0,
+        "downside_p10_pct": 1.0,
+        "mae_p10_pct": -1.0,
+        "entry_bbo_coverage_pct": 100.0,
+    }
+    source_status = {
+        "valid": False,
+        "candidate_source": {
+            "valid": False,
+            "status": "missing",
+            "candidate_count": 0,
+        },
+    }
+    status = mod._upper_limit_watch_report_status(
+        _upper_limit_report(
+            status="source_blocked",
+            source_status=source_status,
+            bounded_live_ready_candidate_count=1,
+        ),
+        _upper_limit_counterfactual(
+            status="source_blocked",
+            source_quality_status="blocked",
+            source_status=source_status,
+            sample_count=1,
+            rows=[{"row_id": "2026-08-06:000001:1"}],
+            policy_cells=[policy],
+            cumulative_update={
+                "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+                "prior_artifact_valid": True,
+                "prior_row_count": 0,
+                "current_row_count": 1,
+                "rolling_row_count": 1,
+            },
+        ),
+        _upper_limit_bounded(
+            status="live_auto_apply_ready",
+            ready_candidate_count=1,
+            candidates=[policy],
+            allowed_runtime_apply=True,
+        ),
+        {},
+        enabled=True,
+        target_date="2026-08-06",
+    )
+
+    assert status["status"] == "fail"
+    assert (
+        "upper_limit_watch_source_blocked_candidate_authority_leak" in status["issues"]
+    )
+
+
 def test_artifact_paths_include_limit_down_watch():
     paths = mod._artifact_paths("2026-07-30")
 

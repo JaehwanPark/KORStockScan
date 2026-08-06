@@ -34,6 +34,10 @@ from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.monitoring.limit_down_watch_report import (
     CONTRACT as LIMIT_DOWN_WATCH_CONTRACT,
 )
+from src.engine.monitoring.upper_limit_watch_report import (
+    COUNTERFACTUAL_CONTRACT as UPPER_LIMIT_COUNTERFACTUAL_CONTRACT,
+    OBSERVATION_CONTRACT as UPPER_LIMIT_OBSERVATION_CONTRACT,
+)
 from src.engine.threshold_cycle_preopen_apply import (
     runtime_gap_provenance_artifact_path,
 )
@@ -94,6 +98,7 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "ldm_hypothesis_parent_refinement",
     "key_lineage_ledger",
     "conversion_lane",
+    "upper_limit_watch_candidate_source",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -798,6 +803,330 @@ def _limit_down_watch_report_status(
     }
 
 
+def _upper_limit_watch_report_status(
+    report: dict[str, Any],
+    counterfactual: dict[str, Any],
+    bounded: dict[str, Any],
+    candidate_source: dict[str, Any],
+    *,
+    enabled: bool,
+    target_date: str,
+) -> dict[str, Any]:
+    if not enabled:
+        return {
+            "status": "disabled",
+            "issues": [],
+            "warnings": [],
+            "candidate_count": 0,
+            "sample_count": 0,
+            "ready_candidate_count": 0,
+            "allowed_runtime_apply": False,
+        }
+
+    issues: list[str] = []
+    warnings: list[str] = []
+    artifacts = (
+        (
+            "report",
+            report,
+            "upper_limit_watch_report",
+            UPPER_LIMIT_OBSERVATION_CONTRACT,
+        ),
+        (
+            "counterfactual",
+            counterfactual,
+            "upper_limit_watch_counterfactual",
+            UPPER_LIMIT_COUNTERFACTUAL_CONTRACT,
+        ),
+        (
+            "bounded_live_candidate",
+            bounded,
+            "upper_limit_watch_bounded_live_candidate",
+            {},
+        ),
+    )
+    for label, payload, report_type, contract in artifacts:
+        if not payload:
+            issues.append(f"upper_limit_watch_{label}_missing")
+            continue
+        for field, expected in {
+            "schema_version": 1,
+            "report_type": report_type,
+            "target_date": target_date,
+            **contract,
+        }.items():
+            if payload.get(field) != expected:
+                issues.append(f"upper_limit_watch_{label}_contract_mismatch:{field}")
+        if not str(payload.get("generated_at") or "").strip():
+            issues.append(f"upper_limit_watch_{label}_generated_at_missing")
+        for field, expected in (
+            ("runtime_effect", False),
+            ("actual_order_submitted", False),
+            ("broker_order_forbidden", True),
+        ):
+            if payload.get(field) is not expected:
+                issues.append(f"upper_limit_watch_{label}_authority_leak:{field}")
+
+    source_rows = (
+        candidate_source.get("candidates")
+        if isinstance(candidate_source.get("candidates"), list)
+        else []
+    )
+    source_contract_valid = bool(
+        candidate_source
+        and candidate_source.get("schema_version") == 1
+        and candidate_source.get("report_type") == "upper_limit_watch_candidate_source"
+        and candidate_source.get("target_date") == target_date
+        and candidate_source.get("status") in {"pass", "partial", "blocked"}
+        and candidate_source.get("candidate_count") == len(source_rows)
+        and candidate_source.get("decision_authority")
+        == "upper_limit_source_observation_only"
+        and candidate_source.get("runtime_effect") is False
+        and candidate_source.get("actual_order_submitted") is False
+        and candidate_source.get("broker_order_forbidden") is True
+        and all(
+            candidate_source.get(field) == expected
+            for field, expected in UPPER_LIMIT_OBSERVATION_CONTRACT.items()
+        )
+        and bool(str(candidate_source.get("generated_at") or "").strip())
+    )
+    source_usable = bool(
+        source_contract_valid and candidate_source.get("status") in {"pass", "partial"}
+    )
+    if not candidate_source:
+        warnings.append("upper_limit_watch_candidate_source_missing")
+    elif not source_contract_valid:
+        issues.append("upper_limit_watch_candidate_source_contract_invalid")
+    elif not source_usable:
+        warnings.append("upper_limit_watch_candidate_source_quality_blocked")
+
+    source_status = (
+        report.get("source_status")
+        if isinstance(report.get("source_status"), dict)
+        else {}
+    )
+    counterfactual_source_status = (
+        counterfactual.get("source_status")
+        if isinstance(counterfactual.get("source_status"), dict)
+        else {}
+    )
+    report_candidate_source = (
+        source_status.get("candidate_source")
+        if isinstance(source_status.get("candidate_source"), dict)
+        else {}
+    )
+    if report and report_candidate_source.get("valid") is not source_usable:
+        issues.append("upper_limit_watch_candidate_source_validity_mismatch")
+    if source_contract_valid and report:
+        if report_candidate_source.get("candidate_count") != len(source_rows):
+            issues.append("upper_limit_watch_candidate_count_source_mismatch")
+        if report.get("candidate_count") != len(source_rows):
+            issues.append("upper_limit_watch_report_candidate_count_mismatch")
+    if counterfactual:
+        if counterfactual_source_status.get("valid") is not source_status.get("valid"):
+            issues.append("upper_limit_watch_source_status_cross_artifact_mismatch")
+        counterfactual_candidate_source = (
+            counterfactual_source_status.get("candidate_source")
+            if isinstance(counterfactual_source_status.get("candidate_source"), dict)
+            else {}
+        )
+        for field in ("valid", "status", "candidate_count"):
+            if counterfactual_candidate_source.get(
+                field
+            ) != report_candidate_source.get(field):
+                issues.append(
+                    f"upper_limit_watch_candidate_source_cross_artifact_mismatch:{field}"
+                )
+
+    event_source_usable = bool(source_usable and source_status.get("valid"))
+    if source_usable and not event_source_usable:
+        warnings.append("upper_limit_watch_event_source_invalid")
+    cumulative_update = (
+        counterfactual.get("cumulative_update")
+        if isinstance(counterfactual.get("cumulative_update"), dict)
+        else {}
+    )
+    prior_artifact_valid = cumulative_update.get("prior_artifact_valid") is True
+    if counterfactual and cumulative_update.get("mode") != (
+        "latest_prior_rolling_rows_plus_current_dedup_by_row_id"
+    ):
+        issues.append("upper_limit_watch_cumulative_update_mode_invalid")
+    if counterfactual and not isinstance(
+        cumulative_update.get("prior_artifact_valid"), bool
+    ):
+        issues.append("upper_limit_watch_cumulative_prior_validity_missing")
+    if counterfactual and not prior_artifact_valid:
+        warnings.append("upper_limit_watch_cumulative_source_invalid")
+    observation_source_usable = bool(event_source_usable and prior_artifact_valid)
+
+    report_status = report.get("status")
+    counterfactual_status = counterfactual.get("status")
+    source_quality_status = counterfactual.get("source_quality_status")
+    if report and report_status not in {"pass", "source_blocked"}:
+        issues.append("upper_limit_watch_report_status_invalid")
+    if counterfactual and counterfactual_status not in {"pass", "source_blocked"}:
+        issues.append("upper_limit_watch_counterfactual_status_invalid")
+    if observation_source_usable:
+        if report_status != "pass" or counterfactual_status != "pass":
+            issues.append("upper_limit_watch_source_state_mismatch")
+        if source_quality_status != "pass":
+            issues.append("upper_limit_watch_counterfactual_source_quality_mismatch")
+    else:
+        if report and report_status != "source_blocked":
+            issues.append("upper_limit_watch_source_block_not_propagated_to_report")
+        if counterfactual and counterfactual_status != "source_blocked":
+            issues.append(
+                "upper_limit_watch_source_block_not_propagated_to_counterfactual"
+            )
+        if counterfactual and source_quality_status != "blocked":
+            issues.append("upper_limit_watch_source_block_quality_state_invalid")
+        warnings.append("upper_limit_watch_source_blocked")
+
+    counterfactual_rows = (
+        counterfactual.get("rows")
+        if isinstance(counterfactual.get("rows"), list)
+        else []
+    )
+    policy_cells = (
+        counterfactual.get("policy_cells")
+        if isinstance(counterfactual.get("policy_cells"), list)
+        else []
+    )
+    bounded_candidates = (
+        bounded.get("candidates") if isinstance(bounded.get("candidates"), list) else []
+    )
+    if counterfactual:
+        if counterfactual.get("sample_count") != len(counterfactual_rows):
+            issues.append("upper_limit_watch_counterfactual_sample_count_mismatch")
+        if cumulative_update.get("rolling_row_count") != len(counterfactual_rows):
+            issues.append("upper_limit_watch_cumulative_rolling_row_count_mismatch")
+        if counterfactual.get("allowed_runtime_apply") is not False:
+            issues.append("upper_limit_watch_counterfactual_runtime_authority_leak")
+    ready_count = len(bounded_candidates)
+    if bounded:
+        expected_ready = ready_count > 0
+        if bounded.get("ready_candidate_count") != ready_count:
+            issues.append("upper_limit_watch_bounded_ready_count_mismatch")
+        if bounded.get("status") != (
+            "live_auto_apply_ready" if expected_ready else "blocked"
+        ):
+            issues.append("upper_limit_watch_bounded_status_mismatch")
+        if bounded.get("allowed_runtime_apply") is not expected_ready:
+            issues.append("upper_limit_watch_bounded_runtime_apply_mismatch")
+        if bounded.get("operator_approval_required") is not False:
+            issues.append("upper_limit_watch_operator_approval_contract_invalid")
+        if bounded.get("preopen_consumer_implemented") is not True:
+            issues.append("upper_limit_watch_preopen_consumer_contract_invalid")
+        if (
+            bounded.get("activation_mode")
+            != "latest_valid_prior_date_policy_auto_loaded"
+        ):
+            issues.append("upper_limit_watch_activation_mode_invalid")
+        if bounded.get("sample_floor") != (
+            "1_verified_ordered_path_per_cohort_price_band_trigger"
+        ):
+            issues.append("upper_limit_watch_bounded_sample_floor_invalid")
+        if bounded.get("decision_authority") != (
+            "upper_limit_live_auto_eligibility_candidate"
+        ):
+            issues.append("upper_limit_watch_bounded_decision_authority_invalid")
+        if bounded.get("forbidden_uses") != (
+            "direct_broker_submission_from_observer,hard_safety_bypass,"
+            "stale_quote_bypass,provider_route_change,bot_restart,scale_in,reentry,overnight"
+        ):
+            issues.append("upper_limit_watch_bounded_forbidden_uses_invalid")
+        risk = bounded.get("risk_contract")
+        risk = risk if isinstance(risk, dict) else {}
+        for field, expected in (
+            ("max_concurrent_positions", 1),
+            ("max_daily_entries", 1),
+            ("quantity_owner", "position_sizing_dynamic_formula"),
+            ("scale_in_allowed", False),
+            ("same_day_reentry_allowed", False),
+            ("overnight_allowed", False),
+            ("entry_requires_two_ordered_trigger_ticks", True),
+            ("entry_requires_fresh_quote_and_bbo", True),
+            ("normal_scalping_ai_and_submit_guards_required", True),
+            ("upper_limit_entry_proximity_guard_required", True),
+            ("hard_safety_priority", "unchanged_and_unbypassable"),
+        ):
+            if risk.get(field) != expected:
+                issues.append(f"upper_limit_watch_risk_contract_mismatch:{field}")
+        spread_cap = _safe_float(risk.get("max_entry_spread_pct"), 0.0)
+        if not 0.0 < spread_cap <= 1.5:
+            issues.append(
+                "upper_limit_watch_risk_contract_mismatch:max_entry_spread_pct"
+            )
+
+    policy_by_key = {
+        str(row.get("policy_key")): row
+        for row in policy_cells
+        if isinstance(row, dict) and str(row.get("policy_key") or "")
+    }
+    bounded_keys: list[str] = []
+    for row in bounded_candidates:
+        if not isinstance(row, dict):
+            issues.append("upper_limit_watch_bounded_candidate_invalid")
+            continue
+        key = str(row.get("policy_key") or "")
+        expected_key = (
+            f"{row.get('cohort')}|{row.get('price_band')}|{row.get('trigger_type')}"
+        )
+        if not key or key != expected_key or key not in policy_by_key:
+            issues.append("upper_limit_watch_bounded_policy_key_invalid")
+        policy_row = policy_by_key.get(key) if key else None
+        for field in (
+            "sample_count",
+            "observation_date_count",
+            "source_quality_adjusted_ev_pct",
+            "downside_p10_pct",
+            "mae_p10_pct",
+            "entry_bbo_coverage_pct",
+        ):
+            if isinstance(policy_row, dict) and row.get(field) != policy_row.get(field):
+                issues.append(
+                    f"upper_limit_watch_bounded_policy_metric_mismatch:{field}"
+                )
+        if (
+            _safe_int(row.get("sample_count"), 0) < 1
+            or _safe_int(row.get("observation_date_count"), 0) < 1
+            or _safe_float(row.get("source_quality_adjusted_ev_pct"), 0.0) <= 0.0
+            or _safe_float(row.get("downside_p10_pct"), -999.0) <= 0.0
+            or _safe_float(row.get("mae_p10_pct"), -999.0) < -5.0
+            or _safe_float(row.get("entry_bbo_coverage_pct"), 0.0) < 100.0
+        ):
+            issues.append("upper_limit_watch_bounded_candidate_threshold_invalid")
+        bounded_keys.append(key)
+    if len(bounded_keys) != len(set(bounded_keys)):
+        issues.append("upper_limit_watch_bounded_policy_key_duplicate")
+    if report and report.get("bounded_live_ready_candidate_count") != ready_count:
+        issues.append("upper_limit_watch_report_bounded_ready_count_mismatch")
+    if ready_count and _safe_int(counterfactual.get("sample_count"), 0) < 1:
+        issues.append("upper_limit_watch_bounded_candidate_without_cumulative_sample")
+    if not observation_source_usable and ready_count:
+        issues.append("upper_limit_watch_source_blocked_candidate_authority_leak")
+    if (
+        observation_source_usable
+        and _safe_int(report.get("candidate_count"), 0) > 0
+        and _safe_int(report.get("ordered_labeled_path_count"), 0) == 0
+    ):
+        warnings.append("upper_limit_watch_ordered_path_not_observed")
+    if ready_count:
+        warnings.append("upper_limit_watch_auto_live_policy_ready")
+
+    return {
+        "status": "fail" if issues else "warning" if warnings else "pass",
+        "issues": sorted(set(issues)),
+        "warnings": sorted(set(warnings)),
+        "source_usable": observation_source_usable,
+        "candidate_count": _safe_int(report.get("candidate_count"), 0),
+        "sample_count": _safe_int(counterfactual.get("sample_count"), 0),
+        "ready_candidate_count": ready_count,
+        "allowed_runtime_apply": bounded.get("allowed_runtime_apply") is True,
+        "activation_mode": bounded.get("activation_mode"),
+    }
+
+
 def _artifact_paths(target_date: str) -> dict[str, Path]:
     next_day = _next_krx_trading_day(target_date)
     paths = {
@@ -825,6 +1154,20 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "limit_down_watch_markdown": REPORT_DIR
         / "limit_down_watch"
         / f"limit_down_watch_{target_date}.md",
+        "upper_limit_watch_candidate_source": REPORT_DIR
+        / "upper_limit_watch_candidate_source"
+        / f"upper_limit_watch_candidate_source_{target_date}.json",
+        "upper_limit_watch": REPORT_DIR
+        / "upper_limit_watch"
+        / f"upper_limit_watch_report_{target_date}.json",
+        "upper_limit_watch_counterfactual": REPORT_DIR
+        / "upper_limit_watch_counterfactual"
+        / f"upper_limit_watch_counterfactual_{target_date}.json",
+        "upper_limit_watch_bounded_live_candidate": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "bounded_live_candidates"
+        / f"upper_limit_watch_bounded_live_candidate_{target_date}.json",
         "buy_funnel_sentinel": REPORT_DIR
         / "buy_funnel_sentinel"
         / f"buy_funnel_sentinel_{target_date}.json",
@@ -4944,6 +5287,25 @@ def _limit_down_watch_verification_enabled(
     return recovery_done and _limit_down_watch_report_required(target_date)
 
 
+def _upper_limit_watch_report_required(target_date: str) -> bool:
+    try:
+        return date.fromisoformat(target_date) >= date(2026, 8, 6)
+    except ValueError:
+        return False
+
+
+def _upper_limit_watch_verification_enabled(
+    target_date: str,
+    *,
+    execution_flags: dict[str, bool],
+    recovery_done: bool,
+) -> bool:
+    explicit = execution_flags.get("upper_limit_watch_report")
+    if explicit is not None:
+        return explicit
+    return recovery_done and _upper_limit_watch_report_required(target_date)
+
+
 def build_threshold_cycle_postclose_verification(
     target_date: str,
     *,
@@ -5044,6 +5406,16 @@ def build_threshold_cycle_postclose_verification(
     entry_split_order_plan = _load_json(paths["entry_split_order_plan"])
     limit_down_watch_report = _load_json(paths["limit_down_watch"])
     limit_down_watch_markdown = _load_text(paths["limit_down_watch_markdown"])
+    upper_limit_watch_candidate_source = _load_json(
+        paths["upper_limit_watch_candidate_source"]
+    )
+    upper_limit_watch_report = _load_json(paths["upper_limit_watch"])
+    upper_limit_watch_counterfactual = _load_json(
+        paths["upper_limit_watch_counterfactual"]
+    )
+    upper_limit_watch_bounded = _load_json(
+        paths["upper_limit_watch_bounded_live_candidate"]
+    )
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
     active_priority_preopen_apply = preopen_apply_current or preopen_apply_next
@@ -5576,6 +5948,11 @@ def build_threshold_cycle_postclose_verification(
         execution_flags=execution_flags,
         recovery_done=recovery_done,
     )
+    upper_limit_watch_verification_enabled = _upper_limit_watch_verification_enabled(
+        target_date,
+        execution_flags=execution_flags,
+        recovery_done=recovery_done,
+    )
     required_execution_flags = (
         "swing_lifecycle",
         "pattern_labs",
@@ -5593,6 +5970,11 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (
             *required_execution_flags,
             "limit_down_watch_report",
+        )
+    if _upper_limit_watch_report_required(target_date):
+        required_execution_flags = (
+            *required_execution_flags,
+            "upper_limit_watch_report",
         )
     missing_execution_flags = [
         key
@@ -5711,6 +6093,7 @@ def build_threshold_cycle_postclose_verification(
             "producer_gap_discovery",
             "one_share_threshold_opportunity",
             "limit_down_watch_report",
+            "upper_limit_watch_report",
             "stage_hook_workorder_discovery",
             "stage_hook_runtime_scaffold",
             "pattern_lab_propagation_audit",
@@ -5872,6 +6255,15 @@ def build_threshold_cycle_postclose_verification(
     if not limit_down_watch_verification_enabled:
         disabled_artifact_labels.add("limit_down_watch")
         disabled_artifact_labels.add("limit_down_watch_markdown")
+    if not upper_limit_watch_verification_enabled:
+        disabled_artifact_labels.update(
+            {
+                "upper_limit_watch_candidate_source",
+                "upper_limit_watch",
+                "upper_limit_watch_counterfactual",
+                "upper_limit_watch_bounded_live_candidate",
+            }
+        )
     if execution_flags.get("stage_hook_workorder_discovery") is not True:
         disabled_artifact_labels.add("stage_hook_workorder_discovery")
     if execution_flags.get("stage_hook_runtime_scaffold") is not True:
@@ -5900,6 +6292,18 @@ def build_threshold_cycle_postclose_verification(
         log_issues.extend(limit_down_watch_status["issues"])
     elif limit_down_watch_status["status"] == "warning":
         handoff_warnings.extend(limit_down_watch_status["warnings"])
+    upper_limit_watch_status = _upper_limit_watch_report_status(
+        upper_limit_watch_report,
+        upper_limit_watch_counterfactual,
+        upper_limit_watch_bounded,
+        upper_limit_watch_candidate_source,
+        enabled=upper_limit_watch_verification_enabled,
+        target_date=target_date,
+    )
+    if upper_limit_watch_status["status"] == "fail":
+        log_issues.extend(upper_limit_watch_status["issues"])
+    elif upper_limit_watch_status["status"] == "warning":
+        handoff_warnings.extend(upper_limit_watch_status["warnings"])
     entry_split_grid = (
         entry_split_order_plan.get("candidate_grid")
         if isinstance(entry_split_order_plan.get("candidate_grid"), list)
@@ -6625,6 +7029,7 @@ def build_threshold_cycle_postclose_verification(
         "artifact_status": artifact_status,
         "missing_required_artifacts": missing_required_artifacts,
         "limit_down_watch": limit_down_watch_status,
+        "upper_limit_watch": upper_limit_watch_status,
         "workorder_snapshot": {
             **workorder_snapshot,
             "status": workorder_snapshot_status,
