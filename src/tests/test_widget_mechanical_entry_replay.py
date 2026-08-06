@@ -152,6 +152,10 @@ def test_report_joins_same_trace_and_keeps_runtime_authority_false():
     assert report["allowed_runtime_apply"] is False
     assert report["actual_order_submitted"] is False
     assert report["broker_order_forbidden"] is True
+    symbol = report["summary"]["stock_code_cohorts"]["123456"]
+    assert symbol["all_joined_rows"]["sample_count"] == 1
+    assert symbol["mechanical_signals"]["sample_count"] == 1
+    assert symbol["mechanical_state_counts"] == {"ENTRY_CAUTION": 1}
 
 
 def test_cli_stdout_is_machine_readable_json(capsys):

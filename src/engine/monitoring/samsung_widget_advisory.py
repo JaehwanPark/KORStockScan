@@ -3084,7 +3084,7 @@ class SamsungWidgetCollector:
             # Telegram/state persistence is advisory-only and must never
             # replace a fresh market-data snapshot with collector failure.
             print(
-                "[WARN] Samsung widget entry Telegram notification isolated: "
+                "[WARN] Samsung widget Telegram notification isolated: "
                 f"{type(exc).__name__}"
             )
             return "notifier_error_isolated"

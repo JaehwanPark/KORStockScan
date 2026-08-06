@@ -1,4 +1,4 @@
-"""Admin-only Telegram notices for actionable Samsung widget entry advisories.
+"""Admin-only Telegram notices for actionable Samsung widget advisories.
 
 This module observes the already-confirmed widget advisory output.  It does not
 evaluate prices, issue orders, access accounts, or mutate the trading runtime.
@@ -18,6 +18,8 @@ from src.engine.monitoring.samsung_widget_contract import (
     ADVISORY_AUTHORITY,
     KST,
     SNAPSHOT_MAX_AGE_SEC,
+    exit_advisory_contract_is_valid,
+    session_context,
 )
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
@@ -52,6 +54,15 @@ _UNMET_LABELS = {
     "regular_flow_unavailable": "정규장 수급 확인 제한",
     "premarket_vwap_not_recovered": "프리마켓 VWAP 미회복",
     "resistance_reclaim_pullback_pending": "저항 돌파 후 눌림 대기",
+}
+
+_EXIT_REASON_LABELS = {
+    "rolling_peak_drawdown": "고점 대비 하락폭 확대",
+    "prior_five_bar_support_broken": "직전 5개 봉 지지 이탈",
+    "below_session_vwap": "세션 VWAP 하회",
+    "three_or_five_minute_down": "3분 또는 5분 하락 추세",
+    "broken_support_reclaim_failed": "이탈 지지 회복 실패",
+    "three_and_five_minute_down": "3분·5분 동시 하락 추세",
 }
 
 
@@ -185,8 +196,45 @@ def build_entry_message(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_exit_message(payload: dict[str, Any]) -> str:
+    """Render a holding-independent EXIT_READY observation for the admin."""
+    advisory = payload.get("exit_advisory") or {}
+    valid_until = _parse_timestamp(advisory.get("valid_until"))
+    valid_text = valid_until.strftime("%H:%M:%S") if valid_until else "-"
+    drawdown = advisory.get("peak_drawdown_pct")
+    try:
+        drawdown_text = f"{float(drawdown):.2f}%"
+    except (TypeError, ValueError):
+        drawdown_text = "-"
+    lines = [
+        "🔴 [삼성전자 청산 관찰 알림]",
+        "상태: EXIT_READY / 지지 이탈·하락 구조 확인",
+        f"현재가: {_format_price(payload.get('current_price'))}",
+        f"청산 참고가: {_format_price(advisory.get('reference_exit_price'))}",
+        f"이탈 지지: {_format_price(advisory.get('broken_support'))}",
+        (
+            f"관측 고점: {_format_price(advisory.get('peak_price'))}"
+            f" / 고점대비 {drawdown_text}"
+        ),
+        f"근거: {_format_labels(advisory.get('reasons'), _EXIT_REASON_LABELS, limit=5)}",
+        f"유효시각: {valid_text}",
+        (
+            f"세션: {advisory.get('session') or '-'} / "
+            f"venue={payload.get('market_venue') or '-'}"
+        ),
+        "권한: 보유 무관 관측용 · 자동매도/주문 아님",
+    ]
+    return "\n".join(lines)
+
+
 class SamsungWidgetEntryTelegramNotifier:
-    """Send one admin notice per confirmed actionable advisory episode."""
+    """Send one admin notice per confirmed entry or EXIT_READY episode.
+
+    The historical class name remains as a compatibility surface for the
+    collector and service unit. Entry and exit retry/dedup state are kept
+    independently so an unavailable Telegram call cannot cross-suppress the
+    other advisory type.
+    """
 
     def __init__(
         self,
@@ -248,11 +296,120 @@ class SamsungWidgetEntryTelegramNotifier:
             and valid_until > _as_kst(observed_at)
         )
 
+    @staticmethod
+    def _exit_contract_valid(payload: dict[str, Any], observed_at: datetime) -> bool:
+        exit_advisory = payload.get("exit_advisory")
+        snapshot_at = _parse_timestamp(payload.get("observed_at_kst"))
+        now = _as_kst(observed_at)
+        context = session_context(now)
+        valid_until = (
+            _parse_timestamp(exit_advisory.get("valid_until"))
+            if isinstance(exit_advisory, dict)
+            else None
+        )
+        observation_age_sec = (
+            (now - snapshot_at).total_seconds() if snapshot_at is not None else None
+        )
+        return bool(
+            payload.get("status") == "ok"
+            and isinstance(exit_advisory, dict)
+            and exit_advisory.get("state") == "EXIT_READY"
+            and context.active
+            and payload.get("market_venue") == context.market_venue
+            and snapshot_at is not None
+            and observation_age_sec is not None
+            and 0 <= observation_age_sec <= SNAPSHOT_MAX_AGE_SEC
+            and valid_until is not None
+            and valid_until > now
+            and exit_advisory_contract_is_valid(
+                exit_advisory,
+                snapshot_observed_at=snapshot_at,
+                context=context,
+                evaluated_at=now,
+            )
+        )
+
+    @staticmethod
+    def _exit_episode_key(payload: dict[str, Any], scope: str) -> str:
+        exit_advisory = payload.get("exit_advisory") or {}
+        continuity = exit_advisory.get("continuity") or {}
+        ready_bar = (
+            continuity.get("ready_bar") if isinstance(continuity, dict) else None
+        )
+        return ":".join(
+            [
+                scope,
+                str(ready_bar or "unknown_ready_bar"),
+                str(_positive_int(exit_advisory.get("broken_support")) or 0),
+                str(_positive_int(exit_advisory.get("peak_price")) or 0),
+            ]
+        )
+
     def _save(self) -> None:
         _atomic_write_state(self.state_file, self._state)
 
+    def _observe_exit_ready(
+        self, payload: dict[str, Any], *, now: datetime, scope: str
+    ) -> str:
+        if not self._exit_contract_valid(payload, now):
+            return "invalid_exit_contract"
+        exit_advisory = payload.get("exit_advisory") or {}
+        episode_key = self._exit_episode_key(payload, scope)
+        if (
+            self._state.get("last_exit_episode_key") == episode_key
+            and self._state.get("last_exit_attempt_status") == "sent"
+        ):
+            return "duplicate_exit_episode"
+
+        last_attempt_at = _parse_timestamp(self._state.get("last_exit_attempt_at"))
+        if (
+            self._state.get("last_exit_episode_key") == episode_key
+            and self._state.get("last_exit_attempt_status")
+            in {"failed", "missing_config"}
+            and last_attempt_at is not None
+            and (now - last_attempt_at).total_seconds() < self.retry_sec
+        ):
+            return "exit_retry_wait"
+
+        token, admin_id = self.config_loader()
+        self._state["last_exit_episode_key"] = episode_key
+        self._state["last_exit_attempt_at"] = now.isoformat()
+        if not token or not admin_id:
+            self._state["last_exit_attempt_status"] = "missing_config"
+            self._save()
+            return "exit_missing_config"
+        try:
+            self.sender(token, admin_id, build_exit_message(payload))
+        except Exception as exc:
+            self._state["last_exit_attempt_status"] = "failed"
+            self._state["last_exit_error"] = type(exc).__name__
+            self._save()
+            return "exit_send_failed"
+
+        self._state.update(
+            {
+                "last_exit_attempt_status": "sent",
+                "last_exit_error": None,
+                "last_exit_sent_at": now.isoformat(),
+                "last_exit_reference_price": _positive_int(
+                    exit_advisory.get("reference_exit_price")
+                ),
+                "last_exit_broken_support": _positive_int(
+                    exit_advisory.get("broken_support")
+                ),
+                "last_exit_peak_price": _positive_int(exit_advisory.get("peak_price")),
+                "authority": ADVISORY_AUTHORITY,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "telegram_audience": "ADMIN_ONLY",
+                "last_telegram_event_type": "samsung_widget_exit_advisory",
+            }
+        )
+        self._save()
+        return "exit_sent"
+
     def observe(self, payload: dict[str, Any], observed_at: datetime) -> str:
-        """Observe the displayed advisory and send only an admin-only entry notice."""
+        """Observe displayed advisories and send admin-only transition notices."""
         if not self.enabled:
             return "disabled"
 
@@ -276,7 +433,7 @@ class SamsungWidgetEntryTelegramNotifier:
                 self._state["active_state"] = None
                 self._state["non_actionable_since"] = now.isoformat()
                 self._save()
-            return "exit_advisory_conflict"
+            return self._observe_exit_ready(payload, now=now, scope=scope)
 
         if state not in ACTIONABLE_ADVISORY_STATES:
             if self._state.get("active") or not self._state.get("non_actionable_since"):
@@ -345,6 +502,7 @@ class SamsungWidgetEntryTelegramNotifier:
                 "actual_order_submitted": False,
                 "telegram_audience": "ADMIN_ONLY",
                 "telegram_event_type": "samsung_widget_entry_advisory",
+                "last_telegram_event_type": "samsung_widget_entry_advisory",
                 "last_current_price": _positive_int(payload.get("current_price")),
                 "last_entry_price_low": _positive_int(advisory.get("entry_price_low")),
                 "last_entry_price_high": _positive_int(

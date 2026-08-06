@@ -156,9 +156,12 @@ non-actionable interval of at least 120 seconds is required before a new episode
 can notify again.  Telegram failures are isolated from quote collection and do
 not change advisory state, trading runtime, accounts, or orders.  Set
 `KORSTOCKSCAN_SAMSUNG_WIDGET_ENTRY_TELEGRAM_ENABLED=false` on the collector
-service to disable this admin-only notification path. An active
-`EXIT_READY` suppresses a contradictory entry notice; exit states do not add a
-new Telegram message in this implementation.
+service to disable this admin-only notification path. The same path also sends
+holding-independent `EXIT_READY` notices once per confirmed exit episode.
+Entry and exit retries/deduplication are independent, and an active
+`EXIT_READY` suppresses a contradictory entry notice. Exit notices remain
+observation-only with no account, holding, sell-order, or trading-runtime
+authority.
 
 Only those two actionable states can display a recommended price range. `WATCH`
 and `DATA_WAIT` show `가격대기`, `NO_CHASE` shows `범위이탈`, and `AVOID` shows
@@ -248,6 +251,52 @@ Official Kiwoom reference gate evidence for this addition was recorded at
 `kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`, `kiwoom/specs.py`,
 `kiwoom/core`, and the Postman collection. KRX uses the unsuffixed `034020`
 code; no NXT, auth, account, order, cancel, or continuation flow is added.
+
+## Hanwha Ocean KRX advisory service
+
+The independent Hanwha Ocean (`042660`) collector exposes
+`GET /api/widget/hanwha-ocean-price` with the same
+`X-KORStockScan-Widget-Key` header. A dedicated key can be set with
+`KORSTOCKSCAN_HANWHA_OCEAN_WIDGET_ACCESS_KEY` (or its `_FILE` form), otherwise
+the Samsung widget key is reused.
+
+`HANWHA_OCEAN_VWAP_FIRST_PULLBACK_V1` is KRX-regular-only and has no fixed
+price or fixed session-return gate. It requires a confirmed retest or
+higher-high/higher-low support structure, a VWAP or recent-resistance reclaim,
+`volume_confirmation_mode=standard_rebound`, fresh coherent quote/BBO, a
+spread no wider than two ticks, and two consecutive 10-second observations.
+A completed retest that rebounds above VWAP is labeled `HIGH` and may become
+`ENTRY_READY`; the broader valid first-pullback structure remains
+`ENTRY_CAUTION`. Resistance-only and recovery-episode signals retain the
+portable engine's caution state.
+
+Only the first qualifying entry episode per KRX trade date is emitted. Its
+linked exit event is emitted at the tick-rounded `+1%` target or when a later
+completed one-minute candle closes below the captured structural support.
+Entry and linked-exit events are sent only to Telegram `ADMIN_ID`. Set
+`KORSTOCKSCAN_HANWHA_OCEAN_WIDGET_TELEGRAM_ENABLED=false` to disable them.
+Every payload remains `authority=widget_advisory_only`,
+`runtime_effect=false`, `actual_order_submitted=false`, and
+`broker_order_forbidden=true`.
+
+The collector reuses only the cached Kiwoom token and calls `ka10001`,
+`ka10004`, `ka10080`, and `ka10081`. It writes atomic state to
+`data/runtime/hanwha_ocean_widget_advisory_snapshot.json` and persists only
+state transitions and minute summaries:
+
+```bash
+sudo cp deploy/systemd/korstockscan-hanwha-ocean-widget-collector.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now korstockscan-hanwha-ocean-widget-collector
+```
+
+Gunicorn must be gracefully reloaded separately before the route is served;
+neither action restarts the trading bot. Official Kiwoom reference evidence
+was rechecked at `2026-08-06T09:31:34+09:00` against upstream commit
+`69642586f7d84ba9fd8a6faf1f1537c7fda6568b`. The inspected paths were
+`kiwoom_docs/종목정보.md`, `kiwoom_docs/차트.md`, `kiwoom/specs.py`,
+`kiwoom/core`, and the Postman collection. KRX uses unsuffixed `042660`; no
+NXT, auth, account, order, cancel, or continuation flow is added.
 
 ## Windows installation
 

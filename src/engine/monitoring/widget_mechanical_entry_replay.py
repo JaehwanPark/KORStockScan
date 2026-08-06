@@ -606,6 +606,34 @@ def build_report(
             and row["mechanical_spread_ticks"] <= max_ticks
         ]
         spread_sensitivity[f"max_{max_ticks}_ticks"] = _cohort_summary(cohort)
+    symbol_cohorts: dict[str, dict[str, Any]] = {}
+    for stock_code in sorted({str(row.get("stock_code") or "") for row in rows}):
+        if not stock_code:
+            continue
+        stock_rows = [row for row in rows if str(row.get("stock_code")) == stock_code]
+        stock_signals = [row for row in stock_rows if row["mechanical_signal"]]
+        stock_candidates = [
+            row for row in stock_rows if row["mechanical_candidate_before_spread_gate"]
+        ]
+        symbol_cohorts[stock_code] = {
+            "all_joined_rows": _cohort_summary(stock_rows),
+            "mechanical_signals": _cohort_summary(stock_signals),
+            "candidates_before_spread": _cohort_summary(stock_candidates),
+            "mechanical_state_counts": dict(
+                sorted(
+                    Counter(str(row["mechanical_state"]) for row in stock_rows).items()
+                )
+            ),
+            "blocker_counts": dict(
+                sorted(
+                    Counter(
+                        str(reason)
+                        for row in stock_rows
+                        for reason in row.get("mechanical_unmet_conditions", [])
+                    ).items()
+                )
+            ),
+        }
 
     return {
         "schema": "widget_mechanical_entry_replay_v1",
@@ -660,6 +688,7 @@ def build_report(
                 pre_spread_candidates
             ),
             "spread_tick_sensitivity_ai_ask_proxy": spread_sensitivity,
+            "stock_code_cohorts": symbol_cohorts,
             "mechanical_signal_raw_count": sum(
                 row["mechanical_signal"] for row in rows
             ),
@@ -737,6 +766,40 @@ def render_markdown(report: dict[str, Any]) -> str:
                     str(row["diagnostic_target_first_rate_pct"]),
                     str(row["diagnostic_target_share_among_decisive_pct"]),
                     str(row["equal_weight_avg_profit_pct"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Stock-code cohorts",
+            "",
+            "Only cohorts with a mechanical signal or a pre-spread candidate are shown; the JSON artifact retains every joined stock code.",
+            "",
+            "| Stock code | Joined | Mechanical signals | Pre-spread candidates | Target first | Adverse first | Equal-weight 10m end |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for stock_code, cohort in summary.get("stock_code_cohorts", {}).items():
+        if (
+            cohort["mechanical_signals"]["sample_count"] == 0
+            and cohort["candidates_before_spread"]["sample_count"] == 0
+        ):
+            continue
+        joined = cohort["all_joined_rows"]
+        hits = joined["hit_counts"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    stock_code,
+                    str(joined["sample_count"]),
+                    str(cohort["mechanical_signals"]["sample_count"]),
+                    str(cohort["candidates_before_spread"]["sample_count"]),
+                    str(hits.get("target_first", 0)),
+                    str(hits.get("adverse_first", 0)),
+                    str(joined["equal_weight_avg_profit_pct"]),
                 ]
             )
             + " |"

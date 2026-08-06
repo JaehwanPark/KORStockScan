@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from src.engine.monitoring.samsung_widget_entry_notify import (
     SamsungWidgetEntryTelegramNotifier,
     build_entry_message,
+    build_exit_message,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -40,6 +41,38 @@ def _payload(state: str = "ENTRY_CAUTION", observed_at: datetime | None = None) 
             "broker_order_forbidden": True,
         },
     }
+
+
+def _exit_payload(observed_at: datetime | None = None) -> dict:
+    now = observed_at or datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
+    payload = _payload("WATCH", now)
+    payload["advisory"]["entry_price_low"] = None
+    payload["advisory"]["entry_price_high"] = None
+    payload["exit_advisory"] = {
+        "state": "EXIT_READY",
+        "session": "KRX_REGULAR",
+        "reference_exit_price": 231_500,
+        "broken_support": 232_000,
+        "peak_price": 235_000,
+        "peak_drawdown_pct": 1.4894,
+        "reasons": [
+            "rolling_peak_drawdown",
+            "prior_five_bar_support_broken",
+            "broken_support_reclaim_failed",
+            "three_and_five_minute_down",
+        ],
+        "valid_until": (now + timedelta(seconds=60)).isoformat(),
+        "observed_at": now.isoformat(),
+        "source_quality": {"status": "PASS"},
+        "continuity": {"ready_bar": "20260804143200"},
+        "authority": "widget_advisory_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "holding_independent": True,
+        "future_prediction": False,
+    }
+    return payload
 
 
 def test_entry_notice_is_admin_only_and_deduplicates_active_episode(tmp_path):
@@ -252,7 +285,7 @@ def test_message_contains_no_sell_or_order_instruction():
     assert "자동주문 아님" in message
 
 
-def test_exit_advisory_suppresses_conflicting_entry_notice(tmp_path):
+def test_exit_ready_sends_one_notice_and_suppresses_conflicting_entry(tmp_path):
     sent = []
     notifier = SamsungWidgetEntryTelegramNotifier(
         state_file=tmp_path / "state.json",
@@ -260,8 +293,82 @@ def test_exit_advisory_suppresses_conflicting_entry_notice(tmp_path):
         sender=lambda *_args: sent.append(_args),
     )
     now = datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
-    payload = _payload(observed_at=now)
-    payload["exit_advisory"] = {"state": "EXIT_READY"}
+    payload = _exit_payload(now)
+    payload["advisory"] = _payload("ENTRY_READY", now)["advisory"]
 
-    assert notifier.observe(payload, now) == "exit_advisory_conflict"
+    assert notifier.observe(payload, now) == "exit_sent"
+    assert (
+        notifier.observe(
+            _exit_payload(now + timedelta(seconds=10)), now + timedelta(seconds=10)
+        )
+        == "duplicate_exit_episode"
+    )
+    assert len(sent) == 1
+    assert "삼성전자 청산 관찰 알림" in sent[0][2]
+    assert "231,500원" in sent[0][2]
+    assert "자동매도/주문 아님" in sent[0][2]
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert state["last_telegram_event_type"] == "samsung_widget_exit_advisory"
+    assert state["last_exit_reference_price"] == 231_500
+
+
+def test_exit_ready_retries_failure_without_cross_suppressing_entry_state(tmp_path):
+    attempts = []
+
+    def sender(*args):
+        attempts.append(args)
+        if len(attempts) == 1:
+            raise TimeoutError("telegram unavailable")
+
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=sender,
+        retry_sec=30,
+    )
+    now = datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
+
+    assert notifier.observe(_exit_payload(now), now) == "exit_send_failed"
+    assert (
+        notifier.observe(
+            _exit_payload(now + timedelta(seconds=10)), now + timedelta(seconds=10)
+        )
+        == "exit_retry_wait"
+    )
+    assert (
+        notifier.observe(
+            _exit_payload(now + timedelta(seconds=31)), now + timedelta(seconds=31)
+        )
+        == "exit_sent"
+    )
+    assert len(attempts) == 2
+
+
+def test_invalid_or_stale_exit_advisory_never_sends(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    now = datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
+    invalid = _exit_payload(now)
+    invalid["exit_advisory"]["runtime_effect"] = True
+    stale = _exit_payload(now)
+    stale["observed_at_kst"] = (now - timedelta(seconds=26)).isoformat()
+    stale["exit_advisory"]["observed_at"] = stale["observed_at_kst"]
+    expired = _exit_payload(now)
+    expired["exit_advisory"]["valid_until"] = now.isoformat()
+
+    assert notifier.observe(invalid, now) == "invalid_exit_contract"
+    assert notifier.observe(stale, now) == "invalid_exit_contract"
+    assert notifier.observe(expired, now) == "invalid_exit_contract"
     assert sent == []
+
+
+def test_exit_message_is_holding_independent_and_has_no_order_authority():
+    message = build_exit_message(_exit_payload())
+
+    assert "보유 무관 관측용" in message
+    assert "자동매도/주문 아님" in message
+    assert "이탈 지지: 232,000원" in message
