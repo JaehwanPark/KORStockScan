@@ -27,6 +27,7 @@ DEFAULT_SNAPSHOT_PATH = Path("data/runtime/hanwha_ocean_widget_advisory_snapshot
 DEFAULT_OBSERVATION_DIR = Path("data/report/hanwha_ocean_widget_advisory_observation")
 
 STRATEGY_PROFILE = "HANWHA_OCEAN_VWAP_FIRST_PULLBACK_V1"
+EPISODE_POLICY = "multiple_non_overlapping_after_exit_and_new_bar_rearm"
 ENTRY_TARGET_PCT = 1.00
 EXIT_EVENT_REASONS = frozenset(
     {
@@ -38,7 +39,7 @@ EXIT_EVENT_REASONS = frozenset(
 METRIC_CONTRACT = {
     "metric_role": "diagnostic_signal_observation",
     "decision_authority": ADVISORY_AUTHORITY,
-    "window_policy": "krx_regular_first_qualifying_episode_per_trade_date",
+    "window_policy": "krx_regular_multiple_rearmed_episodes_per_trade_date",
     "sample_floor": "three_completed_1m_bars_and_two_10s_confirmations",
     "primary_decision_metric": "none_operator_advisory",
     "source_quality_gate": (

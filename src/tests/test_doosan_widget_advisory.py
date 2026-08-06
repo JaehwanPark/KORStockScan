@@ -208,7 +208,7 @@ def test_entry_linked_exit_uses_target_or_completed_close_not_intrabar_low():
     assert tracker.completed is True
 
 
-def test_invalid_actionable_contract_does_not_consume_daily_entry_episode():
+def test_invalid_actionable_contract_does_not_consume_entry_episode():
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     bars = _bars([100_000, 99_000, 98_500])
     tracker = doosan.DoosanDailyEpisodeTracker()
@@ -260,7 +260,7 @@ def test_invalid_actionable_contract_does_not_consume_daily_entry_episode():
     assert tracker.entry_event is not None
 
 
-def test_daily_episode_prevents_reentry_and_restores_after_restart():
+def test_active_episode_prevents_overlap_and_restores_after_restart():
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     bars = _bars([100_000, 99_000, 98_500])
     tracker = doosan.DoosanDailyEpisodeTracker()
@@ -287,6 +287,7 @@ def test_daily_episode_prevents_reentry_and_restores_after_restart():
     assert repeated["state"] == "WATCH"
     assert "doosan_entry_episode_active" in repeated["unmet_conditions"]
     assert restarted.entry_event["event_id"] == snapshot["entry_event"]["event_id"]
+    assert restarted.daily_entry_count == 1
 
     corrupted = {**snapshot, "target_price": 1}
     assert not doosan.DoosanDailyEpisodeTracker().restore(
@@ -294,7 +295,7 @@ def test_daily_episode_prevents_reentry_and_restores_after_restart():
     )
 
 
-def test_entry_linked_target_exit_is_tick_rounded_and_consumes_daily_entry():
+def test_entry_linked_target_exit_is_tick_rounded_and_requires_rearm():
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     bars = _bars([100_000, 99_000, 98_500])
     tracker = doosan.DoosanDailyEpisodeTracker()
@@ -322,6 +323,8 @@ def test_entry_linked_target_exit_is_tick_rounded_and_consumes_daily_entry():
     assert suppressed["state"] == "WATCH"
     assert tracker.entry_event["status"] == "CLOSED"
     assert tracker.completed is True
+    assert tracker.rearm_required is True
+    assert tracker.daily_entry_count == 1
     completed_snapshot = tracker.snapshot()
     assert doosan.DoosanDailyEpisodeTracker().restore(
         completed_snapshot, observed_at=now + timedelta(seconds=20)
@@ -332,6 +335,169 @@ def test_entry_linked_target_exit_is_tick_rounded_and_consumes_daily_entry():
     }
     assert not doosan.DoosanDailyEpisodeTracker().restore(
         completed_snapshot, observed_at=now + timedelta(seconds=20)
+    )
+    stranded = tracker.snapshot()
+    stranded["rearm_required"] = False
+    assert not doosan.DoosanDailyEpisodeTracker().restore(
+        stranded, observed_at=now + timedelta(seconds=20)
+    )
+
+
+def test_completed_episode_rearms_and_allows_second_entry_same_day():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    bars = _bars([100_000, 99_000, 98_500])
+    later_bars = [
+        *bars,
+        _bars([98_700], start=datetime(2026, 8, 5, 9, 3, tzinfo=KST))[0],
+    ]
+    tracker = doosan.DoosanDailyEpisodeTracker()
+    tracker.apply(
+        _base_advisory(now),
+        observed_at=now,
+        current_price=99_100,
+        bars=bars,
+        bbo={"best_bid": 99_000},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    tracker.apply(
+        _base_advisory(now + timedelta(seconds=10)),
+        observed_at=now + timedelta(seconds=10),
+        current_price=100_100,
+        bars=bars,
+        bbo={"best_bid": 100_000},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    first_event_id = str(tracker.entry_event["event_id"])
+
+    same_setup, _ = tracker.apply(
+        _base_advisory(now + timedelta(seconds=80)),
+        observed_at=now + timedelta(seconds=80),
+        current_price=99_200,
+        bars=later_bars,
+        bbo={"best_bid": 99_100},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert same_setup["state"] == "WATCH"
+    assert "doosan_entry_episode_rearm_pending" in same_setup["unmet_conditions"]
+    assert tracker.rearm_required is True
+
+    blocked_reset = _base_advisory(now + timedelta(seconds=90), state="WATCH")
+    blocked_reset["source_quality"] = {
+        "status": "BLOCKED",
+        "issues": ["bbo_stale"],
+    }
+    tracker.apply(
+        blocked_reset,
+        observed_at=now + timedelta(seconds=90),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality=blocked_reset["source_quality"],
+    )
+    assert tracker.rearm_required is True
+
+    unconfirmed = _base_advisory(now + timedelta(seconds=95))
+    unconfirmed["state"] = "WATCH"
+    tracker.apply(
+        unconfirmed,
+        observed_at=now + timedelta(seconds=95),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert tracker.rearm_required is True
+
+    non_actionable, _ = tracker.apply(
+        _base_advisory(now + timedelta(seconds=100), state="WATCH"),
+        observed_at=now + timedelta(seconds=100),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert "doosan_entry_episode_rearmed" in non_actionable["reasons"]
+    assert tracker.entry_issued is False
+    assert tracker.daily_entry_count == 1
+    restarted = doosan.DoosanDailyEpisodeTracker()
+    assert restarted.restore(
+        tracker.snapshot(), observed_at=now + timedelta(seconds=105)
+    )
+    tracker = restarted
+
+    second_entry, _ = tracker.apply(
+        _base_advisory(now + timedelta(seconds=110)),
+        observed_at=now + timedelta(seconds=110),
+        current_price=99_100,
+        bars=later_bars,
+        bbo={"best_bid": 99_000},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert second_entry["state"] == "ENTRY_CAUTION"
+    assert tracker.active is True
+    assert tracker.daily_entry_count == 2
+    assert tracker.entry_event["episode_sequence"] == 2
+    assert ":ENTRY:02:" in tracker.entry_event["event_id"]
+    assert tracker.entry_event["event_id"] != first_event_id
+
+
+def test_completed_legacy_snapshot_migrates_to_rearm_pending():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    bars = _bars([100_000, 99_000, 98_500])
+    tracker = doosan.DoosanDailyEpisodeTracker()
+    tracker.apply(
+        _base_advisory(now),
+        observed_at=now,
+        current_price=99_100,
+        bars=bars,
+        bbo={"best_bid": 99_000},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    tracker.apply(
+        _base_advisory(now + timedelta(seconds=10)),
+        observed_at=now + timedelta(seconds=10),
+        current_price=100_100,
+        bars=bars,
+        bbo={"best_bid": 100_000},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    legacy = tracker.snapshot()
+    for key in (
+        "episode_policy",
+        "daily_entry_count",
+        "rearm_required",
+        "rearm_after_bar",
+    ):
+        legacy.pop(key)
+    restarted = doosan.DoosanDailyEpisodeTracker()
+
+    assert restarted.restore(legacy, observed_at=now + timedelta(seconds=20))
+    assert restarted.daily_entry_count == 1
+    assert restarted.rearm_required is True
+    assert restarted.rearm_after_bar == "20260805100000"
+
+
+def test_non_actionable_reset_requires_fresh_two_observation_promotion():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    promotion = AdvisoryPromotionFilter()
+
+    assert promotion.apply(_base_advisory(now))["state"] == "WATCH"
+    assert (
+        promotion.apply(_base_advisory(now + timedelta(seconds=10)))["state"]
+        == "ENTRY_CAUTION"
+    )
+    assert (
+        promotion.apply(_base_advisory(now + timedelta(seconds=20), state="WATCH"))[
+            "state"
+        ]
+        == "WATCH"
+    )
+    assert (
+        promotion.apply(_base_advisory(now + timedelta(seconds=30)))["state"] == "WATCH"
+    )
+    assert (
+        promotion.apply(_base_advisory(now + timedelta(seconds=40)))["state"]
+        == "ENTRY_CAUTION"
     )
 
 

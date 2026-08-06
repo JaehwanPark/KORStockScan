@@ -214,9 +214,12 @@ completed-bar support/VWAP/rebound detector, then requires all of the following:
 A qualifying return at or below `-1.00%` is labeled `HIGH` and normally becomes
 `ENTRY_READY`; a resistance-only reclaim or a carried recovery episode keeps
 the portable base engine's `ENTRY_CAUTION`. The broader `-0.50%` cohort is also
-`ENTRY_CAUTION`. Only the first qualifying entry episode per KRX trade date is
-emitted. The entry reference is the top of the recommended range. Its linked
-exit event is emitted at the
+`ENTRY_CAUTION`. Multiple non-overlapping entry episodes may be emitted in one
+KRX trade date. A completed episode is rearmed only after its linked exit event
+expires, a later completed one-minute bar is available, and a non-actionable
+observation resets the prior setup; the next setup still requires two fresh
+10-second confirmations. The entry reference is the top of the recommended
+range. Its linked exit event is emitted at the
 tick-rounded `+1%` target or when a later completed one-minute candle closes
 below the captured structural support. An intrabar low touch alone does not
 create the support-break exit.
@@ -270,9 +273,12 @@ A completed retest that rebounds above VWAP is labeled `HIGH` and may become
 `ENTRY_CAUTION`. Resistance-only and recovery-episode signals retain the
 portable engine's caution state.
 
-Only the first qualifying entry episode per KRX trade date is emitted. Its
-linked exit event is emitted at the tick-rounded `+1%` target or when a later
-completed one-minute candle closes below the captured structural support.
+Multiple non-overlapping entry episodes may be emitted in one KRX trade date.
+After a linked exit, the prior setup must expire, a later completed one-minute
+bar and a non-actionable reset must be observed, and the next setup must pass
+two fresh 10-second confirmations. Each linked exit event is emitted at the
+tick-rounded `+1%` target or when a later completed one-minute candle closes
+below the captured structural support.
 Entry and linked-exit events are sent only to Telegram `ADMIN_ID`. Set
 `KORSTOCKSCAN_HANWHA_OCEAN_WIDGET_TELEGRAM_ENABLED=false` to disable them.
 Every payload remains `authority=widget_advisory_only`,

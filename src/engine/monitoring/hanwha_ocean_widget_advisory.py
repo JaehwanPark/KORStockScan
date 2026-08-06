@@ -147,7 +147,7 @@ def apply_hanwha_ocean_entry_policy(
         "signal_tier": tier,
         "relative_context_authority": "diagnostic_only_neutralized_in_v1",
         "external_context_authority": "diagnostic_only_no_promotion",
-        "first_qualifying_episode_per_day": True,
+        "episode_policy": contract.EPISODE_POLICY,
     }
     result["strategy_profile"] = contract.STRATEGY_PROFILE
     result["signal_tier"] = tier
@@ -222,16 +222,19 @@ def _ceil_to_tick(price: float) -> int:
 
 
 class HanwhaOceanDailyEpisodeTracker:
-    """Own one daily entry event and its entry-linked deterministic exit."""
+    """Own non-overlapping, rearmed entry/exit episodes within one trade date."""
 
     def __init__(self) -> None:
         self.reset()
 
     def reset(self) -> None:
         self.scope_date = ""
+        self.daily_entry_count = 0
         self.entry_issued = False
         self.active = False
         self.completed = False
+        self.rearm_required = False
+        self.rearm_after_bar = ""
         self.entry_reference_price: int | None = None
         self.structural_support: int | None = None
         self.target_price: int | None = None
@@ -244,9 +247,13 @@ class HanwhaOceanDailyEpisodeTracker:
     def snapshot(self) -> dict[str, Any]:
         return {
             "scope_date": self.scope_date or None,
+            "episode_policy": contract.EPISODE_POLICY,
+            "daily_entry_count": self.daily_entry_count,
             "entry_issued": self.entry_issued,
             "active": self.active,
             "completed": self.completed,
+            "rearm_required": self.rearm_required,
+            "rearm_after_bar": self.rearm_after_bar or None,
             "entry_reference_price": self.entry_reference_price,
             "structural_support": self.structural_support,
             "target_price": self.target_price,
@@ -282,17 +289,59 @@ class HanwhaOceanDailyEpisodeTracker:
             peak_price = int(value.get("peak_price") or 0) or None
         except (TypeError, ValueError):
             return False
+        if (
+            "episode_policy" in value
+            and value.get("episode_policy") != contract.EPISODE_POLICY
+        ):
+            return False
         entry_issued = value.get("entry_issued") is True
         active = value.get("active") is True
         completed = value.get("completed") is True
+        raw_daily_entry_count = value.get("daily_entry_count")
+        if raw_daily_entry_count is None:
+            daily_entry_count = 1 if entry_issued else 0
+        elif isinstance(raw_daily_entry_count, int) and not isinstance(
+            raw_daily_entry_count, bool
+        ):
+            daily_entry_count = raw_daily_entry_count
+        elif isinstance(raw_daily_entry_count, str) and raw_daily_entry_count.isdigit():
+            daily_entry_count = int(raw_daily_entry_count)
+        else:
+            return False
+        if daily_entry_count < 0 or (entry_issued and daily_entry_count < 1):
+            return False
+        if "rearm_required" in value and not isinstance(
+            value.get("rearm_required"), bool
+        ):
+            return False
+        rearm_required = (
+            completed if "rearm_required" not in value else value["rearm_required"]
+        )
+        raw_rearm_after_bar = value.get("rearm_after_bar")
+        if raw_rearm_after_bar is not None and not isinstance(raw_rearm_after_bar, str):
+            return False
+        rearm_after_bar = raw_rearm_after_bar or ""
+        if entry_issued and active == completed:
+            return False
+        if completed != rearm_required:
+            return False
         if active and (
             not entry_issued
             or completed
+            or rearm_required
             or not all((entry_reference, structural_support, target_price))
         ):
             return False
+        if rearm_required and (not entry_issued or not completed or active):
+            return False
         entry_event = value.get("entry_event")
         exit_event = value.get("exit_event")
+        if isinstance(entry_event, dict) and "episode_sequence" in entry_event:
+            if _positive_int(entry_event.get("episode_sequence")) != daily_entry_count:
+                return False
+        if isinstance(exit_event, dict) and "episode_sequence" in exit_event:
+            if _positive_int(exit_event.get("episode_sequence")) != daily_entry_count:
+                return False
         entry_observed_at = str(value.get("entry_observed_at") or "")
         entry_last_completed_bar = str(value.get("entry_last_completed_bar") or "")
         try:
@@ -409,10 +458,23 @@ class HanwhaOceanDailyEpisodeTracker:
                 and exit_valid_until > exit_observed_at
             ):
                 return False
+            if not rearm_after_bar and exit_observed_at is not None:
+                rearm_after_bar = _as_kst(exit_observed_at).strftime("%Y%m%d%H%M00")
+            if not (
+                len(rearm_after_bar) == 14
+                and rearm_after_bar.isdigit()
+                and rearm_after_bar.startswith(today.replace("-", ""))
+            ):
+                return False
+        elif rearm_required or rearm_after_bar:
+            return False
         self.scope_date = today
+        self.daily_entry_count = daily_entry_count
         self.entry_issued = entry_issued
         self.active = active
         self.completed = completed
+        self.rearm_required = rearm_required
+        self.rearm_after_bar = rearm_after_bar
         self.entry_reference_price = entry_reference
         self.structural_support = structural_support
         self.target_price = target_price
@@ -442,6 +504,62 @@ class HanwhaOceanDailyEpisodeTracker:
             self.reset()
             self.scope_date = today
 
+    def _clear_current_episode(self) -> None:
+        self.entry_issued = False
+        self.active = False
+        self.completed = False
+        self.rearm_required = False
+        self.rearm_after_bar = ""
+        self.entry_reference_price = None
+        self.structural_support = None
+        self.target_price = None
+        self.entry_observed_at = ""
+        self.entry_last_completed_bar = ""
+        self.peak_price = None
+        self.entry_event = None
+        self.exit_event = None
+
+    def _maybe_rearm(
+        self,
+        advisory: dict[str, Any],
+        *,
+        observed_at: datetime,
+        bars: list[MinuteBar],
+        source_quality: dict[str, Any],
+    ) -> bool:
+        advisory_source_quality = advisory.get("source_quality")
+        advisory_source_quality = (
+            advisory_source_quality if isinstance(advisory_source_quality, dict) else {}
+        )
+        if not (
+            self.entry_issued
+            and self.completed
+            and self.rearm_required
+            and isinstance(self.exit_event, dict)
+            and source_quality.get("status") == "PASS"
+            and advisory_source_quality.get("status") == "PASS"
+            and advisory.get("state") not in ACTIONABLE_ENTRY_STATES
+            and advisory.get("raw_state", advisory.get("state"))
+            not in ACTIONABLE_ENTRY_STATES
+        ):
+            return False
+        try:
+            exit_valid_until = datetime.fromisoformat(
+                str(self.exit_event.get("valid_until") or "")
+            )
+        except (TypeError, ValueError):
+            return False
+        latest_bar = bars[-1] if bars else None
+        if (
+            exit_valid_until.tzinfo is None
+            or exit_valid_until > _as_kst(observed_at)
+            or latest_bar is None
+            or latest_bar.source_time <= self.rearm_after_bar
+        ):
+            return False
+        self._clear_current_episode()
+        return True
+
     def _capture_entry(
         self,
         advisory: dict[str, Any],
@@ -449,7 +567,11 @@ class HanwhaOceanDailyEpisodeTracker:
         observed_at: datetime,
         bars: list[MinuteBar],
     ) -> bool:
-        if self.entry_issued or advisory.get("state") not in ACTIONABLE_ENTRY_STATES:
+        if (
+            self.entry_issued
+            or self.rearm_required
+            or advisory.get("state") not in ACTIONABLE_ENTRY_STATES
+        ):
             return False
         now = _as_kst(observed_at)
         context = contract.session_context(now)
@@ -477,6 +599,10 @@ class HanwhaOceanDailyEpisodeTracker:
             return False
         self.entry_issued = True
         self.active = True
+        self.completed = False
+        self.rearm_required = False
+        self.rearm_after_bar = ""
+        self.daily_entry_count += 1
         self.entry_reference_price = entry_high
         self.structural_support = support
         self.target_price = _ceil_to_tick(
@@ -485,11 +611,15 @@ class HanwhaOceanDailyEpisodeTracker:
         self.entry_observed_at = now.isoformat()
         self.entry_last_completed_bar = bars[-1].source_time if bars else ""
         self.peak_price = entry_high
-        event_id = f"{contract.HANWHA_OCEAN_CODE}:{self.scope_date}:ENTRY:{now.strftime('%H%M%S')}"
+        event_id = (
+            f"{contract.HANWHA_OCEAN_CODE}:{self.scope_date}:ENTRY:"
+            f"{self.daily_entry_count:02d}:{now.strftime('%H%M%S')}"
+        )
         policy = advisory.get("hanwha_ocean_policy") or {}
         self.entry_event = {
             "event_id": event_id,
             "event_type": "ENTRY",
+            "episode_sequence": self.daily_entry_count,
             "status": "ACTIVE",
             "state": advisory.get("state"),
             "signal_tier": advisory.get("signal_tier"),
@@ -546,7 +676,7 @@ class HanwhaOceanDailyEpisodeTracker:
                     (
                         "hanwha_ocean_entry_episode_not_active"
                         if not self.entry_issued
-                        else "hanwha_ocean_daily_entry_episode_completed"
+                        else "hanwha_ocean_entry_episode_rearm_pending"
                     )
                 ]
             ),
@@ -575,11 +705,22 @@ class HanwhaOceanDailyEpisodeTracker:
         source_quality: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         self._reset_for_date(observed_at)
+        rearmed = self._maybe_rearm(
+            advisory,
+            observed_at=observed_at,
+            bars=bars,
+            source_quality=source_quality,
+        )
         capture_attempted = bool(
             not self.entry_issued and advisory.get("state") in ACTIONABLE_ENTRY_STATES
         )
         captured = self._capture_entry(advisory, observed_at=observed_at, bars=bars)
         current_advisory = deepcopy(advisory)
+        if rearmed:
+            current_advisory["reasons"] = _append_unique(
+                current_advisory.get("reasons"),
+                "hanwha_ocean_entry_episode_rearmed",
+            )
         if capture_attempted and not captured:
             source_status = str(
                 (current_advisory.get("source_quality") or {}).get("status") or ""
@@ -613,15 +754,20 @@ class HanwhaOceanDailyEpisodeTracker:
             reference_exit_price = _positive_int(bbo.get("best_bid")) or current_price
             self.active = False
             self.completed = True
+            self.rearm_required = True
+            self.rearm_after_bar = (
+                bars[-1].source_time if bars else self.entry_last_completed_bar
+            )
             if self.entry_event is not None:
                 self.entry_event["status"] = "CLOSED"
                 self.entry_event["closed_at"] = now.isoformat()
             self.exit_event = {
                 "event_id": (
                     f"{contract.HANWHA_OCEAN_CODE}:{self.scope_date}:EXIT:"
-                    f"{now.strftime('%H%M%S')}"
+                    f"{self.daily_entry_count:02d}:{now.strftime('%H%M%S')}"
                 ),
                 "event_type": "EXIT",
+                "episode_sequence": self.daily_entry_count,
                 "reason": reason,
                 "reference_exit_price": reference_exit_price,
                 "entry_reference_price": self.entry_reference_price,
@@ -677,7 +823,7 @@ class HanwhaOceanDailyEpisodeTracker:
                 (
                     "hanwha_ocean_entry_episode_active"
                     if self.active
-                    else "hanwha_ocean_daily_entry_episode_consumed"
+                    else "hanwha_ocean_entry_episode_rearm_pending"
                 ),
             )
         return current_advisory, exit_advisory

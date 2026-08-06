@@ -57,6 +57,7 @@ def test_admin_notifier_sends_entry_and_exit_once(tmp_path):
     )
     assert sent[0][:2] == ("TOKEN", "ADMIN")
     assert "진입 신호" in sent[0][2]
+    assert "청산 후 새 구조 재진입 가능" in sent[0][2]
     assert "자동주문 아님" in sent[0][2]
 
     payload["exit_event"] = {
@@ -75,6 +76,30 @@ def test_admin_notifier_sends_entry_and_exit_once(tmp_path):
     assert len(sent) == 2
     assert "청산 신호" in sent[1][2]
     assert "+1% 기준가 도달" in sent[1][2]
+
+
+def test_admin_notifier_sends_each_distinct_same_day_entry_episode(tmp_path):
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    sent = []
+    notifier = DoosanWidgetTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *args: sent.append(args),
+    )
+    payload = _event_payload(now)
+    assert notifier.observe(payload, now)["entry"] == "sent"
+
+    second_at = now + timedelta(minutes=5)
+    payload["entry_event"] = {
+        **payload["entry_event"],
+        "event_id": "034020:2026-08-05:ENTRY:02:100505",
+        "episode_sequence": 2,
+        "observed_at": second_at.isoformat(),
+        "valid_until": (second_at + timedelta(seconds=60)).isoformat(),
+    }
+
+    assert notifier.observe(payload, second_at)["entry"] == "sent"
+    assert len(sent) == 2
 
 
 def test_notifier_rejects_runtime_authority_and_retries_failure(tmp_path):

@@ -121,7 +121,7 @@ def build_entry_message(payload: dict[str, Any], event: dict[str, Any]) -> str:
             f"구조 지지: {_format_price(event.get('structural_support'))}",
             f"세션 낙폭: {event.get('session_return_pct')}%",
             f"유효시각: {valid_text}",
-            "조건: KRX 하락 후 표준 반등거래량 · 일 1회",
+            "조건: KRX 하락 후 표준 반등거래량 · 청산 후 새 구조 재진입 가능",
             "권한: 관측용 · 자동주문 아님",
         ]
     )
