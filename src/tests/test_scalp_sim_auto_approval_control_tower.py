@@ -170,6 +170,42 @@ def test_scalp_control_tower_allows_active_seed_without_bucket_rows(tmp_path):
     assert catalog_payload["broker_order_forbidden"] is True
 
 
+def test_scalp_control_tower_rejects_cooldown_only_lifecycle_approval(tmp_path):
+    catalog = tmp_path / "lifecycle_bucket_catalog_2026-06-01.json"
+    catalog.write_text(json.dumps({"buckets": []}), encoding="utf-8")
+    lifecycle = _lifecycle_approval()
+    lifecycle["approved_bucket_ids"] = []
+    lifecycle["approved_bucket_rows"] = []
+    lifecycle["approved_bucket_count"] = 0
+    lifecycle["active_sim_priority_seeds"] = [
+        {
+            "active_seed_id": "active_seed_cooldown",
+            "source_parent_bucket_id": "parent_cooldown",
+            "status": "cooldown",
+            "observable_prefix": {
+                "entry_score_parent": "score_watch_recovery",
+                "entry_source_parent": "entry_source_wait6579",
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    ]
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-06-01",
+        lifecycle_sim_approval=lifecycle,
+        lifecycle_bucket_catalog_path=catalog,
+        scale_in_approval={},
+        runtime_apply_bridge={},
+    )
+
+    assert approval["approved"] is False
+    assert approval["approved_policy_count"] == 0
+    assert approval["approved_source_ids"] == []
+
+
 def test_scalp_control_tower_adds_rising_missed_prior_active_seed(tmp_path):
     prior = {
         "report_type": "rising_missed_classifier_prior",

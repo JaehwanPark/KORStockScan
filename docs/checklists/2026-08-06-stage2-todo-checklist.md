@@ -16,6 +16,15 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 당일 완료 기록
+
+- [x] `[PostcloseRiskBudgetExplorationReview0806] parent-count 과차단 분리 및 Swing-OFF tail 재검증` (`Due: 2026-08-06`, `Slot: PREOPEN`, `TimeWindow: 08:25~08:45`, `Track: ScalpingLogic`)
+  - Source: [lifecycle_bucket_discovery_2026-08-05_rolling5d.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-08-05_rolling5d.json), [lifecycle_bucket_discovery_2026-08-05_mtd.json](/home/ubuntu/KORStockScan/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_2026-08-05_mtd.json), [pattern_lab_currentness_audit_2026-08-05.json](/home/ubuntu/KORStockScan/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-08-05.json), [pattern_lab_propagation_audit_2026-08-05.json](/home/ubuntu/KORStockScan/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-08-05.json), [threshold_cycle_postclose_verification_2026-08-05.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-08-05.json)
+  - 판정: clean source-quality와 positive EV가 있는 parent는 전체 parent 개수 목표 미달만으로 sim-only 탐색을 닫지 않는다. rolling5d/MTD에서 3개 seed가 bounded sim active로 복원됐고 real/live authority는 0건으로 유지됐다.
+  - 안전 경계: parent granularity, complete lifecycle flow, source quality, entry-source taxonomy는 live conversion 필수 조건으로 유지하며 `runtime_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`를 검증했다.
+  - 산출물 순서: Swing-OFF currentness/workorder/propagation, gap audit, key lineage, conversion lane, rising prior/scout, EV, runtime summary, verifier 순으로 재생성했고 verifier는 stale/missing downstream 없이 warning으로 종료했다.
+  - 잔여 warning: rolling5d/MTD parent granularity 27<30, limit-down ordered-path 자연 표본 없음, Entry ADM joined outcome 표본 부족. 이들은 sim 탐색 차단이나 실주문 완화 근거로 사용하지 않는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-05` postclose -> `2026-08-06`)
 

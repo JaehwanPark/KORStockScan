@@ -721,6 +721,7 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
                     "source_parent_bucket_id": "parent_was_positive",
                     "parent_source_quality_adjusted_ev_pct": -0.1,
                     "complete_flow_count": 1,
+                    "parent_joined_sample": 1,
                     "parent_granularity_floor_passed": True,
                     "dimension_filters": {
                         "entry_score_parent": "score_watch_recovery",
@@ -732,9 +733,7 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
     )[0]
 
     assert first_fail["status"] == "cooldown"
-    assert (
-        first_fail["source_quality_status"] == "source_quality_or_granularity_blocked"
-    )
+    assert first_fail["source_quality_status"] == "nonpositive_ev"
     assert first_fail["active_grace_blocked_reason"] == "nonpositive_ev"
     assert first_fail["consecutive_fail_count"] == 1
 
@@ -751,6 +750,7 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
                     "source_parent_bucket_id": "parent_was_positive",
                     "parent_source_quality_adjusted_ev_pct": -0.1,
                     "complete_flow_count": 1,
+                    "parent_joined_sample": 1,
                     "parent_granularity_floor_passed": True,
                     "dimension_filters": {
                         "entry_score_parent": "score_watch_recovery",
@@ -789,6 +789,7 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
                     "source_parent_bucket_id": "parent_was_positive",
                     "parent_source_quality_adjusted_ev_pct": 1.1,
                     "complete_flow_count": 1,
+                    "parent_joined_sample": 1,
                     "parent_granularity_floor_passed": True,
                     "dimension_filters": {
                         "entry_score_parent": "score_watch_recovery",
@@ -813,6 +814,7 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
                     "source_parent_bucket_id": "parent_was_positive",
                     "parent_source_quality_adjusted_ev_pct": -0.1,
                     "complete_flow_count": 1,
+                    "parent_joined_sample": 1,
                     "parent_granularity_floor_passed": True,
                     "dimension_filters": {
                         "entry_score_parent": "score_watch_recovery",
@@ -839,7 +841,7 @@ def test_active_sim_priority_seed_status_uses_two_day_cooldown_and_five_day_reti
     assert cooldown_missing["consecutive_missing_count"] == 1
 
 
-def test_active_sim_priority_first_fail_grace_requires_positive_ev(
+def test_active_sim_priority_sim_exploration_does_not_require_parent_count_floor(
     tmp_path, monkeypatch
 ):
     previous_seed = {
@@ -871,6 +873,8 @@ def test_active_sim_priority_first_fail_grace_requires_positive_ev(
                     "source_parent_bucket_id": "parent_was_positive",
                     "parent_source_quality_adjusted_ev_pct": 0.4,
                     "complete_flow_count": 1,
+                    "parent_joined_sample": 5,
+                    "parent_granularity_status": "too_broad",
                     "parent_granularity_floor_passed": False,
                     "dimension_filters": {
                         "entry_score_parent": "score_watch_recovery",
@@ -882,8 +886,18 @@ def test_active_sim_priority_first_fail_grace_requires_positive_ev(
     )[0]
 
     assert floor_gap["status"] == "active"
-    assert floor_gap["source_quality_status"] == "first_fail_grace"
-    assert floor_gap["active_collection_reason"] == "previous_active_first_fail_grace"
+    assert floor_gap["source_quality_status"] == "pass"
+    assert floor_gap["sim_exploration_eligible"] is True
+    assert floor_gap["sim_exploration_decoupled_from_parent_count"] is True
+    assert floor_gap["parent_granularity_required_for_live_only"] is True
+    assert "parent_granularity_not_target" in floor_gap["live_conversion_blockers"]
+    assert "entry_source_taxonomy_not_runtime_ready" in floor_gap[
+        "live_conversion_blockers"
+    ]
+    assert floor_gap["live_conversion_taxonomy_runtime_ready"] is False
+    assert floor_gap["active_collection_reason"] == (
+        "positive_ev_parent_needs_sim_collection"
+    )
 
 
 def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(
@@ -899,6 +913,7 @@ def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(
                     "source_parent_bucket_id": "parent_positive_incomplete",
                     "parent_source_quality_adjusted_ev_pct": 1.1,
                     "complete_flow_count": 0,
+                    "parent_joined_sample": 1,
                     "parent_granularity_floor_passed": True,
                     "dimension_filters": {
                         "entry_score_parent": "score_watch_recovery",
@@ -923,8 +938,106 @@ def test_active_sim_priority_allows_incomplete_positive_parent_for_collection(
     assert seed["entry_source_taxonomy_contract"]["contract_state"] == "canonical_alias"
     assert seed["taxonomy_contract_data_consumed"] is True
     assert seed["taxonomy_contract_runtime_effect_allowed"] is True
+    assert seed["live_conversion_taxonomy_runtime_ready"] is True
     assert seed["runtime_effect"] is False
     assert seed["broker_order_forbidden"] is True
+
+
+def test_active_sim_priority_blocks_bad_source_quality_and_pending_taxonomy(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    report = {
+        "date": "2026-06-01",
+        "parent_bucket_summaries": [
+            {
+                "source_parent_bucket_id": "parent_bad_source",
+                "parent_source_quality_adjusted_ev_pct": 1.5,
+                "complete_flow_count": 1,
+                "parent_joined_sample": 5,
+                "parent_granularity_status": "too_broad",
+                "parent_granularity_floor_passed": False,
+                "parent_sim_exploration_source_quality_passed": False,
+                "dimension_filters": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_blocked_ai_score",
+                },
+            },
+            {
+                "source_parent_bucket_id": "parent_pending_taxonomy",
+                "parent_source_quality_adjusted_ev_pct": 1.2,
+                "complete_flow_count": 1,
+                "parent_joined_sample": 4,
+                "parent_granularity_status": "too_broad",
+                "parent_granularity_floor_passed": False,
+                "parent_sim_exploration_source_quality_passed": True,
+                "parent_live_source_quality_passed": False,
+                "dimension_filters": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_observed_other",
+                    "entry_source_parent_contract_state": (
+                        "new_axis_pending_taxonomy"
+                    ),
+                    "entry_source_parent_consume_data": "True",
+                },
+            },
+        ],
+    }
+
+    seeds = {
+        seed["source_parent_bucket_id"]: seed
+        for seed in mod._build_active_sim_priority_seeds(report)
+    }
+
+    assert seeds["parent_bad_source"]["status"] == "cooldown"
+    assert seeds["parent_bad_source"]["source_quality_status"] == (
+        "source_quality_blocked"
+    )
+    assert seeds["parent_pending_taxonomy"]["status"] == "cooldown"
+    assert seeds["parent_pending_taxonomy"]["source_quality_status"] == (
+        "taxonomy_blocked"
+    )
+    assert "source_quality_not_passed" in seeds["parent_pending_taxonomy"][
+        "live_conversion_blockers"
+    ]
+    assert all(
+        seed["sim_exploration_decoupled_from_parent_count"] is False
+        for seed in seeds.values()
+    )
+
+
+def test_active_sim_priority_prunes_terminal_missing_lineage(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    tmp_path.joinpath("lifecycle_bucket_discovery_2026-05-31.json").write_text(
+        json.dumps(
+            {
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_retired",
+                        "source_parent_bucket_id": "parent_no_longer_present",
+                        "status": "retired",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_watch_recovery",
+                            "entry_source_parent": "entry_source_blocked_ai_score",
+                        },
+                        "consecutive_missing_count": 5,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        mod._build_active_sim_priority_seeds(
+            {"date": "2026-06-01", "parent_bucket_summaries": []}
+        )
+        == []
+    )
 
 
 def test_entry_source_parent_maps_first_ai_wait_to_wait6579_parent():
@@ -1020,6 +1133,14 @@ def test_active_sim_priority_summary_exposes_collection_and_live_blockers(
     assert report["summary"]["positive_parent_sample_ready_count"] == 0
     assert report["summary"]["top_positive_parent_buckets"][0]["parent_ev_pct"] == 1.2
     assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
+    contract = report["active_sim_priority_exploration_contract"]
+    assert contract["decision_authority"] == "sim_observation_only"
+    assert contract["parent_granularity_policy"] == (
+        "diagnostic_for_sim_exploration_required_for_live_conversion"
+    )
+    assert contract["runtime_effect"] is False
+    assert contract["actual_order_submitted"] is False
+    assert contract["broker_order_forbidden"] is True
     seed = report["active_sim_priority_seeds"][0]
     assert seed["live_conversion_blocked_reason"] == "incomplete_lifecycle_flow"
     assert (
@@ -1139,6 +1260,43 @@ def test_sim_auto_approval_separates_positive_and_nonpositive_ev(monkeypatch, tm
     assert payload["nonpositive_ev_approved_bucket_count"] == 1
     assert payload["positive_ev_bucket_rows"][0]["bucket_id"] == "entry:positive"
     assert payload["nonpositive_ev_bucket_rows"][0]["bucket_id"] == "entry:avoid"
+
+
+def test_sim_auto_approval_does_not_treat_cooldown_seed_as_approval(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "SIM_AUTO_APPROVAL_DIR", tmp_path)
+    report = {
+        "date": "2026-06-01",
+        "generated_at": "2026-06-01T20:00:00+09:00",
+        "surfaced_candidates": [],
+        "active_sim_priority_seeds": [
+            {
+                "active_seed_id": "active_seed_cooldown",
+                "source_parent_bucket_id": "parent_cooldown",
+                "status": "cooldown",
+                "observable_prefix": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_wait6579",
+                },
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ],
+    }
+
+    mod._write_sim_auto_approval(report)
+    payload = json.loads(
+        (tmp_path / "lifecycle_bucket_sim_auto_approval_2026-06-01.json").read_text()
+    )
+
+    assert payload["active_sim_priority_seed_count"] == 1
+    assert payload["active_sim_priority_active_seed_count"] == 0
+    assert payload["approved"] is False
+    assert payload["source_quality_status"] == "empty"
+    assert payload["blocked_reasons"] == ["sim_auto_approved_bucket_missing"]
 
 
 def test_lifecycle_bucket_discovery_summarizes_quiet_gaps():

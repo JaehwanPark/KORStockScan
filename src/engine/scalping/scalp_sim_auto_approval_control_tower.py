@@ -335,8 +335,11 @@ def _lifecycle_policy_item(
         for item in (payload.get("active_sim_priority_seeds") or [])
         if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
     ]
+    active_status_seeds = [
+        item for item in active_seeds if str(item.get("status") or "") == "active"
+    ]
     if not bool(payload.get("approved")) or not (
-        bucket_rows or bucket_ids or active_seeds
+        bucket_rows or bucket_ids or active_status_seeds
     ):
         return None
     unique_source_bucket_ids = {
@@ -353,6 +356,7 @@ def _lifecycle_policy_item(
         "approved_bucket_rows": bucket_rows,
         "active_sim_priority_seeds": active_seeds,
         "active_sim_priority_seed_count": len(active_seeds),
+        "active_sim_priority_active_seed_count": len(active_status_seeds),
         "active_sim_priority_seed_status_counts": payload.get(
             "active_sim_priority_seed_status_counts"
         )
