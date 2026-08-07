@@ -59,6 +59,9 @@ _UNMET_LABELS = {
     "regular_flow_unavailable": "정규장 수급 확인 제한",
     "premarket_vwap_not_recovered": "프리마켓 VWAP 미회복",
     "resistance_reclaim_pullback_pending": "저항 돌파 후 눌림 대기",
+    "nxt_aftermarket_reclaim_structure_unconfirmed": (
+        "애프터마켓 저항·상승구조 미확인"
+    ),
 }
 
 _EXIT_REASON_LABELS = {
@@ -158,6 +161,14 @@ def _format_price(value: object) -> str:
     return f"{parsed:,}원" if parsed is not None else "-"
 
 
+def _format_entry_price_range(advisory: dict[str, Any]) -> str:
+    low = _positive_int(advisory.get("entry_price_low"))
+    high = _positive_int(advisory.get("entry_price_high"))
+    if low is not None and high == low:
+        return _format_price(low)
+    return f"{_format_price(low)} ~ {_format_price(high)}"
+
+
 def _format_labels(values: object, labels: dict[str, str], *, limit: int) -> str:
     if not isinstance(values, list):
         return "-"
@@ -187,11 +198,7 @@ def build_entry_message(payload: dict[str, Any]) -> str:
         "🟠 [삼성전자 진입 알림]",
         f"상태: {state} / {state_label}",
         f"현재가: {_format_price(payload.get('current_price'))}",
-        (
-            "권장가격: "
-            f"{_format_price(advisory.get('entry_price_low'))}"
-            f" ~ {_format_price(advisory.get('entry_price_high'))}"
-        ),
+        f"권장가격: {_format_entry_price_range(advisory)}",
         "무효화 기준: "
         f"{_format_price(advisory.get('invalidation_price'))}{invalidation_suffix}",
         f"근거: {_format_labels(advisory.get('reasons'), _REASON_LABELS, limit=4)}",

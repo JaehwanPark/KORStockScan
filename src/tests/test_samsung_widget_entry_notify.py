@@ -559,6 +559,20 @@ def test_message_contains_no_sell_or_order_instruction():
     assert "자동주문 아님" in message
 
 
+def test_entry_message_formats_bid_only_scope_as_single_price():
+    payload = _payload()
+    payload["advisory"]["entry_price_high"] = payload["advisory"]["entry_price_low"]
+    payload["advisory"]["unmet_conditions"] = [
+        "nxt_aftermarket_reclaim_structure_unconfirmed"
+    ]
+
+    message = build_entry_message(payload)
+
+    assert "권장가격: 233,000원" in message
+    assert "권장가격: 233,000원 ~ 233,000원" not in message
+    assert "주의: 애프터마켓 저항·상승구조 미확인" in message
+
+
 def test_exit_ready_sends_one_notice_and_suppresses_conflicting_entry(tmp_path):
     sent = []
     notifier = SamsungWidgetEntryTelegramNotifier(

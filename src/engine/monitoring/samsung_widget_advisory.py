@@ -1199,6 +1199,48 @@ def _spread_tick_count(best_bid: int, best_ask: int, *, cap: int = 100) -> int:
     return ticks
 
 
+def _apply_nxt_aftermarket_caution_entry_scope(
+    result: dict[str, Any],
+    *,
+    context: SessionContext,
+    resistance_reclaimed: bool,
+    higher_high_and_low: bool,
+) -> None:
+    """Narrow weak aftermarket caution entries to the support/bid price only."""
+    if (
+        context.name != "NXT_AFTERMARKET"
+        or result.get("state") != "ENTRY_CAUTION"
+        or resistance_reclaimed
+        or higher_high_and_low
+    ):
+        return
+    entry_low = _positive_int(result.get("entry_price_low"))
+    entry_high = _positive_int(result.get("entry_price_high"))
+    if entry_low is None or entry_high is None or entry_high < entry_low:
+        return
+    result["entry_price_high"] = entry_low
+    result["unmet_conditions"] = list(
+        dict.fromkeys(
+            [
+                *(result.get("unmet_conditions") or []),
+                "nxt_aftermarket_reclaim_structure_unconfirmed",
+            ]
+        )
+    )
+    result.setdefault("derived", {})["entry_price_scope"] = {
+        "policy": "nxt_aftermarket_caution_support_bid_only_v1",
+        "applied": True,
+        "reason": "resistance_not_reclaimed_and_higher_high_low_unconfirmed",
+        "unconstrained_entry_price_low": entry_low,
+        "unconstrained_entry_price_high": entry_high,
+        "constrained_price": entry_low,
+        "authority": ADVISORY_AUTHORITY,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "metric_contract": METRIC_CONTRACT,
+    }
+
+
 def evaluate_advisory(
     *,
     observed_at: datetime,
@@ -1783,6 +1825,12 @@ def evaluate_advisory(
                 "runtime_effect": False,
                 "metric_contract": METRIC_CONTRACT,
             }
+            _apply_nxt_aftermarket_caution_entry_scope(
+                base,
+                context=context,
+                resistance_reclaimed=resistance_reclaimed,
+                higher_high_and_low=bool(structure["higher_high_and_low"]),
+            )
             return base
 
     all_core_passed = all(core_checks.values())
@@ -1828,6 +1876,12 @@ def evaluate_advisory(
         base["state"] = base["raw_state"] = "ENTRY_CAUTION"
     else:
         base["state"] = base["raw_state"] = "ENTRY_READY"
+    _apply_nxt_aftermarket_caution_entry_scope(
+        base,
+        context=context,
+        resistance_reclaimed=resistance_reclaimed,
+        higher_high_and_low=bool(structure["higher_high_and_low"]),
+    )
     return base
 
 

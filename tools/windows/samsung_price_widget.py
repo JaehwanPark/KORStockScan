@@ -785,6 +785,7 @@ class SamsungPriceWidget:
             "price_more_than_30bp_above_support": "과열추격",
             "price_above_dynamic_two_tick_chase_limit": "과열추격",
             "resistance_reclaim_pullback_pending": "돌파눌림대기",
+            "nxt_aftermarket_reclaim_structure_unconfirmed": "NXT저항/상승구조대기",
             "recovery_episode_armed": "반등구조",
             "recent_resistance_reclaimed": "저항회복",
             "pullback_within_two_ticks": "2틱눌림",
