@@ -3496,6 +3496,32 @@ def test_build_ai_ops_log_fields_preserves_missing_request_config_as_null():
     assert fields["ai_request_max_output_tokens"] is None
 
 
+def test_build_ai_ops_log_fields_preserves_v214_candidate_lifecycle_binding():
+    fields = _build_ai_ops_log_fields(
+        {
+            "ai_decision_trace_id": "analyze_target:005930:1:abcd",
+            "ai_input_payload_sha256": "a" * 64,
+            "decision_quality_live_adapter": ("entry_setup_v2_14_krx_bounded_probe_v1"),
+            "entry_setup_live_policy_status": "active_bounded_krx_canary",
+            "entry_setup_live_policy_mode": "one_share_exploration",
+            "entry_setup_live_policy_effective_venue": "KRX",
+            "entry_setup_live_policy_session_bucket": "krx_regular",
+            "entry_setup_live_policy_runtime_effect": True,
+            "entry_probe_intent": True,
+            "entry_probe_first_required": True,
+            "entry_ai_full_entry_forbidden": True,
+        }
+    )
+
+    assert fields["ai_decision_trace_id"] == "analyze_target:005930:1:abcd"
+    assert fields["ai_input_payload_sha256"] == "a" * 64
+    assert fields["entry_setup_live_policy_status"] == "active_bounded_krx_canary"
+    assert fields["entry_setup_live_policy_effective_venue"] == "KRX"
+    assert fields["entry_setup_live_policy_session_bucket"] == "krx_regular"
+    assert fields["entry_setup_live_policy_runtime_effect"] is True
+    assert fields["entry_probe_intent"] is True
+
+
 def test_holding_score_preflight_blocks_stale_tick_context():
     preflight = handlers._holding_score_source_quality_from_feature_packet(
         {

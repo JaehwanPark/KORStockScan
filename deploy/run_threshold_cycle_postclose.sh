@@ -1561,6 +1561,9 @@ if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_D
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/ai_prompt_paired_replay/ai_prompt_paired_replay_${TARGET_DATE}.json" \
     "ai_prompt_paired_replay_preparation"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/entry_candidate_lifecycle_state/entry_candidate_lifecycle_state_${TARGET_DATE}.json" \
+    "entry_candidate_lifecycle_state"
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
