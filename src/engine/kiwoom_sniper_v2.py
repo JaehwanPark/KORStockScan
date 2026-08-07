@@ -10915,7 +10915,14 @@ def run_sniper(is_test_mode=False):
         event_bus.publish("TELEGRAM_BROADCAST", {"message": msg})
         return
 
-    KIWOOM_TOKEN = kiwoom_utils.get_kiwoom_token(CONF)
+    # The shared cache survives the daily server/process restart. Reusing a
+    # prior-day token here can bind every long-lived REST/WS consumer to a token
+    # that expires shortly after market open. Same-day reuse remains allowed so
+    # concurrent preopen consumers keep one shared token owner.
+    KIWOOM_TOKEN = kiwoom_utils.get_kiwoom_token(
+        CONF,
+        require_issued_today=True,
+    )
     if not KIWOOM_TOKEN:
         log_error("❌ 토큰 발급 실패로 엔진을 중단합니다.")
         event_bus.publish(

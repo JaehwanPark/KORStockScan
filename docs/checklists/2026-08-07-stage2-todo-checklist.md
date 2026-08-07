@@ -16,6 +16,8 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+운영 보완 기록 (`2026-08-07`): live-engine 시작은 KST 당일 발급된 valid Kiwoom shared token만 재사용하고, 전일/미상 발급 cache는 장수 REST/WS owner binding 전에 1회 갱신한다. fresh 8005 뒤 same-request retry 성공 handoff가 확인되고 이후 재발/복구실패가 없으면 detector는 불필요한 `restart.flag`를 만들지 않는다. untimestamped·handoff 후 재발·refresh/retry 실패는 기존 cooldown/daily cap의 actionable incident로 유지한다. 이 보완은 인증 lifecycle/incident attribution 전용이며 threshold/provider/order/quantity/cap/broker/hard-safety 권한을 바꾸지 않는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-06` postclose -> `2026-08-07`)
 

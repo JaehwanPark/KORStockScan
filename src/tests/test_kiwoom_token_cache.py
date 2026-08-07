@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.utils import kiwoom_utils
@@ -72,6 +74,26 @@ def test_get_kiwoom_token_reuses_shared_cache(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
+def test_token_expiry_parses_official_expires_dt_as_kst():
+    expected = datetime(
+        2026,
+        8,
+        8,
+        8,
+        48,
+        14,
+        tzinfo=ZoneInfo("Asia/Seoul"),
+    ).timestamp()
+
+    assert (
+        kiwoom_utils._parse_token_expires_at(
+            {"expires_dt": "20260808084814"},
+            now_ts=0,
+        )
+        == expected
+    )
+
+
 def test_get_cached_kiwoom_token_never_issues_when_cache_is_missing(
     monkeypatch, tmp_path
 ):
@@ -131,6 +153,76 @@ def test_get_kiwoom_token_force_refresh_bypasses_valid_cache(monkeypatch, tmp_pa
     assert kiwoom_utils.get_kiwoom_token(_config()) == "TOKEN_1"
     assert kiwoom_utils.get_kiwoom_token(_config(), force_refresh=True) == "TOKEN_2"
     assert len(calls) == 2
+
+
+def test_runtime_start_refreshes_valid_prior_day_cache(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
+    now = time.time()
+    cache_path = tmp_path / "kiwoom_token_cache.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "cache_key": kiwoom_utils._token_cache_key(_config()),
+                "access_token": "PRIOR_DAY_TOKEN",
+                "issued_at": now - (24 * 60 * 60),
+                "expires_at": now + 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _FakeResponse("TODAY_TOKEN")
+
+    monkeypatch.setattr(kiwoom_utils.requests, "post", fake_post)
+    monkeypatch.setattr(
+        kiwoom_utils, "get_api_url", lambda endpoint: f"https://example.test{endpoint}"
+    )
+
+    token = kiwoom_utils.get_kiwoom_token(
+        _config(),
+        require_issued_today=True,
+    )
+
+    assert token == "TODAY_TOKEN"
+    assert len(calls) == 1
+
+
+def test_runtime_start_reuses_valid_same_day_cache(monkeypatch, tmp_path):
+    _patch_cache_paths(monkeypatch, tmp_path)
+    now = time.time()
+    cache_path = tmp_path / "kiwoom_token_cache.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "cache_key": kiwoom_utils._token_cache_key(_config()),
+                "access_token": "TODAY_TOKEN",
+                "issued_at": now,
+                "expires_at": now + 3600,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_request_new_kiwoom_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("same-day runtime start must reuse the shared token")
+        ),
+    )
+
+    assert (
+        kiwoom_utils.get_kiwoom_token(
+            _config(),
+            require_issued_today=True,
+        )
+        == "TODAY_TOKEN"
+    )
 
 
 def test_ws_token_refresh_uses_force_refresh(monkeypatch):

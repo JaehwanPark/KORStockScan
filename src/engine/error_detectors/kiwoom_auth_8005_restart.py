@@ -22,7 +22,9 @@ PROC_ROOT = Path("/proc")
 
 _EXPLICIT_LOG_NAMES = {
     "bot_history.log",
+    "kiwoom_utils_error.log",
     "kiwoom_utils_info.log",
+    "kiwoom_websocket_error.log",
     "kiwoom_sniper_v2_error.log",
     "sniper_state_handlers_error.log",
 }
@@ -34,6 +36,18 @@ _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\brun_error_detection\b"),
 ]
 _LOG_TIMESTAMP_PATTERN = re.compile(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
+_AUTH_RECOVERY_PATTERN = re.compile(
+    r"\[TOKEN HANDOFF\].*source=(?:api_8005_retry|order_api_8005_retry):"
+    r"(?P<api_id>[^:,)\s]+):retry_success"
+)
+_AUTH_API_ID_PATTERN = re.compile(
+    r"\[(?P<api_id>[A-Za-z][A-Za-z0-9_-]{2,31})\].*8005"
+)
+_AUTH_RECOVERY_FAILURE_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"8005 token refresh retry 후에도 인증 실패"),
+    re.compile(r"8005 감지 후 Kiwoom token force refresh 실패"),
+    re.compile(r"\[WS TOKEN 재발급\] (?:실패|예외)"),
+)
 
 
 def _now_ts() -> float:
@@ -88,6 +102,22 @@ def _is_auth_8005_line(line: str) -> bool:
     return any(token in line for token in ("Token", "토큰", "인증"))
 
 
+def _auth_recovery_kind(line: str) -> str | None:
+    if any(pattern.search(line) for pattern in _AUTH_RECOVERY_FAILURE_PATTERNS):
+        return "failure"
+    if _AUTH_RECOVERY_PATTERN.search(line):
+        return "success"
+    return None
+
+
+def _extract_auth_api_id(line: str) -> str | None:
+    recovery_match = _AUTH_RECOVERY_PATTERN.search(line)
+    if recovery_match:
+        return recovery_match.group("api_id")
+    auth_match = _AUTH_API_ID_PATTERN.search(line)
+    return auth_match.group("api_id") if auth_match else None
+
+
 @register_detector
 class KiwoomAuth8005RestartDetector(BaseDetector):
     id = "kiwoom_auth_8005_restart"
@@ -133,6 +163,7 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             )
 
         matches: list[dict] = []
+        recovery_events: list[dict] = []
         baselined_new_files: list[str] = []
 
         for log_path in log_files:
@@ -141,12 +172,13 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
                 self._baseline_file(log_path, files_state)
                 baselined_new_files.append(fname)
                 continue
-            file_matches, new_position = self._scan_file(
+            file_matches, file_recovery_events, new_position = self._scan_file(
                 log_path,
                 int(files_state.get(fname, {}).get("position", 0) or 0),
             )
             files_state[fname] = {"position": new_position, "scanned_at": _now_ts()}
             matches.extend(file_matches)
+            recovery_events.extend(file_recovery_events)
 
         if baselined_new_files:
             details["new_files_baselined"] = baselined_new_files
@@ -168,6 +200,11 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
             if prior_runtime_matches:
                 details["prior_runtime_auth_8005_count"] = len(prior_runtime_matches)
                 details["prior_runtime_auth_8005_samples"] = prior_runtime_matches[:5]
+            recovery_events, _ = _split_prior_runtime_matches(
+                recovery_events,
+                runtime_start_ts=runtime_identity["start_ts"],
+                last_restart_ts=float(state.get("last_restart_ts", 0) or 0),
+            )
 
         if not matches:
             if not self.dry_run:
@@ -193,7 +230,46 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
                 recommended_action="",
             )
 
-        return self._handle_matches(state, details, matches)
+        recovered_matches, actionable_matches = _partition_recovered_matches(
+            matches,
+            recovery_events,
+        )
+        if recovered_matches and not actionable_matches:
+            details.update(
+                {
+                    "fresh_auth_8005_count": len(matches),
+                    "recovered_auth_8005_count": len(recovered_matches),
+                    "recovered_auth_8005_samples": recovered_matches[:5],
+                    "auth_recovery_events": recovery_events[:10],
+                    "would_restart": False,
+                    "restart_requested": False,
+                    "token_cache_invalidated": False,
+                    "recovery_state": "recovered_without_restart",
+                    "recovery_reason": "same_runtime_retry_and_handoff_succeeded",
+                    "dry_run": self.dry_run,
+                }
+            )
+            if not self.dry_run:
+                self._save_state(state)
+            return DetectionResult(
+                detector_id=self.id,
+                category=self.category,
+                severity="pass",
+                summary=(
+                    "Fresh Kiwoom auth 8005 was recovered in-process by a successful "
+                    "same-request retry and token handoff; no restart was requested."
+                ),
+                details=details,
+                recommended_action="",
+            )
+
+        if recovered_matches:
+            details["recovered_auth_8005_count"] = len(recovered_matches)
+            details["recovered_auth_8005_samples"] = recovered_matches[:5]
+        if recovery_events:
+            details["auth_recovery_events"] = recovery_events[:10]
+
+        return self._handle_matches(state, details, actionable_matches)
 
     def _handle_matches(
         self, state: dict, details: dict, matches: list[dict]
@@ -293,16 +369,18 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         files_state[log_path.name] = {"position": position, "scanned_at": _now_ts()}
 
     @staticmethod
-    def _scan_file(log_path: Path, last_pos: int) -> tuple[list[dict], int]:
+    def _scan_file(
+        log_path: Path, last_pos: int
+    ) -> tuple[list[dict], list[dict], int]:
         try:
             file_size = log_path.stat().st_size
         except OSError:
-            return [], last_pos
+            return [], [], last_pos
 
         if last_pos < 0 or file_size < last_pos:
             last_pos = 0
         if file_size <= last_pos:
-            return [], last_pos
+            return [], [], last_pos
 
         max_bytes = int(
             getattr(TRADING_RULES, "KIWOOM_AUTH_8005_SCAN_MAX_BYTES", 512_000)
@@ -316,23 +394,26 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
                 new_lines = f.readlines()
                 new_position = f.tell()
         except OSError:
-            return [], last_pos
+            return [], [], last_pos
 
         matches: list[dict] = []
+        recovery_events: list[dict] = []
         for idx, line in enumerate(new_lines, start=1):
             line = line.rstrip("\n")
-            if not _is_auth_8005_line(line):
-                continue
-            matches.append(
-                {
-                    "file": log_path.name,
-                    "line_offset": idx,
-                    "message": line[-500:],
-                    "observed_ts": _extract_log_timestamp(line),
-                }
-            )
+            event = {
+                "file": log_path.name,
+                "line_offset": idx,
+                "message": line[-500:],
+                "observed_ts": _extract_log_timestamp(line),
+                "api_id": _extract_auth_api_id(line),
+            }
+            if _is_auth_8005_line(line):
+                matches.append(event)
+            recovery_kind = _auth_recovery_kind(line)
+            if recovery_kind:
+                recovery_events.append({**event, "kind": recovery_kind})
 
-        return matches, new_position
+        return matches, recovery_events, new_position
 
     @staticmethod
     def _load_state() -> dict:
@@ -361,6 +442,80 @@ def _extract_log_timestamp(line: str) -> float | None:
         return None
     local_tz = datetime.now().astimezone().tzinfo
     return observed.replace(tzinfo=local_tz).timestamp()
+
+
+def _partition_recovered_matches(
+    matches: list[dict], recovery_events: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """Suppress restart only when a timestamped retry handoff closes the incident.
+
+    Missing timestamps remain actionable. A recovery failure at or after the
+    success marker also keeps the incident actionable. This intentionally uses
+    the same-request ``retry_success`` handoff rather than token issuance alone.
+    """
+    timestamped_matches = [
+        item for item in matches if item.get("observed_ts") is not None
+    ]
+    if len(timestamped_matches) != len(matches):
+        return [], matches
+
+    success_events = [
+        item
+        for item in recovery_events
+        if item.get("kind") == "success"
+        and item.get("observed_ts") is not None
+        and item.get("api_id")
+    ]
+    if not success_events:
+        return [], matches
+
+    failure_events = [
+        item
+        for item in recovery_events
+        if item.get("kind") == "failure" and item.get("observed_ts") is not None
+    ]
+    valid_success_events = [
+        success
+        for success in success_events
+        if not any(
+            _event_at_or_after(failure, success, cross_file_equal=True)
+            for failure in failure_events
+        )
+    ]
+    if not valid_success_events:
+        return [], matches
+
+    recovered = []
+    actionable = []
+    for match in timestamped_matches:
+        if match.get("api_id") and any(
+            success.get("api_id") == match.get("api_id")
+            and success.get("file") == match.get("file")
+            and _event_at_or_after(success, match)
+            for success in valid_success_events
+        ):
+            recovered.append(match)
+        else:
+            actionable.append(match)
+    return recovered, actionable
+
+
+def _event_at_or_after(
+    candidate: dict,
+    reference: dict,
+    *,
+    cross_file_equal: bool = False,
+) -> bool:
+    candidate_ts = float(candidate["observed_ts"])
+    reference_ts = float(reference["observed_ts"])
+    if candidate_ts != reference_ts:
+        return candidate_ts > reference_ts
+    if candidate.get("file") != reference.get("file"):
+        # Cross-file events at one-second log precision have no provable order.
+        return cross_file_equal
+    return int(candidate.get("line_offset") or 0) >= int(
+        reference.get("line_offset") or 0
+    )
 
 
 def _current_runtime_identity() -> dict | None:

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 try:
     import fcntl
@@ -32,6 +33,7 @@ _KIWOOM_TOKEN_PROCESS_LOCK = threading.RLock()
 _KIWOOM_TOKEN_REPLACEMENTS = {}
 _KIWOOM_TOKEN_REPLACEMENT_LIMIT = 64
 _SCANNER_CODE_NAMESPACE_BLOCK_LOGGED = set()
+_KST = ZoneInfo("Asia/Seoul")
 KIWOOM_CONNECT_TIMEOUT_SEC = float(os.getenv("KIWOOM_CONNECT_TIMEOUT_SEC", "5"))
 KIWOOM_READ_TIMEOUT_SEC = float(os.getenv("KIWOOM_READ_TIMEOUT_SEC", "20"))
 KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC = int(
@@ -238,7 +240,7 @@ def _parse_token_expires_at(response_payload: dict, now_ts: float) -> float:
             continue
         for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
             try:
-                return datetime.strptime(raw[:19], fmt).timestamp()
+                return datetime.strptime(raw[:19], fmt).replace(tzinfo=_KST).timestamp()
             except ValueError:
                 continue
 
@@ -246,7 +248,10 @@ def _parse_token_expires_at(response_payload: dict, now_ts: float) -> float:
 
 
 def _read_cached_kiwoom_token(
-    config: dict, *, now_ts: float | None = None
+    config: dict,
+    *,
+    now_ts: float | None = None,
+    require_issued_today: bool = False,
 ) -> str | None:
     path = _kiwoom_token_cache_path()
     payload = _json_load_path(path)
@@ -263,6 +268,22 @@ def _read_cached_kiwoom_token(
     token = str(payload.get("access_token") or "").strip()
     if not token or expires_at <= now + safety:
         return None
+
+    if require_issued_today:
+        issued_at = _safe_positive_float(payload.get("issued_at"), 0.0)
+        now_date = datetime.fromtimestamp(now, tz=_KST).date()
+        issued_date = (
+            datetime.fromtimestamp(issued_at, tz=_KST).date()
+            if issued_at > 0
+            else None
+        )
+        if issued_date != now_date:
+            log_info(
+                "🔐 [TOKEN CACHE] 운영 시작 시 전일/미상 발급 token 재사용 거부 "
+                f"(issued_date={issued_date or 'missing'}, required_date={now_date}, "
+                f"expires_in_sec={int(expires_at - now)})"
+            )
+            return None
 
     log_info(
         "🔐 [TOKEN CACHE] 기존 Kiwoom token 재사용 "
@@ -636,11 +657,18 @@ def _request_new_kiwoom_token(config: dict) -> tuple[str | None, dict]:
         return None, {}
 
 
-def get_kiwoom_token(config=None, *, force_refresh=False, use_cache=True):
+def get_kiwoom_token(
+    config=None,
+    *,
+    force_refresh=False,
+    use_cache=True,
+    require_issued_today=False,
+):
     """
     키움 접근 토큰 발급 (환경 자동 감지형)
     - config가 인자로 오면 우선 사용하고, 없으면 환경에 맞는 파일을 직접 로드합니다.
     - 기본은 프로세스 간 공유 캐시를 재사용해 bot/IPO/web 중복 발급 충돌을 방지합니다.
+    - 운영 봇 시작 owner는 require_issued_today=True로 전일 발급 token을 거부할 수 있습니다.
     """
     # 1. 💡 [환경 감지] 인자가 없을 경우 스스로 설정 로드
     if config is None:
@@ -658,7 +686,10 @@ def get_kiwoom_token(config=None, *, force_refresh=False, use_cache=True):
         return None
 
     if use_cache and not force_refresh:
-        cached = _read_cached_kiwoom_token(config)
+        cached = _read_cached_kiwoom_token(
+            config,
+            require_issued_today=bool(require_issued_today),
+        )
         if cached:
             return cached
 
@@ -669,7 +700,10 @@ def get_kiwoom_token(config=None, *, force_refresh=False, use_cache=True):
 
     with _kiwoom_token_file_lock():
         if use_cache and not force_refresh:
-            cached = _read_cached_kiwoom_token(config)
+            cached = _read_cached_kiwoom_token(
+                config,
+                require_issued_today=bool(require_issued_today),
+            )
             if cached:
                 return cached
 

@@ -68,6 +68,34 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-07 Daily Runtime Token Ownership Gate
+
+- Retrieved at `2026-08-07T09:03:03+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/core/auth.py`,
+  `kiwoom/core/token_store.py`, `kiwoom/core/ws_client.py`,
+  `kiwoom_docs/실시간시세.md`, and the production/mock OAuth entries in
+  `postman/kiwoom-openapi.postman_collection.json`.
+- Official `au10001` remains `POST /oauth2/token` with
+  `grant_type=client_credentials`, `appkey`, and `secretkey`; the response owns
+  `token`, `token_type`, and `expires_dt`. The official SDK permits a valid
+  persistent file token cache and refreshes before expiry; it also retries a
+  WebSocket LOGIN once after an authentication refresh.
+- The local live-engine startup is stricter: it may reuse a shared token only
+  when its cache `issued_at` belongs to the current KST date and it passes the
+  existing expiry safety margin. A prior-day or missing-issuance cache is
+  refreshed once under the shared file lock before long-lived REST/WS owners
+  are bound. Same-day restarts reuse the same valid shared token, preventing
+  repeated issuance and cross-process invalidation.
+- A fresh REST 8005 is not restart authority when the same runtime log window
+  proves a successful same-request retry and `api_8005_retry:*:retry_success`
+  token handoff with no later 8005 or recovery-failure marker. Untimestamped,
+  repeated-after-handoff, refresh-failed, or retry-failed incidents remain
+  actionable and keep the existing restart cooldown/daily cap contract.
+- This gate changes authentication lifecycle and incident attribution only. It
+  grants no threshold, provider, order, quantity, cap, stale/conflict, broker,
+  or hard-safety authority.
+
 ### 2026-08-04 SOR Post-Probe Execution-View Gate
 
 - Retrieved at `2026-08-04T09:20:35+09:00` from upstream commit

@@ -77,6 +77,122 @@ class TestKiwoomAuth8005RestartDetector:
         assert result.details["token_cache_invalidated"] is True
         assert invalidations == ["error_detector_auth_8005"]
 
+    def test_recovered_8005_does_not_invalidate_cache_or_restart(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "kiwoom_utils_info.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._write_state(log_file, restart_count=0, last_restart_ts=0)
+            observed = datetime.now().astimezone()
+            stamp = f"[{observed:%Y-%m-%d %H:%M:%S}]"
+            _append(
+                log_file,
+                f"{stamp} [ka10004] API 거절: 인증 실패[8005:Token invalid]\n",
+            )
+            _append(
+                log_file,
+                f"{stamp} [TOKEN HANDOFF] source=api_8005_retry:ka10004:retry_success\n",
+            )
+            _append(
+                log_file,
+                f"{stamp} [TOKEN HANDOFF] source=websocket_login_ack_success\n",
+            )
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["recovered_auth_8005_count"] == 1
+        assert result.details["recovery_state"] == "recovered_without_restart"
+        assert result.details["recovery_reason"] == (
+            "same_runtime_retry_and_handoff_succeeded"
+        )
+        assert result.details["restart_requested"] is False
+        assert result.details["token_cache_invalidated"] is False
+        assert invalidations == []
+        assert not self._restart_flag_path.exists()
+
+    def test_8005_after_retry_success_remains_actionable(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "kiwoom_utils_info.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._write_state(log_file, restart_count=0, last_restart_ts=0)
+            observed = datetime.now().astimezone()
+            recovered_stamp = f"[{observed:%Y-%m-%d %H:%M:%S}]"
+            _append(
+                log_file,
+                f"{recovered_stamp} [ka10004] 인증 실패[8005:Token invalid]\n",
+            )
+            _append(
+                log_file,
+                f"{recovered_stamp} [TOKEN HANDOFF] source=api_8005_retry:ka10004:retry_success\n",
+            )
+            _append(
+                log_file,
+                f"{recovered_stamp} [ka10004] 인증 실패[8005:Token invalid]\n",
+            )
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "warning"
+        assert result.details["recovered_auth_8005_count"] == 1
+        assert result.details["fresh_auth_8005_count"] == 1
+        assert result.details["restart_requested"] is True
+        assert invalidations == ["error_detector_auth_8005"]
+        assert self._restart_flag_path.exists()
+
+    def test_unrelated_api_retry_success_does_not_suppress_8005(self, monkeypatch):
+        import src.engine.error_detectors.kiwoom_auth_8005_restart as detector_module
+
+        invalidations = []
+        monkeypatch.setattr(
+            detector_module.kiwoom_utils,
+            "invalidate_kiwoom_token_cache",
+            lambda reason="": invalidations.append(reason) or True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            log_file = log_dir / "kiwoom_utils_info.log"
+            log_file.write_text("old ok\n", encoding="utf-8")
+            self._write_state(log_file, restart_count=0, last_restart_ts=0)
+            observed = datetime.now().astimezone()
+            stamp = f"[{observed:%Y-%m-%d %H:%M:%S}]"
+            _append(
+                log_file,
+                f"{stamp} [ka10004] 인증 실패[8005:Token invalid]\n",
+            )
+            _append(
+                log_file,
+                f"{stamp} [TOKEN HANDOFF] source=api_8005_retry:ka10001:retry_success\n",
+            )
+
+            with _mock_logs_dir(log_dir):
+                result = KiwoomAuth8005RestartDetector().check()
+
+        assert result.severity == "warning"
+        assert result.details["fresh_auth_8005_count"] == 1
+        assert result.details["restart_requested"] is True
+        assert invalidations == ["error_detector_auth_8005"]
+        assert self._restart_flag_path.exists()
+
     def test_dry_run_would_restart_without_touching_flag(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_dir = Path(tmpdir)
