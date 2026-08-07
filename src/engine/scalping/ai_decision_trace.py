@@ -1566,6 +1566,19 @@ def record_ai_decision_trace(
                 "provider_response_id",
                 "bedrock_response_id",
             ),
+            "openai_response_schema_registry_used": (
+                bool(merged.get("openai_response_schema_registry_used"))
+                if "openai_response_schema_registry_used" in merged
+                else None
+            ),
+            "openai_response_schema_mode": _optional(
+                merged, "openai_response_schema_mode"
+            ),
+            "openai_entry_risk_dynamic_fact_schema_applied": (
+                bool(merged.get("openai_entry_risk_dynamic_fact_schema_applied"))
+                if "openai_entry_risk_dynamic_fact_schema_applied" in merged
+                else None
+            ),
             "model": _model_actual(merged),
             "model_requested": _optional(merged, "openai_model", "ai_model"),
             "model_id": _optional(
@@ -1785,6 +1798,57 @@ def record_ai_decision_trace(
             "entry_ai_risk_codes": (
                 [str(code) for code in merged.get("entry_ai_risk_codes") or []]
                 if isinstance(merged.get("entry_ai_risk_codes"), list)
+                else []
+            ),
+            "entry_ai_raw_risk_verdict": _optional(merged, "entry_ai_raw_risk_verdict"),
+            "entry_ai_raw_risk_codes": (
+                [str(code) for code in merged.get("entry_ai_raw_risk_codes") or []]
+                if isinstance(merged.get("entry_ai_raw_risk_codes"), list)
+                else []
+            ),
+            "entry_ai_raw_confidence": _optional(merged, "entry_ai_raw_confidence"),
+            "entry_ai_raw_supporting_fact_ids": (
+                [
+                    str(value)
+                    for value in merged.get("entry_ai_raw_supporting_fact_ids") or []
+                ][:8]
+                if isinstance(merged.get("entry_ai_raw_supporting_fact_ids"), list)
+                else []
+            ),
+            "entry_ai_raw_contradicting_fact_ids": (
+                [
+                    str(value)
+                    for value in merged.get("entry_ai_raw_contradicting_fact_ids") or []
+                ][:8]
+                if isinstance(merged.get("entry_ai_raw_contradicting_fact_ids"), list)
+                else []
+            ),
+            "entry_ai_invalid_supporting_fact_ids": (
+                [
+                    str(value)
+                    for value in merged.get("entry_ai_invalid_supporting_fact_ids")
+                    or []
+                ][:8]
+                if isinstance(merged.get("entry_ai_invalid_supporting_fact_ids"), list)
+                else []
+            ),
+            "entry_ai_invalid_contradicting_fact_ids": (
+                [
+                    str(value)
+                    for value in merged.get("entry_ai_invalid_contradicting_fact_ids")
+                    or []
+                ][:8]
+                if isinstance(
+                    merged.get("entry_ai_invalid_contradicting_fact_ids"), list
+                )
+                else []
+            ),
+            "entry_ai_rejected_unexpected_fields": (
+                [
+                    str(value)
+                    for value in merged.get("entry_ai_rejected_unexpected_fields") or []
+                ][:12]
+                if isinstance(merged.get("entry_ai_rejected_unexpected_fields"), list)
                 else []
             ),
             "entry_ai_veto_corroborated": (

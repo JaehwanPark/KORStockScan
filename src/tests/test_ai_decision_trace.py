@@ -1445,6 +1445,17 @@ def test_decision_quality_contract_rejection_is_preserved_in_trace(
                 "liquidity": "adverse",
                 "trigger": "recovery_required",
             },
+            "openai_response_schema_registry_used": True,
+            "openai_response_schema_mode": "strict_dynamic_entry_risk",
+            "openai_entry_risk_dynamic_fact_schema_applied": True,
+            "entry_ai_raw_risk_verdict": "CAUTION",
+            "entry_ai_raw_risk_codes": ["CONFIRMATION_MISSING"],
+            "entry_ai_raw_confidence": 0.74,
+            "entry_ai_raw_supporting_fact_ids": ["invented_positive_fact"],
+            "entry_ai_raw_contradicting_fact_ids": ["trigger_confirmation_missing"],
+            "entry_ai_invalid_supporting_fact_ids": ["invented_positive_fact"],
+            "entry_ai_invalid_contradicting_fact_ids": [],
+            "entry_ai_rejected_unexpected_fields": ["action"],
         },
         prompt_type="scalping_entry",
         prompt_version="decision_quality_v2_7",
@@ -1465,6 +1476,21 @@ def test_decision_quality_contract_rejection_is_preserved_in_trace(
         "liquidity": "adverse",
         "trigger": "recovery_required",
     }
+    assert trace_row["openai_response_schema_registry_used"] is True
+    assert trace_row["openai_response_schema_mode"] == "strict_dynamic_entry_risk"
+    assert trace_row["openai_entry_risk_dynamic_fact_schema_applied"] is True
+    assert trace_row["entry_ai_raw_risk_verdict"] == "CAUTION"
+    assert trace_row["entry_ai_raw_risk_codes"] == ["CONFIRMATION_MISSING"]
+    assert trace_row["entry_ai_raw_confidence"] == 0.74
+    assert trace_row["entry_ai_raw_supporting_fact_ids"] == ["invented_positive_fact"]
+    assert trace_row["entry_ai_raw_contradicting_fact_ids"] == [
+        "trigger_confirmation_missing"
+    ]
+    assert trace_row["entry_ai_invalid_supporting_fact_ids"] == [
+        "invented_positive_fact"
+    ]
+    assert trace_row["entry_ai_invalid_contradicting_fact_ids"] == []
+    assert trace_row["entry_ai_rejected_unexpected_fields"] == ["action"]
 
 
 def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(

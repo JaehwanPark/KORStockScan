@@ -548,6 +548,124 @@ def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypa
     assert "PROMPT" in captured["instructions"]
 
 
+def test_unrelated_endpoint_keeps_json_object_when_global_registry_is_disabled(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+
+    def _fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(output_text='{"decision":"WAIT"}')
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False,
+            OPENAI_TRANSPORT_MODE="http",
+        ),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        schema_name="condition_entry_v1",
+        endpoint_name="condition_entry",
+        symbol="000001",
+    )
+
+    assert result["decision"] == "WAIT"
+    assert captured["text"]["format"] == {"type": "json_object"}
+    meta = engine._consume_last_transport_meta()
+    assert meta["openai_response_schema_registry_used"] is False
+    assert meta["openai_response_schema_mode"] == "json_object"
+    assert meta["openai_entry_risk_dynamic_fact_schema_applied"] is False
+
+
+def test_v2_14_forces_dynamic_strict_schema_when_global_registry_is_disabled(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+
+    def _fake_create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            output_text=json.dumps(
+                {
+                    "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+                    "risk_verdict": "CAUTION",
+                    "risk_codes": ["CONFIRMATION_MISSING"],
+                    "supporting_fact_ids": ["structural_edge_floor"],
+                    "contradicting_fact_ids": ["trigger_confirmation_missing"],
+                    "confidence": 74,
+                }
+            )
+        )
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False,
+            OPENAI_TRANSPORT_MODE="http",
+        ),
+    )
+    user_input = json.dumps(
+        {
+            "input_schema": "entry_setup_v2_14_live_input",
+            "entry_setup_evidence_v1": {
+                "positive_facts": ["structural_edge_floor"],
+                "contradicting_facts": ["trigger_confirmation_missing"],
+                "invalidation_facts": ["hard_blocker:source_unusable"],
+            },
+        }
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        user_input,
+        require_json=True,
+        context_name="v2.14-test",
+        model_override="gpt-5.4-nano",
+        schema_name=ENTRY_RISK_ADJUDICATION_SCHEMA,
+        endpoint_name="analyze_target",
+        symbol="000001",
+    )
+
+    response_format = captured["text"]["format"]
+    assert result["confidence"] == 74
+    assert response_format["type"] == "json_schema"
+    assert response_format["strict"] is True
+    assert response_format["schema"]["properties"]["confidence"] == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+    }
+    assert response_format["schema"]["properties"]["supporting_fact_ids"]["items"][
+        "enum"
+    ] == ["structural_edge_floor"]
+    assert response_format["schema"]["properties"]["contradicting_fact_ids"]["items"][
+        "enum"
+    ] == [
+        "trigger_confirmation_missing",
+        "hard_blocker:source_unusable",
+    ]
+    meta = engine._consume_last_transport_meta()
+    assert meta["openai_response_schema_registry_used"] is True
+    assert meta["openai_response_schema_mode"] == "strict_dynamic_entry_risk"
+    assert meta["openai_entry_risk_dynamic_fact_schema_applied"] is True
+
+
 def test_gpt5_nano_always_uses_openai_after_micro_removal(monkeypatch):
     engine = _build_engine()
     provider_called = {"value": False}
@@ -3326,7 +3444,12 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert blocked_reentry["entry_recent_exit_price_vs_exit_pct"] == 1.0
 
     rejected = engine._normalize_decision_quality_entry_result(
-        {**risk_response, "action": "BUY"},
+        {
+            **risk_response,
+            "action": "BUY",
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False,
+        },
         exact_payload={"current": {"price": 10000}},
         prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
         entry_setup_evidence=setup_evidence,
@@ -3337,6 +3460,94 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert rejected["entry_setup_state"] == "READY"
     assert rejected["entry_setup_evidence_sha256"] == setup_evidence["evidence_sha256"]
     assert rejected["entry_ai_raw_risk_verdict"] == "PASS"
+    assert rejected["action"] == "WAIT"
+    assert rejected["score"] == 0
+    assert rejected["entry_probe_intent"] is False
+    assert rejected["entry_ai_rejected_unexpected_fields"] == [
+        "action",
+        "actual_order_submitted",
+        "broker_order_forbidden",
+    ]
+    assert "actual_order_submitted" not in rejected
+    assert "broker_order_forbidden" not in rejected
+
+    waiting_setup = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={
+            "schema": "exact_payload_analysis_v1",
+            "source_quality": {"status": "pass", "completed_bar_count": 20},
+            "executable_liquidity": {"execution_cost_state": "low"},
+            "contradictions": [],
+            "deterministic_contract_facts": {
+                "structural_edge_floor": True,
+                "early_session_structural_edge_floor": False,
+                "early_session_probe_candidate": False,
+                "orderly_pullback_recovery": False,
+                "trusted_supportive_trigger": False,
+                "adverse_distribution_no_edge": False,
+                "blocking_overextension": False,
+                "ask_wall_wide_spread": False,
+            },
+        },
+        recovery_analysis={
+            "schema": "anticipatory_reversal_analysis_v1",
+            "source_mode": "fresh_dual",
+            "hard_blockers": [],
+            "clean_continuation_probe": {"eligible": False},
+            "recovery_confirmation_probe": {"eligible": False},
+        },
+    )
+    waiting_rejected = engine._normalize_decision_quality_entry_result(
+        {
+            "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+            "risk_verdict": "CAUTION",
+            "risk_codes": ["CONFIRMATION_MISSING"],
+            "supporting_fact_ids": ["invented_positive_fact"],
+            "contradicting_fact_ids": ["trigger_confirmation_missing"],
+            "confidence": 0.74,
+        },
+        exact_payload={"current": {"price": 10000}},
+        prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
+        entry_setup_evidence=waiting_setup,
+        live_policy=live_policy,
+    )
+    assert waiting_rejected["decision_quality_contract_status"] == ("semantic_rejected")
+    assert waiting_rejected["action"] == "WAIT"
+    assert waiting_rejected["score"] == 0
+    assert waiting_rejected["edge_state"] == "EDGE"
+    assert waiting_rejected["entry_probe_intent"] is False
+    assert waiting_rejected["entry_ai_raw_risk_verdict"] == "CAUTION"
+    assert waiting_rejected["entry_ai_raw_confidence"] == 0.74
+    assert waiting_rejected["entry_ai_raw_supporting_fact_ids"] == [
+        "invented_positive_fact"
+    ]
+    assert waiting_rejected["entry_ai_invalid_supporting_fact_ids"] == [
+        "invented_positive_fact"
+    ]
+
+    malformed_rejected = engine._normalize_decision_quality_entry_result(
+        {
+            "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+            "risk_verdict": "CAUTION",
+            "risk_codes": 7,
+            "supporting_fact_ids": 11,
+            "contradicting_fact_ids": 13,
+            "confidence": {"normalized": 0.74},
+        },
+        exact_payload={"current": {"price": 10000}},
+        prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
+        entry_setup_evidence=setup_evidence,
+        live_policy=live_policy,
+    )
+    assert malformed_rejected["decision_quality_contract_status"] == (
+        "semantic_rejected"
+    )
+    assert malformed_rejected["action"] == "WAIT"
+    assert malformed_rejected["entry_probe_intent"] is False
+    assert malformed_rejected["entry_ai_raw_risk_codes"] == []
+    assert malformed_rejected["entry_ai_raw_supporting_fact_ids"] == []
+    assert malformed_rejected["entry_ai_raw_contradicting_fact_ids"] == []
+    assert malformed_rejected["entry_ai_raw_confidence"] == "{'normalized': 0.74}"
 
 
 def test_decision_quality_v2_13_clean_wait_maps_to_guarded_probe(monkeypatch):

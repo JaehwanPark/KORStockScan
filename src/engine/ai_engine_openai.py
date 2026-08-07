@@ -77,7 +77,9 @@ from src.engine.scalping.entry_setup_evidence import (  # noqa: E402
     ENTRY_RISK_ADJUDICATION_SCHEMA,
     build_entry_setup_evidence,
     compose_entry_decision,
+    entry_risk_adjudication_openai_schema,
     validate_entry_risk_adjudication,
+    validate_entry_setup_evidence,
 )
 from src.engine.scalping.entry_setup_live_policy import (  # noqa: E402
     resolve_live_prompt_policy,
@@ -333,6 +335,20 @@ class OpenAIResponseRequest:
     def remaining_timeout_sec(self) -> float:
         return max(0.0, self.deadline_perf - time.perf_counter())
 
+    def entry_setup_evidence(self) -> dict[str, Any]:
+        if self.schema_name != ENTRY_RISK_ADJUDICATION_SCHEMA:
+            return {}
+        raw_input: Any = self.user_input
+        if isinstance(raw_input, str):
+            try:
+                raw_input = json.loads(raw_input)
+            except (TypeError, ValueError):
+                return {}
+        if not isinstance(raw_input, dict):
+            return {}
+        setup = raw_input.get("entry_setup_evidence_v1")
+        return dict(setup) if isinstance(setup, dict) else {}
+
     def build_provider_payload(self, *, use_schema_registry: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model_name,
@@ -355,8 +371,17 @@ class OpenAIResponseRequest:
             payload["reasoning"] = {"effort": str(self.reasoning_effort)}
         if self.require_json:
             if use_schema_registry and self.schema_name:
+                schema_override = None
+                if self.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+                    setup_evidence = self.entry_setup_evidence()
+                    schema_override = entry_risk_adjudication_openai_schema(
+                        setup_evidence or None
+                    )
                 payload["text"] = {
-                    "format": build_openai_response_text_format(self.schema_name),
+                    "format": build_openai_response_text_format(
+                        self.schema_name,
+                        schema_override=schema_override,
+                    ),
                     "verbosity": "low",
                 }
             else:
@@ -868,6 +893,12 @@ class GPTSniperEngine:
         )
 
     def _should_use_openai_schema_registry(self, *, require_json, schema_name):
+        if require_json and schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+            # V2.14 validates exact integer and ledger-fact contracts at runtime.
+            # Sending only json_object would make the provider contract weaker
+            # than the live semantic validator even while the global registry
+            # remains intentionally disabled for unrelated endpoints.
+            return True
         return bool(
             require_json
             and schema_name
@@ -1797,11 +1828,13 @@ class GPTSniperEngine:
         """Map the risk-only V2.14 response to the canonical WAIT probe path."""
 
         risk = dict(result or {}) if isinstance(result, dict) else {}
+        setup = dict(setup_evidence or {}) if isinstance(setup_evidence, dict) else {}
         policy = dict(live_policy or {}) if isinstance(live_policy, dict) else {}
         contract_errors = validate_entry_risk_adjudication(
             risk,
-            setup_evidence=setup_evidence,
+            setup_evidence=setup,
         )
+        setup_contract_errors = validate_entry_setup_evidence(setup)
         if (
             policy.get("enabled") is not True
             or policy.get("status") != "active_bounded_krx_canary"
@@ -1810,7 +1843,7 @@ class GPTSniperEngine:
         ):
             contract_errors.append("entry_setup_v2_14_live_policy_invalid")
         composed = compose_entry_decision(
-            setup_evidence=setup_evidence,
+            setup_evidence=setup,
             risk_adjudication=risk,
         )
         composed_for_live = {
@@ -1837,13 +1870,54 @@ class GPTSniperEngine:
             )
             if composed.get(key) not in (None, "")
         }
+
+        def _bounded_raw_strings(field: str, limit: int) -> list[str]:
+            values = risk.get(field)
+            if not isinstance(values, list):
+                return []
+            return [str(value)[:160] for value in values[:limit]]
+
+        raw_supporting_fact_ids = _bounded_raw_strings("supporting_fact_ids", 8)
+        raw_contradicting_fact_ids = _bounded_raw_strings("contradicting_fact_ids", 8)
+        setup_positive_facts = set(map(str, setup.get("positive_facts") or []))
+        setup_adverse_facts = {
+            *map(str, setup.get("contradicting_facts") or []),
+            *map(str, setup.get("invalidation_facts") or []),
+        }
+        raw_confidence = risk.get("confidence")
         raw_risk_fields = {
-            "entry_ai_raw_risk_verdict": risk.get("risk_verdict"),
-            "entry_ai_raw_risk_codes": (
-                list(risk.get("risk_codes") or [])
-                if isinstance(risk.get("risk_codes"), list)
-                else []
+            "entry_ai_raw_risk_verdict": str(risk.get("risk_verdict") or "")[:80],
+            "entry_ai_raw_risk_codes": _bounded_raw_strings("risk_codes", 6),
+            "entry_ai_raw_confidence": (
+                raw_confidence
+                if raw_confidence is None
+                or isinstance(raw_confidence, (bool, int, float, str))
+                else str(raw_confidence)[:80]
             ),
+            "entry_ai_raw_supporting_fact_ids": raw_supporting_fact_ids,
+            "entry_ai_raw_contradicting_fact_ids": raw_contradicting_fact_ids,
+            "entry_ai_invalid_supporting_fact_ids": [
+                value
+                for value in raw_supporting_fact_ids
+                if value not in setup_positive_facts
+            ],
+            "entry_ai_invalid_contradicting_fact_ids": [
+                value
+                for value in raw_contradicting_fact_ids
+                if value not in setup_adverse_facts
+            ],
+            "entry_ai_rejected_unexpected_fields": sorted(
+                str(key)[:120]
+                for key in set(risk)
+                - {
+                    "schema",
+                    "risk_verdict",
+                    "risk_codes",
+                    "supporting_fact_ids",
+                    "contradicting_fact_ids",
+                    "confidence",
+                }
+            )[:12],
         }
         policy_fields = {
             "entry_setup_live_policy_status": policy.get("status"),
@@ -1866,17 +1940,50 @@ class GPTSniperEngine:
             ),
         }
         if contract_errors:
+            setup_state = (
+                str(composed.get("entry_setup_state") or "INSUFFICIENT").upper()
+                if not setup_contract_errors
+                else "INSUFFICIENT"
+            )
+            # A malformed risk response cannot authorize exposure, but it also
+            # must not discard a deterministically valid READY opportunity.
+            # Only a validated deterministic INVALID setup may remain DROP.
+            fail_closed_action = "DROP" if setup_state == "INVALID" else "WAIT"
+            fail_closed_edge_state = {
+                "READY": "EDGE",
+                "WAIT_CONFIRMATION": "EDGE",
+                "INVALID": "NO_EDGE",
+                "INSUFFICIENT": "INSUFFICIENT_DATA",
+            }.get(setup_state, "INSUFFICIENT_DATA")
             return {
-                **risk,
                 **setup_provenance_fields,
                 **raw_risk_fields,
                 **policy_fields,
-                "action": "DROP",
+                "schema": composed.get("schema"),
+                "composer_version": composed.get("composer_version"),
+                "entry_setup_family": (
+                    composed.get("entry_setup_family")
+                    if not setup_contract_errors
+                    else "NO_VALID_SETUP"
+                ),
+                "entry_setup_state": setup_state,
+                "action": fail_closed_action,
                 "score": 0,
+                "confidence": 0,
                 "reason": "entry_setup_v2_14_semantic_rejected",
-                "edge_state": "INSUFFICIENT_DATA",
+                "edge_state": fail_closed_edge_state,
+                "evidence": {
+                    "setup": (composed.get("evidence") or {}).get("setup", "no_setup"),
+                    "trigger": "failed",
+                    "positive_edge": "none",
+                    "adverse_risk": "insufficient",
+                },
+                "entry_ai_contract_valid": False,
+                "entry_ai_contract_errors": contract_errors,
                 "decision_quality_contract_status": "semantic_rejected",
                 "decision_quality_contract_errors": contract_errors,
+                "decision_quality_contract_repair_applied": False,
+                "decision_quality_contract_repair_codes": [],
                 "decision_quality_live_adapter": (
                     "entry_setup_v2_14_krx_bounded_probe_v1"
                 ),
@@ -1974,6 +2081,7 @@ class GPTSniperEngine:
         return {
             **risk,
             **composed_for_live,
+            **raw_risk_fields,
             **policy_fields,
             "action": action,
             "score": score,
@@ -4082,6 +4190,11 @@ class GPTSniperEngine:
         requested_transport_mode = self._resolve_openai_transport_mode(
             transport_mode_override
         )
+        response_schema_registry_used = self._should_use_openai_schema_registry(
+            require_json=request.require_json,
+            schema_name=request.schema_name,
+        )
+        entry_setup_schema_evidence = request.entry_setup_evidence()
         transport_meta = {
             "openai_transport_mode": "http",
             "openai_transport_requested_mode": requested_transport_mode,
@@ -4094,6 +4207,25 @@ class GPTSniperEngine:
             "openai_request_id": request.request_id,
             "openai_endpoint_name": request.endpoint_name,
             "openai_schema_name": request.schema_name or "-",
+            "openai_response_schema_registry_used": bool(response_schema_registry_used),
+            "openai_response_schema_mode": (
+                "strict_dynamic_entry_risk"
+                if (
+                    response_schema_registry_used
+                    and request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA
+                    and entry_setup_schema_evidence
+                )
+                else (
+                    "strict_registry"
+                    if response_schema_registry_used
+                    else "json_object"
+                )
+            ),
+            "openai_entry_risk_dynamic_fact_schema_applied": bool(
+                response_schema_registry_used
+                and request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA
+                and entry_setup_schema_evidence
+            ),
         }
         transport_meta.update(
             capture_ai_request(

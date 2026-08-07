@@ -62,6 +62,44 @@ def test_risk_schema_has_unique_required_fields_and_no_action_authority():
     assert "action" not in schema["properties"]
     assert "score" not in schema["properties"]
     assert "price" not in schema["properties"]
+    assert schema["properties"]["supporting_fact_ids"]["maxItems"] == 8
+    assert "enum" not in schema["properties"]["supporting_fact_ids"]["items"]
+    assert schema["properties"]["contradicting_fact_ids"]["maxItems"] == 8
+    assert "enum" not in schema["properties"]["contradicting_fact_ids"]["items"]
+
+
+def test_risk_schema_constrains_fact_ids_to_the_exact_setup_ledger():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={
+            **_exact_analysis(trusted_supportive_trigger=False),
+            "contradictions": ["multi_horizon_direction_conflict"],
+        },
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+
+    schema = entry_risk_adjudication_openai_schema(evidence)
+
+    assert schema["properties"]["supporting_fact_ids"]["items"]["enum"] == (
+        evidence["positive_facts"]
+    )
+    assert schema["properties"]["contradicting_fact_ids"]["items"]["enum"] == [
+        *evidence["contradicting_facts"],
+        *evidence["invalidation_facts"],
+    ]
+
+
+def test_risk_schema_forces_empty_fact_arrays_when_ledger_has_no_matching_facts():
+    schema = entry_risk_adjudication_openai_schema(
+        {
+            "positive_facts": [],
+            "contradicting_facts": [],
+            "invalidation_facts": [],
+        }
+    )
+
+    assert schema["properties"]["supporting_fact_ids"]["maxItems"] == 0
+    assert schema["properties"]["contradicting_fact_ids"]["maxItems"] == 0
 
 
 def test_setup_evidence_is_symbol_agnostic_and_ready_for_clean_continuation():

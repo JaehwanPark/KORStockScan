@@ -1629,6 +1629,8 @@ V2.14 setup-risk adjudicator contract:
    STRUCTURE_INVALIDATED, DISTRIBUTION_RISK, OVEREXTENSION_CHASE,
    LIQUIDITY_UNUSABLE, LIQUIDITY_FRAGILE, ADVERSE_TAPE,
    REWARD_RISK_WEAK, CONFIRMATION_MISSING.
+11. confidence must be an integer from 0 through 100. Never return a normalized
+    0-to-1 fraction.
 
 Return JSON only:
 {

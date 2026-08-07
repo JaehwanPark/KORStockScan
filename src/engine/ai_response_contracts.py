@@ -2060,8 +2060,14 @@ def _openai_strict_schema(schema):
     return copied
 
 
-def build_openai_response_text_format(schema_name, *, strict=True):
-    schema = resolve_ai_response_schema(schema_name)
+def build_openai_response_text_format(
+    schema_name, *, strict=True, schema_override=None
+):
+    schema = (
+        deepcopy(schema_override)
+        if isinstance(schema_override, dict)
+        else resolve_ai_response_schema(schema_name)
+    )
     if schema is None:
         return {"type": "json_object"}
     return {

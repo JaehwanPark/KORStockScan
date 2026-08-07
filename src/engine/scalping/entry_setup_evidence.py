@@ -648,10 +648,12 @@ def build_entry_setup_evidence(
     return evidence
 
 
-def entry_risk_adjudication_openai_schema() -> dict[str, Any]:
-    """Return the strict offline V2.14 structured-output schema."""
+def entry_risk_adjudication_openai_schema(
+    setup_evidence: Any = None,
+) -> dict[str, Any]:
+    """Return the V2.14 schema, optionally constrained to one setup ledger."""
 
-    return {
+    schema = {
         "type": "object",
         "additionalProperties": False,
         "required": [
@@ -690,6 +692,29 @@ def entry_risk_adjudication_openai_schema() -> dict[str, Any]:
             "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
         },
     }
+    if setup_evidence is None:
+        return schema
+
+    setup = _as_dict(setup_evidence)
+    fact_fields = {
+        "supporting_fact_ids": list(setup.get("positive_facts") or []),
+        "contradicting_fact_ids": [
+            *list(setup.get("contradicting_facts") or []),
+            *list(setup.get("invalidation_facts") or []),
+        ],
+    }
+    for response_field, raw_values in fact_fields.items():
+        allowed_values = list(
+            dict.fromkeys(
+                str(value) for value in raw_values if isinstance(value, str) and value
+            )
+        )
+        field_schema = schema["properties"][response_field]
+        if allowed_values:
+            field_schema["items"]["enum"] = allowed_values
+        else:
+            field_schema["maxItems"] = 0
+    return schema
 
 
 def validate_entry_setup_evidence(evidence: Any) -> list[str]:
@@ -868,9 +893,15 @@ def validate_entry_risk_adjudication(
             continue
         if any(str(value) not in known_facts for value in values):
             errors.append(f"entry_risk_{field}_invented")
+    supporting_fact_ids = result.get("supporting_fact_ids")
+    contradicting_fact_ids = result.get("contradicting_fact_ids")
     referenced_facts = [
-        *list(result.get("supporting_fact_ids") or []),
-        *list(result.get("contradicting_fact_ids") or []),
+        *(list(supporting_fact_ids) if isinstance(supporting_fact_ids, list) else []),
+        *(
+            list(contradicting_fact_ids)
+            if isinstance(contradicting_fact_ids, list)
+            else []
+        ),
     ]
     if verdict != "INSUFFICIENT" and not referenced_facts:
         errors.append("entry_risk_fact_reference_required")
@@ -962,7 +993,12 @@ def compose_entry_decision(
     state = str(setup.get("setup_state") or "INSUFFICIENT").strip().upper()
     family = str(setup.get("setup_family") or "NO_VALID_SETUP").strip().upper()
     verdict = str(risk.get("risk_verdict") or "INSUFFICIENT").strip().upper()
-    risk_codes = [str(value) for value in risk.get("risk_codes") or []]
+    raw_risk_codes = risk.get("risk_codes")
+    risk_codes = (
+        [str(value) for value in raw_risk_codes]
+        if isinstance(raw_risk_codes, list)
+        else []
+    )
     corroborated_codes = set(map(str, setup.get("corroborated_risk_codes") or []))
     supported_veto_codes = sorted(set(risk_codes) & corroborated_codes)
     corroborated_veto_codes = sorted(
