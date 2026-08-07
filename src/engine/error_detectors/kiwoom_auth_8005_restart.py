@@ -40,9 +40,7 @@ _AUTH_RECOVERY_PATTERN = re.compile(
     r"\[TOKEN HANDOFF\].*source=(?:api_8005_retry|order_api_8005_retry):"
     r"(?P<api_id>[^:,)\s]+):retry_success"
 )
-_AUTH_API_ID_PATTERN = re.compile(
-    r"\[(?P<api_id>[A-Za-z][A-Za-z0-9_-]{2,31})\].*8005"
-)
+_AUTH_API_ID_PATTERN = re.compile(r"\[(?P<api_id>[A-Za-z][A-Za-z0-9_-]{2,31})\].*8005")
 _AUTH_RECOVERY_FAILURE_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"8005 token refresh retry 후에도 인증 실패"),
     re.compile(r"8005 감지 후 Kiwoom token force refresh 실패"),
@@ -369,9 +367,7 @@ class KiwoomAuth8005RestartDetector(BaseDetector):
         files_state[log_path.name] = {"position": position, "scanned_at": _now_ts()}
 
     @staticmethod
-    def _scan_file(
-        log_path: Path, last_pos: int
-    ) -> tuple[list[dict], list[dict], int]:
+    def _scan_file(log_path: Path, last_pos: int) -> tuple[list[dict], list[dict], int]:
         try:
             file_size = log_path.stat().st_size
         except OSError:

@@ -273,9 +273,7 @@ def _read_cached_kiwoom_token(
         issued_at = _safe_positive_float(payload.get("issued_at"), 0.0)
         now_date = datetime.fromtimestamp(now, tz=_KST).date()
         issued_date = (
-            datetime.fromtimestamp(issued_at, tz=_KST).date()
-            if issued_at > 0
-            else None
+            datetime.fromtimestamp(issued_at, tz=_KST).date() if issued_at > 0 else None
         )
         if issued_date != now_date:
             log_info(

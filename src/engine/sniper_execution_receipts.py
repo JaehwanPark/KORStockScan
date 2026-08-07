@@ -601,6 +601,8 @@ _ADD_RECEIPT_FILLED_BY_ORDER_KEY = "_add_receipt_filled_by_order_no"
 _ADD_RECEIPT_REQUESTED_BY_ORDER_KEY = "_add_receipt_requested_by_order_no"
 _ADD_RECEIPT_AMOUNT_BY_ORDER_KEY = "_add_receipt_filled_amount_by_order_no"
 _ADD_RECEIPT_NO_ORDER_KEY = "__add_without_order_no__"
+
+
 def bind_execution_dependencies(
     *,
     kiwoom_token=None,
