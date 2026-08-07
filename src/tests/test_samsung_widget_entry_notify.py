@@ -366,6 +366,38 @@ def test_legacy_session_state_restores_entry_bar_before_invalidation(tmp_path):
     assert sent == []
 
 
+def test_legacy_closed_episode_uses_exit_time_for_rearm(tmp_path):
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "scope": "2026-08-07:KRX_REGULAR",
+                "active": False,
+                "last_sent_at": "2026-08-07T09:07:33+09:00",
+                "last_exit_sent_at": "2026-08-07T09:18:04+09:00",
+                "last_exit_reference_price": 235_000,
+                "non_actionable_since": "2026-08-07T09:08:04+09:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=state_file,
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: None,
+        rearm_sec=120,
+    )
+
+    early = datetime(2026, 8, 7, 9, 19, 0, tzinfo=KST)
+    assert notifier.observe(_payload(observed_at=early), early) == "rearm_wait"
+    migrated = json.loads(state_file.read_text(encoding="utf-8"))
+    assert migrated["non_actionable_since"] == "2026-08-07T09:18:04+09:00"
+    assert migrated["entry_episode_closed_at"] == "2026-08-07T09:18:04+09:00"
+    assert migrated["entry_episode_close_reason"] == "legacy_exit_notification"
+    assert migrated["entry_episode_close_reference_price"] == 235_000
+
+
 def test_holding_independent_exit_rearms_before_fresh_entry(tmp_path):
     sent = []
     notifier = SamsungWidgetEntryTelegramNotifier(

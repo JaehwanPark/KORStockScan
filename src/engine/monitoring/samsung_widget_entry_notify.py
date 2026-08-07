@@ -291,6 +291,23 @@ class SamsungWidgetEntryTelegramNotifier:
                     or self._state.get("last_sent_at")
                 ),
             )
+            last_exit_at = _parse_timestamp(self._state.get("last_exit_sent_at"))
+            non_actionable_at = _parse_timestamp(
+                self._state.get("non_actionable_since")
+            )
+            if not self._state.get("active") and last_exit_at is not None:
+                if not self._state.get("entry_episode_closed_at"):
+                    self._state["entry_episode_closed_at"] = last_exit_at.isoformat()
+                if not self._state.get("entry_episode_close_reason"):
+                    self._state["entry_episode_close_reason"] = (
+                        "legacy_exit_notification"
+                    )
+                if not self._state.get("entry_episode_close_reference_price"):
+                    self._state["entry_episode_close_reference_price"] = _positive_int(
+                        self._state.get("last_exit_reference_price")
+                    )
+                if non_actionable_at is None or last_exit_at > non_actionable_at:
+                    self._state["non_actionable_since"] = last_exit_at.isoformat()
             if self._state != state_before:
                 self._save()
             return
