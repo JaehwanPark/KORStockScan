@@ -126,6 +126,8 @@ def _outcome_label(
     *,
     first_hit: str = "target_first",
     end_return_pct: float = 1.0,
+    actual_order_submitted: bool = False,
+    fill_observed: bool = False,
 ) -> dict:
     return {
         "decision_trace_id": prediction["decision_trace_id"],
@@ -147,7 +149,8 @@ def _outcome_label(
         },
         "horizon_metrics": {"10m": {"end_return_pct": end_return_pct}},
         "correlation": {
-            "actual_order_submitted": False,
+            "actual_order_submitted": actual_order_submitted,
+            "fill_observed": fill_observed,
             "realized_profit_pct": None,
         },
     }
@@ -205,6 +208,8 @@ def test_build_report_produces_calibrated_offline_odds_ledger() -> None:
                 end_return_pct=(
                     -1.0 if index in veto_indexes else (0.3 if index < 15 else 1.0)
                 ),
+                actual_order_submitted=True,
+                fill_observed=True,
             )
         )
 
@@ -241,6 +246,8 @@ def test_build_report_produces_calibrated_offline_odds_ledger() -> None:
         is True
     )
     assert report["negative_veto_attribution"]["sim_candidate_gate"]["pass"] is True
+    assert report["calibration_evaluation"]["probability_skill_gate"]["pass"] is True
+    assert report["fill_model_validation"]["sim_candidate_gate"]["pass"] is True
     assert report["fill_cohort_attribution"]["cohorts"]["FULL"]["sample_count"] == 30
     assert report["fill_cohort_attribution"]["full_and_partial_merged"] is False
     assert report["decision"]["applied_to_sim"] is False
@@ -250,6 +257,50 @@ def test_build_report_produces_calibrated_offline_odds_ledger() -> None:
     assert METRIC_DECISION_CONTRACT["primary_decision_metric"] == (
         "source_quality_adjusted_ev_pct"
     )
+
+
+def test_calibration_shrinks_unskilled_model_to_prior_and_blocks_promotion() -> None:
+    prediction = _prediction(1, datetime(2026, 8, 6, 9, 0, tzinfo=KST))
+    calibration_rows = _calibration_rows()
+    for row in calibration_rows:
+        row["observed_outcome_label"] = "ADVERSE_FIRST"
+    report = build_report(
+        target_date="2026-08-06",
+        predictions=[prediction],
+        calibration_rows=calibration_rows,
+        traces=[_trace(prediction)],
+        outcome_labels=[
+            _outcome_label(
+                prediction,
+                first_hit="adverse_first",
+                end_return_pct=-1.0,
+            )
+        ],
+    )
+
+    calibrator = next(iter(report["calibrators"].values()))
+    evaluation = report["calibration_evaluation"]
+    assert calibrator["status"] == "fitted"
+    assert calibrator["model_weight"] == 0.0
+    assert calibrator["model_signal_retained"] is False
+    assert evaluation["calibrated"] == evaluation["historical_signature_prior"]
+    assert evaluation["probability_skill_gate"]["pass"] is False
+    assert report["fill_model_validation"]["independent_fill_row_count"] == 0
+    assert (
+        "counterfactual_fill_model_validation_not_closed"
+        in report["summary"]["evaluation_blockers"]
+    )
+    closure_by_blocker = {row["blocker"]: row for row in report["blocker_closure_plan"]}
+    assert (
+        closure_by_blocker["calibrated_probability_skill_not_proven"]["next_action"]
+        == "improve_probability_estimator_then_run_strict_oos_skill_test"
+    )
+    assert report["decision"]["next_actions"]
+    assert (
+        "calibrated_probability_skill_not_proven"
+        in report["summary"]["evaluation_blockers"]
+    )
+    assert report["final_state"] == "hold_sample"
 
 
 def test_unfitted_signature_abstains_without_runtime_authority() -> None:
