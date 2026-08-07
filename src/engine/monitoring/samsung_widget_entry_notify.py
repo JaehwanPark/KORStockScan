@@ -47,9 +47,14 @@ _REASON_LABELS = {
     "recent_resistance_reclaimed": "직전 저항 회복",
     "pullback_within_two_ticks": "저항 2틱 이내 눌림",
     "recent_rebound_volume_grace": "최근 반등 거래량 유지",
+    "early_reversal_retest_confirmed": "저점 재시험 반등 확인",
+    "recent_runup_near_rolling_high": "최근 저점 대비 상승 후 고점 근접",
 }
 
 _UNMET_LABELS = {
+    "vwap_or_resistance_reclaimed": "VWAP/저항 회복 대기",
+    "rebound_volume_confirmed": "반등 거래량 확인 대기",
+    "pullback_from_recent_high_pending": "최근 고점 대비 눌림 대기",
     "foreign_or_program_flow_not_improving": "외국인/프로그램 수급 주의",
     "regular_flow_unavailable": "정규장 수급 확인 제한",
     "premarket_vwap_not_recovered": "프리마켓 VWAP 미회복",
@@ -63,6 +68,10 @@ _EXIT_REASON_LABELS = {
     "three_or_five_minute_down": "3분 또는 5분 하락 추세",
     "broken_support_reclaim_failed": "이탈 지지 회복 실패",
     "three_and_five_minute_down": "3분·5분 동시 하락 추세",
+    "completed_bar_lower_high": "확정봉 고점 하락",
+    "completed_red_bar_after_peak": "고점 이후 음봉 확인",
+    "local_peak_rollover_continued": "국지 고점 이탈 지속",
+    "three_minute_down_confirmed": "3분 하락 추세 확인",
 }
 
 
@@ -211,12 +220,25 @@ def build_exit_message(payload: dict[str, Any]) -> str:
         drawdown_text = f"{float(drawdown):.2f}%"
     except (TypeError, ValueError):
         drawdown_text = "-"
+    continuity = advisory.get("continuity") or {}
+    local_peak_exit = bool(
+        isinstance(continuity, dict)
+        and continuity.get("caution_kind") == "local_peak_rollover"
+    )
     lines = [
         "🔴 [삼성전자 청산 관찰 알림]",
-        "상태: EXIT_READY / 지지 이탈·하락 구조 확인",
+        (
+            "상태: EXIT_READY / 고점 이탈·하락 지속 확인"
+            if local_peak_exit
+            else "상태: EXIT_READY / 지지 이탈·하락 구조 확인"
+        ),
         f"현재가: {_format_price(payload.get('current_price'))}",
         f"청산 참고가: {_format_price(advisory.get('reference_exit_price'))}",
-        f"이탈 지지: {_format_price(advisory.get('broken_support'))}",
+        (
+            f"확인 지지: {_format_price(advisory.get('broken_support'))}"
+            if local_peak_exit
+            else f"이탈 지지: {_format_price(advisory.get('broken_support'))}"
+        ),
         (
             f"관측 고점: {_format_price(advisory.get('peak_price'))}"
             f" / 고점대비 {drawdown_text}"

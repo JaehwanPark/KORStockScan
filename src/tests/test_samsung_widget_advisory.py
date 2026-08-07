@@ -280,6 +280,126 @@ def test_exit_advisory_no_new_low_cancel_requires_support_rearm():
     assert "exit_rearm_pending" in locked["unmet_conditions"]
 
 
+def test_exit_advisory_new_entry_episode_releases_stale_rearm():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(
+        start,
+        [100_000, 100_300, 100_500, 100_400, 100_200, 100_000, 99_500],
+    )
+    context = advisory.session_context(start + timedelta(minutes=7, seconds=5))
+    machine = advisory.ExitAdvisoryStateMachine()
+    quality = _exit_source_quality()
+    machine.apply(
+        observed_at=start + timedelta(minutes=7, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 99_400, "best_ask": 99_500},
+        source_quality=quality,
+    )
+    bars.append(_bars(start + timedelta(minutes=7), [99_000])[0])
+    machine.apply(
+        observed_at=start + timedelta(minutes=8, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 98_900, "best_ask": 99_000},
+        source_quality=quality,
+    )
+    for offset in range(8, 13):
+        bars.append(
+            advisory.MinuteBar(
+                (start + timedelta(minutes=offset)).strftime("%Y%m%d%H%M%S"),
+                99_000,
+                99_100,
+                98_950,
+                99_000,
+                1_000,
+            )
+        )
+        machine.apply(
+            observed_at=start + timedelta(minutes=offset + 1, seconds=5),
+            context=context,
+            bars=bars,
+            bbo={"best_bid": 98_900, "best_ask": 99_000},
+            source_quality=quality,
+        )
+    assert machine.snapshot()["rearm_support"] is not None
+
+    bars.append(
+        advisory.MinuteBar("20260803091300", 99_000, 99_100, 98_900, 99_000, 1_000)
+    )
+    reset = machine.apply(
+        observed_at=start + timedelta(minutes=14, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 98_900, "best_ask": 99_000},
+        source_quality=quality,
+        entry_advisory={"state": "ENTRY_CAUTION"},
+    )
+
+    assert reset["state"] == "EXIT_WATCH"
+    assert reset["entry_episode_reset"] is True
+    assert reset["continuity"]["rearm_support"] is None
+    assert "exit_rearm_pending" not in reset["unmet_conditions"]
+
+
+def test_exit_advisory_local_peak_rollover_does_not_wait_for_session_vwap():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(
+        start,
+        [100_000, 100_500, 101_000, 101_500, 102_000, 102_500],
+    )
+    bars.append(
+        advisory.MinuteBar("20260803090600", 102_000, 102_000, 101_000, 101_000, 2_000)
+    )
+    context = advisory.session_context(start + timedelta(minutes=7, seconds=5))
+    machine = advisory.ExitAdvisoryStateMachine()
+
+    caution = machine.apply(
+        observed_at=start + timedelta(minutes=7, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 100_900, "best_ask": 101_000},
+        source_quality=_exit_source_quality(),
+    )
+
+    assert caution["state"] == "EXIT_CAUTION"
+    assert caution["local_peak_rollover"] is True
+    assert caution["continuity"]["caution_kind"] == "local_peak_rollover"
+    assert caution["session_vwap"] is not None
+    assert caution["reference_exit_price"] == 100_900
+    assert "below_session_vwap" not in caution["reasons"]
+    assert "local_support_break_confirmation_pending" in caution["reasons"]
+
+    bars.extend(
+        [
+            advisory.MinuteBar(
+                "20260803090700", 101_000, 101_000, 100_500, 100_500, 1_500
+            ),
+            advisory.MinuteBar(
+                "20260803090800", 100_500, 100_500, 99_900, 100_000, 1_500
+            ),
+        ]
+    )
+    machine.apply(
+        observed_at=start + timedelta(minutes=8, seconds=5),
+        context=context,
+        bars=bars[:-1],
+        bbo={"best_bid": 100_400, "best_ask": 100_500},
+        source_quality=_exit_source_quality(),
+    )
+    ready = machine.apply(
+        observed_at=start + timedelta(minutes=9, seconds=5),
+        context=context,
+        bars=bars,
+        bbo={"best_bid": 99_900, "best_ask": 100_000},
+        source_quality=_exit_source_quality(),
+    )
+
+    assert ready["state"] == "EXIT_READY"
+    assert "local_peak_rollover_continued" in ready["reasons"]
+    assert "three_minute_down_confirmed" in ready["reasons"]
+
+
 def test_exit_advisory_restores_internal_state_from_failure_data_wait_snapshot():
     start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
     bars = _bars(
@@ -1470,6 +1590,21 @@ def test_tactical_support_owns_chase_while_structural_support_owns_invalidation(
     )
     monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 101_000)
     inputs = _ready_input(current_price=101_200)
+    inputs["bars"] = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [
+            100_700,
+            100_800,
+            100_700,
+            100_900,
+            100_800,
+            101_000,
+            100_900,
+            101_100,
+            101_000,
+            101_200,
+        ],
+    )
     inputs["bbo"] = {"best_bid": 101_100, "best_ask": 101_200, "age_sec": 0}
 
     result = advisory.evaluate_advisory(**inputs)
@@ -1634,18 +1769,149 @@ def test_completed_close_below_support_confirms_break(monkeypatch):
     )
 
 
+def test_confirmed_retest_can_emit_early_reversal_caution(monkeypatch):
+    inputs = _ready_input(current_price=100_200)
+    first_bar = inputs["bars"][0]
+    inputs["bars"][0] = advisory.MinuteBar(
+        source_time=first_bar.source_time,
+        open=first_bar.open,
+        high=101_500,
+        low=100_000,
+        close=first_bar.close,
+        volume=first_bar.volume,
+    )
+    pullback_bar = inputs["bars"][5]
+    inputs["bars"][5] = advisory.MinuteBar(
+        source_time=pullback_bar.source_time,
+        open=pullback_bar.open,
+        high=pullback_bar.high,
+        low=99_500,
+        close=pullback_bar.close,
+        volume=pullback_bar.volume,
+    )
+    inputs["bbo"] = {"best_bid": 100_100, "best_ask": 100_200, "age_sec": 0}
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 101_000)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 100_000,
+            "candidate_support": 100_000,
+            "recent_resistance": 101_000,
+            "higher_high": True,
+            "higher_low": True,
+            "higher_high_and_low": True,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "support_confirmation": "retest_held",
+        },
+    )
+    monkeypatch.setattr(
+        advisory,
+        "_volume_confirmation",
+        lambda _bars: (
+            False,
+            {
+                "rebound_avg_volume": 1_000.0,
+                "decline_avg_volume": 1_500.0,
+                "first_test_volume": 1_500,
+                "retest_volume": 1_000,
+                "retest_volume_contracted": True,
+                "rising_volume_sample_count": 2,
+                "falling_volume_sample_count": 2,
+                "zero_volume_count": 0,
+                "zero_volume_ratio": 0.0,
+                "volume_minimum_composition_met": True,
+            },
+        ),
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["trigger"] == "confirmed_retest_early_reversal"
+    assert result["entry_price_low"] == 100_100
+    assert result["entry_price_high"] == 100_200
+    assert (
+        result["derived"]["early_reversal_caution"]["ready_promotion_forbidden"] is True
+    )
+    assert "vwap_or_resistance_reclaimed" in result["unmet_conditions"]
+    assert "rebound_volume_confirmed" in result["unmet_conditions"]
+
+
+def test_recent_runup_guard_blocks_shifted_support_entry_near_rolling_high(
+    monkeypatch,
+):
+    inputs = _ready_input(current_price=101_500)
+    inputs["bars"] = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [
+            100_000,
+            100_100,
+            100_200,
+            100_300,
+            100_500,
+            100_700,
+            100_900,
+            101_100,
+            101_300,
+            101_500,
+        ],
+    )
+    inputs["bbo"] = {"best_bid": 101_400, "best_ask": 101_500, "age_sec": 0}
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 101_300,
+            "candidate_support": 101_300,
+            "recent_resistance": 101_400,
+            "higher_high": True,
+            "higher_low": True,
+            "higher_high_and_low": True,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "support_confirmation": "retest_held",
+        },
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "NO_CHASE"
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+    assert result["reasons"] == ["recent_runup_near_rolling_high"]
+    assert result["derived"]["recent_runup_chase_guard"]["near_recent_high"] is True
+
+
 def test_break_rearm_requires_two_distinct_completed_bars():
     raw = advisory.evaluate_advisory(**_ready_input())
     support = raw["derived"]["structural_support"]
     break_advisory = {
         **raw,
-        "state": "WATCH",
-        "raw_state": "WATCH",
-        "invalidation": "soft_support_break_pending_confirmation",
+        "state": "AVOID",
+        "raw_state": "AVOID",
+        "invalidation": "confirmed_support_break",
+        "derived": {
+            **raw["derived"],
+            "invalidation_confirmation": {
+                **raw["derived"]["invalidation_confirmation"],
+                "completed_close_break": True,
+            },
+        },
     }
     filter_ = advisory.AdvisoryBreakRearmFilter()
     break_bar = advisory.MinuteBar(
-        "20260803090900", support, support, support - 100, support, 1_000
+        "20260803090900",
+        support,
+        support,
+        advisory.move_price_by_ticks(support, -1),
+        advisory.move_price_by_ticks(support, -1),
+        1_000,
     )
     first_reclaim = advisory.MinuteBar(
         "20260803091000", support, support + 100, support, support, 1_000
@@ -1668,15 +1934,64 @@ def test_break_rearm_requires_two_distinct_completed_bars():
     assert "post_break_rearm_satisfied" in second["reasons"]
 
 
+def test_declarative_invalidation_does_not_create_break_rearm_lock():
+    raw = advisory.evaluate_advisory(**_ready_input())
+    support = raw["derived"]["structural_support"]
+    result = advisory.AdvisoryBreakRearmFilter().apply(
+        {
+            **raw,
+            "state": "WATCH",
+            "raw_state": "WATCH",
+            "invalidation": "confirmed_support_break",
+        },
+        latest_bar=advisory.MinuteBar(
+            "20260803090900", support, support, support, support, 1_000
+        ),
+    )
+
+    assert result["state"] == "WATCH"
+    assert result["continuity"]["support_break_rearm_required"] is False
+    assert "post_break_rearm_pending" not in result["unmet_conditions"]
+
+
+def test_break_rearm_restore_rejects_legacy_lock_without_confirmed_evidence():
+    raw = advisory.evaluate_advisory(**_ready_input())
+    support = raw["derived"]["structural_support"]
+    filter_ = advisory.AdvisoryBreakRearmFilter()
+
+    restored = filter_.restore(
+        {
+            **raw,
+            "continuity": {
+                "support_break_rearm_required": True,
+                "locked_support": support,
+                "break_kind": "confirmed_support_break",
+                "break_bar_source_time": "20260803090900",
+                "reclaim_bar_source_times": [],
+            },
+        }
+    )
+
+    assert restored is False
+    assert filter_.snapshot()["support_break_rearm_required"] is False
+
+
 def test_collector_restores_break_lock_beyond_display_freshness(tmp_path):
     raw = advisory.evaluate_advisory(**_ready_input())
     support = raw["derived"]["structural_support"]
     filter_ = advisory.AdvisoryBreakRearmFilter()
     break_advisory = {
         **raw,
-        "state": "WATCH",
-        "raw_state": "WATCH",
-        "invalidation": "soft_support_break_pending_confirmation",
+        "state": "AVOID",
+        "raw_state": "AVOID",
+        "invalidation": "confirmed_support_break",
+        "derived": {
+            **raw["derived"],
+            "invalidation_confirmation": {
+                **raw["derived"]["invalidation_confirmation"],
+                "completed_close_break": True,
+            },
+        },
     }
     persisted = filter_.apply(
         break_advisory,
@@ -1731,9 +2046,16 @@ def test_collector_failure_snapshot_preserves_break_rearm_lock(tmp_path):
     collector.break_rearm_filter.apply(
         {
             **raw,
-            "state": "WATCH",
-            "raw_state": "WATCH",
-            "invalidation": "soft_support_break_pending_confirmation",
+            "state": "AVOID",
+            "raw_state": "AVOID",
+            "invalidation": "confirmed_support_break",
+            "derived": {
+                **raw["derived"],
+                "invalidation_confirmation": {
+                    **raw["derived"]["invalidation_confirmation"],
+                    "completed_close_break": True,
+                },
+            },
         },
         latest_bar=advisory.MinuteBar(
             "20260803090900", support, support, support - 100, support, 1_000

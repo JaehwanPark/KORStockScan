@@ -646,3 +646,21 @@ def test_exit_message_is_holding_independent_and_has_no_order_authority():
     assert "보유 무관 관측용" in message
     assert "자동매도/주문 아님" in message
     assert "이탈 지지: 232,000원" in message
+
+
+def test_local_peak_exit_message_does_not_claim_support_was_broken():
+    payload = _exit_payload()
+    payload["exit_advisory"]["continuity"]["caution_kind"] = "local_peak_rollover"
+    payload["exit_advisory"]["reasons"] = [
+        "rolling_peak_drawdown",
+        "completed_bar_lower_high",
+        "local_peak_rollover_continued",
+        "three_minute_down_confirmed",
+    ]
+
+    message = build_exit_message(payload)
+
+    assert "고점 이탈·하락 지속 확인" in message
+    assert "확인 지지: 232,000원" in message
+    assert "이탈 지지: 232,000원" not in message
+    assert "국지 고점 이탈 지속" in message

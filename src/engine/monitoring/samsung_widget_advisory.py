@@ -84,11 +84,20 @@ TREND_TICK_MULTIPLIERS = {
 }
 RELATIVE_UNDERPERFORMANCE_LIMIT_PCT = 0.50
 TACTICAL_CHASE_LIMIT_PCT = 0.30
+RECENT_RUNUP_LOOKBACK_BARS = 20
+RECENT_RUNUP_NO_CHASE_PCT = 0.80
+RECENT_RUNUP_NO_CHASE_TICKS = 4
+EARLY_REVERSAL_LOW_HOLD_MIN_BARS = 3
+EARLY_REVERSAL_LOW_HOLD_MAX_BARS = 8
+EARLY_REVERSAL_PULLBACK_MIN_PCT = 0.60
+EARLY_REVERSAL_PULLBACK_TICKS = 3
 EXIT_PEAK_LOOKBACK_BARS = 20
 EXIT_SUPPORT_LOOKBACK_BARS = 5
 EXIT_VOLATILITY_LOOKBACK_BARS = 10
 EXIT_NO_NEW_LOW_CANCEL_BARS = 5
 EXIT_PENDING_MAX_BARS = 3
+EXIT_LOCAL_PEAK_PENDING_MAX_BARS = 8
+EXIT_REARM_MAX_BARS = 20
 
 EXTERNAL_THRESHOLDS = {
     "NQ": -0.40,
@@ -1632,6 +1641,150 @@ def evaluate_advisory(
             base["unmet_conditions"].append("live_price_reversal_with_ask_pressure")
         return base
 
+    two_tick_chase_limit_pct = (
+        (move_price_by_ticks(tactical_support, 2) - tactical_support) / tactical_support
+    ) * 100
+    dynamic_chase_limit_pct = max(TACTICAL_CHASE_LIMIT_PCT, two_tick_chase_limit_pct)
+    base["derived"]["dynamic_chase_limit_pct"] = round(dynamic_chase_limit_pct, 4)
+
+    early_reversal_allowed_unmet = {
+        "vwap_or_resistance_reclaimed",
+        "rebound_volume_confirmed",
+        "regular_flow_unavailable",
+    }
+    early_reversal_structure_eligible = bool(
+        structure["retest_held"]
+        and structure["retest_rebound_confirmed"]
+        and trends_ok
+        and relative_ok
+        and spread_ok
+        and not flow_negative
+        and not premarket_aux_weak
+        and external_risk["level"] != "HOLD"
+        and not reclaim_ok
+        and "vwap_or_resistance_reclaimed" in base["unmet_conditions"]
+        and set(base["unmet_conditions"]).issubset(early_reversal_allowed_unmet)
+    )
+    recent_window = bars[-RECENT_RUNUP_LOOKBACK_BARS:]
+    recent_runup_low = min(bar.low for bar in recent_window)
+    recent_runup_high = max(bar.high for bar in recent_window)
+    recent_runup_pct = (
+        ((current_price - recent_runup_low) / recent_runup_low) * 100
+        if current_price > recent_runup_low
+        else 0.0
+    )
+    recent_runup_limit_pct = max(
+        RECENT_RUNUP_NO_CHASE_PCT,
+        (
+            (
+                move_price_by_ticks(recent_runup_low, RECENT_RUNUP_NO_CHASE_TICKS)
+                - recent_runup_low
+            )
+            / recent_runup_low
+        )
+        * 100,
+    )
+    recent_pullback_pct = (
+        ((recent_runup_high - recent_runup_low) / recent_runup_high) * 100
+        if recent_runup_high > recent_runup_low
+        else 0.0
+    )
+    recent_low_age_bars = (
+        len(recent_window)
+        - 1
+        - max(
+            index
+            for index, bar in enumerate(recent_window)
+            if bar.low == recent_runup_low
+        )
+    )
+    early_reversal_pullback_limit_pct = max(
+        EARLY_REVERSAL_PULLBACK_MIN_PCT,
+        (
+            (
+                move_price_by_ticks(recent_runup_low, EARLY_REVERSAL_PULLBACK_TICKS)
+                - recent_runup_low
+            )
+            / recent_runup_low
+        )
+        * 100,
+    )
+    early_reversal_setup_eligible = bool(
+        early_reversal_structure_eligible
+        and recent_pullback_pct >= early_reversal_pullback_limit_pct
+        and EARLY_REVERSAL_LOW_HOLD_MIN_BARS
+        <= recent_low_age_bars
+        <= EARLY_REVERSAL_LOW_HOLD_MAX_BARS
+    )
+    near_recent_high = current_price >= move_price_by_ticks(recent_runup_high, -1)
+    base["derived"]["recent_runup_chase_guard"] = {
+        "lookback_bars": len(recent_window),
+        "recent_low": recent_runup_low,
+        "recent_high": recent_runup_high,
+        "runup_pct": round(recent_runup_pct, 4),
+        "pullback_range_pct": round(recent_pullback_pct, 4),
+        "recent_low_age_bars": recent_low_age_bars,
+        "limit_pct": round(recent_runup_limit_pct, 4),
+        "early_reversal_pullback_limit_pct": round(
+            early_reversal_pullback_limit_pct, 4
+        ),
+        "near_recent_high": near_recent_high,
+        "authority": "negative_veto_only",
+        "metric_contract": METRIC_CONTRACT,
+    }
+    if (
+        (all(core_checks.values()) or early_reversal_setup_eligible)
+        and near_recent_high
+        and recent_runup_pct >= recent_runup_limit_pct
+    ):
+        base["state"] = base["raw_state"] = "NO_CHASE"
+        base["entry_price_low"] = None
+        base["entry_price_high"] = None
+        base["reasons"] = ["recent_runup_near_rolling_high"]
+        base["unmet_conditions"] = list(
+            dict.fromkeys(
+                [*base["unmet_conditions"], "pullback_from_recent_high_pending"]
+            )
+        )
+        return base
+
+    # A completed-bar retest is the earliest defensible reversal observation.
+    # Keep it caution-only while VWAP/resistance or rebound-volume confirmation
+    # is still pending; it must not inherit ENTRY_READY authority.
+    early_reversal_caution = bool(
+        early_reversal_setup_eligible and tactical_chase_pct <= dynamic_chase_limit_pct
+    )
+    if early_reversal_caution:
+        entry_low = max(tactical_support, best_bid)
+        entry_high = min(best_ask, move_price_by_ticks(tactical_support, 2))
+        if entry_low <= entry_high:
+            base["state"] = base["raw_state"] = "ENTRY_CAUTION"
+            base["entry_price_low"] = entry_low
+            base["entry_price_high"] = entry_high
+            base["trigger"] = "confirmed_retest_early_reversal"
+            base["trigger_price"] = tactical_support
+            base["reasons"] = list(
+                dict.fromkeys([*base["reasons"], "early_reversal_retest_confirmed"])
+            )
+            base["derived"]["early_reversal_caution"] = {
+                "completed_bar_retest_required": True,
+                "meaningful_recent_pullback_required": True,
+                "recent_low_hold_bars": recent_low_age_bars,
+                "ready_promotion_forbidden": True,
+                "pending_confirmations": [
+                    value
+                    for value in (
+                        "vwap_or_resistance_reclaimed",
+                        "rebound_volume_confirmed",
+                    )
+                    if value in base["unmet_conditions"]
+                ],
+                "authority": ADVISORY_AUTHORITY,
+                "runtime_effect": False,
+                "metric_contract": METRIC_CONTRACT,
+            }
+            return base
+
     all_core_passed = all(core_checks.values())
     if not all_core_passed:
         base["state"] = base["raw_state"] = "WATCH"
@@ -1647,11 +1800,6 @@ def evaluate_advisory(
         base["unmet_conditions"].append("resistance_reclaim_pullback_pending")
         return base
 
-    two_tick_chase_limit_pct = (
-        (move_price_by_ticks(tactical_support, 2) - tactical_support) / tactical_support
-    ) * 100
-    dynamic_chase_limit_pct = max(TACTICAL_CHASE_LIMIT_PCT, two_tick_chase_limit_pct)
-    base["derived"]["dynamic_chase_limit_pct"] = round(dynamic_chase_limit_pct, 4)
     if tactical_chase_pct > dynamic_chase_limit_pct:
         base["state"] = base["raw_state"] = "NO_CHASE"
         base["reasons"] = ["price_above_dynamic_two_tick_chase_limit"]
@@ -1724,6 +1872,11 @@ class AdvisoryBreakRearmFilter:
         self._scope_key = self._scope_for(advisory)
         if continuity.get("support_break_rearm_required") is not True:
             return True
+        # Snapshots written before confirmed-break provenance was introduced
+        # may contain a lock created from the declarative invalidation label.
+        # Do not restore those ambiguous locks.
+        if continuity.get("confirmed_break_evidence") is not True:
+            return False
         try:
             locked_support = int(continuity.get("locked_support") or 0)
         except (TypeError, ValueError):
@@ -1759,6 +1912,7 @@ class AdvisoryBreakRearmFilter:
         """Return restart-safe widget-only continuity without market authority."""
         return {
             "support_break_rearm_required": self._locked_support is not None,
+            "confirmed_break_evidence": self._locked_support is not None,
             "locked_support": self._locked_support,
             "break_kind": self._break_kind or None,
             "break_bar_source_time": self._break_bar_source_time or None,
@@ -1790,10 +1944,23 @@ class AdvisoryBreakRearmFilter:
                 support = int(derived.get("structural_support") or 0) or None
             except (TypeError, ValueError):
                 support = None
-        break_detected = invalidation_kind in {
-            "soft_support_break_pending_confirmation",
-            "confirmed_support_break",
-        } and raw_state in {"WATCH", "AVOID"}
+        confirmation = (
+            derived.get("invalidation_confirmation")
+            if isinstance(derived, dict)
+            else None
+        )
+        confirmed_break_evidence = bool(
+            isinstance(confirmation, dict)
+            and (
+                confirmation.get("completed_close_break") is True
+                or confirmation.get("deep_live_break") is True
+            )
+        )
+        break_detected = bool(
+            invalidation_kind == "confirmed_support_break"
+            and raw_state == "AVOID"
+            and confirmed_break_evidence
+        )
         if break_detected and support:
             is_new_break_bar = (
                 self._locked_support is None
@@ -2310,11 +2477,15 @@ class ExitAdvisoryStateMachine:
         self._ready_bar = ""
         self._pending_bars = 0
         self._reclaim_bars = 0
+        self._caution_kind: str | None = None
         self._lowest_since_ready: int | None = None
         self._bars_without_new_low = 0
         self._rearm_support: int | None = None
         self._rearm_closes = 0
+        self._rearm_age_bars = 0
         self._cancel_reason: str | None = None
+        self._entry_was_actionable = False
+        self._entry_episode_id: str | None = None
 
     def restore(self, exit_advisory: object) -> bool:
         if not isinstance(exit_advisory, dict):
@@ -2369,10 +2540,14 @@ class ExitAdvisoryStateMachine:
                 0, int(continuity.get("bars_without_new_low") or 0)
             )
             self._rearm_closes = max(0, int(continuity.get("rearm_closes") or 0))
+            self._rearm_age_bars = max(0, int(continuity.get("rearm_age_bars") or 0))
         except (TypeError, ValueError):
             self.reset()
             return False
         self._cancel_reason = str(continuity.get("cancel_reason") or "") or None
+        self._caution_kind = str(continuity.get("caution_kind") or "") or None
+        self._entry_was_actionable = bool(continuity.get("entry_was_actionable"))
+        self._entry_episode_id = str(continuity.get("entry_episode_id") or "") or None
         return True
 
     def snapshot(self) -> dict[str, Any]:
@@ -2385,12 +2560,17 @@ class ExitAdvisoryStateMachine:
             "caution_bar": self._caution_bar or None,
             "ready_bar": self._ready_bar or None,
             "pending_bars": self._pending_bars,
+            "caution_kind": self._caution_kind,
             "reclaim_bars": self._reclaim_bars,
             "lowest_since_ready": self._lowest_since_ready,
             "bars_without_new_low": self._bars_without_new_low,
             "rearm_support": self._rearm_support,
             "rearm_closes": self._rearm_closes,
+            "rearm_age_bars": self._rearm_age_bars,
+            "rearm_max_bars": EXIT_REARM_MAX_BARS,
             "cancel_reason": self._cancel_reason,
+            "entry_was_actionable": self._entry_was_actionable,
+            "entry_episode_id": self._entry_episode_id,
         }
 
     def _clear_episode(self) -> None:
@@ -2400,8 +2580,30 @@ class ExitAdvisoryStateMachine:
         self._ready_bar = ""
         self._pending_bars = 0
         self._reclaim_bars = 0
+        self._caution_kind = None
         self._lowest_since_ready = None
         self._bars_without_new_low = 0
+
+    def _observe_entry_episode(
+        self,
+        entry_advisory: dict[str, Any] | None,
+        latest: MinuteBar,
+    ) -> bool:
+        """Release stale exit continuity when a visible entry episode opens."""
+        state = str((entry_advisory or {}).get("state") or "")
+        actionable = state in {"ENTRY_CAUTION", "ENTRY_READY"}
+        opened = actionable and not self._entry_was_actionable
+        self._entry_was_actionable = actionable
+        if not opened:
+            return False
+        self._entry_episode_id = f"{self._scope_key}:{latest.source_time}"
+        self._state = "EXIT_WATCH"
+        self._cancel_reason = None
+        self._clear_episode()
+        self._rearm_support = None
+        self._rearm_closes = 0
+        self._rearm_age_bars = 0
+        return True
 
     @staticmethod
     def _valid_until(observed_at: datetime, context: SessionContext) -> str:
@@ -2454,6 +2656,7 @@ class ExitAdvisoryStateMachine:
         bars: list[MinuteBar],
         bbo: dict[str, Any],
         source_quality: dict[str, Any],
+        entry_advisory: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         scope_key = self._scope_for(observed_at, context)
         if scope_key != self._scope_key:
@@ -2492,6 +2695,7 @@ class ExitAdvisoryStateMachine:
             return payload
 
         latest = bars[-1]
+        entry_episode_reset = self._observe_entry_episode(entry_advisory, latest)
         change_window = bars[-(EXIT_VOLATILITY_LOOKBACK_BARS + 1) :]
         recent_changes = [
             abs(current.close - previous.close)
@@ -2511,12 +2715,20 @@ class ExitAdvisoryStateMachine:
         peak_departed = peak_price - latest.close >= dynamic_band
         support_broken = latest.close < prior_support
         below_vwap = bool(session_vwap and latest.close < session_vwap)
-        caution_setup = bool(
+        previous = bars[-2]
+        full_breakdown_setup = bool(
             peak_departed
             and support_broken
             and below_vwap
             and (trend_3m_down or trend_5m_down)
         )
+        local_peak_rollover = bool(
+            peak_departed
+            and latest.high < peak_price
+            and latest.close < previous.close
+            and latest.close < latest.open
+        )
+        caution_setup = full_breakdown_setup or local_peak_rollover
 
         is_new_bar = latest.source_time != self._last_processed_bar
         continuity_gap_reset = False
@@ -2537,8 +2749,8 @@ class ExitAdvisoryStateMachine:
                 self._clear_episode()
                 self._rearm_support = None
                 self._rearm_closes = 0
+                self._rearm_age_bars = 0
         if is_new_bar:
-            previous = bars[-2]
             if self._state == "EXIT_READY" and self._broken_support:
                 if (
                     self._lowest_since_ready is None
@@ -2559,6 +2771,7 @@ class ExitAdvisoryStateMachine:
                     self._clear_episode()
                     self._rearm_support = None
                     self._rearm_closes = 0
+                    self._rearm_age_bars = 0
                 elif self._bars_without_new_low >= EXIT_NO_NEW_LOW_CANCEL_BARS:
                     rearm_support = self._broken_support
                     self._state = "EXIT_CANCELLED"
@@ -2566,28 +2779,42 @@ class ExitAdvisoryStateMachine:
                     self._clear_episode()
                     self._rearm_support = rearm_support
                     self._rearm_closes = 0
+                    self._rearm_age_bars = 0
             elif self._state == "EXIT_CAUTION" and self._broken_support:
                 self._pending_bars += 1
                 failed_reclaim = bool(
                     latest.high >= self._broken_support
                     and latest.close < self._broken_support
                 )
-                continuation = bool(
-                    latest.close < self._broken_support
-                    and trend_3m_down
-                    and trend_5m_down
-                    and (latest.close <= previous.close or failed_reclaim)
-                )
+                if self._caution_kind == "local_peak_rollover":
+                    continuation = bool(
+                        peak_departed
+                        and latest.close < previous.close
+                        and trend_3m_down
+                        and latest.high < (self._peak_price or peak_price)
+                    )
+                    cancel_caution = bool(
+                        (self._peak_price and latest.close >= self._peak_price)
+                        or self._pending_bars >= EXIT_LOCAL_PEAK_PENDING_MAX_BARS
+                    )
+                else:
+                    continuation = bool(
+                        latest.close < self._broken_support
+                        and trend_3m_down
+                        and trend_5m_down
+                        and (latest.close <= previous.close or failed_reclaim)
+                    )
+                    cancel_caution = bool(
+                        latest.close >= self._broken_support
+                        or self._pending_bars >= EXIT_PENDING_MAX_BARS
+                    )
                 if continuation:
                     self._state = "EXIT_READY"
                     self._ready_bar = latest.source_time
                     self._lowest_since_ready = latest.low
                     self._bars_without_new_low = 0
                     self._reclaim_bars = 0
-                elif (
-                    latest.close >= self._broken_support
-                    or self._pending_bars >= EXIT_PENDING_MAX_BARS
-                ):
+                elif cancel_caution:
                     self._state = "EXIT_WATCH"
                     self._cancel_reason = None
                     self._clear_episode()
@@ -2596,20 +2823,30 @@ class ExitAdvisoryStateMachine:
                     self._state = "EXIT_WATCH"
                     self._cancel_reason = None
                 if self._rearm_support:
+                    self._rearm_age_bars += 1
                     self._rearm_closes = (
                         self._rearm_closes + 1
                         if latest.close >= self._rearm_support
                         else 0
                     )
-                    if self._rearm_closes >= 2:
+                    if (
+                        self._rearm_closes >= 2
+                        or self._rearm_age_bars >= EXIT_REARM_MAX_BARS
+                    ):
                         self._rearm_support = None
                         self._rearm_closes = 0
+                        self._rearm_age_bars = 0
                 elif caution_setup:
                     self._state = "EXIT_CAUTION"
                     self._broken_support = prior_support
                     self._peak_price = peak_price
                     self._caution_bar = latest.source_time
                     self._pending_bars = 0
+                    self._caution_kind = (
+                        "full_session_breakdown"
+                        if full_breakdown_setup
+                        else "local_peak_rollover"
+                    )
                     self._cancel_reason = None
             self._last_processed_bar = latest.source_time
 
@@ -2623,6 +2860,9 @@ class ExitAdvisoryStateMachine:
         payload["trend_3m_down"] = trend_3m_down
         payload["trend_5m_down"] = trend_5m_down
         payload["continuity_gap_reset"] = continuity_gap_reset
+        payload["entry_episode_reset"] = entry_episode_reset
+        payload["local_peak_rollover"] = local_peak_rollover
+        payload["full_session_breakdown"] = full_breakdown_setup
         payload["continuity"] = self.snapshot()
         if self._peak_price:
             payload["peak_drawdown_pct"] = round(
@@ -2630,16 +2870,36 @@ class ExitAdvisoryStateMachine:
             )
         if self._state in self.ACTIONABLE:
             payload["reference_exit_price"] = _positive_int(bbo.get("best_bid"))
-            payload["reasons"] = [
-                "rolling_peak_drawdown",
-                "prior_five_bar_support_broken",
-                "below_session_vwap",
-                "three_or_five_minute_down",
-            ]
+            if self._caution_kind == "local_peak_rollover":
+                payload["reasons"] = [
+                    "rolling_peak_drawdown",
+                    "completed_bar_lower_high",
+                    "completed_red_bar_after_peak",
+                    "local_support_break_confirmation_pending",
+                ]
+            else:
+                payload["reasons"] = [
+                    "rolling_peak_drawdown",
+                    "prior_five_bar_support_broken",
+                    "below_session_vwap",
+                    "three_or_five_minute_down",
+                ]
             if self._state == "EXIT_READY":
-                payload["reasons"].extend(
-                    ["broken_support_reclaim_failed", "three_and_five_minute_down"]
-                )
+                if self._caution_kind == "local_peak_rollover":
+                    payload["reasons"] = [
+                        "rolling_peak_drawdown",
+                        "completed_bar_lower_high",
+                        "completed_red_bar_after_peak",
+                        "local_peak_rollover_continued",
+                        "three_minute_down_confirmed",
+                    ]
+                else:
+                    payload["reasons"].extend(
+                        [
+                            "broken_support_reclaim_failed",
+                            "three_and_five_minute_down",
+                        ]
+                    )
         elif self._state == "EXIT_CANCELLED":
             payload["reasons"] = [self._cancel_reason or "exit_signal_cancelled"]
         else:
@@ -3633,6 +3893,7 @@ class SamsungWidgetCollector:
             bars=bars,
             bbo=bbo,
             source_quality=exit_source_quality,
+            entry_advisory=advisory,
         )
         day_low = _positive_int(quote.get("low_pric"))
         day_low_delta = (
