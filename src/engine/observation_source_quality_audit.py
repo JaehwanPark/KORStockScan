@@ -2623,9 +2623,16 @@ def _reviewed_unknown_reason_for_stage_field(
             "blocked_ai_score",
         }:
             return False
-        if str(key or "") not in {"entry_score_source", "entry_score_excluded_reason"}:
+        if str(key or "") not in {
+            "entry_score_source",
+            "entry_score_excluded_reason",
+            "entry_recheck_excluded_reason",
+        }:
             return False
-        reason = _field_text("entry_score_excluded_reason").lower()
+        reason = (
+            _field_text("entry_score_excluded_reason")
+            or _field_text("entry_recheck_excluded_reason")
+        ).lower()
         return _is_runtime_order_forbidden_observation() and (
             reason.startswith("unusable_source:")
             or reason

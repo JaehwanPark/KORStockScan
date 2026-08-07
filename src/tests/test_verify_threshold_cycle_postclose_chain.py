@@ -3271,6 +3271,59 @@ def test_active_sim_priority_handoff_passes_with_matching_preopen_and_runtime(
     assert status["active_swing_priority_policy_ids"] == ["priority_arm05"]
 
 
+def test_active_sim_priority_handoff_parses_python_list_runtime_provenance(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_matched_ids": "['active_seed_test']",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={},
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_test",
+                    "source_parent_bucket_id": "parent_positive",
+                    "status": "active",
+                    "observable_prefix": {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_blocked_ai_score",
+                    },
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": False,
+                }
+            ],
+        },
+        swing_catalog={},
+        preopen_apply={
+            "selected": [
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "selected": True,
+                    "active_sim_priority_seed_ids": ["active_seed_test"],
+                }
+            ]
+        },
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "pass"
+    assert status["observed_seed_ids"] == ["active_seed_test"]
+    assert status["unknown_consumed_ids"] == []
+
+
 def test_active_sim_priority_shared_prefix_credits_all_runtime_seed_lineages(
     monkeypatch, tmp_path
 ):

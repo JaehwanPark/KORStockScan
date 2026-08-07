@@ -192,6 +192,11 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(lifecycle_flow_attribution.get("summary"), dict)
         else {}
     )
+    source_quality_preflight_gate = (
+        payload.get("source_quality_preflight_gate")
+        if isinstance(payload.get("source_quality_preflight_gate"), dict)
+        else {}
+    )
     return {
         "status": payload.get("status") or summary.get("status"),
         "runtime_effect": payload.get("runtime_effect"),
@@ -214,6 +219,7 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
             )
         ),
         "warnings": _top_list(payload.get("warnings"), 50),
+        "source_quality_preflight_gate": source_quality_preflight_gate,
     }
 
 
@@ -2294,6 +2300,201 @@ def _implementation_marker_for_conclusion(
                     "root_cause_closure_status_hint": "root_cause_closed",
                 },
             )
+    report_state_review_contracts = {
+        "lifecycle_bucket_discovery_granularity_too_broad": {
+            "source_report_type": "lifecycle_bucket_discovery",
+            "implementation_type": (
+                "pattern_lab_bucket_granularity_observation_provenance"
+            ),
+            "interpretation_class": (
+                "bucket_granularity_observation_not_source_hard_block"
+            ),
+            "metric_role": "parent_bucket_granularity_diagnostic",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "sample_floor": "rolling_parent_bucket_evidence_required",
+            "source_quality_gate": "source_contract_status_pass_required",
+            "implemented_scope": (
+                "Parent bucket count and target range are preserved as taxonomy "
+                "diagnostics. A low parent count alone is not a source-quality hard "
+                "block and cannot authorize thin child buckets or runtime application."
+            ),
+        },
+        "lifecycle_decision_matrix_submit_drought": {
+            "source_report_type": "lifecycle_decision_matrix",
+            "implementation_type": (
+                "pattern_lab_submit_drought_attribution_provenance"
+            ),
+            "interpretation_class": (
+                "submit_drought_attribution_required_not_source_hard_block"
+            ),
+            "metric_role": "entry_to_submit_conversion_diagnostic",
+            "primary_decision_metric": "complete_flow_conversion_rate",
+            "sample_floor": "natural_entry_to_submit_flow_observation",
+            "source_quality_gate": "join_contract_not_blocked",
+            "implemented_scope": (
+                "Submit drought is preserved as an execution-conversion bottleneck "
+                "requiring downstream blocker attribution. It is not relabeled as a "
+                "source-quality failure when the lifecycle join contract passes."
+            ),
+        },
+        "threshold_cycle_ev_warning_state": {
+            "source_report_type": "threshold_cycle_ev",
+            "implementation_type": (
+                "pattern_lab_ev_warning_classification_provenance"
+            ),
+            "interpretation_class": (
+                "ev_warning_split_sample_floor_vs_source_hard_block"
+            ),
+            "metric_role": "ev_warning_classification_diagnostic",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "sample_floor": "owning_ev_contract_sample_floor",
+            "source_quality_gate": "preflight_tuning_input_allowed",
+            "implemented_scope": (
+                "EV warnings now retain the preflight hard-block state separately from "
+                "sample-floor and unknown-bucket warnings. Warning status alone cannot "
+                "be interpreted as a source-quality hard block."
+            ),
+        },
+    }
+    report_state_contract = report_state_review_contracts.get(normalized_review_id)
+    if report_state_contract and str(conclusion.get("final_state") or "") in {
+        "source_quality_gap",
+        "code_patch_required",
+    }:
+        source_report_type = str(report_state_contract["source_report_type"])
+        source_wrapper = _source_summary(context, source_report_type)
+        source_summary = _nested_report_summary(source_wrapper)
+        preflight = (
+            source_wrapper.get("source_quality_preflight_gate")
+            if isinstance(source_wrapper.get("source_quality_preflight_gate"), dict)
+            else {}
+        )
+        if not source_summary:
+            return None, None
+        report_state_contract_applies = True
+        if normalized_review_id == "lifecycle_bucket_discovery_granularity_too_broad":
+            report_state_contract_applies = bool(
+                source_summary.get("source_contract_status") == "pass"
+                and _safe_int(source_summary.get("source_quality_blocker_count"), 0)
+                == 0
+            )
+        elif normalized_review_id == "lifecycle_decision_matrix_submit_drought":
+            report_state_contract_applies = (
+                source_summary.get("join_contract_blocked") is False
+            )
+        elif normalized_review_id == "threshold_cycle_ev_warning_state":
+            report_state_contract_applies = bool(
+                preflight.get("tuning_input_allowed") is True
+                and _safe_int(preflight.get("hard_blocking_contract_gap_count"), 0)
+                == 0
+            )
+        if not report_state_contract_applies:
+            return None, None
+        source_paths = (
+            conclusion.get("source_paths")
+            if isinstance(conclusion.get("source_paths"), list)
+            else []
+        )
+        diagnostic: dict[str, Any] = {}
+        if normalized_review_id == "lifecycle_bucket_discovery_granularity_too_broad":
+            diagnostic = {
+                "source_contract_status": source_summary.get("source_contract_status"),
+                "parent_bucket_count": _safe_int(
+                    source_summary.get("parent_bucket_count"), 0
+                ),
+                "target_parent_min": _safe_int(
+                    source_summary.get("target_parent_min"), 0
+                ),
+                "target_parent_max": _safe_int(
+                    source_summary.get("target_parent_max"), 0
+                ),
+                "parent_granularity_status": source_summary.get(
+                    "parent_granularity_status"
+                ),
+                "source_quality_blocker_count": _safe_int(
+                    source_summary.get("source_quality_blocker_count"), 0
+                ),
+            }
+        elif normalized_review_id == "lifecycle_decision_matrix_submit_drought":
+            stage_counts = (
+                source_summary.get("stage_counts")
+                if isinstance(source_summary.get("stage_counts"), dict)
+                else {}
+            )
+            blocker_counts = (
+                source_summary.get("conversion_blocker_reason_counts")
+                if isinstance(
+                    source_summary.get("conversion_blocker_reason_counts"), dict
+                )
+                else {}
+            )
+            diagnostic = {
+                "join_contract_blocked": source_summary.get("join_contract_blocked"),
+                "entry_row_count": _safe_int(
+                    stage_counts.get("entry"), 0
+                ),
+                "submit_row_count": _safe_int(
+                    stage_counts.get("submit"), 0
+                ),
+                "missing_submit_count": _safe_int(
+                    blocker_counts.get("missing_submit"), 0
+                ),
+                "complete_flow_conversion_rate": source_summary.get(
+                    "complete_flow_conversion_rate"
+                ),
+            }
+        else:
+            diagnostic = {
+                "ev_status": source_summary.get("status")
+                or source_wrapper.get("status"),
+                "warning_count": _safe_int(source_summary.get("warning_count"), 0),
+                "warnings": source_wrapper.get("warnings") or [],
+                "preflight_status": preflight.get("status"),
+                "preflight_tuning_input_allowed": preflight.get(
+                    "tuning_input_allowed"
+                ),
+                "preflight_source_quality_gate": preflight.get(
+                    "source_quality_gate"
+                ),
+                "hard_blocking_contract_gap_count": _safe_int(
+                    preflight.get("hard_blocking_contract_gap_count"), 0
+                ),
+            }
+        return (
+            "implemented_but_waiting_sample",
+            {
+                "implementation_type": report_state_contract["implementation_type"],
+                "implemented_scope": report_state_contract["implemented_scope"],
+                "interpretation_class": report_state_contract[
+                    "interpretation_class"
+                ],
+                "source_report_type": source_report_type,
+                "review_id": review_id,
+                "normalized_review_id": normalized_review_id,
+                "final_state": conclusion.get("final_state"),
+                "final_decision": conclusion.get("final_decision"),
+                "metric_role": report_state_contract["metric_role"],
+                "primary_decision_metric": report_state_contract[
+                    "primary_decision_metric"
+                ],
+                "source_quality_gate": report_state_contract["source_quality_gate"],
+                "window_policy": "same_day_source_plus_rolling_consumer_recheck",
+                "sample_floor": report_state_contract["sample_floor"],
+                "decision_authority": "pattern_lab_ai_review_source_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "requires_separate_runtime_apply_candidate": True,
+                "runtime_mutation_allowed": False,
+                "forbidden_uses": FORBIDDEN_USES,
+                "source_paths": source_paths,
+                "diagnostic": diagnostic,
+                "root_cause_closure_status_hint": (
+                    "handoff_closed_root_cause_open"
+                ),
+            },
+        )
     source_quality_review_ids = {
         "lifecycle_decision_matrix",
         "lifecycle_decision_matrix_source_quality_blocked",

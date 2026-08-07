@@ -107,6 +107,69 @@ def test_active_seed_same_key_continuity_pass(monkeypatch, tmp_path):
     )
 
 
+def test_active_seed_python_list_provenance_preserves_same_key_continuity(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path
+        / "report"
+        / "lifecycle_bucket_discovery"
+        / f"lifecycle_bucket_discovery_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "scalp_sim_policies"
+        / f"scalp_sim_policy_catalog_{target}.json",
+        {
+            "active_sim_priority_seeds": [
+                {"active_seed_id": "seed_a", "status": "active"}
+            ]
+        },
+    )
+    _write(
+        tmp_path
+        / "threshold_cycle"
+        / "swing_sim_policies"
+        / f"swing_sim_policy_catalog_{target}.json",
+        {},
+    )
+    _write(
+        tmp_path / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target}.json",
+        {
+            "source_date": target,
+            "scalp_sim_auto_approval": {
+                "approved_request": {"active_sim_priority_seed_ids": ["seed_a"]}
+            },
+        },
+    )
+    event_path = tmp_path / "pipeline_events" / f"pipeline_events_{target}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "stage": "scalp_sim_entry_ai_price_applied",
+                "fields": {
+                    "active_seed_candidate_observable_prefix": '{"entry_source_parent":"entry_source_wait6579"}',
+                    "active_seed_matched_ids": "['seed_a']",
+                    "scalp_sim_auto_policy_active_seed_count": 1,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = ledger.build_key_lineage_ledger(target)
+
+    assert report["summary"]["key_mismatch_count"] == 0
+    assert report["summary"]["same_key_continuity_pass_count"] == 1
+    assert report["lineage_rows"][0]["source_key_id"] == "seed_a"
+
+
 def test_active_seed_count_zero_window_is_consumed_but_excluded_from_effect(
     monkeypatch, tmp_path
 ):

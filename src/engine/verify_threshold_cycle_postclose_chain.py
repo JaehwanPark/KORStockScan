@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import hashlib
 import json
@@ -4003,10 +4004,19 @@ def _active_sim_priority_handoff_status(
         )
         matched_seed_ids_value = fields.get("active_seed_matched_ids")
         if isinstance(matched_seed_ids_value, str):
-            try:
-                matched_seed_ids_value = json.loads(matched_seed_ids_value)
-            except Exception:
-                matched_seed_ids_value = [matched_seed_ids_value]
+            serialized_value = matched_seed_ids_value.strip()
+            for loader in (json.loads, ast.literal_eval):
+                try:
+                    parsed_value = loader(serialized_value)
+                except (TypeError, ValueError, SyntaxError, json.JSONDecodeError):
+                    continue
+                if isinstance(parsed_value, (list, tuple, set)):
+                    matched_seed_ids_value = list(parsed_value)
+                else:
+                    matched_seed_ids_value = [parsed_value]
+                break
+            else:
+                matched_seed_ids_value = [serialized_value]
         matched_seed_ids = {
             str(item).strip()
             for item in (

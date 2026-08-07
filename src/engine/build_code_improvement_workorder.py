@@ -97,6 +97,7 @@ KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
     "pre_submit_overbought_reason",
     "entry_score_source",
     "entry_score_excluded_reason",
+    "entry_recheck_excluded_reason",
     "score_prior_band",
     "score_prior_confidence",
     "soft_stop_dynamic_grace_score_prior_band",

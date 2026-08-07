@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import hashlib
 import json
@@ -122,6 +123,23 @@ def _bool_field(value: Any, default: bool | None = None) -> bool | None:
     if raw in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _serialized_sequence(value: Any) -> list[Any]:
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    if not isinstance(value, str):
+        return []
+    serialized_value = value.strip()
+    for loader in (json.loads, ast.literal_eval):
+        try:
+            parsed_value = loader(serialized_value)
+        except (TypeError, ValueError, SyntaxError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed_value, (list, tuple, set)):
+            return list(parsed_value)
+        return [parsed_value]
+    return [serialized_value]
 
 
 def _active_seed_default_match_eligible(
@@ -538,21 +556,12 @@ def _event_field_values(
                             else str(matched_value or "").strip().lower()
                         )
                     )
-                    explicit_matched_seed_ids = fields.get("active_seed_matched_ids")
-                    if isinstance(explicit_matched_seed_ids, str):
-                        try:
-                            explicit_matched_seed_ids = json.loads(
-                                explicit_matched_seed_ids
-                            )
-                        except Exception:
-                            explicit_matched_seed_ids = [explicit_matched_seed_ids]
+                    explicit_matched_seed_ids = _serialized_sequence(
+                        fields.get("active_seed_matched_ids")
+                    )
                     matched_seed_ids = {
                         str(item).strip()
-                        for item in (
-                            explicit_matched_seed_ids
-                            if isinstance(explicit_matched_seed_ids, list)
-                            else []
-                        )
+                        for item in explicit_matched_seed_ids
                         if str(item).strip()
                     }
                     if matched == "true":
@@ -901,8 +910,13 @@ def _event_field_values(
                     policy_diag["zero_count_data_consumed"] = True
             for key in field_keys:
                 value = fields.get(key) if isinstance(fields, dict) else None
-                if isinstance(value, list):
-                    for item in value:
+                normalized_values = (
+                    _serialized_sequence(value)
+                    if key == "active_seed_matched_ids"
+                    else value
+                )
+                if isinstance(normalized_values, (list, tuple, set)):
+                    for item in normalized_values:
                         if str(item or "").strip():
                             target_key = key
                             if (
@@ -923,7 +937,7 @@ def _event_field_values(
                                 tracked_values=tracked_values,
                                 untracked_value_limit=untracked_value_limit,
                             )
-                elif str(value or "").strip():
+                elif str(normalized_values or "").strip():
                     if key in {
                         "active_seed_id",
                         "active_sim_priority_seed_id",
@@ -933,7 +947,7 @@ def _event_field_values(
                             _bounded_add(
                                 values,
                                 key=key,
-                                value=str(value),
+                                value=str(normalized_values),
                                 tracked_values=tracked_values,
                                 untracked_value_limit=untracked_value_limit,
                             )
@@ -948,7 +962,7 @@ def _event_field_values(
                             _bounded_add(
                                 values,
                                 key="pre_policy_active_seed_id",
-                                value=str(value),
+                                value=str(normalized_values),
                                 tracked_values=tracked_values,
                                 untracked_value_limit=untracked_value_limit,
                             )
@@ -956,7 +970,7 @@ def _event_field_values(
                         _bounded_add(
                             values,
                             key=key,
-                            value=str(value),
+                            value=str(normalized_values),
                             tracked_values=tracked_values,
                             untracked_value_limit=untracked_value_limit,
                         )

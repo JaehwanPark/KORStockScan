@@ -3257,6 +3257,53 @@ def test_observation_source_quality_known_fixed_unknown_tokens_attach_existing_f
     assert classified.decision == "attach_existing_family"
 
 
+def test_observation_source_quality_entry_recheck_unknown_provenance_attaches_existing_family():
+    report = {
+        "status": "warning",
+        "summary": {
+            "event_count": 100,
+            "warning_stage_count": 0,
+            "high_volume_no_source_field_stage_count": 0,
+            "unknown_token_stage_count": 1,
+            "review_warning_count": 1,
+            "tuning_input_allowed": True,
+        },
+        "stage_contracts": {},
+        "unknown_token_findings": [
+            {
+                "stage": "scalp_entry_action_decision_snapshot",
+                "event_count": 100,
+                "fields": [
+                    {
+                        "field": "entry_recheck_excluded_reason",
+                        "count": 10,
+                        "rate": 0.1,
+                        "examples": ["unusable_source:unknown"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    order = next(
+        item
+        for item in mod._observation_source_quality_followup_orders(report)
+        if item["order_id"]
+        == "order_observation_source_quality_unknown_token_provenance_gap"
+    )
+    classified = mod._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+
+    assert order["implementation_status"] == "implemented_but_waiting_sample"
+    assert order["implementation_provenance"]["current_raw_contains_pre_fix_rows"] is True
+    assert classified.decision == "attach_existing_family"
+
+
 def test_observation_source_quality_scanner_venue_fix_attaches_existing_family():
     report = {
         "status": "warning",

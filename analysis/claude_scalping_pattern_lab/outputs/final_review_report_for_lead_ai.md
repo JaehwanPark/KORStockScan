@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-08-06 21:04:34
-분석 기간: 2026-06-05 ~ 2026-08-06
+생성일: 2026-08-07 21:45:45
+분석 기간: 2026-06-05 ~ 2026-08-07
 
 ---
 
@@ -16,10 +16,10 @@
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=17`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=17.6%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=0.0%`
+- `WAIT65~79 total_candidates=35`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=20.0%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=0.0%`
 
-- `Budget pass without submit`: 경고 — `budget_pass=893`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
+- `Budget pass without submit`: 경고 — `budget_pass=198`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
 
 ### 1-2. 손실 패턴 Top 5
 
@@ -68,16 +68,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 34393건 | 차단 비율: 99.0% | 관찰 일수: 29일
+- 차단 건수 합계: 37444건 | 차단 비율: 99.1% | 관찰 일수: 30일
 
 **#2** — `latency guard miss`
-- 차단 건수 합계: 4766건 | 차단 비율: 93.1% | 관찰 일수: 29일
+- 차단 건수 합계: 4894건 | 차단 비율: 93.3% | 관찰 일수: 30일
 
 **#3** — `overbought gate miss`
-- 차단 건수 합계: 4173건 | 차단 비율: 92.2% | 관찰 일수: 29일
+- 차단 건수 합계: 4508건 | 차단 비율: 92.7% | 관찰 일수: 30일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 29일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 30일
 
 ---
 

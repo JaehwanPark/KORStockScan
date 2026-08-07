@@ -120,21 +120,7 @@ def _python_bin() -> str:
     return "python"
 
 
-def _workorder_command(
-    target_date: str,
-    verification: dict[str, Any],
-    *,
-    max_orders: str | None = None,
-) -> list[str]:
-    command = [
-        _python_bin(),
-        "-m",
-        "src.engine.build_code_improvement_workorder",
-        "--date",
-        target_date,
-    ]
-    if max_orders:
-        command.extend(["--max-orders", max_orders])
+def _swing_scope_args(verification: dict[str, Any]) -> list[str]:
     execution_profile = (
         verification.get("execution_profile")
         if isinstance(verification.get("execution_profile"), dict)
@@ -151,8 +137,63 @@ def _workorder_command(
         "swing_lifecycle_matrix",
         "swing_lifecycle_bucket_discovery",
     )
-    if all(flags.get(key) is False for key in swing_flags):
-        command.append("--exclude-swing")
+    return (
+        ["--exclude-swing"]
+        if all(flags.get(key) is False for key in swing_flags)
+        else []
+    )
+
+
+def _threshold_ev_scope_args(verification: dict[str, Any]) -> list[str]:
+    args = _swing_scope_args(verification)
+    optional_sources = (
+        (
+            "THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT",
+            "codebase_performance_workorder",
+        ),
+        (
+            "THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL",
+            "time_window_regime_counterfactual",
+        ),
+        ("THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY", "producer_gap_discovery"),
+        (
+            "THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY",
+            "stage_hook_workorder_discovery",
+        ),
+        (
+            "THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD",
+            "stage_hook_runtime_scaffold",
+        ),
+    )
+    for env_name, source in optional_sources:
+        if not _env_enabled(env_name, "false"):
+            args.extend(["--disabled-source", source])
+    return args
+
+
+def _runtime_approval_scope_args(verification: dict[str, Any]) -> list[str]:
+    args = _swing_scope_args(verification)
+    if not _env_enabled("THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY", "false"):
+        args.append("--producer-gap-disabled")
+    return args
+
+
+def _workorder_command(
+    target_date: str,
+    verification: dict[str, Any],
+    *,
+    max_orders: str | None = None,
+) -> list[str]:
+    command = [
+        _python_bin(),
+        "-m",
+        "src.engine.build_code_improvement_workorder",
+        "--date",
+        target_date,
+    ]
+    if max_orders:
+        command.extend(["--max-orders", max_orders])
+    command.extend(_swing_scope_args(verification))
     return command
 
 
@@ -402,7 +443,43 @@ def _runner_completed(runner_report: dict[str, Any], *, dry_run: bool = False) -
     }
 
 
-def _build_verify_action(target_date: str) -> RecoveryAction:
+def _verification_disabled_stage_args(verification: dict[str, Any]) -> list[str]:
+    execution_profile = (
+        verification.get("execution_profile")
+        if isinstance(verification.get("execution_profile"), dict)
+        else {}
+    )
+    flags = (
+        execution_profile.get("flags")
+        if isinstance(execution_profile.get("flags"), dict)
+        else {}
+    )
+    disabled_stages = execution_profile.get("disabled_stage_flags")
+    allowed_stages = (
+        "swing_lifecycle",
+        "swing_strategy_discovery",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "deepseek_swing_lab",
+    )
+    explicit_disabled = {
+        str(item)
+        for item in (disabled_stages if isinstance(disabled_stages, list) else [])
+        if str(item) in allowed_stages
+    }
+    explicit_disabled.update(
+        stage for stage in allowed_stages if flags.get(stage) is False
+    )
+    args: list[str] = []
+    for stage in allowed_stages:
+        if stage in explicit_disabled:
+            args.extend(["--disabled-stage", stage])
+    return args
+
+
+def _build_verify_action(
+    target_date: str, verification: dict[str, Any]
+) -> RecoveryAction:
     return RecoveryAction(
         "verify_postclose_chain",
         [
@@ -411,6 +488,7 @@ def _build_verify_action(target_date: str) -> RecoveryAction:
             "src.engine.verify_threshold_cycle_postclose_chain",
             "--date",
             target_date,
+            *_verification_disabled_stage_args(verification),
         ],
         "refresh verifier status",
     )
@@ -430,7 +508,9 @@ def _build_tuning_performance_control_tower_action(target_date: str) -> Recovery
     )
 
 
-def _build_pending_verify_action(target_date: str) -> RecoveryAction:
+def _build_pending_verify_action(
+    target_date: str, verification: dict[str, Any]
+) -> RecoveryAction:
     return RecoveryAction(
         "verify_postclose_chain_pending_done",
         [
@@ -440,6 +520,7 @@ def _build_pending_verify_action(target_date: str) -> RecoveryAction:
             "--date",
             target_date,
             "--allow-pending-done-marker",
+            *_verification_disabled_stage_args(verification),
         ],
         "wrapper-tail repair verifier before DONE reconciliation",
     )
@@ -479,7 +560,9 @@ def _build_next_preopen_apply_action(target_date: str) -> RecoveryAction:
     )
 
 
-def _build_runtime_apply_gap_audit_action(target_date: str) -> RecoveryAction:
+def _build_runtime_apply_gap_audit_action(
+    target_date: str, verification: dict[str, Any]
+) -> RecoveryAction:
     return RecoveryAction(
         "refresh_runtime_apply_gap_audit",
         [
@@ -488,6 +571,7 @@ def _build_runtime_apply_gap_audit_action(target_date: str) -> RecoveryAction:
             "src.engine.runtime_apply_gap_audit",
             "--date",
             target_date,
+            *_swing_scope_args(verification),
         ],
         "runtime apply gap audit refresh after next PREOPEN apply",
     )
@@ -674,6 +758,7 @@ def _tail_stage_repair_actions(
                 "src.engine.automation.key_lineage_ledger",
                 "--date",
                 target_date,
+                *_swing_scope_args(verification),
             ],
             "wrapper tail repair from failed key lineage ledger stage",
         ),
@@ -685,6 +770,7 @@ def _tail_stage_repair_actions(
                 "src.engine.automation.conversion_lane",
                 "--date",
                 target_date,
+                *_swing_scope_args(verification),
             ],
             "wrapper tail repair from failed conversion lane stage",
         ),
@@ -723,6 +809,7 @@ def _tail_stage_repair_actions(
                     "src.engine.pattern_lab_currentness_audit",
                     "--date",
                     target_date,
+                    *_swing_scope_args(verification),
                 ],
                 "wrapper tail repair pattern currentness audit refresh before final EV",
             ),
@@ -734,6 +821,7 @@ def _tail_stage_repair_actions(
                     "src.engine.pattern_lab_propagation_audit",
                     "--date",
                     target_date,
+                    *_swing_scope_args(verification),
                 ],
                 "wrapper tail repair pattern propagation audit refresh before final EV",
             ),
@@ -752,6 +840,7 @@ def _tail_stage_repair_actions(
                     "src.engine.threshold_cycle_ev_report",
                     "--date",
                     target_date,
+                    *_threshold_ev_scope_args(verification),
                 ],
                 "wrapper tail repair EV refresh after upstream audits and workorder",
             ),
@@ -763,14 +852,15 @@ def _tail_stage_repair_actions(
                     "src.engine.runtime_approval_summary",
                     "--date",
                     target_date,
+                    *_runtime_approval_scope_args(verification),
                 ],
                 "wrapper tail repair runtime summary refresh after EV consumers",
             ),
             _build_next_preopen_apply_action(target_date),
-            _build_runtime_apply_gap_audit_action(target_date),
-            _build_pending_verify_action(target_date),
+            _build_runtime_apply_gap_audit_action(target_date, verification),
+            _build_pending_verify_action(target_date, verification),
             _build_tail_done_reconciliation_action(target_date),
-            _build_verify_action(target_date),
+            _build_verify_action(target_date, verification),
         ]
     )
     if _env_enabled("THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER"):
@@ -1036,7 +1126,7 @@ def _recovery_actions(
         actions.extend(
             [
                 _build_marker_reconciliation_action(target_date),
-                _build_verify_action(target_date),
+                _build_verify_action(target_date, verification),
             ]
         )
         return actions
@@ -1046,9 +1136,9 @@ def _recovery_actions(
     ):
         actions.extend(
             [
-                _build_pending_verify_action(target_date),
+                _build_pending_verify_action(target_date, verification),
                 _build_tail_done_reconciliation_action(target_date),
-                _build_verify_action(target_date),
+                _build_verify_action(target_date, verification),
             ]
         )
         return actions
@@ -1056,20 +1146,20 @@ def _recovery_actions(
         actions.extend(
             [
                 _build_next_preopen_apply_action(target_date),
-                _build_runtime_apply_gap_audit_action(target_date),
-                _build_pending_verify_action(target_date),
+                _build_runtime_apply_gap_audit_action(target_date, verification),
+                _build_pending_verify_action(target_date, verification),
                 _build_tail_done_reconciliation_action(target_date),
-                _build_verify_action(target_date),
+                _build_verify_action(target_date, verification),
             ]
         )
         return actions
     if "runtime_apply_gap_audit_stale_before_threshold_preopen_apply" in issues:
         actions.extend(
             [
-                _build_runtime_apply_gap_audit_action(target_date),
-                _build_pending_verify_action(target_date),
+                _build_runtime_apply_gap_audit_action(target_date, verification),
+                _build_pending_verify_action(target_date, verification),
                 _build_tail_done_reconciliation_action(target_date),
-                _build_verify_action(target_date),
+                _build_verify_action(target_date, verification),
             ]
         )
         return actions
@@ -1100,6 +1190,7 @@ def _recovery_actions(
                         "src.engine.threshold_cycle_ev_report",
                         "--date",
                         target_date,
+                        *_threshold_ev_scope_args(verification),
                     ],
                     "threshold EV source refresh before downstream consumers",
                 ),
@@ -1111,6 +1202,7 @@ def _recovery_actions(
                         "src.engine.pattern_lab_currentness_audit",
                         "--date",
                         target_date,
+                        *_swing_scope_args(verification),
                     ],
                     "pattern currentness audit refresh after EV",
                 ),
@@ -1122,6 +1214,7 @@ def _recovery_actions(
                         "src.engine.pattern_lab_propagation_audit",
                         "--date",
                         target_date,
+                        *_swing_scope_args(verification),
                     ],
                     "pattern propagation audit refresh after EV",
                 ),
@@ -1138,6 +1231,7 @@ def _recovery_actions(
                         "src.engine.threshold_cycle_ev_report",
                         "--date",
                         target_date,
+                        *_threshold_ev_scope_args(verification),
                     ],
                     "final EV refresh after pattern audits and workorder lineage repair",
                 ),
@@ -1149,17 +1243,20 @@ def _recovery_actions(
                         "src.engine.runtime_approval_summary",
                         "--date",
                         target_date,
+                        *_runtime_approval_scope_args(verification),
                     ],
                     "runtime summary refresh after EV consumer repair",
                 ),
                 _build_next_preopen_apply_action(target_date),
-                _build_runtime_apply_gap_audit_action(target_date),
-                _build_verify_action(target_date),
+                _build_runtime_apply_gap_audit_action(target_date, verification),
+                _build_verify_action(target_date, verification),
             ]
         )
         return actions
     if "runtime_apply_gap" in issue_text:
-        actions.append(_build_runtime_apply_gap_audit_action(target_date))
+        actions.append(
+            _build_runtime_apply_gap_audit_action(target_date, verification)
+        )
     if (
         "code_improvement_workorder" in issue_text
         or not _workorder_path(target_date).exists()
@@ -1187,6 +1284,7 @@ def _recovery_actions(
                         "src.engine.threshold_cycle_ev_report",
                         "--date",
                         target_date,
+                        *_threshold_ev_scope_args(verification),
                     ],
                     "downstream EV source refresh",
                 ),
@@ -1198,6 +1296,7 @@ def _recovery_actions(
                         "src.engine.runtime_approval_summary",
                         "--date",
                         target_date,
+                        *_runtime_approval_scope_args(verification),
                     ],
                     "runtime summary source refresh",
                 ),
@@ -1290,7 +1389,8 @@ def build_postclose_done_controller(
             break
         recovery_attempt += 1
         attempt = recovery_attempt
-        verify_action = _build_verify_action(target_date)
+        existing_verification = _load_json(_verification_path(target_date))
+        verify_action = _build_verify_action(target_date, existing_verification)
         verify_rc = (
             0
             if dry_run
