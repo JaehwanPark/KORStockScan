@@ -1311,7 +1311,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "## Next action",
         "",
     ]
-    remaining = decision.get("remaining_for_real_runtime") or []
+    remaining = (
+        decision.get("next_actions") or decision.get("remaining_for_real_runtime") or []
+    )
     lines.extend(f"- {item}" for item in remaining)
     lines.extend(
         [
@@ -1465,6 +1467,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         report["final_state"] = "hold_sample"
         report["source_quality_status"] = "blocked_missing_offline_odds_input"
         report["decision"]["identified"] = False
+        report["decision"]["next_actions"] = [
+            "produce_exact_payload_raw_odds",
+            "accumulate_strictly_prior_calibration_history",
+            "rerun_offline_entry_odds_observer",
+        ]
         report["summary"]["evaluation_blockers"] = sorted(
             set(report["summary"]["evaluation_blockers"])
             | {f"missing_{name}" for name in missing_odds_inputs}

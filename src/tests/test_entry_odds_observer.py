@@ -532,3 +532,5 @@ def test_cli_can_write_explicit_missing_odds_bootstrap_report(tmp_path: Path) ->
     ).read_text(encoding="utf-8")
     assert "blocked_missing_offline_odds_input" in markdown
     assert "missing_raw_predictions" in markdown
+    assert "produce_exact_payload_raw_odds" in markdown
+    assert "PREOPEN_runtime_selection" not in markdown
