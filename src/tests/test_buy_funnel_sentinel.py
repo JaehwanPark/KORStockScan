@@ -408,7 +408,15 @@ def test_budget_block_is_causal_only_when_parent_ai_trace_joins(
                     f"10:{idx:02d}:05",
                     "blocked_zero_qty" if idx == 0 else "budget_pass",
                     record_id=idx,
-                    fields={"pre_submit_parent_ai_decision_trace_id": trace_id},
+                    fields={
+                        "pre_submit_parent_ai_decision_trace_id": trace_id,
+                        "pre_submit_parent_ai_attempt_trace_id": trace_id,
+                        "pre_submit_parent_ai_lineage_status": (
+                            "exact_latest_watching_ai_trace"
+                        ),
+                        "pre_submit_parent_ai_attempt_trusted": True,
+                        "pre_submit_parent_ai_source_fresh": True,
+                    },
                 )
             )
     _write_events(tmp_path, target_date, rows)
@@ -425,8 +433,60 @@ def test_budget_block_is_causal_only_when_parent_ai_trace_joins(
     assert budget_axis["observed_count"] == 1
     assert lineage["linked_budget_block_trace_count"] == 1
     assert lineage["linked_budget_pass_trace_count"] == 2
+    assert lineage["lineage_exact_trusted_count"] == 3
     assert lineage["raw_ai_budget_census_is_causal"] is False
     assert "BUDGET_PASS_COLLAPSE" in breakdown["causal_bottleneck_axes"]
+
+
+def test_budget_block_rejects_untrusted_or_stale_parent_ai_trace(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-13"
+    rows = []
+    for idx in range(20):
+        trace_id = f"trace-{idx}"
+        rows.append(
+            _event(
+                target_date,
+                f"10:{idx:02d}:00",
+                "ai_confirmed",
+                record_id=idx,
+                fields={"ai_decision_trace_id": trace_id, "action": "WAIT"},
+            )
+        )
+    rows.append(
+        _event(
+            target_date,
+            "10:00:05",
+            "blocked_zero_qty",
+            record_id=0,
+            fields={
+                "pre_submit_parent_ai_decision_trace_id": "trace-0",
+                "pre_submit_parent_ai_attempt_trace_id": "trace-0",
+                "pre_submit_parent_ai_lineage_status": (
+                    "latest_watching_ai_trace_untrusted_or_stale"
+                ),
+                "pre_submit_parent_ai_attempt_trusted": False,
+                "pre_submit_parent_ai_source_fresh": True,
+            },
+        )
+    )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    budget_axis = report["entry_submit_drought_contract"]["observation_breakdown"][
+        "axes"
+    ]["BUDGET_PASS_COLLAPSE"]
+
+    assert budget_axis["status"] == "observation_only"
+    assert budget_axis["observed_count"] == 0
+    assert budget_axis["evidence"]["budget_ai_lineage"]["status"] == (
+        "parent_ai_trace_untrusted_or_not_exact"
+    )
 
 
 def test_submit_drought_separates_price_revalidation_from_broker_receipt(

@@ -29157,10 +29157,37 @@ def _pre_submit_parent_ai_lineage_fields(
     attempt_trace_id = str(
         source.get("last_watching_ai_attempt_decision_trace_id") or ""
     ).strip()
+    attempt_trusted = _boolish_true(source.get("last_watching_ai_attempt_trusted"))
+    result_source = str(
+        source.get("last_watching_ai_result_source") or ""
+    ).strip().lower()
+    max_age_sec = max(
+        1.0,
+        _safe_float(
+            os.getenv("KORSTOCKSCAN_PRE_SUBMIT_AI_AUTHORITY_MAX_PRIOR_AGE_SEC"),
+            _rule_float("AI_WATCHING_COOLDOWN", 300.0),
+        ),
+    )
+    age_sec = max(0.0, observed_at - confirmed_at) if confirmed_at > 0 else None
+    source_fresh = bool(
+        result_source in {"live", "prior_valid"}
+        and age_sec is not None
+        and age_sec <= max_age_sec
+    )
+    exact_trusted_trace = bool(
+        trace_id
+        and trace_id == attempt_trace_id
+        and attempt_trusted
+        and source_fresh
+    )
     lineage_status = (
         "exact_latest_watching_ai_trace"
-        if trace_id and trace_id == attempt_trace_id
-        else ("latest_watching_ai_trace_present" if trace_id else "missing_ai_trace")
+        if exact_trusted_trace
+        else (
+            "latest_watching_ai_trace_untrusted_or_stale"
+            if trace_id
+            else "missing_ai_trace"
+        )
     )
     return {
         "pre_submit_parent_ai_decision_trace_id": trace_id or "-",
@@ -29175,9 +29202,10 @@ def _pre_submit_parent_ai_lineage_fields(
             source.get("last_watching_ai_result_source") or "unknown"
         ),
         "pre_submit_parent_ai_confirmed_at": confirmed_at or "-",
-        "pre_submit_parent_ai_age_sec": (
-            max(0.0, observed_at - confirmed_at) if confirmed_at > 0 else "-"
-        ),
+        "pre_submit_parent_ai_age_sec": age_sec if age_sec is not None else "-",
+        "pre_submit_parent_ai_max_age_sec": max_age_sec,
+        "pre_submit_parent_ai_attempt_trusted": attempt_trusted,
+        "pre_submit_parent_ai_source_fresh": source_fresh,
         "pre_submit_parent_ai_lineage_status": lineage_status,
         "pre_submit_pipeline_stage_order_contract": (
             "latest_watching_ai_to_budget_precheck_to_final_authority_revalidation"

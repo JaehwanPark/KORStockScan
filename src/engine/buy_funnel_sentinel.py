@@ -665,9 +665,21 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         if _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
         not in {"", "-", "unknown", "not_available"}
     ]
-    linked = [
+    exact_lineage = [
         event
         for event in lineage_present
+        if _field_first(event.fields, ("pre_submit_parent_ai_lineage_status",))
+        == "exact_latest_watching_ai_trace"
+        and _field_first(event.fields, ("pre_submit_parent_ai_attempt_trace_id",))
+        == _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
+        and _is_truthy_text(
+            event.fields.get("pre_submit_parent_ai_attempt_trusted")
+        )
+        and _is_truthy_text(event.fields.get("pre_submit_parent_ai_source_fresh"))
+    ]
+    linked = [
+        event
+        for event in exact_lineage
         if _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
         in ai_trace_ids
     ]
@@ -689,8 +701,10 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         status = "explicit_ai_trace_budget_block_observed"
     elif linked_pass:
         status = "explicit_ai_trace_budget_pass_only"
+    elif exact_lineage:
+        status = "exact_parent_ai_trace_unresolved"
     elif lineage_present:
-        status = "parent_ai_trace_unresolved"
+        status = "parent_ai_trace_untrusted_or_not_exact"
     else:
         status = "instrumentation_gap_parent_ai_trace_missing"
     return {
@@ -702,6 +716,7 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         "ai_trace_count": len(ai_trace_ids),
         "budget_or_block_event_count": len(lineage_events),
         "lineage_field_present_count": len(lineage_present),
+        "lineage_exact_trusted_count": len(exact_lineage),
         "lineage_joined_event_count": len(linked),
         "lineage_join_coverage_pct": coverage_pct,
         "linked_budget_pass_trace_count": len(linked_pass),

@@ -26919,6 +26919,7 @@ def test_pre_submit_parent_ai_lineage_exposes_latest_trace_without_runtime_effec
             "last_watching_ai_score": 68,
             "last_watching_ai_result_source": "live",
             "last_watching_ai_confirmed_at": 95.0,
+            "last_watching_ai_attempt_trusted": True,
         },
         now_ts=100.0,
     )
@@ -26928,6 +26929,8 @@ def test_pre_submit_parent_ai_lineage_exposes_latest_trace_without_runtime_effec
     assert fields["pre_submit_parent_ai_action"] == "WAIT"
     assert fields["pre_submit_parent_ai_score"] == 68.0
     assert fields["pre_submit_parent_ai_age_sec"] == 5.0
+    assert fields["pre_submit_parent_ai_attempt_trusted"] is True
+    assert fields["pre_submit_parent_ai_source_fresh"] is True
     assert (
         fields["pre_submit_parent_ai_lineage_status"]
         == "exact_latest_watching_ai_trace"
