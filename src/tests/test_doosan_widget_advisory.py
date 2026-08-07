@@ -269,6 +269,39 @@ def test_auxiliary_request_failures_remain_limited_without_blocking_core_collect
     }
 
 
+def test_auxiliary_summary_preserves_fresh_program_when_foreign_source_is_stale():
+    advisory = {
+        "reasons": [],
+        "unmet_conditions": ["regular_flow_unavailable"],
+        "source_quality": {"status": "PASS", "issues": []},
+        "provenance": {},
+        "flow": {
+            "status": "STALE",
+            "foreign_nonworsening": False,
+            "program_nonworsening": True,
+        },
+        "external_risk": {"level": "CLEAR"},
+    }
+
+    result = attach_auxiliary_summary(
+        advisory,
+        {
+            "status": "LIMITED",
+            "relative_status": "OBSERVED",
+            "flow_status": "STALE",
+            "foreign_flow_status": "STALE",
+            "program_flow_status": "OBSERVED",
+            "external_status": "OBSERVED",
+            "context_version": "doosan_krx_auxiliary_context_v1",
+        },
+    )
+
+    assert result["auxiliary_context"]["flow_signal"] == (
+        "PROGRAM_NONWORSENING_FOREIGN_LIMITED"
+    )
+    assert "regular_flow_unavailable" in result["unmet_conditions"]
+
+
 def test_entry_linked_exit_uses_target_or_completed_close_not_intrabar_low():
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     bars = _bars([100_000, 99_000, 98_500])

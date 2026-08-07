@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from src.engine.monitoring.samsung_widget_advisory import (
+    FLOW_STALE_SEC,
     ExternalMarketProvider,
     ExternalPoint,
     KiwoomReadOnlyClient,
@@ -82,6 +83,17 @@ def _generic_aligned_windows(rows: object) -> dict[str, dict[str, Any]]:
             "window_end": row.get("window_end"),
         }
     return result
+
+
+def _flow_component_status(flow: dict[str, Any], component: str) -> str:
+    if flow.get(f"{component}_available") is not True:
+        return "UNAVAILABLE"
+    age = flow.get(f"{component}_source_age_sec")
+    if not isinstance(age, (int, float)) or isinstance(age, bool):
+        return "UNAVAILABLE"
+    if age < 0:
+        return "TIME_CONFLICT"
+    return "OBSERVED" if age <= FLOW_STALE_SEC else "STALE"
 
 
 def _neutral_relative_context(
@@ -344,6 +356,8 @@ class WidgetAuxiliaryContextCollector:
         )
         relative_status = str(relative.get("status") or "UNAVAILABLE")
         flow_status = str(self._flow.get("status") or "UNAVAILABLE")
+        foreign_flow_status = _flow_component_status(self._flow, "foreign")
+        program_flow_status = _flow_component_status(self._flow, "program")
         auxiliary_status = (
             "OBSERVED"
             if relative_status == "OBSERVED"
@@ -360,6 +374,8 @@ class WidgetAuxiliaryContextCollector:
                 "status": auxiliary_status,
                 "relative_status": relative_status,
                 "flow_status": flow_status,
+                "foreign_flow_status": foreign_flow_status,
+                "program_flow_status": program_flow_status,
                 "external_status": external_status,
                 "primary_symbol": self.profile.symbol,
                 "peer_symbol": self.profile.peer_symbol,
@@ -397,7 +413,20 @@ def attach_auxiliary_summary(
     flow = advisory.get("flow")
     flow = flow if isinstance(flow, dict) else {}
     if summary.get("flow_status") != "OBSERVED":
-        flow_signal = "DATA_LIMITED"
+        if summary.get("program_flow_status") == "OBSERVED":
+            flow_signal = (
+                "PROGRAM_NONWORSENING_FOREIGN_LIMITED"
+                if flow.get("program_nonworsening")
+                else "PROGRAM_DETERIORATING_FOREIGN_LIMITED"
+            )
+        elif summary.get("foreign_flow_status") == "OBSERVED":
+            flow_signal = (
+                "FOREIGN_NONWORSENING_PROGRAM_LIMITED"
+                if flow.get("foreign_nonworsening")
+                else "FOREIGN_DETERIORATING_PROGRAM_LIMITED"
+            )
+        else:
+            flow_signal = "DATA_LIMITED"
     elif flow.get("foreign_nonworsening") and flow.get("program_nonworsening"):
         flow_signal = "NONWORSENING"
     else:
