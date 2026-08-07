@@ -847,6 +847,104 @@ def test_resistance_only_breakout_waits_for_pullback_above_one_tick(monkeypatch)
     assert result["entry_price_high"] is None
 
 
+def test_nxt_aftermarket_caution_without_reclaim_or_higher_structure_is_bid_only(
+    monkeypatch,
+):
+    inputs = _ready_input(current_price=100_400)
+    inputs["observed_at"] = datetime(2026, 8, 3, 15, 50, 5, tzinfo=KST)
+    inputs["context"] = advisory.session_context(inputs["observed_at"])
+    inputs["bars"] = _bars(
+        datetime(2026, 8, 3, 15, 40, tzinfo=KST),
+        [
+            100_000,
+            99_900,
+            100_100,
+            100_000,
+            100_200,
+            100_100,
+            100_300,
+            100_200,
+            100_400,
+            100_400,
+        ],
+    )
+    inputs["bbo"] = {"best_bid": 100_300, "best_ask": 100_400, "age_sec": 0}
+    inputs["external_points"] = _external(quality="STALE")
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 100_300,
+            "candidate_support": 100_300,
+            "recent_resistance": 100_500,
+            "higher_high": False,
+            "higher_low": False,
+            "higher_high_and_low": False,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "support_confirmation": "retest_held",
+        },
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["external_risk"]["level"] == "DATA_LIMITED"
+    assert result["derived"]["recent_resistance_reclaimed"] is False
+    assert result["derived"]["higher_high_and_low"] is False
+    assert result["entry_price_low"] == 100_300
+    assert result["entry_price_high"] == 100_300
+    assert "nxt_aftermarket_reclaim_structure_unconfirmed" in result["unmet_conditions"]
+    assert result["derived"]["entry_price_scope"] == {
+        "policy": "nxt_aftermarket_caution_support_bid_only_v1",
+        "applied": True,
+        "reason": "resistance_not_reclaimed_and_higher_high_low_unconfirmed",
+        "unconstrained_entry_price_low": 100_300,
+        "unconstrained_entry_price_high": 100_400,
+        "constrained_price": 100_300,
+        "authority": "widget_advisory_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "metric_contract": advisory.METRIC_CONTRACT,
+    }
+
+
+def test_krx_caution_without_reclaim_keeps_normal_entry_range(monkeypatch):
+    inputs = _ready_input(current_price=100_400)
+    inputs["bbo"] = {"best_bid": 100_300, "best_ask": 100_400, "age_sec": 0}
+    inputs["external_points"] = _external(quality="STALE")
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 100_300,
+            "candidate_support": 100_300,
+            "recent_resistance": 100_500,
+            "higher_high": False,
+            "higher_low": False,
+            "higher_high_and_low": False,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "support_confirmation": "retest_held",
+        },
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["entry_price_low"] == 100_300
+    assert result["entry_price_high"] == 100_400
+    assert (
+        "nxt_aftermarket_reclaim_structure_unconfirmed"
+        not in result["unmet_conditions"]
+    )
+    assert "entry_price_scope" not in result["derived"]
+
+
 def _recovery_episode_advisory(
     observed_at: datetime,
     *,

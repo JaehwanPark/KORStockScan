@@ -7184,7 +7184,123 @@ def test_entry_lifecycle_replay_separates_path_proxy_from_natural_realized_pnl()
     assert lifecycle["replay_component_status"]["residual_multi_leg"] == (
         "not_counterfactually_replayed"
     )
-    assert lifecycle["full_lifecycle_counterfactual_status"].startswith("blocked_")
+    assert lifecycle["full_lifecycle_counterfactual_status"] == (
+        "source_state_missing_instrumentation_gap"
+    )
+    assert lifecycle["full_lifecycle_counterfactual_ev_pct"] is None
+    source_audit = lifecycle["candidate_full_lifecycle_source_audit"]
+    assert source_audit["candidate_probe_or_exposure_count"] == 1
+    assert source_audit["candidate_state_row_count"] == 0
+    assert source_audit["full_lifecycle_evaluable_candidate_count"] == 0
+    assert not any(
+        row["candidate_exact_state_authority"]
+        for row in source_audit["source_inventory"]
+    )
+
+
+def test_entry_lifecycle_source_inventory_keeps_adjacent_reports_non_authoritative(
+    tmp_path, monkeypatch
+):
+    pyramid_dir = tmp_path / "pyramid"
+    scale_in_dir = tmp_path / "scale-in"
+    split_dir = tmp_path / "split"
+    for path in (pyramid_dir, scale_in_dir, split_dir):
+        path.mkdir()
+    (pyramid_dir / "scalping_pyramid_intraday_feedback_2026-08-07.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "pyramid_v1",
+                "runtime_effect": False,
+                "summary": {
+                    "one_share_event_count": 1,
+                    "probe_residual_real_outcome_closed_count": 1,
+                    "whole_day_real_entry_lifecycle": {
+                        "filled_cycle_count": 1,
+                        "closed_cycle_count": 1,
+                    },
+                    "real_scale_in_performance": {"execution_count": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (scale_in_dir / "scale_in_incremental_counterfactual_2026-08-07.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_v1",
+                "runtime_effect": False,
+                "status": "pass",
+                "summary": {
+                    "candidate_activity_count": 2,
+                    "eligible_candidate_count": 1,
+                    "counterfactual_event_count": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (split_dir / "entry_split_order_plan_2026-08-07.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "split_v1",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "candidate_grid": [{"legs": 2}],
+                "recommended_policy": {"legs": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(quality, "PYRAMID_FEEDBACK_REPORT_DIR", pyramid_dir)
+    monkeypatch.setattr(quality, "SCALE_IN_COUNTERFACTUAL_REPORT_DIR", scale_in_dir)
+    monkeypatch.setattr(quality, "ENTRY_SPLIT_ORDER_PLAN_REPORT_DIR", split_dir)
+
+    inventory = quality._entry_lifecycle_source_inventory("2026-08-07")
+
+    assert len(inventory) == 3
+    assert all(row["status"] == "available" for row in inventory)
+    assert not any(row["candidate_exact_state_authority"] for row in inventory)
+    assert inventory[0]["evidence"]["natural_closed_cycle_count"] == 1
+    assert inventory[1]["evidence"]["counterfactual_event_count"] == 1
+    assert inventory[2]["evidence"]["candidate_policy_count"] == 1
+
+
+def test_entry_lifecycle_source_audit_requires_exact_candidate_lineage():
+    state = {
+        "schema": "entry_candidate_lifecycle_state_v1",
+        "source_quality_status": "pass",
+        "decision_trace_id": "trace-1",
+        "paired_replay_id": "wrong-pair",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "probe": {"terminal_state": "filled"},
+        "post_probe": {"decision": "continue"},
+        "residual_multi_leg": {"terminal_state": "filled"},
+        "scale_in": {"terminal_state": "evaluated_no_add"},
+        "holding_exit": {"terminal_state": "closed"},
+        "economics": {"net_profit_pct": 0.2},
+    }
+    row = {
+        "decision_trace_id": "trace-1",
+        "paired_replay_id": "pair-1",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "candidate_exposure_selected": True,
+        "candidate_counterfactual_lifecycle_state": state,
+    }
+
+    mismatched = quality._entry_candidate_lifecycle_source_audit(
+        [row], source_inventory=[]
+    )
+    assert mismatched["status"] == "source_state_missing_instrumentation_gap"
+    assert mismatched["full_lifecycle_evaluable_candidate_count"] == 0
+
+    state["paired_replay_id"] = "pair-1"
+    exact = quality._entry_candidate_lifecycle_source_audit([row], source_inventory=[])
+    assert exact["status"] == (
+        "exact_counterfactual_state_source_available_not_yet_evaluated"
+    )
+    assert exact["full_lifecycle_evaluable_candidate_count"] == 1
 
 
 def test_lifecycle_correlation_does_not_count_post_probe_as_initial_probe():
@@ -7211,3 +7327,278 @@ def test_lifecycle_correlation_does_not_count_post_probe_as_initial_probe():
     assert correlation["status"] == "exact_matched"
     assert correlation["lifecycle_stage_presence"]["probe"] is False
     assert correlation["lifecycle_stage_presence"]["post_probe"] is True
+
+
+def _reattribution_fixture(tmp_path, monkeypatch):
+    request = {
+        "decision_trace_id": "reattribute-trace",
+        "paired_replay_id": "reattribute-pair",
+        "decision_ts": "2026-08-06T09:00:00+09:00",
+        "stage": "entry",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "payload_sha256": "payload-reattribute",
+        "candidate_input_sha256": "input-reattribute",
+        "exact_payload_analysis_sha256": "exact-analysis-reattribute",
+        "anticipatory_reversal_analysis_sha256": "anticipatory-reattribute",
+        "entry_setup_evidence_sha256": "setup-reattribute",
+        "entry_setup_evidence": {"setup_state": "READY"},
+        "candidate": {
+            "prompt_version": (
+                f"{quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry"
+            ),
+            "system_prompt_sha256": "prompt-reattribute",
+            "model": "gpt-test",
+            "exposure_semantics": "offline_counterfactual_passive_probe_only",
+        },
+        "anticipatory_reversal_analysis": {
+            "execution_cost": {"conservative_execution_cost_pct": 0.1}
+        },
+        "sample_floor": {"pass": True},
+    }
+    label = {
+        "decision_trace_id": "reattribute-trace",
+        "decision_stage": "entry",
+        "decision_ts": "2026-08-06T09:00:00+09:00",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "action": "DROP",
+        "label_status": "mature",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 0.5,
+                "mfe_pct": 1.0,
+                "mae_pct": -0.2,
+                "first_hit": "target",
+                "entry_path_first_hit": "target_first",
+                "entry_path_target_pct": 0.3,
+                "entry_path_adverse_pct": -0.7,
+                "profit_opportunity_observed": True,
+            }
+        },
+        "correlation": {"status": "open_unresolved"},
+    }
+    result = {
+        "decision_trace_id": "reattribute-trace",
+        "paired_replay_id": "reattribute-pair",
+        "stage": "entry",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "status": "pass",
+        "same_payload_confirmed": True,
+        "control_response": {"action": "DROP"},
+        "candidate_response": {
+            "action": "BUY",
+            "entry_setup_state": "READY",
+            "entry_ai_risk_verdict": "PASS",
+            "entry_probe_intent": True,
+        },
+    }
+    existing = quality.build_paired_replay_report(
+        target_date="2026-08-06",
+        requests=[request],
+        results=[result],
+        labels=[label],
+        prepared_requests=[request],
+    )
+    assert existing["promotion_report_integrity_pass"] is True
+    existing.update(
+        {
+            "schema": quality.DETAILED_PAIRED_SCHEMA,
+            "cohort_filter": {
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "runtime_effect": False,
+            },
+            "candidate_execution_performed": True,
+            "existing_result_reuse_count": 1,
+            "new_candidate_execution_count": 0,
+            "deferred_candidate_execution_count": 0,
+            "outcome_price_source": "stored_test_source",
+            "outcome_price_source_requested": "stored_test_source",
+            "price_source_provenance": [],
+            "outcome_as_of": "2026-08-06T16:30:00+09:00",
+        }
+    )
+    detailed_path = tmp_path / "detailed.json"
+    label_path = tmp_path / "labels.json"
+    control_path = tmp_path / "control.json"
+    detailed_path.write_text(json.dumps(existing), encoding="utf-8")
+    label_path.write_text(
+        json.dumps(
+            {
+                "schema": quality.LABEL_REPORT_SCHEMA,
+                "target_date": "2026-08-06",
+                "labels": [label],
+                "outcome_price_source": "stored_test_source",
+                "outcome_price_source_requested": "stored_test_source",
+                "price_source_provenance": [],
+                "outcome_as_of": "2026-08-06T16:30:00+09:00",
+                **quality.OFFLINE_CONTRACT,
+            }
+        ),
+        encoding="utf-8",
+    )
+    control_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        quality, "detailed_paired_path", lambda *_a, **_k: detailed_path
+    )
+    monkeypatch.setattr(quality, "label_report_path", lambda *_a, **_k: label_path)
+    monkeypatch.setattr(quality, "control_path", lambda *_a, **_k: control_path)
+    monkeypatch.setattr(
+        quality,
+        "_default_sources",
+        lambda *_a, **_k: {"traces": [], "payloads": [], "pending": []},
+    )
+    monkeypatch.setattr(
+        quality,
+        "prepare_paired_replay_requests",
+        lambda **_kwargs: [dict(request)],
+    )
+    monkeypatch.setattr(
+        quality,
+        "prepare_detailed_paired_replay_requests",
+        lambda rows, **_kwargs: rows,
+    )
+    return request, detailed_path
+
+
+def test_rematerialize_detailed_replay_uses_stored_artifacts_without_api_calls(
+    tmp_path, monkeypatch
+):
+    _request, detailed_path = _reattribution_fixture(tmp_path, monkeypatch)
+
+    report, output_path = quality.rematerialize_detailed_replay_attribution(
+        target_date="2026-08-06",
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ),
+    )
+
+    assert output_path == detailed_path
+    assert (
+        report["entry_opportunity_funnel"]["cohorts"][0][
+            "eligible_decision_event_count"
+        ]
+        == 1
+    )
+    assert report["entry_lifecycle_replay"]["bounded_one_share_replay_status"] == (
+        "path_proxy_available"
+    )
+    assert report["reattribution_provenance"]["price_rest_request_performed"] is False
+    assert report["reattribution_provenance"]["candidate_model_call_performed"] is False
+
+
+def test_rematerialize_detailed_replay_rejects_current_request_identity_drift(
+    tmp_path, monkeypatch
+):
+    request, _detailed_path = _reattribution_fixture(tmp_path, monkeypatch)
+    drifted = {**request, "candidate_input_sha256": "changed-input"}
+    monkeypatch.setattr(
+        quality,
+        "prepare_paired_replay_requests",
+        lambda **_kwargs: [drifted],
+    )
+
+    with pytest.raises(RuntimeError, match="offline_reattribution_identity_invalid"):
+        quality.rematerialize_detailed_replay_attribution(
+            target_date="2026-08-06",
+            effective_venue="KRX",
+            session_bucket="KRX_REGULAR",
+            candidate_prompt_version=(
+                quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ),
+        )
+
+
+def test_rematerialize_detailed_replay_accepts_hash_pinned_historical_snapshot(
+    tmp_path, monkeypatch
+):
+    request, detailed_path = _reattribution_fixture(tmp_path, monkeypatch)
+    drifted = {**request, "candidate_input_sha256": "current-source-drift"}
+    monkeypatch.setattr(
+        quality,
+        "prepare_paired_replay_requests",
+        lambda **_kwargs: [drifted],
+    )
+    existing_report = json.loads(detailed_path.read_text(encoding="utf-8"))
+    stored_label_report = json.loads(
+        (tmp_path / "labels.json").read_text(encoding="utf-8")
+    )
+    snapshot_path = tmp_path / "prepared_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "schema": quality.DETAILED_PREPARED_REQUEST_SNAPSHOT_SCHEMA,
+                "target_date": "2026-08-06",
+                "candidate_prompt_version": (
+                    quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                ),
+                "cohort_filter": {
+                    "effective_venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                },
+                "source_code_commit": "a" * 40,
+                "source_report_content_sha256": quality._sha256(existing_report),
+                "stored_label_report_content_sha256": quality._sha256(
+                    stored_label_report
+                ),
+                "prepared_request_count": 1,
+                "sample_floor_pass_count": 1,
+                "prepared_requests": [request],
+                **quality.OFFLINE_CONTRACT,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report, _output_path = quality.rematerialize_detailed_replay_attribution(
+        target_date="2026-08-06",
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ),
+        prepared_request_snapshot_path=snapshot_path,
+    )
+
+    provenance = report["reattribution_provenance"]
+    assert provenance["prepared_request_source"] == "pinned_historical_snapshot"
+    assert provenance["prepared_request_source_code_commit"] == "a" * 40
+    assert provenance["candidate_model_call_performed"] is False
+    assert provenance["historical_decision_metrics_preserved"] is True
+
+    detailed_path.write_text(json.dumps(report), encoding="utf-8")
+    repeated, _output_path = quality.rematerialize_detailed_replay_attribution(
+        target_date="2026-08-06",
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ),
+        prepared_request_snapshot_path=snapshot_path,
+    )
+    assert (
+        repeated["control_source_quality_adjusted_ev_pct"]
+        == report["control_source_quality_adjusted_ev_pct"]
+    )
+
+    tampered = json.loads(detailed_path.read_text(encoding="utf-8"))
+    tampered["control_source_quality_adjusted_ev_pct"] = 999.0
+    detailed_path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="offline_reattribution_snapshot_invalid"):
+        quality.rematerialize_detailed_replay_attribution(
+            target_date="2026-08-06",
+            effective_venue="KRX",
+            session_bucket="KRX_REGULAR",
+            candidate_prompt_version=(
+                quality.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ),
+            prepared_request_snapshot_path=snapshot_path,
+        )

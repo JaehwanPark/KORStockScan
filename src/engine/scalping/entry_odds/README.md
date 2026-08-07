@@ -30,7 +30,10 @@ Raw predictions must contain:
 The calibration signature includes provider, exact model, prompt SHA-256,
 input schema, odds policy, outcome label/horizon/target/adverse contract, cost
 model, broker execution venue, observed venue/session, risk regime, and
-liquidity bucket. There is no fallback across different signatures.
+liquidity bucket. There is no fallback across different signatures. Within an
+eligible signature, calibration blends temperature-scaled model odds with a
+smoothed historical class prior. The model weight is selected on strictly
+prior rows and can fall to zero when the raw model adds no probability skill.
 
 ## Run
 
@@ -94,9 +97,22 @@ candidate. Missing trace or outcome files still fail closed.
 
 The command atomically writes private-mode JSON and Markdown reports under
 `data/report/entry_odds_observer/`. The JSON contains the row ledger,
-temperature calibrators, Brier/log-loss/ECE diagnostics, explicit cost
-attribution, predicted-vs-OOS EV buckets, negative-veto attribution, and
+prior-shrunk temperature calibrators, Brier/log-loss/ECE diagnostics, explicit
+cost attribution, predicted-vs-OOS EV buckets, negative-veto attribution, and
 reusable `calibration_updates` for a later chronological run.
+
+The OOS calibration section compares calibrated odds with both a uniform
+four-class baseline and the smoothed exact-signature historical prior. A model
+that merely approaches the prior, without improving its OOS log loss while
+keeping Brier score no worse, remains blocked by
+`calibrated_probability_skill_not_proven`.
+
+Predicted fill probability is not treated as independent fill truth. The
+report validates it only against lifecycle-correlated rows where an order was
+actually submitted and fill observation is present. Weighting a
+counterfactual return by predicted fill probability remains diagnostic; it
+cannot close the simulation-candidate gate until the independent fill sample
+floors pass.
 
 `sim_candidate_ready` remains simulation-candidate evidence only. It requires
 the declared sample floors, at least two populated predicted-EV buckets with

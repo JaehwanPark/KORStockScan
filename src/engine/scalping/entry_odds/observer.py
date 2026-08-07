@@ -28,7 +28,7 @@ SCHEMA = "entry_odds_observer_v1"
 ROW_SCHEMA = "entry_odds_observer_row_v1"
 RAW_PREDICTION_SCHEMA = "entry_odds_raw_prediction_v1"
 CALIBRATION_ROW_SCHEMA = "entry_odds_calibration_row_v1"
-POLICY_VERSION = "offline_entry_odds_observer_v1"
+POLICY_VERSION = "offline_entry_odds_observer_v1_1"
 COUNTERFACTUAL_EXECUTION_POLICY = "one_share_reference_horizon_close_v1"
 LEGACY_FIXED_COST_COMPARISON_BPS = 23.0
 
@@ -48,6 +48,8 @@ DEFAULT_MIN_CALIBRATION_DATES = 2
 DEFAULT_MIN_EVALUATION_ROWS = 30
 DEFAULT_MIN_EVALUATION_DATES = 2
 TEMPERATURE_GRID = tuple(value / 20.0 for value in range(10, 61))
+MODEL_WEIGHT_GRID = tuple(value / 20.0 for value in range(21))
+EMPIRICAL_PRIOR_PSEUDOCOUNT = 1.0
 
 METRIC_DECISION_CONTRACT: dict[str, Any] = {
     "metric_role": "entry_odds_calibration_and_counterfactual_veto_observation",
@@ -73,6 +75,7 @@ METRIC_DECISION_CONTRACT: dict[str, Any] = {
         "multiclass_brier_score",
         "multiclass_log_loss",
         "top_label_ece",
+        "counterfactual_fill_probability_brier_score",
         "hypothetical_buy_retention_pct",
         "avoided_loser_count",
         "foregone_winner_count",
@@ -232,6 +235,40 @@ def _temperature_scale(
     return {label: weights[index] / total for index, label in enumerate(OUTCOME_LABELS)}
 
 
+def _apply_calibrator(
+    probabilities: Mapping[str, float], calibrator: Mapping[str, Any]
+) -> dict[str, float]:
+    """Blend temperature-scaled model odds with the historical class prior.
+
+    Temperature scaling alone cannot correct a multiclass base-rate shift: it
+    only sharpens or flattens the supplied ordering.  The empirical-Bayes blend
+    keeps conditional model signal only when it improves chronological
+    calibration history over a smoothed exact-signature prior.
+    """
+
+    temperature = _number(calibrator.get("temperature"))
+    model_weight = _number(calibrator.get("model_weight"))
+    prior_value = calibrator.get("empirical_prior_probabilities")
+    if (
+        temperature is None
+        or temperature <= 0.0
+        or model_weight is None
+        or not 0.0 <= model_weight <= 1.0
+        or not isinstance(prior_value, Mapping)
+    ):
+        raise ValueError("calibrator_contract_invalid")
+    prior, prior_errors = _normalized_probabilities(prior_value)
+    if prior is None or prior_errors:
+        raise ValueError("calibrator_empirical_prior_invalid")
+    scaled = _temperature_scale(probabilities, temperature)
+    blended = {
+        label: (model_weight * scaled[label]) + ((1.0 - model_weight) * prior[label])
+        for label in OUTCOME_LABELS
+    }
+    total = sum(blended.values())
+    return {label: blended[label] / total for label in OUTCOME_LABELS}
+
+
 def _log_loss(rows: Sequence[tuple[Mapping[str, float], str]]) -> float | None:
     if not rows:
         return None
@@ -353,6 +390,15 @@ def _fit_calibrators(
     for signature, signature_rows in eligible.items():
         symbols = {row[2] for row in signature_rows if row[2]}
         dates = {row[3].astimezone(KST).date().isoformat() for row in signature_rows}
+        outcome_counts = Counter(row[1] for row in signature_rows)
+        prior_denominator = len(signature_rows) + (
+            EMPIRICAL_PRIOR_PSEUDOCOUNT * len(OUTCOME_LABELS)
+        )
+        empirical_prior = {
+            label: (outcome_counts[label] + EMPIRICAL_PRIOR_PSEUDOCOUNT)
+            / prior_denominator
+            for label in OUTCOME_LABELS
+        }
         blockers: list[str] = []
         if len(signature_rows) < min_rows:
             blockers.append("calibration_row_floor")
@@ -368,27 +414,55 @@ def _fit_calibrators(
                 "source_date_count": len(dates),
                 "blockers": blockers,
                 "temperature": None,
+                "model_weight": None,
+                "empirical_prior_probabilities": empirical_prior,
             }
             continue
         base_rows = [
             (probabilities, outcome)
             for probabilities, outcome, _symbol, _ts in signature_rows
         ]
-        scored: list[tuple[float, float]] = []
+        scored: list[tuple[float, float, float]] = []
         for temperature in TEMPERATURE_GRID:
-            scaled = [
-                (_temperature_scale(probabilities, temperature), outcome)
-                for probabilities, outcome in base_rows
+            temperature_scaled = [
+                _temperature_scale(probabilities, temperature)
+                for probabilities, _outcome in base_rows
             ]
-            loss = _log_loss(scaled)
-            if loss is not None:
-                scored.append((loss, temperature))
-        best_loss, temperature = min(
-            scored, key=lambda item: (item[0], abs(item[1] - 1.0))
+            for model_weight in MODEL_WEIGHT_GRID:
+                blended = [
+                    (
+                        {
+                            label: (model_weight * scaled[label])
+                            + ((1.0 - model_weight) * empirical_prior[label])
+                            for label in OUTCOME_LABELS
+                        },
+                        base_rows[index][1],
+                    )
+                    for index, scaled in enumerate(temperature_scaled)
+                ]
+                loss = _log_loss(blended)
+                if loss is not None:
+                    scored.append((loss, model_weight, temperature))
+        best_loss, model_weight, temperature = min(
+            scored,
+            key=lambda item: (
+                item[0],
+                item[1],
+                abs(item[2] - 1.0),
+                item[2],
+            ),
         )
+        calibrator_contract = {
+            "temperature": temperature,
+            "model_weight": model_weight,
+            "empirical_prior_probabilities": empirical_prior,
+        }
         calibrated_rows = [
-            (_temperature_scale(probabilities, temperature), outcome)
+            (_apply_calibrator(probabilities, calibrator_contract), outcome)
             for probabilities, outcome in base_rows
+        ]
+        historical_prior_rows = [
+            (empirical_prior, outcome) for _probabilities, outcome in base_rows
         ]
         fitted[signature] = {
             "status": "fitted",
@@ -397,10 +471,17 @@ def _fit_calibrators(
             "source_date_count": len(dates),
             "blockers": [],
             "temperature": temperature,
+            "model_weight": model_weight,
+            "model_signal_retained": model_weight > 0.0,
+            "calibration_method": "temperature_plus_smoothed_prior_blend_v1",
+            "empirical_prior_probabilities": empirical_prior,
+            "empirical_prior_pseudocount_per_class": EMPIRICAL_PRIOR_PSEUDOCOUNT,
             "raw_log_loss": _round(_log_loss(base_rows)),
             "calibrated_log_loss": _round(best_loss),
+            "historical_prior_log_loss": _round(_log_loss(historical_prior_rows)),
             "raw_brier_score": _round(_brier_score(base_rows)),
             "calibrated_brier_score": _round(_brier_score(calibrated_rows)),
+            "historical_prior_brier_score": _round(_brier_score(historical_prior_rows)),
         }
     return fitted, exclusions
 
@@ -531,6 +612,15 @@ def _outcome(label: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
         errors.append("outcome_market_path_invalid")
     if end_return_pct is None:
         errors.append("outcome_end_return_missing")
+    correlation = label.get("correlation")
+    correlation = correlation if isinstance(correlation, Mapping) else {}
+    actual_order_submitted = bool(correlation.get("actual_order_submitted", False))
+    fill_observed_value = correlation.get("fill_observed")
+    actual_fill_observed = (
+        fill_observed_value
+        if actual_order_submitted and isinstance(fill_observed_value, bool)
+        else None
+    )
     return {
         "status": "mature" if not errors else "invalid",
         "decision_ts": label.get("decision_ts"),
@@ -550,16 +640,9 @@ def _outcome(label: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
         ),
         "horizon_end_return_pct": end_return_pct,
         "counterfactual_only": True,
-        "actual_order_submitted": (
-            bool((label.get("correlation") or {}).get("actual_order_submitted", False))
-            if isinstance(label.get("correlation"), Mapping)
-            else False
-        ),
-        "realized_profit_pct": (
-            (label.get("correlation") or {}).get("realized_profit_pct")
-            if isinstance(label.get("correlation"), Mapping)
-            else None
-        ),
+        "actual_order_submitted": actual_order_submitted,
+        "actual_fill_observed": actual_fill_observed,
+        "realized_profit_pct": correlation.get("realized_profit_pct"),
         "realized_separate_from_counterfactual": True,
     }, errors
 
@@ -712,6 +795,50 @@ def _evaluation_metrics(rows: Sequence[dict[str, Any]], key: str) -> dict[str, A
         "multiclass_log_loss": _round(_log_loss(scored)),
         "multiclass_brier_score": _round(_brier_score(scored)),
         "top_label_ece": _round(_top_label_ece(scored)),
+    }
+
+
+def _uniform_evaluation_metrics(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    uniform = {label: 1.0 / len(OUTCOME_LABELS) for label in OUTCOME_LABELS}
+    scored = [
+        (uniform, row["outcome"]["market_path_label"])
+        for row in rows
+        if row.get("outcome", {}).get("market_path_label") in OUTCOME_LABELS
+    ]
+    return {
+        "sample_count": len(scored),
+        "multiclass_log_loss": _round(_log_loss(scored)),
+        "multiclass_brier_score": _round(_brier_score(scored)),
+        "top_label_ece": _round(_top_label_ece(scored)),
+    }
+
+
+def _probability_skill_gate(
+    calibrated: Mapping[str, Any], historical_prior: Mapping[str, Any]
+) -> dict[str, Any]:
+    calibrated_log_loss = _number(calibrated.get("multiclass_log_loss"))
+    prior_log_loss = _number(historical_prior.get("multiclass_log_loss"))
+    calibrated_brier = _number(calibrated.get("multiclass_brier_score"))
+    prior_brier = _number(historical_prior.get("multiclass_brier_score"))
+    checks = {
+        "oos_log_loss_improves_historical_signature_prior": (
+            calibrated_log_loss is not None
+            and prior_log_loss is not None
+            and calibrated_log_loss < prior_log_loss - 1e-12
+        ),
+        "oos_brier_not_worse_than_historical_signature_prior": (
+            calibrated_brier is not None
+            and prior_brier is not None
+            and calibrated_brier <= prior_brier + 1e-12
+        ),
+    }
+    blockers = [name for name, passed in checks.items() if not passed]
+    return {
+        "pass": not blockers,
+        "checks": checks,
+        "blockers": blockers,
+        "baseline": "smoothed_exact_signature_historical_class_prior",
+        "authority_if_passed": "evaluation_gate_only_no_runtime_apply",
     }
 
 
@@ -902,6 +1029,82 @@ def _fill_cohort_attribution(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _fill_model_validation(
+    rows: Sequence[dict[str, Any]],
+    *,
+    min_rows: int,
+    min_symbols: int,
+    min_dates: int,
+) -> dict[str, Any]:
+    independently_observed = [
+        row
+        for row in rows
+        if row.get("outcome", {}).get("actual_order_submitted") is True
+        and isinstance(row.get("outcome", {}).get("actual_fill_observed"), bool)
+        and _number(
+            row.get("predicted_value", {}).get("counterfactual_fill_probability")
+        )
+        is not None
+    ]
+    symbols = {
+        str(row.get("stock_code") or "")
+        for row in independently_observed
+        if row.get("stock_code")
+    }
+    dates = {
+        str(row.get("decision_ts") or "")[:10]
+        for row in independently_observed
+        if row.get("decision_ts")
+    }
+    brier_values: list[float] = []
+    log_loss_values: list[float] = []
+    epsilon = 1e-15
+    for row in independently_observed:
+        probability = float(row["predicted_value"]["counterfactual_fill_probability"])
+        observed = 1.0 if row["outcome"]["actual_fill_observed"] else 0.0
+        brier_values.append((probability - observed) ** 2)
+        log_loss_values.append(
+            -(
+                observed * math.log(max(probability, epsilon))
+                + (1.0 - observed) * math.log(max(1.0 - probability, epsilon))
+            )
+        )
+    checks = {
+        "minimum_independent_fill_rows": len(independently_observed) >= min_rows,
+        "minimum_independent_fill_unique_symbols": len(symbols) >= min_symbols,
+        "minimum_independent_fill_source_dates": len(dates) >= min_dates,
+    }
+    blockers = [name for name, passed in checks.items() if not passed]
+    return {
+        "status": "validated_sample_floor" if not blockers else "unvalidated",
+        "independent_fill_truth_source": (
+            "actual_submitted_order_lifecycle_fill_correlation"
+        ),
+        "independent_fill_row_count": len(independently_observed),
+        "independent_fill_unique_symbol_count": len(symbols),
+        "independent_fill_source_date_count": len(dates),
+        "fill_observed_count": sum(
+            row["outcome"]["actual_fill_observed"] is True
+            for row in independently_observed
+        ),
+        "counterfactual_fill_probability_brier_score": (
+            _round(fmean(brier_values)) if brier_values else None
+        ),
+        "counterfactual_fill_probability_log_loss": (
+            _round(fmean(log_loss_values)) if log_loss_values else None
+        ),
+        "sim_candidate_gate": {
+            "pass": not blockers,
+            "checks": checks,
+            "blockers": blockers,
+            "authority_if_passed": "evaluation_gate_only_no_runtime_apply",
+        },
+        "predicted_fill_weighted_counterfactual_is_independent_truth": False,
+        "predicted_zero_fill_mechanically_zeroes_counterfactual_return": True,
+        "runtime_effect": False,
+    }
+
+
 def build_report(
     *,
     target_date: str,
@@ -1044,6 +1247,7 @@ def build_report(
                 "raw_probabilities": probabilities,
                 "observed_outcome_label": outcome.get("market_path_label"),
                 "actual_order_submitted": outcome.get("actual_order_submitted"),
+                "actual_fill_observed": outcome.get("actual_fill_observed"),
                 "realized_separate_from_counterfactual": True,
                 "runtime_effect": False,
             }
@@ -1064,6 +1268,7 @@ def build_report(
 
         calibrator = calibrators.get(signature or "")
         calibrated: dict[str, float] | None = None
+        historical_prior: dict[str, float] | None = None
         if signature and calibrator is None:
             assessment_errors.append("calibration_signature_unseen")
         elif calibrator and calibrator.get("status") != "fitted":
@@ -1071,9 +1276,15 @@ def build_report(
                 str(value) for value in calibrator.get("blockers") or []
             )
         elif calibrator and probabilities is not None:
-            calibrated = _temperature_scale(
-                probabilities, float(calibrator["temperature"])
-            )
+            try:
+                calibrated = _apply_calibrator(probabilities, calibrator)
+                prior_value = calibrator.get("empirical_prior_probabilities")
+                if isinstance(prior_value, Mapping):
+                    historical_prior = {
+                        label: float(prior_value[label]) for label in OUTCOME_LABELS
+                    }
+            except (KeyError, TypeError, ValueError):
+                assessment_errors.append("calibrator_contract_invalid")
 
         expected_value: dict[str, Any] = {"status": "not_evaluated"}
         if calibrated is not None and cost.get("total_cost_bps") is not None:
@@ -1142,6 +1353,7 @@ def build_report(
                 "probabilities": {
                     "raw": probabilities,
                     "calibrated": calibrated,
+                    "historical_signature_prior": historical_prior,
                     "labels": list(OUTCOME_LABELS),
                 },
                 "cost": cost,
@@ -1166,7 +1378,20 @@ def build_report(
     ]
     raw_metrics = _evaluation_metrics(scored_rows, "raw")
     calibrated_metrics = _evaluation_metrics(scored_rows, "calibrated")
+    historical_prior_metrics = _evaluation_metrics(
+        scored_rows, "historical_signature_prior"
+    )
+    uniform_metrics = _uniform_evaluation_metrics(scored_rows)
+    probability_skill_gate = _probability_skill_gate(
+        calibrated_metrics, historical_prior_metrics
+    )
     predicted_vs_oos = _predicted_vs_oos(scored_rows)
+    fill_model_validation = _fill_model_validation(
+        scored_rows,
+        min_rows=min_evaluation_rows,
+        min_symbols=min_unique_symbols,
+        min_dates=min_evaluation_dates,
+    )
     veto_attribution = _veto_attribution(scored_rows)
     ev_pct = (
         _round(fmean(row["counterfactual_net_return_pct"] for row in scored_rows))
@@ -1185,6 +1410,10 @@ def build_report(
         evaluation_blockers.append("oos_evaluation_source_date_floor")
     if predicted_vs_oos["observed_ev_monotonic_non_decreasing"] is not True:
         evaluation_blockers.append("predicted_ev_observed_ev_monotonicity_unproven")
+    if probability_skill_gate["pass"] is not True:
+        evaluation_blockers.append("calibrated_probability_skill_not_proven")
+    if fill_model_validation["sim_candidate_gate"]["pass"] is not True:
+        evaluation_blockers.append("counterfactual_fill_model_validation_not_closed")
     if veto_attribution["sim_candidate_gate"]["pass"] is not True:
         evaluation_blockers.append("negative_veto_sim_candidate_gate_not_closed")
     if cost_warning_counts.get("cost_model_assumption_only", 0):
@@ -1210,12 +1439,94 @@ def build_report(
         final_state = "calibration_failed"
     elif evaluation_blockers:
         final_state = "hold_sample"
-    elif ev_pct is not None and ev_pct > 0.0:
+    elif veto_attribution["sim_candidate_gate"]["pass"] is True:
         final_state = "sim_candidate_ready"
     else:
         final_state = "observe_only_continue"
 
     assessment_counts = Counter(row["observer_assessment"] for row in ledger)
+    blocker_details: dict[str, dict[str, Any]] = {
+        "oos_evaluation_row_floor": {
+            "blocker_class": "sample_window",
+            "owner_artifact": "entry_odds_observer rolling OOS ledger",
+            "observed_evidence": f"eligible_rows={len(scored_rows)}",
+            "next_action": "collect_more_exact_mature_oos_rows",
+            "acceptance_test": f"eligible_rows>={min_evaluation_rows}",
+        },
+        "oos_evaluation_source_date_floor": {
+            "blocker_class": "sample_window",
+            "owner_artifact": "entry_odds_observer rolling OOS ledger",
+            "observed_evidence": f"source_dates={len(source_dates)}",
+            "next_action": "build_multi_date_oos_evaluation_window",
+            "acceptance_test": f"source_dates>={min_evaluation_dates}",
+        },
+        "predicted_ev_observed_ev_monotonicity_unproven": {
+            "blocker_class": "economic_calibration",
+            "owner_artifact": "predicted_vs_oos_outcome",
+            "observed_evidence": (
+                "observed_ev_monotonic_non_decreasing="
+                f"{predicted_vs_oos['observed_ev_monotonic_non_decreasing']}"
+            ),
+            "next_action": "collect_populated_oos_ev_buckets_and_retest_monotonicity",
+            "acceptance_test": "two_or_more_nonempty_buckets_and_monotonic_observed_ev",
+        },
+        "calibrated_probability_skill_not_proven": {
+            "blocker_class": "probability_model_skill",
+            "owner_artifact": "calibration_evaluation.probability_skill_gate",
+            "observed_evidence": (
+                "model_signal_retained_signatures="
+                f"{sum(value.get('status') == 'fitted' and value.get('model_signal_retained') is True for value in calibrators.values())}"
+            ),
+            "next_action": "improve_probability_estimator_then_run_strict_oos_skill_test",
+            "acceptance_test": (
+                "calibrated_log_loss_better_than_smoothed_signature_prior_and_"
+                "brier_not_worse"
+            ),
+        },
+        "counterfactual_fill_model_validation_not_closed": {
+            "blocker_class": "fill_model_contract",
+            "owner_artifact": "fill_model_validation",
+            "observed_evidence": (
+                "independent_fill_rows="
+                f"{fill_model_validation['independent_fill_row_count']}"
+            ),
+            "next_action": "join_actual_submitted_order_fill_correlations_and_validate_fill_odds",
+            "acceptance_test": (
+                f"fill_rows>={min_evaluation_rows}_symbols>={min_unique_symbols}_"
+                f"dates>={min_evaluation_dates}"
+            ),
+        },
+        "negative_veto_sim_candidate_gate_not_closed": {
+            "blocker_class": "incremental_veto_value",
+            "owner_artifact": "negative_veto_attribution.sim_candidate_gate",
+            "observed_evidence": (
+                "original_buys="
+                f"{veto_attribution['original_buy_count']}_vetoes="
+                f"{veto_attribution['hypothetical_veto_count']}"
+            ),
+            "next_action": "collect_existing_buy_overlap_and_measure_incremental_veto_ev",
+            "acceptance_test": (
+                "veto_sample_floors_positive_incremental_ev_and_nonworse_tail_drawdown"
+            ),
+        },
+        "cost_model_assumption_only": {
+            "blocker_class": "execution_cost_source_quality",
+            "owner_artifact": "raw odds cost_inputs plus broker execution receipts",
+            "observed_evidence": (
+                "assumption_only_rows="
+                f"{cost_warning_counts.get('cost_model_assumption_only', 0)}"
+            ),
+            "next_action": "replace_assumed_cost_fields_with_verified_instrument_execution_costs",
+            "acceptance_test": (
+                "listing_tax_commission_slippage_and_impact_sources_verified"
+            ),
+        },
+    }
+    blocker_closure_plan = [
+        {"blocker": blocker, **blocker_details[blocker]}
+        for blocker in evaluation_blockers
+        if blocker in blocker_details
+    ]
     generated = generated_at or datetime.now(KST)
     report: dict[str, Any] = {
         "schema": SCHEMA,
@@ -1226,7 +1537,9 @@ def build_report(
         "decision": {
             "identified": bool(scored_rows),
             "applied_to_sim": False,
+            "next_actions": [item["next_action"] for item in blocker_closure_plan],
             "remaining_for_real_runtime": [
+                "all_evaluation_blockers_closed",
                 "reviewed_sim_policy_catalog_candidate",
                 "PREOPEN_runtime_selection",
                 "live_auto_and_same_stage_owner_contract",
@@ -1249,13 +1562,26 @@ def build_report(
             "fitted_calibration_signature_count": sum(
                 value.get("status") == "fitted" for value in calibrators.values()
             ),
+            "model_signal_retained_signature_count": sum(
+                value.get("status") == "fitted"
+                and value.get("model_signal_retained") is True
+                for value in calibrators.values()
+            ),
+            "historical_prior_only_signature_count": sum(
+                value.get("status") == "fitted" and value.get("model_weight") == 0.0
+                for value in calibrators.values()
+            ),
             "source_quality_adjusted_ev_pct": ev_pct,
             "evaluation_source_date_count": len(source_dates),
+            "probability_skill_gate_pass": probability_skill_gate["pass"],
             "evaluation_blockers": evaluation_blockers,
         },
         "calibration_evaluation": {
             "raw": raw_metrics,
             "calibrated": calibrated_metrics,
+            "historical_signature_prior": historical_prior_metrics,
+            "uniform_four_class": uniform_metrics,
+            "probability_skill_gate": probability_skill_gate,
             "calibrated_log_loss_worse_than_raw": calibration_worse,
             "strictly_prior_to_first_evaluation_ts": evaluation_start.isoformat(),
         },
@@ -1267,6 +1593,7 @@ def build_report(
         ],
         "predicted_vs_oos_outcome": predicted_vs_oos,
         "fill_cohort_attribution": _fill_cohort_attribution(scored_rows),
+        "fill_model_validation": fill_model_validation,
         "cost_attribution": {
             "required_components": list(REQUIRED_COST_FIELDS),
             "required_context": list(REQUIRED_COST_CONTEXT_FIELDS),
@@ -1276,6 +1603,7 @@ def build_report(
             "assumption_only_blocks_sim_candidate": True,
         },
         "negative_veto_attribution": veto_attribution,
+        "blocker_closure_plan": blocker_closure_plan,
         "source_quality_and_exclusion_manifest": {
             "assessment_exclusion_counts": dict(
                 sorted(assessment_exclusion_counts.items())
@@ -1306,6 +1634,7 @@ def build_report(
 def render_markdown(report: Mapping[str, Any]) -> str:
     summary = report.get("summary") or {}
     calibration = report.get("calibration_evaluation") or {}
+    fill_validation = report.get("fill_model_validation") or {}
     veto = report.get("negative_veto_attribution") or {}
     decision = report.get("decision") or {}
     lines = [
@@ -1325,8 +1654,12 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- Predictions / eligible / excluded: {summary.get('prediction_count', 0)} / {summary.get('eligible_count', 0)} / {summary.get('excluded_count', 0)}",
         f"- Source-quality-adjusted EV: {summary.get('source_quality_adjusted_ev_pct')}",
         f"- Assessment counts: `{json.dumps(summary.get('assessment_counts', {}), ensure_ascii=False, sort_keys=True)}`",
+        f"- Model-signal / prior-only fitted signatures: {summary.get('model_signal_retained_signature_count', 0)} / {summary.get('historical_prior_only_signature_count', 0)}",
         f"- Raw calibration: `{json.dumps(calibration.get('raw', {}), sort_keys=True)}`",
         f"- Calibrated: `{json.dumps(calibration.get('calibrated', {}), sort_keys=True)}`",
+        f"- Historical-signature prior: `{json.dumps(calibration.get('historical_signature_prior', {}), sort_keys=True)}`",
+        f"- Probability skill gate: `{json.dumps(calibration.get('probability_skill_gate', {}), sort_keys=True)}`",
+        f"- Independent fill validation rows / status: {fill_validation.get('independent_fill_row_count', 0)} / {fill_validation.get('status')}",
         f"- Hypothetical avoided losers / foregone winners: {veto.get('avoided_loser_count', 0)} / {veto.get('foregone_winner_count', 0)}",
         f"- Hypothetical buy retention: {veto.get('hypothetical_buy_retention_pct')}",
         "",
