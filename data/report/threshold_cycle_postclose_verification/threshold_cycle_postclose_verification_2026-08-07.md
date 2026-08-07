@@ -23,7 +23,7 @@
 - runtime_effect: `False`
 - allowed_runtime_apply: `False`
 - P1 `submit_drought` 판정: `pass_handoff_closed`
-  - 근거: `{'status': 'pass', 'handoff_status': 'pass', 'root_cause_closure_status': 'closed', 'root_cause_open_reasons': [], 'artifact_regeneration_required': False, 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['PRICE_GUARD_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'quote_freshness_attribution_inconsistent': False, 'submit_drought_refresh_attempted_count': 36, 'submit_drought_refresh_applied_count': 24, 'submit_drought_latency_pass_recovered_count': 4, 'submit_drought_unknown_latency_reason_count': 0, 'ldm_submit_real_submitted_row_count': 0, 'ldm_submit_missing_broker_order_key_count': 0, 'ldm_submit_missing_broker_order_key_rate': 0.0, 'ldm_submit_post_submit_provenance_join_gap': False, 'ldm_submit_post_submit_provenance_join_gap_raw': False, 'ldm_submit_bot_history_backfill_candidate_count': 0, 'ldm_submit_bot_history_backfill_full_coverage': False, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'no_gap_broker_order_key_present_or_no_missing_rows'}`
+  - 근거: `{'status': 'pass', 'handoff_status': 'pass', 'root_cause_closure_status': 'closed', 'root_cause_open_reasons': [], 'artifact_regeneration_required': False, 'critical': True, 'primary': 'SUBMIT_DROUGHT_CRITICAL', 'matches': ['ENTRY_AI_AUTHORITY_DROUGHT', 'LATENCY_DROUGHT', 'UPSTREAM_AI_THRESHOLD', 'SUBMIT_DROUGHT_CRITICAL'], 'missing': [], 'quote_freshness_attribution_inconsistent': False, 'submit_drought_refresh_attempted_count': 36, 'submit_drought_refresh_applied_count': 24, 'submit_drought_latency_pass_recovered_count': 4, 'submit_drought_unknown_latency_reason_count': 0, 'ldm_submit_real_submitted_row_count': 0, 'ldm_submit_missing_broker_order_key_count': 0, 'ldm_submit_missing_broker_order_key_rate': 0.0, 'ldm_submit_post_submit_provenance_join_gap': False, 'ldm_submit_post_submit_provenance_join_gap_raw': False, 'ldm_submit_bot_history_backfill_candidate_count': 0, 'ldm_submit_bot_history_backfill_full_coverage': False, 'ldm_submit_bot_history_exact_mapping_count': 0, 'ldm_submit_bot_history_exact_mapping_full_coverage': False, 'ldm_submit_post_submit_provenance_join_resolution': 'no_gap_broker_order_key_present_or_no_missing_rows'}`
   - 다음 액션: `No new implementation from this warning pass; continue postclose attribution and submit blocker tracking.`
 - P2 `scalp_entry_adm_unknown_bucket_source_quality_gap` 판정: `source_quality_followup_required`
   - 근거: `{'status': 'warning', 'warnings': ['joined_sample_below_sample_floor', 'sim_post_sell_outcome_source_below_sample_floor', 'unknown_bucket_source_quality_gap'], 'affected_rows': 4, 'affected_rate': 0.0062, 'dimension_counts': {'score_bucket': 1, 'risk_context_bucket': 3}, 'unknown_root_cause_counts': {'score_bucket:source_score_missing': 1, 'risk_context_bucket:source_field_missing': 3}, 'stage_counts': {'scalp_entry_action_decision_snapshot': 72, 'latency_block': 10, 'blocked_ai_score': 88, 'entry_submit_revalidation_block': 1, 'scalp_sim_entry_ai_price_skip_order': 27}, 'recommended_route': 'source_quality_workorder', 'not_available_route': 'field_legitimately_unavailable_no_workorder', 'lookup_status_counts': {'new_or_unseen_token_vs_prior_adm': 166, 'matched_prior_bucket': 475}}`
@@ -224,11 +224,11 @@
 - gap_affected_handoff_count: `0`
 
 ## Workorder Snapshot
-- generation_id: `2026-08-07-6c45c99ae528`
-- source_hash: `6c45c99ae5283e0cc3918795bdc1b5997666cb2f48b1dbaa86132596c23e2c67`
+- generation_id: `2026-08-07-67c59ccc7132`
+- source_hash: `67c59ccc7132a88a4f71f2fa37a6fa276551c44e964ba9df2712b1215c919bb6`
 - snapshot_status: `source_changed_with_lineage`
-- previous_generation_id: `2026-08-07-001e11b1a5cd`
-- previous_source_hash: `001e11b1a5cd3668272f065de770ca659591162b4772c4d239ef44adbceddbd8`
+- previous_generation_id: `2026-08-07-b2d70a66de6d`
+- previous_source_hash: `b2d70a66de6dc8657c1bfe590f5b43813d256c1c40a495b4440f03eb33ea4e4f`
 - new_order_ids: `[]`
-- removed_order_ids: `[]`
+- removed_order_ids: `['order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse']`
 - decision_changed_order_ids: `[]`

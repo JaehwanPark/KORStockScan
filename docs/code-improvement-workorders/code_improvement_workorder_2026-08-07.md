@@ -29,9 +29,9 @@
 - stage_hook_runtime_scaffold: `-`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-08-07.json`
 - microstructure_reaction_context: `/home/ubuntu/KORStockScan/data/report/microstructure_reaction_context/microstructure_reaction_context_2026-08-07.json`
-- generated_at: `2026-08-07T22:13:34+09:00`
-- generation_id: `2026-08-07-6c45c99ae528`
-- source_hash: `6c45c99ae5283e0cc3918795bdc1b5997666cb2f48b1dbaa86132596c23e2c67`
+- generated_at: `2026-08-07T23:13:10+09:00`
+- generation_id: `2026-08-07-67c59ccc7132`
+- source_hash: `67c59ccc7132a88a4f71f2fa37a6fa276551c44e964ba9df2712b1215c919bb6`
 
 ## 운영 원칙
 
@@ -53,15 +53,15 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-08-07-001e11b1a5cd`
-- previous_source_hash: `001e11b1a5cd3668272f065de770ca659591162b4772c4d239ef44adbceddbd8`
+- previous_generation_id: `2026-08-07-b2d70a66de6d`
+- previous_source_hash: `b2d70a66de6dc8657c1bfe590f5b43813d256c1c40a495b4440f03eb33ea4e4f`
 - new_order_ids: `[]`
-- removed_order_ids: `[]`
+- removed_order_ids: `['order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `64`
+- source_order_count: `62`
 - scalping_source_order_count: `10`
 - swing_source_order_count: `0`
 - swing_entry_bottleneck_primary: `None`
@@ -84,14 +84,14 @@
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `1`
-- selected_order_count: `50`
+- selected_order_count: `48`
 - non_selected_order_count: `14`
-- operator_workload_summary: `{'implementation_required_count': 0, 'existing_family_attribution_count': 46, 'visibility_only_count': 4, 'other_selected_count': 0, 'root_cause_open_count': 8, 'selected_total_count': 50, 'category_count_reconciled': True, 'runtime_effect_true_count': 0}`
-- source_decision_counts: `{'attach_existing_family': 59, 'design_family_candidate': 3, 'defer_evidence': 1, 'reject': 1}`
-- selected_decision_counts: `{'attach_existing_family': 50}`
-- selected_route_counts: `{'existing_family': 46, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'join_gap_enrichment': 1}`
+- operator_workload_summary: `{'implementation_required_count': 0, 'existing_family_attribution_count': 44, 'visibility_only_count': 4, 'other_selected_count': 0, 'root_cause_open_count': 6, 'selected_total_count': 48, 'category_count_reconciled': True, 'runtime_effect_true_count': 0}`
+- source_decision_counts: `{'attach_existing_family': 57, 'design_family_candidate': 3, 'defer_evidence': 1, 'reject': 1}`
+- selected_decision_counts: `{'attach_existing_family': 48}`
+- selected_route_counts: `{'existing_family': 44, 'ai_review_coverage_review': 1, 'positive_source_only_review': 1, 'source_dimension_rollup': 1, 'join_gap_enrichment': 1}`
 - selected_implement_now_route_count: `0`
-- selected_runtime_effect_false_count: `50`
+- selected_runtime_effect_false_count: `48`
 - selected_unimplemented_runtime_effect_false_count: `0`
 - selected_unimplemented_route_counts: `{}`
 - selected_terminal_non_implement_runtime_effect_false_count: `4`
@@ -104,16 +104,16 @@
 - repeat_unresolved_escalated_order_ids: `[]`
 - repeat_unresolved_structural_blocker_count: `0`
 - repeat_unresolved_structural_blocker_order_ids: `[]`
-- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 8, 'implementation_done': 1, 'root_cause_closed': 37}`
+- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 6, 'implementation_done': 1, 'root_cause_closed': 37}`
 - implementation_done_count: `1`
 - artifact_regeneration_required_count: `0`
-- handoff_closed_root_cause_open_count: `8`
+- handoff_closed_root_cause_open_count: `6`
 - root_cause_closed_count: `37`
 - needs_followup_workorder_count: `0`
-- root_cause_followup_contract_required_count: `8`
-- root_cause_followup_contract_complete_count: `8`
+- root_cause_followup_contract_required_count: `6`
+- root_cause_followup_contract_complete_count: `6`
 - root_cause_followup_contract_missing_order_ids: `[]`
-- root_cause_open_top: `[{'order_id': 'order_conversion_lane_bridge_contract_entry_wait6579_score66_69_recovery_gate_v1_2026_08_07', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:bridge_contract:bridge_contract:open', 'acceptance_test': 'runtime_apply_bridge emits explicit bridge blocker ledger or live_auto_apply_ready', 'next_repair_action': 'bridge_contract'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_broker_receipt', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:BROKER_RECEIPT:open', 'acceptance_test': 'submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE', 'next_repair_action': 'close_submit_drought_broker_receipt'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:BUDGET_PASS_COLLAPSE:open', 'acceptance_test': 'submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE', 'next_repair_action': 'close_submit_drought_budget_pass_collapse'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_latency_pre_submit', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:LATENCY_PRE_SUBMIT:open', 'acceptance_test': 'submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE', 'next_repair_action': 'close_submit_drought_latency_pre_submit_quote_freshness'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_upstream_gate', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:UPSTREAM_GATE:open', 'acceptance_test': 'submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE', 'next_repair_action': 'close_submit_drought_upstream_gate'}, {'order_id': 'order_pattern_lab_ai_review_lifecycle_bucket_discovery_granularity_too_broad', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'pattern_lab_ai_review', 'threshold_family': None, 'implementation_status': 'implemented_but_waiting_sample', 'root_cause_signal': 'pattern_lab_ai_review:source_quality_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py', 'next_repair_action': 'collect new evidence for pattern_lab_ai_review:source_quality_gap:open and re-run the owning verifier'}, {'order_id': 'order_pattern_lab_ai_review_lifecycle_decision_matrix_submit_drought', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'pattern_lab_ai_review', 'threshold_family': None, 'implementation_status': 'implemented_but_waiting_sample', 'root_cause_signal': 'pattern_lab_ai_review:source_quality_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py', 'next_repair_action': 'collect new evidence for pattern_lab_ai_review:source_quality_gap:open and re-run the owning verifier'}, {'order_id': 'order_pattern_lab_ai_review_threshold_cycle_ev_warning_state', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'pattern_lab_ai_review', 'threshold_family': None, 'implementation_status': 'implemented_but_waiting_sample', 'root_cause_signal': 'pattern_lab_ai_review:source_quality_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py', 'next_repair_action': 'collect new evidence for pattern_lab_ai_review:source_quality_gap:open and re-run the owning verifier'}]`
+- root_cause_open_top: `[{'order_id': 'order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:ENTRY_AI_AUTHORITY_REVALIDATION:open', 'acceptance_test': 'entry-AI-authority blocks preserve canonical authority reason, exact payload lineage, executable BBO, and target/adverse first-hit; only a positive source-quality-adjusted EV cohort may emit a one-share bounded candidate without changing AI semantics or bypassing submit guards', 'next_repair_action': 'join exact AI authority reason, executable BBO, and target/adverse first-hit outcomes before proposing a bounded one-share probe'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_latency_pre_submit', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:LATENCY_PRE_SUBMIT:open', 'acceptance_test': 'latency rows carry fresh executable BBO and target/adverse first-hit; only false-negative DANGER attribution may become a bounded candidate', 'next_repair_action': 'close_submit_drought_latency_pre_submit_quote_freshness'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_upstream_gate', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:UPSTREAM_GATE:open', 'acceptance_test': 'blocked candidates join executable BBO plus 1/3/5/10/20/30/60m MFE/MAE and target/adverse first-hit; bounded exploration remains source-only until positive EV and downstream protection are proven', 'next_repair_action': 'join upstream action/reason cohorts to executable BBO and first-hit outcomes; AI semantic tuning remains separately owned'}, {'order_id': 'order_pattern_lab_ai_review_lifecycle_bucket_discovery_granularity_too_broad', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'pattern_lab_ai_review', 'threshold_family': None, 'implementation_status': 'implemented_but_waiting_sample', 'root_cause_signal': 'pattern_lab_ai_review:source_quality_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py', 'next_repair_action': 'collect new evidence for pattern_lab_ai_review:source_quality_gap:open and re-run the owning verifier'}, {'order_id': 'order_pattern_lab_ai_review_lifecycle_decision_matrix_submit_drought', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'pattern_lab_ai_review', 'threshold_family': None, 'implementation_status': 'implemented_but_waiting_sample', 'root_cause_signal': 'pattern_lab_ai_review:source_quality_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py', 'next_repair_action': 'collect new evidence for pattern_lab_ai_review:source_quality_gap:open and re-run the owning verifier'}, {'order_id': 'order_pattern_lab_ai_review_threshold_cycle_ev_warning_state', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'pattern_lab_ai_review', 'threshold_family': None, 'implementation_status': 'implemented_but_waiting_sample', 'root_cause_signal': 'pattern_lab_ai_review:source_quality_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py', 'next_repair_action': 'collect new evidence for pattern_lab_ai_review:source_quality_gap:open and re-run the owning verifier'}]`
 - selected_terminal_non_implement_longstanding_count: `4`
 - selected_terminal_non_implement_longstanding_order_ids: `['order_lifecycle_quiet_gap_ai_review_coverage_rollup', 'order_lifecycle_quiet_gap_positive_source_only_rollup', 'order_lifecycle_source_dimension_gap_rollup', 'order_lifecycle_source_dimension_join_gap_enrichment']`
 - selected_longstanding_non_implement_disposition_counts: `{'keep_visible_by_design': 4}`
@@ -180,7 +180,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
 - implementation_status: `implemented`
 - root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"allowed_runtime_apply": false, "artifact_regeneration_required": false, "broker_order_submit_allowed": false, "forbidden_uses": ["intraday_threshold_mutation", "broker_guard_bypass", "provider_route_change", "bot_restart_trigger", "telegram_pre_submit_buy_alert"], "implementation_type": "source_only_report_provenance_handoff", "ldm_quote_freshness_attribution_present": true, "observation_axis_status": {"BROKER_RECEIPT": "observed", "BUDGET_PASS_COLLAPSE": "observed", "ECONOMIC_PARTICIPATION": "no_current_signal", "LATENCY_PRE_SUBMIT": "observed", "SIM_REAL_AUTHORITY": "observed", "SOURCE_TAXONOMY_LEAKAGE": "no_current_signal", "UPSTREAM_GATE": "observed"}, "observation_breakdown": {"allowed_runtime_apply": false, "axes": {"BROKER_RECEIPT": {"evidence": {"latency_pass_unique": 14, "order_bundle_submitted_unique": 0, "submitted_to_budget_unique_pct": 0.0}, "next_repair_action": "join post-submit broker receipt and fill provenance when submitted samples exist", "observed_count": 14, "status": "observed"}, "BUDGET_PASS_COLLAPSE": {"evidence": {"ai_confirmed_unique": 139, "budget_pass_unique": 37, "budget_to_ai_unique_pct": 26.6}, "next_repair_action": "preserve budget pass collapse as source attribution before EV approval", "observed_count": 102, "status": "observed"}, "ECONOMIC_PARTICIPATION": {"evidence": {"allowed_runtime_apply": false, "bundle_count": 0, "by_venue": {}, "decision_authority": "submit_drought_attribution_only", "forbidden_uses": ["broker_order_submit", "intraday_threshold_mutation", "quantity_cap_release", "live_auto_promotion", "bot_restart_trigger"], "full_submitted_bundle_count": 0, "metric_role": "funnel_count", "observed_bundle_count": 0, "partial_residual_bundle_count": 0, "primary_decision_metric": "submitted_notional_to_requested_notional_pct", "probe_only_bundle_count": 0, "requested_notional_krw": 0, "requested_qty": 0, "rows": [], "runtime_effect": false, "sample_floor": "1_explicit_venue_probe_bundle", "source_quality_blocked_bundle_count": 0, "source_quality_gate": "explicit_conflict_free_venue_and_positive_requested_submitted_qty_price", "source_quality_valid_bundle_count": 0, "submitted_notional_krw": 0, "submitted_notional_to_requested_notional_pct": 0.0, "submitted_qty": 0, "submitted_qty_to_requested_qty_pct": 0.0, "window_policy": "same_session_probe_bundle_lifecycle"}, "next_repair_action": "attribute probe-only and residual-submitted quantity/notional by explicit venue before interpreting submit conversion", "observed_count": 0, "status": "no_current_signal"}, "LATENCY_PRE_SUBMIT": {"evidence": {"latency_blocker_top": [{"count": 121, "label": "latency_block:latency_state_danger"}, {"count": 2, "label": "latency_block:tp1_direct_recheck_expired"}], "latency_root_cause_counts": {"quote_freshness_input_snapshot_noop": 83, "quote_stale": 45, "spread_microstructure_guard": 123, "spread_or_slippage_guard": 107}, "quote_freshness_attribution": {"decision_authority": "submit_drought_quote_freshness_attribution_only", "forbidden_uses": ["broker_order_submit", "adm_ldm_training_input", "general_threshold_ev_input", "live_auto_promotion"], "latency_pass_recovered_count": 4, "latency_pass_recovered_downstream_counts": {"budget_pass_no_submit_event": 1, "price_guard_or_revalidation": 3}, "latency_pass_recovered_downstream_stage_counts": {"budget_pass": 1, "pre_submit_entry_ai_authority_guard_block": 3}, "order_bundle_submitted_after_refresh_count": 0, "post_restart_window_policy": "event_provenance_only", "refresh_applied_count": 24, "refresh_attempted_count": 36, "refresh_block_subreason_counts": {"ws_snapshot_refresh_failed_input_snapshot_fresh": 83, "ws_snapshot_refresh_failed_stale": 4}, "refresh_subreason_counts": {"ws_snapshot_refresh_failed_input_snapshot_fresh": 83, "ws_snapshot_refresh_failed_stale": 4}, "runtime_effect": false, "still_latency_blocked_after_refresh_count": 30}, "unknown_latency_reason_count": 0, "unknown_latency_workorder_required": false}, "next_repair_action": "close unknown latency labels or route quote freshness gaps to LDM attribution", "observed_count": 123, "status": "observed"}, "SIM_REAL_AUTHORITY": {"evidence": {"actual_order_submitted_authority": "not_granted_by_report", "broker_order_submit_allowed": false}, "next_repair_action": "keep attribution source-only until explicit runtime approval artifact exists", "observed_count": 1, "status": "observed"}, "SOURCE_TAXONOMY_LEAKAGE": {"evidence": {"blocker_top": [{"count": 757, "label": "blocked_strength_momentum:insufficient_history"}, {"count": 519, "label": "blocked_strength_momentum:below_window_buy_value"}, {"count": 436, "label": "blocked_strength_momentum:below_strength_base"}, {"count": 349, "label": "blocked_vpw:-"}, {"count": 341, "label": "blocked_liquidity:-"}, {"count": 335, "label": "blocked_overbought:-"}, {"count": 330, "label": "blocked_zero_qty:-"}, {"count": 246, "label": "blocked_ai_score:ai_score_50_buy_hold_override"}, {"count": 166, "label": "first_ai_wait:-"}, {"count": 149, "label": "blocked_ai_score:score_0.0"}], "taxonomy_leakage_labels": []}, "next_repair_action": "separate swing/source taxonomy from entry-submit blocker labels", "observed_count": 0, "status": "no_current_signal"}, "UPSTREAM_GATE": {"evidence": {"budget_to_ai_unique_pct": 26.6, "upstream_blocker_top": [{"count": 246, "label": "blocked_ai_score:ai_score_50_buy_hold_override"}, {"count": 166, "label": "first_ai_wait:-"}, {"count": 149, "label": "blocked_ai_score:score_0.0"}, {"count": 36, "label": "wait65_79_ev_candidate:score_70.0"}, {"count": 13, "label": "blocked_ai_score:score_7.0"}, {"count": 8, "label": "blocked_ai_score:score_4.0"}, {"count": 6, "label": "blocked_ai_score:score_70.0"}, {"count": 5, "label": "blocked_ai_score:score_11.0"}, {"count": 5, "label": "blocked_ai_score:score_6.0"}, {"count": 2, "label": "blocked_ai_score:score_8.0"}]}, "next_repair_action": "split upstream AI terminal and score gate reasons before threshold interpretation", "observed_count": 641, "status": "observed"}}, "axis_order": ["UPSTREAM_GATE", "BUDGET_PASS_COLLAPSE", "LATENCY_PRE_SUBMIT", "BROKER_RECEIPT", "ECONOMIC_PARTICIPATION", "SIM_REAL_AUTHORITY", "SOURCE_TAXONOMY_LEAKAGE"], "broker_order_submit_allowed": false, "causal_bottleneck_axes": ["UPSTREAM_GATE", "BUDGET_PASS_COLLAPSE", "LATENCY_PRE_SUBMIT", "BROKER_RECEIPT"], "decision_authority": "submit_drought_attribution_only", "forbidden_uses": ["broker_order_submit", "runtime_apply_candidate", "intraday_threshold_mutation", "provider_route_change", "bot_restart_trigger", "live_auto_promotion"], "no_current_signal_axes": ["ECONOMIC_PARTICIPATION", "SOURCE_TAXONOMY_LEAKAGE"], "observation_only_axes": ["SIM_REAL_AUTHORITY"], "runtime_effect": false}, "quote_freshness_attribution_inconsistent": false, "quote_freshness_latency_pass_recovered_count": 4, "quote_freshness_refresh_applied_count": 24, "quote_freshness_refresh_attempted_count": 36, "required_downstream": ["code_improvement_workorder", "lifecycle_decision_matrix.submit_bucket_attribution", "threshold_cycle_ev_report", "runtime_approval_summary", "postclose_verifier"], "root_cause_closure_status_hint": "root_cause_closed", "root_cause_counts": {"quote_freshness_input_snapshot_noop": 83, "quote_stale": 45, "spread_microstructure_guard": 123, "spread_or_slippage_guard": 107}, "root_cause_signal": "SUBMIT_DROUGHT_CRITICAL", "runtime_effect": false, "source_report_type": "buy_funnel_sentinel", "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "PRICE_REVALIDATION", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "artifact_regeneration_required": false, "broker_order_submit_allowed": false, "forbidden_uses": ["intraday_threshold_mutation", "broker_guard_bypass", "provider_route_change", "bot_restart_trigger", "telegram_pre_submit_buy_alert"], "implementation_type": "source_only_report_provenance_handoff", "ldm_quote_freshness_attribution_present": true, "observation_axis_status": {"BROKER_RECEIPT": "no_current_signal", "BUDGET_PASS_COLLAPSE": "observation_only", "ECONOMIC_PARTICIPATION": "no_current_signal", "ENTRY_AI_AUTHORITY_REVALIDATION": "observed", "LATENCY_PRE_SUBMIT": "observed", "PRICE_REVALIDATION": "no_current_signal", "SIM_REAL_AUTHORITY": "observed", "SOURCE_TAXONOMY_LEAKAGE": "no_current_signal", "UPSTREAM_GATE": "observed"}, "observation_breakdown": {"allowed_runtime_apply": false, "axes": {"BROKER_RECEIPT": {"evidence": {"broker_submit_failure_unique": 0, "latency_pass_unique": 14, "order_bundle_submitted_unique": 0, "submitted_to_budget_unique_pct": 0.0}, "next_repair_action": "join post-submit broker receipt and fill provenance only when a broker submission or explicit submit failure exists", "observed_count": 0, "status": "no_current_signal"}, "BUDGET_PASS_COLLAPSE": {"evidence": {"ai_confirmed_unique": 139, "budget_ai_lineage": {"ai_trace_count": 434, "allowed_runtime_apply": false, "budget_or_block_event_count": 517, "lineage_field_present_count": 0, "lineage_join_coverage_pct": 0.0, "lineage_joined_event_count": 0, "linked_budget_block_trace_count": 0, "linked_budget_pass_trace_count": 0, "linked_stage_counts": {}, "pipeline_stage_order_contract": "latest_watching_ai_to_budget_precheck_to_final_authority_revalidation", "raw_ai_budget_census_is_causal": false, "runtime_effect": false, "status": "instrumentation_gap_parent_ai_trace_missing"}, "budget_pass_unique": 37, "budget_to_ai_unique_pct": 26.6, "legacy_stage_census_gap": 102, "legacy_stage_census_gap_is_causal": false}, "next_repair_action": "collect explicit parent AI trace on budget pass/block events; only joined budget blocks may become a causal EV cohort", "observed_count": 0, "status": "observation_only"}, "ECONOMIC_PARTICIPATION": {"evidence": {"allowed_runtime_apply": false, "bundle_count": 0, "by_venue": {}, "decision_authority": "submit_drought_attribution_only", "forbidden_uses": ["broker_order_submit", "intraday_threshold_mutation", "quantity_cap_release", "live_auto_promotion", "bot_restart_trigger"], "full_submitted_bundle_count": 0, "metric_role": "funnel_count", "observed_bundle_count": 0, "partial_residual_bundle_count": 0, "primary_decision_metric": "submitted_notional_to_requested_notional_pct", "probe_only_bundle_count": 0, "requested_notional_krw": 0, "requested_qty": 0, "rows": [], "runtime_effect": false, "sample_floor": "1_explicit_venue_probe_bundle", "source_quality_blocked_bundle_count": 0, "source_quality_gate": "explicit_conflict_free_venue_and_positive_requested_submitted_qty_price", "source_quality_valid_bundle_count": 0, "submitted_notional_krw": 0, "submitted_notional_to_requested_notional_pct": 0.0, "submitted_qty": 0, "submitted_qty_to_requested_qty_pct": 0.0, "window_policy": "same_session_probe_bundle_lifecycle"}, "next_repair_action": "attribute probe-only and residual-submitted quantity/notional by explicit venue before interpreting submit conversion", "observed_count": 0, "status": "no_current_signal"}, "ENTRY_AI_AUTHORITY_REVALIDATION": {"evidence": {"entry_ai_authority_guard_events": 20, "entry_ai_authority_guard_top": [{"count": 20, "label": "pre_submit_entry_ai_authority_guard_block:entry_ai_result_stale_or_untrusted"}], "entry_ai_authority_guard_unique": 14, "latency_pass_unique": 14, "order_bundle_submitted_unique": 0}, "next_repair_action": "join exact AI authority reason, executable BBO, and target/adverse first-hit outcomes before proposing a bounded one-share probe", "observed_count": 14, "status": "observed"}, "LATENCY_PRE_SUBMIT": {"evidence": {"latency_blocker_top": [{"count": 121, "label": "latency_block:latency_state_danger"}, {"count": 2, "label": "latency_block:tp1_direct_recheck_expired"}], "latency_root_cause_counts": {"quote_freshness_input_snapshot_noop": 83, "quote_stale": 45, "spread_microstructure_guard": 123, "spread_or_slippage_guard": 107}, "quote_freshness_attribution": {"decision_authority": "submit_drought_quote_freshness_attribution_only", "forbidden_uses": ["broker_order_submit", "adm_ldm_training_input", "general_threshold_ev_input", "live_auto_promotion"], "latency_pass_recovered_count": 4, "latency_pass_recovered_downstream_counts": {"budget_pass_no_submit_event": 1, "entry_ai_authority_revalidation": 3}, "latency_pass_recovered_downstream_stage_counts": {"budget_pass": 1, "pre_submit_entry_ai_authority_guard_block": 3}, "order_bundle_submitted_after_refresh_count": 0, "post_restart_window_policy": "event_provenance_only", "refresh_applied_count": 24, "refresh_attempted_count": 36, "refresh_block_subreason_counts": {"ws_snapshot_refresh_failed_input_snapshot_fresh": 83, "ws_snapshot_refresh_failed_stale": 4}, "refresh_subreason_counts": {"ws_snapshot_refresh_failed_input_snapshot_fresh": 83, "ws_snapshot_refresh_failed_stale": 4}, "runtime_effect": false, "still_latency_blocked_after_refresh_count": 30}, "unknown_latency_reason_count": 0, "unknown_latency_workorder_required": false}, "next_repair_action": "close unknown latency labels or route quote freshness gaps to LDM attribution", "observed_count": 123, "status": "observed"}, "PRICE_REVALIDATION": {"evidence": {"latency_pass_unique": 14, "order_bundle_submitted_unique": 0, "price_guard_events": 1, "price_guard_top": [{"count": 1, "label": "entry_ai_price_canary_fallback:above_best_ask"}], "price_guard_unique": 1}, "next_repair_action": "join executable BBO and target/adverse first-hit outcomes to price revalidation blocks before proposing bounded exploration", "observed_count": 1, "status": "no_current_signal"}, "SIM_REAL_AUTHORITY": {"evidence": {"actual_order_submitted_authority": "not_granted_by_report", "broker_order_submit_allowed": false}, "next_repair_action": "keep attribution source-only until explicit runtime approval artifact exists", "observed_count": 1, "status": "observed"}, "SOURCE_TAXONOMY_LEAKAGE": {"evidence": {"blocker_top": [{"count": 757, "label": "blocked_strength_momentum:insufficient_history"}, {"count": 519, "label": "blocked_strength_momentum:below_window_buy_value"}, {"count": 436, "label": "blocked_strength_momentum:below_strength_base"}, {"count": 349, "label": "blocked_vpw:-"}, {"count": 341, "label": "blocked_liquidity:-"}, {"count": 335, "label": "blocked_overbought:-"}, {"count": 330, "label": "blocked_zero_qty:-"}, {"count": 246, "label": "blocked_ai_score:ai_score_50_buy_hold_override"}, {"count": 166, "label": "first_ai_wait:-"}, {"count": 149, "label": "blocked_ai_score:score_0.0"}], "taxonomy_leakage_labels": []}, "next_repair_action": "separate swing/source taxonomy from entry-submit blocker labels", "observed_count": 0, "status": "no_current_signal"}, "UPSTREAM_GATE": {"evidence": {"ai_action_event_counts": {"DROP": 314, "NOT_EVALUATED": 27, "WAIT": 93}, "ai_action_unique_counts": {"DROP": 314, "NOT_EVALUATED": 27, "WAIT": 93}, "ai_terminal_reason_top": [{"count": 193, "label": "ai_terminal:entry_policy_no_buy_score_prior"}, {"count": 166, "label": "ai_terminal:first_ai_wait_big_bite_not_confirmed"}], "budget_to_ai_unique_pct": 26.6, "upstream_blocker_top": [{"count": 246, "label": "blocked_ai_score:ai_score_50_buy_hold_override"}, {"count": 166, "label": "first_ai_wait:-"}, {"count": 149, "label": "blocked_ai_score:score_0.0"}, {"count": 36, "label": "wait65_79_ev_candidate:score_70.0"}, {"count": 13, "label": "blocked_ai_score:score_7.0"}, {"count": 8, "label": "blocked_ai_score:score_4.0"}, {"count": 6, "label": "blocked_ai_score:score_70.0"}, {"count": 5, "label": "blocked_ai_score:score_11.0"}, {"count": 5, "label": "blocked_ai_score:score_6.0"}, {"count": 2, "label": "blocked_ai_score:score_8.0"}]}, "next_repair_action": "join upstream action/reason cohorts to executable BBO and first-hit outcomes; AI semantic tuning remains separately owned", "observed_count": 353, "status": "observed"}}, "axis_order": ["UPSTREAM_GATE", "BUDGET_PASS_COLLAPSE", "LATENCY_PRE_SUBMIT", "PRICE_REVALIDATION", "ENTRY_AI_AUTHORITY_REVALIDATION", "BROKER_RECEIPT", "ECONOMIC_PARTICIPATION", "SIM_REAL_AUTHORITY", "SOURCE_TAXONOMY_LEAKAGE"], "broker_order_submit_allowed": false, "causal_bottleneck_axes": ["UPSTREAM_GATE", "LATENCY_PRE_SUBMIT", "ENTRY_AI_AUTHORITY_REVALIDATION"], "decision_authority": "submit_drought_attribution_only", "forbidden_uses": ["broker_order_submit", "runtime_apply_candidate", "intraday_threshold_mutation", "provider_route_change", "bot_restart_trigger", "live_auto_promotion"], "metric_role": "funnel_count", "no_current_signal_axes": ["PRICE_REVALIDATION", "BROKER_RECEIPT", "ECONOMIC_PARTICIPATION", "SOURCE_TAXONOMY_LEAKAGE"], "observation_only_axes": ["BUDGET_PASS_COLLAPSE", "SIM_REAL_AUTHORITY"], "primary_decision_metric": "causal_bottleneck_axis_observed_count", "runtime_effect": false, "sample_floor": "one_explicit_attempt_per_axis", "source_quality_gate": "lossless_attempt_key_and_explicit_stage_provenance", "window_policy": "same_session_unique_attempt_submit_funnel"}, "quote_freshness_attribution_inconsistent": false, "quote_freshness_latency_pass_recovered_count": 4, "quote_freshness_refresh_applied_count": 24, "quote_freshness_refresh_attempted_count": 36, "required_downstream": ["code_improvement_workorder", "lifecycle_decision_matrix.submit_bucket_attribution", "threshold_cycle_ev_report", "runtime_approval_summary", "postclose_verifier"], "root_cause_closure_status_hint": "root_cause_closed", "root_cause_counts": {"quote_freshness_input_snapshot_noop": 83, "quote_stale": 45, "spread_microstructure_guard": 123, "spread_or_slippage_guard": 107}, "root_cause_signal": "SUBMIT_DROUGHT_CRITICAL", "runtime_effect": false, "source_report_type": "buy_funnel_sentinel", "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ENTRY_AI_AUTHORITY_REVALIDATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`
@@ -193,9 +193,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 2. `order_conversion_lane_submit_drought_submit_drought_broker_receipt`
+### 2. `order_conversion_lane_submit_drought_submit_drought_latency_pre_submit`
 
-- title: Conversion lane blocker follow-up: submit_drought submit_drought:BROKER_RECEIPT
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:LATENCY_PRE_SUBMIT
 - decision: `attach_existing_family`
 - decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
 - source_report_type: `conversion_lane`
@@ -212,16 +212,16 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
-- evidence: `conversion_candidate_id=submit_drought:BROKER_RECEIPT`, `blocker_class=submit_drought`, `conversion_impact_rank=1`, `next_repair_action=close_submit_drought_broker_receipt`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- evidence: `conversion_candidate_id=submit_drought:LATENCY_PRE_SUBMIT`, `blocker_class=submit_drought`, `conversion_impact_rank=1`, `next_repair_action=close_submit_drought_latency_pre_submit_quote_freshness`, `acceptance_test=latency rows carry fresh executable BBO and target/adverse first-hit; only false-negative DANGER attribution may become a bounded candidate`, `runtime_effect=false`, `allowed_runtime_apply=false`
 - parity_contract: -
 - next_postclose_metric: -
 - files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented`
 - root_cause_closure_status: `handoff_closed_root_cause_open`
-- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "BROKER_RECEIPT", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE", "root_cause_next_repair_action": "close_submit_drought_broker_receipt", "root_cause_signal": "conversion_lane:submit_drought:BROKER_RECEIPT:open", "runtime_effect": false}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "LATENCY_PRE_SUBMIT", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "latency rows carry fresh executable BBO and target/adverse first-hit; only false-negative DANGER attribution may become a bounded candidate", "root_cause_next_repair_action": "close_submit_drought_latency_pre_submit_quote_freshness", "root_cause_signal": "conversion_lane:submit_drought:LATENCY_PRE_SUBMIT:open", "runtime_effect": false}`
 - repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 6, "repeat_key": "order_conversion_lane_submit_drought_submit_drought_broker_receipt", "repeat_signature": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_submit_drought_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_submit_drought_submit_drought_broker_receipt", "review_disposition": "implemented_with_provenance"}`
+- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 6, "repeat_key": "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit", "repeat_signature": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_submit_drought_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_submit_drought_submit_drought_latency_pre_subm", "review_disposition": "implemented_with_provenance"}`
 - longstanding_non_implement_action: `-`
 - structural_blocker_escalation: `-`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
@@ -258,7 +258,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented_submit_contract_verified`
 - root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "broker_receipt_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "PRICE_REVALIDATION", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "broker_receipt_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ENTRY_AI_AUTHORITY_REVALIDATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_submit_contract_verified", "previous_route": "existing_family", "repeat_count": 7, "repeat_key": "order_entry_broker_receipt_contract_gap_review", "repeat_signature": "sig:buy_funnel_sentinel|runtime_instrumentation|entry_submit||lifecycle_decision_matrix_runtime|entry_broker_receipt_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
 - longstanding_non_implement_action: `-`
@@ -297,7 +297,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented_submit_contract_verified`
 - root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "fill_quality_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "PRICE_REVALIDATION", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "fill_quality_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ENTRY_AI_AUTHORITY_REVALIDATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_submit_contract_verified", "previous_route": "existing_family", "repeat_count": 7, "repeat_key": "order_entry_fill_quality_contract_gap_review", "repeat_signature": "sig:buy_funnel_sentinel|runtime_instrumentation|entry_submit||lifecycle_decision_matrix_runtime|entry_fill_quality_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
 - longstanding_non_implement_action: `-`
@@ -336,7 +336,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented_submit_contract_verified`
 - root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "post_submit_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "PRICE_REVALIDATION", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "post_submit_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ENTRY_AI_AUTHORITY_REVALIDATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_submit_contract_verified", "previous_route": "existing_family", "repeat_count": 7, "repeat_key": "order_entry_post_submit_contract_gap_review", "repeat_signature": "sig:buy_funnel_sentinel|runtime_instrumentation|entry_submit||lifecycle_decision_matrix_runtime|entry_post_submit_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
 - longstanding_non_implement_action: `-`
@@ -375,7 +375,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented_submit_contract_verified`
 - root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "source_taxonomy_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "PRICE_REVALIDATION", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "source_taxonomy_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ENTRY_AI_AUTHORITY_REVALIDATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_submit_contract_verified", "previous_route": "existing_family", "repeat_count": 7, "repeat_key": "order_entry_source_taxonomy_contract_gap_review", "repeat_signature": "sig:buy_funnel_sentinel|runtime_instrumentation|entry_submit||lifecycle_decision_matrix_runtime|entry_source_taxonomy_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
 - longstanding_non_implement_action: `-`
@@ -414,7 +414,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented_submit_contract_verified`
 - root_cause_closure_status: `root_cause_closed`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "telegram_post_submit_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "PRICE_REVALIDATION", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution", "gap_type": "telegram_post_submit_contract_gap", "implementation_type": "submit_contract_report_provenance_verified", "missing_broker_order_key_count": 0, "post_submit_provenance_join_resolution": "no_gap_broker_order_key_present_or_no_missing_rows", "real_submitted_row_count": 0, "runtime_effect": false, "sample_status": "ldm_submit_contract_verified", "source_report_type": "buy_funnel_sentinel", "submit_rows": 13, "taxonomy_leakage_labels": [], "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ENTRY_AI_AUTHORITY_REVALIDATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY", "UPSTREAM_GATE"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented_submit_contract_verified", "previous_route": "existing_family", "repeat_count": 7, "repeat_key": "order_entry_telegram_post_submit_contract_gap_review", "repeat_signature": "sig:buy_funnel_sentinel|runtime_instrumentation|entry_submit||lifecycle_decision_matrix_runtime|entry_telegram_post_submit_contract_gap_review", "review_disposition": "implemented_with_provenance"}`
 - longstanding_non_implement_action: `-`
@@ -1246,9 +1246,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 29. `order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse`
+### 29. `order_conversion_lane_submit_drought_submit_drought_upstream_gate`
 
-- title: Conversion lane blocker follow-up: submit_drought submit_drought:BUDGET_PASS_COLLAPSE
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:UPSTREAM_GATE
 - decision: `attach_existing_family`
 - decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
 - source_report_type: `conversion_lane`
@@ -1265,16 +1265,16 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
-- evidence: `conversion_candidate_id=submit_drought:BUDGET_PASS_COLLAPSE`, `blocker_class=submit_drought`, `conversion_impact_rank=2`, `next_repair_action=close_submit_drought_budget_pass_collapse`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- evidence: `conversion_candidate_id=submit_drought:UPSTREAM_GATE`, `blocker_class=submit_drought`, `conversion_impact_rank=2`, `next_repair_action=join upstream action/reason cohorts to executable BBO and first-hit outcomes; AI semantic tuning remains separately owned`, `acceptance_test=blocked candidates join executable BBO plus 1/3/5/10/20/30/60m MFE/MAE and target/adverse first-hit; bounded exploration remains source-only until positive EV and downstream protection are proven`, `runtime_effect=false`, `allowed_runtime_apply=false`
 - parity_contract: -
 - next_postclose_metric: -
 - files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented`
 - root_cause_closure_status: `handoff_closed_root_cause_open`
-- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "BUDGET_PASS_COLLAPSE", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE", "root_cause_next_repair_action": "close_submit_drought_budget_pass_collapse", "root_cause_signal": "conversion_lane:submit_drought:BUDGET_PASS_COLLAPSE:open", "runtime_effect": false}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "UPSTREAM_GATE", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "blocked candidates join executable BBO plus 1/3/5/10/20/30/60m MFE/MAE and target/adverse first-hit; bounded exploration remains source-only until positive EV and downstream protection are proven", "root_cause_next_repair_action": "join upstream action/reason cohorts to executable BBO and first-hit outcomes; AI semantic tuning remains separately owned", "root_cause_signal": "conversion_lane:submit_drought:UPSTREAM_GATE:open", "runtime_effect": false}`
 - repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 6, "repeat_key": "order_conversion_lane_submit_drought_submit_drought_budget_pass_collapse", "repeat_signature": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_submit_drought_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_submit_drought_submit_drought_budget_pass_coll", "review_disposition": "implemented_with_provenance"}`
+- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 6, "repeat_key": "order_conversion_lane_submit_drought_submit_drought_upstream_gate", "repeat_signature": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_submit_drought_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_submit_drought_submit_drought_upstream_gate", "review_disposition": "implemented_with_provenance"}`
 - longstanding_non_implement_action: `-`
 - structural_blocker_escalation: `-`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
@@ -1363,9 +1363,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 32. `order_conversion_lane_submit_drought_submit_drought_latency_pre_submit`
+### 32. `order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation`
 
-- title: Conversion lane blocker follow-up: submit_drought submit_drought:LATENCY_PRE_SUBMIT
+- title: Conversion lane blocker follow-up: submit_drought submit_drought:ENTRY_AI_AUTHORITY_REVALIDATION
 - decision: `attach_existing_family`
 - decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
 - source_report_type: `conversion_lane`
@@ -1382,16 +1382,16 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
-- evidence: `conversion_candidate_id=submit_drought:LATENCY_PRE_SUBMIT`, `blocker_class=submit_drought`, `conversion_impact_rank=3`, `next_repair_action=close_submit_drought_latency_pre_submit_quote_freshness`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
+- evidence: `conversion_candidate_id=submit_drought:ENTRY_AI_AUTHORITY_REVALIDATION`, `blocker_class=submit_drought`, `conversion_impact_rank=3`, `next_repair_action=join exact AI authority reason, executable BBO, and target/adverse first-hit outcomes before proposing a bounded one-share probe`, `acceptance_test=entry-AI-authority blocks preserve canonical authority reason, exact payload lineage, executable BBO, and target/adverse first-hit; only a positive source-quality-adjusted EV cohort may emit a one-share bounded candidate without changing AI semantics or bypassing submit guards`, `runtime_effect=false`, `allowed_runtime_apply=false`
 - parity_contract: -
 - next_postclose_metric: -
 - files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
 - implementation_status: `implemented`
 - root_cause_closure_status: `handoff_closed_root_cause_open`
-- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "LATENCY_PRE_SUBMIT", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE", "root_cause_next_repair_action": "close_submit_drought_latency_pre_submit_quote_freshness", "root_cause_signal": "conversion_lane:submit_drought:LATENCY_PRE_SUBMIT:open", "runtime_effect": false}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "ENTRY_AI_AUTHORITY_REVALIDATION", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "entry-AI-authority blocks preserve canonical authority reason, exact payload lineage, executable BBO, and target/adverse first-hit; only a positive source-quality-adjusted EV cohort may emit a one-share bounded candidate without changing AI semantics or bypassing submit guards", "root_cause_next_repair_action": "join exact AI authority reason, executable BBO, and target/adverse first-hit outcomes before proposing a bounded one-share probe", "root_cause_signal": "conversion_lane:submit_drought:ENTRY_AI_AUTHORITY_REVALIDATION:open", "runtime_effect": false}`
 - repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 6, "repeat_key": "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit", "repeat_signature": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_submit_drought_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_submit_drought_submit_drought_latency_pre_subm", "review_disposition": "implemented_with_provenance"}`
+- longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`
 - structural_blocker_escalation: `-`
 - automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
@@ -1597,46 +1597,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 38. `order_conversion_lane_submit_drought_submit_drought_upstream_gate`
-
-- title: Conversion lane blocker follow-up: submit_drought submit_drought:UPSTREAM_GATE
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `conversion_lane`
-- lifecycle_stage: `conversion`
-- target_subsystem: `sim_to_real_conversion_lineage`
-- route: `existing_family`
-- mapped_family: `sim_to_real_conversion_lane`
-- threshold_family: `sim_to_real_conversion_lane`
-- improvement_type: `conversion_submit_drought_blocker`
-- confidence: `-`
-- priority: `4`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
-- evidence: `conversion_candidate_id=submit_drought:UPSTREAM_GATE`, `blocker_class=submit_drought`, `conversion_impact_rank=4`, `next_repair_action=close_submit_drought_upstream_gate`, `acceptance_test=submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE`, `runtime_effect=false`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: -
-- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `implemented`
-- root_cause_closure_status: `handoff_closed_root_cause_open`
-- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "UPSTREAM_GATE", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE", "root_cause_next_repair_action": "close_submit_drought_upstream_gate", "root_cause_signal": "conversion_lane:submit_drought:UPSTREAM_GATE:open", "runtime_effect": false}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 6, "repeat_key": "order_conversion_lane_submit_drought_submit_drought_upstream_gate", "repeat_signature": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_submit_drought_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_submit_drought_submit_drought_upstream_gate", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 39. `order_lifecycle_entry_bucket_chosen_action_skip_pre_submit_safety`
+### 38. `order_lifecycle_entry_bucket_chosen_action_skip_pre_submit_safety`
 
 - title: LDM entry bucket attribution follow-up: chosen_action=SKIP_PRE_SUBMIT_SAFETY
 - decision: `attach_existing_family`
@@ -1675,7 +1636,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 40. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_stal_3da5a749`
+### 39. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_stal_3da5a749`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_lt60|source=scalp_entry_action_decision_snapshot|stale=stale_not_available|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_0900_1000
 - decision: `attach_existing_family`
@@ -1714,7 +1675,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 41. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_stal_db7776dc`
+### 40. `order_lifecycle_entry_bucket_combo_entry_spot_score_score_lt60_source_scalp_entry_action_decision_snapshot_stale_stal_db7776dc`
 
 - title: LDM entry bucket attribution follow-up: combo_entry_spot=score=score_lt60|source=scalp_entry_action_decision_snapshot|stale=stale_not_available|liquidity=liquidity_not_available|overbought=overbought_not_available|time=time_1400_close
 - decision: `attach_existing_family`
@@ -1753,7 +1714,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 42. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_not_available`
+### 41. `order_lifecycle_entry_bucket_liquidity_bucket_liquidity_not_available`
 
 - title: LDM entry bucket attribution follow-up: liquidity_bucket=liquidity_not_available
 - decision: `attach_existing_family`
@@ -1792,7 +1753,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 43. `order_lifecycle_entry_bucket_overbought_bucket_overbought_not_available`
+### 42. `order_lifecycle_entry_bucket_overbought_bucket_overbought_not_available`
 
 - title: LDM entry bucket attribution follow-up: overbought_bucket=overbought_not_available
 - decision: `attach_existing_family`
@@ -1831,7 +1792,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 44. `order_lifecycle_entry_bucket_score_band_score_lt60`
+### 43. `order_lifecycle_entry_bucket_score_band_score_lt60`
 
 - title: LDM entry bucket attribution follow-up: score_band=score_lt60
 - decision: `attach_existing_family`
@@ -1870,7 +1831,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 45. `order_lifecycle_entry_bucket_source_stage_scalp_entry_action_decision_snapshot`
+### 44. `order_lifecycle_entry_bucket_source_stage_scalp_entry_action_decision_snapshot`
 
 - title: LDM entry bucket attribution follow-up: source_stage=scalp_entry_action_decision_snapshot
 - decision: `attach_existing_family`
@@ -1909,7 +1870,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 46. `order_lifecycle_entry_bucket_stale_bucket_stale_not_available`
+### 45. `order_lifecycle_entry_bucket_stale_bucket_stale_not_available`
 
 - title: LDM entry bucket attribution follow-up: stale_bucket=stale_not_available
 - decision: `attach_existing_family`
@@ -1948,46 +1909,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 47. `order_conversion_lane_bridge_contract_entry_wait6579_score66_69_recovery_gate_v1_2026_08_07`
-
-- title: Conversion lane blocker follow-up: bridge_contract entry_wait6579_score66_69_recovery_gate_v1:2026-08-07
-- decision: `attach_existing_family`
-- decision_reason: instrumentation/report/provenance implementation status is implemented; keep the order as existing-family source evidence instead of re-implementing
-- source_report_type: `conversion_lane`
-- lifecycle_stage: `conversion`
-- target_subsystem: `sim_to_real_conversion_lineage`
-- route: `existing_family`
-- mapped_family: `sim_to_real_conversion_lane`
-- threshold_family: `sim_to_real_conversion_lane`
-- improvement_type: `conversion_bridge_contract_blocker`
-- confidence: `-`
-- priority: `10`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: reduce remaining blocker count before bounded real canary can be requested
-- evidence: `conversion_candidate_id=entry_wait6579_score66_69_recovery_gate_v1:2026-08-07`, `blocker_class=bridge_contract`, `conversion_impact_rank=10`, `next_repair_action=bridge_contract`, `acceptance_test=runtime_apply_bridge emits explicit bridge blocker ledger or live_auto_apply_ready`, `runtime_effect=false`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: -
-- files_likely_touched: `src/engine/automation/key_lineage_ledger.py`, `src/engine/automation/conversion_lane.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`, `src/engine/build_code_improvement_workorder.py`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `implemented`
-- root_cause_closure_status: `handoff_closed_root_cause_open`
-- implementation_provenance: `{"allowed_runtime_apply": false, "blocker_axis": "bridge_contract", "blocker_resolution_status": "open", "implementation_status": "implemented", "implemented_scope": "conversion_lane_blocker_axis_report_provenance", "remaining_blocker_is_observation_or_policy_closure": true, "root_cause_acceptance_test": "runtime_apply_bridge emits explicit bridge blocker ledger or live_auto_apply_ready", "root_cause_next_repair_action": "bridge_contract", "root_cause_signal": "conversion_lane:bridge_contract:bridge_contract:open", "runtime_effect": false}`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `{"history_window_days": 10, "previous_decision": "attach_existing_family", "previous_implementation_status": "implemented", "previous_route": "existing_family", "repeat_count": 5, "repeat_key": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_bridge_contract_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_bridge_contract_entry_wait6579_score66_69_reco", "repeat_signature": "sig:conversion_lane|sim_to_real_conversion_lineage|conversion|conversion_bridge_contract_blocker|sim_to_real_conversion_lane|conversion_lane_blocker_follow_up_bridge_contract_entry_wait6579_score66_69_reco", "review_disposition": "implemented_with_provenance"}`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: Next postclose workorder should preserve implementation_status=implemented and use the source metrics as provenance only.
-
-실행 기준:
-
-- 기존 threshold family의 source metric/provenance를 보강한다.
-- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
-- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
-
-### 48. `order_pattern_lab_ai_review_lifecycle_bucket_discovery_granularity_too_broad`
+### 46. `order_pattern_lab_ai_review_lifecycle_bucket_discovery_granularity_too_broad`
 
 - title: Pattern Lab AI review follow-up: lifecycle_bucket_discovery_granularity_too_broad
 - decision: `attach_existing_family`
@@ -2026,7 +1948,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 49. `order_pattern_lab_ai_review_lifecycle_decision_matrix_submit_drought`
+### 47. `order_pattern_lab_ai_review_lifecycle_decision_matrix_submit_drought`
 
 - title: Pattern Lab AI review follow-up: lifecycle_decision_matrix_submit_drought
 - decision: `attach_existing_family`
@@ -2065,7 +1987,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 50. `order_pattern_lab_ai_review_threshold_cycle_ev_warning_state`
+### 48. `order_pattern_lab_ai_review_threshold_cycle_ev_warning_state`
 
 - title: Pattern Lab AI review follow-up: threshold_cycle_ev_warning_state
 - decision: `attach_existing_family`

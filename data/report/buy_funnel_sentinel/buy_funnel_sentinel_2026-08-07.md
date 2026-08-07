@@ -3,7 +3,7 @@
 ## 판정
 
 - primary: `SUBMIT_DROUGHT_CRITICAL`
-- secondary: `PRICE_GUARD_DROUGHT, LATENCY_DROUGHT, UPSTREAM_AI_THRESHOLD`
+- secondary: `ENTRY_AI_AUTHORITY_DROUGHT, LATENCY_DROUGHT, UPSTREAM_AI_THRESHOLD`
 - report_only: `true`
 - live_runtime_effect: `false`
 - operator_action_required: `false`
@@ -11,11 +11,11 @@
 - followup_owner: `postclose_threshold_cycle_and_lifecycle_decision_matrix`
 - runtime_effect: `auto_workorder_no_intraday_mutation`
 - submit_contract_downstream: `code_improvement_workorder, lifecycle_decision_matrix.submit_bucket_attribution, threshold_cycle_ev_report, runtime_approval_summary, postclose_verifier`
-- submit_contract_weak_matches: `BROKER_RECEIPT, BUDGET_PASS_COLLAPSE, FILL_QUALITY, LATENCY_PRE_SUBMIT, PRICE_REVALIDATION, SIM_REAL_AUTHORITY, TELEGRAM_POST_SUBMIT_ONLY, UPSTREAM_GATE`
+- submit_contract_weak_matches: `BROKER_RECEIPT, BUDGET_PASS_COLLAPSE, ENTRY_AI_AUTHORITY_REVALIDATION, FILL_QUALITY, LATENCY_PRE_SUBMIT, SIM_REAL_AUTHORITY, TELEGRAM_POST_SUBMIT_ONLY, UPSTREAM_GATE`
 
 ## 근거
 
-- as_of: `2026-08-07T15:20:03`
+- as_of: `2026-08-07T15:20:00`
 - baseline_date: `2026-08-06`
 - ai_confirmed unique: `139`
 - budget_pass unique: `37`
@@ -32,10 +32,12 @@
 - swing blockers: `-`
 - upstream blockers: `blocked_ai_score:ai_score_50_buy_hold_override=246, first_ai_wait:-=166, blocked_ai_score:score_0.0=149, wait65_79_ev_candidate:score_70.0=36, blocked_ai_score:score_7.0=13`
 - AI terminal reasons: `ai_terminal:entry_policy_no_buy_score_prior=193, ai_terminal:first_ai_wait_big_bite_not_confirmed=166`
+- AI actions: `events={'DROP': 314, 'NOT_EVALUATED': 27, 'WAIT': 93}, unique={'DROP': 314, 'NOT_EVALUATED': 27, 'WAIT': 93}`
+- budget/AI lineage: `{'status': 'instrumentation_gap_parent_ai_trace_missing', 'pipeline_stage_order_contract': 'latest_watching_ai_to_budget_precheck_to_final_authority_revalidation', 'raw_ai_budget_census_is_causal': False, 'ai_trace_count': 434, 'budget_or_block_event_count': 517, 'lineage_field_present_count': 0, 'lineage_joined_event_count': 0, 'lineage_join_coverage_pct': 0.0, 'linked_budget_pass_trace_count': 0, 'linked_budget_block_trace_count': 0, 'linked_stage_counts': {}, 'runtime_effect': False, 'allowed_runtime_apply': False}`
 - latency blockers: `latency_block:latency_state_danger=121, latency_block:tp1_direct_recheck_expired=2`
-- price guards: `pre_submit_entry_ai_authority_guard_block:entry_ai_result_stale_or_untrusted=23, entry_ai_price_canary_fallback:above_best_ask=1`
+- price guards: `entry_ai_price_canary_fallback:above_best_ask=1`
 - quote refresh: `attempted=36, applied=24, latency_recovered=4, submitted_after_refresh=0`
-- quote refresh downstream: `{'budget_pass_no_submit_event': 1, 'price_guard_or_revalidation': 3}`
+- quote refresh downstream: `{'budget_pass_no_submit_event': 1, 'entry_ai_authority_revalidation': 3}`
 
 ## 금지된 자동변경
 

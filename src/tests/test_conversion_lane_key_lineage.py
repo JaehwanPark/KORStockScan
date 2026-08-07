@@ -1859,6 +1859,162 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
     )
 
 
+def test_conversion_lane_preserves_price_revalidation_axis_contract(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path
+        / "report"
+        / "buy_funnel_sentinel"
+        / f"buy_funnel_sentinel_{target}.json",
+        {
+            "classification": {
+                "primary": "SUBMIT_DROUGHT_CRITICAL",
+                "matches": ["SUBMIT_DROUGHT_CRITICAL", "PRICE_GUARD_DROUGHT"],
+            },
+            "entry_submit_drought_contract": {
+                "causal_bottleneck_axes": ["PRICE_REVALIDATION"],
+                "observation_breakdown": {
+                    "metric_role": "funnel_count",
+                    "window_policy": "same_session_unique_attempt_submit_funnel",
+                    "sample_floor": "one_explicit_attempt_per_axis",
+                    "primary_decision_metric": (
+                        "causal_bottleneck_axis_observed_count"
+                    ),
+                    "source_quality_gate": (
+                        "lossless_attempt_key_and_explicit_stage_provenance"
+                    ),
+                    "forbidden_uses": ["broker_order_submit"],
+                    "axes": {
+                        "PRICE_REVALIDATION": {
+                            "status": "observed",
+                            "observed_count": 14,
+                            "evidence": {
+                                "price_guard_unique": 14,
+                                "order_bundle_submitted_unique": 0,
+                            },
+                            "next_repair_action": (
+                                "join executable BBO and first-hit outcomes"
+                            ),
+                        }
+                    },
+                },
+            },
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+    blocker = next(
+        item
+        for item in report["conversion_blocker_rank"]
+        if item["blocker_axis"] == "PRICE_REVALIDATION"
+    )
+
+    assert blocker["axis_observed_count"] == 14
+    assert blocker["axis_evidence"]["price_guard_unique"] == 14
+    assert "executable BBO" in blocker["acceptance_test"]
+    assert "one-share bounded candidate" in blocker["acceptance_test"]
+    assert blocker["blocker_runtime_effect"] is False
+    assert blocker["blocker_allowed_runtime_apply"] is False
+
+
+def test_conversion_lane_preserves_entry_ai_authority_axis_contract(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    _write(
+        tmp_path
+        / "report"
+        / "buy_funnel_sentinel"
+        / f"buy_funnel_sentinel_{target}.json",
+        {
+            "classification": {
+                "primary": "SUBMIT_DROUGHT_CRITICAL",
+                "matches": [
+                    "SUBMIT_DROUGHT_CRITICAL",
+                    "ENTRY_AI_AUTHORITY_DROUGHT",
+                ],
+            },
+            "entry_submit_drought_contract": {
+                "causal_bottleneck_axes": ["ENTRY_AI_AUTHORITY_REVALIDATION"],
+                "observation_breakdown": {
+                    "axes": {
+                        "ENTRY_AI_AUTHORITY_REVALIDATION": {
+                            "status": "observed",
+                            "observed_count": 14,
+                            "evidence": {
+                                "entry_ai_authority_guard_unique": 14,
+                                "order_bundle_submitted_unique": 0,
+                            },
+                        }
+                    }
+                },
+            },
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+    blocker = next(
+        item
+        for item in report["conversion_blocker_rank"]
+        if item["blocker_axis"] == "ENTRY_AI_AUTHORITY_REVALIDATION"
+    )
+
+    assert blocker["axis_observed_count"] == 14
+    assert "exact payload lineage" in blocker["acceptance_test"]
+    assert "one-share bounded candidate" in blocker["acceptance_test"]
+    assert blocker["blocker_runtime_effect"] is False
+
+
+def test_conversion_lane_terminal_entry_metadata_is_not_open_bridge_blocker(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-06-04"
+    candidate_id = "entry_wait6579_score66_69_recovery_gate_v1:2026-06-04"
+    _write(
+        tmp_path
+        / "report"
+        / "runtime_apply_gap_audit"
+        / f"runtime_apply_gap_audit_{target}.json",
+        {
+            "candidate_route_ledger": [
+                {
+                    "candidate_id": candidate_id,
+                    "domain": "scalping",
+                    "producer_state": "entry_only_bridge_metadata",
+                    "bridge_state": "excluded",
+                    "final_disposition": "source_only_explicit_exclusion",
+                    "derived_review_category": "source_only_explicit_exclusion",
+                    "failure_reason": (
+                        "entry_only_bridge_metadata_not_live_candidate"
+                    ),
+                }
+            ]
+        },
+    )
+
+    report = lane.build_conversion_lane(target)
+    candidate = next(
+        item
+        for item in report["conversion_candidates"]
+        if item["candidate_id"] == candidate_id
+    )
+
+    assert candidate["conversion_state"] == "terminal_source_only_exclusion"
+    assert candidate["next_blocker"] == "not_applicable"
+    assert candidate["strategy_scope"] == "scalp"
+    assert report["summary"]["terminal_source_only_exclusion_count"] == 1
+    assert report["summary"]["unscoped_conversion_candidate_count"] == 0
+    assert not any(
+        item["conversion_candidate_id"] == candidate_id
+        for item in report["conversion_blocker_rank"]
+    )
+
+
 def test_conversion_lane_records_buy_funnel_non_submit_drought_source_state(
     monkeypatch, tmp_path
 ):

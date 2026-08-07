@@ -48,12 +48,24 @@ UPSTREAM_BLOCK_STAGES = {
 AI_TERMINAL_ATTRIBUTION_STAGES = {
     "ai_confirmed_terminal_no_budget",
 }
+BUDGET_BLOCKER_STAGES = {
+    "auth_zero_qty",
+    "blocked_zero_qty",
+}
 PRICE_GUARD_STAGES = {
     "pre_submit_price_guard_block",
-    "pre_submit_entry_ai_authority_guard_block",
     "entry_ai_price_canary_skip_order",
     "entry_ai_price_canary_fallback",
     "scale_in_price_guard_block",
+}
+ENTRY_PRICE_GUARD_STAGES = PRICE_GUARD_STAGES - {"scale_in_price_guard_block"}
+ENTRY_AI_AUTHORITY_GUARD_STAGES = {
+    "pre_submit_entry_ai_authority_guard_block",
+}
+BROKER_SUBMIT_FAILURE_STAGES = {
+    "broker_submit_failed",
+    "buy_order_failed",
+    "submit_order_failed",
 }
 POST_LATENCY_SUBMIT_BLOCK_STAGES = {
     "budget_pass",
@@ -77,7 +89,10 @@ BLOCKER_STAGES = {
     "entry_armed_expired_after_wait",
     "entry_arm_expired",
     *UPSTREAM_BLOCK_STAGES,
+    *BUDGET_BLOCKER_STAGES,
     *PRICE_GUARD_STAGES,
+    *ENTRY_AI_AUTHORITY_GUARD_STAGES,
+    *BROKER_SUBMIT_FAILURE_STAGES,
 }
 DEFAULT_WINDOWS = (5, 10, 30)
 SESSION_START = time(9, 0)
@@ -109,6 +124,8 @@ SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER = (
     "UPSTREAM_GATE",
     "BUDGET_PASS_COLLAPSE",
     "LATENCY_PRE_SUBMIT",
+    "PRICE_REVALIDATION",
+    "ENTRY_AI_AUTHORITY_REVALIDATION",
     "BROKER_RECEIPT",
     "ECONOMIC_PARTICIPATION",
     "SIM_REAL_AUTHORITY",
@@ -582,7 +599,7 @@ def _blocker_label(event: PipelineEvent) -> str:
     if event.stage == "latency_block":
         reason = _field_first(fields, ("reason", "latency_danger_reasons", "decision"))
         return f"latency_block:{reason or '-'}"
-    if event.stage in PRICE_GUARD_STAGES:
+    if event.stage in PRICE_GUARD_STAGES | ENTRY_AI_AUTHORITY_GUARD_STAGES:
         reason = _field_first(
             fields, ("reason", "block_reason", "resolution_reason", "action")
         )
@@ -609,6 +626,92 @@ def _ai_terminal_reason_label(event: PipelineEvent) -> str:
     return "ai_terminal:unknown_terminal_reason"
 
 
+def _ai_trace_key(event: PipelineEvent) -> str:
+    trace_id = _field_first(
+        event.fields,
+        (
+            "ai_decision_trace_id",
+            "pre_submit_parent_ai_decision_trace_id",
+        ),
+    )
+    if trace_id and trace_id not in {"-", "unknown", "not_available"}:
+        return f"trace:{trace_id}"
+    return _attempt_key(event)
+
+
+def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
+    """Attribute budget outcomes only through an explicit parent AI trace.
+
+    The live pipeline may evaluate budget/latency before its final Entry-AI
+    authority revalidation.  A raw ``ai_confirmed - budget_pass`` census is
+    therefore useful as coverage only and is not a causal budget blocker.
+    """
+
+    ai_trace_ids = {
+        _field_first(event.fields, ("ai_decision_trace_id",))
+        for event in events
+        if event.stage == "ai_confirmed"
+        and _field_first(event.fields, ("ai_decision_trace_id",))
+        not in {"", "-", "unknown", "not_available"}
+    }
+    lineage_events = [
+        event
+        for event in events
+        if event.stage == "budget_pass" or event.stage in BUDGET_BLOCKER_STAGES
+    ]
+    lineage_present = [
+        event
+        for event in lineage_events
+        if _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
+        not in {"", "-", "unknown", "not_available"}
+    ]
+    linked = [
+        event
+        for event in lineage_present
+        if _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
+        in ai_trace_ids
+    ]
+    linked_pass = {
+        _ai_trace_key(event) for event in linked if event.stage == "budget_pass"
+    }
+    linked_block = {
+        _ai_trace_key(event)
+        for event in linked
+        if event.stage in BUDGET_BLOCKER_STAGES
+    }
+    stage_counts = Counter(event.stage for event in linked)
+    coverage_pct = (
+        round((len(linked) / len(lineage_events)) * 100.0, 2)
+        if lineage_events
+        else 0.0
+    )
+    if linked_block:
+        status = "explicit_ai_trace_budget_block_observed"
+    elif linked_pass:
+        status = "explicit_ai_trace_budget_pass_only"
+    elif lineage_present:
+        status = "parent_ai_trace_unresolved"
+    else:
+        status = "instrumentation_gap_parent_ai_trace_missing"
+    return {
+        "status": status,
+        "pipeline_stage_order_contract": (
+            "latest_watching_ai_to_budget_precheck_to_final_authority_revalidation"
+        ),
+        "raw_ai_budget_census_is_causal": False,
+        "ai_trace_count": len(ai_trace_ids),
+        "budget_or_block_event_count": len(lineage_events),
+        "lineage_field_present_count": len(lineage_present),
+        "lineage_joined_event_count": len(linked),
+        "lineage_join_coverage_pct": coverage_pct,
+        "linked_budget_pass_trace_count": len(linked_pass),
+        "linked_budget_block_trace_count": len(linked_block),
+        "linked_stage_counts": dict(sorted(stage_counts.items())),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _post_refresh_downstream_bucket(event: PipelineEvent | None) -> str:
     if event is None:
         return "no_downstream_event"
@@ -616,6 +719,8 @@ def _post_refresh_downstream_bucket(event: PipelineEvent | None) -> str:
     label = _blocker_label(event).lower()
     if stage == "order_bundle_submitted":
         return "order_bundle_submitted"
+    if stage in ENTRY_AI_AUTHORITY_GUARD_STAGES:
+        return "entry_ai_authority_revalidation"
     if (
         stage in PRICE_GUARD_STAGES
         or "price" in label
@@ -999,7 +1104,17 @@ def _summarize_events(
         or _contains_text_token(event.fields, "ai_score_50_buy_hold_override")
     ]
     price_guard_events = [
-        event for event in lossless_scoped if event.stage in PRICE_GUARD_STAGES
+        event for event in lossless_scoped if event.stage in ENTRY_PRICE_GUARD_STAGES
+    ]
+    entry_ai_authority_guard_events = [
+        event
+        for event in lossless_scoped
+        if event.stage in ENTRY_AI_AUTHORITY_GUARD_STAGES
+    ]
+    broker_submit_failure_events = [
+        event
+        for event in lossless_scoped
+        if event.stage in BROKER_SUBMIT_FAILURE_STAGES
     ]
     latency_blocks = [
         event
@@ -1014,11 +1129,29 @@ def _summarize_events(
     upstream_counter = Counter(_blocker_label(event) for event in upstream_events)
     latency_counter = Counter(_blocker_label(event) for event in latency_blocks)
     price_guard_counter = Counter(_blocker_label(event) for event in price_guard_events)
+    entry_ai_authority_guard_counter = Counter(
+        _blocker_label(event) for event in entry_ai_authority_guard_events
+    )
     ai_terminal_reason_counter = Counter(
         _ai_terminal_reason_label(event)
         for event in lossless_scoped
         if event.stage in AI_TERMINAL_ATTRIBUTION_STAGES
     )
+    ai_action_counter = Counter(
+        _field_first(event.fields, ("action", "ai_action", "decision"))
+        or "NOT_REPORTED"
+        for event in lossless_scoped
+        if event.stage == "ai_confirmed"
+    )
+    ai_action_unique: dict[str, set[str]] = {}
+    for event in lossless_scoped:
+        if event.stage != "ai_confirmed":
+            continue
+        action = (
+            _field_first(event.fields, ("action", "ai_action", "decision"))
+            or "NOT_REPORTED"
+        )
+        ai_action_unique.setdefault(action, set()).add(_ai_trace_key(event))
     latency_danger_reason_counts = Counter(
         label
         for event in latency_blocks
@@ -1107,6 +1240,7 @@ def _summarize_events(
     )
     economic_participation = _economic_submit_participation(lossless_scoped)
     market_gainer_handoff = _market_gainer_handoff_summary(lossless_scoped)
+    budget_ai_lineage = _budget_ai_lineage_summary(lossless_scoped)
 
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
@@ -1146,13 +1280,35 @@ def _summarize_events(
             {"label": label, "count": count}
             for label, count in price_guard_counter.most_common(10)
         ],
+        "entry_ai_authority_guard_top": [
+            {"label": label, "count": count}
+            for label, count in entry_ai_authority_guard_counter.most_common(10)
+        ],
         "ai_terminal_reason_top": [
             {"label": label, "count": count}
             for label, count in ai_terminal_reason_counter.most_common(10)
         ],
+        "ai_action_event_counts": dict(sorted(ai_action_counter.items())),
+        "ai_action_unique_counts": {
+            action: len(keys) for action, keys in sorted(ai_action_unique.items())
+        },
+        "budget_ai_lineage": budget_ai_lineage,
         "upstream_block_events": len(upstream_events),
+        "upstream_block_unique": len(
+            {_ai_trace_key(event) for event in upstream_events}
+        ),
         "latency_state_danger_events": len(latency_blocks),
         "price_guard_events": len(price_guard_events),
+        "price_guard_unique": len(
+            {_attempt_key(event) for event in price_guard_events}
+        ),
+        "entry_ai_authority_guard_events": len(entry_ai_authority_guard_events),
+        "entry_ai_authority_guard_unique": len(
+            {_attempt_key(event) for event in entry_ai_authority_guard_events}
+        ),
+        "broker_submit_failure_unique": len(
+            {_attempt_key(event) for event in broker_submit_failure_events}
+        ),
         "quote_freshness_refresh_attempted_count": len(refresh_attempt_keys),
         "quote_freshness_refresh_applied_count": len(refresh_applied_keys),
         "quote_freshness_still_latency_blocked_after_refresh_count": len(
@@ -1475,6 +1631,16 @@ def _classify(
         matches.append("PRICE_GUARD_DROUGHT")
         reasons.append("price guard blocks dominate the downstream submit path")
 
+    entry_ai_authority_guard = current["entry_ai_authority_guard_events"] >= 3 and (
+        submitted_unique == 0
+        or current["entry_ai_authority_guard_events"] >= max(3, latency_unique)
+    )
+    if entry_ai_authority_guard:
+        matches.append("ENTRY_AI_AUTHORITY_DROUGHT")
+        reasons.append(
+            "entry AI authority revalidation blocks dominate the downstream submit path"
+        )
+
     latency_drought = budget_unique >= 3 and (
         submitted_unique == 0
         or ratios["latency_to_budget_unique_pct"] < 25.0
@@ -1709,6 +1875,8 @@ def _entry_submit_drought_contract(
         weak_contract_matches.append("LATENCY_PRE_SUBMIT")
     if "PRICE_GUARD_DROUGHT" in matches:
         weak_contract_matches.append("PRICE_REVALIDATION")
+    if "ENTRY_AI_AUTHORITY_DROUGHT" in matches:
+        weak_contract_matches.append("ENTRY_AI_AUTHORITY_REVALIDATION")
     if taxonomy_leakage:
         weak_contract_matches.append("SOURCE_TAXONOMY_LEAKAGE")
     weak_contract_matches = sorted(set(weak_contract_matches))
@@ -1795,6 +1963,13 @@ def _entry_submit_drought_observation_breakdown(
     budget_unique = int(unique.get("budget_pass", 0) or 0)
     latency_unique = int(unique.get("latency_pass", 0) or 0)
     submitted_unique = int(unique.get("order_bundle_submitted", 0) or 0)
+    price_guard_unique = int(session_summary.get("price_guard_unique", 0) or 0)
+    entry_ai_authority_guard_unique = int(
+        session_summary.get("entry_ai_authority_guard_unique", 0) or 0
+    )
+    broker_submit_failure_unique = int(
+        session_summary.get("broker_submit_failure_unique", 0) or 0
+    )
     latency_root_cause_counts = (
         root_cause.get("latency_root_cause_counts")
         if isinstance(root_cause.get("latency_root_cause_counts"), dict)
@@ -1813,6 +1988,14 @@ def _entry_submit_drought_observation_breakdown(
         if isinstance(session_summary.get("economic_participation"), dict)
         else {}
     )
+    budget_ai_lineage = (
+        session_summary.get("budget_ai_lineage")
+        if isinstance(session_summary.get("budget_ai_lineage"), dict)
+        else {}
+    )
+    linked_budget_block_count = int(
+        budget_ai_lineage.get("linked_budget_block_trace_count", 0) or 0
+    )
 
     axes = {
         "UPSTREAM_GATE": {
@@ -1821,28 +2004,56 @@ def _entry_submit_drought_observation_breakdown(
                 if "UPSTREAM_GATE" in weak_contract_matches
                 else "no_current_signal"
             ),
-            "observed_count": int(session_summary.get("upstream_block_events", 0) or 0),
+            "observed_count": int(
+                session_summary.get("upstream_block_unique", 0) or 0
+            ),
             "evidence": {
                 "upstream_blocker_top": (
                     upstream_blockers if isinstance(upstream_blockers, list) else []
                 ),
                 "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
+                "ai_action_event_counts": session_summary.get(
+                    "ai_action_event_counts"
+                )
+                or {},
+                "ai_action_unique_counts": session_summary.get(
+                    "ai_action_unique_counts"
+                )
+                or {},
+                "ai_terminal_reason_top": session_summary.get(
+                    "ai_terminal_reason_top"
+                )
+                or [],
             },
-            "next_repair_action": "split upstream AI terminal and score gate reasons before threshold interpretation",
+            "next_repair_action": (
+                "join upstream action/reason cohorts to executable BBO and "
+                "first-hit outcomes; AI semantic tuning remains separately owned"
+            ),
         },
         "BUDGET_PASS_COLLAPSE": {
             "status": (
                 "observed"
                 if "BUDGET_PASS_COLLAPSE" in weak_contract_matches
-                else "no_current_signal"
+                and linked_budget_block_count > 0
+                else (
+                    "observation_only"
+                    if "BUDGET_PASS_COLLAPSE" in weak_contract_matches
+                    else "no_current_signal"
+                )
             ),
-            "observed_count": max(ai_unique - budget_unique, 0),
+            "observed_count": linked_budget_block_count,
             "evidence": {
                 "ai_confirmed_unique": ai_unique,
                 "budget_pass_unique": budget_unique,
                 "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
+                "legacy_stage_census_gap": max(ai_unique - budget_unique, 0),
+                "legacy_stage_census_gap_is_causal": False,
+                "budget_ai_lineage": budget_ai_lineage,
             },
-            "next_repair_action": "preserve budget pass collapse as source attribution before EV approval",
+            "next_repair_action": (
+                "collect explicit parent AI trace on budget pass/block events; "
+                "only joined budget blocks may become a causal EV cohort"
+            ),
         },
         "LATENCY_PRE_SUBMIT": {
             "status": (
@@ -1868,21 +2079,80 @@ def _entry_submit_drought_observation_breakdown(
             },
             "next_repair_action": "close unknown latency labels or route quote freshness gaps to LDM attribution",
         },
+        "PRICE_REVALIDATION": {
+            "status": (
+                "observed"
+                if "PRICE_REVALIDATION" in weak_contract_matches
+                and price_guard_unique > 0
+                else "no_current_signal"
+            ),
+            "observed_count": price_guard_unique,
+            "evidence": {
+                "price_guard_unique": price_guard_unique,
+                "price_guard_events": int(
+                    session_summary.get("price_guard_events", 0) or 0
+                ),
+                "price_guard_top": (
+                    session_summary.get("price_guard_top")
+                    if isinstance(session_summary.get("price_guard_top"), list)
+                    else []
+                ),
+                "latency_pass_unique": latency_unique,
+                "order_bundle_submitted_unique": submitted_unique,
+            },
+            "next_repair_action": (
+                "join executable BBO and target/adverse first-hit outcomes to "
+                "price revalidation blocks before proposing bounded exploration"
+            ),
+        },
+        "ENTRY_AI_AUTHORITY_REVALIDATION": {
+            "status": (
+                "observed"
+                if "ENTRY_AI_AUTHORITY_REVALIDATION" in weak_contract_matches
+                and entry_ai_authority_guard_unique > 0
+                else "no_current_signal"
+            ),
+            "observed_count": entry_ai_authority_guard_unique,
+            "evidence": {
+                "entry_ai_authority_guard_unique": entry_ai_authority_guard_unique,
+                "entry_ai_authority_guard_events": int(
+                    session_summary.get("entry_ai_authority_guard_events", 0) or 0
+                ),
+                "entry_ai_authority_guard_top": (
+                    session_summary.get("entry_ai_authority_guard_top")
+                    if isinstance(
+                        session_summary.get("entry_ai_authority_guard_top"), list
+                    )
+                    else []
+                ),
+                "latency_pass_unique": latency_unique,
+                "order_bundle_submitted_unique": submitted_unique,
+            },
+            "next_repair_action": (
+                "join exact AI authority reason, executable BBO, and target/adverse "
+                "first-hit outcomes before proposing a bounded one-share probe"
+            ),
+        },
         "BROKER_RECEIPT": {
             "status": (
                 "observed"
                 if "BROKER_RECEIPT" in weak_contract_matches
+                and broker_submit_failure_unique > 0
                 else "no_current_signal"
             ),
-            "observed_count": max(latency_unique - submitted_unique, 0),
+            "observed_count": broker_submit_failure_unique,
             "evidence": {
                 "latency_pass_unique": latency_unique,
                 "order_bundle_submitted_unique": submitted_unique,
+                "broker_submit_failure_unique": broker_submit_failure_unique,
                 "submitted_to_budget_unique_pct": ratios.get(
                     "submitted_to_budget_unique_pct"
                 ),
             },
-            "next_repair_action": "join post-submit broker receipt and fill provenance when submitted samples exist",
+            "next_repair_action": (
+                "join post-submit broker receipt and fill provenance only when "
+                "a broker submission or explicit submit failure exists"
+            ),
         },
         "ECONOMIC_PARTICIPATION": {
             "status": (
@@ -1935,7 +2205,6 @@ def _entry_submit_drought_observation_breakdown(
         axis
         for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER
         if axes[axis]["status"] == "no_current_signal"
-        or int(axes[axis].get("observed_count") or 0) <= 0
     ]
     observation_only_axes = [
         axis
@@ -1947,6 +2216,11 @@ def _entry_submit_drought_observation_breakdown(
         "allowed_runtime_apply": False,
         "broker_order_submit_allowed": False,
         "decision_authority": "submit_drought_attribution_only",
+        "metric_role": "funnel_count",
+        "window_policy": "same_session_unique_attempt_submit_funnel",
+        "sample_floor": "one_explicit_attempt_per_axis",
+        "primary_decision_metric": "causal_bottleneck_axis_observed_count",
+        "source_quality_gate": "lossless_attempt_key_and_explicit_stage_provenance",
         "axis_order": list(SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER),
         "axes": {axis: axes[axis] for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER},
         "causal_bottleneck_axes": causal_axes,
@@ -2142,6 +2416,9 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- swing blockers: `{_format_top_blockers(session.get('swing_blocker_top') or [])}`",
         f"- upstream blockers: `{_format_top_blockers(session['upstream_blocker_top'])}`",
         f"- AI terminal reasons: `{_format_top_blockers(session.get('ai_terminal_reason_top') or [])}`",
+        f"- AI actions: `events={session.get('ai_action_event_counts') or {}}, "
+        f"unique={session.get('ai_action_unique_counts') or {}}`",
+        f"- budget/AI lineage: `{session.get('budget_ai_lineage') or {}}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",
         f"- price guards: `{_format_top_blockers(session['price_guard_top'])}`",
         f"- quote refresh: `attempted={quote_freshness.get('refresh_attempted_count', 0)}, "

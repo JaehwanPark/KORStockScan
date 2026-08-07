@@ -26873,6 +26873,76 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     assert by_stage["order_bundle_failed"]["overbought_guard_action"] == "WOULD_PASS"
 
 
+def test_counterfactual_executable_bbo_requires_explicit_fresh_submit_context():
+    fields = state_handlers._build_counterfactual_executable_bbo_fields(
+        {
+            "best_bid_at_submit": 10_000,
+            "best_ask_at_submit": 10_010,
+            "quote_stale_at_submit": False,
+            "price_context_stale_at_submit": False,
+            "quote_consistency_block_at_submit": False,
+        }
+    )
+
+    assert fields["counterfactual_entry_executable_best_bid"] == 10_000
+    assert fields["counterfactual_entry_executable_best_ask"] == 10_010
+    assert fields["counterfactual_entry_bbo_source_quality"] == "pass"
+    assert (
+        fields["counterfactual_entry_price_source"]
+        == "fresh_pre_submit_executable_bbo_ask"
+    )
+
+
+def test_counterfactual_executable_bbo_fails_closed_without_freshness():
+    fields = state_handlers._build_counterfactual_executable_bbo_fields(
+        {
+            "best_bid_at_submit": 10_000,
+            "best_ask_at_submit": 10_010,
+        }
+    )
+
+    assert fields["counterfactual_entry_executable_best_bid"] == 0
+    assert fields["counterfactual_entry_executable_best_ask"] == 0
+    assert fields["counterfactual_entry_bbo_source_quality"] == "blocked"
+    assert (
+        fields["counterfactual_entry_bbo_source_quality_reason"]
+        == "missing_explicit_submit_freshness"
+    )
+
+
+def test_pre_submit_parent_ai_lineage_exposes_latest_trace_without_runtime_effect():
+    fields = state_handlers._pre_submit_parent_ai_lineage_fields(
+        {
+            "last_watching_ai_decision_trace_id": "trace-123",
+            "last_watching_ai_attempt_decision_trace_id": "trace-123",
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_score": 68,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": 95.0,
+        },
+        now_ts=100.0,
+    )
+
+    assert fields["pre_submit_parent_ai_decision_trace_id"] == "trace-123"
+    assert fields["pre_submit_parent_ai_attempt_trace_id"] == "trace-123"
+    assert fields["pre_submit_parent_ai_action"] == "WAIT"
+    assert fields["pre_submit_parent_ai_score"] == 68.0
+    assert fields["pre_submit_parent_ai_age_sec"] == 5.0
+    assert (
+        fields["pre_submit_parent_ai_lineage_status"]
+        == "exact_latest_watching_ai_trace"
+    )
+    assert fields["pre_submit_parent_ai_lineage_runtime_effect"] is False
+
+
+def test_pre_submit_parent_ai_lineage_reports_missing_trace():
+    fields = state_handlers._pre_submit_parent_ai_lineage_fields({}, now_ts=100.0)
+
+    assert fields["pre_submit_parent_ai_decision_trace_id"] == "-"
+    assert fields["pre_submit_parent_ai_lineage_status"] == "missing_ai_trace"
+    assert fields["pre_submit_parent_ai_age_sec"] == "-"
+
+
 def test_pre_submit_price_guard_allows_policy_split_passive_leg_within_cap(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

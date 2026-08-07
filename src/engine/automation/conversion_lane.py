@@ -35,6 +35,8 @@ BLOCKER_CLASSES = {
 }
 SUBMIT_DROUGHT_CLOSURE_AXES = (
     "LATENCY_PRE_SUBMIT",
+    "PRICE_REVALIDATION",
+    "ENTRY_AI_AUTHORITY_REVALIDATION",
     "BROKER_RECEIPT",
     "BUDGET_PASS_COLLAPSE",
     "SIM_REAL_AUTHORITY",
@@ -394,6 +396,9 @@ def _candidates_from_lifecycle(
 
 def _candidate_from_runtime_gap(row: dict[str, Any]) -> dict[str, Any]:
     candidate_id = str(row.get("candidate_id") or _hash("runtime_gap", row))
+    strategy_scope = str(row.get("domain") or "scalp").strip().lower()
+    if strategy_scope == "scalping":
+        strategy_scope = "scalp"
     derived = str(
         row.get("derived_review_category") or row.get("final_disposition") or ""
     )
@@ -401,9 +406,15 @@ def _candidate_from_runtime_gap(row: dict[str, Any]) -> dict[str, Any]:
         str(row.get("failure_reason") or row.get("recommended_resolution") or derived),
         row,
     )
+    explicit_source_only_exclusion = (
+        derived == "source_only_explicit_exclusion"
+        or str(row.get("final_disposition") or "")
+        == "source_only_explicit_exclusion"
+        or str(row.get("producer_state") or "") == "entry_only_bridge_metadata"
+    )
     return {
         "candidate_id": candidate_id,
-        "strategy_scope": str(row.get("domain") or "scalp"),
+        "strategy_scope": strategy_scope,
         "source_key_type": "bucket",
         "source_key_id": candidate_id,
         "parent_bucket_id": row.get("parent_bucket_id"),
@@ -416,15 +427,20 @@ def _candidate_from_runtime_gap(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "bridge_state": str(row.get("bridge_state") or "not_checked"),
         "conversion_state": (
-            "bridge_contract_ready"
-            if row.get("bridge_state") == "joined"
-            else "discovered"
+            "terminal_source_only_exclusion"
+            if explicit_source_only_exclusion
+            else (
+                "bridge_contract_ready"
+                if row.get("bridge_state") == "joined"
+                else "discovered"
+            )
         ),
-        "next_blocker": blocker,
+        "next_blocker": "not_applicable" if explicit_source_only_exclusion else blocker,
         "evidence": {
             "final_disposition": row.get("final_disposition"),
             "failure_reason": row.get("failure_reason"),
             "derived_review_category": derived,
+            "source_only_explicit_exclusion": explicit_source_only_exclusion,
         },
     }
 
@@ -511,7 +527,7 @@ def _acceptance_test(blocker_class: str) -> str:
     mapping = {
         "source_quality": "source-quality audit excludes/fixes defective rows and candidate source_quality_state becomes pass",
         "sample_floor": "candidate reaches configured parent sample floor or remains sim_priority_only",
-        "submit_drought": "submit drought ledger splits LATENCY_PRE_SUBMIT/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE",
+        "submit_drought": "submit drought ledger splits LATENCY_PRE_SUBMIT/PRICE_REVALIDATION/ENTRY_AI_AUTHORITY_REVALIDATION/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE",
         "runtime_hook": "runtime event emits the candidate key and postclose can observe it",
         "env_mapping": "next PREOPEN policy/env contains the same candidate key",
         "post_apply_attribution": "post-apply attribution joins runtime-applied candidate result",
@@ -562,15 +578,95 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
     if not critical:
         return []
     selected_axes = _submit_drought_causal_axes(buy_funnel)
-    return [
-        _conversion_blocker(
-            candidate_id=f"submit_drought:{item}",
+    contract = _submit_drought_contract(buy_funnel)
+    breakdown = (
+        contract.get("observation_breakdown")
+        if isinstance(contract.get("observation_breakdown"), dict)
+        else {}
+    )
+    axis_rows = (
+        breakdown.get("axes") if isinstance(breakdown.get("axes"), dict) else {}
+    )
+    blockers: list[dict[str, Any]] = []
+    for axis in selected_axes:
+        axis_row = axis_rows.get(axis) if isinstance(axis_rows.get(axis), dict) else {}
+        observed_count = _safe_int(axis_row.get("observed_count"))
+        blocker = _conversion_blocker(
+            candidate_id=f"submit_drought:{axis}",
             blocker_class="submit_drought",
-            reason=f"close_submit_drought_{item.lower()}",
+            reason=f"close_submit_drought_{axis.lower()}",
+            candidate={"sample": observed_count},
             rank_seed=30,
         )
-        for item in selected_axes
-    ]
+        blocker.update(
+            {
+                "axis_status": str(axis_row.get("status") or "observed"),
+                "axis_observed_count": observed_count,
+                "axis_evidence": axis_row.get("evidence") or {},
+                "next_repair_action": str(
+                    axis_row.get("next_repair_action")
+                    or blocker.get("next_repair_action")
+                ),
+                "acceptance_test": _submit_drought_axis_acceptance_test(axis),
+                "metric_role": breakdown.get("metric_role") or "funnel_count",
+                "window_policy": breakdown.get("window_policy")
+                or "same_session_unique_attempt_submit_funnel",
+                "sample_floor": breakdown.get("sample_floor")
+                or "one_explicit_attempt_per_axis",
+                "primary_decision_metric": breakdown.get(
+                    "primary_decision_metric"
+                )
+                or "causal_bottleneck_axis_observed_count",
+                "source_quality_gate": breakdown.get("source_quality_gate")
+                or "lossless_attempt_key_and_explicit_stage_provenance",
+                "decision_authority": "submit_drought_attribution_only",
+                "forbidden_uses": breakdown.get("forbidden_uses") or [],
+            }
+        )
+        blockers.append(blocker)
+    return blockers
+
+
+def _submit_drought_axis_acceptance_test(axis: str) -> str:
+    mapping = {
+        "UPSTREAM_GATE": (
+            "blocked candidates join executable BBO plus 1/3/5/10/20/30/60m "
+            "MFE/MAE and target/adverse first-hit; bounded exploration remains "
+            "source-only until positive EV and downstream protection are proven"
+        ),
+        "BUDGET_PASS_COLLAPSE": (
+            "each ai-confirmed to budget-pass drop has an explicit account/order/"
+            "quantity/cooldown or eligibility reason; no hard guard is relaxed"
+        ),
+        "LATENCY_PRE_SUBMIT": (
+            "latency rows carry fresh executable BBO and target/adverse first-hit; "
+            "only false-negative DANGER attribution may become a bounded candidate"
+        ),
+        "PRICE_REVALIDATION": (
+            "price-revalidation blocks join executable BBO and target/adverse "
+            "first-hit, then positive source-quality-adjusted EV may emit a "
+            "one-share bounded candidate without stale or broker guard bypass"
+        ),
+        "ENTRY_AI_AUTHORITY_REVALIDATION": (
+            "entry-AI-authority blocks preserve canonical authority reason, exact "
+            "payload lineage, executable BBO, and target/adverse first-hit; only a "
+            "positive source-quality-adjusted EV cohort may emit a one-share bounded "
+            "candidate without changing AI semantics or bypassing submit guards"
+        ),
+        "BROKER_RECEIPT": (
+            "a broker submission or explicit submit failure exists and receipt/fill "
+            "provenance reconciles every submitted attempt"
+        ),
+        "SIM_REAL_AUTHORITY": (
+            "sim/probe evidence remains actual_order_submitted=false until a separate "
+            "approved runtime candidate closes all downstream guards"
+        ),
+        "SOURCE_TAXONOMY_LEAKAGE": (
+            "all submit blocker labels have canonical scalp/swing provenance and no "
+            "cross-strategy leakage"
+        ),
+    }
+    return mapping.get(axis, _acceptance_test("submit_drought"))
 
 
 def _submit_drought_quote_freshness_subactions(
@@ -853,10 +949,12 @@ def build_conversion_lane(
             continue
         if candidate["candidate_id"] in seen:
             continue
-        if candidate.get("primary_ev") is not None or candidate.get("next_blocker") in {
-            "source_quality",
-            "bridge_contract",
-        }:
+        if (
+            candidate.get("primary_ev") is not None
+            or candidate.get("next_blocker") in {"source_quality", "bridge_contract"}
+            or candidate.get("conversion_state")
+            == "terminal_source_only_exclusion"
+        ):
             candidates.append(candidate)
             seen.add(candidate["candidate_id"])
     if include_swing:
@@ -888,6 +986,7 @@ def build_conversion_lane(
         if candidate.get("conversion_state") not in {
             "bounded_real_canary_requestable",
             "terminal_not_applicable",
+            "terminal_source_only_exclusion",
         }:
             blockers.append(
                 _conversion_blocker(
@@ -1058,6 +1157,11 @@ def build_conversion_lane(
     )
     summary = {
         "conversion_candidate_count": len(candidates),
+        "terminal_source_only_exclusion_count": sum(
+            1
+            for item in candidates
+            if item.get("conversion_state") == "terminal_source_only_exclusion"
+        ),
         "conversion_candidate_strategy_scope_counts": dict(strategy_scope_counts),
         "bounded_real_canary_requestable_count": sum(
             1
@@ -1339,6 +1443,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Decision",
         f"- conversion candidates: `{summary.get('conversion_candidate_count', 0)}`",
+        f"- terminal source-only exclusions: `{summary.get('terminal_source_only_exclusion_count', 0)}`",
         f"- real conversion queue: `{summary.get('real_conversion_queue_count', 0)}`",
         f"- positive EV runtime observed: `{summary.get('positive_ev_runtime_observed_count', 0)}`",
         f"- positive EV not due until next PREOPEN: `{summary.get('positive_ev_not_due_until_next_preopen_count', 0)}`",

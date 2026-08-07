@@ -29098,6 +29098,94 @@ def _build_entry_price_snapshot_fields(
     }
 
 
+def _build_counterfactual_executable_bbo_fields(fields: dict | None) -> dict:
+    """Project a fresh submit BBO into the counterfactual report contract.
+
+    This is provenance-only.  It never changes the live order price or any guard
+    decision, and it deliberately fails closed when freshness was not explicit.
+    """
+
+    source = fields if isinstance(fields, dict) else {}
+    best_bid = _coerce_int_value(source.get("best_bid_at_submit"))
+    best_ask = _coerce_int_value(source.get("best_ask_at_submit"))
+    quote_stale_raw = source.get("quote_stale_at_submit")
+    price_context_stale_raw = source.get("price_context_stale_at_submit")
+    quote_consistency_block_raw = source.get("quote_consistency_block_at_submit")
+    explicit_freshness = all(
+        value not in (None, "", "-", "not_available", "unknown")
+        for value in (quote_stale_raw, price_context_stale_raw)
+    )
+    valid = bool(
+        best_bid > 0
+        and best_ask > 0
+        and best_ask >= best_bid
+        and explicit_freshness
+        and not _boolish_true(quote_stale_raw)
+        and not _boolish_true(price_context_stale_raw)
+        and not _boolish_true(quote_consistency_block_raw)
+    )
+    if valid:
+        quality_reason = "explicit_fresh_pre_submit_bbo"
+    elif not explicit_freshness:
+        quality_reason = "missing_explicit_submit_freshness"
+    elif best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+        quality_reason = "missing_or_crossed_submit_bbo"
+    else:
+        quality_reason = "stale_or_conflicted_submit_context"
+    return {
+        "counterfactual_entry_executable_best_ask": best_ask if valid else 0,
+        "counterfactual_entry_executable_best_bid": best_bid if valid else 0,
+        "counterfactual_entry_price_source": (
+            "fresh_pre_submit_executable_bbo_ask"
+            if valid
+            else "missing_fresh_executable_bbo"
+        ),
+        "counterfactual_entry_bbo_source_quality": "pass" if valid else "blocked",
+        "counterfactual_entry_bbo_source_quality_reason": quality_reason,
+    }
+
+
+def _pre_submit_parent_ai_lineage_fields(
+    stock: dict | None, *, now_ts: float | None = None
+) -> dict:
+    """Expose the latest watching-AI trace to pre-submit budget provenance."""
+
+    source = stock if isinstance(stock, dict) else {}
+    observed_at = float(now_ts if now_ts is not None else time.time())
+    confirmed_at = _safe_float(source.get("last_watching_ai_confirmed_at"), 0.0)
+    trace_id = str(source.get("last_watching_ai_decision_trace_id") or "").strip()
+    attempt_trace_id = str(
+        source.get("last_watching_ai_attempt_decision_trace_id") or ""
+    ).strip()
+    lineage_status = (
+        "exact_latest_watching_ai_trace"
+        if trace_id and trace_id == attempt_trace_id
+        else ("latest_watching_ai_trace_present" if trace_id else "missing_ai_trace")
+    )
+    return {
+        "pre_submit_parent_ai_decision_trace_id": trace_id or "-",
+        "pre_submit_parent_ai_attempt_trace_id": attempt_trace_id or "-",
+        "pre_submit_parent_ai_action": (
+            source.get("last_watching_ai_action") or "NOT_EVALUATED"
+        ),
+        "pre_submit_parent_ai_score": _safe_float(
+            source.get("last_watching_ai_score"), 0.0
+        ),
+        "pre_submit_parent_ai_result_source": (
+            source.get("last_watching_ai_result_source") or "unknown"
+        ),
+        "pre_submit_parent_ai_confirmed_at": confirmed_at or "-",
+        "pre_submit_parent_ai_age_sec": (
+            max(0.0, observed_at - confirmed_at) if confirmed_at > 0 else "-"
+        ),
+        "pre_submit_parent_ai_lineage_status": lineage_status,
+        "pre_submit_pipeline_stage_order_contract": (
+            "latest_watching_ai_to_budget_precheck_to_final_authority_revalidation"
+        ),
+        "pre_submit_parent_ai_lineage_runtime_effect": False,
+    }
+
+
 REAL_ENTRY_PANIC_GAP_WEIGHT_FAMILY = "real_entry_panic_gap_weight"
 
 
@@ -59063,6 +59151,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 cap_qty=budget_cap if budget_cap_applied else "not_applicable_cap_qty",
                 guard_intended=True,
             ),
+            **_pre_submit_parent_ai_lineage_fields(stock, now_ts=now_ts),
         )
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
@@ -59129,6 +59218,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **_scalp_pre_ai_gate_context_log_fields(
             runtime.get("scalp_pre_ai_gate_context")
         ),
+        **_pre_submit_parent_ai_lineage_fields(stock, now_ts=now_ts),
         **_build_observation_contract_fields("funnel_count"),
     )
 
@@ -61527,19 +61617,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ],
         )
         clear_signal_reference(stock)
+        entry_ai_authority_block_fields = _merge_entry_pipeline_field_groups(
+            real_pre_submit_guard_fields,
+            submit_revalidation_fields,
+            latency_price_snapshot,
+            entry_orderbook_micro_fields,
+            microstructure_submit_log_fields,
+            pre_ai_gate_submit_log_fields,
+            entry_ai_submit_authority,
+        )
+        entry_ai_authority_block_fields.update(
+            _build_counterfactual_executable_bbo_fields(
+                entry_ai_authority_block_fields
+            )
+        )
         _log_entry_pipeline(
             stock,
             code,
             "pre_submit_entry_ai_authority_guard_block",
-            **_merge_entry_pipeline_field_groups(
-                real_pre_submit_guard_fields,
-                submit_revalidation_fields,
-                latency_price_snapshot,
-                entry_orderbook_micro_fields,
-                microstructure_submit_log_fields,
-                pre_ai_gate_submit_log_fields,
-                entry_ai_submit_authority,
-            ),
+            **entry_ai_authority_block_fields,
         )
         _emit_scalp_entry_adm_snapshot(
             stock,

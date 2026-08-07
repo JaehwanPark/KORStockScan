@@ -197,8 +197,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-08-07.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-08-07.md`
-- selected_order_count: `50`
-- decision_counts: `{'attach_existing_family': 59, 'design_family_candidate': 3, 'defer_evidence': 1, 'reject': 1}`
+- selected_order_count: `48`
+- decision_counts: `{'attach_existing_family': 57, 'design_family_candidate': 3, 'defer_evidence': 1, 'reject': 1}`
 
 ## Approval Requests
 - none
@@ -209,7 +209,7 @@
 ## Calibration Decisions
 ## Code Improvement Top Orders
 - `order_entry_submit_drought_auto_resolution` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
-- `order_conversion_lane_submit_drought_submit_drought_broker_receipt` decision=`attach_existing_family` subsystem=`sim_to_real_conversion_lineage`
+- `order_conversion_lane_submit_drought_submit_drought_latency_pre_submit` decision=`attach_existing_family` subsystem=`sim_to_real_conversion_lineage`
 - `order_entry_broker_receipt_contract_gap_review` decision=`attach_existing_family` subsystem=`runtime_instrumentation`
 
 - `soft_stop_whipsaw_confirmation`: `hold_sample` sample=`485/10`

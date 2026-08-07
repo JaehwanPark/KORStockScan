@@ -305,6 +305,8 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
         "UPSTREAM_GATE",
         "BUDGET_PASS_COLLAPSE",
         "LATENCY_PRE_SUBMIT",
+        "PRICE_REVALIDATION",
+        "ENTRY_AI_AUTHORITY_REVALIDATION",
         "BROKER_RECEIPT",
         "ECONOMIC_PARTICIPATION",
         "SIM_REAL_AUTHORITY",
@@ -319,10 +321,19 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
         ]
         == 5
     )
-    assert breakdown["axes"]["BROKER_RECEIPT"]["status"] == "observed"
+    assert breakdown["axes"]["BROKER_RECEIPT"]["status"] == "no_current_signal"
+    assert breakdown["axes"]["PRICE_REVALIDATION"]["status"] == (
+        "no_current_signal"
+    )
+    assert breakdown["axes"]["ENTRY_AI_AUTHORITY_REVALIDATION"]["status"] == (
+        "no_current_signal"
+    )
     assert breakdown["axes"]["SIM_REAL_AUTHORITY"]["status"] == "observed"
     assert breakdown["causal_bottleneck_axes"] == ["LATENCY_PRE_SUBMIT"]
-    assert breakdown["observation_only_axes"] == ["SIM_REAL_AUTHORITY"]
+    assert breakdown["observation_only_axes"] == [
+        "BUDGET_PASS_COLLAPSE",
+        "SIM_REAL_AUTHORITY",
+    ]
     assert "BROKER_RECEIPT" in breakdown["no_current_signal_axes"]
     assert contract["causal_bottleneck_axes"] == ["LATENCY_PRE_SUBMIT"]
     assert "broker_order_submit" in breakdown["forbidden_uses"]
@@ -332,6 +343,236 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     assert root_cause["unknown_latency_workorder_required"] is True
     assert report["current"]["session"]["stage_unique"]["budget_pass"] == 5
     assert report["current"]["session"]["stage_unique"]["order_bundle_submitted"] == 0
+
+
+def test_budget_census_gap_is_observation_only_without_explicit_ai_lineage(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-11"
+    rows = [
+        _event(
+            target_date,
+            f"10:{idx:02d}:00",
+            "ai_confirmed",
+            record_id=idx,
+            fields={"ai_decision_trace_id": f"trace-{idx}", "action": "WAIT"},
+        )
+        for idx in range(20)
+    ]
+    rows.extend(
+        _event(target_date, f"10:{idx:02d}:05", "budget_pass", record_id=idx)
+        for idx in range(3)
+    )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    breakdown = report["entry_submit_drought_contract"]["observation_breakdown"]
+    budget_axis = breakdown["axes"]["BUDGET_PASS_COLLAPSE"]
+
+    assert budget_axis["status"] == "observation_only"
+    assert budget_axis["observed_count"] == 0
+    assert budget_axis["evidence"]["legacy_stage_census_gap"] == 17
+    assert budget_axis["evidence"]["legacy_stage_census_gap_is_causal"] is False
+    assert budget_axis["evidence"]["budget_ai_lineage"]["status"] == (
+        "instrumentation_gap_parent_ai_trace_missing"
+    )
+    assert "BUDGET_PASS_COLLAPSE" not in breakdown["causal_bottleneck_axes"]
+    assert "BUDGET_PASS_COLLAPSE" in breakdown["observation_only_axes"]
+
+
+def test_budget_block_is_causal_only_when_parent_ai_trace_joins(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-12"
+    rows = []
+    for idx in range(20):
+        trace_id = f"trace-{idx}"
+        rows.append(
+            _event(
+                target_date,
+                f"10:{idx:02d}:00",
+                "ai_confirmed",
+                record_id=idx,
+                fields={"ai_decision_trace_id": trace_id, "action": "WAIT"},
+            )
+        )
+        if idx < 3:
+            rows.append(
+                _event(
+                    target_date,
+                    f"10:{idx:02d}:05",
+                    "blocked_zero_qty" if idx == 0 else "budget_pass",
+                    record_id=idx,
+                    fields={"pre_submit_parent_ai_decision_trace_id": trace_id},
+                )
+            )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    breakdown = report["entry_submit_drought_contract"]["observation_breakdown"]
+    budget_axis = breakdown["axes"]["BUDGET_PASS_COLLAPSE"]
+    lineage = budget_axis["evidence"]["budget_ai_lineage"]
+
+    assert budget_axis["status"] == "observed"
+    assert budget_axis["observed_count"] == 1
+    assert lineage["linked_budget_block_trace_count"] == 1
+    assert lineage["linked_budget_pass_trace_count"] == 2
+    assert lineage["raw_ai_budget_census_is_causal"] is False
+    assert "BUDGET_PASS_COLLAPSE" in breakdown["causal_bottleneck_axes"]
+
+
+def test_submit_drought_separates_price_revalidation_from_broker_receipt(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-07"
+    rows = []
+    for idx in range(5):
+        rows.extend(
+            [
+                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx),
+                _event(target_date, f"10:0{idx}:05", "budget_pass", record_id=idx),
+                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx),
+                _event(
+                    target_date,
+                    f"10:0{idx}:15",
+                    "pre_submit_price_guard_block",
+                    record_id=idx,
+                    fields={"reason": "price_revalidation_failed"},
+                ),
+            ]
+        )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:10:00"),
+    )
+    breakdown = report["entry_submit_drought_contract"]["observation_breakdown"]
+
+    assert breakdown["axes"]["PRICE_REVALIDATION"]["status"] == "observed"
+    assert breakdown["axes"]["PRICE_REVALIDATION"]["observed_count"] == 5
+    assert breakdown["axes"]["BROKER_RECEIPT"]["status"] == "no_current_signal"
+    assert breakdown["axes"]["BROKER_RECEIPT"]["observed_count"] == 0
+    assert "PRICE_REVALIDATION" in breakdown["causal_bottleneck_axes"]
+    assert "BROKER_RECEIPT" in breakdown["no_current_signal_axes"]
+    assert breakdown["metric_role"] == "funnel_count"
+    assert breakdown["decision_authority"] == "submit_drought_attribution_only"
+
+
+def test_submit_drought_separates_entry_ai_authority_from_price_and_broker(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-10"
+    rows = []
+    for idx in range(5):
+        rows.extend(
+            [
+                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx),
+                _event(target_date, f"10:0{idx}:05", "budget_pass", record_id=idx),
+                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx),
+                _event(
+                    target_date,
+                    f"10:0{idx}:15",
+                    "pre_submit_entry_ai_authority_guard_block",
+                    record_id=idx,
+                    fields={"reason": "entry_ai_result_stale_or_untrusted"},
+                ),
+            ]
+        )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:10:00"),
+    )
+    breakdown = report["entry_submit_drought_contract"]["observation_breakdown"]
+
+    authority = breakdown["axes"]["ENTRY_AI_AUTHORITY_REVALIDATION"]
+    assert authority["status"] == "observed"
+    assert authority["observed_count"] == 5
+    assert breakdown["axes"]["PRICE_REVALIDATION"]["status"] == "no_current_signal"
+    assert breakdown["axes"]["BROKER_RECEIPT"]["status"] == "no_current_signal"
+    assert "ENTRY_AI_AUTHORITY_REVALIDATION" in breakdown["causal_bottleneck_axes"]
+
+
+def test_submit_drought_does_not_treat_scale_in_price_guard_as_entry_blocker(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-09"
+    rows = []
+    for idx in range(5):
+        rows.extend(
+            [
+                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx),
+                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx),
+                _event(
+                    target_date,
+                    f"10:0{idx}:15",
+                    "scale_in_price_guard_block",
+                    record_id=idx,
+                ),
+            ]
+        )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:10:00"),
+    )
+    breakdown = report["entry_submit_drought_contract"]["observation_breakdown"]
+
+    assert breakdown["axes"]["PRICE_REVALIDATION"]["status"] == "no_current_signal"
+    assert breakdown["axes"]["PRICE_REVALIDATION"]["observed_count"] == 0
+    assert "PRICE_REVALIDATION" in breakdown["no_current_signal_axes"]
+
+
+def test_submit_drought_broker_axis_requires_explicit_submit_failure(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-08"
+    rows = []
+    for idx in range(5):
+        rows.extend(
+            [
+                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx),
+                _event(target_date, f"10:0{idx}:05", "budget_pass", record_id=idx),
+                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx),
+            ]
+        )
+    rows.append(
+        _event(
+            target_date,
+            "10:04:15",
+            "broker_submit_failed",
+            record_id=4,
+            fields={"reason": "broker_rejected"},
+        )
+    )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:10:00"),
+    )
+    broker_axis = report["entry_submit_drought_contract"]["observation_breakdown"][
+        "axes"
+    ]["BROKER_RECEIPT"]
+
+    assert broker_axis["status"] == "observed"
+    assert broker_axis["observed_count"] == 1
+    assert broker_axis["evidence"]["broker_submit_failure_unique"] == 1
 
 
 def test_probe_only_bundle_is_not_counted_as_full_economic_submission(

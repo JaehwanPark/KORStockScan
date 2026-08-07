@@ -75,6 +75,8 @@ _EVENT_FIELD_KEYS = frozenset(
         "counterfactual_entry_executable_best_ask",
         "counterfactual_entry_executable_best_bid",
         "counterfactual_entry_price_source",
+        "best_ask_at_submit",
+        "best_bid_at_submit",
         "effective_venue",
         "eviction_reason",
         "existing_runtime_record_id",
@@ -86,6 +88,7 @@ _EVENT_FIELD_KEYS = frozenset(
         "mark_price_at_submit",
         "no_submit_reason",
         "pre_submit_ai_action",
+        "price_context_stale_at_submit",
         "price",
         "price_delta_since_first_seen_pct",
         "qty",
@@ -108,6 +111,8 @@ _EVENT_FIELD_KEYS = frozenset(
         "terminal_reason",
         "terminal_stage",
         "venue",
+        "quote_consistency_block_at_submit",
+        "quote_stale_at_submit",
         "zero_context_cntr_str_state",
     }
 )
@@ -164,6 +169,42 @@ def _safe_bool(value, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "n", "off", "", "none", "null"}:
         return False
     return default
+
+
+def _resolve_terminal_executable_entry_price(fields: dict | None) -> tuple[int, str]:
+    source = fields if isinstance(fields, dict) else {}
+    executable_ask = _safe_int(
+        source.get("counterfactual_entry_executable_best_ask"), 0
+    )
+    executable_source = str(source.get("counterfactual_entry_price_source") or "")
+    executable_quality = str(
+        source.get("counterfactual_entry_bbo_source_quality") or ""
+    )
+    if (
+        executable_ask > 0
+        and "executable" in executable_source
+        and executable_quality == "pass"
+    ):
+        return executable_ask, executable_source
+
+    best_ask = _safe_int(source.get("best_ask_at_submit"), 0)
+    best_bid = _safe_int(source.get("best_bid_at_submit"), 0)
+    quote_stale_raw = source.get("quote_stale_at_submit")
+    price_context_stale_raw = source.get("price_context_stale_at_submit")
+    explicit_freshness = all(
+        value not in (None, "", "-", "not_available", "unknown")
+        for value in (quote_stale_raw, price_context_stale_raw)
+    )
+    if (
+        best_bid > 0
+        and best_ask >= best_bid
+        and explicit_freshness
+        and not _safe_bool(quote_stale_raw, True)
+        and not _safe_bool(price_context_stale_raw, True)
+        and not _safe_bool(source.get("quote_consistency_block_at_submit"), False)
+    ):
+        return best_ask, "fresh_pre_submit_executable_bbo_ask_backfill"
+    return 0, ""
 
 
 def _minute_candle_meta(
@@ -847,22 +888,10 @@ def _build_buy_attempts(
                 ),
                 None,
             )
-            executable_ask = _safe_int(
-                terminal_event.fields.get("counterfactual_entry_executable_best_ask"),
-                0,
+            executable_ask, executable_source = (
+                _resolve_terminal_executable_entry_price(terminal_event.fields)
             )
-            executable_source = str(
-                terminal_event.fields.get("counterfactual_entry_price_source") or ""
-            )
-            executable_quality = str(
-                terminal_event.fields.get("counterfactual_entry_bbo_source_quality")
-                or ""
-            )
-            if (
-                executable_ask > 0
-                and "executable" in executable_source
-                and executable_quality == "pass"
-            ):
+            if executable_ask > 0:
                 signal_price = executable_ask
                 signal_price_source = executable_source
                 evaluation_dt = _parse_event_dt(terminal_event.emitted_at) or anchor_dt

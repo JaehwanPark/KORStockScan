@@ -126,6 +126,63 @@ def test_overbought_attempt_uses_terminal_fresh_executable_ask(monkeypatch, tmp_
     assert attempts[0]["signal_time"] == "10:00:03"
 
 
+def test_authority_block_backfills_explicit_fresh_submit_bbo(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-08-05"
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "ai_confirmed",
+                "stock_name": "테스트",
+                "stock_code": "005930",
+                "record_id": "runtime-1",
+                "fields": {"action": "BUY", "ai_score": "85"},
+                "emitted_at": "2026-08-05T10:00:00+09:00",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "pre_submit_entry_ai_authority_guard_block",
+                "stock_name": "테스트",
+                "stock_code": "005930",
+                "record_id": "runtime-1",
+                "fields": {
+                    "best_ask_at_submit": "70100",
+                    "best_bid_at_submit": "70000",
+                    "quote_stale_at_submit": "False",
+                    "price_context_stale_at_submit": "False",
+                    "quote_consistency_block_at_submit": "False",
+                },
+                "emitted_at": "2026-08-05T10:00:03+09:00",
+                "emitted_date": target_date,
+            },
+        ],
+    )
+
+    attempts = report_mod._build_buy_attempts(
+        target_date, events=report_mod._load_entry_events(target_date)
+    )
+
+    assert len(attempts) == 1
+    assert attempts[0]["signal_price"] == 70100
+    assert (
+        attempts[0]["signal_price_source"]
+        == "fresh_pre_submit_executable_bbo_ask_backfill"
+    )
+    assert attempts[0]["signal_time"] == "10:00:03"
+    assert report_mod._resolve_terminal_executable_entry_price(
+        {
+            "best_ask_at_submit": "70100",
+            "best_bid_at_submit": "70000",
+            "quote_stale_at_submit": "True",
+            "price_context_stale_at_submit": "False",
+        }
+    ) == (0, "")
+
+
 def test_candidate_candle_fetch_releases_prior_symbol_before_next_fetch(
     monkeypatch, tmp_path
 ):
