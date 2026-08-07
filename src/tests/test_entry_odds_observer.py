@@ -67,6 +67,8 @@ def _cost_inputs(*, includes_spread: bool = False, spread_bps: float = 3.0) -> d
         "instrument_tax_class": "listed_common_stock",
         "effective_from": "2026-01-01",
         "effective_to": "2026-12-31",
+        "cost_source_quality_status": "verified",
+        "assumption_flags": [],
     }
 
 
@@ -283,6 +285,26 @@ def test_spread_double_count_fails_closed() -> None:
     assert row["observer_assessment"] == "ABSTAIN"
     assert "entry_spread_cost_double_count" in row["assessment_exclusion_reasons"]
     assert report["final_state"] == "cost_model_incomplete"
+
+
+def test_assumption_only_costs_remain_observable_but_block_sim_candidate() -> None:
+    prediction = _prediction(1, datetime(2026, 8, 6, 9, 0, tzinfo=KST))
+    prediction["cost_inputs"]["cost_source_quality_status"] = "assumption_only"
+    prediction["cost_inputs"]["assumption_flags"] = ["commission_assumed_zero"]
+    report = build_report(
+        target_date="2026-08-06",
+        predictions=[prediction],
+        calibration_rows=_calibration_rows(),
+        traces=[_trace(prediction)],
+        outcome_labels=[_outcome_label(prediction)],
+    )
+
+    assert report["ledger"][0]["cost"]["status"] == "complete"
+    assert "cost_model_assumption_only" in report["summary"]["evaluation_blockers"]
+    assert report["source_quality_and_exclusion_manifest"]["cost_warning_counts"] == {
+        "cost_model_assumption_only": 1
+    }
+    assert report["final_state"] == "hold_sample"
 
 
 def test_missing_odds_provenance_abstains_instead_of_raising() -> None:

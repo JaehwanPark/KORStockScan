@@ -34,6 +34,38 @@ liquidity bucket. There is no fallback across different signatures.
 
 ## Run
 
+First inventory an exact-payload batch without an API call:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.scalping.entry_odds.producer \
+  --target-date YYYY-MM-DD
+```
+
+After reviewing the manifest, explicitly enable the resumable offline call:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.scalping.entry_odds.producer \
+  --target-date YYYY-MM-DD \
+  --execute-openai
+```
+
+The producer uses the mature outcome file only to select traces that can be
+evaluated. Observed outcomes, the original action, the score, and later market
+data are not included in the provider request. Existing output can be resumed
+only when its model, prompt hash, policy version, and target date match.
+
+Rebuild calibration history from complete strictly-prior producer batches:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.scalping.entry_odds.history \
+  --target-date YYYY-MM-DD
+```
+
+The history builder rejects missing/incomplete producer manifests and never
+admits a target-date row into calibration.
+
+Then build the target observer report:
+
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.scalping.entry_odds.observer \
   --target-date YYYY-MM-DD \
@@ -44,6 +76,13 @@ PYTHONPATH=. .venv/bin/python -m src.engine.scalping.entry_odds.observer \
 The default trace and outcome paths use the target date. All four inputs are
 required and malformed rows fail the command instead of being silently
 discarded.
+
+The current producer cost schedule separates the observed quote spread and
+the 2026 20bp taxable-equity assumption, but commission, extra slippage,
+listing-market classification, and one-share impact are still assumptions.
+Those rows remain useful for calibration observation, while
+`cost_model_assumption_only` blocks `sim_candidate_ready` until a verified
+execution-cost source replaces them.
 
 When the immutable trace and mature outcome files exist but raw odds have not
 yet been produced, an explicit bootstrap report can be written with

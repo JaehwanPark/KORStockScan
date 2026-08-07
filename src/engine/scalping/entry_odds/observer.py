@@ -418,6 +418,17 @@ def _cost_breakdown(row: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
     )
     if not cost_model_version:
         errors.append("cost_model_version_missing")
+    source_quality_status = str(value.get("cost_source_quality_status") or "")
+    if source_quality_status not in {"verified", "assumption_only"}:
+        errors.append("cost_source_quality_status_missing_or_invalid")
+    assumption_flags_value = value.get("assumption_flags") or []
+    assumption_flags = (
+        [str(item) for item in assumption_flags_value if str(item)]
+        if isinstance(assumption_flags_value, list)
+        else []
+    )
+    if source_quality_status == "assumption_only" and not assumption_flags:
+        errors.append("cost_assumption_flags_missing")
     components: dict[str, float] = {}
     for field in REQUIRED_COST_FIELDS:
         number = _number(value.get(field))
@@ -460,6 +471,8 @@ def _cost_breakdown(row: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
         return {
             "status": "incomplete",
             "cost_model_version": (cost_model_version),
+            "source_quality_status": source_quality_status or None,
+            "assumption_flags": assumption_flags,
             "entry_price_basis": price_basis or None,
             "price_basis_includes_entry_spread": includes_spread,
             "cost_context": context,
@@ -471,6 +484,8 @@ def _cost_breakdown(row: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return {
         "status": "complete",
         "cost_model_version": cost_model_version,
+        "source_quality_status": source_quality_status,
+        "assumption_flags": assumption_flags,
         "entry_price_basis": price_basis,
         "price_basis_includes_entry_spread": includes_spread,
         "cost_context": context,
@@ -956,6 +971,7 @@ def build_report(
     ledger: list[dict[str, Any]] = []
     assessment_exclusion_counts: Counter[str] = Counter()
     evaluation_exclusion_counts: Counter[str] = Counter()
+    cost_warning_counts: Counter[str] = Counter()
     for prediction in prediction_rows:
         trace_id = str(prediction.get("decision_trace_id") or "")
         assessment_errors: list[str] = []
@@ -1033,6 +1049,8 @@ def build_report(
             }
         cost, cost_errors = _cost_breakdown(prediction)
         assessment_errors.extend(cost_errors)
+        if cost.get("source_quality_status") == "assumption_only":
+            cost_warning_counts["cost_model_assumption_only"] += 1
         if (
             cost.get("cost_context", {}).get("execution_venue")
             and str(cost["cost_context"]["execution_venue"]).upper()
@@ -1169,6 +1187,8 @@ def build_report(
         evaluation_blockers.append("predicted_ev_observed_ev_monotonicity_unproven")
     if veto_attribution["sim_candidate_gate"]["pass"] is not True:
         evaluation_blockers.append("negative_veto_sim_candidate_gate_not_closed")
+    if cost_warning_counts.get("cost_model_assumption_only", 0):
+        evaluation_blockers.append("cost_model_assumption_only")
     raw_loss = raw_metrics["multiclass_log_loss"]
     calibrated_loss = calibrated_metrics["multiclass_log_loss"]
     calibration_worse = (
@@ -1253,6 +1273,7 @@ def build_report(
             "legacy_fixed_cost_comparison_bps": LEGACY_FIXED_COST_COMPARISON_BPS,
             "legacy_fixed_cost_is_comparison_only": True,
             "spread_double_count_guard": True,
+            "assumption_only_blocks_sim_candidate": True,
         },
         "negative_veto_attribution": veto_attribution,
         "source_quality_and_exclusion_manifest": {
@@ -1265,6 +1286,7 @@ def build_report(
             "calibration_exclusion_counts": dict(
                 sorted(calibration_exclusions.items())
             ),
+            "cost_warning_counts": dict(sorted(cost_warning_counts.items())),
             "same_bar_ambiguous_is_excluded_from_ev": True,
             "pre_clean_baseline_is_archive_only": True,
         },
