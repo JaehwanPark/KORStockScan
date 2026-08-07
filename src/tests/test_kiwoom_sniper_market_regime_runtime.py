@@ -2350,6 +2350,7 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_last_full_eval_epoch": 1500.0,
         "_scanner_last_heavy_eval_attempt_epoch": 1500.0,
         "_scanner_last_heavy_eval_evidence_fingerprint": "old-generation-bbo",
+        "_scanner_last_heavy_eval_explicit_recheck_key": "strength:1:1499.000000",
         "_scanner_heavy_eval_retry_after_epoch": 1515.0,
         "_scanner_fast_precheck_logged_at": 1500.0,
         "_scanner_runtime_queue_lag_logged_at": 1500.0,
@@ -2434,6 +2435,7 @@ def test_scalping_scanner_promoted_target_refresh_resets_eval_state(monkeypatch)
         "_scanner_last_full_eval_epoch",
         "_scanner_last_heavy_eval_attempt_epoch",
         "_scanner_last_heavy_eval_evidence_fingerprint",
+        "_scanner_last_heavy_eval_explicit_recheck_key",
         "_scanner_heavy_eval_retry_after_epoch",
         "_scanner_fast_precheck_logged_at",
         "_scanner_runtime_queue_lag_logged_at",
@@ -8692,6 +8694,106 @@ def test_scanner_heavy_eval_retry_due_honors_explicit_future_recheck_without_att
 
     assert due is False
     assert retry_after == 110.0
+
+
+def test_scanner_heavy_eval_retry_due_applies_to_legacy_promotion_without_generation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "4")
+    target = {
+        "scanner_promotion_id": "PROMO-LEGACY-1",
+        "_scanner_last_heavy_eval_attempt_epoch": 100.0,
+    }
+
+    due, retry_after = kiwoom_sniper_v2._scanner_heavy_eval_retry_due(
+        target,
+        now_epoch=101.0,
+        allow_explicit_recheck=True,
+        consume_explicit_recheck=True,
+    )
+
+    assert due is False
+    assert retry_after == 115.0
+    assert target["_scanner_heavy_eval_retry_after_epoch"] == 115.0
+
+
+def test_scanner_heavy_eval_explicit_recheck_bypasses_cadence_only_once(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_OPERATOR_RUNTIME_OVERRIDE_PATH",
+        tmp_path / "missing_operator_runtime_overrides.env",
+    )
+    _reset_scanner_hot_override_cache()
+    monkeypatch.setenv("KORSTOCKSCAN_SCANNER_HEAVY_EVAL_RECHECK_FRESH_SEC", "4")
+    target = {
+        "_scanner_last_heavy_eval_attempt_epoch": 100.0,
+        "entry_strength_momentum_recheck_pending": True,
+        "entry_strength_momentum_recheck_count": 1,
+        "entry_strength_momentum_recheck_after_epoch": 102.0,
+        "entry_strength_momentum_recheck_reason": "below_strength_base",
+    }
+
+    preview_due, _ = kiwoom_sniper_v2._scanner_heavy_eval_retry_due(
+        target,
+        now_epoch=103.0,
+        allow_explicit_recheck=True,
+    )
+    admitted, _ = kiwoom_sniper_v2._scanner_heavy_eval_retry_due(
+        target,
+        now_epoch=103.0,
+        allow_explicit_recheck=True,
+        consume_explicit_recheck=True,
+    )
+    repeated, retry_after = kiwoom_sniper_v2._scanner_heavy_eval_retry_due(
+        target,
+        now_epoch=104.0,
+        allow_explicit_recheck=True,
+        consume_explicit_recheck=True,
+    )
+
+    assert preview_due is True
+    assert admitted is True
+    assert repeated is False
+    assert retry_after == 115.0
+    assert target["_scanner_last_heavy_eval_explicit_recheck_key"].startswith(
+        "strength:1:102.000000"
+    )
+
+
+def test_run_sniper_gates_legacy_heavy_eval_before_consuming_loop_budget():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    strength_wait_idx = source.index("if _scanner_strength_recheck_waiting(")
+    budget_start = source.index('budget_source = "standard"')
+    preview_gate_idx = source.index(
+        "legacy_retry_preview_due, legacy_retry_after_epoch = (",
+        strength_wait_idx,
+    )
+    common_gate_idx = source.index(
+        "heavy_retry_due, heavy_retry_after_epoch = (",
+        budget_start,
+    )
+    scheduler_enqueue_idx = source.index(
+        "heavy_decision = _scanner_scheduler_enqueue_target(",
+        common_gate_idx,
+    )
+    legacy_count_idx = source.index(
+        "scanner_full_eval_count += 1",
+        scheduler_enqueue_idx,
+    )
+
+    assert strength_wait_idx < preview_gate_idx < budget_start
+    assert budget_start < common_gate_idx < scheduler_enqueue_idx < legacy_count_idx
+    assert (
+        "consume_explicit_recheck=True" in source[common_gate_idx:scheduler_enqueue_idx]
+    )
 
 
 def test_scanner_deadline_expiry_parks_generation_without_immediate_retry(

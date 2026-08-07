@@ -4947,6 +4947,7 @@ def _reset_scanner_runtime_eval_state(target):
         "_scanner_last_full_eval_epoch",
         "_scanner_last_heavy_eval_attempt_epoch",
         "_scanner_last_heavy_eval_evidence_fingerprint",
+        "_scanner_last_heavy_eval_explicit_recheck_key",
         "_scanner_heavy_eval_retry_after_epoch",
         "_scanner_scheduler_warm_parked",
         "_scanner_scheduler_warm_generation_id",
@@ -7031,31 +7032,93 @@ def _scanner_heavy_eval_recheck_fresh_sec():
 
 
 def _scanner_heavy_eval_min_retry_sec():
-    """Bound recurring heavy work below the scheduler's heavy deadline.
+    """Bound recurring heavy work across legacy and scheduler watch loops.
 
     The WS freshness window controls source validation, not how often an
-    unchanged WATCHING generation may occupy the heavy lane.  Retrying every
-    few seconds created a self-sustaining heavy backlog after async_v1 was
-    enabled.  Initial fast-precheck, recovery, COMMIT, and all safety paths
+    unchanged WATCHING promotion may occupy the heavy lane. Retrying every few
+    seconds creates a self-sustaining backlog in legacy mode and after async_v1
+    is enabled. Initial fast-precheck, recovery, COMMIT, and all safety paths
     remain independent of this bounded recheck cadence.
     """
 
     return max(15.0, _scanner_heavy_eval_recheck_fresh_sec())
 
 
-def _scanner_heavy_eval_retry_due(target, *, now_epoch):
-    """Gate recurring heavy work by generation, not by ordinary tick churn.
+def _scanner_heavy_eval_explicit_recheck_key(target, *, now_epoch):
+    """Identify one due bounded recheck without granting an endless bypass."""
+
+    if not isinstance(target, dict):
+        return ""
+    now_value = float(now_epoch)
+    identities = []
+    if _scanner_strength_recheck_pending(target, now_ts=now_value):
+        identities.append(
+            "strength:"
+            f"{_safe_int(target.get('entry_strength_momentum_recheck_count'), 0)}:"
+            f"{_safe_float(target.get('entry_strength_momentum_recheck_after_epoch'), 0.0):.6f}:"
+            f"{str(target.get('entry_strength_momentum_recheck_reason') or '-')}"
+        )
+    if _scanner_rising_recheck_pending(target, now_ts=now_value):
+        rising_fields = (
+            "_scanner_rising_cooldown_recheck_after_epoch",
+            "_scanner_rising_cutoff_recheck_after_epoch",
+            "_scanner_rising_freshness_envelope_recheck_until_epoch",
+            "_scanner_rising_latency_direct_recheck_after_epoch",
+            "_scanner_rising_reversal_up_volatile_recheck_until_epoch",
+            "_scanner_rising_reversal_up_watch_recheck_until_epoch",
+            "_scanner_rising_ws_gap_priority_recheck_after_epoch",
+            "_scanner_rising_terminal_hardgate_recheck_after_epoch",
+        )
+        rising_identity = ",".join(
+            f"{key}={_safe_float(target.get(key), 0.0):.6f}"
+            for key in rising_fields
+            if _safe_float(target.get(key), 0.0) > 0.0
+        )
+        identities.append(
+            "rising:"
+            f"{rising_identity}:"
+            f"{str(target.get('_scanner_rising_recheck_reason') or '-')}"
+        )
+    return "|".join(identities)
+
+
+def _scanner_heavy_eval_retry_due(
+    target,
+    *,
+    now_epoch,
+    allow_explicit_recheck=False,
+    consume_explicit_recheck=False,
+):
+    """Gate recurring heavy work by promotion, not by ordinary tick churn.
 
     A fresh scanner promotion resets the runtime evaluation state, so its new
-    generation remains immediately eligible.  Within one generation, however,
-    current price, BBO, strength, and cumulative volume can change on every
-    receipt.  Treating each such change as retry authority defeats the bounded
-    cadence and can starve newly attached symbols before their first heavy
-    evaluation.  COMMIT and RECOVERY lanes do not call this helper.
+    generation (or legacy promotion) remains immediately eligible. Within one
+    promotion, however, current price, BBO, strength, and cumulative volume can
+    change on every receipt. Treating each such change as retry authority
+    defeats the bounded cadence and can starve newly attached symbols before
+    their first heavy evaluation. COMMIT and RECOVERY lanes do not call this
+    helper. A due explicit bounded recheck may bypass the cadence once per
+    stable recheck identity; a stale flag left behind by an early return cannot
+    create an unbounded heavy-eval loop.
     """
 
     if not isinstance(target, dict):
         return True, 0.0
+    if allow_explicit_recheck:
+        explicit_recheck_key = _scanner_heavy_eval_explicit_recheck_key(
+            target,
+            now_epoch=now_epoch,
+        )
+        last_explicit_recheck_key = str(
+            target.get("_scanner_last_heavy_eval_explicit_recheck_key") or ""
+        )
+        if explicit_recheck_key and explicit_recheck_key != last_explicit_recheck_key:
+            if consume_explicit_recheck:
+                target["_scanner_last_heavy_eval_explicit_recheck_key"] = (
+                    explicit_recheck_key
+                )
+                target.pop("_scanner_heavy_eval_retry_after_epoch", None)
+            return True, 0.0
     last_attempt_epoch = _safe_float(
         target.get("_scanner_last_heavy_eval_attempt_epoch"),
         0.0,
@@ -13250,6 +13313,7 @@ def run_sniper(is_test_mode=False):
                                     _scanner_heavy_eval_retry_due(
                                         stock,
                                         now_epoch=heavy_queue_enter_epoch,
+                                        allow_explicit_recheck=True,
                                     )
                                 )
                                 if not heavy_retry_due:
@@ -13257,8 +13321,9 @@ def run_sniper(is_test_mode=False):
                                     # heavy unit. Leave any queued fresh
                                     # precheck untouched and avoid rebuilding
                                     # missing work until the bounded retry time.
-                                    # COMMIT/RECOVERY and a newly promoted
-                                    # generation bypass this branch.
+                                    # COMMIT/RECOVERY, a newly promoted
+                                    # generation, and a new explicit bounded
+                                    # recheck bypass this branch.
                                     continue
                             if scheduled_lane is ScannerLane.HEAVY_EVAL:
                                 delayed_scanner_heavy_eval.append(
@@ -14142,6 +14207,19 @@ def run_sniper(is_test_mode=False):
                                     owner="strength_stability_fresh_recheck",
                                 )
                             continue
+                        if scheduler_generation is None:
+                            legacy_retry_preview_due, legacy_retry_after_epoch = (
+                                _scanner_heavy_eval_retry_due(
+                                    stock,
+                                    now_epoch=heavy_queue_enter_epoch,
+                                    allow_explicit_recheck=True,
+                                )
+                            )
+                            if not legacy_retry_preview_due:
+                                stock["_scanner_heavy_eval_retry_after_epoch"] = (
+                                    legacy_retry_after_epoch
+                                )
+                                continue
                         budget_source = "standard"
                         if (
                             scheduler_generation is None
@@ -14275,6 +14353,22 @@ def run_sniper(is_test_mode=False):
                             ):
                                 continue
                             continue
+                        heavy_retry_min_sec = _scanner_heavy_eval_min_retry_sec()
+                        last_heavy_attempt_epoch = _safe_float(
+                            stock.get("_scanner_last_heavy_eval_attempt_epoch"),
+                            0.0,
+                        )
+                        current_heavy_evidence = (
+                            _scanner_heavy_eval_evidence_fingerprint(ws_data)
+                        )
+                        previous_heavy_evidence = str(
+                            stock.get("_scanner_last_heavy_eval_evidence_fingerprint")
+                            or ""
+                        )
+                        heavy_evidence_changed = bool(
+                            previous_heavy_evidence
+                            and previous_heavy_evidence != current_heavy_evidence
+                        )
                         if scheduler_generation is not None:
                             async_wait_state = _scanner_async_transport_wait_state(
                                 stock,
@@ -14284,24 +14378,6 @@ def run_sniper(is_test_mode=False):
                                     "scanner_async_eval_coordinator",
                                     None,
                                 ),
-                            )
-                            heavy_retry_min_sec = _scanner_heavy_eval_min_retry_sec()
-                            last_heavy_attempt_epoch = _safe_float(
-                                stock.get("_scanner_last_heavy_eval_attempt_epoch"),
-                                0.0,
-                            )
-                            current_heavy_evidence = (
-                                _scanner_heavy_eval_evidence_fingerprint(ws_data)
-                            )
-                            previous_heavy_evidence = str(
-                                stock.get(
-                                    "_scanner_last_heavy_eval_evidence_fingerprint"
-                                )
-                                or ""
-                            )
-                            heavy_evidence_changed = bool(
-                                previous_heavy_evidence
-                                and previous_heavy_evidence != current_heavy_evidence
                             )
                             if async_wait_state in {"pending", "ready_for_commit"}:
                                 _emit_scanner_heavy_eval_coalesced(
@@ -14314,13 +14390,16 @@ def run_sniper(is_test_mode=False):
                                     evidence_changed=heavy_evidence_changed,
                                 )
                                 continue
-                            heavy_retry_due, heavy_retry_after_epoch = (
-                                _scanner_heavy_eval_retry_due(
-                                    stock,
-                                    now_epoch=time.time(),
-                                )
+                        heavy_retry_due, heavy_retry_after_epoch = (
+                            _scanner_heavy_eval_retry_due(
+                                stock,
+                                now_epoch=time.time(),
+                                allow_explicit_recheck=True,
+                                consume_explicit_recheck=True,
                             )
-                            if not heavy_retry_due:
+                        )
+                        if not heavy_retry_due:
+                            if scheduler_generation is not None:
                                 _emit_scanner_heavy_eval_coalesced(
                                     stock,
                                     generation=scheduler_generation,
@@ -14337,10 +14416,11 @@ def run_sniper(is_test_mode=False):
                                     last_attempt_epoch=last_heavy_attempt_epoch,
                                     evidence_changed=heavy_evidence_changed,
                                 )
-                                stock["_scanner_heavy_eval_retry_after_epoch"] = (
-                                    heavy_retry_after_epoch
-                                )
-                                continue
+                            stock["_scanner_heavy_eval_retry_after_epoch"] = (
+                                heavy_retry_after_epoch
+                            )
+                            continue
+                        if scheduler_generation is not None:
                             heavy_decision = _scanner_scheduler_enqueue_target(
                                 scheduler,
                                 stock,
