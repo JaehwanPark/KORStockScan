@@ -4,8 +4,16 @@ from datetime import datetime, timedelta
 
 from src.engine.monitoring import doosan_widget_advisory as doosan
 from src.engine.monitoring import doosan_widget_contract as contract
-from src.engine.monitoring.samsung_widget_advisory import AdvisoryPromotionFilter
+from src.engine.monitoring.samsung_widget_advisory import (
+    AdvisoryPromotionFilter,
+    ExternalPoint,
+)
 from src.engine.monitoring.samsung_widget_contract import KST
+from src.engine.monitoring.widget_auxiliary_context import (
+    DOOSAN_AUXILIARY_PROFILE,
+    WidgetAuxiliaryContextCollector,
+    attach_auxiliary_summary,
+)
 
 
 def _bars(
@@ -41,10 +49,23 @@ def _base_advisory(
         "entry_price_low": 99_000,
         "entry_price_high": 99_100,
         "reasons": ["low_structure_confirmed"],
-        "unmet_conditions": ["regular_flow_unavailable"],
+        "unmet_conditions": [],
         "observed_at": now.isoformat(),
         "valid_until": (now + timedelta(seconds=60)).isoformat(),
         "source_quality": {"status": "PASS", "issues": []},
+        "auxiliary_context": {
+            "status": "OBSERVED",
+            "relative_status": "OBSERVED",
+            "flow_status": "OBSERVED",
+            "external_status": "OBSERVED",
+        },
+        "external_risk": {"level": "CLEAR"},
+        "flow": {
+            "status": "OBSERVED",
+            "live_for_current_session": True,
+            "foreign_nonworsening": True,
+            "program_nonworsening": True,
+        },
         "signal_tier": "STANDARD",
         "doosan_policy": {"session_return_pct": -0.9},
         "derived": {
@@ -90,7 +111,7 @@ def test_doosan_policy_assigns_standard_and_high_confidence_tiers():
         context=context,
     )
     high = doosan.apply_doosan_entry_policy(
-        _base_advisory(now),
+        _base_advisory(now, state="ENTRY_READY"),
         current_price=98_900,
         bars=bars,
         context=context,
@@ -120,6 +141,7 @@ def test_doosan_policy_keeps_absorption_recovery_in_watch():
 def test_high_tier_does_not_override_portable_recovery_caution():
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     source = _base_advisory(now)
+    source["state"] = source["raw_state"] = "ENTRY_READY"
     source["derived"]["recovery_episode"] = {"support": 98_500}
 
     result = doosan.apply_doosan_entry_policy(
@@ -138,13 +160,13 @@ def test_doosan_signal_still_requires_two_ten_second_observations():
     first_at = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     bars = _bars([100_000, 99_000, 98_500])
     first = doosan.apply_doosan_entry_policy(
-        _base_advisory(first_at),
+        _base_advisory(first_at, state="ENTRY_READY"),
         current_price=98_500,
         bars=bars,
         context=contract.session_context(first_at),
     )
     second = doosan.apply_doosan_entry_policy(
-        _base_advisory(first_at + timedelta(seconds=10)),
+        _base_advisory(first_at + timedelta(seconds=10), state="ENTRY_READY"),
         current_price=98_500,
         bars=bars,
         context=contract.session_context(first_at),
@@ -153,6 +175,98 @@ def test_doosan_signal_still_requires_two_ten_second_observations():
 
     assert promotion.apply(first)["state"] == "WATCH"
     assert promotion.apply(second)["state"] == "ENTRY_READY"
+
+
+def test_doosan_high_price_structure_is_capped_when_auxiliary_context_is_limited():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(now)
+    source["auxiliary_context"]["status"] = "LIMITED"
+
+    result = doosan.apply_doosan_entry_policy(
+        source,
+        current_price=98_500,
+        bars=_bars([100_000, 99_000, 98_500]),
+        context=contract.session_context(now),
+    )
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["signal_tier"] == "STANDARD"
+    assert "auxiliary_context_not_ready_for_high" in result["unmet_conditions"]
+
+
+def test_auxiliary_gap_is_explicit_and_not_reported_as_supportive_relative_strength():
+    advisory = {
+        "reasons": ["relative_strength_not_weak", "low_structure_confirmed"],
+        "unmet_conditions": [],
+        "source_quality": {"status": "PASS", "issues": []},
+        "provenance": {},
+    }
+
+    result = attach_auxiliary_summary(
+        advisory,
+        {
+            "status": "LIMITED",
+            "relative_status": "UNAVAILABLE",
+            "flow_status": "PARTIAL",
+            "external_status": "LIMITED",
+            "context_version": "doosan_krx_auxiliary_context_v1",
+        },
+    )
+
+    assert "relative_strength_not_weak" not in result["reasons"]
+    assert "low_structure_confirmed" in result["reasons"]
+    assert set(result["unmet_conditions"]) == {
+        "relative_strength_unavailable",
+        "regular_flow_unavailable",
+        "external_context_data_limited",
+    }
+    assert result["source_quality"]["auxiliary_status"] == "LIMITED"
+    assert result["auxiliary_context"]["relative_signal"] == "DATA_LIMITED"
+    assert result["auxiliary_context"]["flow_signal"] == "DATA_LIMITED"
+    assert result["auxiliary_context"]["external_risk_level"] == "DATA_LIMITED"
+    assert result["provenance"]["auxiliary_context_version"] == (
+        "doosan_krx_auxiliary_context_v1"
+    )
+
+
+def test_auxiliary_request_failures_remain_limited_without_blocking_core_collector():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+
+    class FailingClient:
+        def post(self, *_args, **_kwargs):
+            raise RuntimeError("optional_market_data_failed")
+
+    class FailingExternalProvider:
+        def fetch(self, _observed_at):
+            raise RuntimeError("optional_external_data_failed")
+
+    collector = WidgetAuxiliaryContextCollector(
+        DOOSAN_AUXILIARY_PROFILE,
+        external_provider=FailingExternalProvider(),
+    )
+    result = collector.collect(
+        client=FailingClient(),
+        observed_at=now,
+        context=contract.session_context(now),
+        primary_bars=_bars(
+            [100_000 - index * 10 for index in range(60)],
+            start=datetime(2026, 8, 5, 9, 0, tzinfo=KST),
+        ),
+    )
+
+    assert result["summary"]["status"] == "LIMITED"
+    assert result["relative"]["authority"] == (
+        "unavailable_neutral_no_positive_or_negative_authority"
+    )
+    assert result["flow"]["status"] == "UNAVAILABLE"
+    assert result["external_points"] == {}
+    assert {gap["source"] for gap in result["summary"]["optional_gaps"]} == {
+        "ka10080",
+        "ka20005",
+        "ka10064",
+        "ka90008",
+        "USDKRW",
+    }
 
 
 def test_entry_linked_exit_uses_target_or_completed_close_not_intrabar_low():
@@ -501,7 +615,7 @@ def test_non_actionable_reset_requires_fresh_two_observation_promotion():
     )
 
 
-def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
+def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
     monkeypatch, tmp_path
 ):
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
@@ -570,8 +684,50 @@ def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
                                 "trde_qty": "1000",
                             }
                             for index, close in enumerate(
-                                [100_000, 99_500, 99_000, 98_500]
+                                [100_000 - index * 10 for index in range(60)]
                             )
+                        ]
+                    }
+                )
+            if api_id == "ka20005":
+                return Response(
+                    {
+                        "inds_min_pole_qry": [
+                            {
+                                "cntr_tm": (
+                                    datetime(2026, 8, 5, 9, 0, tzinfo=KST)
+                                    + timedelta(minutes=index)
+                                ).strftime("%Y%m%d%H%M%S"),
+                                "open_pric": str(close + 100),
+                                "high_pric": str(close + 150),
+                                "low_pric": str(close - 50),
+                                "cur_prc": str(close),
+                                "trde_qty": "1000",
+                            }
+                            for index, close in enumerate(
+                                [300_000 - index * 10 for index in range(60)]
+                            )
+                        ]
+                    }
+                )
+            if api_id == "ka10064":
+                return Response(
+                    {
+                        "opmr_invsr_trde_chart": [
+                            {"tm": "095900", "frgnr_invsr": "-100"},
+                            {"tm": "100000", "frgnr_invsr": "-50"},
+                        ]
+                    }
+                )
+            if api_id == "ka90008":
+                return Response(
+                    {
+                        "stk_tm_prm_trde_trnsn": [
+                            {
+                                "tm": "100000",
+                                "prm_netprps_amt": "10",
+                                "prm_netprps_amt_irds": "5",
+                            }
                         ]
                     }
                 )
@@ -591,10 +747,28 @@ def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
                 )
             raise AssertionError(api_id)
 
+    class ExternalProvider:
+        def fetch(self, observed_at):
+            return {
+                "USDKRW": ExternalPoint(
+                    "USDKRW",
+                    "KRW=X",
+                    1400.0,
+                    0.0,
+                    observed_at.isoformat(),
+                    observed_at.isoformat(),
+                    0.0,
+                    "test",
+                    "BEST_EFFORT_DELAYED",
+                    "OPEN",
+                )
+            }
+
     session = FakeSession()
     collector = doosan.DoosanWidgetCollector(
         snapshot_path=tmp_path / "snapshot.json",
         observation_dir=tmp_path / "observations",
+        external_provider=ExternalProvider(),
         request_session=session,
     )
     payload = collector.collect_once(now)
@@ -604,7 +778,28 @@ def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
     assert {api_id for api_id, _ in session.calls} == {
         "ka10001",
         "ka10004",
+        "ka10064",
         "ka10080",
         "ka10081",
+        "ka20005",
+        "ka90008",
     }
-    assert all(call_payload["stk_cd"] == "034020" for _, call_payload in session.calls)
+    assert payload["advisory"]["auxiliary_context"]["status"] == "OBSERVED"
+    assert payload["advisory"]["auxiliary_context"]["relative_signal"] in {
+        "NOT_WEAK",
+        "WEAK",
+    }
+    assert payload["advisory"]["auxiliary_context"]["flow_signal"] == "NONWORSENING"
+    assert payload["advisory"]["flow"]["status"] == "OBSERVED"
+    assert payload["advisory"]["external_risk"]["level"] == "CLEAR"
+    assert payload["advisory"]["relative_strength"]["peer_symbol"] == "267260"
+    assert payload["advisory"]["relative_strength"]["authority"] == (
+        "observed_negative_veto_and_recovery_authority"
+    )
+    stock_codes = [
+        call_payload["stk_cd"]
+        for _, call_payload in session.calls
+        if "stk_cd" in call_payload
+    ]
+    assert "034020" in stock_codes
+    assert "267260" in stock_codes

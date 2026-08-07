@@ -605,8 +605,16 @@ class YahooExternalMarketProvider:
 
     TICKERS = {"NQ": "NQ=F", "MU": "MU", "USDKRW": "KRW=X"}
 
-    def __init__(self, downloader=None) -> None:
+    def __init__(
+        self,
+        downloader=None,
+        *,
+        tickers: dict[str, str] | None = None,
+        thread_name_prefix: str = "samsung-widget-yahoo",
+    ) -> None:
         self._downloader = downloader or yf.download
+        self.tickers = dict(self.TICKERS if tickers is None else tickers)
+        self.thread_name_prefix = str(thread_name_prefix).strip() or "widget-yahoo"
 
     def _fetch_one(self, key: str, ticker: str, now: datetime) -> ExternalPoint:
         received_at = _as_kst(now)
@@ -743,15 +751,15 @@ class YahooExternalMarketProvider:
         )
 
     def fetch(self, observed_at: datetime) -> dict[str, ExternalPoint]:
-        # Isolate the three best-effort sources so one five-second Yahoo delay
+        # Isolate configured best-effort sources so one five-second Yahoo delay
         # cannot serially consume the collector's ten-second refresh budget.
         with ThreadPoolExecutor(
-            max_workers=len(self.TICKERS),
-            thread_name_prefix="samsung-widget-yahoo",
+            max_workers=max(1, len(self.tickers)),
+            thread_name_prefix=self.thread_name_prefix,
         ) as executor:
             futures = {
                 key: executor.submit(self._fetch_one, key, ticker, observed_at)
-                for key, ticker in self.TICKERS.items()
+                for key, ticker in self.tickers.items()
             }
             points: dict[str, ExternalPoint] = {}
             for key, future in futures.items():
@@ -760,7 +768,7 @@ class YahooExternalMarketProvider:
                 except Exception as exc:
                     points[key] = ExternalPoint(
                         key=key,
-                        ticker=self.TICKERS[key],
+                        ticker=self.tickers[key],
                         value=None,
                         change_15m_pct=None,
                         observed_at=None,
@@ -808,12 +816,17 @@ def _age_external_points(
     return aged
 
 
-def evaluate_external_risk(points: dict[str, ExternalPoint]) -> dict[str, Any]:
+def evaluate_external_risk(
+    points: dict[str, ExternalPoint],
+    *,
+    thresholds: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    active_thresholds = EXTERNAL_THRESHOLDS if thresholds is None else thresholds
     adverse: list[str] = []
     severe: list[str] = []
     stale: list[str] = []
     unavailable: list[str] = []
-    for key, threshold in EXTERNAL_THRESHOLDS.items():
+    for key, threshold in active_thresholds.items():
         point = points.get(key)
         if point is None or point.quality == "UNAVAILABLE":
             unavailable.append(key)
@@ -960,15 +973,19 @@ def _same_window_relative_snapshot(
 def _relative_quality_assessment(
     relative: dict[str, Any], context: SessionContext
 ) -> tuple[bool, list[str], dict[str, Any]]:
-    samsung_change = _signed_float(relative.get("samsung_change_pct"))
-    sk_hynix_change = _signed_float(relative.get("sk_hynix_change_pct"))
-    kospi_change = _signed_float(relative.get("kospi_change_pct"))
+    primary_change = _signed_float(relative.get("primary_change_pct"))
+    if primary_change is None:
+        primary_change = _signed_float(relative.get("samsung_change_pct"))
+    peer_change = _signed_float(relative.get("peer_change_pct"))
+    if peer_change is None:
+        peer_change = _signed_float(relative.get("sk_hynix_change_pct"))
+    market_change = _signed_float(relative.get("market_change_pct"))
+    if market_change is None:
+        market_change = _signed_float(relative.get("kospi_change_pct"))
     comparisons = (
-        [sk_hynix_change, kospi_change]
-        if context.name == "KRX_REGULAR"
-        else [sk_hynix_change]
+        [peer_change, market_change] if context.name == "KRX_REGULAR" else [peer_change]
     )
-    if samsung_change is None or any(value is None for value in comparisons):
+    if primary_change is None or any(value is None for value in comparisons):
         return (
             False,
             ["relative_strength_unavailable"],
@@ -984,15 +1001,24 @@ def _relative_quality_assessment(
         value
         for value in comparisons
         if value is not None
-        and samsung_change < value - RELATIVE_UNDERPERFORMANCE_LIMIT_PCT
+        and primary_change < value - RELATIVE_UNDERPERFORMANCE_LIMIT_PCT
     ]
-    same_window = relative.get("same_window")
+    generic_same_window = relative.get("same_window_generic")
+    generic_contract = isinstance(generic_same_window, dict)
+    same_window = (
+        generic_same_window if generic_contract else relative.get("same_window")
+    )
     same_window_weak = False
     recovery_complete = True
     recovery_nonweak = True
-    comparison_names = (
-        ("sk_hynix", "kospi") if context.name == "KRX_REGULAR" else ("sk_hynix",)
-    )
+    if generic_contract:
+        comparison_names = (
+            ("peer", "market") if context.name == "KRX_REGULAR" else ("peer",)
+        )
+    else:
+        comparison_names = (
+            ("sk_hynix", "kospi") if context.name == "KRX_REGULAR" else ("sk_hynix",)
+        )
     if isinstance(same_window, dict):
         for comparison_name in comparison_names:
             windows = same_window.get(comparison_name)
@@ -1180,6 +1206,7 @@ def evaluate_advisory(
     regular_session: dict[str, Any] | None = None,
     quote_age_sec: float = 0.0,
     quote_received_at: str | None = None,
+    external_thresholds: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic widget-only advisory without score/AI authority."""
     flow = flow or {}
@@ -1195,7 +1222,9 @@ def evaluate_advisory(
         current_price=current_price,
     )
     external_points = _age_external_points(external_points, observed_at)
-    external_risk = evaluate_external_risk(external_points)
+    external_risk = evaluate_external_risk(
+        external_points, thresholds=external_thresholds
+    )
     trend_details = analyze_trends(bars, session_name=context.name)
     trends = {
         key: str(detail.get("state") or "unavailable")

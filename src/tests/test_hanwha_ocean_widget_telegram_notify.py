@@ -36,6 +36,9 @@ def _event_payload(now: datetime) -> dict:
             "structural_support": 67_800,
             "target_price": 68_900,
             "session_return_pct": -1.2,
+            "relative_signal": "NOT_WEAK",
+            "flow_signal": "NONWORSENING",
+            "external_risk_level": "CLEAR",
         },
         "exit_event": None,
     }
@@ -58,6 +61,7 @@ def test_admin_notifier_sends_entry_and_exit_once(tmp_path):
     assert sent[0][:2] == ("TOKEN", "ADMIN")
     assert "진입 신호" in sent[0][2]
     assert "청산 후 새 구조 재진입 가능" in sent[0][2]
+    assert "상대 NOT_WEAK · 수급 NONWORSENING · 외부 CLEAR" in sent[0][2]
     assert "자동주문 아님" in sent[0][2]
 
     payload["exit_event"] = {

@@ -125,6 +125,12 @@ def build_entry_message(payload: dict[str, Any], event: dict[str, Any]) -> str:
             f"+1% 기준가: {_format_price(event.get('target_price'))}",
             f"구조 지지: {_format_price(event.get('structural_support'))}",
             f"세션 등락: {event.get('session_return_pct')}%",
+            (
+                "보조확인: "
+                f"상대 {event.get('relative_signal') or event.get('relative_status') or '-'} · "
+                f"수급 {event.get('flow_signal') or event.get('flow_status') or '-'} · "
+                f"외부 {event.get('external_risk_level') or '-'}"
+            ),
             f"유효시각: {valid_text}",
             "조건: KRX 첫 눌림 · 표준 반등거래량 · 청산 후 새 구조 재진입 가능",
             "권한: 관측용 · 자동주문 아님",

@@ -4,7 +4,10 @@ from datetime import datetime, timedelta
 
 from src.engine.monitoring import hanwha_ocean_widget_advisory as hanwha_ocean
 from src.engine.monitoring import hanwha_ocean_widget_contract as contract
-from src.engine.monitoring.samsung_widget_advisory import AdvisoryPromotionFilter
+from src.engine.monitoring.samsung_widget_advisory import (
+    AdvisoryPromotionFilter,
+    ExternalPoint,
+)
 from src.engine.monitoring.samsung_widget_contract import KST
 
 
@@ -46,10 +49,23 @@ def _base_advisory(
         "entry_price_low": 99_000,
         "entry_price_high": 99_100,
         "reasons": ["low_structure_confirmed"],
-        "unmet_conditions": ["regular_flow_unavailable"],
+        "unmet_conditions": [],
         "observed_at": now.isoformat(),
         "valid_until": (now + timedelta(seconds=60)).isoformat(),
         "source_quality": {"status": "PASS", "issues": []},
+        "auxiliary_context": {
+            "status": "OBSERVED",
+            "relative_status": "OBSERVED",
+            "flow_status": "OBSERVED",
+            "external_status": "OBSERVED",
+        },
+        "external_risk": {"level": "CLEAR"},
+        "flow": {
+            "status": "OBSERVED",
+            "live_for_current_session": True,
+            "foreign_nonworsening": True,
+            "program_nonworsening": True,
+        },
         "signal_tier": "STANDARD",
         "hanwha_ocean_policy": {"session_return_pct": -0.9},
         "derived": {
@@ -107,6 +123,7 @@ def test_hanwha_ocean_policy_assigns_structure_based_signal_tiers():
     high = hanwha_ocean.apply_hanwha_ocean_entry_policy(
         _base_advisory(
             now,
+            state="ENTRY_READY",
             support_confirmation="retest_held",
             retest_held=True,
             retest_rebound_confirmed=True,
@@ -145,6 +162,7 @@ def test_high_tier_does_not_override_portable_recovery_caution():
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     source = _base_advisory(
         now,
+        state="ENTRY_READY",
         support_confirmation="retest_held",
         retest_held=True,
         retest_rebound_confirmed=True,
@@ -169,6 +187,7 @@ def test_hanwha_ocean_signal_still_requires_two_ten_second_observations():
     first = hanwha_ocean.apply_hanwha_ocean_entry_policy(
         _base_advisory(
             first_at,
+            state="ENTRY_READY",
             support_confirmation="retest_held",
             retest_held=True,
             retest_rebound_confirmed=True,
@@ -180,6 +199,7 @@ def test_hanwha_ocean_signal_still_requires_two_ten_second_observations():
     second = hanwha_ocean.apply_hanwha_ocean_entry_policy(
         _base_advisory(
             first_at + timedelta(seconds=10),
+            state="ENTRY_READY",
             support_confirmation="retest_held",
             retest_held=True,
             retest_rebound_confirmed=True,
@@ -192,6 +212,45 @@ def test_hanwha_ocean_signal_still_requires_two_ten_second_observations():
 
     assert promotion.apply(first)["state"] == "WATCH"
     assert promotion.apply(second)["state"] == "ENTRY_READY"
+
+
+def test_hanwha_ocean_high_requires_resistance_reclaim_and_auxiliary_context():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(
+        now,
+        state="ENTRY_READY",
+        support_confirmation="retest_held",
+        retest_held=True,
+        retest_rebound_confirmed=True,
+        resistance_reclaimed=False,
+    )
+
+    resistance_pending = hanwha_ocean.apply_hanwha_ocean_entry_policy(
+        source,
+        current_price=98_500,
+        bars=_bars([100_000, 99_000, 98_500]),
+        context=contract.session_context(now),
+    )
+    assert resistance_pending["state"] == "ENTRY_CAUTION"
+    assert resistance_pending["signal_tier"] == "STANDARD"
+    assert (
+        "hanwha_ocean_recent_resistance_reclaim_required_for_high"
+        in resistance_pending["unmet_conditions"]
+    )
+
+    source["derived"]["recent_resistance_reclaimed"] = True
+    source["auxiliary_context"]["status"] = "LIMITED"
+    auxiliary_limited = hanwha_ocean.apply_hanwha_ocean_entry_policy(
+        source,
+        current_price=98_500,
+        bars=_bars([100_000, 99_000, 98_500]),
+        context=contract.session_context(now),
+    )
+    assert auxiliary_limited["state"] == "ENTRY_CAUTION"
+    assert auxiliary_limited["signal_tier"] == "STANDARD"
+    assert (
+        "auxiliary_context_not_ready_for_high" in auxiliary_limited["unmet_conditions"]
+    )
 
 
 def test_entry_linked_exit_uses_target_or_completed_close_not_intrabar_low():
@@ -518,7 +577,7 @@ def test_completed_legacy_snapshot_migrates_to_rearm_pending():
     assert restarted.rearm_after_bar == "20260805100000"
 
 
-def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
+def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
     monkeypatch, tmp_path
 ):
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
@@ -587,8 +646,50 @@ def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
                                 "trde_qty": "1000",
                             }
                             for index, close in enumerate(
-                                [100_000, 99_500, 99_000, 98_500]
+                                [100_000 - index * 10 for index in range(60)]
                             )
+                        ]
+                    }
+                )
+            if api_id == "ka20005":
+                return Response(
+                    {
+                        "inds_min_pole_qry": [
+                            {
+                                "cntr_tm": (
+                                    datetime(2026, 8, 5, 9, 0, tzinfo=KST)
+                                    + timedelta(minutes=index)
+                                ).strftime("%Y%m%d%H%M%S"),
+                                "open_pric": str(close + 100),
+                                "high_pric": str(close + 150),
+                                "low_pric": str(close - 50),
+                                "cur_prc": str(close),
+                                "trde_qty": "1000",
+                            }
+                            for index, close in enumerate(
+                                [300_000 - index * 10 for index in range(60)]
+                            )
+                        ]
+                    }
+                )
+            if api_id == "ka10064":
+                return Response(
+                    {
+                        "opmr_invsr_trde_chart": [
+                            {"tm": "095900", "frgnr_invsr": "-100"},
+                            {"tm": "100000", "frgnr_invsr": "-50"},
+                        ]
+                    }
+                )
+            if api_id == "ka90008":
+                return Response(
+                    {
+                        "stk_tm_prm_trde_trnsn": [
+                            {
+                                "tm": "100000",
+                                "prm_netprps_amt": "10",
+                                "prm_netprps_amt_irds": "5",
+                            }
                         ]
                     }
                 )
@@ -608,10 +709,28 @@ def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
                 )
             raise AssertionError(api_id)
 
+    class ExternalProvider:
+        def fetch(self, observed_at):
+            return {
+                "USDKRW": ExternalPoint(
+                    "USDKRW",
+                    "KRW=X",
+                    1400.0,
+                    0.0,
+                    observed_at.isoformat(),
+                    observed_at.isoformat(),
+                    0.0,
+                    "test",
+                    "BEST_EFFORT_DELAYED",
+                    "OPEN",
+                )
+            }
+
     session = FakeSession()
     collector = hanwha_ocean.HanwhaOceanWidgetCollector(
         snapshot_path=tmp_path / "snapshot.json",
         observation_dir=tmp_path / "observations",
+        external_provider=ExternalProvider(),
         request_session=session,
     )
     payload = collector.collect_once(now)
@@ -621,7 +740,28 @@ def test_collector_uses_only_cached_token_and_four_read_only_market_requests(
     assert {api_id for api_id, _ in session.calls} == {
         "ka10001",
         "ka10004",
+        "ka10064",
         "ka10080",
         "ka10081",
+        "ka20005",
+        "ka90008",
     }
-    assert all(call_payload["stk_cd"] == "042660" for _, call_payload in session.calls)
+    assert payload["advisory"]["auxiliary_context"]["status"] == "OBSERVED"
+    assert payload["advisory"]["auxiliary_context"]["relative_signal"] in {
+        "NOT_WEAK",
+        "WEAK",
+    }
+    assert payload["advisory"]["auxiliary_context"]["flow_signal"] == "NONWORSENING"
+    assert payload["advisory"]["flow"]["status"] == "OBSERVED"
+    assert payload["advisory"]["external_risk"]["level"] == "CLEAR"
+    assert payload["advisory"]["relative_strength"]["peer_symbol"] == "010140"
+    assert payload["advisory"]["relative_strength"]["authority"] == (
+        "observed_negative_veto_and_recovery_authority"
+    )
+    stock_codes = [
+        call_payload["stk_cd"]
+        for _, call_payload in session.calls
+        if "stk_cd" in call_payload
+    ]
+    assert "042660" in stock_codes
+    assert "010140" in stock_codes

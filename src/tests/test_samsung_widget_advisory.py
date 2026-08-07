@@ -1234,6 +1234,27 @@ def test_regular_relative_strength_requires_both_peer_and_kospi_inputs():
     assert "relative_strength_unavailable" in result["unmet_conditions"]
 
 
+def test_relative_strength_accepts_portable_primary_peer_market_schema():
+    context = contract.session_context(datetime(2026, 8, 5, 10, 0, tzinfo=KST))
+    portable = {
+        "primary_change_pct": -1.0,
+        "peer_change_pct": 0.0,
+        "market_change_pct": 0.0,
+        "same_window_generic": {},
+    }
+
+    ok, issues = advisory._relative_quality(portable, context)
+
+    assert ok is False
+    assert issues == ["relative_strength_weak"]
+
+    portable["primary_change_pct"] = 0.0
+    ok, issues = advisory._relative_quality(portable, context)
+
+    assert ok is True
+    assert issues == []
+
+
 def test_nxt_relative_strength_does_not_require_closed_krx_index():
     context = advisory.session_context(datetime(2026, 8, 3, 15, 45, tzinfo=KST))
 

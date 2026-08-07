@@ -45,7 +45,8 @@ METRIC_CONTRACT = {
     "sample_floor": "three_completed_1m_bars_and_two_10s_confirmations",
     "primary_decision_metric": "none_operator_advisory",
     "source_quality_gate": (
-        "fresh_coherent_quote_bbo_completed_1m_and_previous_day_ohlc"
+        "fresh_coherent_quote_bbo_completed_1m_and_previous_day_ohlc;"
+        "high_requires_observed_peer_kospi_flow_and_usdkrw_context"
     ),
     "forbidden_uses": [
         "real_order_submission",
@@ -60,15 +61,25 @@ METRIC_CONTRACT = {
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-05T16:55:23+09:00",
+    "retrieved_at_kst": "2026-08-07T10:44:54+09:00",
     "inspected_paths": [
         "kiwoom_docs/종목정보.md",
+        "kiwoom_docs/시세.md",
         "kiwoom_docs/차트.md",
+        "kiwoom_docs/업종.md",
         "kiwoom/specs.py",
         "kiwoom/core",
         "postman/kiwoom-openapi.postman_collection.json",
     ],
-    "request_scope": ["ka10001", "ka10004", "ka10080", "ka10081"],
+    "request_scope": [
+        "ka10001",
+        "ka10004",
+        "ka10064",
+        "ka10080",
+        "ka10081",
+        "ka20005",
+        "ka90008",
+    ],
 }
 
 

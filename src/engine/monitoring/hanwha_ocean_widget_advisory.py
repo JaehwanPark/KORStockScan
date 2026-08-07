@@ -26,6 +26,7 @@ from src.engine.monitoring.samsung_widget_advisory import (
     AdvisoryBreakRearmFilter,
     AdvisoryPromotionFilter,
     AdvisoryRecoveryEpisodeFilter,
+    ExternalMarketProvider,
     KiwoomReadOnlyClient,
     MinuteBar,
     ObservationRecorder,
@@ -50,6 +51,11 @@ from src.engine.monitoring.samsung_widget_contract import (
 from src.engine.monitoring.widget_advisory_calibration_policy import (
     WidgetCalibrationPolicyLoader,
 )
+from src.engine.monitoring.widget_auxiliary_context import (
+    HANWHA_OCEAN_AUXILIARY_PROFILE,
+    WidgetAuxiliaryContextCollector,
+    attach_auxiliary_summary,
+)
 from src.engine.sniper_config import CONF
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 from src.utils import kiwoom_utils
@@ -66,37 +72,6 @@ def _append_unique(values: object, value: str) -> list[str]:
     if value not in result:
         result.append(value)
     return result
-
-
-def _remove_values(values: object, blocked: set[str]) -> list[str]:
-    return (
-        [str(item) for item in values if item and str(item) not in blocked]
-        if isinstance(values, list)
-        else []
-    )
-
-
-def _neutral_relative_context(
-    *, current_price: int, bars: list[MinuteBar], observed_at: datetime
-) -> dict[str, Any]:
-    """Satisfy the portable base schema without inventing peer alpha.
-
-    Relative context is not decision-bearing in V1. Equal comparison values
-    therefore provide no positive or negative authority; the Hanwha Ocean
-    overlay owns the actual promotion decision.
-    """
-    session_open = bars[0].open if bars else current_price
-    session_return = (
-        ((current_price - session_open) / session_open) * 100 if session_open else 0.0
-    )
-    return {
-        "samsung_change_pct": round(session_return, 4),
-        "sk_hynix_change_pct": round(session_return, 4),
-        "kospi_change_pct": round(session_return, 4),
-        "observed_at": _as_kst(observed_at).isoformat(),
-        "authority": "neutralized_no_positive_or_negative_authority",
-        "portable_schema_compatibility_only": True,
-    }
 
 
 def apply_hanwha_ocean_entry_policy(
@@ -129,9 +104,15 @@ def apply_hanwha_ocean_entry_policy(
         retest_held
         and retest_rebound_confirmed
         and vwap_reclaimed
+        and resistance_reclaimed
         and volume_mode == "standard_rebound"
     )
-    tier = "HIGH" if high_confidence_structure else "STANDARD"
+    base_state = str(result.get("raw_state") or result.get("state") or "DATA_WAIT")
+    auxiliary_context = result.get("auxiliary_context")
+    auxiliary_context = auxiliary_context if isinstance(auxiliary_context, dict) else {}
+    auxiliary_observed = auxiliary_context.get("status") == "OBSERVED"
+    auxiliary_high_ready = bool(auxiliary_observed and base_state == "ENTRY_READY")
+    tier = "HIGH" if high_confidence_structure and auxiliary_high_ready else "STANDARD"
     policy = {
         "strategy_profile": contract.STRATEGY_PROFILE,
         "session_scope": "KRX_REGULAR_ONLY",
@@ -147,9 +128,12 @@ def apply_hanwha_ocean_entry_policy(
         "retest_rebound_confirmed": retest_rebound_confirmed,
         "required_volume_confirmation_mode": "standard_rebound",
         "observed_volume_confirmation_mode": volume_mode,
+        "price_structure_tier": "HIGH" if high_confidence_structure else "STANDARD",
         "signal_tier": tier,
-        "relative_context_authority": "diagnostic_only_neutralized_in_v1",
-        "external_context_authority": "diagnostic_only_no_promotion",
+        "relative_context_authority": "observed_negative_veto_and_recovery",
+        "external_context_authority": "negative_risk_only_no_positive_promotion",
+        "auxiliary_context_status": auxiliary_context.get("status") or "LIMITED",
+        "auxiliary_high_ready": auxiliary_high_ready,
         "episode_policy": contract.EPISODE_POLICY,
     }
     result["strategy_profile"] = contract.STRATEGY_PROFILE
@@ -161,17 +145,13 @@ def apply_hanwha_ocean_entry_policy(
         {
             "symbol": contract.HANWHA_OCEAN_CODE,
             "strategy_profile": contract.STRATEGY_PROFILE,
-            "relative_context": "neutralized_schema_compatible_no_authority",
-            "external_context": "not_used_for_hanwha_ocean_v1_promotion",
+            "relative_context": "peer_kospi_observed_or_neutral_limited",
+            "external_context": "usdkrw_best_effort_negative_risk_only",
             "kiwoom_official_reference": contract.KIWOOM_OFFICIAL_REFERENCE,
         }
     )
-    result["unmet_conditions"] = _remove_values(
-        result.get("unmet_conditions"),
-        {"regular_flow_unavailable", "relative_strength_unavailable"},
-    )
 
-    raw_state = str(result.get("raw_state") or result.get("state") or "DATA_WAIT")
+    raw_state = base_state
     if context.name != "KRX_REGULAR" or not context.active:
         return result
     if raw_state not in ACTIONABLE_ENTRY_STATES:
@@ -202,13 +182,25 @@ def apply_hanwha_ocean_entry_policy(
         result.get("reasons"), "hanwha_ocean_standard_rebound_volume"
     )
     base_caution_must_remain = bool(
-        (
+        raw_state != "ENTRY_READY"
+        or not auxiliary_high_ready
+        or not resistance_reclaimed
+        or (
             derived.get("recent_resistance_reclaimed") is True
             and derived.get("vwap_reclaimed") is not True
         )
         or isinstance(derived.get("recovery_episode"), dict)
     )
     policy["base_caution_preserved"] = base_caution_must_remain
+    if not resistance_reclaimed:
+        result["unmet_conditions"] = _append_unique(
+            result.get("unmet_conditions"),
+            "hanwha_ocean_recent_resistance_reclaim_required_for_high",
+        )
+    if high_confidence_structure and not auxiliary_high_ready:
+        result["unmet_conditions"] = _append_unique(
+            result.get("unmet_conditions"), "auxiliary_context_not_ready_for_high"
+        )
     if high_confidence_structure and not base_caution_must_remain:
         result["reasons"] = _append_unique(
             result.get("reasons"), "hanwha_ocean_retest_vwap_high_confidence"
@@ -619,6 +611,8 @@ class HanwhaOceanDailyEpisodeTracker:
             f"{self.daily_entry_count:02d}:{now.strftime('%H%M%S')}"
         )
         policy = advisory.get("hanwha_ocean_policy") or {}
+        auxiliary = advisory.get("auxiliary_context") or {}
+        external_risk = advisory.get("external_risk") or {}
         self.entry_event = {
             "event_id": event_id,
             "event_type": "ENTRY",
@@ -632,6 +626,12 @@ class HanwhaOceanDailyEpisodeTracker:
             "structural_support": support,
             "target_price": self.target_price,
             "session_return_pct": policy.get("session_return_pct"),
+            "auxiliary_status": auxiliary.get("status"),
+            "relative_status": auxiliary.get("relative_status"),
+            "relative_signal": auxiliary.get("relative_signal"),
+            "flow_status": auxiliary.get("flow_status"),
+            "flow_signal": auxiliary.get("flow_signal"),
+            "external_risk_level": external_risk.get("level"),
             "observed_at": now.isoformat(),
             "valid_until": advisory.get("valid_until") or self._valid_until(now),
             "source_quality_status": (
@@ -838,6 +838,7 @@ class HanwhaOceanWidgetCollector:
         *,
         snapshot_path: Path = contract.DEFAULT_SNAPSHOT_PATH,
         observation_dir: Path = contract.DEFAULT_OBSERVATION_DIR,
+        external_provider: ExternalMarketProvider | None = None,
         request_session: requests.Session | None = None,
         notifier: HanwhaOceanWidgetTelegramNotifier | None = None,
         calibration_policy_loader: WidgetCalibrationPolicyLoader | None = None,
@@ -849,6 +850,10 @@ class HanwhaOceanWidgetCollector:
             calibration_policy_loader or WidgetCalibrationPolicyLoader()
         )
         self.request_budget = ReadOnlyRequestBudget()
+        self.auxiliary_context = WidgetAuxiliaryContextCollector(
+            HANWHA_OCEAN_AUXILIARY_PROFILE,
+            external_provider=external_provider,
+        )
         self.break_rearm_filter = AdvisoryBreakRearmFilter()
         self.recovery_episode_filter = AdvisoryRecoveryEpisodeFilter()
         self.promotion_filter = AdvisoryPromotionFilter()
@@ -881,6 +886,7 @@ class HanwhaOceanWidgetCollector:
         self._last_minute_fetch = ""
         self._last_daily_fetch = ""
         self._restore_attempted = False
+        self.auxiliary_context.reset()
         self.break_rearm_filter.reset()
         self.recovery_episode_filter.reset()
         self.promotion_filter.reset()
@@ -1059,6 +1065,13 @@ class HanwhaOceanWidgetCollector:
             cache_fetch_day=self._last_daily_fetch,
         )
 
+        auxiliary = self.auxiliary_context.collect(
+            client=client,
+            observed_at=now,
+            context=context,
+            primary_bars=bars,
+        )
+
         decision_now = now if observed_at is not None else _now_kst()
         quote_age_sec = max(
             0.0, (decision_now - _as_kst(quote_received_at)).total_seconds()
@@ -1074,19 +1087,14 @@ class HanwhaOceanWidgetCollector:
             bars=bars,
             bbo=bbo,
             previous_day=previous_day,
-            relative=_neutral_relative_context(
-                current_price=current_price, bars=bars, observed_at=decision_now
-            ),
-            external_points={},
-            flow={
-                "status": "NOT_USED_HANWHA_OCEAN_V1",
-                "live_for_current_session": False,
-                "foreign_nonworsening": False,
-                "program_nonworsening": False,
-            },
+            relative=auxiliary["relative"],
+            external_points=auxiliary["external_points"],
+            flow=auxiliary["flow"],
             quote_age_sec=quote_age_sec,
             quote_received_at=_as_kst(quote_received_at).isoformat(),
+            external_thresholds=auxiliary["external_thresholds"],
         )
+        advisory = attach_auxiliary_summary(advisory, auxiliary["summary"])
         advisory = self.break_rearm_filter.apply(
             advisory, latest_bar=bars[-1] if bars else None
         )
@@ -1115,7 +1123,6 @@ class HanwhaOceanWidgetCollector:
             calibration_policy=calibration_policy,
         )
         advisory["metric_contract"] = contract.METRIC_CONTRACT
-        advisory.setdefault("source_quality", {})["auxiliary_status"] = "NOT_APPLICABLE"
         advisory.setdefault("provenance", {})["cache_scope"] = [
             now.date().isoformat(),
             "KRX_REGULAR",
