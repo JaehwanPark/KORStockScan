@@ -9699,9 +9699,7 @@ def test_launcher_pid_expected_env_disables_expired_guard():
     )
 
     assert expected["KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED"] == "false"
-    assert disabled == [
-        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED"
-    ]
+    assert disabled == ["KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED"]
 
 
 def test_verify_runtime_env_handoff_uses_target_date_operator_overlay(

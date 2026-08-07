@@ -2798,9 +2798,55 @@ def _correlation(
         if row.get("realized_profit_pct") is not None
     ]
     matched_event_count = len(matched)
+    matched_stage_counts = Counter(
+        str(row.get("stage") or "unknown").strip().lower() for row in matched
+    )
+    position_cycle_ids = sorted(
+        {
+            str(row.get("position_cycle_id"))
+            for row in matched
+            if row.get("position_cycle_id") not in (None, "", "-")
+        }
+    )
+    probe_bundle_ids = sorted(
+        {
+            str(row.get("probe_bundle_id"))
+            for row in matched
+            if row.get("probe_bundle_id") not in (None, "", "-")
+        }
+    )
+    broker_order_nos = sorted(
+        {
+            str(row.get("broker_order_no"))
+            for row in matched
+            if row.get("broker_order_no") not in (None, "", "-")
+        }
+    )
+
+    def stage_seen(*tokens: str) -> bool:
+        return any(
+            any(token in stage for token in tokens) for stage in matched_stage_counts
+        )
+
+    initial_probe_seen = any(
+        "probe" in stage and "post_probe" not in stage and "post-probe" not in stage
+        for stage in matched_stage_counts
+    )
+
     return {
         "status": "exact_matched" if matched else "open_unresolved",
         "matched_event_count": matched_event_count,
+        "matched_stage_counts": dict(matched_stage_counts),
+        "position_cycle_ids": position_cycle_ids,
+        "probe_bundle_ids": probe_bundle_ids,
+        "broker_order_nos": broker_order_nos,
+        "lifecycle_stage_presence": {
+            "probe": initial_probe_seen,
+            "post_probe": stage_seen("post_probe", "post-probe"),
+            "residual_multi_leg": stage_seen("residual", "multi_leg", "multi-leg"),
+            "scale_in": stage_seen("scale_in", "scale-in", "avg_down", "pyramid"),
+            "exit": stage_seen("sell", "exit", "trade_completed", "position_completed"),
+        },
         "actual_order_submitted": (
             any(row.get("actual_order_submitted") for row in matched)
             if matched
@@ -2810,6 +2856,7 @@ def _correlation(
             any(row.get("filled") for row in matched) if matched else None
         ),
         "realized_profit_pct": realized[-1] if realized else None,
+        "realized_event_count": len(realized),
         "realized_separate_from_counterfactual": True,
     }
 
@@ -8163,6 +8210,557 @@ def _semantic_repair_provenance_matches(
     )
 
 
+def _entry_setup_state_from_request(request: dict[str, Any]) -> str:
+    evidence = request.get("entry_setup_evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    return str(evidence.get("setup_state") or "NOT_PREPARED").strip().upper()
+
+
+def _entry_opportunity_funnel_attribution(
+    *,
+    labels: list[dict[str, Any]],
+    prepared_requests: list[dict[str, Any]],
+    comparable_rows: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    candidate_execution_requested: bool,
+) -> dict[str, Any]:
+    """Measure Entry opportunity recall before the candidate execution budget.
+
+    Labels are decision events, not independent trade episodes.  The report keeps
+    venue/session cohorts separate and treats candidate replay coverage as a
+    sampling layer so an unevaluated READY row cannot be mislabeled as an AI
+    rejection.
+    """
+
+    prepared_by_trace: dict[str, dict[str, Any]] = {}
+    prepared_states_by_trace: dict[str, set[str]] = defaultdict(set)
+    for request in prepared_requests:
+        if _stage(request.get("stage")) != "entry":
+            continue
+        trace_id = str(request.get("decision_trace_id") or "").strip()
+        if trace_id:
+            prepared_states_by_trace[trace_id].add(
+                _entry_setup_state_from_request(request)
+            )
+            if trace_id not in prepared_by_trace:
+                prepared_by_trace[trace_id] = request
+    conflicting_prepared_trace_ids = {
+        trace_id
+        for trace_id, states in prepared_states_by_trace.items()
+        if len(states) > 1
+    }
+    comparison_by_trace = {
+        str(row.get("decision_trace_id") or "").strip(): row
+        for row in comparable_rows
+        if _stage(row.get("stage")) == "entry" and row.get("decision_trace_id")
+    }
+    result_by_trace = {
+        str(row.get("decision_trace_id") or "").strip(): row
+        for row in results
+        if _stage(row.get("stage")) == "entry" and row.get("decision_trace_id")
+    }
+
+    eligible_labels: list[dict[str, Any]] = []
+    for label in labels:
+        if (
+            _stage(label.get("decision_stage")) != "entry"
+            or label.get("source_quality_status") != "pass"
+            or label.get("primary_cohort_eligible") is not True
+        ):
+            continue
+        metric = _primary_metric(label) or {}
+        if not metric.get("entry_path_first_hit"):
+            continue
+        eligible_labels.append(label)
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for label in eligible_labels:
+        grouped[
+            (
+                _venue(label.get("effective_venue")) or "UNKNOWN",
+                _session(label.get("session_bucket")) or "UNKNOWN",
+            )
+        ].append(label)
+
+    cohorts: list[dict[str, Any]] = []
+    for (venue, session), cohort_labels in sorted(grouped.items()):
+        control_action_path: dict[str, Counter[str]] = defaultdict(Counter)
+        candidate_action_path: dict[str, Counter[str]] = defaultdict(Counter)
+        path_counts: Counter[str] = Counter()
+        setup_state_counts: Counter[str] = Counter()
+        first_blocker_counts: Counter[str] = Counter()
+        target_first_blocker_counts: Counter[str] = Counter()
+        control_action_counts: Counter[str] = Counter()
+        candidate_action_counts: Counter[str] = Counter()
+        candidate_execution_status_counts: Counter[str] = Counter()
+        prepared_count = 0
+        attempted_count = 0
+        evaluated_count = 0
+        target_first_count = 0
+        profit_opportunity_count = 0
+        control_target_first_capture_count = 0
+        control_target_first_probe_arm_count = 0
+        control_adverse_first_exposure_count = 0
+        candidate_evaluated_target_first_count = 0
+        candidate_target_first_capture_count = 0
+        candidate_adverse_first_exposure_count = 0
+
+        for label in cohort_labels:
+            trace_id = str(label.get("decision_trace_id") or "").strip()
+            metric = _primary_metric(label) or {}
+            path = str(metric.get("entry_path_first_hit") or "unknown")
+            path_counts[path] += 1
+            target_first = path == "target_first"
+            if target_first:
+                target_first_count += 1
+            if metric.get("profit_opportunity_observed") is True:
+                profit_opportunity_count += 1
+
+            control_action = str(label.get("action") or "UNKNOWN").strip().upper()
+            control_exposed = control_action in EXPOSURE_ACTIONS
+            control_probe_armed = bool(
+                control_exposed or label.get("entry_probe_intent") is True
+            )
+            control_action_counts[control_action] += 1
+            control_action_path[control_action][path] += 1
+            if target_first and control_exposed:
+                control_target_first_capture_count += 1
+            if target_first and control_probe_armed:
+                control_target_first_probe_arm_count += 1
+            if path == "adverse_first" and control_exposed:
+                control_adverse_first_exposure_count += 1
+
+            prepared = prepared_by_trace.get(trace_id)
+            comparison = comparison_by_trace.get(trace_id)
+            result = result_by_trace.get(trace_id)
+            if result is not None:
+                attempted_count += 1
+                candidate_execution_status_counts[
+                    str(result.get("status") or "unknown")
+                ] += 1
+            candidate_action = "UNKNOWN"
+            candidate_exposed = False
+            if comparison is not None:
+                evaluated_count += 1
+                candidate_action = (
+                    str(comparison.get("candidate_action") or "UNKNOWN").strip().upper()
+                )
+                candidate_action_counts[candidate_action] += 1
+                candidate_action_path[candidate_action][path] += 1
+                candidate_exposed = bool(
+                    comparison.get("candidate_exposure_selected") is True
+                )
+                if target_first:
+                    candidate_evaluated_target_first_count += 1
+                    if candidate_exposed:
+                        candidate_target_first_capture_count += 1
+                if path == "adverse_first" and candidate_exposed:
+                    candidate_adverse_first_exposure_count += 1
+            if trace_id in conflicting_prepared_trace_ids:
+                prepared_count += 1
+                setup_state_counts["CONFLICT"] += 1
+                blocker = "prepared_setup_state_conflict"
+            elif prepared is None:
+                blocker = "paired_request_not_prepared"
+            else:
+                prepared_count += 1
+                setup_state = _entry_setup_state_from_request(prepared)
+                setup_state_counts[setup_state] += 1
+                if setup_state == "INVALID":
+                    blocker = "deterministic_setup_invalid"
+                elif setup_state == "WAIT_CONFIRMATION":
+                    blocker = "deterministic_setup_wait_confirmation"
+                elif result is None and candidate_execution_requested:
+                    blocker = "candidate_execution_budget_deferred"
+                elif result is None:
+                    blocker = "candidate_execution_not_requested"
+                elif result.get("status") == "provider_failed":
+                    blocker = "candidate_provider_failed"
+                elif result.get("status") == "schema_rejected":
+                    blocker = "candidate_schema_rejected"
+                elif comparison is None:
+                    blocker = "candidate_comparison_ineligible"
+                elif candidate_exposed:
+                    blocker = "candidate_exposure_selected"
+                elif comparison.get("entry_ai_veto_corroborated") is True:
+                    blocker = "ai_risk_veto_corroborated"
+                elif comparison.get("candidate_probe_armed") is True:
+                    blocker = "bounded_probe_arm_pending_recheck"
+                elif candidate_action == "WAIT":
+                    blocker = "composer_wait_without_probe_arm"
+                else:
+                    blocker = "composer_drop_or_no_exposure"
+            first_blocker_counts[blocker] += 1
+            if target_first:
+                target_first_blocker_counts[blocker] += 1
+
+        eligible_count = len(cohort_labels)
+        cohorts.append(
+            {
+                "effective_venue": venue,
+                "session_bucket": session,
+                "eligible_decision_event_count": eligible_count,
+                "eligible_unique_symbol_count": len(
+                    {
+                        _normalize_stock_code(row.get("stock_code"))
+                        for row in cohort_labels
+                        if _normalize_stock_code(row.get("stock_code"))
+                    }
+                ),
+                "decision_event_semantics": (
+                    "repeated_same_symbol_decisions_are_not_independent_trade_episodes"
+                ),
+                "entry_path_first_hit_counts": dict(path_counts),
+                "profit_opportunity_1pct_count": profit_opportunity_count,
+                "control_action_counts": dict(control_action_counts),
+                "control_action_by_entry_path": {
+                    action: dict(counts)
+                    for action, counts in sorted(control_action_path.items())
+                },
+                "control_target_first_capture_count": (
+                    control_target_first_capture_count
+                ),
+                "control_target_first_capture_rate_pct": (
+                    control_target_first_capture_count / target_first_count * 100.0
+                    if target_first_count
+                    else None
+                ),
+                "control_target_first_probe_arm_count": (
+                    control_target_first_probe_arm_count
+                ),
+                "control_adverse_first_exposure_count": (
+                    control_adverse_first_exposure_count
+                ),
+                "prepared_setup_decision_count": prepared_count,
+                "prepared_setup_coverage_pct": (
+                    prepared_count / eligible_count * 100.0 if eligible_count else None
+                ),
+                "prepared_setup_state_counts": dict(setup_state_counts),
+                "prepared_setup_state_conflict_count": sum(
+                    str(row.get("decision_trace_id") or "").strip()
+                    in conflicting_prepared_trace_ids
+                    for row in cohort_labels
+                ),
+                "candidate_execution_attempted_decision_count": attempted_count,
+                "candidate_execution_attempt_coverage_pct": (
+                    attempted_count / prepared_count * 100.0 if prepared_count else None
+                ),
+                "candidate_execution_status_counts": dict(
+                    candidate_execution_status_counts
+                ),
+                "candidate_evaluated_decision_count": evaluated_count,
+                "candidate_evaluated_semantics": (
+                    "same_payload_contract_valid_outcome_comparable_only"
+                ),
+                "candidate_evaluation_coverage_pct": (
+                    evaluated_count / prepared_count * 100.0 if prepared_count else None
+                ),
+                "candidate_action_counts": dict(candidate_action_counts),
+                "candidate_action_by_entry_path": {
+                    action: dict(counts)
+                    for action, counts in sorted(candidate_action_path.items())
+                },
+                "candidate_evaluated_target_first_count": (
+                    candidate_evaluated_target_first_count
+                ),
+                "candidate_target_first_capture_count": (
+                    candidate_target_first_capture_count
+                ),
+                "candidate_target_first_capture_rate_pct": (
+                    candidate_target_first_capture_count
+                    / candidate_evaluated_target_first_count
+                    * 100.0
+                    if candidate_evaluated_target_first_count
+                    else None
+                ),
+                "candidate_adverse_first_exposure_count": (
+                    candidate_adverse_first_exposure_count
+                ),
+                "first_blocker_counts": dict(first_blocker_counts),
+                "target_first_first_blocker_counts": dict(target_first_blocker_counts),
+            }
+        )
+
+    return {
+        "schema": "entry_opportunity_funnel_attribution_v1",
+        "metric_role": "funnel_count",
+        "decision_authority": "offline_full_census_attribution_only",
+        "window_policy": "full_mature_exact_entry_cohort_by_venue_session",
+        "sample_floor": "one_eligible_decision_event_starts_observation",
+        "primary_decision_metric": "target_first_capture_rate_pct",
+        "source_quality_gate": "exact_v2_fresh_same_route_mature_10m_window",
+        "cohort_count": len(cohorts),
+        "cohorts": cohorts,
+        "candidate_execution_requested": candidate_execution_requested,
+        "cross_cohort_aggregation_forbidden": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "treat_repeated_decision_events_as_independent_trades",
+            "treat_unevaluated_candidate_rows_as_ai_rejections",
+            "cross_venue_or_cross_session_performance_aggregation",
+            "standalone_live_prompt_promotion",
+            "real_order_or_realized_pnl_claim",
+            "provider_model_threshold_price_quantity_or_cap_change",
+            "broker_or_safety_guard_bypass",
+            "bot_restart",
+        ],
+    }
+
+
+def _prepared_entry_transition_observations(
+    *,
+    prepared_requests: list[dict[str, Any]],
+    comparable_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    comparison_by_trace = {
+        str(row.get("decision_trace_id") or "").strip(): row
+        for row in comparable_rows
+        if row.get("decision_trace_id")
+    }
+    observations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    prepared_state_sets: dict[str, set[str]] = defaultdict(set)
+    for request in prepared_requests:
+        if _stage(request.get("stage")) != "entry":
+            continue
+        trace_id = str(request.get("decision_trace_id") or "").strip()
+        dedupe_key = trace_id or str(request.get("paired_replay_id") or "").strip()
+        if dedupe_key:
+            prepared_state_sets[dedupe_key].add(
+                _entry_setup_state_from_request(request)
+            )
+    for request in prepared_requests:
+        if _stage(request.get("stage")) != "entry":
+            continue
+        trace_id = str(request.get("decision_trace_id") or "").strip()
+        dedupe_key = trace_id or str(request.get("paired_replay_id") or "").strip()
+        if not dedupe_key or dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        comparison = comparison_by_trace.get(trace_id)
+        states = prepared_state_sets.get(dedupe_key) or set()
+        observations.append(
+            {
+                "decision_trace_id": trace_id,
+                "decision_ts": request.get("decision_ts"),
+                "stock_code": request.get("stock_code"),
+                "effective_venue": request.get("effective_venue"),
+                "session_bucket": request.get("session_bucket"),
+                "entry_setup_state": (
+                    next(iter(states)) if len(states) == 1 else "CONFLICT"
+                ),
+                "prepared_setup_state_conflict": len(states) > 1,
+                "candidate_evaluated": comparison is not None,
+                "candidate_action": (
+                    comparison.get("candidate_action") if comparison else None
+                ),
+                "candidate_exposure_selected": bool(
+                    comparison and comparison.get("candidate_exposure_selected") is True
+                ),
+                "candidate_primary_decision_value_pct": (
+                    comparison.get("candidate_primary_decision_value_pct")
+                    if comparison
+                    else None
+                ),
+                "entry_path_first_hit": (
+                    comparison.get("entry_path_first_hit") if comparison else None
+                ),
+            }
+        )
+    for row in comparable_rows:
+        trace_id = str(row.get("decision_trace_id") or "").strip()
+        dedupe_key = trace_id or str(row.get("paired_replay_id") or "").strip()
+        if dedupe_key and dedupe_key not in seen:
+            seen.add(dedupe_key)
+            observations.append(dict(row, candidate_evaluated=True))
+    return observations
+
+
+def _attach_wait_transition_continuity(
+    *,
+    waiting_rows: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+    field_prefix: str,
+    contract_version: str,
+    observation_source: str,
+) -> dict[str, Any]:
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in observations:
+        grouped[
+            (
+                _normalize_stock_code(row.get("stock_code")),
+                _venue(row.get("effective_venue")),
+                _session(row.get("session_bucket")),
+            )
+        ].append(row)
+    for route_rows in grouped.values():
+        route_rows.sort(
+            key=lambda row: _parse_ts(row.get("decision_ts"))
+            or datetime.max.replace(tzinfo=KST)
+        )
+
+    transition_rows: list[dict[str, Any]] = []
+    for row in waiting_rows:
+        route_key = (
+            _normalize_stock_code(row.get("stock_code")),
+            _venue(row.get("effective_venue")),
+            _session(row.get("session_bucket")),
+        )
+        decision_ts = _parse_ts(row.get("decision_ts"))
+        current_trace_id = str(row.get("decision_trace_id") or "").strip()
+        followups: list[tuple[float, dict[str, Any]]] = []
+        if decision_ts is not None:
+            for candidate in grouped.get(route_key, []):
+                if (
+                    str(candidate.get("decision_trace_id") or "").strip()
+                    == current_trace_id
+                ):
+                    continue
+                candidate_ts = _parse_ts(candidate.get("decision_ts"))
+                if candidate_ts is None:
+                    continue
+                delay_sec = (candidate_ts - decision_ts).total_seconds()
+                if 0 < delay_sec <= ENTRY_RECHECK_MAX_WAIT_SEC:
+                    followups.append((delay_sec, candidate))
+        ready_followup = next(
+            (
+                (delay_sec, candidate)
+                for delay_sec, candidate in followups
+                if candidate.get("entry_setup_state") == "READY"
+            ),
+            None,
+        )
+        confirmed = next(
+            (
+                (delay_sec, candidate)
+                for delay_sec, candidate in followups
+                if candidate.get("entry_setup_state") == "READY"
+                and candidate.get("candidate_evaluated") is True
+                and candidate.get("candidate_exposure_selected") is True
+            ),
+            None,
+        )
+        selected = confirmed or ready_followup or (followups[0] if followups else None)
+        if decision_ts is None:
+            status = "decision_time_missing"
+        elif confirmed is not None:
+            status = "ready_exposure_confirmed_after_wait"
+        elif (
+            ready_followup is not None
+            and ready_followup[1].get("candidate_evaluated") is not True
+        ):
+            status = "ready_followup_candidate_budget_deferred"
+        elif ready_followup is not None:
+            status = "ready_followup_evaluated_not_exposed"
+        elif followups:
+            status = "followup_observed_not_ready"
+        else:
+            status = "no_followup_within_window"
+        row[f"{field_prefix}_transition_status"] = status
+        row[f"{field_prefix}_followup_count"] = len(followups)
+        row[f"{field_prefix}_ready_followup_delay_sec"] = (
+            ready_followup[0] if ready_followup is not None else None
+        )
+        row[f"{field_prefix}_followup_trace_id"] = (
+            selected[1].get("decision_trace_id") if selected is not None else None
+        )
+        row[f"{field_prefix}_followup_setup_state"] = (
+            selected[1].get("entry_setup_state") if selected is not None else None
+        )
+        row[f"{field_prefix}_followup_candidate_evaluated"] = bool(
+            selected is not None and selected[1].get("candidate_evaluated") is True
+        )
+        row[f"{field_prefix}_followup_exposure_selected"] = bool(
+            selected is not None
+            and selected[1].get("candidate_exposure_selected") is True
+        )
+        row[f"{field_prefix}_confirmed_primary_decision_value_pct"] = (
+            confirmed[1].get("candidate_primary_decision_value_pct")
+            if confirmed is not None
+            else None
+        )
+        transition_rows.append(row)
+
+    confirmed_values = [
+        value
+        for row in transition_rows
+        if (
+            value := _number(
+                row.get(f"{field_prefix}_confirmed_primary_decision_value_pct")
+            )
+        )
+        is not None
+    ]
+    ready_followup_observed_count = sum(
+        row.get(f"{field_prefix}_followup_setup_state") == "READY"
+        for row in transition_rows
+    )
+    status_by_initial_risk_verdict: dict[str, Counter[str]] = defaultdict(Counter)
+    for row in transition_rows:
+        status_by_initial_risk_verdict[
+            str(row.get("entry_ai_risk_verdict") or "NOT_RECORDED")
+        ][str(row.get(f"{field_prefix}_transition_status") or "unknown")] += 1
+    return {
+        "contract_version": contract_version,
+        "maximum_wait_sec": ENTRY_RECHECK_MAX_WAIT_SEC,
+        "waiting_decision_count": len(transition_rows),
+        "followup_observed_count": sum(
+            int(row.get(f"{field_prefix}_followup_count") or 0) > 0
+            for row in transition_rows
+        ),
+        "ready_followup_observed_count": ready_followup_observed_count,
+        "ready_followup_observed_rate_pct": (
+            ready_followup_observed_count / len(transition_rows) * 100.0
+            if transition_rows
+            else None
+        ),
+        "ready_followup_candidate_budget_deferred_count": sum(
+            row.get(f"{field_prefix}_transition_status")
+            == "ready_followup_candidate_budget_deferred"
+            for row in transition_rows
+        ),
+        "ready_exposure_confirmed_count": sum(
+            row.get(f"{field_prefix}_transition_status")
+            == "ready_exposure_confirmed_after_wait"
+            for row in transition_rows
+        ),
+        "confirmed_exposure_source_quality_adjusted_ev_pct": (
+            fmean(confirmed_values) if confirmed_values else None
+        ),
+        "status_counts": dict(
+            Counter(
+                str(row.get(f"{field_prefix}_transition_status") or "unknown")
+                for row in transition_rows
+            )
+        ),
+        "initial_setup_state_counts": dict(
+            Counter(
+                str(row.get("entry_setup_state") or "NOT_RECORDED")
+                for row in transition_rows
+            )
+        ),
+        "initial_risk_verdict_counts": dict(
+            Counter(
+                str(row.get("entry_ai_risk_verdict") or "NOT_RECORDED")
+                for row in transition_rows
+            )
+        ),
+        "transition_status_by_initial_risk_verdict": {
+            verdict: dict(counts)
+            for verdict, counts in sorted(status_by_initial_risk_verdict.items())
+        },
+        "observation_source": observation_source,
+        "decision_authority": "offline_sequential_continuity_attribution_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _entry_recheck_reason_breakdown(
     rows: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
@@ -8212,8 +8810,51 @@ def _entry_recheck_reason_breakdown(
 
 def _attach_entry_recheck_transitions(
     rows: list[dict[str, Any]],
+    *,
+    prepared_requests: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Link WAIT_CONFIRMATION to a later exact READY exposure on the same route."""
+
+    if prepared_requests is not None:
+        observations = _prepared_entry_transition_observations(
+            prepared_requests=prepared_requests,
+            comparable_rows=rows,
+        )
+        waiting_rows = [row for row in rows if row.get("entry_recheck_intent") is True]
+        summary = _attach_wait_transition_continuity(
+            waiting_rows=waiting_rows,
+            observations=observations,
+            field_prefix="entry_recheck",
+            contract_version="entry_next_exact_recheck_transition_v2",
+            observation_source="full_prepared_exact_request_census",
+        )
+        return {
+            "contract_version": summary["contract_version"],
+            "maximum_recheck_wait_sec": summary["maximum_wait_sec"],
+            "recheck_decision_count": summary["waiting_decision_count"],
+            "followup_observed_count": summary["followup_observed_count"],
+            "ready_followup_observed_count": summary["ready_followup_observed_count"],
+            "ready_followup_observed_rate_pct": summary[
+                "ready_followup_observed_rate_pct"
+            ],
+            "ready_followup_candidate_budget_deferred_count": summary[
+                "ready_followup_candidate_budget_deferred_count"
+            ],
+            "ready_exposure_confirmed_count": summary["ready_exposure_confirmed_count"],
+            "confirmed_exposure_cost_adjusted_ev_pct": summary[
+                "confirmed_exposure_source_quality_adjusted_ev_pct"
+            ],
+            "confirmed_exposure_source_quality_adjusted_ev_pct": summary[
+                "confirmed_exposure_source_quality_adjusted_ev_pct"
+            ],
+            "status_counts": summary["status_counts"],
+            "observation_source": summary["observation_source"],
+            "decision_authority": summary["decision_authority"],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
 
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -8329,6 +8970,182 @@ def _attach_entry_recheck_transitions(
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+    }
+
+
+def _entry_probe_path_proxy_value(row: dict[str, Any]) -> float | None:
+    """Return a bounded one-share path proxy, never a realized exit PnL."""
+
+    path = str(row.get("entry_path_first_hit") or "")
+    cost = _number(row.get("conservative_execution_cost_pct"))
+    if cost is None:
+        return None
+    if path == "target_first":
+        gross = _number(row.get("entry_path_target_pct"))
+    elif path == "adverse_first":
+        gross = _number(row.get("entry_path_adverse_pct"))
+    elif path == "neither_hit":
+        gross = _number(row.get("outcome_return_pct"))
+    else:
+        return None
+    return gross - cost if gross is not None else None
+
+
+def _entry_lifecycle_replay_attribution(
+    rows: list[dict[str, Any]],
+    *,
+    probe_arm_transition_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Separate path-proxy evidence from observed real lifecycle evidence.
+
+    A candidate replay has no historical broker fill of its own.  The report can
+    therefore evaluate the completed-bar one-share path and join the natural
+    control lifecycle, but it must not invent residual, scale-in, trailing, or
+    realized PnL for a counterfactual candidate.
+    """
+
+    entry_rows = [row for row in rows if _stage(row.get("stage")) == "entry"]
+    control_exposure_rows = [
+        row for row in entry_rows if row.get("control_exposure_selected") is True
+    ]
+    candidate_exposure_rows = [
+        row for row in entry_rows if row.get("candidate_exposure_selected") is True
+    ]
+    candidate_probe_arm_rows = [
+        row for row in entry_rows if row.get("candidate_probe_armed") is True
+    ]
+
+    def proxy_values(source_rows: list[dict[str, Any]]) -> list[float]:
+        return [
+            value
+            for row in source_rows
+            if (value := _entry_probe_path_proxy_value(row)) is not None
+        ]
+
+    control_proxy_values = proxy_values(control_exposure_rows)
+    candidate_proxy_values = proxy_values(candidate_exposure_rows)
+    probe_arm_proxy_values = proxy_values(candidate_probe_arm_rows)
+    correlation_rows = [
+        (row, row.get("lifecycle_correlation"))
+        for row in entry_rows
+        if isinstance(row.get("lifecycle_correlation"), dict)
+    ]
+    exact_correlations = [
+        (entry_row, correlation)
+        for entry_row, correlation in correlation_rows
+        if correlation.get("status") == "exact_matched"
+    ]
+    deduped_lifecycle: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for entry_row, correlation in exact_correlations:
+        key: tuple[Any, ...] = (
+            tuple(correlation.get("position_cycle_ids") or []),
+            tuple(correlation.get("probe_bundle_ids") or []),
+            tuple(correlation.get("broker_order_nos") or []),
+        )
+        if not any(key):
+            key = (str(entry_row.get("decision_trace_id") or ""),)
+        deduped_lifecycle.setdefault(key, correlation)
+    realized_values = [
+        value
+        for row in deduped_lifecycle.values()
+        if (value := _number(row.get("realized_profit_pct"))) is not None
+    ]
+    observed_stage_presence_counts = Counter(
+        stage
+        for row in deduped_lifecycle.values()
+        for stage, present in (row.get("lifecycle_stage_presence") or {}).items()
+        if present is True
+    )
+    return {
+        "schema": "entry_lifecycle_replay_attribution_v1",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "offline_path_and_observed_lifecycle_attribution_only",
+        "window_policy": (
+            "same_exact_entry_snapshot_completed_1m_path_plus_natural_trace_lifecycle"
+        ),
+        "sample_floor": {
+            "decision_rows": PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS,
+            "unique_symbols": PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS,
+        },
+        "primary_decision_metric": (
+            "candidate_probe_path_proxy_source_quality_adjusted_ev_pct"
+        ),
+        "source_quality_gate": "exact_v2_same_route_completed_bar_and_trace_join",
+        "path_proxy_contract": {
+            "target_first_value_pct": "entry_path_target_pct_minus_cost",
+            "adverse_first_value_pct": "entry_path_adverse_pct_minus_cost",
+            "neither_hit_value_pct": "primary_horizon_end_return_minus_cost",
+            "same_bar_ambiguous": "excluded",
+            "realized_pnl_equivalent": False,
+        },
+        "control_exposure_count": len(control_exposure_rows),
+        "control_probe_path_proxy_evaluable_count": len(control_proxy_values),
+        "control_probe_path_proxy_source_quality_adjusted_ev_pct": (
+            fmean(control_proxy_values) if control_proxy_values else None
+        ),
+        "candidate_immediate_exposure_count": len(candidate_exposure_rows),
+        "candidate_probe_path_proxy_evaluable_count": len(candidate_proxy_values),
+        "candidate_probe_path_proxy_source_quality_adjusted_ev_pct": (
+            fmean(candidate_proxy_values) if candidate_proxy_values else None
+        ),
+        "candidate_probe_arm_count": len(candidate_probe_arm_rows),
+        "candidate_probe_arm_path_proxy_evaluable_count": len(probe_arm_proxy_values),
+        "candidate_probe_arm_path_proxy_stress_source_quality_adjusted_ev_pct": (
+            fmean(probe_arm_proxy_values) if probe_arm_proxy_values else None
+        ),
+        "probe_arm_transition_summary": probe_arm_transition_summary,
+        "observed_natural_lifecycle": {
+            "exact_trace_join_count": len(exact_correlations),
+            "deduped_lifecycle_count": len(deduped_lifecycle),
+            "decision_event_join_semantics": (
+                "repeated_decision_trace_joins_are_deduped_by_position_probe_order_ids"
+            ),
+            "actual_order_submitted_count": sum(
+                row.get("actual_order_submitted") is True
+                for row in deduped_lifecycle.values()
+            ),
+            "fill_observed_count": sum(
+                row.get("fill_observed") is True for row in deduped_lifecycle.values()
+            ),
+            "realized_profit_observed_count": len(realized_values),
+            "realized_profit_equal_weight_avg_profit_pct": (
+                fmean(realized_values) if realized_values else None
+            ),
+            "lifecycle_stage_presence_counts": dict(observed_stage_presence_counts),
+            "candidate_counterfactual_attribution_allowed": False,
+        },
+        "replay_component_status": {
+            "one_share_probe_first": "completed_bar_path_proxy_available",
+            "post_probe_recheck": (
+                "next_exact_transition_attribution_available"
+                if probe_arm_transition_summary.get("waiting_decision_count")
+                else "no_waiting_probe_arm_sample"
+            ),
+            "residual_multi_leg": "not_counterfactually_replayed",
+            "scale_in": "not_counterfactually_replayed",
+            "holding_exit": "natural_trace_observation_only_not_candidate_replay",
+        },
+        "full_lifecycle_counterfactual_status": (
+            "blocked_without_counterfactual_order_fill_post_probe_scale_in_exit_state"
+        ),
+        "bounded_one_share_replay_status": (
+            "path_proxy_available"
+            if candidate_proxy_values or probe_arm_proxy_values
+            else "no_evaluable_candidate_probe_path"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "treat_path_proxy_as_realized_pnl",
+            "attribute_natural_control_fill_or_exit_to_candidate",
+            "assume_residual_multi_leg_or_scale_in_execution",
+            "standalone_live_prompt_promotion",
+            "provider_model_threshold_price_quantity_or_cap_change",
+            "broker_or_safety_guard_bypass",
+            "bot_restart",
+        ],
     }
 
 
@@ -8699,8 +9516,12 @@ def build_paired_replay_report(
     results: list[dict[str, Any]] | None = None,
     labels: list[dict[str, Any]] | None = None,
     execution_selection: dict[str, Any] | None = None,
+    prepared_requests: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     results = list(results or [])
+    candidate_execution_requested = bool(results or execution_selection is not None)
+    prepared_census_provided = prepared_requests is not None
+    all_prepared_requests = list(prepared_requests or requests)
     if execution_selection is None:
         execution_selection = {
             "policy": "complete_evaluated_request_census",
@@ -9085,10 +9906,44 @@ def build_paired_replay_report(
                 "entry_composed_reason": candidate_response.get(
                     "entry_composed_reason"
                 ),
+                "lifecycle_correlation": (
+                    dict(label.get("correlation") or {})
+                    if isinstance(label.get("correlation"), dict)
+                    else {}
+                ),
             }
         )
     entry_recheck_transition_summary = _attach_entry_recheck_transitions(
-        comparable_rows
+        comparable_rows,
+        prepared_requests=(all_prepared_requests if prepared_census_provided else None),
+    )
+    transition_observations = _prepared_entry_transition_observations(
+        prepared_requests=all_prepared_requests,
+        comparable_rows=comparable_rows,
+    )
+    waiting_probe_arm_rows = [
+        row
+        for row in comparable_rows
+        if row.get("candidate_probe_armed") is True
+        and row.get("candidate_exposure_selected") is not True
+    ]
+    entry_probe_arm_transition_summary = _attach_wait_transition_continuity(
+        waiting_rows=waiting_probe_arm_rows,
+        observations=transition_observations,
+        field_prefix="entry_probe_arm_continuity",
+        contract_version="entry_probe_arm_next_exact_transition_v1",
+        observation_source=(
+            "full_prepared_exact_request_census"
+            if prepared_census_provided
+            else "evaluated_request_set_only"
+        ),
+    )
+    entry_opportunity_funnel = _entry_opportunity_funnel_attribution(
+        labels=list(labels or []),
+        prepared_requests=all_prepared_requests,
+        comparable_rows=comparable_rows,
+        results=results,
+        candidate_execution_requested=candidate_execution_requested,
     )
     rejected = sum(row.get("status") != "pass" for row in results)
     schema_rejected = sum(row.get("status") == "schema_rejected" for row in results)
@@ -9428,6 +10283,10 @@ def build_paired_replay_report(
             }
             for row in candidate_probe_arm_rows
         ]
+    )
+    entry_lifecycle_replay = _entry_lifecycle_replay_attribution(
+        comparable_rows,
+        probe_arm_transition_summary=entry_probe_arm_transition_summary,
     )
     control_probe_severe_tail_count = sum(
         row["control_probe_severe_tail_exposure"] for row in comparable_rows
@@ -10243,6 +11102,8 @@ def build_paired_replay_report(
         "clean_continuation_probe_summary": clean_continuation_probe_summary,
         "selective_recovery_probe_summary": selective_recovery_probe_summary,
         "recovery_confirmation_probe_summary": (recovery_confirmation_probe_summary),
+        "entry_opportunity_funnel": entry_opportunity_funnel,
+        "entry_lifecycle_replay": entry_lifecycle_replay,
         "entry_setup_adjudicator_summary": {
             "schema": "entry_setup_adjudicator_attribution_v1",
             "metric_role": "ai_entry_setup_adjudicator_attribution",
@@ -10364,6 +11225,26 @@ def build_paired_replay_report(
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
         },
+        "entry_probe_arm_continuity": {
+            "schema": "entry_probe_arm_continuity_v1",
+            "metric_role": "funnel_count",
+            "decision_authority": "offline_sequential_continuity_attribution_only",
+            "window_policy": (
+                "same_symbol_venue_session_full_prepared_exact_request_census_300s"
+            ),
+            "sample_floor": "one_waiting_probe_arm_starts_observation",
+            "primary_decision_metric": "ready_followup_observed_rate_pct",
+            "source_quality_gate": "exact_v2_same_route_prepared_request_census",
+            **entry_probe_arm_transition_summary,
+            "forbidden_uses": [
+                "treat_waiting_probe_arm_as_submitted_order",
+                "treat_candidate_budget_defer_as_ai_rejection",
+                "standalone_live_prompt_promotion",
+                "provider_model_threshold_price_quantity_or_cap_change",
+                "broker_or_safety_guard_bypass",
+                "bot_restart",
+            ],
+        },
         "candidate_edge_state_counts": dict(
             Counter(
                 str(
@@ -10484,6 +11365,7 @@ def build_daily_materialization_reports(
         requests=accepted_requests,
         results=[],
         labels=labels,
+        prepared_requests=prepared_requests,
     )
     _attach_paired_preparation_metadata(
         paired,
@@ -13906,6 +14788,7 @@ def main(argv: list[str] | None = None) -> int:
                 results=results,
                 labels=replay_labels,
                 execution_selection=execution_selection,
+                prepared_requests=prepared_requests,
             )
             if args.mode == "detailed":
                 report["schema"] = DETAILED_PAIRED_SCHEMA

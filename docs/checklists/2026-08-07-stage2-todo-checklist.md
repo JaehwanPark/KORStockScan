@@ -18,6 +18,19 @@
 
 운영 보완 기록 (`2026-08-07`): live-engine 시작은 KST 당일 발급된 valid Kiwoom shared token만 재사용하고, 전일/미상 발급 cache는 장수 REST/WS owner binding 전에 1회 갱신한다. fresh 8005 뒤 same-request retry 성공 handoff가 확인되고 이후 재발/복구실패가 없으면 detector는 불필요한 `restart.flag`를 만들지 않는다. untimestamped·handoff 후 재발·refresh/retry 실패는 기존 cooldown/daily cap의 actionable incident로 유지한다. 이 보완은 인증 lifecycle/incident attribution 전용이며 threshold/provider/order/quantity/cap/broker/hard-safety 권한을 바꾸지 않는다.
 
+## 사용자 지시 구현 (`2026-08-07`)
+
+- [x] `[EntryDecisionOpportunityFunnel0807] V2.13/V2.14 전체 기회·probe-arm 연속성·lifecycle 경계 계측` (`Due: 2026-08-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:05~21:15`, `Track: ScalpingLogic`)
+  - Source: [ai_decision_quality.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py), [test_ai_decision_quality.py](/home/ubuntu/KORStockScan/src/tests/test_ai_decision_quality.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 완료 기준: full mature exact decision-event census와 AI 실행예산 표본을 분리하고, `READY+CAUTION`/`WAIT_CONFIRMATION` probe arm의 300초 후속 exact 관측을 full prepared-request census에서 찾으며, one-share completed-bar path proxy와 natural real lifecycle correlation을 분리한다.
+  - 금지: 반복 판단 이벤트를 독립 거래로 합산, candidate budget defer를 AI 거부로 오인, path proxy를 실현손익으로 사용, KRX/NXT 혼합, runtime/order/provider/threshold/bot 변경.
+
+- [ ] `[EntryDecisionFullLifecycleReplayGap0807] candidate residual multi-leg·scale-in·exit exact counterfactual state replay 연결` (`Due: 2026-08-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:15~21:25`, `Track: ScalpingLogic`)
+  - Source: [ai_decision_quality.py](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py), [scalping_pyramid_intraday_feedback.py](/home/ubuntu/KORStockScan/src/engine/monitoring/scalping_pyramid_intraday_feedback.py), [scale_in_incremental_counterfactual.py](/home/ubuntu/KORStockScan/src/engine/lifecycle/scale_in_incremental_counterfactual.py)
+  - 판정 기준: candidate 자체의 post-probe 방향·residual leg 가격/수량·scale-in·holding/exit 상태를 exact same-route 시계열로 재생하고 notional/fill 비용을 결합할 수 있을 때만 full lifecycle counterfactual EV를 생성한다.
+  - 금지: natural control 주문·체결·청산을 candidate에 귀속, completed-bar path proxy를 realized PnL로 승격, 미구현 residual/scale-in/exit를 가정하여 runtime 승격.
+  - 다음 액션: `exact_counterfactual_state_replay_implemented`, `source_state_missing_instrumentation_gap`, `source_quality_blocked`, `keep_path_proxy_only` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-06` postclose -> `2026-08-07`)
 

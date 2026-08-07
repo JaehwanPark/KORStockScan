@@ -282,6 +282,9 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
                 "mfe_pct": 1.2,
                 "mae_pct": -0.2,
                 "first_hit": "target",
+                "entry_path_first_hit": "target_first",
+                "entry_path_target_pct": 0.3,
+                "entry_path_adverse_pct": -0.7,
             }
         },
     }
@@ -345,6 +348,11 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
     assert paired["candidate_execution_authority"] == (
         "explicit_offline_execute_candidate_only"
     )
+    funnel = paired["entry_opportunity_funnel"]
+    assert funnel["candidate_execution_requested"] is False
+    assert funnel["cohorts"][0]["first_blocker_counts"] == {
+        "candidate_execution_not_requested": 1
+    }
 
     invalid_reports = dict(materialization["reports"])
     invalid_reports["paired"] = {
@@ -6794,3 +6802,412 @@ def test_opportunity_capture_gate_allows_positive_incremental_probe_with_guarded
     assert tradeoff["net_missed_upside_value_pct"] == pytest.approx(0.3)
     assert tradeoff["opportunity_capture_expanded"] is True
     assert tradeoff["missed_upside_tradeoff_not_worse"] is True
+
+
+def test_entry_opportunity_funnel_uses_full_prepared_census_before_ai_budget():
+    def label(
+        trace_id: str,
+        *,
+        action: str,
+        first_hit: str,
+        profit_opportunity: bool,
+    ) -> dict:
+        return {
+            "decision_trace_id": trace_id,
+            "decision_stage": "entry",
+            "decision_ts": f"2026-08-07T09:0{trace_id[-1]}:00+09:00",
+            "stock_code": f"00000{trace_id[-1]}",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "action": action,
+            "label_status": "mature",
+            "source_quality_status": "pass",
+            "primary_cohort_eligible": True,
+            "horizon_metrics": {
+                "10m": {
+                    "end_return_pct": 0.4,
+                    "mfe_pct": 1.2 if profit_opportunity else 0.2,
+                    "mae_pct": -0.2,
+                    "first_hit": "neither",
+                    "entry_path_first_hit": first_hit,
+                    "entry_path_target_pct": 0.3,
+                    "entry_path_adverse_pct": -0.7,
+                    "profit_opportunity_observed": profit_opportunity,
+                }
+            },
+        }
+
+    prepared = [
+        {
+            "decision_trace_id": "trace-1",
+            "paired_replay_id": "pair-1",
+            "decision_ts": "2026-08-07T09:01:00+09:00",
+            "stage": "entry",
+            "stock_code": "000001",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "entry_setup_evidence": {"setup_state": "READY"},
+        },
+        {
+            "decision_trace_id": "trace-2",
+            "paired_replay_id": "pair-2",
+            "decision_ts": "2026-08-07T09:02:00+09:00",
+            "stage": "entry",
+            "stock_code": "000002",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "entry_setup_evidence": {"setup_state": "READY"},
+        },
+        {
+            "decision_trace_id": "trace-3",
+            "paired_replay_id": "pair-3",
+            "decision_ts": "2026-08-07T09:03:00+09:00",
+            "stage": "entry",
+            "stock_code": "000003",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "entry_setup_evidence": {"setup_state": "WAIT_CONFIRMATION"},
+        },
+    ]
+    prepared.append(
+        {
+            **prepared[1],
+            "paired_replay_id": "pair-2-conflict",
+            "entry_setup_evidence": {"setup_state": "WAIT_CONFIRMATION"},
+        }
+    )
+    evaluated = [prepared[0], prepared[2]]
+    results = [
+        {
+            "decision_trace_id": request["decision_trace_id"],
+            "paired_replay_id": request["paired_replay_id"],
+            "stage": "entry",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "status": "pass",
+            "same_payload_confirmed": True,
+            "control_response": {"action": "DROP"},
+            "candidate_response": {
+                "action": "WAIT",
+                "entry_setup_state": ("READY" if index == 0 else "WAIT_CONFIRMATION"),
+                "entry_probe_intent": True,
+                "entry_probe_intent_status": "eligible_wait_probe",
+            },
+        }
+        for index, request in enumerate(evaluated)
+    ]
+
+    report = quality.build_paired_replay_report(
+        target_date="2026-08-07",
+        requests=evaluated,
+        prepared_requests=prepared,
+        results=results,
+        labels=[
+            label(
+                "trace-1",
+                action="DROP",
+                first_hit="target_first",
+                profit_opportunity=True,
+            ),
+            label(
+                "trace-2",
+                action="WAIT",
+                first_hit="adverse_first",
+                profit_opportunity=False,
+            ),
+            label(
+                "trace-3",
+                action="DROP",
+                first_hit="target_first",
+                profit_opportunity=True,
+            ),
+        ],
+    )
+
+    funnel = report["entry_opportunity_funnel"]
+    assert funnel["cohort_count"] == 1
+    cohort = funnel["cohorts"][0]
+    assert cohort["eligible_decision_event_count"] == 3
+    assert cohort["prepared_setup_decision_count"] == 3
+    assert cohort["prepared_setup_state_counts"] == {
+        "READY": 1,
+        "WAIT_CONFIRMATION": 1,
+        "CONFLICT": 1,
+    }
+    assert cohort["prepared_setup_state_conflict_count"] == 1
+    assert cohort["candidate_evaluated_decision_count"] == 2
+    assert cohort["candidate_execution_attempted_decision_count"] == 2
+    assert cohort["candidate_execution_status_counts"] == {"pass": 2}
+    assert cohort["candidate_evaluation_coverage_pct"] == pytest.approx(2 / 3 * 100)
+    assert cohort["control_target_first_capture_rate_pct"] == 0
+    assert cohort["candidate_evaluated_target_first_count"] == 2
+    assert cohort["candidate_target_first_capture_rate_pct"] == 0
+    assert cohort["target_first_first_blocker_counts"] == {
+        "bounded_probe_arm_pending_recheck": 1,
+        "deterministic_setup_wait_confirmation": 1,
+    }
+
+
+def test_entry_opportunity_funnel_separates_provider_failure_from_budget_defer():
+    trace_id = "provider-failed-trace"
+    funnel = quality._entry_opportunity_funnel_attribution(
+        labels=[
+            {
+                "decision_trace_id": trace_id,
+                "decision_stage": "entry",
+                "stock_code": "005930",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "action": "WAIT",
+                "source_quality_status": "pass",
+                "primary_cohort_eligible": True,
+                "horizon_metrics": {
+                    "10m": {
+                        "entry_path_first_hit": "target_first",
+                        "profit_opportunity_observed": True,
+                    }
+                },
+            }
+        ],
+        prepared_requests=[
+            {
+                "decision_trace_id": trace_id,
+                "stage": "entry",
+                "entry_setup_evidence": {"setup_state": "READY"},
+            }
+        ],
+        comparable_rows=[],
+        results=[
+            {
+                "decision_trace_id": trace_id,
+                "stage": "entry",
+                "status": "provider_failed",
+            }
+        ],
+        candidate_execution_requested=True,
+    )
+
+    cohort = funnel["cohorts"][0]
+    assert cohort["candidate_execution_attempted_decision_count"] == 1
+    assert cohort["candidate_evaluated_decision_count"] == 0
+    assert cohort["candidate_execution_status_counts"] == {"provider_failed": 1}
+    assert cohort["first_blocker_counts"] == {"candidate_provider_failed": 1}
+
+
+def test_probe_arm_continuity_finds_ready_followup_deferred_by_ai_budget():
+    prepared = [
+        {
+            "decision_trace_id": "wait-trace",
+            "paired_replay_id": "wait-pair",
+            "decision_ts": "2026-08-07T09:00:00+09:00",
+            "stage": "entry",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "entry_setup_evidence": {"setup_state": "READY"},
+        },
+        {
+            "decision_trace_id": "ready-followup-trace",
+            "paired_replay_id": "ready-followup-pair",
+            "decision_ts": "2026-08-07T09:02:00+09:00",
+            "stage": "entry",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "entry_setup_evidence": {"setup_state": "READY"},
+        },
+    ]
+    label = {
+        "decision_trace_id": "wait-trace",
+        "decision_stage": "entry",
+        "decision_ts": "2026-08-07T09:00:00+09:00",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "action": "DROP",
+        "label_status": "mature",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 0.8,
+                "mfe_pct": 1.2,
+                "mae_pct": -0.1,
+                "first_hit": "target",
+                "entry_path_first_hit": "target_first",
+                "entry_path_target_pct": 0.3,
+                "entry_path_adverse_pct": -0.7,
+            }
+        },
+    }
+    report = quality.build_paired_replay_report(
+        target_date="2026-08-07",
+        requests=[prepared[0]],
+        prepared_requests=prepared,
+        results=[
+            {
+                "decision_trace_id": "wait-trace",
+                "paired_replay_id": "wait-pair",
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "DROP"},
+                "candidate_response": {
+                    "action": "WAIT",
+                    "entry_setup_state": "READY",
+                    "entry_ai_risk_verdict": "CAUTION",
+                    "entry_probe_intent": True,
+                    "entry_probe_intent_status": "eligible_wait_probe",
+                    "entry_recheck_intent": False,
+                },
+            }
+        ],
+        labels=[label],
+    )
+
+    continuity = report["entry_probe_arm_continuity"]
+    assert continuity["waiting_decision_count"] == 1
+    assert continuity["followup_observed_count"] == 1
+    assert continuity["ready_followup_observed_count"] == 1
+    assert continuity["ready_followup_candidate_budget_deferred_count"] == 1
+    assert continuity["status_counts"] == {
+        "ready_followup_candidate_budget_deferred": 1
+    }
+    assert continuity["initial_risk_verdict_counts"] == {"CAUTION": 1}
+    assert continuity["transition_status_by_initial_risk_verdict"] == {
+        "CAUTION": {"ready_followup_candidate_budget_deferred": 1}
+    }
+    comparison = report["paired_comparisons"][0]
+    assert comparison["entry_probe_arm_continuity_followup_trace_id"] == (
+        "ready-followup-trace"
+    )
+    assert report["entry_recheck_attribution"]["candidate_recheck_intent_count"] == 0
+
+
+def test_entry_lifecycle_replay_separates_path_proxy_from_natural_realized_pnl():
+    request = {
+        "decision_trace_id": "lifecycle-trace",
+        "paired_replay_id": "lifecycle-pair",
+        "decision_ts": "2026-08-07T09:00:00+09:00",
+        "stage": "entry",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "candidate": {
+            "exposure_semantics": "offline_counterfactual_passive_probe_only"
+        },
+        "anticipatory_reversal_analysis": {
+            "execution_cost": {"conservative_execution_cost_pct": 0.1}
+        },
+        "entry_setup_evidence": {"setup_state": "READY"},
+    }
+    label = {
+        "decision_trace_id": "lifecycle-trace",
+        "decision_stage": "entry",
+        "decision_ts": "2026-08-07T09:00:00+09:00",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "action": "DROP",
+        "label_status": "mature",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "correlation": {
+            "status": "exact_matched",
+            "actual_order_submitted": True,
+            "fill_observed": True,
+            "realized_profit_pct": 0.4,
+            "position_cycle_ids": ["cycle-1"],
+            "probe_bundle_ids": ["probe-1"],
+            "broker_order_nos": ["order-1"],
+            "lifecycle_stage_presence": {
+                "probe": True,
+                "post_probe": True,
+                "residual_multi_leg": False,
+                "scale_in": False,
+                "exit": True,
+            },
+        },
+        "horizon_metrics": {
+            "10m": {
+                "end_return_pct": 0.1,
+                "mfe_pct": 1.0,
+                "mae_pct": -0.1,
+                "first_hit": "target",
+                "entry_path_first_hit": "target_first",
+                "entry_path_target_pct": 0.3,
+                "entry_path_adverse_pct": -0.7,
+            }
+        },
+    }
+    report = quality.build_paired_replay_report(
+        target_date="2026-08-07",
+        requests=[request],
+        prepared_requests=[request],
+        results=[
+            {
+                "decision_trace_id": "lifecycle-trace",
+                "paired_replay_id": "lifecycle-pair",
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "DROP"},
+                "candidate_response": {
+                    "action": "BUY",
+                    "entry_setup_state": "READY",
+                    "entry_probe_intent": True,
+                    "entry_probe_intent_status": "eligible_offline_probe",
+                },
+            }
+        ],
+        labels=[label],
+    )
+
+    lifecycle = report["entry_lifecycle_replay"]
+    assert lifecycle["candidate_probe_path_proxy_source_quality_adjusted_ev_pct"] == (
+        pytest.approx(0.2)
+    )
+    assert lifecycle["observed_natural_lifecycle"]["deduped_lifecycle_count"] == 1
+    assert lifecycle["observed_natural_lifecycle"][
+        "realized_profit_equal_weight_avg_profit_pct"
+    ] == pytest.approx(0.4)
+    assert (
+        lifecycle["observed_natural_lifecycle"][
+            "candidate_counterfactual_attribution_allowed"
+        ]
+        is False
+    )
+    assert lifecycle["replay_component_status"]["residual_multi_leg"] == (
+        "not_counterfactually_replayed"
+    )
+    assert lifecycle["full_lifecycle_counterfactual_status"].startswith("blocked_")
+
+
+def test_lifecycle_correlation_does_not_count_post_probe_as_initial_probe():
+    correlation = quality._correlation(
+        {
+            "decision_trace_id": "trace-post-probe-only",
+            "decision_stage": "entry",
+            "decision_ts": "2026-08-07T09:00:00+09:00",
+            "stock_code": "005930",
+        },
+        [
+            {
+                "timestamp": "2026-08-07T09:01:00+09:00",
+                "stage": "post_probe_recheck",
+                "stock_code": "005930",
+                "decision_trace_id": "trace-post-probe-only",
+                "actual_order_submitted": False,
+                "filled": False,
+                "realized_profit_pct": None,
+            }
+        ],
+    )
+
+    assert correlation["status"] == "exact_matched"
+    assert correlation["lifecycle_stage_presence"]["probe"] is False
+    assert correlation["lifecycle_stage_presence"]["post_probe"] is True
