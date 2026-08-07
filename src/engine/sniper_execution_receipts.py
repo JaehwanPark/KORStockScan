@@ -16,6 +16,10 @@ from src.engine.scalping.entry_split_order_plan import (
     trip_probe_runtime_circuit,
     update_probe_runtime_bundle,
 )
+from src.engine.scalping.entry_candidate_lifecycle_state import (
+    CONTEXT_KEY as ENTRY_CANDIDATE_LIFECYCLE_CONTEXT_KEY,
+    observe_candidate_transition_safe,
+)
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.rising_missed_one_share_entry import (
     scout_ai_execution_attribution_fields,
@@ -224,7 +228,9 @@ _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS = (
     "rising_missed_scout_parent_ai_probe_intent_eligibility_path",
     "rising_missed_scout_parent_ai_probe_intent_after_cost_reward_risk",
 )
+_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS = (ENTRY_CANDIDATE_LIFECYCLE_CONTEXT_KEY,)
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
+    *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     "buy_execution_notified",
     "buy_price",
     "buy_qty",
@@ -243,6 +249,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "swing_live_order_dry_run",
 )
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
+    *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "actual_order_submitted",
     "broker_order_forbidden",
@@ -283,12 +290,14 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "pre_add_qty",
     "scalp_live_simulator",
     "scale_in_incremental_realized_delta_pct",
+    "sell_execution_order_no",
     "simulation_book",
     "simulation_owner",
     "strategy",
     "swing_live_order_dry_run",
 )
 _ADD_RECEIPT_SNAPSHOT_KEYS = (
+    *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     "actual_order_submitted",
     "add_count",
     "avg_down_count",
@@ -364,6 +373,7 @@ _POSITION_PEAK_RESET_KEYS = (
     "position_peak_runtime_price",
 )
 _SELL_REVIVE_RESET_KEYS = (
+    *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     "odno",
     "order_time",
     "order_price",
@@ -482,10 +492,12 @@ _SELL_REVIVE_RESET_KEYS = (
     "rising_missed_scout_upgraded",
 )
 _SELL_COMPLETE_RESET_KEYS = (
+    *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
     "pending_sell_msg",
     "sell_odno",
     "sell_ord_no",
+    "sell_execution_order_no",
     "sell_order_time",
     "sell_target_price",
     "exit_requested",
@@ -657,7 +669,11 @@ def bind_execution_dependencies(
         _broker_snapshot_refresh_callback = broker_snapshot_refresh_callback
 
 
-def _log_holding_pipeline(name, code, target_id, stage, **fields):
+def _log_holding_pipeline(
+    name, code, target_id, stage, *, candidate_stock=None, **fields
+):
+    if isinstance(candidate_stock, dict):
+        observe_candidate_transition_safe(candidate_stock, code, stage, fields)
     emit_pipeline_event(
         "HOLDING_PIPELINE",
         name,
@@ -1341,6 +1357,7 @@ def _finalize_standard_sell_execution(
     strategy: str,
     is_scalp_revive: bool,
     code: str,
+    order_no: str = "",
 ) -> None:
     try:
         POSITION_PEAK_LEDGER.remove_for_stock(target_stock)
@@ -1366,6 +1383,7 @@ def _finalize_standard_sell_execution(
             sold_at=now.astimezone().isoformat() if now.tzinfo else now.isoformat(),
         )
     move_orders_to_terminal(target_stock, reason="sell_completed_cleanup")
+    target_stock["sell_execution_order_no"] = str(order_no or "").strip() or "-"
     sell_receipt_snapshot = _receipt_snapshot(target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS)
     _clear_runtime_keys(target_stock, _SELL_COMPLETE_RESET_KEYS)
     target_stock.pop("pending_sell_msg", None)
@@ -1532,6 +1550,7 @@ def _handle_scalp_revive_sell_execution(
     profit_rate: float,
     safe_buy_price: float,
     strategy: str,
+    order_no: str = "",
 ) -> bool:
     revived_position_tag = normalize_position_tag(
         "SCALPING",
@@ -1580,6 +1599,8 @@ def _handle_scalp_revive_sell_execution(
                 code,
                 target_id,
                 "sell_completed",
+                candidate_stock=target_stock,
+                order_no=str(order_no or "").strip() or "-",
                 metric_role="execution_quality_real_only",
                 decision_authority="broker_sell_fill_observation_only",
                 window_policy="same_position_cycle_broker_fill",
@@ -2626,6 +2647,8 @@ def _update_db_for_sell(
                 str(receipt_snapshot.get("code", "")).strip()[:6],
                 target_id,
                 "sell_completed",
+                candidate_stock=receipt_snapshot,
+                order_no=receipt_snapshot.get("sell_execution_order_no") or "-",
                 sell_price=int(exec_price or 0),
                 position_weighted_sell_price=position_weighted_sell_price,
                 profit_rate=f"{profit_rate:+.2f}",
@@ -2924,6 +2947,7 @@ def _handle_add_buy_execution(
         code,
         target_id,
         "scale_in_executed",
+        candidate_stock=target_stock,
         metric_role="execution_quality_real_only",
         decision_authority="broker_receipt_observation_only",
         runtime_effect=False,
@@ -3126,6 +3150,7 @@ def _handle_entry_buy_execution(
                 code,
                 target_id,
                 "probe_filled",
+                candidate_stock=target_stock,
                 probe_bundle_id=bundle_id or "-",
                 order_no=order_no or "-",
                 fill_qty=effective_exec_qty,
@@ -3275,6 +3300,7 @@ def _handle_entry_buy_execution(
                 code,
                 target_id,
                 "bundle_completed",
+                candidate_stock=target_stock,
                 probe_bundle_id=probe_bundle_id,
                 requested_qty=requested_entry_qty,
                 filled_qty=cum_filled_qty,
@@ -3373,6 +3399,9 @@ def _handle_entry_buy_execution(
         code,
         target_id,
         "position_rebased_after_fill",
+        candidate_stock=target_stock,
+        order_no=order_no or "-",
+        fill_price=int(exec_price or 0),
         fill_qty=int(effective_exec_qty or 0),
         raw_fill_qty=int(exec_qty or 0),
         order_requested_qty=int(order_requested_qty or 0),
@@ -3420,6 +3449,7 @@ def _handle_entry_buy_execution(
         code,
         target_id,
         "holding_started",
+        candidate_stock=target_stock,
         metric_role="execution_quality_real_only",
         decision_authority="broker_receipt_observation_only",
         runtime_effect=False,
@@ -3647,6 +3677,7 @@ def handle_real_execution(exec_data):
                     profit_rate=profit_rate,
                     safe_buy_price=safe_buy_price,
                     strategy=strategy,
+                    order_no=order_no,
                 ):
                     return
             else:
@@ -3658,6 +3689,7 @@ def handle_real_execution(exec_data):
                     strategy=strategy,
                     is_scalp_revive=is_scalp_revive,
                     code=code,
+                    order_no=order_no,
                 )
 
     # 메모리 업데이트는 각 조건문 내에서 이미 수행됨

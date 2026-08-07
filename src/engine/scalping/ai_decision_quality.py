@@ -50,6 +50,13 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_system_prompt,
 )
 from src.engine.scalping.ai_decision_trace import replay_source_input
+from src.engine.scalping.entry_candidate_lifecycle_state import (
+    component_is_complete as candidate_lifecycle_component_is_complete,
+    event_path as candidate_lifecycle_event_path,
+    load_candidate_state_index,
+    materialize_candidate_states,
+    report_path as candidate_lifecycle_report_path,
+)
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_RISK_ADJUDICATION_SCHEMA,
@@ -9007,6 +9014,10 @@ def _entry_lifecycle_source_inventory(target_date: str) -> list[dict[str, Any]]:
 
     paths = (
         (
+            "entry_candidate_lifecycle_state",
+            candidate_lifecycle_report_path(target_date),
+        ),
+        (
             "scalping_pyramid_intraday_feedback",
             PYRAMID_FEEDBACK_REPORT_DIR
             / f"scalping_pyramid_intraday_feedback_{target_date}.json",
@@ -9046,7 +9057,36 @@ def _entry_lifecycle_source_inventory(target_date: str) -> list[dict[str, Any]]:
         }
         summary = payload.get("summary")
         summary = summary if isinstance(summary, dict) else {}
-        if owner == "scalping_pyramid_intraday_feedback":
+        if owner == "entry_candidate_lifecycle_state":
+            row["candidate_exact_state_authority"] = bool(
+                payload.get("schema") == "entry_candidate_lifecycle_state_report_v1"
+                and payload.get("runtime_effect") is False
+                and payload.get("allowed_runtime_apply") is False
+                and payload.get("actual_order_submitted") is False
+                and payload.get("broker_order_forbidden") is True
+            )
+            row["evidence"] = {
+                "source_event_path": payload.get("source_event_path"),
+                "source_event_count": int(
+                    _number(payload.get("source_event_count")) or 0
+                ),
+                "candidate_state_count": int(
+                    _number(payload.get("candidate_state_count")) or 0
+                ),
+                "source_quality_pass_count": int(
+                    _number(payload.get("source_quality_pass_count")) or 0
+                ),
+                "full_lifecycle_evaluable_candidate_count": int(
+                    _number(payload.get("full_lifecycle_evaluable_candidate_count"))
+                    or 0
+                ),
+            }
+            row["non_authority_reason"] = (
+                None
+                if row["candidate_exact_state_authority"]
+                else "candidate_state_report_schema_mismatch"
+            )
+        elif owner == "scalping_pyramid_intraday_feedback":
             natural = summary.get("whole_day_real_entry_lifecycle")
             natural = natural if isinstance(natural, dict) else {}
             scale_in = summary.get("real_scale_in_performance")
@@ -9107,6 +9147,52 @@ def _entry_lifecycle_source_inventory(target_date: str) -> list[dict[str, Any]]:
     return inventory
 
 
+def _attach_entry_candidate_lifecycle_states(
+    rows: list[dict[str, Any]], *, target_date: str
+) -> dict[str, Any]:
+    """Join only exact trace/pair/venue/session candidate-owned state."""
+
+    state_index = load_candidate_state_index(
+        target_date,
+        materialize=True,
+        write=False,
+    )
+    attached = 0
+    conflicts = 0
+    for row in rows:
+        if not (
+            row.get("candidate_exposure_selected") is True
+            or row.get("candidate_probe_armed") is True
+        ):
+            continue
+        key = (
+            str(row.get("decision_trace_id") or "").strip(),
+            str(row.get("paired_replay_id") or "").strip(),
+            _venue(row.get("effective_venue")),
+            _session(row.get("session_bucket")).lower(),
+        )
+        state = state_index.get(key)
+        if not isinstance(state, dict):
+            continue
+        existing = row.get("candidate_counterfactual_lifecycle_state")
+        if isinstance(existing, dict) and existing and existing != state:
+            conflicts += 1
+            row["candidate_lifecycle_state_join_conflict"] = True
+            continue
+        row["candidate_counterfactual_lifecycle_state"] = dict(state)
+        row["candidate_lifecycle_state_join_basis"] = state.get("lifecycle_basis")
+        attached += 1
+    return {
+        "candidate_state_index_count": len(state_index),
+        "candidate_state_attached_count": attached,
+        "candidate_state_join_conflict_count": conflicts,
+        "candidate_state_event_path": str(candidate_lifecycle_event_path(target_date)),
+        "candidate_state_report_path": str(
+            candidate_lifecycle_report_path(target_date)
+        ),
+    }
+
+
 def _entry_candidate_lifecycle_source_audit(
     rows: list[dict[str, Any]],
     *,
@@ -9136,10 +9222,11 @@ def _entry_candidate_lifecycle_source_audit(
     )
     component_available_counts = {
         component: sum(
-            bool(
+            candidate_lifecycle_component_is_complete(
+                component,
                 (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
                     component
-                )
+                ),
             )
             for row in state_rows
         )
@@ -9149,10 +9236,11 @@ def _entry_candidate_lifecycle_source_audit(
         row
         for row in state_rows
         if all(
-            bool(
+            candidate_lifecycle_component_is_complete(
+                component,
                 (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
                     component
-                )
+                ),
             )
             for component in required_components
         )
@@ -9173,16 +9261,19 @@ def _entry_candidate_lifecycle_source_audit(
         and (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
             "effective_venue"
         )
-        == row.get("effective_venue")
-        and (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
-            "session_bucket"
-        )
-        == row.get("session_bucket")
+        == _venue(row.get("effective_venue"))
+        and str(
+            (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+                "session_bucket"
+            )
+            or ""
+        ).lower()
+        == _session(row.get("session_bucket")).lower()
     ]
     if not candidate_rows:
         status = "keep_path_proxy_only"
     elif complete_rows:
-        status = "exact_counterfactual_state_source_available_not_yet_evaluated"
+        status = "exact_candidate_owned_state_source_available_not_yet_evaluated"
     else:
         status = "source_state_missing_instrumentation_gap"
     return {
@@ -9243,6 +9334,10 @@ def _entry_lifecycle_replay_attribution(
     realized PnL for a counterfactual candidate.
     """
 
+    candidate_state_join = _attach_entry_candidate_lifecycle_states(
+        rows,
+        target_date=target_date,
+    )
     entry_rows = [row for row in rows if _stage(row.get("stage")) == "entry"]
     control_exposure_rows = [
         row for row in entry_rows if row.get("control_exposure_selected") is True
@@ -9358,6 +9453,7 @@ def _entry_lifecycle_replay_attribution(
             "candidate_counterfactual_attribution_allowed": False,
         },
         "candidate_full_lifecycle_source_audit": candidate_source_audit,
+        "candidate_lifecycle_state_join": candidate_state_join,
         "replay_component_status": {
             "one_share_probe_first": "completed_bar_path_proxy_available",
             "post_probe_recheck": (
@@ -11630,12 +11726,17 @@ def build_daily_materialization_reports(
     paired["candidate_execution_performed"] = False
     paired["candidate_execution_authority"] = "explicit_offline_execute_candidate_only"
     paired["decision_quality_objective"] = dict(DECISION_QUALITY_OBJECTIVE)
+    candidate_lifecycle_state = materialize_candidate_states(
+        target_date,
+        write=False,
+    )
 
     reports = {
         "control": control,
         "mature": label_report,
         "baseline": baseline,
         "paired": paired,
+        "candidate_lifecycle_state": candidate_lifecycle_state,
     }
     validation_errors = validate_daily_materialization_reports(
         target_date=target_date,
@@ -11650,7 +11751,13 @@ def build_daily_materialization_reports(
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(),
         "status": "daily_exact_quality_chain_prepared",
-        "write_order": ["control", "mature", "baseline", "paired"],
+        "write_order": [
+            "control",
+            "mature",
+            "baseline",
+            "paired",
+            "candidate_lifecycle_state",
+        ],
         "candidate_execution_performed": False,
         "decision_quality_objective": dict(DECISION_QUALITY_OBJECTIVE),
         "reports": reports,
@@ -11664,6 +11771,12 @@ def build_daily_materialization_reports(
             "paired_status": paired.get("status"),
             "paired_prepared_request_count": paired.get("prepared_request_count"),
             "paired_accepted_request_count": paired.get("request_count"),
+            "candidate_lifecycle_state_count": candidate_lifecycle_state.get(
+                "candidate_state_count"
+            ),
+            "candidate_lifecycle_source_quality_pass_count": (
+                candidate_lifecycle_state.get("source_quality_pass_count")
+            ),
         },
         **OFFLINE_CONTRACT,
     }
@@ -11681,6 +11794,7 @@ def validate_daily_materialization_reports(
         "mature": LABEL_REPORT_SCHEMA,
         "baseline": BASELINE_SCHEMA,
         "paired": PAIRED_SCHEMA,
+        "candidate_lifecycle_state": "entry_candidate_lifecycle_state_report_v1",
     }
     errors: list[str] = []
     for name, expected_schema in expected_schemas.items():
@@ -15127,11 +15241,18 @@ def main(argv: list[str] | None = None) -> int:
                 _atomic_write_json(label_report_path(args.date), reports["mature"])
                 _atomic_write_json(baseline_path(args.date), reports["baseline"])
                 _atomic_write_json(paired_path(args.date), reports["paired"])
+                _atomic_write_json(
+                    candidate_lifecycle_report_path(args.date),
+                    reports["candidate_lifecycle_state"],
+                )
                 written_reports = {
                     "control": _load_json(control_path(args.date)),
                     "mature": _load_json(label_report_path(args.date)),
                     "baseline": _load_json(baseline_path(args.date)),
                     "paired": _load_json(paired_path(args.date)),
+                    "candidate_lifecycle_state": _load_json(
+                        candidate_lifecycle_report_path(args.date)
+                    ),
                 }
                 write_validation_errors = validate_daily_materialization_reports(
                     target_date=args.date,
@@ -15150,6 +15271,9 @@ def main(argv: list[str] | None = None) -> int:
                 "mature": str(label_report_path(args.date)),
                 "baseline": str(baseline_path(args.date)),
                 "paired": str(paired_path(args.date)),
+                "candidate_lifecycle_state": str(
+                    candidate_lifecycle_report_path(args.date)
+                ),
             }
             print(json.dumps(printable, ensure_ascii=False))
             return 0

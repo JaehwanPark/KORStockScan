@@ -625,6 +625,7 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
         "ai_decision_outcome_labels_${TARGET_DATE}.json",
         "ai_decision_quality_baseline_${TARGET_DATE}.json",
         "ai_prompt_paired_replay_${TARGET_DATE}.json",
+        "entry_candidate_lifecycle_state_${TARGET_DATE}.json",
     ):
         assert artifact in materialization_block
     assert (

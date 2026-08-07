@@ -320,6 +320,7 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
         "mature",
         "baseline",
         "paired",
+        "candidate_lifecycle_state",
     ]
     assert materialization["candidate_execution_performed"] is False
     assert materialization["contract_validation"] == "pass"
@@ -338,6 +339,10 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
     paired = materialization["reports"]["paired"]
     assert paired["prepared_request_count"] == 1
     assert paired["outcome_as_of"] == "2026-07-27T16:30:00+09:00"
+    assert (
+        materialization["reports"]["candidate_lifecycle_state"]["schema"]
+        == "entry_candidate_lifecycle_state_report_v1"
+    )
     assert paired["request_count"] == 1
     assert paired["status"] == ("paired_replay_requests_ready_candidate_not_executed")
     assert paired["sample_floor_buckets"][0]["pass"] is True
@@ -716,6 +721,7 @@ def test_postclose_cli_writes_and_revalidates_all_daily_artifacts(
         "mature": tmp_path / "mature.json",
         "baseline": tmp_path / "baseline.json",
         "paired": tmp_path / "paired.json",
+        "candidate_lifecycle_state": tmp_path / "candidate_lifecycle_state.json",
     }
     monkeypatch.setattr(
         quality,
@@ -761,6 +767,11 @@ def test_postclose_cli_writes_and_revalidates_all_daily_artifacts(
     monkeypatch.setattr(quality, "label_report_path", lambda _date: paths["mature"])
     monkeypatch.setattr(quality, "baseline_path", lambda _date: paths["baseline"])
     monkeypatch.setattr(quality, "paired_path", lambda _date: paths["paired"])
+    monkeypatch.setattr(
+        quality,
+        "candidate_lifecycle_report_path",
+        lambda _date: paths["candidate_lifecycle_state"],
+    )
 
     assert (
         quality.main(
@@ -7254,15 +7265,21 @@ def test_entry_lifecycle_source_inventory_keeps_adjacent_reports_non_authoritati
     monkeypatch.setattr(quality, "PYRAMID_FEEDBACK_REPORT_DIR", pyramid_dir)
     monkeypatch.setattr(quality, "SCALE_IN_COUNTERFACTUAL_REPORT_DIR", scale_in_dir)
     monkeypatch.setattr(quality, "ENTRY_SPLIT_ORDER_PLAN_REPORT_DIR", split_dir)
+    monkeypatch.setattr(
+        quality,
+        "candidate_lifecycle_report_path",
+        lambda _target_date: tmp_path / "missing_candidate_state.json",
+    )
 
     inventory = quality._entry_lifecycle_source_inventory("2026-08-07")
 
-    assert len(inventory) == 3
-    assert all(row["status"] == "available" for row in inventory)
+    assert len(inventory) == 4
+    assert inventory[0]["status"] == "missing_or_unreadable"
+    assert all(row["status"] == "available" for row in inventory[1:])
     assert not any(row["candidate_exact_state_authority"] for row in inventory)
-    assert inventory[0]["evidence"]["natural_closed_cycle_count"] == 1
-    assert inventory[1]["evidence"]["counterfactual_event_count"] == 1
-    assert inventory[2]["evidence"]["candidate_policy_count"] == 1
+    assert inventory[1]["evidence"]["natural_closed_cycle_count"] == 1
+    assert inventory[2]["evidence"]["counterfactual_event_count"] == 1
+    assert inventory[3]["evidence"]["candidate_policy_count"] == 1
 
 
 def test_entry_lifecycle_source_audit_requires_exact_candidate_lineage():
@@ -7273,12 +7290,12 @@ def test_entry_lifecycle_source_audit_requires_exact_candidate_lineage():
         "paired_replay_id": "wrong-pair",
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
-        "probe": {"terminal_state": "filled"},
-        "post_probe": {"decision": "continue"},
-        "residual_multi_leg": {"terminal_state": "filled"},
-        "scale_in": {"terminal_state": "evaluated_no_add"},
-        "holding_exit": {"terminal_state": "closed"},
-        "economics": {"net_profit_pct": 0.2},
+        "probe": {"status": "filled"},
+        "post_probe": {"status": "evaluated"},
+        "residual_multi_leg": {"status": "terminal_submitted"},
+        "scale_in": {"status": "evaluated_not_submitted"},
+        "holding_exit": {"status": "terminal_exit_filled"},
+        "economics": {"status": "complete"},
     }
     row = {
         "decision_trace_id": "trace-1",
@@ -7298,9 +7315,49 @@ def test_entry_lifecycle_source_audit_requires_exact_candidate_lineage():
     state["paired_replay_id"] = "pair-1"
     exact = quality._entry_candidate_lifecycle_source_audit([row], source_inventory=[])
     assert exact["status"] == (
-        "exact_counterfactual_state_source_available_not_yet_evaluated"
+        "exact_candidate_owned_state_source_available_not_yet_evaluated"
     )
     assert exact["full_lifecycle_evaluable_candidate_count"] == 1
+
+
+def test_attach_entry_candidate_lifecycle_state_requires_exact_route(monkeypatch):
+    state = {
+        "schema": "entry_candidate_lifecycle_state_v1",
+        "decision_trace_id": "trace-1",
+        "paired_replay_id": "pair-1",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+        "lifecycle_basis": "observed_live_candidate",
+    }
+    monkeypatch.setattr(
+        quality,
+        "load_candidate_state_index",
+        lambda *_args, **_kwargs: {("trace-1", "pair-1", "KRX", "krx_regular"): state},
+    )
+    rows = [
+        {
+            "decision_trace_id": "trace-1",
+            "paired_replay_id": "pair-1",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "candidate_probe_armed": True,
+        },
+        {
+            "decision_trace_id": "trace-1",
+            "paired_replay_id": "pair-1",
+            "effective_venue": "NXT",
+            "session_bucket": "NXT_ENTRY_WINDOW",
+            "candidate_probe_armed": True,
+        },
+    ]
+
+    result = quality._attach_entry_candidate_lifecycle_states(
+        rows, target_date="2026-08-07"
+    )
+
+    assert result["candidate_state_attached_count"] == 1
+    assert rows[0]["candidate_counterfactual_lifecycle_state"] == state
+    assert "candidate_counterfactual_lifecycle_state" not in rows[1]
 
 
 def test_lifecycle_correlation_does_not_count_post_probe_as_initial_probe():

@@ -74,6 +74,9 @@ from src.engine.scalping.ai_market_snapshot import (
     runtime_preflight_required,
 )
 from src.engine.scalping.ai_decision_trace import record_ai_decision_trace
+from src.engine.scalping.entry_candidate_lifecycle_state import (
+    observe_candidate_transition_safe,
+)
 from src.engine.scalping.entry_setup_live_policy import (
     mark_exploration_probe_cap_fail_closed,
     read_exploration_probe_submit_count,
@@ -12864,6 +12867,7 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         if parent_snapshot_id not in {"", "-"}:
             merged_fields.setdefault("ai_input_snapshot_id", parent_snapshot_id)
     _remember_scanner_terminal_block(stock, stage, merged_fields)
+    observe_candidate_transition_safe(stock, code, stage, merged_fields)
     emit_pipeline_event(
         "ENTRY_PIPELINE",
         stock.get("name"),
@@ -19552,6 +19556,7 @@ def _log_holding_pipeline(stock, code, stage, **fields):
             actual_order_submitted=fields.get("actual_order_submitted"),
         )
     )
+    observe_candidate_transition_safe(stock, code, stage, fields)
     record_id = stock.get("id")
     emit_pipeline_event(
         "HOLDING_PIPELINE",
@@ -44575,6 +44580,19 @@ def _build_ai_ops_log_fields(
         "ai_prompt_sha256",
         "ai_prompt_store_date",
         "ai_input_payload_sha256",
+        "decision_quality_live_adapter",
+        "entry_setup_live_policy_status",
+        "entry_setup_live_policy_mode",
+        "entry_setup_live_policy_source_date",
+        "entry_setup_live_policy_target_date",
+        "entry_setup_live_policy_activation_sha256",
+        "entry_setup_live_policy_candidate_contract_sha256",
+        "entry_setup_live_policy_effective_venue",
+        "entry_setup_live_policy_session_bucket",
+        "entry_probe_intent_status",
+        "entry_probe_intent_prompt_version",
+        "entry_probe_intent_eligibility_path",
+        "entry_probe_intent_authority",
         "ai_input_payload_store_date",
         "ai_request_envelope_sha256",
         "ai_request_reasoning_effort",
@@ -44758,6 +44776,12 @@ def _build_ai_ops_log_fields(
         "holding_score_raw_score_non50_neutralized",
         "entry_candle_context_enabled",
         "entry_candle_forming_bar_present",
+        "entry_setup_live_policy_runtime_effect",
+        "entry_probe_intent",
+        "entry_probe_first_required",
+        "entry_ai_full_entry_forbidden",
+        "entry_probe_intent_submit_guard_required",
+        "entry_probe_intent_actual_order_submitted",
     ):
         if field_name in payload:
             raw_value = payload.get(field_name)
