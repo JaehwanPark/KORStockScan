@@ -346,6 +346,10 @@ def test_legacy_session_state_restores_entry_bar_before_invalidation(tmp_path):
         {"source_time": "20260807082900", "close": 231_000}
     )
     assert notifier.observe(same_bar, now) == "not_actionable"
+    migrated = json.loads(state_file.read_text(encoding="utf-8"))
+    assert migrated["schema_version"] == 2
+    assert migrated["scope"] == "2026-08-07"
+    assert migrated["entry_episode_opened_bar"] == "20260807082900"
 
     next_bar = _payload("WATCH", now + timedelta(minutes=1))
     next_bar["market_venue"] = "NXT"

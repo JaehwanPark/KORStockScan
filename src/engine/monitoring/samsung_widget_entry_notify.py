@@ -269,6 +269,7 @@ class SamsungWidgetEntryTelegramNotifier:
         return _as_kst(observed_at).date().isoformat()
 
     def _ensure_daily_scope(self, scope: str) -> None:
+        state_before = dict(self._state)
         stored_scope = str(self._state.get("scope") or "")
         stored_date = stored_scope.split(":", 1)[0]
         if stored_date == scope:
@@ -290,6 +291,8 @@ class SamsungWidgetEntryTelegramNotifier:
                     or self._state.get("last_sent_at")
                 ),
             )
+            if self._state != state_before:
+                self._save()
             return
         self._state = {
             "schema_version": 2,
@@ -299,6 +302,7 @@ class SamsungWidgetEntryTelegramNotifier:
             "entry_episode_status": "none",
             "non_actionable_since": None,
         }
+        self._save()
 
     def _close_entry_episode(
         self,
