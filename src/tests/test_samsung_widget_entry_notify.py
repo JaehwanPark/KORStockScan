@@ -20,6 +20,12 @@ def _payload(state: str = "ENTRY_CAUTION", observed_at: datetime | None = None) 
         "current_price": 233_250,
         "market_venue": "KRX",
         "observed_at_kst": now.isoformat(),
+        "observation": {
+            "latest_completed_bar": {
+                "source_time": now.strftime("%Y%m%d%H%M00"),
+                "close": 233_250,
+            }
+        },
         "advisory": {
             "state": state,
             "session": "KRX_REGULAR",
@@ -102,7 +108,7 @@ def test_entry_notice_is_admin_only_and_deduplicates_active_episode(tmp_path):
     assert state["last_entry_price_high"] == 233_500
 
 
-def test_caution_to_ready_upgrade_sends_one_additional_notice(tmp_path):
+def test_caution_to_ready_upgrade_does_not_duplicate_open_episode(tmp_path):
     sent = []
     notifier = SamsungWidgetEntryTelegramNotifier(
         state_file=tmp_path / "state.json",
@@ -115,7 +121,7 @@ def test_caution_to_ready_upgrade_sends_one_additional_notice(tmp_path):
     assert notifier.observe(
         _payload("ENTRY_READY", now + timedelta(seconds=10)),
         now + timedelta(seconds=10),
-    ) == ("sent")
+    ) == ("duplicate_active_episode")
     assert (
         notifier.observe(
             _payload("ENTRY_READY", now + timedelta(seconds=20)),
@@ -123,10 +129,10 @@ def test_caution_to_ready_upgrade_sends_one_additional_notice(tmp_path):
         )
         == "duplicate_active_episode"
     )
-    assert len(sent) == 2
+    assert len(sent) == 1
 
 
-def test_new_episode_requires_full_non_actionable_rearm_window(tmp_path):
+def test_watch_does_not_close_open_entry_episode(tmp_path):
     sent = []
     notifier = SamsungWidgetEntryTelegramNotifier(
         state_file=tmp_path / "state.json",
@@ -145,16 +151,248 @@ def test_new_episode_requires_full_non_actionable_rearm_window(tmp_path):
             _payload(observed_at=now + timedelta(seconds=110)),
             now + timedelta(seconds=110),
         )
-        == "rearm_wait"
+        == "duplicate_active_episode"
     )
     assert (
         notifier.observe(
             _payload(observed_at=now + timedelta(seconds=130)),
             now + timedelta(seconds=130),
         )
-        == "sent"
+        == "duplicate_active_episode"
     )
+    assert len(sent) == 1
+
+
+def test_open_premarket_episode_survives_krx_session_transition_until_exit(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    premarket = datetime(2026, 8, 7, 8, 29, 13, tzinfo=KST)
+    first = _payload(observed_at=premarket)
+    first["market_venue"] = "NXT"
+    first["advisory"]["session"] = "NXT_PREMARKET"
+    first["advisory"]["entry_price_low"] = 232_500
+    first["advisory"]["entry_price_high"] = 233_000
+    first["advisory"]["invalidation_price"] = 231_500
+
+    assert notifier.observe(first, premarket) == "sent"
+
+    watch = _payload("WATCH", premarket + timedelta(minutes=2))
+    watch["market_venue"] = "NXT"
+    watch["advisory"]["session"] = "NXT_PREMARKET"
+    watch["advisory"]["entry_price_low"] = None
+    watch["advisory"]["entry_price_high"] = None
+    assert notifier.observe(watch, premarket + timedelta(minutes=2)) == "not_actionable"
+
+    regular = datetime(2026, 8, 7, 9, 7, 33, tzinfo=KST)
+    second = _payload(observed_at=regular)
+    second["current_price"] = 238_000
+    second["advisory"]["entry_price_low"] = 238_000
+    second["advisory"]["entry_price_high"] = 238_500
+    second["advisory"]["invalidation_price"] = 236_500
+    assert notifier.observe(second, regular) == "duplicate_active_episode"
+
+    exit_at = datetime(2026, 8, 7, 9, 18, 4, tzinfo=KST)
+    exit_payload = _exit_payload(exit_at)
+    assert notifier.observe(exit_payload, exit_at) == "exit_sent"
     assert len(sent) == 2
+    assert "진입 알림" in sent[0][2]
+    assert "청산 관찰 알림" in sent[1][2]
+
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert state["scope"] == "2026-08-07"
+    assert state["entry_episode_status"] == "closed"
+    assert state["entry_episode_close_reason"] == "exit_ready"
+    assert state["entry_episode_close_reference_price"] == 231_500
+    assert state["entry_episode_closed_session"] == "KRX_REGULAR"
+    assert state["entry_episode_peak_price"] == 235_000
+
+
+def test_displayed_invalidation_closes_episode_before_reentry(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+        rearm_sec=120,
+    )
+    now = datetime(2026, 8, 7, 10, 0, 0, tzinfo=KST)
+    assert notifier.observe(_payload(observed_at=now), now) == "sent"
+
+    broken = _payload("WATCH", now + timedelta(minutes=1))
+    broken["advisory"]["entry_price_low"] = None
+    broken["advisory"]["entry_price_high"] = None
+    broken["observation"]["latest_completed_bar"]["close"] = 232_000
+    assert (
+        notifier.observe(broken, now + timedelta(minutes=1))
+        == "entry_episode_invalidated"
+    )
+
+    early = _payload(observed_at=now + timedelta(minutes=2))
+    assert notifier.observe(early, now + timedelta(minutes=2)) == "rearm_wait"
+    later = _payload(observed_at=now + timedelta(minutes=3, seconds=1))
+    assert notifier.observe(later, now + timedelta(minutes=3, seconds=1)) == "sent"
+    assert len(sent) == 2
+
+
+def test_source_blocked_payload_cannot_close_open_entry_episode(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    now = datetime(2026, 8, 7, 10, 0, 0, tzinfo=KST)
+    assert notifier.observe(_payload(observed_at=now), now) == "sent"
+
+    blocked = _payload("WATCH", now + timedelta(minutes=1))
+    blocked["advisory"]["entry_price_low"] = None
+    blocked["advisory"]["entry_price_high"] = None
+    blocked["advisory"]["source_quality"] = {
+        "status": "BLOCKED",
+        "issues": ["bbo_stale"],
+    }
+    blocked["observation"]["latest_completed_bar"]["close"] = 231_500
+    assert notifier.observe(blocked, now + timedelta(minutes=1)) == "not_actionable"
+
+    fresh = _payload(observed_at=now + timedelta(minutes=2))
+    assert (
+        notifier.observe(fresh, now + timedelta(minutes=2))
+        == "duplicate_active_episode"
+    )
+    assert len(sent) == 1
+
+
+def test_live_invalidation_requires_confirmed_ask_pressure(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    now = datetime(2026, 8, 7, 10, 0, 20, tzinfo=KST)
+    assert notifier.observe(_payload(observed_at=now), now) == "sent"
+
+    live_break = _payload("WATCH", now + timedelta(seconds=10))
+    live_break["current_price"] = 231_500
+    live_break["advisory"]["entry_price_low"] = None
+    live_break["advisory"]["entry_price_high"] = None
+    live_break["advisory"]["derived"] = {"live_reversal": {"ask_pressure": False}}
+    assert notifier.observe(live_break, now + timedelta(seconds=10)) == "not_actionable"
+
+    live_break["observed_at_kst"] = (now + timedelta(seconds=20)).isoformat()
+    live_break["advisory"]["observed_at"] = live_break["observed_at_kst"]
+    live_break["advisory"]["valid_until"] = (now + timedelta(seconds=80)).isoformat()
+    live_break["advisory"]["derived"]["live_reversal"]["ask_pressure"] = True
+    assert (
+        notifier.observe(live_break, now + timedelta(seconds=20))
+        == "entry_episode_invalidated"
+    )
+    assert len(sent) == 1
+
+
+def test_pre_entry_completed_bar_cannot_invalidate_new_episode(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    now = datetime(2026, 8, 7, 10, 0, 20, tzinfo=KST)
+    entry = _payload(observed_at=now)
+    entry["observation"]["latest_completed_bar"]["close"] = 233_000
+    assert notifier.observe(entry, now) == "sent"
+
+    same_bar = _payload("WATCH", now + timedelta(seconds=10))
+    same_bar["advisory"]["entry_price_low"] = None
+    same_bar["advisory"]["entry_price_high"] = None
+    same_bar["observation"]["latest_completed_bar"]["close"] = 231_500
+    assert notifier.observe(same_bar, now + timedelta(seconds=10)) == "not_actionable"
+    assert len(sent) == 1
+
+
+def test_legacy_session_state_restores_entry_bar_before_invalidation(tmp_path):
+    sent = []
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "scope": "2026-08-07:NXT_PREMARKET",
+                "active": True,
+                "active_state": "ENTRY_CAUTION",
+                "last_sent_at": "2026-08-07T08:29:13+09:00",
+                "last_invalidation_price": 231_500,
+            }
+        ),
+        encoding="utf-8",
+    )
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=state_file,
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+
+    now = datetime(2026, 8, 7, 8, 29, 30, tzinfo=KST)
+    same_bar = _payload("WATCH", now)
+    same_bar["market_venue"] = "NXT"
+    same_bar["advisory"]["session"] = "NXT_PREMARKET"
+    same_bar["advisory"]["entry_price_low"] = None
+    same_bar["advisory"]["entry_price_high"] = None
+    same_bar["observation"]["latest_completed_bar"].update(
+        {"source_time": "20260807082900", "close": 231_000}
+    )
+    assert notifier.observe(same_bar, now) == "not_actionable"
+
+    next_bar = _payload("WATCH", now + timedelta(minutes=1))
+    next_bar["market_venue"] = "NXT"
+    next_bar["advisory"]["session"] = "NXT_PREMARKET"
+    next_bar["advisory"]["entry_price_low"] = None
+    next_bar["advisory"]["entry_price_high"] = None
+    next_bar["observation"]["latest_completed_bar"].update(
+        {"source_time": "20260807083000", "close": 231_000}
+    )
+    assert (
+        notifier.observe(next_bar, now + timedelta(minutes=1))
+        == "entry_episode_invalidated"
+    )
+    assert sent == []
+
+
+def test_holding_independent_exit_rearms_before_fresh_entry(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+        rearm_sec=120,
+    )
+    now = datetime(2026, 8, 7, 10, 0, 0, tzinfo=KST)
+    assert notifier.observe(_exit_payload(now), now) == "exit_sent"
+
+    entry = _payload(observed_at=now + timedelta(seconds=60))
+    assert notifier.observe(entry, now + timedelta(seconds=60)) == "rearm_wait"
+    later = _payload(observed_at=now + timedelta(seconds=121))
+    assert notifier.observe(later, now + timedelta(seconds=121)) == "sent"
+    assert len(sent) == 2
+
+
+def test_missing_invalidation_price_is_not_an_actionable_contract(tmp_path):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    now = datetime(2026, 8, 7, 10, 0, 0, tzinfo=KST)
+    payload = _payload(observed_at=now)
+    payload["advisory"]["invalidation_price"] = None
+
+    assert notifier.observe(payload, now) == "invalid_actionable_contract"
+    assert sent == []
 
 
 def test_restart_restores_active_episode_and_does_not_resend(tmp_path):

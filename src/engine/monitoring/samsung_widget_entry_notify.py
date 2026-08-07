@@ -122,6 +122,11 @@ def _positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _minute_bar_key(value: object) -> str:
+    parsed = _parse_timestamp(value)
+    return parsed.strftime("%Y%m%d%H%M00") if parsed is not None else ""
+
+
 def _load_state(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -256,8 +261,142 @@ class SamsungWidgetEntryTelegramNotifier:
 
     @staticmethod
     def _scope(payload: dict[str, Any], observed_at: datetime) -> str:
+        # One advisory position episode may span NXT premarket, KRX regular,
+        # and NXT aftermarket.  Session-scoped state used to forget an open
+        # premarket episode at 09:00 and could emit a second "new entry"
+        # notice before the first episode was invalidated or exited.
+        del payload
+        return _as_kst(observed_at).date().isoformat()
+
+    def _ensure_daily_scope(self, scope: str) -> None:
+        stored_scope = str(self._state.get("scope") or "")
+        stored_date = stored_scope.split(":", 1)[0]
+        if stored_date == scope:
+            # Migrate the former YYYY-MM-DD:SESSION state in place so a
+            # collector restart or deployment cannot reopen today's episode.
+            self._state["schema_version"] = 2
+            self._state["scope"] = scope
+            self._state.setdefault(
+                "entry_episode_status",
+                "open" if self._state.get("active") else "closed",
+            )
+            self._state.setdefault(
+                "entry_episode_opened_at", self._state.get("last_sent_at")
+            )
+            self._state.setdefault(
+                "entry_episode_opened_bar",
+                _minute_bar_key(
+                    self._state.get("entry_episode_opened_at")
+                    or self._state.get("last_sent_at")
+                ),
+            )
+            return
+        self._state = {
+            "schema_version": 2,
+            "scope": scope,
+            "active": False,
+            "active_state": None,
+            "entry_episode_status": "none",
+            "non_actionable_since": None,
+        }
+
+    def _close_entry_episode(
+        self,
+        *,
+        now: datetime,
+        reason: str,
+        reference_price: int | None = None,
+        session: object = None,
+        peak_price: int | None = None,
+    ) -> None:
+        self._state.update(
+            {
+                "active": False,
+                "active_state": None,
+                "entry_episode_status": "closed",
+                "entry_episode_closed_at": now.isoformat(),
+                "entry_episode_close_reason": reason,
+                "entry_episode_close_reference_price": reference_price,
+                "entry_episode_closed_session": session,
+                "entry_episode_peak_price": peak_price,
+                "non_actionable_since": now.isoformat(),
+            }
+        )
+        self._save()
+
+    @staticmethod
+    def _latest_completed_bar(payload: dict[str, Any]) -> dict[str, Any]:
+        latest_bar = (payload.get("observation") or {}).get("latest_completed_bar")
+        if not isinstance(latest_bar, dict):
+            latest_bar = payload.get("latest_completed_bar")
+        return latest_bar if isinstance(latest_bar, dict) else {}
+
+    def _active_episode_invalidation_reason(
+        self, payload: dict[str, Any]
+    ) -> str | None:
+        """Return a displayed-invalidation breach for the open entry episode.
+
+        The stored hard invalidation price is the user-facing episode boundary.
+        A completed one-minute close at/below it closes the advisory episode. A
+        live touch also closes it when the current advisory confirms ask
+        pressure. Missing/stale payloads never synthesize an invalidation.
+        """
         advisory = payload.get("advisory") or {}
-        return f"{_as_kst(observed_at).date().isoformat()}:{advisory.get('session') or '-'}"
+        source_quality = advisory.get("source_quality") or {}
+        if (
+            not self._state.get("active")
+            or payload.get("status") != "ok"
+            or source_quality.get("status") != "PASS"
+        ):
+            return None
+        invalidation_price = _positive_int(
+            self._state.get("entry_episode_invalidation_price")
+            or self._state.get("last_invalidation_price")
+        )
+        if invalidation_price is None:
+            return None
+
+        latest_bar = self._latest_completed_bar(payload)
+        completed_bar_time = str(latest_bar.get("source_time") or "")
+        opened_bar_time = str(
+            self._state.get("entry_episode_opened_bar")
+            or _minute_bar_key(
+                self._state.get("entry_episode_opened_at")
+                or self._state.get("last_sent_at")
+            )
+        )
+        completed_close = (
+            _positive_int(latest_bar.get("close"))
+            if isinstance(latest_bar, dict)
+            else None
+        )
+        completed_after_entry = bool(
+            len(completed_bar_time) == 14
+            and len(opened_bar_time) == 14
+            and completed_bar_time > opened_bar_time
+        )
+        if (
+            completed_after_entry
+            and completed_close is not None
+            and completed_close <= invalidation_price
+        ):
+            return "completed_1m_close_invalidation"
+
+        live_reversal = advisory.get("live_reversal")
+        if not isinstance(live_reversal, dict):
+            derived = advisory.get("derived")
+            live_reversal = (
+                derived.get("live_reversal") if isinstance(derived, dict) else {}
+            )
+        current_price = _positive_int(payload.get("current_price"))
+        if (
+            current_price is not None
+            and current_price <= invalidation_price
+            and isinstance(live_reversal, dict)
+            and live_reversal.get("ask_pressure") is True
+        ):
+            return "live_invalidation_with_ask_pressure"
+        return None
 
     @staticmethod
     def _actionable_contract_valid(
@@ -270,6 +409,7 @@ class SamsungWidgetEntryTelegramNotifier:
         source_quality = advisory.get("source_quality") or {}
         low = _positive_int(advisory.get("entry_price_low"))
         high = _positive_int(advisory.get("entry_price_high"))
+        invalidation_price = _positive_int(advisory.get("invalidation_price"))
         advisory_observed_at = _parse_timestamp(
             advisory.get("observed_at") or payload.get("observed_at_kst")
         )
@@ -290,6 +430,7 @@ class SamsungWidgetEntryTelegramNotifier:
             and low is not None
             and high is not None
             and low <= high
+            and invalidation_price is not None
             and observation_age_sec is not None
             and 0 <= observation_age_sec <= SNAPSHOT_MAX_AGE_SEC
             and valid_until is not None
@@ -418,48 +559,53 @@ class SamsungWidgetEntryTelegramNotifier:
         state = str(advisory.get("state") or "")
         exit_state = str((payload.get("exit_advisory") or {}).get("state") or "")
         scope = self._scope(payload, now)
-        if self._state.get("scope") != scope:
-            self._state = {
-                "schema_version": 1,
-                "scope": scope,
-                "active": False,
-                "active_state": None,
-                "non_actionable_since": None,
-            }
+        self._ensure_daily_scope(scope)
 
         if exit_state == "EXIT_READY":
-            if self._state.get("active") or not self._state.get("non_actionable_since"):
-                self._state["active"] = False
-                self._state["active_state"] = None
-                self._state["non_actionable_since"] = now.isoformat()
-                self._save()
+            if not self._exit_contract_valid(payload, now):
+                return "invalid_exit_contract"
+            if self._state.get("active"):
+                exit_advisory = payload.get("exit_advisory") or {}
+                self._close_entry_episode(
+                    now=now,
+                    reason="exit_ready",
+                    reference_price=_positive_int(
+                        exit_advisory.get("reference_exit_price")
+                    ),
+                    session=exit_advisory.get("session"),
+                    peak_price=_positive_int(exit_advisory.get("peak_price")),
+                )
+            else:
+                exit_episode_key = self._exit_episode_key(payload, scope)
+                if self._state.get("last_exit_episode_key") != exit_episode_key:
+                    self._state["non_actionable_since"] = now.isoformat()
+                    self._save()
             return self._observe_exit_ready(payload, now=now, scope=scope)
 
+        invalidation_reason = self._active_episode_invalidation_reason(payload)
+        if invalidation_reason:
+            self._close_entry_episode(
+                now=now,
+                reason=invalidation_reason,
+                reference_price=_positive_int(payload.get("current_price")),
+                session=advisory.get("session"),
+            )
+            return "entry_episode_invalidated"
+
         if state not in ACTIONABLE_ADVISORY_STATES:
-            if self._state.get("active") or not self._state.get("non_actionable_since"):
-                self._state["active"] = False
-                self._state["active_state"] = None
-                self._state["non_actionable_since"] = now.isoformat()
-                self._save()
+            # WATCH/NO_CHASE/DATA_WAIT ends the short-lived entry opportunity,
+            # not the advisory position episode opened by a sent entry notice.
             return "not_actionable"
 
         if not self._actionable_contract_valid(payload, now):
             return "invalid_actionable_contract"
 
-        active_state = str(self._state.get("active_state") or "")
-        is_upgrade = bool(
-            self._state.get("active")
-            and active_state == "ENTRY_CAUTION"
-            and state == "ENTRY_READY"
-        )
-        if self._state.get("active") and not is_upgrade:
+        if self._state.get("active"):
             return "duplicate_active_episode"
 
         non_actionable_since = _parse_timestamp(self._state.get("non_actionable_since"))
         if (
-            not is_upgrade
-            and self._state.get("last_sent_at")
-            and non_actionable_since is not None
+            non_actionable_since is not None
             and (now - non_actionable_since).total_seconds() < self.rearm_sec
         ):
             return "rearm_wait"
@@ -492,6 +638,21 @@ class SamsungWidgetEntryTelegramNotifier:
             {
                 "active": True,
                 "active_state": state,
+                "entry_episode_status": "open",
+                "entry_episode_id": f"{scope}:{now.isoformat()}",
+                "entry_episode_opened_at": now.isoformat(),
+                "entry_episode_opened_session": advisory.get("session"),
+                "entry_episode_opened_bar": self._latest_completed_bar(payload).get(
+                    "source_time"
+                ),
+                "entry_episode_invalidation_price": _positive_int(
+                    advisory.get("invalidation_price")
+                ),
+                "entry_episode_closed_at": None,
+                "entry_episode_close_reason": None,
+                "entry_episode_close_reference_price": None,
+                "entry_episode_closed_session": None,
+                "entry_episode_peak_price": None,
                 "non_actionable_since": None,
                 "last_sent_at": now.isoformat(),
                 "last_sent_state": state,
