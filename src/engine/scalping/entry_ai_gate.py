@@ -181,17 +181,22 @@ def evaluate_entry_score_role_gate(
     unusable_source = source_l in UNUSABLE_RESULT_SOURCES or any(
         token in source_l for token in UNUSABLE_RESULT_SOURCE_TOKENS
     )
-    excluded_reason = ""
+    source_excluded_reason = ""
     if fallback_50:
-        excluded_reason = "fallback_score_50"
+        source_excluded_reason = "fallback_score_50"
     elif parse_fail or not parse_ok:
-        excluded_reason = "parse_fail_or_not_ok"
+        source_excluded_reason = "parse_fail_or_not_ok"
     elif unusable_source:
-        excluded_reason = f"unusable_source:{source}"
-    elif stale:
-        excluded_reason = "stale_quote_or_context"
+        source_excluded_reason = f"unusable_source:{source}"
 
+    excluded_reason = source_excluded_reason or (
+        "stale_quote_or_context" if stale else ""
+    )
     usable = not excluded_reason
+    # Direct submission remains fail-closed on stale input.  A canonical WAIT
+    # recheck may retain only source/parse eligibility because its single owner
+    # refreshes the quote and re-applies freshness before granting probe access.
+    recheck_source_usable = not source_excluded_reason
     score = _safe_float(ai_score if ai_score is not None else result.get("score"), 0.0)
     action = str(ai_action or result.get("action") or "").strip().upper()
     evidence = (
@@ -206,14 +211,16 @@ def evaluate_entry_score_role_gate(
         str(result.get("entry_probe_intent_status") or "").strip().lower()
     )
     recovery_trigger = str(evidence.get("trigger") or "").strip().lower()
+    adverse_risk = str(evidence.get("adverse_risk") or "").strip().lower()
     recheck_usable = bool(
-        usable
+        recheck_source_usable
         and action in {"WAIT", "WAIT_REQUOTE"}
         and contract_status == "pass"
         and edge_state == "EDGE"
         and probe_intent
         and probe_intent_status == "eligible_wait_probe"
         and recovery_trigger == "recovery_required"
+        and adverse_risk != "blocking"
     )
     prior = evaluate_ai_score_prior(action, score, usable=usable)
     return {
@@ -224,6 +231,9 @@ def evaluate_entry_score_role_gate(
         "entry_score_value": round(score, 3),
         "entry_score_usable_for_entry_submit": bool(usable),
         "entry_score_usable_for_recheck": recheck_usable,
+        "entry_recheck_source_usable": recheck_source_usable,
+        "entry_recheck_freshness_refresh_required": bool(stale and recheck_usable),
+        "entry_recheck_excluded_reason": source_excluded_reason or "-",
         "entry_score_usable_for_state_history": bool(usable),
         "entry_score_excluded_reason": excluded_reason or "-",
         "entry_recheck_contract_status": contract_status or "unreported",
@@ -231,6 +241,7 @@ def evaluate_entry_score_role_gate(
         "entry_recheck_probe_intent": probe_intent,
         "entry_recheck_probe_intent_status": probe_intent_status or "not_reported",
         "entry_recheck_recovery_trigger": recovery_trigger or "-",
+        "entry_recheck_adverse_risk": adverse_risk or "not_reported",
         **prior,
     }
 
@@ -247,6 +258,13 @@ def entry_score_role_log_fields(role_gate: dict[str, Any] | None) -> dict[str, A
         "entry_score_usable_for_recheck": bool(
             gate.get("entry_score_usable_for_recheck", False)
         ),
+        "entry_recheck_source_usable": bool(
+            gate.get("entry_recheck_source_usable", False)
+        ),
+        "entry_recheck_freshness_refresh_required": bool(
+            gate.get("entry_recheck_freshness_refresh_required", False)
+        ),
+        "entry_recheck_excluded_reason": gate.get("entry_recheck_excluded_reason", "-"),
         "entry_score_usable_for_state_history": bool(
             gate.get("entry_score_usable_for_state_history", False)
         ),
@@ -263,6 +281,9 @@ def entry_score_role_log_fields(role_gate: dict[str, Any] | None) -> dict[str, A
         ),
         "entry_recheck_recovery_trigger": gate.get(
             "entry_recheck_recovery_trigger", "-"
+        ),
+        "entry_recheck_adverse_risk": gate.get(
+            "entry_recheck_adverse_risk", "not_reported"
         ),
         "score_gate_converted_to_prior": bool(
             gate.get("score_gate_converted_to_prior", True)

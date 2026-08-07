@@ -56766,6 +56766,9 @@ def _handle_watching_strategy_branch(
                                     (ai_decision or {}).get("entry_probe_intent_status")
                                     or ""
                                 ),
+                                **entry_score_role_log_fields(
+                                    entry_score_role_gate_for_bridge
+                                ),
                             )
                         if first_ai_wait_score_prior_block:
                             rising_missed_normal_buy_bridge_fields = _evaluate_rising_missed_normal_buy_bridge(

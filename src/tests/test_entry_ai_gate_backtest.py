@@ -345,6 +345,50 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
     )
     assert valid_wait_recheck["entry_score_usable_for_recheck"] is True
 
+    stale_wait_recheck = gate.evaluate_entry_score_role_gate(
+        {
+            "action": "WAIT",
+            "score": 72,
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+            "edge_state": "EDGE",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "evidence": {"trigger": "recovery_required"},
+        },
+        ws_data={"quote_stale": True},
+    )
+    assert stale_wait_recheck["entry_score_usable_for_entry_submit"] is False
+    assert stale_wait_recheck["entry_score_usable_for_recheck"] is True
+    assert stale_wait_recheck["entry_recheck_source_usable"] is True
+    assert stale_wait_recheck["entry_recheck_freshness_refresh_required"] is True
+    assert stale_wait_recheck["entry_score_excluded_reason"] == (
+        "stale_quote_or_context"
+    )
+    assert stale_wait_recheck["entry_recheck_excluded_reason"] == "-"
+
+    blocking_adverse_wait = gate.evaluate_entry_score_role_gate(
+        {
+            "action": "WAIT",
+            "score": 72,
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+            "edge_state": "EDGE",
+            "entry_probe_intent": True,
+            "entry_probe_intent_status": "eligible_wait_probe",
+            "evidence": {
+                "trigger": "recovery_required",
+                "adverse_risk": "blocking",
+            },
+        },
+        ws_data={"quote_stale": True},
+    )
+    assert blocking_adverse_wait["entry_score_usable_for_entry_submit"] is False
+    assert blocking_adverse_wait["entry_score_usable_for_recheck"] is False
+    assert blocking_adverse_wait["entry_recheck_adverse_risk"] == "blocking"
+
     normalized_wait_recheck = gate.evaluate_entry_score_role_gate(
         {
             "action": "WAIT",
@@ -383,6 +427,9 @@ def test_entry_ai_gate_role_gate_and_threshold_helper(monkeypatch):
         }
     )
     assert fallback["entry_score_usable_for_recheck"] is False
+    assert fallback["entry_recheck_source_usable"] is False
+    assert fallback["entry_recheck_freshness_refresh_required"] is False
+    assert fallback["entry_recheck_excluded_reason"] == "fallback_score_50"
     assert fallback["entry_score_excluded_reason"] == "fallback_score_50"
 
     lock_contention = gate.evaluate_entry_score_role_gate(
