@@ -186,6 +186,89 @@ def test_capture_ai_request_persists_exact_payload_once(monkeypatch, tmp_path):
     assert payload_row["reasoning_effort"] == "low"
 
 
+def test_capture_ai_request_separates_compact_provider_input_from_replay_context(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    provider_input = {
+        "input_schema": "entry_setup_v2_14_risk_input_v1",
+        "entry_setup_evidence_v1": {"setup_family": "CLEAN_CONTINUATION"},
+    }
+    replay_context = {
+        "exact_payload": {
+            "input_schema": "entry_screen_hot_v1",
+            "stock_code": "005930",
+            "current": {"price": 70100},
+        },
+        "entry_setup_evidence_v1": {"setup_family": "CLEAN_CONTINUATION"},
+    }
+
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input=provider_input,
+        replay_context=replay_context,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="request-compact-1",
+        model="gpt-test",
+        schema_name="entry_setup_risk_adjudication_v1",
+        require_json=True,
+    )
+    trace.capture_ai_request(
+        prompt="prompt",
+        user_input=provider_input,
+        replay_context={
+            **replay_context,
+            "exact_payload": {
+                **replay_context["exact_payload"],
+                "current": {"price": 70200},
+            },
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="request-compact-2",
+        model="gpt-test",
+        schema_name="entry_setup_risk_adjudication_v1",
+        require_json=True,
+    )
+
+    rows = _rows(trace._payload_path(trace._date_text()))
+    assert len(rows) == 2
+    assert rows[0]["sanitized_user_input"] == provider_input
+    assert rows[0]["sanitized_replay_context"] == replay_context
+    assert trace.replay_source_input(rows[0]) == replay_context
+    assert rows[0]["payload_bytes"] < rows[0]["replay_context_bytes"]
+    assert fields["ai_replay_context_exact"] is True
+    assert fields["ai_input_payload_bytes"] == rows[0]["payload_bytes"]
+    trace.record_ai_decision_trace(
+        {
+            **fields,
+            "action": "WAIT",
+            "provider_called": True,
+            "provider": "openai",
+            "openai_model": "gpt-test",
+            "ai_parse_ok": True,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="entry_setup_risk_adjudication_v1",
+        result_source="live",
+    )
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert trace_row["replay_context_present"] is True
+    assert trace_row["replay_context_exact"] is True
+    assert trace_row["replay_context_sha256"] == fields["ai_replay_context_sha256"]
+    assert (
+        trace.replay_source_input(
+            {
+                "replay_context_present": True,
+                "replay_context_exact": False,
+                "sanitized_user_input": provider_input,
+            }
+        )
+        is None
+    )
+
+
 def test_capture_ai_request_preserves_simulation_cohort_provenance(
     monkeypatch, tmp_path
 ):

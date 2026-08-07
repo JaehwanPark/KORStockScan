@@ -969,8 +969,9 @@ def capture_ai_request(
     max_output_tokens: int | None = None,
     reasoning_effort: str | None = None,
     metadata: dict[str, Any] | None = None,
+    replay_context: Any = None,
 ) -> dict[str, Any]:
-    """Persist a sanitized replay payload and return fields propagated to the result."""
+    """Persist provider input plus an optional exact offline replay context."""
     if not trace_enabled():
         return {}
     try:
@@ -989,33 +990,88 @@ def capture_ai_request(
         metadata_row = dict(metadata or {})
         raw_input = _json_bytes(user_input)
         payload_sha256 = hashlib.sha256(raw_input).hexdigest()
+        replay_context_present = replay_context is not None
+        replay_context_bytes = (
+            _json_bytes(replay_context) if replay_context_present else b""
+        )
+        replay_context_sha256 = (
+            hashlib.sha256(replay_context_bytes).hexdigest()
+            if replay_context_present
+            else None
+        )
         prompt_sha256 = hashlib.sha256(_json_bytes(prompt)).hexdigest()
+        request_envelope = {
+            "endpoint": str(endpoint_name or "generic"),
+            "model": str(model or "-"),
+            "schema_name": str(schema_name or "-"),
+            "require_json": bool(require_json),
+            "temperature": temperature,
+            "max_output_tokens": max_output_tokens,
+            "reasoning_effort": reasoning_effort,
+            "prompt_sha256": prompt_sha256,
+            "user_input_sha256": payload_sha256,
+        }
+        if replay_context_sha256:
+            request_envelope["replay_context_sha256"] = replay_context_sha256
         request_envelope_sha256 = hashlib.sha256(
-            _json_bytes(
-                {
-                    "endpoint": str(endpoint_name or "generic"),
-                    "model": str(model or "-"),
-                    "schema_name": str(schema_name or "-"),
-                    "require_json": bool(require_json),
-                    "temperature": temperature,
-                    "max_output_tokens": max_output_tokens,
-                    "reasoning_effort": reasoning_effort,
-                    "prompt_sha256": prompt_sha256,
-                    "user_input_sha256": payload_sha256,
-                }
-            )
+            _json_bytes(request_envelope)
         ).hexdigest()
         input_format, parsed_input = _parse_user_input(user_input)
         sanitized_input, redacted = _sanitize(parsed_input)
+        if replay_context_present:
+            replay_input_format, parsed_replay_context = _parse_user_input(
+                replay_context
+            )
+            sanitized_replay_context, replay_context_redacted = _sanitize(
+                parsed_replay_context
+            )
+        else:
+            replay_input_format = None
+            parsed_replay_context = None
+            sanitized_replay_context = None
+            replay_context_redacted = False
         sanitized_prompt, prompt_redacted = _sanitize(str(prompt or ""))
         context = _request_context(
-            parsed_input,
+            parsed_replay_context if replay_context_present else parsed_input,
             metadata_row,
             endpoint_name=endpoint_name,
         )
         canonical_context = _canonical_context_capture(
-            parsed_input,
+            parsed_replay_context if replay_context_present else parsed_input,
             endpoint_name=endpoint_name,
+        )
+        replay_payload_fields = (
+            {
+                "replay_context_present": True,
+                "replay_context_input_format": replay_input_format,
+                "replay_context_sha256": replay_context_sha256,
+                "replay_context_bytes": len(replay_context_bytes),
+                "replay_context_redacted": bool(replay_context_redacted),
+                "replay_context_exact": not replay_context_redacted,
+                "sanitized_replay_context": sanitized_replay_context,
+            }
+            if replay_context_present
+            else {}
+        )
+        replay_request_fields = (
+            {
+                "replay_context_sha256": replay_context_sha256,
+                "replay_context_redacted": bool(replay_context_redacted),
+                "replay_context_exact": not replay_context_redacted,
+            }
+            if replay_context_present
+            else {}
+        )
+        replay_result_fields = (
+            {
+                "ai_replay_context_present": True,
+                "ai_replay_context_sha256": replay_context_sha256,
+                "ai_replay_context_bytes": len(replay_context_bytes),
+                "ai_replay_context_redacted": bool(replay_context_redacted),
+                "ai_replay_context_exact": not replay_context_redacted,
+            }
+            if replay_context_present
+            else {}
         )
         trace_id = str(request_id or "").strip() or f"aidt-{uuid.uuid4().hex}"
         payload_row = {
@@ -1046,6 +1102,7 @@ def capture_ai_request(
             "redacted": bool(redacted),
             "replay_exact": not redacted,
             "sanitized_user_input": sanitized_input,
+            **replay_payload_fields,
             "canonical_context_capture": canonical_context,
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
@@ -1083,6 +1140,7 @@ def capture_ai_request(
             "request_envelope_sha256": request_envelope_sha256,
             "prompt_sha256": prompt_sha256,
             "payload_redacted": bool(redacted),
+            **replay_request_fields,
             "prompt_redacted": bool(prompt_redacted),
             "canonical_context_capture": canonical_context,
             **STORAGE_SECURITY_CONTRACT,
@@ -1130,6 +1188,7 @@ def capture_ai_request(
             "ai_input_payload_store_date": target_date,
             "ai_input_payload_redacted": bool(redacted),
             "ai_input_payload_replay_exact": not redacted,
+            **replay_result_fields,
             "ai_trace_stock_code": context.get("stock_code") or symbol or None,
             "ai_trace_record_id": context.get("record_id"),
             "ai_trace_recommendation_id": context.get("recommendation_id"),
@@ -1170,6 +1229,25 @@ def capture_ai_request(
     except Exception as exc:
         log_error(f"[AI_DECISION_TRACE] request capture failed: {exc}")
         return {}
+
+
+def replay_source_input(payload_row: Any) -> Any:
+    """Return the exact offline source while keeping provider input truthful."""
+
+    row = payload_row if isinstance(payload_row, dict) else {}
+    if row.get("replay_context_present") is True:
+        if (
+            row.get("replay_context_exact") is True
+            and row.get("sanitized_replay_context") is not None
+        ):
+            return row.get("sanitized_replay_context")
+        return None
+    if (
+        row.get("replay_context_exact") is True
+        and row.get("sanitized_replay_context") is not None
+    ):
+        return row.get("sanitized_replay_context")
+    return row.get("sanitized_user_input")
 
 
 def _decision_stage(prompt_type: str, explicit_stage: str | None = None) -> str:
@@ -1526,6 +1604,21 @@ def record_ai_decision_trace(
             "payload_redacted": bool(merged.get("ai_input_payload_redacted", False)),
             "payload_replay_exact": bool(
                 merged.get("ai_input_payload_replay_exact", False)
+            ),
+            "replay_context_present": bool(
+                merged.get("ai_replay_context_present", False)
+            ),
+            "replay_context_sha256": _optional(merged, "ai_replay_context_sha256"),
+            "replay_context_bytes": _safe_number(
+                _optional(merged, "ai_replay_context_bytes")
+            ),
+            "replay_context_redacted": bool(
+                merged.get("ai_replay_context_redacted", False)
+            ),
+            "replay_context_exact": (
+                bool(merged.get("ai_replay_context_exact"))
+                if "ai_replay_context_exact" in merged
+                else None
             ),
             "canonical_context_capture_status": _optional(
                 merged, "ai_trace_canonical_context_capture_status"

@@ -85,6 +85,75 @@ def _trace(action="DROP"):
     }
 
 
+def test_payload_contract_prefers_exact_replay_context_over_compact_provider_input():
+    payload = _payload()
+    exact_context = payload["sanitized_user_input"]
+    payload.update(
+        {
+            "sanitized_user_input": {
+                "input_schema": "entry_setup_v2_14_live_input",
+                "entry_setup_evidence_v1": {"setup_state": "READY"},
+            },
+            "replay_context_exact": True,
+            "sanitized_replay_context": {
+                "exact_payload": exact_context,
+                "exact_payload_analysis_v1": {"schema": "exact_payload_analysis_v1"},
+            },
+        }
+    )
+
+    assert quality._replay_exact_payload(quality.replay_source_input(payload)) == (
+        exact_context
+    )
+    assert len(quality._payload_contract(payload)["canonical_contexts"]) == 1
+
+
+def test_payload_lookup_prefers_request_envelope_when_provider_hash_repeats():
+    first = {
+        **_payload(),
+        "endpoint": "analyze_target",
+        "request_envelope_sha256": "request-1",
+        "sanitized_replay_context": {"exact_payload": {"marker": "first"}},
+        "replay_context_present": True,
+        "replay_context_exact": True,
+    }
+    second = {
+        **_payload(),
+        "endpoint": "analyze_target",
+        "request_envelope_sha256": "request-2",
+        "sanitized_replay_context": {"exact_payload": {"marker": "second"}},
+        "replay_context_present": True,
+        "replay_context_exact": True,
+    }
+    payload_by_key, payload_by_unique_hash = quality._payload_indexes([first, second])
+
+    selected = quality._payload_for_trace(
+        {
+            **_trace(),
+            "request_envelope_sha256": "request-1",
+        },
+        payload_by_key=payload_by_key,
+        payload_by_unique_hash=payload_by_unique_hash,
+    )
+
+    assert selected["request_envelope_sha256"] == "request-1"
+    assert quality.replay_source_input(selected) == {
+        "exact_payload": {"marker": "first"}
+    }
+    assert (
+        quality._payload_for_trace(
+            {
+                **_trace(),
+                "payload_sha256": "corrupted-hash",
+                "request_envelope_sha256": "request-1",
+            },
+            payload_by_key=payload_by_key,
+            payload_by_unique_hash=payload_by_unique_hash,
+        )
+        == {}
+    )
+
+
 def _pending(action="DROP"):
     return {
         "schema": "ai_decision_outcome_label_v1",

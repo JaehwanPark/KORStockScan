@@ -26,6 +26,7 @@ from src.engine.monitoring.samsung_widget_contract import (
 from src.engine.risk.manual_control_exclusion import (
     configured_manual_control_exclusion_codes,
 )
+from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
@@ -128,7 +129,7 @@ def _source_qualified_exact_payload(row: object) -> dict[str, Any] | None:
         or row.get("broker_order_forbidden") is not True
     ):
         return None
-    sanitized = row.get("sanitized_user_input")
+    sanitized = replay_source_input(row)
     exact = sanitized.get("exact_payload") if isinstance(sanitized, dict) else None
     if not isinstance(exact, dict):
         return None
@@ -183,7 +184,7 @@ def _load_feature_history(
                 code = str(row.get("symbol") or "").strip()
                 if eligible_codes is not None and code not in eligible_codes:
                     continue
-                sanitized = row.get("sanitized_user_input")
+                sanitized = replay_source_input(row)
                 liquidity = _payload_feature(sanitized, "entry_liquidity_score")
                 intraday_range = _payload_feature(sanitized, "intraday_range_pct")
                 spread_bp = _payload_feature(sanitized, "spread_bp")

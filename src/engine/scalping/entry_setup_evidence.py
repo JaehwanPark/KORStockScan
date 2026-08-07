@@ -15,7 +15,7 @@ from typing import Any
 ENTRY_SETUP_EVIDENCE_SCHEMA = "entry_setup_evidence_v1"
 ENTRY_RISK_ADJUDICATION_SCHEMA = "entry_setup_risk_adjudication_v1"
 ENTRY_DECISION_COMPOSER_SCHEMA = "entry_decision_composer_v1"
-ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v7"
+ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v8"
 ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v7"
 ENTRY_RISK_ADJUDICATION_REPAIR_VERSION = (
     "entry_setup_risk_fail_closed_invalidation_citation_v1"
@@ -25,6 +25,7 @@ TAIL_RISK_CALIBRATION_VERSION = "entry_tail_risk_calibration_v2"
 TAIL_RISK_SPREAD_FLOOR_BP = 100.0
 TAIL_RISK_FILLABILITY_CEILING = 15.0
 TAIL_RISK_TOP3_ASK_TO_BID_FLOOR = 5.0
+RELATIVE_WEAKNESS_FLOOR_PCT_POINT = -0.50
 
 RECHECK_REASONS = {
     "TRIGGER_CONFIRMATION_RECHECK",
@@ -84,6 +85,29 @@ OBSERVATION_CONTRACT = {
         "broker_or_safety_guard_bypass",
         "bot_restart",
         "widget_runtime_or_policy_change",
+    ],
+}
+
+CONTEXT_OBSERVATION_CONTRACT = {
+    "schema": "entry_setup_context_observations_v1",
+    "version": "entry_setup_context_observations_policy_v1",
+    "metric_role": "entry_risk_context_observation",
+    "decision_authority": "bounded_nonblocking_risk_corroboration_only",
+    "window_policy": "same_exact_payload_snapshot_no_cross_venue_fill",
+    "sample_floor": "one_fresh_observation_starts_attribution_only",
+    "primary_decision_metric": "candidate_probe_cost_adjusted_ev_pct",
+    "source_quality_gate": "fresh_explicit_source_and_exact_observation_time",
+    "runtime_effect": False,
+    "allowed_runtime_apply": False,
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "forbidden_uses": [
+        "create_or_promote_setup",
+        "standalone_live_entry_or_block",
+        "missing_as_adverse_evidence",
+        "cross_venue_or_cross_session_imputation",
+        "provider_model_price_quantity_or_threshold_change",
+        "broker_or_safety_guard_bypass",
     ],
 }
 
@@ -147,6 +171,186 @@ def _number(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _source_quality_status(value: Any) -> str:
+    source = _as_dict(value)
+    quality = source.get("quality")
+    if isinstance(quality, dict):
+        quality = quality.get("status")
+    if quality in (None, ""):
+        quality = source.get("source_quality")
+        if isinstance(quality, dict):
+            quality = quality.get("status")
+    return str(quality or "unknown").strip().lower()
+
+
+def _source_is_fresh(value: Any) -> bool:
+    return _source_quality_status(value) in {
+        "fresh",
+        "fresh_consistent",
+        "pass",
+    }
+
+
+def _has_observation_time(value: Any) -> bool:
+    source = _as_dict(value)
+    return source.get("observed_at") not in (None, "") or source.get(
+        "captured_at"
+    ) not in (None, "")
+
+
+def _build_context_observations(payload: dict[str, Any]) -> dict[str, Any]:
+    """Extract null-aware relative-strength, flow, and external-risk inputs.
+
+    Missing data remains explicit and never becomes a negative fact. Only
+    fresh, same-payload observations can corroborate a bounded risk.
+    """
+
+    candle_context = _as_dict(payload.get("entry_candle_context"))
+    multi = _as_dict(candle_context.get("multi_timeframe_context"))
+    market = _as_dict(multi.get("market_context"))
+    sector = _as_dict(multi.get("sector_context"))
+    snapshot = _as_dict(payload.get("ai_market_snapshot_v1"))
+    if not snapshot:
+        snapshot = _as_dict(candle_context.get("ai_market_snapshot_v1"))
+    sources = _as_dict(snapshot.get("sources"))
+
+    stock_5m = _number(sector.get("stock_return_5m_pct"))
+    stock_15m = _number(sector.get("stock_return_15m_pct"))
+    market_5m = _number(market.get("return_5m_pct"))
+    market_15m = _number(market.get("return_15m_pct"))
+    market_relative_5m = (
+        round(stock_5m - market_5m, 6)
+        if stock_5m is not None and market_5m is not None
+        else None
+    )
+    market_relative_15m = (
+        round(stock_15m - market_15m, 6)
+        if stock_15m is not None and market_15m is not None
+        else None
+    )
+    market_relative_usable = bool(
+        _source_is_fresh(market)
+        and market_relative_5m is not None
+        and market_relative_15m is not None
+    )
+    sector_relative_5m = _number(sector.get("sector_relative_return_5m_pct"))
+    sector_relative_15m = _number(sector.get("sector_relative_return_15m_pct"))
+    sector_relative_usable = bool(
+        _source_is_fresh(sector)
+        and sector_relative_5m is not None
+        and sector_relative_15m is not None
+    )
+
+    program = _as_dict(sources.get("program"))
+    program_value = _as_dict(program.get("value"))
+    program_net_qty = _number(program_value.get("net_qty"))
+    program_delta_qty = _number(program_value.get("delta_qty"))
+    program_usable = bool(
+        _source_is_fresh(program)
+        and _has_observation_time(program)
+        and program_net_qty is not None
+    )
+
+    investor = _as_dict(sources.get("investor"))
+    investor_value = _as_dict(investor.get("value"))
+    foreign_net = _number(investor_value.get("foreign_net"))
+    institutional_net = _number(investor_value.get("inst_net"))
+    investor_numbers = [foreign_net, institutional_net]
+    investor_all_zero = bool(
+        all(value is not None for value in investor_numbers)
+        and all(value == 0.0 for value in investor_numbers)
+    )
+    investor_usable = bool(
+        _source_is_fresh(investor)
+        and _has_observation_time(investor)
+        and all(value is not None for value in investor_numbers)
+        and not investor_all_zero
+    )
+
+    runtime_context = _as_dict(payload.get("runtime_context"))
+    external = _as_dict(payload.get("external_market_context"))
+    if not external:
+        external = _as_dict(runtime_context.get("external_market_context"))
+    if not external:
+        external_source = _as_dict(sources.get("external_market"))
+        external = _as_dict(external_source.get("value"))
+        if external:
+            external = {
+                **external,
+                "source": external_source.get("source"),
+                "quality": external_source.get("quality"),
+                "observed_at": external_source.get("observed_at"),
+            }
+    external_risk_state = (
+        str(external.get("risk_state") or external.get("state") or "unknown")
+        .strip()
+        .upper()
+    )
+    external_usable = bool(
+        _source_is_fresh(external)
+        and _has_observation_time(external)
+        and external_risk_state != "UNKNOWN"
+    )
+
+    return {
+        **CONTEXT_OBSERVATION_CONTRACT,
+        "market_relative": {
+            "status": "observed" if market_relative_usable else "unavailable",
+            "usable_for_risk": market_relative_usable,
+            "return_5m_pct_point": market_relative_5m,
+            "return_15m_pct_point": market_relative_15m,
+            "source": market.get("source"),
+            "source_quality": _source_quality_status(market),
+            "reason": market.get("reason"),
+        },
+        "sector_relative": {
+            "status": "observed" if sector_relative_usable else "unavailable",
+            "usable_for_risk": sector_relative_usable,
+            "return_5m_pct_point": sector_relative_5m,
+            "return_15m_pct_point": sector_relative_15m,
+            "source": sector.get("source"),
+            "source_quality": _source_quality_status(sector),
+            "reason": sector.get("reason"),
+        },
+        "program_flow": {
+            "status": "observed" if program_usable else "unavailable",
+            "usable_for_risk": program_usable,
+            "net_qty": program_net_qty,
+            "delta_qty": program_delta_qty,
+            "source": program.get("source"),
+            "source_quality": _source_quality_status(program),
+            "observed_at": program.get("observed_at"),
+        },
+        "investor_flow": {
+            "status": (
+                "observed"
+                if investor_usable
+                else (
+                    "observed_zero_or_not_yet_reported"
+                    if investor_all_zero
+                    and _source_is_fresh(investor)
+                    and _has_observation_time(investor)
+                    else "unavailable"
+                )
+            ),
+            "usable_for_risk": investor_usable,
+            "foreign_net": foreign_net,
+            "institutional_net": institutional_net,
+            "source": investor.get("source"),
+            "source_quality": _source_quality_status(investor),
+            "observed_at": investor.get("observed_at"),
+        },
+        "external_market": {
+            "status": "observed" if external_usable else "unavailable",
+            "usable_for_risk": external_usable,
+            "risk_state": external_risk_state,
+            "source": external.get("source"),
+            "source_quality": _source_quality_status(external),
+            "observed_at": external.get("observed_at"),
+        },
+    }
+
+
 def build_entry_setup_evidence(
     *,
     exact_payload: Any,
@@ -177,6 +381,7 @@ def build_entry_setup_evidence(
     invalidation_facts: list[str] = []
     corroborated_risk_codes: list[str] = []
     recheck_reasons: list[str] = []
+    context_observations = _build_context_observations(payload)
 
     spread_bp = _number(liquidity.get("spread_bp"))
     fillability_score = _number(liquidity.get("fillability_score"))
@@ -237,6 +442,54 @@ def build_entry_setup_evidence(
     }:
         contradicting_facts.append("trigger_confirmation_missing")
         corroborated_risk_codes.append("CONFIRMATION_MISSING")
+
+    # These auxiliary inputs can corroborate only a bounded CAUTION. They do
+    # not create a setup, never turn missing data into a negative signal, and
+    # cannot bypass the existing submit/post-probe safety owners.
+    market_relative = _as_dict(context_observations.get("market_relative"))
+    if (
+        market_relative.get("usable_for_risk") is True
+        and _number(market_relative.get("return_5m_pct_point"))
+        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+        and _number(market_relative.get("return_15m_pct_point"))
+        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+    ):
+        contradicting_facts.append("market_relative_weak_5m_15m")
+        corroborated_risk_codes.append("ADVERSE_TAPE")
+    sector_relative = _as_dict(context_observations.get("sector_relative"))
+    if (
+        sector_relative.get("usable_for_risk") is True
+        and _number(sector_relative.get("return_5m_pct_point"))
+        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+        and _number(sector_relative.get("return_15m_pct_point"))
+        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+    ):
+        contradicting_facts.append("sector_relative_weak_5m_15m")
+        corroborated_risk_codes.append("ADVERSE_TAPE")
+    program_flow = _as_dict(context_observations.get("program_flow"))
+    if (
+        program_flow.get("usable_for_risk") is True
+        and (_number(program_flow.get("net_qty")) or 0.0) < 0.0
+        and (_number(program_flow.get("delta_qty")) or 0.0) < 0.0
+    ):
+        contradicting_facts.append("program_flow_net_and_delta_sell")
+        corroborated_risk_codes.append("ADVERSE_TAPE")
+    if "supportive_micro_tape_vs_program_net_sell" in contradicting_facts:
+        corroborated_risk_codes.append("ADVERSE_TAPE")
+    investor_flow = _as_dict(context_observations.get("investor_flow"))
+    if (
+        investor_flow.get("usable_for_risk") is True
+        and (_number(investor_flow.get("foreign_net")) or 0.0) < 0.0
+        and (_number(investor_flow.get("institutional_net")) or 0.0) < 0.0
+    ):
+        contradicting_facts.append("foreign_institutional_joint_sell")
+        corroborated_risk_codes.append("ADVERSE_TAPE")
+    external_market = _as_dict(context_observations.get("external_market"))
+    if external_market.get("usable_for_risk") is True and str(
+        external_market.get("risk_state") or ""
+    ).upper() in {"RISK_OFF", "SEVERE", "HIGH_RISK"}:
+        contradicting_facts.append("external_market_risk_off")
+        corroborated_risk_codes.append("ADVERSE_TAPE")
 
     analysis_schema_valid = bool(
         exact.get("schema") == "exact_payload_analysis_v1"
@@ -370,6 +623,7 @@ def build_entry_setup_evidence(
                 "top3_ask_to_bid_ratio": top3_ask_to_bid_ratio,
             },
         },
+        "context_observations": context_observations,
         "source_quality": {
             "status": source_status or "unknown",
             "source_mode": source_mode or "unknown",
@@ -508,6 +762,24 @@ def validate_entry_setup_evidence(evidence: Any) -> list[str]:
         not in set(map(str, setup.get("contradicting_facts") or []))
     ):
         errors.append("entry_setup_trigger_recheck_without_missing_confirmation")
+    context_observations = _as_dict(setup.get("context_observations"))
+    for field, expected in CONTEXT_OBSERVATION_CONTRACT.items():
+        if context_observations.get(field) != expected:
+            errors.append(f"entry_setup_context_{field}_contract_invalid")
+    for source_name in (
+        "market_relative",
+        "sector_relative",
+        "program_flow",
+        "investor_flow",
+        "external_market",
+    ):
+        source = _as_dict(context_observations.get(source_name))
+        if source.get("status") not in {
+            "observed",
+            "observed_zero_or_not_yet_reported",
+            "unavailable",
+        } or not isinstance(source.get("usable_for_risk"), bool):
+            errors.append(f"entry_setup_context_{source_name}_invalid")
     if (
         setup.get("runtime_effect") is not False
         or setup.get("allowed_runtime_apply") is not False
@@ -686,6 +958,7 @@ def compose_entry_decision(
 
     setup = _as_dict(setup_evidence)
     risk = _as_dict(risk_adjudication)
+    context_observations = _as_dict(setup.get("context_observations"))
     state = str(setup.get("setup_state") or "INSUFFICIENT").strip().upper()
     family = str(setup.get("setup_family") or "NO_VALID_SETUP").strip().upper()
     verdict = str(risk.get("risk_verdict") or "INSUFFICIENT").strip().upper()
@@ -842,6 +1115,33 @@ def compose_entry_decision(
             _as_dict(setup.get("tail_risk_assessment")).get("version") or ""
         ),
         "entry_setup_source_quality": dict(setup.get("source_quality") or {}),
+        "entry_setup_context_observation_version": context_observations.get("version"),
+        **{
+            f"entry_setup_{source_name}_status": _as_dict(
+                context_observations.get(source_name)
+            ).get("status", "unavailable")
+            for source_name in (
+                "market_relative",
+                "sector_relative",
+                "program_flow",
+                "investor_flow",
+                "external_market",
+            )
+        },
+        **{
+            f"entry_setup_{source_name}_usable_for_risk": bool(
+                _as_dict(context_observations.get(source_name)).get(
+                    "usable_for_risk", False
+                )
+            )
+            for source_name in (
+                "market_relative",
+                "sector_relative",
+                "program_flow",
+                "investor_flow",
+                "external_market",
+            )
+        },
         "entry_composed_action": action,
         "entry_composed_reason": reason,
         "decision_quality_contract_status": (

@@ -1588,9 +1588,13 @@ V2.14 setup-risk adjudicator contract:
    risk_codes=["NO_BLOCKING_RISK"]. External submit and hard-safety guards remain
    mandatory and are not represented by PASS.
 4. Return CAUTION when a READY setup has fragile-but-observable liquidity,
-   bounded adverse tape, weak reward/risk, or a missing non-blocking
-   confirmation. CAUTION is an offline one-share probe/recheck observation, not
-   direct entry authority.
+   bounded adverse tape, fresh relative-strength weakness, fresh program or
+   investor flow divergence, an explicitly fresh external risk-off context,
+   weak reward/risk, or a missing non-blocking confirmation. These auxiliary
+   inputs may only appear as ledger-backed ADVERSE_TAPE facts. Missing,
+   unavailable, stale, or observed-zero flow is never adverse evidence.
+   CAUTION is an offline one-share probe/recheck observation, not direct entry
+   authority.
 5. Return VETO only for a concrete current risk. A VETO can block the composed
    offline exposure only for SOURCE_QUALITY_GAP, STRUCTURE_INVALIDATED,
    DISTRIBUTION_RISK, OVEREXTENSION_CHASE, or LIQUIDITY_UNUSABLE when the same

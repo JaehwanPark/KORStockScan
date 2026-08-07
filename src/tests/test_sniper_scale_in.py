@@ -54,6 +54,27 @@ def _exact_entry_context():
     }
 
 
+def test_entry_context_ws_data_preserves_explicit_market_metadata_only():
+    enriched = state_handlers._entry_context_ws_data(
+        {"curr": 70000, "market_code": "10"},
+        {
+            "market_code": "0",
+            "market_index_code": "001",
+            "sector_index_code": "123",
+            "external_market_context": {
+                "quality": "fresh",
+                "risk_state": "RISK_OFF",
+            },
+        },
+    )
+
+    assert enriched["market_code"] == "10"
+    assert enriched["market_index_code"] == "001"
+    assert enriched["sector_index_code"] == "123"
+    assert enriched["external_market_context"]["risk_state"] == "RISK_OFF"
+    assert state_handlers._entry_context_ws_data({"curr": 70000}, {}) == {"curr": 70000}
+
+
 def test_entry_price_exact_context_handoff_is_single_use_and_bounded(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
     stock = {}
@@ -9803,12 +9824,8 @@ def test_scalping_execution_cohort_requires_canonical_broker_route():
     krx_ts = datetime(2026, 7, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
     premarket_ts = datetime(2026, 7, 24, 8, 30, tzinfo=state_handlers._KST).timestamp()
 
-    assert state_handlers._scalping_execution_cohort(krx_ts, "SOR") == (
-        "KRX"
-    )
-    assert state_handlers._scalping_execution_cohort(krx_ts, "KRX") == (
-        "UNKNOWN"
-    )
+    assert state_handlers._scalping_execution_cohort(krx_ts, "SOR") == ("KRX")
+    assert state_handlers._scalping_execution_cohort(krx_ts, "KRX") == ("UNKNOWN")
     assert (
         state_handlers._scalping_execution_cohort(premarket_ts, "NXT")
         == "PREMARKET_KRX_LIKE"

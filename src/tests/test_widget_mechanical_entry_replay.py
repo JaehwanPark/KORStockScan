@@ -108,6 +108,27 @@ def test_portable_core_replays_exact_widget_axes_without_ready_promotion():
 
     assert result["state"] == "ENTRY_CAUTION"
     assert result["candidate_before_spread_gate"] is True
+
+
+def test_portable_core_uses_separate_exact_replay_context():
+    payload = _payload()
+    exact_replay_context = payload.pop("sanitized_user_input")
+    payload.update(
+        {
+            "sanitized_user_input": {
+                "input_schema": "entry_setup_v2_14_live_input",
+                "entry_setup_evidence_v1": {"setup_state": "READY"},
+            },
+            "replay_context_present": True,
+            "replay_context_exact": True,
+            "sanitized_replay_context": exact_replay_context,
+        }
+    )
+
+    result = replay.evaluate_portable_widget_core(payload)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["candidate_before_spread_gate"] is True
     assert result["entry_price_low"] <= result["entry_price_high"] < 100_400
     assert "symbol_generic_relative_strength_unavailable" in (
         result["unmet_conditions"]

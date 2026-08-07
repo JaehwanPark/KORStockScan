@@ -19,7 +19,10 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from src.engine.scalping.ai_decision_trace import sanitize_ai_trace_value
+from src.engine.scalping.ai_decision_trace import (
+    replay_source_input,
+    sanitize_ai_trace_value,
+)
 from src.engine.scalping.market_context_observation import (
     OBSERVATION_CONTRACT,
     build_market_context_observation,
@@ -442,7 +445,9 @@ def _find_nested(value: Any, key: str) -> Any:
 def _payload_context(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
-    entry = payload.get("entry_candle_context")
+    exact = payload.get("exact_payload")
+    source = exact if isinstance(exact, dict) else payload
+    entry = source.get("entry_candle_context")
     if isinstance(entry, dict):
         return {
             "context_type": "entry",
@@ -452,7 +457,7 @@ def _payload_context(payload: Any) -> dict[str, Any]:
             "rest_route": entry.get("rest_route"),
             "bars": entry.get("bars"),
         }
-    holding = payload.get("holding_decision_context")
+    holding = source.get("holding_decision_context")
     if isinstance(holding, dict):
         candle = holding.get("candle")
         return {
@@ -467,7 +472,7 @@ def _payload_context(payload: Any) -> dict[str, Any]:
 
 
 def _payload_symbol(row: dict[str, Any]) -> str:
-    payload = row.get("sanitized_user_input")
+    payload = replay_source_input(row)
     context = _payload_context(payload)
     request_code = str(context.get("request_code") or "").strip()
     return str(
@@ -876,7 +881,7 @@ def _payload_rows_for_venue(
     selected = []
     expected = str(venue or "").upper()
     for row in payload_rows:
-        context = _payload_context(row.get("sanitized_user_input"))
+        context = _payload_context(replay_source_input(row))
         request_code = str(context.get("request_code") or "").upper()
         observed = str(context.get("venue") or row.get("effective_venue") or "").upper()
         if expected == "NXT":
@@ -897,7 +902,7 @@ def _payload_request_code(
     row: dict[str, Any],
     context: dict[str, Any] | None = None,
 ) -> str:
-    resolved = context or _payload_context(row.get("sanitized_user_input"))
+    resolved = context or _payload_context(replay_source_input(row))
     explicit = str(resolved.get("request_code") or "").strip()
     if explicit:
         return explicit
@@ -930,7 +935,7 @@ def build_exact_payload_comparisons(
     response_hash_missing_count = 0
     forming_bar_count = 0
     for payload_row in payload_rows:
-        context = _payload_context(payload_row.get("sanitized_user_input"))
+        context = _payload_context(replay_source_input(payload_row))
         bars = context.get("bars")
         if not isinstance(bars, list) or not bars:
             continue
@@ -1107,7 +1112,7 @@ def build_symbol_comparison(
     if not selected_payload_rows and ai_payload_row:
         selected_payload_rows = [ai_payload_row]
     representative_payload = selected_payload_rows[0] if selected_payload_rows else {}
-    ai_payload = representative_payload.get("sanitized_user_input")
+    ai_payload = replay_source_input(representative_payload)
     observation = build_market_context_observation(
         kiwoom_minutes,
         symbol=symbol,
@@ -1448,7 +1453,7 @@ def build_live_report(
         )
         payload_route_minutes: dict[str, list[dict[str, Any]]] = {}
         for payload_row in selected_payload_rows:
-            context = _payload_context(payload_row.get("sanitized_user_input"))
+            context = _payload_context(replay_source_input(payload_row))
             payload_request_code = _payload_request_code(
                 payload_row,
                 context,

@@ -2446,6 +2446,44 @@ def _safe_int(value, default=0):
         return default
 
 
+_ENTRY_CONTEXT_METADATA_KEYS = (
+    "market_type",
+    "mrkt_tp",
+    "market_code",
+    "market_segment",
+    "market",
+    "market_index_code",
+    "market_inds_cd",
+    "sector_index_code",
+    "sector_inds_cd",
+    "industry_index_code",
+    "previous_day_levels",
+    "market_context",
+    "sector_context",
+    "external_market_context",
+)
+
+
+def _entry_context_ws_data(ws_data, stock):
+    """Preserve explicit scanner/DB market context for the entry candle owner.
+
+    No market or sector is inferred here. Missing metadata remains missing so
+    the downstream source-quality ledger cannot silently mix KRX/KOSDAQ or
+    fabricate an external-market observation.
+    """
+
+    enriched = dict(ws_data or {})
+    stock_row = stock if isinstance(stock, dict) else {}
+    for key in _ENTRY_CONTEXT_METADATA_KEYS:
+        if enriched.get(key) in (None, "", {}) and stock_row.get(key) not in (
+            None,
+            "",
+            {},
+        ):
+            enriched[key] = stock_row.get(key)
+    return enriched
+
+
 def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount):
     fallback = max(0, _safe_int(fallback_orderable_amount, 0))
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
@@ -11631,7 +11669,6 @@ def sanitize_pending_add_states(active_targets=None):
     """재시작/복구 시 pending add 정합성을 보수 정리합니다."""
     targets = active_targets if active_targets is not None else ACTIVE_TARGETS
     _sanitize_pending_add_states(targets)
-
 
 
 def _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed):
@@ -25688,9 +25725,7 @@ def _fast_exit_execution_route_fields(
         )
     broker_route = str(resolution.get("dmst_stex_tp") or "").strip().upper()
     session_bucket = _rising_missed_nxt_session_bucket(float(now_ts))
-    execution_cohort = _scalping_execution_cohort(
-        float(now_ts), broker_route
-    )
+    execution_cohort = _scalping_execution_cohort(float(now_ts), broker_route)
     execution_cohort_resolution = "session_and_broker_route_resolved"
     if execution_cohort == "UNKNOWN":
         execution_cohort = "OUTSIDE_SUPPORTED_SESSION"
@@ -35528,7 +35563,7 @@ def _retry_entry_ai_submit_authority_before_block(
             recent_candles = copy.deepcopy(list(handoff.get("recent_candles") or []))
             candle_context = copy.deepcopy(dict(handoff.get("candle_context") or {}))
         else:
-            retry_ws_data = dict(ws_data or {})
+            retry_ws_data = _entry_context_ws_data(ws_data, stock)
             recent_ticks = (
                 kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
                 or []
@@ -53389,7 +53424,10 @@ def _resolve_scanner_async_opening_rotation_context(
 
     def prepare(async_context: ScannerAsyncEvalContext) -> dict:
         stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
-        prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        prepared_ws = _entry_context_ws_data(
+            thaw_scanner_async_value(async_context.ws_snapshot),
+            stock_snapshot,
+        )
         effective_ws, freshness_fields = _resolve_opening_rotation_freshness_envelope(
             stock_snapshot,
             code,
@@ -55228,10 +55266,14 @@ def _handle_watching_strategy_branch(
                                 # The outer WATCHING loop timestamp can be minutes
                                 # old when earlier symbols perform REST/AI work.
                                 entry_context_now_ts = time.time()
+                                entry_ai_ws_data = _entry_context_ws_data(
+                                    ws_data,
+                                    stock,
+                                )
                                 candle_context = build_entry_candle_context(
                                     KIWOOM_TOKEN,
                                     code,
-                                    ws_data,
+                                    entry_ai_ws_data,
                                     venue=None,
                                     session=None,
                                     limit=40,
@@ -55243,7 +55285,7 @@ def _handle_watching_strategy_branch(
                                 )
                                 ai_decision = ai_engine.analyze_target(
                                     stock["name"],
-                                    ws_data,
+                                    entry_ai_ws_data,
                                     recent_ticks,
                                     recent_candles,
                                     prompt_profile="watching",
@@ -68541,7 +68583,6 @@ def _nxt_rising_missed_tp1_partial_runner_enabled(now_dt: datetime) -> bool:
         os.getenv("KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE", "")
     ).strip()
     return bool(active_date and active_date == now_dt.strftime("%Y-%m-%d"))
-
 
 
 def _maybe_submit_nxt_rising_missed_tp1_partial_runner(

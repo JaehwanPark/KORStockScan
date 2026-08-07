@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
+from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import open_text_auto
 
@@ -963,7 +964,7 @@ def _payload_context_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     venues: set[str] = set()
     forming = False
     conflicts: list[str] = []
-    for item in _walk(payload.get("sanitized_user_input")):
+    for item in _walk(replay_source_input(payload)):
         if not isinstance(item, dict):
             continue
         schema = str(item.get("schema") or "")

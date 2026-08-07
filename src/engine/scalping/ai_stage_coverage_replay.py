@@ -240,9 +240,8 @@ def prepare_stage_requests(
         trace = row["trace"]
         payload = row["payload"]
         trace_id = str(trace.get("decision_trace_id") or "")
-        exact_payload = quality._replay_exact_payload(
-            payload.get("sanitized_user_input")
-        )
+        source_input = quality.replay_source_input(payload)
+        exact_payload = quality._replay_exact_payload(source_input)
         supplemental = bool(row.get("semantic_replay_supplemental"))
         authority_contract = SUPPLEMENTAL_CONTRACT if supplemental else CONTRACT
         request = {
@@ -299,11 +298,9 @@ def prepare_stage_requests(
             request["candidate_input_sha256"] = quality._sha256(candidate_input)
             request["exact_payload_analysis_sha256"] = exact_analysis["analysis_sha256"]
         elif normalized_stage in {"holding", "holding_flow"}:
-            holding_facts = quality._holding_contract_facts(
-                payload.get("sanitized_user_input")
-            )
+            holding_facts = quality._holding_contract_facts(exact_payload)
             candidate_input = {
-                "exact_payload": payload.get("sanitized_user_input"),
+                "exact_payload": exact_payload,
                 "holding_exact_contract_facts_v1": holding_facts,
             }
             request["candidate_input"] = candidate_input

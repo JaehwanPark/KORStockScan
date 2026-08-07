@@ -2897,6 +2897,16 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
         captured["payload"] = json.loads(user_input)
         captured["schema_name"] = kwargs.get("schema_name")
         captured["metadata_extra"] = kwargs.get("metadata_extra")
+        captured["replay_context"] = kwargs.get("replay_context")
+        # Match the real provider path: transport metadata is recorded in
+        # thread-local storage separately from the six-field model response.
+        engine._set_last_transport_meta(
+            {
+                "openai_transport_mode": "http",
+                "openai_ws_used": False,
+                "openai_request_total_ms": 123,
+            }
+        )
         return {
             "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
             "risk_verdict": "PASS",
@@ -2924,7 +2934,30 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
         decision_quality_v2_14_setup_risk_adjudicator_system_prompt("entry")
     )
     assert captured["schema_name"] == ENTRY_RISK_ADJUDICATION_SCHEMA
+    assert captured["payload"]["input_schema"] == "entry_setup_v2_14_live_input"
     assert captured["payload"]["entry_setup_evidence_v1"] == setup_evidence
+    assert captured["payload"]["provider_input_authority"] == (
+        "deterministic_setup_ledger_only"
+    )
+    assert captured["replay_context"]["entry_setup_evidence_v1"] == setup_evidence
+    assert captured["replay_context"]["exact_payload"]["input_schema"] == (
+        "entry_screen_hot_v1"
+    )
+    assert len(json.dumps(captured["payload"], default=str)) < len(
+        json.dumps(captured["replay_context"], default=str)
+    )
+    expected_replay_sha256 = hashlib.sha256(
+        json.dumps(
+            captured["replay_context"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert captured["payload"]["exact_replay_context_sha256"] == (
+        expected_replay_sha256
+    )
     assert captured["metadata_extra"]["entry_setup_live_policy_status"] == (
         "active_bounded_krx_canary"
     )
@@ -2942,6 +2975,12 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
     assert result["entry_setup_composer_broker_order_forbidden"] is True
     assert result["entry_setup_live_adapter_runtime_effect"] is True
     assert result["entry_setup_live_policy_mode"] == "performance_bounded"
+    assert result["decision_quality_contract_status"] == "pass"
+    assert result["openai_transport_mode"] == "http"
+    assert result["openai_request_total_ms"] == 123
+    assert "entry_risk_unexpected_fields" not in result.get(
+        "decision_quality_contract_errors", []
+    )
 
 
 def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatch):
@@ -3286,6 +3325,19 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert blocked_reentry["entry_recent_exit_probe_blocked"] is True
     assert blocked_reentry["entry_recent_exit_price_vs_exit_pct"] == 1.0
 
+    rejected = engine._normalize_decision_quality_entry_result(
+        {**risk_response, "action": "BUY"},
+        exact_payload={"current": {"price": 10000}},
+        prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
+        entry_setup_evidence=setup_evidence,
+        live_policy=live_policy,
+    )
+    assert rejected["decision_quality_contract_status"] == "semantic_rejected"
+    assert rejected["entry_setup_family"] == "CLEAN_CONTINUATION"
+    assert rejected["entry_setup_state"] == "READY"
+    assert rejected["entry_setup_evidence_sha256"] == setup_evidence["evidence_sha256"]
+    assert rejected["entry_ai_raw_risk_verdict"] == "PASS"
+
 
 def test_decision_quality_v2_13_clean_wait_maps_to_guarded_probe(monkeypatch):
     engine = _build_engine()
@@ -3547,6 +3599,25 @@ def test_hot_entry_payload_preserves_recent_exit_context():
 
     assert payload["recent_exit_context"] == recent_exit
     assert entry_price_payload["recent_exit_context"] == recent_exit
+
+
+def test_hot_entry_payload_preserves_explicit_external_market_context():
+    engine = _build_engine()
+    external = {
+        "quality": "fresh",
+        "source": "licensed_fixture",
+        "risk_state": "RISK_OFF",
+        "observed_at": "2026-08-07T09:05:00+09:00",
+    }
+
+    payload = engine._build_entry_screen_hot_payload(
+        {"curr": 109900, "external_market_context": external},
+        [],
+        [],
+        feature_packet={},
+    )
+
+    assert payload["external_market_context"] == external
 
 
 def test_analyze_target_probe_prompt_keeps_exact_schema_and_version(monkeypatch):

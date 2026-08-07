@@ -72,7 +72,7 @@ def test_setup_evidence_is_symbol_agnostic_and_ready_for_clean_continuation():
     )
 
     assert evidence["schema"] == ENTRY_SETUP_EVIDENCE_SCHEMA
-    assert evidence["version"] == "entry_setup_evidence_policy_v7"
+    assert evidence["version"] == "entry_setup_evidence_policy_v8"
     assert evidence["setup_family"] == "CLEAN_CONTINUATION"
     assert evidence["setup_state"] == "READY"
     assert evidence["symbol_specific_branching"] is False
@@ -80,6 +80,132 @@ def test_setup_evidence_is_symbol_agnostic_and_ready_for_clean_continuation():
     assert evidence["runtime_effect"] is False
     assert evidence["observation_contract"]["runtime_effect"] is False
     assert evidence["observation_contract"]["broker_order_forbidden"] is True
+    assert evidence["context_observations"]["market_relative"]["status"] == (
+        "unavailable"
+    )
+    assert (
+        evidence["context_observations"]["external_market"]["usable_for_risk"] is False
+    )
+
+
+def test_context_inputs_are_null_aware_bounded_risk_only():
+    exact_payload = {
+        "current": {"price": 10000},
+        "entry_candle_context": {
+            "multi_timeframe_context": {
+                "market_context": {
+                    "source": "fixture_market",
+                    "source_quality": {"status": "pass"},
+                    "return_5m_pct": 0.3,
+                    "return_15m_pct": 0.5,
+                },
+                "sector_context": {
+                    "source": "fixture_sector",
+                    "source_quality": {"status": "pass"},
+                    "stock_return_5m_pct": -0.4,
+                    "stock_return_15m_pct": -0.3,
+                    "sector_relative_return_5m_pct": -0.8,
+                    "sector_relative_return_15m_pct": -0.7,
+                },
+            }
+        },
+        "ai_market_snapshot_v1": {
+            "sources": {
+                "program": {
+                    "quality": "fresh",
+                    "source": "ws_0w",
+                    "observed_at": "2026-08-07T09:00:00+09:00",
+                    "value": {"net_qty": -100, "delta_qty": -20},
+                },
+                "investor": {
+                    "quality": "fresh",
+                    "source": "fixture_investor",
+                    "observed_at": "2026-08-07T09:00:00+09:00",
+                    "value": {"foreign_net": 0, "inst_net": 0},
+                },
+            }
+        },
+        "external_market_context": {
+            "quality": "fresh",
+            "source": "fixture_external",
+            "observed_at": "2026-08-07T09:00:00+09:00",
+            "risk_state": "RISK_OFF",
+        },
+    }
+    evidence = build_entry_setup_evidence(
+        exact_payload=exact_payload,
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+
+    assert evidence["setup_state"] == "READY"
+    assert (
+        evidence["context_observations"]["market_relative"]["usable_for_risk"] is True
+    )
+    assert evidence["context_observations"]["investor_flow"]["status"] == (
+        "observed_zero_or_not_yet_reported"
+    )
+    assert evidence["context_observations"]["investor_flow"]["usable_for_risk"] is False
+    assert {
+        "market_relative_weak_5m_15m",
+        "sector_relative_weak_5m_15m",
+        "program_flow_net_and_delta_sell",
+        "external_market_risk_off",
+    }.issubset(set(evidence["contradicting_facts"]))
+    assert evidence["corroborated_risk_codes"] == ["ADVERSE_TAPE"]
+    assert evidence["invalidation_facts"] == []
+
+    composed = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=_risk(
+            "VETO",
+            ["ADVERSE_TAPE"],
+            contradict=["market_relative_weak_5m_15m"],
+        ),
+    )
+    assert composed["action"] == "WAIT"
+    assert composed["entry_probe_intent"] is True
+    assert composed["entry_ai_bounded_risk_codes"] == ["ADVERSE_TAPE"]
+    assert composed["entry_setup_market_relative_status"] == "observed"
+    assert composed["entry_setup_program_flow_usable_for_risk"] is True
+    assert composed["entry_setup_investor_flow_status"] == (
+        "observed_zero_or_not_yet_reported"
+    )
+    assert composed["entry_setup_external_market_usable_for_risk"] is True
+
+
+def test_context_flow_and_external_fresh_labels_require_observation_time():
+    evidence = build_entry_setup_evidence(
+        exact_payload={
+            "current": {"price": 10000},
+            "ai_market_snapshot_v1": {
+                "sources": {
+                    "program": {
+                        "quality": "fresh",
+                        "value": {"net_qty": -100, "delta_qty": -20},
+                    },
+                    "investor": {
+                        "quality": "fresh",
+                        "value": {"foreign_net": -10, "inst_net": -20},
+                    },
+                }
+            },
+            "external_market_context": {
+                "quality": "fresh",
+                "risk_state": "RISK_OFF",
+            },
+        },
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+
+    observations = evidence["context_observations"]
+    assert observations["program_flow"]["usable_for_risk"] is False
+    assert observations["investor_flow"]["usable_for_risk"] is False
+    assert observations["external_market"]["usable_for_risk"] is False
+    assert "program_flow_net_and_delta_sell" not in evidence["contradicting_facts"]
+    assert "foreign_institutional_joint_sell" not in evidence["contradicting_facts"]
+    assert "external_market_risk_off" not in evidence["contradicting_facts"]
 
 
 def test_setup_evidence_waits_for_pullback_confirmation_and_fails_closed():

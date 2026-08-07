@@ -48,6 +48,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_v2_system_prompt,
 )
+from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_RISK_ADJUDICATION_SCHEMA,
@@ -1015,7 +1016,7 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
     schemas: set[str] = set()
     bundles: set[str] = set()
     canonical_contexts: list[dict[str, Any]] = []
-    sanitized_input = payload.get("sanitized_user_input")
+    sanitized_input = replay_source_input(payload)
     roots = [sanitized_input]
     marked_holding = (
         _extract_holding_context_from_exact_payload(sanitized_input)
@@ -1127,17 +1128,53 @@ def _payload_indexes(
     counts = Counter(
         str(row.get("payload_sha256")) for row in payloads if row.get("payload_sha256")
     )
-    by_key = {
-        (str(row.get("payload_sha256")), str(row.get("endpoint") or "")): row
-        for row in payloads
-        if row.get("payload_sha256")
-    }
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in payloads:
+        endpoint = str(row.get("endpoint") or "")
+        payload_sha256 = str(row.get("payload_sha256") or "")
+        request_envelope_sha256 = str(row.get("request_envelope_sha256") or "")
+        if payload_sha256:
+            by_key[(payload_sha256, endpoint)] = row
+        if request_envelope_sha256:
+            by_key[(f"request:{request_envelope_sha256}", endpoint)] = row
     by_unique_hash = {
         str(row.get("payload_sha256")): row
         for row in payloads
         if row.get("payload_sha256") and counts[str(row.get("payload_sha256"))] == 1
     }
     return by_key, by_unique_hash
+
+
+def _payload_for_trace(
+    trace: dict[str, Any],
+    *,
+    payload_by_key: dict[tuple[str, str], dict[str, Any]],
+    payload_by_unique_hash: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve the exact payload row, preferring the full request envelope.
+
+    A provider-input hash can legitimately repeat while prompt settings or the
+    separately retained exact replay context differ.  The request envelope
+    binds all of those inputs, so it is authoritative whenever both ledgers
+    contain it.  The payload-hash paths retain backward compatibility with
+    traces captured before request-envelope storage.
+    """
+
+    endpoint = _trace_endpoint(trace)
+    request_envelope_sha256 = str(trace.get("request_envelope_sha256") or "")
+    payload_sha256 = str(trace.get("payload_sha256") or "")
+    if request_envelope_sha256:
+        payload = payload_by_key.get((f"request:{request_envelope_sha256}", endpoint))
+        if payload is not None:
+            if not payload_sha256 or str(payload.get("payload_sha256") or "") == (
+                payload_sha256
+            ):
+                return payload
+            return {}
+    return payload_by_key.get(
+        (payload_sha256, endpoint),
+        payload_by_unique_hash.get(payload_sha256, {}),
+    )
 
 
 def _replay_exact_payload(value: Any) -> Any:
@@ -1203,7 +1240,7 @@ def _approved_cache_redaction_supplemental(payload: dict[str, Any]) -> bool:
 
     if payload.get("redacted") is not True or payload.get("replay_exact") is not False:
         return False
-    redacted_paths = _redacted_value_paths(payload.get("sanitized_user_input"))
+    redacted_paths = _redacted_value_paths(replay_source_input(payload))
     return bool(redacted_paths) and redacted_paths.issubset(
         _SUPPLEMENTAL_CACHE_REDACTION_PATHS
     )
@@ -1245,6 +1282,11 @@ def _exact_trace_payload_findings(
         findings.append("payload_hash_missing")
     if not payload or payload.get("replay_exact") is not True:
         findings.append("payload_store_not_exact")
+    if payload.get("replay_context_present") is True and (
+        payload.get("replay_context_exact") is not True
+        or replay_source_input(payload) is None
+    ):
+        findings.append("replay_context_not_exact")
     if str(trace.get("provider_actual") or "none").lower() == "none":
         findings.append("provider_none")
     if trace.get("input_preflight_allowed") is not True:
@@ -1389,11 +1431,11 @@ def build_control_manifest(
         if str(endpoint).strip() and isinstance(signature, dict)
     }
     for trace in traces:
-        payload_hash = str(trace.get("payload_sha256") or "")
         endpoint = _trace_endpoint(trace)
-        payload = payload_by_key.get(
-            (payload_hash, endpoint),
-            payload_by_unique_hash.get(payload_hash, {}),
+        payload = _payload_for_trace(
+            trace,
+            payload_by_key=payload_by_key,
+            payload_by_unique_hash=payload_by_unique_hash,
         )
         exact_findings = _exact_trace_payload_findings(
             trace=trace,
@@ -1633,10 +1675,10 @@ def _latest_exact_control_prompt_versions(
     for index, trace in enumerate(traces):
         endpoint = _trace_endpoint(trace)
         prompt_version = str(trace.get("prompt_version") or "").strip()
-        payload_hash = str(trace.get("payload_sha256") or "")
-        payload = payload_by_key.get(
-            (payload_hash, endpoint),
-            payload_by_unique_hash.get(payload_hash, {}),
+        payload = _payload_for_trace(
+            trace,
+            payload_by_key=payload_by_key,
+            payload_by_unique_hash=payload_by_unique_hash,
         )
         if (
             not endpoint
@@ -1672,10 +1714,10 @@ def _latest_exact_control_signatures(
     selected: dict[str, tuple[datetime, int, dict[str, Any]]] = {}
     for index, trace in enumerate(traces):
         endpoint = _trace_endpoint(trace)
-        payload_hash = str(trace.get("payload_sha256") or "")
-        payload = payload_by_key.get(
-            (payload_hash, endpoint),
-            payload_by_unique_hash.get(payload_hash, {}),
+        payload = _payload_for_trace(
+            trace,
+            payload_by_key=payload_by_key,
+            payload_by_unique_hash=payload_by_unique_hash,
         )
         signature = {
             "prompt_version": trace.get("prompt_version"),
@@ -1743,11 +1785,10 @@ def annotate_primary_cohort_eligibility(
             payload: dict[str, Any] = {}
         else:
             trace = trace_rows[0]
-            payload_hash = str(trace.get("payload_sha256") or "")
-            endpoint = _trace_endpoint(trace)
-            payload = payload_by_key.get(
-                (payload_hash, endpoint),
-                payload_by_unique_hash.get(payload_hash, {}),
+            payload = _payload_for_trace(
+                trace,
+                payload_by_key=payload_by_key,
+                payload_by_unique_hash=payload_by_unique_hash,
             )
             findings.extend(
                 _exact_trace_payload_findings(
@@ -6970,11 +7011,11 @@ def prepare_paired_replay_requests(
     for trace in traces:
         trace_id = str(trace.get("decision_trace_id") or "")
         label = label_by_trace.get(trace_id)
-        payload_hash = str(trace.get("payload_sha256") or "")
         endpoint = _trace_endpoint(trace)
-        payload = payload_by_key.get(
-            (payload_hash, endpoint),
-            payload_by_unique_hash.get(payload_hash),
+        payload = _payload_for_trace(
+            trace,
+            payload_by_key=payload_by_key,
+            payload_by_unique_hash=payload_by_unique_hash,
         )
         if (
             not label
@@ -7008,7 +7049,9 @@ def prepare_paired_replay_requests(
             if stage == "holding"
             else decision_quality_v2_system_prompt(stage)
         )
-        replay_payload = _replay_exact_payload(payload.get("sanitized_user_input"))
+        replay_payload = _replay_exact_payload(replay_source_input(payload))
+        if not isinstance(replay_payload, dict):
+            continue
         candidate = {
             "prompt_version": (
                 DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
@@ -7040,6 +7083,8 @@ def prepare_paired_replay_requests(
             "best_bid": trace.get("best_bid"),
             "best_ask": trace.get("best_ask"),
             "payload_sha256": trace.get("payload_sha256"),
+            "request_envelope_sha256": trace.get("request_envelope_sha256"),
+            "endpoint": endpoint,
             "exact_payload": replay_payload,
             "control": {
                 "prompt_version": control.get("prompt_version"),
@@ -7241,12 +7286,13 @@ def recover_same_trace_outcome_labels_from_paired_reports(
             stage = _stage(comparison.get("stage"), trace.get("decision_stage"))
             horizon = PRIMARY_HORIZON_BY_STAGE.get(stage)
             payload_hash = str(trace.get("payload_sha256") or "")
-            endpoint = _trace_endpoint(trace)
-            payload = payload_by_key.get(
-                (payload_hash, endpoint), payload_by_unique_hash.get(payload_hash)
+            payload = _payload_for_trace(
+                trace,
+                payload_by_key=payload_by_key,
+                payload_by_unique_hash=payload_by_unique_hash,
             )
             current_exact_payload_sha256 = (
-                _sha256(_replay_exact_payload(payload.get("sanitized_user_input")))
+                _sha256(_replay_exact_payload(replay_source_input(payload)))
                 if isinstance(payload, dict)
                 else ""
             )
@@ -11134,12 +11180,21 @@ def build_recovery_trigger_report(
         trace_id = str(result.get("decision_trace_id") or "")
         request = request_by_trace.get(trace_id) or {}
         label = label_by_trace.get(trace_id)
-        payload_hash = str(result.get("payload_sha256") or "")
-        payload_row = payload_by_unique_hash.get(payload_hash)
-        if payload_row is None:
-            payload_row = payload_by_key.get((payload_hash, "analyze_target"))
+        payload_reference = {
+            **request,
+            "payload_sha256": (
+                result.get("payload_sha256") or request.get("payload_sha256")
+            ),
+            "endpoint": request.get("endpoint") or "analyze_target",
+        }
+        payload_row = _payload_for_trace(
+            payload_reference,
+            payload_by_key=payload_by_key,
+            payload_by_unique_hash=payload_by_unique_hash,
+        )
+        payload_hash = str(payload_reference.get("payload_sha256") or "")
         exact_payload = (
-            payload_row.get("sanitized_user_input")
+            _replay_exact_payload(replay_source_input(payload_row))
             if isinstance(payload_row, dict)
             else None
         )
@@ -11452,7 +11507,7 @@ def _entry_reversal_snapshot_context(
     request: dict[str, Any],
     payload_row: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
-    exact_payload = _replay_exact_payload(payload_row.get("sanitized_user_input"))
+    exact_payload = _replay_exact_payload(replay_source_input(payload_row))
     if not isinstance(exact_payload, dict):
         return None, "exact_payload_missing"
     request_payload_sha256 = str(request.get("payload_sha256") or "")

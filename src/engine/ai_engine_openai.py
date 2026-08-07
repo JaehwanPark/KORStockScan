@@ -1826,6 +1826,25 @@ class GPTSniperEngine:
         }
         contract_errors.extend(composed.get("entry_ai_contract_errors") or [])
         contract_errors = list(dict.fromkeys(map(str, contract_errors)))
+        setup_provenance_fields = {
+            key: composed.get(key)
+            for key in (
+                "entry_setup_family",
+                "entry_setup_state",
+                "entry_setup_evidence_version",
+                "entry_setup_evidence_sha256",
+                "entry_setup_source_quality",
+            )
+            if composed.get(key) not in (None, "")
+        }
+        raw_risk_fields = {
+            "entry_ai_raw_risk_verdict": risk.get("risk_verdict"),
+            "entry_ai_raw_risk_codes": (
+                list(risk.get("risk_codes") or [])
+                if isinstance(risk.get("risk_codes"), list)
+                else []
+            ),
+        }
         policy_fields = {
             "entry_setup_live_policy_status": policy.get("status"),
             "entry_setup_live_policy_mode": policy.get("canary_mode"),
@@ -1849,6 +1868,8 @@ class GPTSniperEngine:
         if contract_errors:
             return {
                 **risk,
+                **setup_provenance_fields,
+                **raw_risk_fields,
                 **policy_fields,
                 "action": "DROP",
                 "score": 0,
@@ -4025,6 +4046,7 @@ class GPTSniperEngine:
         metadata_extra=None,
         transport_mode_override=None,
         timeout_ms_override=None,
+        replay_context=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         target_model = model_override if model_override else self.current_model_name
@@ -4087,6 +4109,7 @@ class GPTSniperEngine:
                 max_output_tokens=request.max_output_tokens,
                 reasoning_effort=request.reasoning_effort,
                 metadata=request.metadata,
+                replay_context=replay_context,
             )
         )
         bedrock_primary_payload = self._try_bedrock_primary_provider(
@@ -5431,6 +5454,11 @@ class GPTSniperEngine:
                 matrix_runtime=matrix_runtime,
                 entry_adm_runtime=entry_adm_runtime,
                 lifecycle_ai_runtime=lifecycle_ai_runtime,
+            ),
+            "external_market_context": (
+                dict(ws.get("external_market_context") or {})
+                if isinstance(ws.get("external_market_context"), dict)
+                else {}
             ),
             "recent_exit_context": (
                 dict(ws.get("recent_exit_context") or {})
@@ -7127,6 +7155,7 @@ class GPTSniperEngine:
         lifecycle_ai_runtime = None
         entry_setup_live_policy = {}
         entry_setup_evidence = None
+        replay_context = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             prompt_type = "swing"
             prompt = SWING_SYSTEM_PROMPT
@@ -7652,6 +7681,24 @@ class GPTSniperEngine:
                             decision_quality_input["entry_setup_evidence_v1"] = (
                                 entry_setup_evidence
                             )
+                            replay_context = decision_quality_input
+                            replay_context_sha256 = hashlib.sha256(
+                                json.dumps(
+                                    replay_context,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                    default=str,
+                                ).encode("utf-8")
+                            ).hexdigest()
+                            decision_quality_input = {
+                                "input_schema": "entry_setup_v2_14_live_input",
+                                "entry_setup_evidence_v1": entry_setup_evidence,
+                                "exact_replay_context_sha256": (replay_context_sha256),
+                                "provider_input_authority": (
+                                    "deterministic_setup_ledger_only"
+                                ),
+                            }
                         formatted_data = json.dumps(
                             decision_quality_input,
                             ensure_ascii=False,
@@ -7678,7 +7725,7 @@ class GPTSniperEngine:
                             formatted_data = self._format_market_data(
                                 ws_data, recent_ticks, recent_candles
                             )
-                if bool(
+                if not decision_quality_v2_14_selected and bool(
                     getattr(
                         TRADING_RULES, "OPENAI_ENTRY_SCREEN_V2_INPUT_ENABLED", False
                     )
@@ -7721,14 +7768,17 @@ class GPTSniperEngine:
                         "prompt_context"
                     ):
                         formatted_data = f"{formatted_data}\n\n{lifecycle_ai_runtime['prompt_context']}"
-                formatted_data = self._append_numeric_consistency_recheck_context(
-                    formatted_data,
-                    metadata_extra=metadata_extra,
-                )
-                formatted_data = self._append_early_accel_strong_bundle_recheck_context(
-                    formatted_data,
-                    metadata_extra=metadata_extra,
-                )
+                if not decision_quality_v2_14_selected:
+                    formatted_data = self._append_numeric_consistency_recheck_context(
+                        formatted_data,
+                        metadata_extra=metadata_extra,
+                    )
+                    formatted_data = (
+                        self._append_early_accel_strong_bundle_recheck_context(
+                            formatted_data,
+                            metadata_extra=metadata_extra,
+                        )
+                    )
                 target_model = (
                     str(
                         getattr(
@@ -7911,8 +7961,16 @@ class GPTSniperEngine:
                     if is_scalping_entry_call
                     else None
                 ),
+                replay_context=replay_context,
             )
-            result = self._merge_last_transport_meta(result)
+            # V2.14 validates a deliberately narrow model-response schema.
+            # Transport/timing metadata is generated locally and must not be
+            # mistaken for model output by the strict semantic validator.
+            v2_14_transport_meta = {}
+            if decision_quality_v2_14_selected:
+                v2_14_transport_meta = self._consume_last_transport_meta()
+            else:
+                result = self._merge_last_transport_meta(result)
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
                 if decision_quality_v2_7_selected:
@@ -7923,6 +7981,8 @@ class GPTSniperEngine:
                         entry_setup_evidence=entry_setup_evidence,
                         live_policy=entry_setup_live_policy,
                     )
+                if v2_14_transport_meta:
+                    result.update(v2_14_transport_meta)
                 result = self._apply_remote_entry_guard(
                     result,
                     prompt_type=prompt_type,
@@ -8014,6 +8074,39 @@ class GPTSniperEngine:
                     "openai_transport_fail_closed": bool(provider_attempted),
                 }
             )
+            if decision_quality_v2_14_selected:
+                setup = (
+                    entry_setup_evidence
+                    if isinstance(entry_setup_evidence, dict)
+                    else {}
+                )
+                fallback_payload.update(
+                    {
+                        "decision_quality_contract_status": (
+                            "not_evaluated_transport"
+                            if provider_attempted
+                            else "not_evaluated_local"
+                        ),
+                        "decision_quality_contract_errors": [],
+                        "decision_quality_response_schema": (
+                            ENTRY_RISK_ADJUDICATION_SCHEMA
+                        ),
+                        "entry_ai_evaluation_status": "not_evaluated",
+                        "entry_setup_family": setup.get("setup_family"),
+                        "entry_setup_state": setup.get("setup_state"),
+                        "entry_setup_evidence_version": setup.get("version"),
+                        "entry_setup_evidence_sha256": setup.get("evidence_sha256"),
+                        "entry_setup_source_quality": setup.get("source_quality"),
+                        "entry_probe_intent": False,
+                        "entry_probe_intent_status": (
+                            "ai_transport_unavailable"
+                            if provider_attempted
+                            else "ai_local_evaluation_unavailable"
+                        ),
+                        "entry_probe_first_required": True,
+                        "entry_ai_full_entry_forbidden": True,
+                    }
+                )
             if provider_attempted:
                 fallback_payload["openai_transport_fail_closed_reason"] = str(e)[:240]
             else:

@@ -19,6 +19,29 @@ def _minute(minute, close, volume):
     }
 
 
+def test_payload_context_unwraps_separate_exact_replay_context():
+    assert mod._payload_context(
+        {
+            "exact_payload": {
+                "entry_candle_context": {
+                    "venue": "KRX",
+                    "session": "KRX_REGULAR",
+                    "request_code": "005930_KRX",
+                    "bars": [{"t": "09:00"}],
+                }
+            },
+            "entry_setup_evidence_v1": {"setup_state": "READY"},
+        }
+    ) == {
+        "context_type": "entry",
+        "venue": "KRX",
+        "session": "KRX_REGULAR",
+        "request_code": "005930_KRX",
+        "rest_route": None,
+        "bars": [{"t": "09:00"}],
+    }
+
+
 def test_naver_cumulative_volume_requires_consecutive_minutes():
     rows = [
         {"timestamp": "2026-07-24T15:14:00+09:00", "volume": 100},

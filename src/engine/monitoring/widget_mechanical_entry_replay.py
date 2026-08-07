@@ -35,6 +35,7 @@ with contextlib.redirect_stdout(io.StringIO()):
         analyze_trends,
     )
 from src.engine.monitoring.samsung_widget_contract import KST
+from src.engine.scalping.ai_decision_trace import replay_source_input
 from src.trading.order.tick_utils import (
     clamp_price_to_tick,
     move_price_by_ticks,
@@ -181,6 +182,10 @@ def _source_issue(
 ) -> str | None:
     if payload_row.get("replay_exact") is not True:
         return "payload_not_exact_replay"
+    if payload_row.get("replay_context_present") is True and (
+        payload_row.get("replay_context_exact") is not True
+    ):
+        return "payload_not_exact_replay"
     if session_name is None:
         return "session_not_portable"
     if context.get("schema") != "entry_candle_context_v1":
@@ -212,7 +217,7 @@ def _source_issue(
 
 def evaluate_portable_widget_core(payload_row: dict[str, Any]) -> dict[str, Any]:
     """Evaluate only widget axes available unchanged for arbitrary symbols."""
-    user_input = payload_row.get("sanitized_user_input")
+    user_input = replay_source_input(payload_row)
     exact_payload = (
         user_input.get("exact_payload") if isinstance(user_input, dict) else None
     )
