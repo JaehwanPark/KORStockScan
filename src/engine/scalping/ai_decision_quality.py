@@ -16,6 +16,7 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import fmean
@@ -119,6 +120,11 @@ DETAILED_PAIRED_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_detailed_paired_re
 SCORE_CORRELATION_REPORT_DIR = DATA_DIR / "report" / "ai_score_outcome_correlation"
 RECOVERY_TRIGGER_REPORT_DIR = DATA_DIR / "report" / "ai_prompt_recovery_trigger"
 REVERSAL_SEQUENCE_REPORT_DIR = DATA_DIR / "report" / "ai_entry_reversal_sequence_replay"
+PYRAMID_FEEDBACK_REPORT_DIR = DATA_DIR / "report" / "scalping_pyramid_intraday_feedback"
+SCALE_IN_COUNTERFACTUAL_REPORT_DIR = (
+    DATA_DIR / "report" / "scale_in_incremental_counterfactual"
+)
+ENTRY_SPLIT_ORDER_PLAN_REPORT_DIR = DATA_DIR / "report" / "entry_split_order_plan"
 PAIRED_REPLAY_MIN_ROWS = 30
 PAIRED_REPLAY_MIN_SYMBOLS = 10
 PAIRED_LEARNING_MIN_ROWS = 1
@@ -8991,9 +8997,242 @@ def _entry_probe_path_proxy_value(row: dict[str, Any]) -> float | None:
     return gross - cost if gross is not None else None
 
 
+def _entry_lifecycle_source_inventory(target_date: str) -> list[dict[str, Any]]:
+    """Inventory adjacent reports without treating them as candidate ownership.
+
+    These reports can prove that the natural lifecycle or a generic policy was
+    observed.  They cannot, by themselves, prove how this report's V2.14
+    counterfactual candidate would have submitted, filled, scaled, or exited.
+    """
+
+    paths = (
+        (
+            "scalping_pyramid_intraday_feedback",
+            PYRAMID_FEEDBACK_REPORT_DIR
+            / f"scalping_pyramid_intraday_feedback_{target_date}.json",
+        ),
+        (
+            "scale_in_incremental_counterfactual",
+            SCALE_IN_COUNTERFACTUAL_REPORT_DIR
+            / f"scale_in_incremental_counterfactual_{target_date}.json",
+        ),
+        (
+            "entry_split_order_plan",
+            ENTRY_SPLIT_ORDER_PLAN_REPORT_DIR
+            / f"entry_split_order_plan_{target_date}.json",
+        ),
+    )
+    inventory: list[dict[str, Any]] = []
+    for owner, path in paths:
+        payload = _load_json(path)
+        if not payload:
+            inventory.append(
+                {
+                    "owner": owner,
+                    "path": str(path),
+                    "status": "missing_or_unreadable",
+                    "candidate_exact_state_authority": False,
+                }
+            )
+            continue
+        row: dict[str, Any] = {
+            "owner": owner,
+            "path": str(path),
+            "status": "available",
+            "canonical_json_sha256": _sha256(payload),
+            "schema_version": payload.get("schema_version"),
+            "runtime_effect": payload.get("runtime_effect"),
+            "candidate_exact_state_authority": False,
+        }
+        summary = payload.get("summary")
+        summary = summary if isinstance(summary, dict) else {}
+        if owner == "scalping_pyramid_intraday_feedback":
+            natural = summary.get("whole_day_real_entry_lifecycle")
+            natural = natural if isinstance(natural, dict) else {}
+            scale_in = summary.get("real_scale_in_performance")
+            scale_in = scale_in if isinstance(scale_in, dict) else {}
+            row["evidence"] = {
+                "one_share_event_count": int(
+                    _number(summary.get("one_share_event_count")) or 0
+                ),
+                "probe_residual_real_outcome_closed_count": int(
+                    _number(summary.get("probe_residual_real_outcome_closed_count"))
+                    or 0
+                ),
+                "natural_filled_cycle_count": int(
+                    _number(natural.get("filled_cycle_count")) or 0
+                ),
+                "natural_closed_cycle_count": int(
+                    _number(natural.get("closed_cycle_count")) or 0
+                ),
+                "real_scale_in_execution_count": int(
+                    _number(scale_in.get("execution_count")) or 0
+                ),
+            }
+            row["non_authority_reason"] = (
+                "natural_real_lifecycle_not_same_candidate_counterfactual_state"
+            )
+        elif owner == "scale_in_incremental_counterfactual":
+            row["evidence"] = {
+                "status": payload.get("status"),
+                "candidate_activity_count": int(
+                    _number(summary.get("candidate_activity_count")) or 0
+                ),
+                "eligible_candidate_count": int(
+                    _number(summary.get("eligible_candidate_count")) or 0
+                ),
+                "counterfactual_event_count": int(
+                    _number(summary.get("counterfactual_event_count")) or 0
+                ),
+                "no_sample_reason": summary.get("no_sample_reason"),
+            }
+            row["non_authority_reason"] = (
+                "scale_in_only_report_not_same_entry_candidate_full_lifecycle"
+            )
+        else:
+            candidate_grid = payload.get("candidate_grid")
+            row["evidence"] = {
+                "candidate_policy_count": (
+                    len(candidate_grid) if isinstance(candidate_grid, list) else 0
+                ),
+                "recommended_policy_present": isinstance(
+                    payload.get("recommended_policy"), dict
+                ),
+                "actual_order_submitted": payload.get("actual_order_submitted"),
+            }
+            row["non_authority_reason"] = (
+                "generic_policy_calibration_not_candidate_specific_invocation_fill"
+            )
+        inventory.append(row)
+    return inventory
+
+
+def _entry_candidate_lifecycle_source_audit(
+    rows: list[dict[str, Any]],
+    *,
+    source_inventory: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Declare whether candidate-owned full-lifecycle state is replayable."""
+
+    candidate_rows = [
+        row
+        for row in rows
+        if row.get("candidate_exposure_selected") is True
+        or row.get("candidate_probe_armed") is True
+    ]
+    state_rows = [
+        row
+        for row in candidate_rows
+        if isinstance(row.get("candidate_counterfactual_lifecycle_state"), dict)
+        and bool(row.get("candidate_counterfactual_lifecycle_state"))
+    ]
+    required_components = (
+        "probe",
+        "post_probe",
+        "residual_multi_leg",
+        "scale_in",
+        "holding_exit",
+        "economics",
+    )
+    component_available_counts = {
+        component: sum(
+            bool(
+                (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+                    component
+                )
+            )
+            for row in state_rows
+        )
+        for component in required_components
+    }
+    complete_rows = [
+        row
+        for row in state_rows
+        if all(
+            bool(
+                (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+                    component
+                )
+            )
+            for component in required_components
+        )
+        and (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+            "source_quality_status"
+        )
+        == "pass"
+        and (row.get("candidate_counterfactual_lifecycle_state") or {}).get("schema")
+        == "entry_candidate_lifecycle_state_v1"
+        and (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+            "decision_trace_id"
+        )
+        == row.get("decision_trace_id")
+        and (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+            "paired_replay_id"
+        )
+        == row.get("paired_replay_id")
+        and (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+            "effective_venue"
+        )
+        == row.get("effective_venue")
+        and (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+            "session_bucket"
+        )
+        == row.get("session_bucket")
+    ]
+    if not candidate_rows:
+        status = "keep_path_proxy_only"
+    elif complete_rows:
+        status = "exact_counterfactual_state_source_available_not_yet_evaluated"
+    else:
+        status = "source_state_missing_instrumentation_gap"
+    return {
+        "schema": "entry_candidate_lifecycle_source_audit_v1",
+        "metric_role": "instrumentation_gap",
+        "decision_authority": "offline_source_adequacy_only",
+        "window_policy": "same_exact_candidate_probe_through_terminal_exit",
+        "sample_floor": "one_candidate_probe_arm_starts_source_adequacy_audit",
+        "primary_decision_metric": "full_lifecycle_evaluable_candidate_count",
+        "source_quality_gate": (
+            "exact_candidate_owned_same_route_stage_state_with_time_price_quantity_cost"
+        ),
+        "required_state_schema": "entry_candidate_lifecycle_state_v1",
+        "required_components": list(required_components),
+        "candidate_probe_or_exposure_count": len(candidate_rows),
+        "candidate_state_row_count": len(state_rows),
+        "candidate_state_schema_pass_count": sum(
+            (row.get("candidate_counterfactual_lifecycle_state") or {}).get("schema")
+            == "entry_candidate_lifecycle_state_v1"
+            for row in state_rows
+        ),
+        "candidate_state_source_quality_pass_count": sum(
+            (row.get("candidate_counterfactual_lifecycle_state") or {}).get(
+                "source_quality_status"
+            )
+            == "pass"
+            for row in state_rows
+        ),
+        "component_available_counts": component_available_counts,
+        "full_lifecycle_evaluable_candidate_count": len(complete_rows),
+        "status": status,
+        "source_inventory": source_inventory,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "attribute_natural_control_order_fill_or_exit_to_candidate",
+            "treat_generic_entry_split_policy_as_candidate_invocation",
+            "treat_bar_path_proxy_as_realized_pnl",
+            "assume_missing_residual_scale_in_holding_or_exit_state",
+            "runtime_provider_model_threshold_price_quantity_cap_or_bot_change",
+        ],
+    }
+
+
 def _entry_lifecycle_replay_attribution(
     rows: list[dict[str, Any]],
     *,
+    target_date: str,
     probe_arm_transition_summary: dict[str, Any],
 ) -> dict[str, Any]:
     """Separate path-proxy evidence from observed real lifecycle evidence.
@@ -9056,6 +9295,10 @@ def _entry_lifecycle_replay_attribution(
         for stage, present in (row.get("lifecycle_stage_presence") or {}).items()
         if present is True
     )
+    candidate_source_audit = _entry_candidate_lifecycle_source_audit(
+        entry_rows,
+        source_inventory=_entry_lifecycle_source_inventory(target_date),
+    )
     return {
         "schema": "entry_lifecycle_replay_attribution_v1",
         "metric_role": "sim_probe_ev",
@@ -9114,6 +9357,7 @@ def _entry_lifecycle_replay_attribution(
             "lifecycle_stage_presence_counts": dict(observed_stage_presence_counts),
             "candidate_counterfactual_attribution_allowed": False,
         },
+        "candidate_full_lifecycle_source_audit": candidate_source_audit,
         "replay_component_status": {
             "one_share_probe_first": "completed_bar_path_proxy_available",
             "post_probe_recheck": (
@@ -9125,9 +9369,8 @@ def _entry_lifecycle_replay_attribution(
             "scale_in": "not_counterfactually_replayed",
             "holding_exit": "natural_trace_observation_only_not_candidate_replay",
         },
-        "full_lifecycle_counterfactual_status": (
-            "blocked_without_counterfactual_order_fill_post_probe_scale_in_exit_state"
-        ),
+        "full_lifecycle_counterfactual_status": candidate_source_audit["status"],
+        "full_lifecycle_counterfactual_ev_pct": None,
         "bounded_one_share_replay_status": (
             "path_proxy_available"
             if candidate_proxy_values or probe_arm_proxy_values
@@ -9911,6 +10154,13 @@ def build_paired_replay_report(
                     if isinstance(label.get("correlation"), dict)
                     else {}
                 ),
+                "candidate_counterfactual_lifecycle_state": (
+                    dict(result.get("candidate_counterfactual_lifecycle_state") or {})
+                    if isinstance(
+                        result.get("candidate_counterfactual_lifecycle_state"), dict
+                    )
+                    else {}
+                ),
             }
         )
     entry_recheck_transition_summary = _attach_entry_recheck_transitions(
@@ -10286,6 +10536,7 @@ def build_paired_replay_report(
     )
     entry_lifecycle_replay = _entry_lifecycle_replay_attribution(
         comparable_rows,
+        target_date=target_date,
         probe_arm_transition_summary=entry_probe_arm_transition_summary,
     )
     control_probe_severe_tail_count = sum(
@@ -14025,6 +14276,439 @@ def _valid_checkpoint_attempted_pair_ids(
     }
 
 
+_REATTRIBUTION_REQUEST_IDENTITY_FIELDS = (
+    "payload_sha256",
+    "candidate_input_sha256",
+    "exact_payload_analysis_sha256",
+    "anticipatory_reversal_analysis_sha256",
+    "entry_setup_evidence_sha256",
+)
+
+DETAILED_PREPARED_REQUEST_SNAPSHOT_SCHEMA = "ai_detailed_prepared_request_snapshot_v1"
+
+_REATTRIBUTION_CORE_INVARIANT_FIELDS = (
+    "status",
+    "request_count",
+    "result_count",
+    "paired_comparable_count",
+    "control_source_quality_adjusted_ev_pct",
+    "candidate_source_quality_adjusted_ev_pct",
+    "candidate_exposure_decision_count",
+    "candidate_probe_arm_decision_count",
+    "candidate_error_taxonomy_counts",
+    "promotion_report_integrity_pass",
+)
+
+
+def _detailed_request_reattribution_identity(
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    candidate = request.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    return {
+        **{
+            field: request.get(field)
+            for field in _REATTRIBUTION_REQUEST_IDENTITY_FIELDS
+        },
+        "candidate_prompt_version": candidate.get("prompt_version"),
+        "candidate_prompt_sha256": candidate.get("system_prompt_sha256"),
+        "candidate_contract_sha256": candidate.get("contract_sha256"),
+        "candidate_model": candidate.get("model"),
+    }
+
+
+def _reattribution_core_invariant_sha256(report: dict[str, Any]) -> str:
+    return _sha256(
+        {field: report.get(field) for field in _REATTRIBUTION_CORE_INVARIANT_FIELDS}
+    )
+
+
+def rematerialize_detailed_replay_attribution(
+    *,
+    target_date: str,
+    effective_venue: str,
+    session_bucket: str,
+    candidate_prompt_version: str,
+    prepared_request_snapshot_path: Path | None = None,
+) -> tuple[dict[str, Any], Path]:
+    """Rebuild attribution from immutable stored labels and candidate results.
+
+    This path performs no price REST request and no candidate model call. It is
+    intentionally fail-closed when current request construction no longer
+    matches the stored evaluated request/result identities.
+    """
+
+    output_path = detailed_paired_path(
+        target_date,
+        candidate_prompt_version=candidate_prompt_version,
+        effective_venue=effective_venue,
+        session_bucket=session_bucket,
+    )
+    existing_report = _load_json(output_path)
+    stored_label_path = label_report_path(target_date)
+    stored_label_report = _load_json(stored_label_path)
+    errors: list[str] = []
+    if existing_report.get("schema") != DETAILED_PAIRED_SCHEMA:
+        errors.append("existing_detailed_schema_invalid")
+    if existing_report.get("target_date") != target_date:
+        errors.append("existing_detailed_target_date_mismatch")
+    cohort_filter = existing_report.get("cohort_filter")
+    cohort_filter = cohort_filter if isinstance(cohort_filter, dict) else {}
+    if _venue(cohort_filter.get("effective_venue")) != _venue(effective_venue):
+        errors.append("existing_detailed_venue_mismatch")
+    if _session(cohort_filter.get("session_bucket")) != _session(session_bucket):
+        errors.append("existing_detailed_session_mismatch")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+        ("promotion_report_integrity_pass", True),
+    ):
+        if existing_report.get(field) is not expected:
+            errors.append(f"existing_detailed_{field}_invalid")
+    existing_selection = existing_report.get("candidate_execution_selection")
+    if not (
+        isinstance(existing_selection, dict)
+        and existing_selection.get("outcome_blind") is True
+        and existing_selection.get("contract_pass") is True
+    ):
+        errors.append("existing_candidate_execution_selection_invalid")
+    existing_requests = existing_report.get("requests")
+    existing_results = existing_report.get("results")
+    if not isinstance(existing_requests, list) or not existing_requests:
+        errors.append("existing_evaluated_requests_missing")
+        existing_requests = []
+    if not isinstance(existing_results, list) or not existing_results:
+        errors.append("existing_candidate_results_missing")
+        existing_results = []
+    if stored_label_report.get("schema") != LABEL_REPORT_SCHEMA:
+        errors.append("stored_label_schema_invalid")
+    if stored_label_report.get("target_date") != target_date:
+        errors.append("stored_label_target_date_mismatch")
+    for field, expected in (
+        ("runtime_effect", False),
+        ("allowed_runtime_apply", False),
+        ("actual_order_submitted", False),
+        ("broker_order_forbidden", True),
+    ):
+        if stored_label_report.get(field) is not expected:
+            errors.append(f"stored_label_{field}_invalid")
+    labels = stored_label_report.get("labels")
+    if not isinstance(labels, list) or not labels:
+        errors.append("stored_labels_missing")
+        labels = []
+    labels = _filter_rows_for_cohort(
+        labels,
+        effective_venue=effective_venue,
+        session_bucket=session_bucket,
+    )
+    if not labels:
+        errors.append("stored_cohort_labels_missing")
+    if errors:
+        raise RuntimeError("offline_reattribution_source_invalid:" + ",".join(errors))
+
+    prepared_snapshot: dict[str, Any] = {}
+    if prepared_request_snapshot_path is not None:
+        prepared_snapshot = _load_json(prepared_request_snapshot_path)
+        snapshot_errors: list[str] = []
+        if prepared_snapshot.get("schema") != DETAILED_PREPARED_REQUEST_SNAPSHOT_SCHEMA:
+            snapshot_errors.append("schema_invalid")
+        if prepared_snapshot.get("target_date") != target_date:
+            snapshot_errors.append("target_date_mismatch")
+        if (
+            prepared_snapshot.get("candidate_prompt_version")
+            != candidate_prompt_version
+        ):
+            snapshot_errors.append("candidate_prompt_version_mismatch")
+        snapshot_cohort = prepared_snapshot.get("cohort_filter")
+        snapshot_cohort = snapshot_cohort if isinstance(snapshot_cohort, dict) else {}
+        if _venue(snapshot_cohort.get("effective_venue")) != _venue(effective_venue):
+            snapshot_errors.append("venue_mismatch")
+        if _session(snapshot_cohort.get("session_bucket")) != _session(session_bucket):
+            snapshot_errors.append("session_mismatch")
+        for field, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+            ("broker_order_forbidden", True),
+        ):
+            if prepared_snapshot.get(field) is not expected:
+                snapshot_errors.append(f"{field}_invalid")
+        if prepared_snapshot.get("stored_label_report_content_sha256") != _sha256(
+            stored_label_report
+        ):
+            snapshot_errors.append("stored_label_report_hash_mismatch")
+        snapshot_content_sha256 = _sha256(prepared_snapshot)
+        prior_reattribution = existing_report.get("reattribution_provenance")
+        prior_reattribution = (
+            prior_reattribution if isinstance(prior_reattribution, dict) else {}
+        )
+        source_report_hash = prepared_snapshot.get("source_report_content_sha256")
+        source_report_hash_matches = source_report_hash == _sha256(existing_report)
+        idempotent_source_match = bool(
+            prior_reattribution.get("source_report_content_sha256")
+            == source_report_hash
+            and prior_reattribution.get("prepared_request_snapshot_content_sha256")
+            == snapshot_content_sha256
+            and prior_reattribution.get("historical_core_invariant_sha256")
+            == _reattribution_core_invariant_sha256(existing_report)
+        )
+        if not source_report_hash_matches and not idempotent_source_match:
+            snapshot_errors.append("source_report_hash_mismatch")
+        source_code_commit = str(
+            prepared_snapshot.get("source_code_commit") or ""
+        ).strip()
+        if re.fullmatch(r"[0-9a-f]{40}", source_code_commit) is None:
+            snapshot_errors.append("source_code_commit_invalid")
+        prepared_requests = prepared_snapshot.get("prepared_requests")
+        if not isinstance(prepared_requests, list) or not prepared_requests:
+            snapshot_errors.append("prepared_requests_missing")
+            prepared_requests = []
+        if prepared_snapshot.get("prepared_request_count") != len(prepared_requests):
+            snapshot_errors.append("prepared_request_count_mismatch")
+        snapshot_pass_count = sum(
+            (request.get("sample_floor") or {}).get("pass") is True
+            for request in prepared_requests
+            if isinstance(request, dict)
+        )
+        if prepared_snapshot.get("sample_floor_pass_count") != snapshot_pass_count:
+            snapshot_errors.append("sample_floor_pass_count_mismatch")
+        existing_prepared_count = existing_report.get("prepared_request_count")
+        if existing_prepared_count is not None and existing_prepared_count != len(
+            prepared_requests
+        ):
+            snapshot_errors.append("existing_prepared_request_count_mismatch")
+        existing_eligible_count = existing_selection.get("eligible_request_count")
+        if (
+            existing_eligible_count is not None
+            and existing_eligible_count != snapshot_pass_count
+        ):
+            snapshot_errors.append("existing_eligible_request_count_mismatch")
+        if snapshot_errors:
+            raise RuntimeError(
+                "offline_reattribution_snapshot_invalid:" + ",".join(snapshot_errors)
+            )
+    else:
+        sources = _default_sources(target_date, include_pipeline=False)
+        traces = _filter_rows_for_cohort(
+            sources["traces"],
+            effective_venue=effective_venue,
+            session_bucket=session_bucket,
+        )
+        prepared_requests = prepare_paired_replay_requests(
+            control_manifest=_load_json(
+                control_path(
+                    target_date,
+                    effective_venue=effective_venue,
+                    session_bucket=session_bucket,
+                )
+            ),
+            traces=traces,
+            payloads=sources["payloads"],
+            labels=labels,
+        )
+        prepared_requests = prepare_detailed_paired_replay_requests(
+            prepared_requests,
+            candidate_prompt_version=candidate_prompt_version,
+        )
+    prepared_errors: list[str] = []
+    if any(not isinstance(request, dict) for request in prepared_requests):
+        prepared_errors.append("request_not_object")
+    prepared_pair_ids = [
+        str(request.get("paired_replay_id") or "")
+        for request in prepared_requests
+        if isinstance(request, dict)
+    ]
+    if any(not pair_id for pair_id in prepared_pair_ids):
+        prepared_errors.append("pair_id_missing")
+    if len(prepared_pair_ids) != len(set(prepared_pair_ids)):
+        prepared_errors.append("pair_id_duplicate")
+    if any(
+        _stage(request.get("stage")) == "entry"
+        and (request.get("candidate") or {}).get("prompt_version")
+        != f"{candidate_prompt_version}_entry"
+        for request in prepared_requests
+        if isinstance(request, dict)
+    ):
+        prepared_errors.append("candidate_version_mismatch")
+    if any(
+        _venue(request.get("effective_venue")) != _venue(effective_venue)
+        or _session(request.get("session_bucket")) != _session(session_bucket)
+        for request in prepared_requests
+        if isinstance(request, dict)
+    ):
+        prepared_errors.append("cohort_mismatch")
+    if prepared_errors:
+        raise RuntimeError(
+            "offline_reattribution_prepared_invalid:" + ",".join(prepared_errors)
+        )
+    current_by_pair = {
+        str(request.get("paired_replay_id") or ""): request
+        for request in prepared_requests
+        if request.get("paired_replay_id")
+    }
+    identity_errors: list[str] = []
+    evaluated_pair_ids: set[str] = set()
+    for request in existing_requests:
+        if not isinstance(request, dict):
+            identity_errors.append("existing_request_not_object")
+            continue
+        pair_id = str(request.get("paired_replay_id") or "")
+        current = current_by_pair.get(pair_id)
+        if not pair_id or current is None:
+            identity_errors.append(f"evaluated_pair_missing_current:{pair_id or '-'}")
+            continue
+        evaluated_pair_ids.add(pair_id)
+        stored_identity = _detailed_request_reattribution_identity(request)
+        current_identity = _detailed_request_reattribution_identity(current)
+        mismatched_fields = [
+            field
+            for field in stored_identity
+            if stored_identity.get(field) != current_identity.get(field)
+        ]
+        if mismatched_fields:
+            identity_errors.append(
+                "evaluated_request_identity_mismatch:"
+                f"{pair_id}:{'|'.join(mismatched_fields)}"
+            )
+    result_pair_ids = {
+        str(result.get("paired_replay_id") or "")
+        for result in existing_results
+        if isinstance(result, dict) and result.get("paired_replay_id")
+    }
+    if result_pair_ids != evaluated_pair_ids:
+        identity_errors.append("evaluated_request_result_pair_set_mismatch")
+    if len(existing_requests) != len(evaluated_pair_ids):
+        identity_errors.append("evaluated_request_count_mismatch")
+    if len(existing_results) != len(evaluated_pair_ids):
+        identity_errors.append("evaluated_result_count_mismatch")
+    if identity_errors:
+        raise RuntimeError(
+            "offline_reattribution_identity_invalid:" + ",".join(identity_errors[:20])
+        )
+
+    # Preserve every historical decision/EV field. Re-running the current
+    # composer over an older prompt result would silently reinterpret that
+    # result under today's semantics. Reattribution may only add observation
+    # sections computed from the immutable stored comparison rows.
+    historical_core_invariant_sha256 = _reattribution_core_invariant_sha256(
+        existing_report
+    )
+    rebuilt = deepcopy(existing_report)
+    comparable_rows = rebuilt.get("paired_comparisons")
+    if not isinstance(comparable_rows, list):
+        raise RuntimeError("offline_reattribution_source_invalid:paired_rows_missing")
+    transition_observations = _prepared_entry_transition_observations(
+        prepared_requests=prepared_requests,
+        comparable_rows=comparable_rows,
+    )
+    waiting_probe_arm_rows = [
+        row
+        for row in comparable_rows
+        if isinstance(row, dict)
+        and row.get("candidate_probe_armed") is True
+        and row.get("candidate_exposure_selected") is not True
+    ]
+    probe_arm_transition_summary = _attach_wait_transition_continuity(
+        waiting_rows=waiting_probe_arm_rows,
+        observations=transition_observations,
+        field_prefix="entry_probe_arm_continuity",
+        contract_version="entry_probe_arm_next_exact_transition_v1",
+        observation_source="full_prepared_exact_request_census",
+    )
+    rebuilt["entry_opportunity_funnel"] = _entry_opportunity_funnel_attribution(
+        labels=labels,
+        prepared_requests=prepared_requests,
+        comparable_rows=comparable_rows,
+        results=existing_results,
+        candidate_execution_requested=bool(
+            existing_results or existing_selection is not None
+        ),
+    )
+    rebuilt["entry_probe_arm_continuity"] = {
+        "schema": "entry_probe_arm_continuity_v1",
+        "metric_role": "funnel_count",
+        "decision_authority": "offline_sequential_continuity_attribution_only",
+        "window_policy": (
+            "same_symbol_venue_session_full_prepared_exact_request_census_300s"
+        ),
+        "sample_floor": "one_waiting_probe_arm_starts_observation",
+        "primary_decision_metric": "ready_followup_observed_rate_pct",
+        "source_quality_gate": "exact_v2_same_route_prepared_request_census",
+        **probe_arm_transition_summary,
+        "forbidden_uses": [
+            "treat_waiting_probe_arm_as_submitted_order",
+            "treat_candidate_budget_defer_as_ai_rejection",
+            "standalone_live_prompt_promotion",
+            "provider_model_threshold_price_quantity_or_cap_change",
+            "broker_or_safety_guard_bypass",
+            "bot_restart",
+        ],
+    }
+    rebuilt["entry_lifecycle_replay"] = _entry_lifecycle_replay_attribution(
+        comparable_rows,
+        target_date=target_date,
+        probe_arm_transition_summary=probe_arm_transition_summary,
+    )
+    invariant_mismatches = [
+        field
+        for field in _REATTRIBUTION_CORE_INVARIANT_FIELDS
+        if rebuilt.get(field) != existing_report.get(field)
+    ]
+    if invariant_mismatches:
+        raise RuntimeError(
+            "offline_reattribution_core_metric_drift:" + ",".join(invariant_mismatches)
+        )
+    if (
+        _reattribution_core_invariant_sha256(rebuilt)
+        != historical_core_invariant_sha256
+    ):
+        raise RuntimeError("offline_reattribution_core_metric_hash_drift")
+    rebuilt["reattribution_provenance"] = {
+        "schema": "ai_detailed_replay_reattribution_provenance_v1",
+        "source_report_path": str(output_path),
+        "source_report_content_sha256": (
+            prepared_snapshot.get("source_report_content_sha256")
+            if prepared_snapshot
+            else _sha256(existing_report)
+        ),
+        "stored_label_report_path": str(stored_label_path),
+        "stored_label_report_content_sha256": _sha256(stored_label_report),
+        "prepared_request_source": (
+            "pinned_historical_snapshot"
+            if prepared_request_snapshot_path is not None
+            else "current_source_reconstruction"
+        ),
+        "prepared_request_snapshot_path": (
+            str(prepared_request_snapshot_path)
+            if prepared_request_snapshot_path is not None
+            else None
+        ),
+        "prepared_request_snapshot_content_sha256": (
+            _sha256(prepared_snapshot) if prepared_snapshot else None
+        ),
+        "prepared_request_source_code_commit": (
+            prepared_snapshot.get("source_code_commit") if prepared_snapshot else None
+        ),
+        "source_generated_at": existing_report.get("generated_at"),
+        "reattributed_at": datetime.now(KST).isoformat(),
+        "prepared_request_count": len(prepared_requests),
+        "evaluated_request_count": len(existing_requests),
+        "candidate_result_count": len(existing_results),
+        "historical_core_invariant_sha256": historical_core_invariant_sha256,
+        "historical_decision_metrics_preserved": True,
+        "historical_composer_reexecution_performed": False,
+        "price_rest_request_performed": False,
+        "candidate_model_call_performed": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    return rebuilt, output_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build offline exact AI decision-quality artifacts."
@@ -14042,6 +14726,7 @@ def main(argv: list[str] | None = None) -> int:
             "correlation",
             "recovery",
             "reversal_sequence",
+            "reattribute",
         ),
         required=True,
     )
@@ -14150,6 +14835,14 @@ def main(argv: list[str] | None = None) -> int:
             "reconstructed from the report."
         ),
     )
+    parser.add_argument(
+        "--prepared-request-snapshot",
+        type=Path,
+        help=(
+            "Hash-pinned historical full prepared-request census. Valid only "
+            "with --mode reattribute when current request construction drifted."
+        ),
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
     if args.execute_candidate and (
@@ -14162,21 +14855,31 @@ def main(argv: list[str] | None = None) -> int:
         "control",
         "paired",
         "detailed",
+        "reattribute",
     }:
-        parser.error("--venue/--session-bucket require --mode control|paired|detailed")
+        parser.error(
+            "--venue/--session-bucket require "
+            "--mode control|paired|detailed|reattribute"
+        )
     if args.session_bucket and not args.venue:
         parser.error("--session-bucket requires --venue")
     if (
-        args.mode != "detailed"
+        args.mode not in {"detailed", "reattribute"}
         and args.detailed_candidate_version != DECISION_QUALITY_DETAILED_PROMPT_VERSION
     ):
-        parser.error("--detailed-candidate-version requires --mode detailed")
+        parser.error(
+            "--detailed-candidate-version requires --mode detailed|reattribute"
+        )
     if args.candidate_model and args.mode != "detailed":
         parser.error("--candidate-model requires --mode detailed")
     if args.candidate_model and not args.execute_candidate:
         parser.error("--candidate-model requires --execute-candidate")
     if args.outcome_recovery_report and args.mode != "detailed":
         parser.error("--outcome-recovery-report requires --mode detailed")
+    if args.prepared_request_snapshot and args.mode != "reattribute":
+        parser.error("--prepared-request-snapshot requires --mode reattribute")
+    if args.mode == "reattribute" and not (args.venue and args.session_bucket):
+        parser.error("--mode reattribute requires --venue and --session-bucket")
     if args.candidate_max_new_requests < 0:
         parser.error("--candidate-max-new-requests must be zero or positive")
     if args.candidate_max_new_requests and not args.execute_candidate:
@@ -14189,6 +14892,34 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.mode == "reattribute":
+        report, path = rematerialize_detailed_replay_attribution(
+            target_date=args.date,
+            effective_venue=args.venue,
+            session_bucket=args.session_bucket,
+            candidate_prompt_version=args.detailed_candidate_version,
+            prepared_request_snapshot_path=args.prepared_request_snapshot,
+        )
+        if args.write:
+            _atomic_write_json(path, report)
+        print(
+            json.dumps(
+                {
+                    "status": "detailed_replay_reattribution_complete",
+                    "artifact_path": str(path),
+                    "target_date": args.date,
+                    "cohort_filter": report.get("cohort_filter"),
+                    "entry_opportunity_funnel": report.get("entry_opportunity_funnel"),
+                    "entry_probe_arm_continuity": report.get(
+                        "entry_probe_arm_continuity"
+                    ),
+                    "entry_lifecycle_replay": report.get("entry_lifecycle_replay"),
+                    "reattribution_provenance": report.get("reattribution_provenance"),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
     sources = _default_sources(
         args.date,
         # Pipeline lifecycle rows own decision-to-order/fill correlation even
