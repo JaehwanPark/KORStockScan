@@ -141,6 +141,96 @@ def test_postclose_done_controller_uses_project_venv_candidates(monkeypatch, tmp
     assert mod._python_bin() == str(venv_python)
 
 
+def test_controller_verify_actions_inherit_disabled_stage_profile():
+    verification = {
+        "execution_profile": {
+            "flags": {
+                "swing_lifecycle": False,
+                "swing_strategy_discovery": False,
+                "swing_lifecycle_matrix": False,
+                "swing_lifecycle_bucket_discovery": False,
+                "deepseek_swing_lab": False,
+            },
+            "disabled_stage_flags": [
+                "swing_lifecycle",
+                "swing_strategy_discovery",
+                "swing_lifecycle_matrix",
+                "swing_lifecycle_bucket_discovery",
+                "deepseek_swing_lab",
+                "not_a_verifier_stage",
+            ],
+        }
+    }
+
+    verify_command = mod._build_verify_action(
+        "2026-06-03", verification
+    ).command
+    pending_command = mod._build_pending_verify_action(
+        "2026-06-03", verification
+    ).command
+
+    assert verify_command is not None
+    assert pending_command is not None
+    expected_stages = [
+        "swing_lifecycle",
+        "swing_strategy_discovery",
+        "swing_lifecycle_matrix",
+        "swing_lifecycle_bucket_discovery",
+        "deepseek_swing_lab",
+    ]
+
+    def disabled_stages(command):
+        return [
+            command[index + 1]
+            for index, token in enumerate(command[:-1])
+            if token == "--disabled-stage"
+        ]
+
+    assert disabled_stages(verify_command) == expected_stages
+    assert disabled_stages(pending_command) == expected_stages
+    assert "not_a_verifier_stage" not in verify_command
+
+
+def test_tail_repair_actions_preserve_wrapper_scope(monkeypatch):
+    for env_name in (
+        "THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT",
+        "THRESHOLD_CYCLE_RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL",
+        "THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY",
+        "THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY",
+        "THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+    verification = {
+        "execution_profile": {
+            "flags": {
+                "swing_lifecycle": False,
+                "swing_strategy_discovery": False,
+                "swing_lifecycle_matrix": False,
+                "swing_lifecycle_bucket_discovery": False,
+                "deepseek_swing_lab": False,
+            }
+        }
+    }
+
+    actions = mod._tail_stage_repair_actions(
+        "2026-06-03", "verify_threshold_cycle_postclose_chain", verification
+    )
+    commands = {
+        action.action: action.command
+        for action in actions
+        if action.command is not None
+    }
+
+    assert "--exclude-swing" in commands["refresh_pattern_lab_currentness_audit"]
+    assert "--exclude-swing" in commands["refresh_pattern_lab_propagation_audit"]
+    assert "--exclude-swing" in commands["refresh_code_improvement_workorder"]
+    assert "--exclude-swing" in commands["refresh_threshold_cycle_ev"]
+    assert "--disabled-source" in commands["refresh_threshold_cycle_ev"]
+    assert "--exclude-swing" in commands["refresh_runtime_approval_summary"]
+    assert "--producer-gap-disabled" in commands["refresh_runtime_approval_summary"]
+    assert "--exclude-swing" in commands["refresh_runtime_apply_gap_audit"]
+
+
 def test_postclose_done_controller_refreshes_recoverable_sources(monkeypatch, tmp_path):
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

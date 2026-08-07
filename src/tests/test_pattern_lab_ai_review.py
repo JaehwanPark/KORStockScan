@@ -3388,6 +3388,104 @@ def test_pattern_lab_ai_review_keeps_sample_warning_followup_visible():
         assert provenance["allowed_runtime_apply"] is False
 
 
+def test_pattern_lab_ai_review_splits_report_state_warnings_from_source_hard_blocks():
+    cases = {
+        "lifecycle_bucket_discovery_granularity_too_broad": {
+            "source": "lifecycle_bucket_discovery",
+            "summary": {
+                "source_contract_status": "pass",
+                "parent_bucket_count": 13,
+                "target_parent_min": 30,
+                "target_parent_max": 60,
+                "parent_granularity_status": "too_broad",
+                "source_quality_blocker_count": 0,
+            },
+            "expected_class": "bucket_granularity_observation_not_source_hard_block",
+            "expected_value": ("parent_bucket_count", 13),
+        },
+        "lifecycle_decision_matrix_submit_drought": {
+            "source": "lifecycle_decision_matrix",
+            "summary": {
+                "join_contract_blocked": False,
+                "stage_counts": {"entry": 649, "submit": 13},
+                "conversion_blocker_reason_counts": {"missing_submit": 34},
+                "complete_flow_conversion_rate": 0.0556,
+            },
+            "expected_class": "submit_drought_attribution_required_not_source_hard_block",
+            "expected_value": ("missing_submit_count", 34),
+        },
+        "threshold_cycle_ev_warning_state": {
+            "source": "threshold_cycle_ev",
+            "summary": {"status": "warning", "warning_count": 4},
+            "warnings": ["scalp_entry_adm:joined_sample_below_sample_floor"],
+            "preflight": {
+                "status": "warning",
+                "tuning_input_allowed": True,
+                "source_quality_gate": "pass",
+                "hard_blocking_contract_gap_count": 0,
+            },
+            "expected_class": "ev_warning_split_sample_floor_vs_source_hard_block",
+            "expected_value": ("preflight_tuning_input_allowed", True),
+        },
+    }
+
+    for review_id, case in cases.items():
+        source_wrapper = {"summary": case["summary"]}
+        if case.get("warnings"):
+            source_wrapper["warnings"] = case["warnings"]
+        if case.get("preflight"):
+            source_wrapper["source_quality_preflight_gate"] = case["preflight"]
+        status, provenance = mod._implementation_marker_for_conclusion(
+            {
+                "review_id": review_id,
+                "final_state": "source_quality_gap",
+                "final_decision": "block_runtime_use",
+                "source_paths": [f"/tmp/{case['source']}.json"],
+            },
+            {"sources": {case["source"]: {"summary": source_wrapper}}},
+        )
+
+        assert status == "implemented_but_waiting_sample"
+        assert provenance["interpretation_class"] == case["expected_class"]
+        key, value = case["expected_value"]
+        assert provenance["diagnostic"][key] == value
+        assert provenance["runtime_effect"] is False
+        assert provenance["allowed_runtime_apply"] is False
+        assert provenance["actual_order_submitted"] is False
+        assert provenance["broker_order_forbidden"] is True
+        assert provenance["root_cause_closure_status_hint"] == (
+            "handoff_closed_root_cause_open"
+        )
+
+
+def test_pattern_lab_ai_review_does_not_downgrade_real_source_hard_block():
+    status, provenance = mod._implementation_marker_for_conclusion(
+        {
+            "review_id": "threshold_cycle_ev_warning_state",
+            "final_state": "source_quality_gap",
+            "final_decision": "block_runtime_use",
+            "source_paths": ["/tmp/threshold_cycle_ev.json"],
+        },
+        {
+            "sources": {
+                "threshold_cycle_ev": {
+                    "summary": {
+                        "summary": {"status": "warning", "warning_count": 1},
+                        "source_quality_preflight_gate": {
+                            "tuning_input_allowed": False,
+                            "source_quality_gate": "blocked",
+                            "hard_blocking_contract_gap_count": 1,
+                        },
+                    }
+                }
+            }
+        },
+    )
+
+    assert status is None
+    assert provenance is None
+
+
 def test_pattern_lab_ai_review_marks_adm_sample_floor_provenance_implemented():
     context = {
         "sources": {

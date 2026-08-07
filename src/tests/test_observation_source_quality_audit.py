@@ -1533,6 +1533,7 @@ def test_observation_source_quality_audit_reviews_score_and_micro_context_unknow
                     "broker_order_forbidden": True,
                     "entry_score_source": "unknown",
                     "entry_score_excluded_reason": "unusable_source:unknown",
+                    "entry_recheck_excluded_reason": "unusable_source:unknown",
                     "score_prior_band": "neutral_or_unknown",
                     "score_prior_confidence": "unknown",
                 },
@@ -1554,6 +1555,9 @@ def test_observation_source_quality_audit_reviews_score_and_micro_context_unknow
     assert reviewed["scalp_entry_action_decision_snapshot"]["entry_score_source"][
         "reviewed_reason"
     ] == ("reviewed_entry_score_source_not_available")
+    assert reviewed["scalp_entry_action_decision_snapshot"][
+        "entry_recheck_excluded_reason"
+    ]["reviewed_reason"] == ("reviewed_entry_score_source_not_available")
     assert reviewed["scalp_entry_action_decision_snapshot"]["score_prior_confidence"][
         "reviewed_reason"
     ] == ("reviewed_score_prior_neutral_unknown_not_decision_input")
