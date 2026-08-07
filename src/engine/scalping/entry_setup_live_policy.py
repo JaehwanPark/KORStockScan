@@ -25,6 +25,11 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
 )
+from src.engine.scalping.entry_setup_evidence import (
+    ENTRY_DECISION_COMPOSER_VERSION,
+    ENTRY_SETUP_EVIDENCE_VERSION,
+    STRUCTURE_PHASE_POLICY_VERSION,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
@@ -540,6 +545,42 @@ def _candidate_source_errors(
     )
     if request_versions != {expected_request_version}:
         errors.append("detailed_candidate_prompt_contract_mismatch")
+    request_evidence_versions = {
+        str((row.get("candidate") or {}).get("entry_setup_evidence_version") or "")
+        for row in detailed_report.get("requests") or []
+        if isinstance(row, dict) and isinstance(row.get("candidate"), dict)
+    }
+    request_composer_versions = {
+        str((row.get("candidate") or {}).get("entry_decision_composer_version") or "")
+        for row in detailed_report.get("requests") or []
+        if isinstance(row, dict) and isinstance(row.get("candidate"), dict)
+    }
+    request_phase_versions = {
+        str(
+            (row.get("candidate") or {}).get("entry_structure_phase_policy_version")
+            or ""
+        )
+        for row in detailed_report.get("requests") or []
+        if isinstance(row, dict) and isinstance(row.get("candidate"), dict)
+    }
+    if detailed_report.get(
+        "entry_setup_evidence_version"
+    ) != ENTRY_SETUP_EVIDENCE_VERSION or request_evidence_versions != {
+        ENTRY_SETUP_EVIDENCE_VERSION
+    }:
+        errors.append("detailed_entry_setup_evidence_version_stale")
+    if detailed_report.get(
+        "entry_decision_composer_version"
+    ) != ENTRY_DECISION_COMPOSER_VERSION or request_composer_versions != {
+        ENTRY_DECISION_COMPOSER_VERSION
+    }:
+        errors.append("detailed_entry_decision_composer_version_stale")
+    if detailed_report.get(
+        "entry_structure_phase_policy_version"
+    ) != STRUCTURE_PHASE_POLICY_VERSION or request_phase_versions != {
+        STRUCTURE_PHASE_POLICY_VERSION
+    }:
+        errors.append("detailed_entry_structure_phase_policy_version_stale")
     selection = detailed_report.get("candidate_execution_selection")
     if (
         not isinstance(selection, dict)
@@ -724,6 +765,9 @@ def build_live_candidate(
         "effective_venue": CANARY_VENUE,
         "session_bucket": CANARY_SESSION,
         "candidate_contract_sha256": detailed_report.get("candidate_contract_sha256"),
+        "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
+        "entry_decision_composer_version": ENTRY_DECISION_COMPOSER_VERSION,
+        "entry_structure_phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
         "promotion_metrics": {
             "promotion_quality_gate_basis": detailed_report.get(
                 "promotion_quality_gate_basis"
@@ -911,6 +955,18 @@ def _validate_candidate_artifact(
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
     ):
         errors.append("candidate_rollback_prompt_invalid")
+    if candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION:
+        errors.append("candidate_entry_setup_evidence_version_stale")
+    if (
+        candidate.get("entry_decision_composer_version")
+        != ENTRY_DECISION_COMPOSER_VERSION
+    ):
+        errors.append("candidate_entry_decision_composer_version_stale")
+    if (
+        candidate.get("entry_structure_phase_policy_version")
+        != STRUCTURE_PHASE_POLICY_VERSION
+    ):
+        errors.append("candidate_entry_structure_phase_policy_version_stale")
     artifact_sha = str(candidate.get("artifact_sha256") or "")
     if artifact_sha != _canonical_sha256(
         {key: value for key, value in candidate.items() if key != "artifact_sha256"}
@@ -985,6 +1041,11 @@ def _runtime_candidate_contract_errors(
         != DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
         or candidate.get("rollback_prompt_version")
         != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        or candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION
+        or candidate.get("entry_decision_composer_version")
+        != ENTRY_DECISION_COMPOSER_VERSION
+        or candidate.get("entry_structure_phase_policy_version")
+        != STRUCTURE_PHASE_POLICY_VERSION
         or candidate.get("allowed_runtime_apply") is not True
         or candidate.get("runtime_effect") is not False
         or candidate.get("actual_order_submitted") is not False
@@ -1099,6 +1160,13 @@ def build_preopen_activation(
         "candidate_file_sha256": candidate_file_sha256,
         "candidate_artifact_sha256": candidate.get("artifact_sha256"),
         "candidate_contract_sha256": candidate.get("candidate_contract_sha256"),
+        "entry_setup_evidence_version": candidate.get("entry_setup_evidence_version"),
+        "entry_decision_composer_version": candidate.get(
+            "entry_decision_composer_version"
+        ),
+        "entry_structure_phase_policy_version": candidate.get(
+            "entry_structure_phase_policy_version"
+        ),
         "runtime_env_provenance": dict(runtime_env_provenance or {}),
         "runtime_effect": active,
         "allowed_runtime_apply": active,
@@ -1238,6 +1306,12 @@ def resolve_live_prompt_policy(
         or activation.get("selected_prompt_version")
         != DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
         or activation.get("rollback_prompt_version") != fallback
+        or activation.get("entry_setup_evidence_version")
+        != ENTRY_SETUP_EVIDENCE_VERSION
+        or activation.get("entry_decision_composer_version")
+        != ENTRY_DECISION_COMPOSER_VERSION
+        or activation.get("entry_structure_phase_policy_version")
+        != STRUCTURE_PHASE_POLICY_VERSION
         or _normalize_venue(activation.get("effective_venue")) != CANARY_VENUE
         or _normalize_session(activation.get("session_bucket")) != CANARY_SESSION
         or activation_contract.get("preopen_only") is not True
@@ -1266,6 +1340,18 @@ def resolve_live_prompt_policy(
         candidate_errors.append("runtime_candidate_prompt_contract_sha_mismatch")
     if candidate.get("canary_mode") != canary_mode:
         candidate_errors.append("runtime_candidate_canary_mode_mismatch")
+    if candidate.get("entry_setup_evidence_version") != activation.get(
+        "entry_setup_evidence_version"
+    ):
+        candidate_errors.append("runtime_candidate_evidence_version_mismatch")
+    if candidate.get("entry_decision_composer_version") != activation.get(
+        "entry_decision_composer_version"
+    ):
+        candidate_errors.append("runtime_candidate_composer_version_mismatch")
+    if candidate.get("entry_structure_phase_policy_version") != activation.get(
+        "entry_structure_phase_policy_version"
+    ):
+        candidate_errors.append("runtime_candidate_structure_phase_version_mismatch")
     if candidate_errors:
         result["status"] = "fallback_candidate_contract_invalid"
         result["runtime_contract_errors"] = list(dict.fromkeys(candidate_errors))
@@ -1279,6 +1365,15 @@ def resolve_live_prompt_policy(
             ),
             "source_date": activation.get("source_date"),
             "candidate_contract_sha256": activation.get("candidate_contract_sha256"),
+            "entry_setup_evidence_version": activation.get(
+                "entry_setup_evidence_version"
+            ),
+            "entry_decision_composer_version": activation.get(
+                "entry_decision_composer_version"
+            ),
+            "entry_structure_phase_policy_version": activation.get(
+                "entry_structure_phase_policy_version"
+            ),
             "activation_artifact_sha256": artifact_sha,
             "canary_mode": canary_mode,
             "maximum_daily_exploration_probes": (

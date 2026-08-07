@@ -3193,6 +3193,113 @@ def test_three_bar_early_probe_requires_bounded_cost_and_independent_support():
     )
 
 
+def test_completed_structure_phase_relabels_deep_rebound_and_ignores_intrabar_tape():
+    base = {
+        "current": {"price": 3080, "fluctuation_pct": 5.84},
+        "features": {
+            "entry_order_flow_status": "supportive",
+            "order_flow_pressure_source": "trusted_aggressor",
+            "entry_momentum_status": "accelerating",
+            "buy_pressure_10t": 91.68,
+            "net_aggressive_delta_10t": 2345,
+            "tick_aggressor_trusted_count": 10,
+            "tick_aggressor_pressure_usable": True,
+            "quote_fresh_for_entry": True,
+            "tick_context_stale": False,
+            "large_sell_print_detected": False,
+            "tick_context_quality": "fresh_computed",
+            "tick_accel_source": "computed_10ticks",
+            "spread_bp": 81.17,
+        },
+        "entry_candle_context": {
+            "completed_bar_count": 285,
+            "structure": {
+                "returns_pct": {
+                    "1": 0.3257,
+                    "3": 0.3257,
+                    "5": -0.1621,
+                    "10": 1.8182,
+                    "20": 2.1559,
+                    "60": 4.7619,
+                },
+                "slopes_pct_per_bar": {
+                    "1": 0.3257,
+                    "3": 0.1629,
+                    "5": -0.129,
+                    "10": 0.2153,
+                    "20": 0.051,
+                    "60": 0.0754,
+                },
+                "peak_drawdown_pct": -10.4651,
+                "high_direction": "up_or_flat",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 1.592,
+                "volume_direction_alignment": "bullish_confirmed",
+                "regime": "range",
+                "alignment": "neutral",
+            },
+        },
+    }
+    adverse_tape = {
+        **base,
+        "features": {
+            **base["features"],
+            "entry_order_flow_status": "adverse",
+            "buy_pressure_10t": 15.0,
+            "net_aggressive_delta_10t": -500,
+        },
+    }
+
+    supportive = quality.build_exact_payload_analysis_v1(base, stage="entry")
+    adverse = quality.build_exact_payload_analysis_v1(adverse_tape, stage="entry")
+
+    assert supportive["completed_structure"]["phase"] == "recovery_continuation"
+    assert adverse["completed_structure"]["phase"] == "recovery_continuation"
+    assert supportive["completed_structure"]["phase_policy_version"] == (
+        "entry_completed_bar_structure_phase_v2"
+    )
+    assert supportive["completed_structure"]["phase_stable_on_completed_bar"] is True
+
+
+def test_downtrend_bounce_cannot_be_named_clean_continuation_phase():
+    payload = {
+        "current": {"price": 10000, "fluctuation_pct": 3.0},
+        "features": {},
+        "entry_candle_context": {
+            "completed_bar_count": 60,
+            "structure": {
+                "returns_pct": {
+                    "1": 0.2,
+                    "3": 0.6,
+                    "5": 1.0,
+                    "10": 1.2,
+                    "20": 0.5,
+                    "60": 2.0,
+                },
+                "slopes_pct_per_bar": {
+                    "1": 0.2,
+                    "3": 0.2,
+                    "5": 0.1,
+                    "10": 0.05,
+                    "20": -0.04,
+                    "60": 0.01,
+                },
+                "peak_drawdown_pct": -0.5,
+                "high_direction": "up_or_flat",
+                "low_direction": "up_or_flat",
+                "volume_ratio": 1.2,
+                "volume_direction_alignment": "bullish_confirmed",
+                "regime": "downtrend_bounce",
+                "alignment": "adverse",
+            },
+        },
+    }
+
+    analysis = quality.build_exact_payload_analysis_v1(payload, stage="entry")
+
+    assert analysis["completed_structure"]["phase"] == "rebound_attempt"
+
+
 def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
     exact_payload = {
         "current": {"price": 10000},

@@ -1520,6 +1520,13 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
             "entry_probe_intent_actual_order_submitted": False,
             "entry_setup_family": "CLEAN_CONTINUATION",
             "entry_setup_state": "READY",
+            "entry_structure_phase": "continuation",
+            "entry_structure_phase_policy_version": (
+                "entry_completed_bar_structure_phase_v2"
+            ),
+            "entry_structure_phase_sha256": "phase-sha",
+            "entry_structure_phase_bar_end": "2026-08-07T09:10:00+09:00",
+            "entry_execution_readiness_state": "READY",
             "entry_ai_risk_verdict": "PASS",
             "entry_ai_risk_codes": ["NO_BLOCKING_RISK"],
             "entry_ai_veto_corroborated": False,
@@ -1566,6 +1573,9 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
     assert pending_row["entry_probe_intent_actual_order_submitted"] is False
     assert trace_row["entry_setup_family"] == "CLEAN_CONTINUATION"
     assert trace_row["entry_setup_state"] == "READY"
+    assert trace_row["entry_structure_phase"] == "continuation"
+    assert pending_row["entry_structure_phase"] == "continuation"
+    assert trace_row["entry_execution_readiness_state"] == "READY"
     assert trace_row["entry_ai_risk_verdict"] == "PASS"
     assert trace_row["entry_ai_risk_codes"] == ["NO_BLOCKING_RISK"]
     assert trace_row["entry_setup_live_policy_status"] == ("active_bounded_krx_canary")

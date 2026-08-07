@@ -1866,6 +1866,11 @@ class GPTSniperEngine:
                 "entry_setup_state",
                 "entry_setup_evidence_version",
                 "entry_setup_evidence_sha256",
+                "entry_structure_phase",
+                "entry_structure_phase_policy_version",
+                "entry_structure_phase_sha256",
+                "entry_structure_phase_bar_end",
+                "entry_execution_readiness_state",
                 "entry_setup_source_quality",
             )
             if composed.get(key) not in (None, "")
@@ -8228,6 +8233,19 @@ class GPTSniperEngine:
                         "entry_setup_state": setup.get("setup_state"),
                         "entry_setup_evidence_version": setup.get("version"),
                         "entry_setup_evidence_sha256": setup.get("evidence_sha256"),
+                        "entry_structure_phase": setup.get("structure_phase"),
+                        "entry_structure_phase_policy_version": setup.get(
+                            "structure_phase_policy_version"
+                        ),
+                        "entry_structure_phase_sha256": setup.get(
+                            "structure_phase_sha256"
+                        ),
+                        "entry_structure_phase_bar_end": setup.get(
+                            "structure_phase_bar_end"
+                        ),
+                        "entry_execution_readiness_state": setup.get(
+                            "execution_readiness_state"
+                        ),
                         "entry_setup_source_quality": setup.get("source_quality"),
                         "entry_probe_intent": False,
                         "entry_probe_intent_status": (

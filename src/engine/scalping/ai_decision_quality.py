@@ -55,6 +55,7 @@ from src.engine.scalping.entry_setup_evidence import (
     ENTRY_RISK_ADJUDICATION_REPAIR_VERSION,
     ENTRY_SETUP_EVIDENCE_SCHEMA,
     ENTRY_SETUP_EVIDENCE_VERSION,
+    STRUCTURE_PHASE_POLICY_VERSION,
     TAIL_RISK_OBSERVATION_CONTRACT,
     build_entry_setup_evidence,
     compose_entry_decision,
@@ -3828,6 +3829,7 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         "long_horizon_structural_edge_floor": long_horizon_structural_edge_floor,
         "early_session_structural_edge_floor": early_session_structural_edge_floor,
         "early_session_probe_candidate": early_session_probe_candidate,
+        "early_short_structure_floor": early_short_structure,
         "blocking_overextension": blocking_overextension,
         "orderly_pullback_recovery": orderly_pullback_recovery,
         "bounded_reversal_probe_candidate": bounded_reversal_probe_candidate,
@@ -3971,25 +3973,44 @@ def build_exact_payload_analysis_v1(
         volume_state = "mixed"
     return_1m = normalized_returns["1m"]
     return_3m = normalized_returns["3m"]
-    if facts.get("adverse_distribution_no_edge"):
+    regime = str(structure.get("regime") or "").lower()
+    peak_drawdown = _number(structure.get("peak_drawdown_pct"))
+    return_5m = normalized_returns["5m"]
+    return_10m = normalized_returns["10m"]
+    positive_recovery_windows = sum(
+        value is not None and value > 0 for value in (return_3m, return_5m, return_10m)
+    )
+    short_recovery = bool((return_1m or 0) > 0 or (return_3m or 0) > 0)
+    deep_session_drawdown = bool(peak_drawdown is not None and peak_drawdown <= -2.0)
+    if facts.get("adverse_distribution_no_edge") or regime == (
+        "lower_high_distribution"
+    ):
         structure_phase = "distribution"
         structural_edge = "absent"
-    elif str(structure.get("regime") or "").lower() in {
-        "failed_breakout",
-        "breakdown",
-    }:
+    elif regime in {"failed_breakout", "breakdown"}:
         structure_phase = "failed_breakout"
         structural_edge = "moderate" if facts.get("structural_edge_floor") else "absent"
-    elif facts.get("structural_edge_floor") and (
-        (return_1m or 0) > 0 or (return_3m or 0) > 0
+    elif regime == "downtrend_bounce":
+        structure_phase = "rebound_attempt"
+        structural_edge = "moderate" if facts.get("structural_edge_floor") else "weak"
+    elif (
+        deep_session_drawdown
+        and facts.get("structural_edge_floor")
+        and (positive_recovery_windows >= 2)
     ):
+        structure_phase = "recovery_continuation"
+        structural_edge = "moderate"
+    elif deep_session_drawdown and short_recovery:
+        structure_phase = "rebound_attempt"
+        structural_edge = "weak"
+    elif facts.get("early_short_structure_floor") and completed_bar_count < 10:
+        structure_phase = "early_continuation_probe"
+        structural_edge = "moderate"
+    elif facts.get("structural_edge_floor") and (short_recovery):
         structure_phase = "continuation"
         structural_edge = "moderate"
     elif facts.get("structural_edge_floor"):
         structure_phase = "pullback"
-        structural_edge = "moderate"
-    elif facts.get("early_session_probe_candidate"):
-        structure_phase = "early_continuation_probe"
         structural_edge = "moderate"
     elif (
         (normalized_returns["5m"] or 0) < 0
@@ -4056,21 +4077,39 @@ def build_exact_payload_analysis_v1(
         },
         "completed_structure": {
             "phase": structure_phase,
+            "phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
+            "phase_stable_on_completed_bar": True,
+            "phase_input_policy": (
+                "completed_candle_structure_only_intrabar_tape_quote_excluded"
+            ),
             "structural_edge": structural_edge,
             "returns_pct": normalized_returns,
             "slopes_pct_per_bar": normalized_slopes,
-            "peak_drawdown_pct": _number(structure.get("peak_drawdown_pct")),
+            "peak_drawdown_pct": peak_drawdown,
+            "rolling_20m_peak_drawdown_pct": _number(
+                structure.get("rolling_20m_peak_drawdown_pct")
+            ),
+            "rolling_20m_low_rebound_pct": _number(
+                structure.get("rolling_20m_low_rebound_pct")
+            ),
+            "bars_since_session_high": structure.get("bars_since_session_high"),
+            "bars_since_session_low": structure.get("bars_since_session_low"),
+            "bars_since_20m_high": structure.get("bars_since_20m_high"),
+            "bars_since_20m_low": structure.get("bars_since_20m_low"),
             "high_direction": structure.get("high_direction"),
             "low_direction": structure.get("low_direction"),
             "regime": structure.get("regime"),
             "alignment": structure.get("alignment"),
             "structural_edge_policy_version": ("session_available_horizons_v2"),
+            "structural_edge_floor": facts.get("structural_edge_floor"),
             "long_horizon_structural_edge_floor": facts.get(
                 "long_horizon_structural_edge_floor"
             ),
             "early_session_structural_edge_floor": facts.get(
                 "early_session_structural_edge_floor"
             ),
+            "early_short_structure_floor": facts.get("early_short_structure_floor"),
+            "adverse_distribution_no_edge": facts.get("adverse_distribution_no_edge"),
             "early_session_probe_candidate": facts.get("early_session_probe_candidate"),
         },
         "volume_confirmation": {
@@ -6296,6 +6335,9 @@ def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
         contract["entry_decision_composer_version"] = candidate.get(
             "entry_decision_composer_version"
         )
+        contract["entry_structure_phase_policy_version"] = candidate.get(
+            "entry_structure_phase_policy_version"
+        )
         contract["tail_risk_observation_contract_sha256"] = candidate.get(
             "tail_risk_observation_contract_sha256"
         )
@@ -7628,6 +7670,9 @@ def prepare_detailed_paired_replay_requests(
                     "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
                     "entry_decision_composer_version": (
                         ENTRY_DECISION_COMPOSER_VERSION
+                    ),
+                    "entry_structure_phase_policy_version": (
+                        STRUCTURE_PHASE_POLICY_VERSION
                     ),
                     "tail_risk_observation_contract_sha256": _sha256(
                         TAIL_RISK_OBSERVATION_CONTRACT
@@ -9961,12 +10006,32 @@ def build_paired_replay_report(
         and cumulative_promotion_quality_gate_pass
     ):
         status = "paired_replay_complete_cumulative_quality_pass_offline_only"
+
+    def _single_candidate_contract_value(field: str) -> Any:
+        values = {
+            candidate.get(field)
+            for request in requests
+            if isinstance(request, dict)
+            and isinstance((candidate := request.get("candidate")), dict)
+            and candidate.get(field) not in (None, "")
+        }
+        return next(iter(values)) if len(values) == 1 else None
+
     return {
         "schema": PAIRED_SCHEMA,
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(),
         "status": status,
         "candidate_contract_sha256": cumulative_candidate_contract_sha256,
+        "entry_setup_evidence_version": _single_candidate_contract_value(
+            "entry_setup_evidence_version"
+        ),
+        "entry_decision_composer_version": _single_candidate_contract_value(
+            "entry_decision_composer_version"
+        ),
+        "entry_structure_phase_policy_version": _single_candidate_contract_value(
+            "entry_structure_phase_policy_version"
+        ),
         "request_count": len(requests),
         "result_count": len(results),
         "candidate_execution_performed": bool(results),

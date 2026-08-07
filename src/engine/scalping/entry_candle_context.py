@@ -607,6 +607,39 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
     peak = max(highs, default=0)
     low = min(lows, default=0)
     latest_close = _integer(latest.get("c"))
+    rolling_20m_candidate = active[-21:]
+    rolling_20m_contiguous = all(
+        isinstance(previous.get("dt"), datetime)
+        and isinstance(current.get("dt"), datetime)
+        and (current["dt"] - previous["dt"]).total_seconds() == 60
+        for previous, current in zip(rolling_20m_candidate, rolling_20m_candidate[1:])
+    )
+    rolling_20m = rolling_20m_candidate if rolling_20m_contiguous else []
+    rolling_20m_high = max((bar["h"] for bar in rolling_20m if bar["h"] > 0), default=0)
+    rolling_20m_low = min((bar["l"] for bar in rolling_20m if bar["l"] > 0), default=0)
+
+    def _last_anchor(
+        source: list[dict[str, Any]], field: str, value: int
+    ) -> tuple[str | None, int | None]:
+        if value <= 0:
+            return None, None
+        for index in range(len(source) - 1, -1, -1):
+            if _integer(source[index].get(field)) == value:
+                moment = source[index].get("dt")
+                return (
+                    moment.isoformat() if isinstance(moment, datetime) else None,
+                    len(source) - 1 - index,
+                )
+        return None, None
+
+    session_high_at, bars_since_session_high = _last_anchor(active, "h", peak)
+    session_low_at, bars_since_session_low = _last_anchor(active, "l", low)
+    rolling_20m_high_at, bars_since_20m_high = _last_anchor(
+        rolling_20m, "h", rolling_20m_high
+    )
+    rolling_20m_low_at, bars_since_20m_low = _last_anchor(
+        rolling_20m, "l", rolling_20m_low
+    )
     peak_drawdown = (
         round((latest_close / peak - 1.0) * 100.0, 4)
         if peak > 0 and latest_close > 0
@@ -615,6 +648,16 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
     low_rebound = (
         round((latest_close / low - 1.0) * 100.0, 4)
         if low > 0 and latest_close > 0
+        else None
+    )
+    rolling_20m_peak_drawdown = (
+        round((latest_close / rolling_20m_high - 1.0) * 100.0, 4)
+        if rolling_20m_high > 0 and latest_close > 0
+        else None
+    )
+    rolling_20m_low_rebound = (
+        round((latest_close / rolling_20m_low - 1.0) * 100.0, 4)
+        if rolling_20m_low > 0 and latest_close > 0
         else None
     )
     windows = (1, 3, 5, 10, 20, 60)
@@ -741,6 +784,22 @@ def _structure(bars: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "peak_drawdown_pct": peak_drawdown,
         "low_rebound_pct": low_rebound,
+        "session_peak_drawdown_pct": peak_drawdown,
+        "session_low_rebound_pct": low_rebound,
+        "rolling_20m_peak_drawdown_pct": rolling_20m_peak_drawdown,
+        "rolling_20m_low_rebound_pct": rolling_20m_low_rebound,
+        "session_high_at": session_high_at,
+        "session_low_at": session_low_at,
+        "rolling_20m_high_at": rolling_20m_high_at,
+        "rolling_20m_low_at": rolling_20m_low_at,
+        "bars_since_session_high": bars_since_session_high,
+        "bars_since_session_low": bars_since_session_low,
+        "bars_since_20m_high": bars_since_20m_high,
+        "bars_since_20m_low": bars_since_20m_low,
+        "rolling_20m_contiguous": rolling_20m_contiguous,
+        "anchor_window_policy": (
+            "session_extrema_plus_up_to_20m_contiguous_completed_tail_no_forming_bar"
+        ),
         "latest_upper_wick_ratio": round(upper_wick_ratio, 4),
         "latest_lower_wick_ratio": round(lower_wick_ratio, 4),
         "latest_body_ratio": round(body_ratio, 4),

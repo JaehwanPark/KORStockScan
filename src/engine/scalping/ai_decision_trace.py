@@ -1794,6 +1794,19 @@ def record_ai_decision_trace(
             ),
             "entry_setup_family": _optional(merged, "entry_setup_family"),
             "entry_setup_state": _optional(merged, "entry_setup_state"),
+            "entry_structure_phase": _optional(merged, "entry_structure_phase"),
+            "entry_structure_phase_policy_version": _optional(
+                merged, "entry_structure_phase_policy_version"
+            ),
+            "entry_structure_phase_sha256": _optional(
+                merged, "entry_structure_phase_sha256"
+            ),
+            "entry_structure_phase_bar_end": _optional(
+                merged, "entry_structure_phase_bar_end"
+            ),
+            "entry_execution_readiness_state": _optional(
+                merged, "entry_execution_readiness_state"
+            ),
             "entry_ai_risk_verdict": _optional(merged, "entry_ai_risk_verdict"),
             "entry_ai_risk_codes": (
                 [str(code) for code in merged.get("entry_ai_risk_codes") or []]
@@ -2028,6 +2041,15 @@ def record_ai_decision_trace(
             "reason_codes": trace_row["reason_codes"],
             "entry_setup_family": trace_row["entry_setup_family"],
             "entry_setup_state": trace_row["entry_setup_state"],
+            "entry_structure_phase": trace_row["entry_structure_phase"],
+            "entry_structure_phase_policy_version": trace_row[
+                "entry_structure_phase_policy_version"
+            ],
+            "entry_structure_phase_sha256": trace_row["entry_structure_phase_sha256"],
+            "entry_structure_phase_bar_end": trace_row["entry_structure_phase_bar_end"],
+            "entry_execution_readiness_state": trace_row[
+                "entry_execution_readiness_state"
+            ],
             "entry_ai_risk_verdict": trace_row["entry_ai_risk_verdict"],
             "entry_ai_risk_codes": trace_row["entry_ai_risk_codes"],
             "entry_ai_veto_corroborated": trace_row["entry_ai_veto_corroborated"],

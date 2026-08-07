@@ -15,8 +15,9 @@ from typing import Any
 ENTRY_SETUP_EVIDENCE_SCHEMA = "entry_setup_evidence_v1"
 ENTRY_RISK_ADJUDICATION_SCHEMA = "entry_setup_risk_adjudication_v1"
 ENTRY_DECISION_COMPOSER_SCHEMA = "entry_decision_composer_v1"
-ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v8"
-ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v7"
+ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v9"
+ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v8"
+STRUCTURE_PHASE_POLICY_VERSION = "entry_completed_bar_structure_phase_v2"
 ENTRY_RISK_ADJUDICATION_REPAIR_VERSION = (
     "entry_setup_risk_fail_closed_invalidation_citation_v1"
 )
@@ -40,6 +41,23 @@ SETUP_FAMILIES = {
     "NO_VALID_SETUP",
 }
 SETUP_STATES = {"READY", "WAIT_CONFIRMATION", "INVALID", "INSUFFICIENT"}
+STRUCTURE_PHASES = {
+    "distribution",
+    "failed_breakout",
+    "continuation",
+    "pullback",
+    "early_continuation_probe",
+    "recovery_continuation",
+    "rebound_attempt",
+    "range_or_no_setup",
+}
+STRUCTURE_PHASE_FAMILIES = {
+    "continuation": "CLEAN_CONTINUATION",
+    "early_continuation_probe": "CLEAN_CONTINUATION",
+    "pullback": "PULLBACK_RECOVERY",
+    "recovery_continuation": "RECOVERY_CONFIRMATION",
+    "rebound_attempt": "RECOVERY_CONFIRMATION",
+}
 RISK_VERDICTS = {"PASS", "CAUTION", "VETO", "INSUFFICIENT"}
 RISK_CODES = {
     "NO_BLOCKING_RISK",
@@ -373,6 +391,61 @@ def build_entry_setup_evidence(
     source_mode = str(recovery.get("source_mode") or "").strip().lower()
     source_status = str(source_quality.get("status") or "").strip().lower()
     completed_bar_count = int(source_quality.get("completed_bar_count") or 0)
+    completed_structure = _as_dict(exact.get("completed_structure"))
+    structure_phase = str(completed_structure.get("phase") or "").strip().lower()
+    if structure_phase not in STRUCTURE_PHASES:
+        if facts.get("orderly_pullback_recovery") is True:
+            structure_phase = "pullback"
+        elif (
+            _as_dict(recovery.get("recovery_confirmation_probe")).get("eligible")
+            is True
+        ):
+            structure_phase = "recovery_continuation"
+        elif facts.get("structural_edge_floor") is True:
+            structure_phase = "continuation"
+        elif facts.get("early_session_probe_candidate") is True:
+            structure_phase = "early_continuation_probe"
+        else:
+            structure_phase = "range_or_no_setup"
+    phase_family = STRUCTURE_PHASE_FAMILIES.get(structure_phase, "NO_VALID_SETUP")
+    stable_phase_fields = {
+        key: completed_structure.get(key)
+        for key in (
+            "phase",
+            "phase_policy_version",
+            "phase_input_policy",
+            "structural_edge",
+            "returns_pct",
+            "slopes_pct_per_bar",
+            "peak_drawdown_pct",
+            "rolling_20m_peak_drawdown_pct",
+            "rolling_20m_low_rebound_pct",
+            "bars_since_session_high",
+            "bars_since_session_low",
+            "bars_since_20m_high",
+            "bars_since_20m_low",
+            "high_direction",
+            "low_direction",
+            "regime",
+            "alignment",
+            "structural_edge_policy_version",
+            "structural_edge_floor",
+            "long_horizon_structural_edge_floor",
+            "early_session_structural_edge_floor",
+            "early_short_structure_floor",
+            "adverse_distribution_no_edge",
+        )
+    }
+    phase_source = {
+        "completed_bar_count": completed_bar_count,
+        "completed_structure": stable_phase_fields,
+        "decision_window_end": _as_dict(
+            _as_dict(
+                _as_dict(payload.get("entry_candle_context")).get("source_quality")
+            ).get("decision_window")
+        ).get("end_timestamp"),
+    }
+    structure_phase_sha256 = _canonical_sha256(phase_source)
 
     positive_facts: list[str] = []
     contradicting_facts = [
@@ -540,6 +613,7 @@ def build_entry_setup_evidence(
     )
     large_sell_recheck_eligible = bool(
         source_usable
+        and phase_family != "NO_VALID_SETUP"
         and set(invalidation_facts) == {"hard_blocker:large_sell_print_present"}
         and facts.get("structural_edge_floor") is True
         and str(volume.get("state") or "").lower() == "confirmed"
@@ -549,33 +623,44 @@ def build_entry_setup_evidence(
         setup_family = "NO_VALID_SETUP"
         setup_state = "INSUFFICIENT"
     elif large_sell_recheck_eligible:
-        setup_family = "RECOVERY_CONFIRMATION"
+        setup_family = phase_family
         setup_state = "WAIT_CONFIRMATION"
         recheck_reasons.append("LARGE_SELL_EXHAUSTION_RECHECK")
     elif invalidation_facts:
         setup_family = "NO_VALID_SETUP"
         setup_state = "INVALID"
-    elif recovery_confirmation.get("eligible") is True:
-        setup_family = "RECOVERY_CONFIRMATION"
+    elif phase_family == "RECOVERY_CONFIRMATION" and (
+        recovery_confirmation.get("eligible") is True
+        or facts.get("trusted_supportive_trigger") is True
+    ):
+        setup_family = phase_family
         setup_state = "READY"
-    elif clean.get("eligible") is True:
-        setup_family = "CLEAN_CONTINUATION"
+    elif phase_family == "RECOVERY_CONFIRMATION":
+        setup_family = phase_family
+        setup_state = "WAIT_CONFIRMATION"
+    elif phase_family == "CLEAN_CONTINUATION" and (
+        clean.get("eligible") is True or facts.get("trusted_supportive_trigger") is True
+    ):
+        setup_family = phase_family
         setup_state = "READY"
-    elif facts.get("trusted_supportive_trigger") is True:
-        setup_family = "CLEAN_CONTINUATION"
-        setup_state = "READY"
-    elif facts.get("orderly_pullback_recovery") is True:
+    elif (
+        phase_family == "PULLBACK_RECOVERY"
+        and facts.get("orderly_pullback_recovery") is True
+    ):
         setup_family = "PULLBACK_RECOVERY"
         setup_state = (
             "READY"
             if facts.get("trusted_supportive_trigger") is True
             else "WAIT_CONFIRMATION"
         )
-    elif (
+    elif phase_family == "CLEAN_CONTINUATION" and (
         facts.get("structural_edge_floor") is True
         or facts.get("early_session_probe_candidate") is True
     ):
-        setup_family = "CLEAN_CONTINUATION"
+        setup_family = phase_family
+        setup_state = "WAIT_CONFIRMATION"
+    elif phase_family in {"CLEAN_CONTINUATION", "PULLBACK_RECOVERY"}:
+        setup_family = phase_family
         setup_state = "WAIT_CONFIRMATION"
     else:
         setup_family = "NO_VALID_SETUP"
@@ -605,6 +690,14 @@ def build_entry_setup_evidence(
         "version": ENTRY_SETUP_EVIDENCE_VERSION,
         "setup_family": setup_family,
         "setup_state": setup_state,
+        "structure_phase": structure_phase,
+        "structure_phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
+        "structure_phase_sha256": structure_phase_sha256,
+        "structure_phase_bar_end": phase_source["decision_window_end"],
+        "structure_phase_stable_on_completed_bar": True,
+        "structure_phase_role": "completed_bar_chart_flow_only",
+        "execution_readiness_state": setup_state,
+        "execution_readiness_role": "intrabar_tape_quote_risk_recheck",
         "positive_facts": _unique(positive_facts),
         "contradicting_facts": _unique(contradicting_facts),
         "invalidation_facts": _unique(invalidation_facts),
@@ -730,6 +823,23 @@ def validate_entry_setup_evidence(evidence: Any) -> list[str]:
         errors.append("entry_setup_family_invalid")
     if setup.get("setup_state") not in SETUP_STATES:
         errors.append("entry_setup_state_invalid")
+    if setup.get("structure_phase") not in STRUCTURE_PHASES:
+        errors.append("entry_setup_structure_phase_invalid")
+    if setup.get("structure_phase_policy_version") != STRUCTURE_PHASE_POLICY_VERSION:
+        errors.append("entry_setup_structure_phase_policy_invalid")
+    if setup.get("structure_phase_stable_on_completed_bar") is not True:
+        errors.append("entry_setup_structure_phase_stability_contract_invalid")
+    if setup.get("structure_phase_role") != "completed_bar_chart_flow_only":
+        errors.append("entry_setup_structure_phase_role_invalid")
+    if setup.get("execution_readiness_state") != setup.get("setup_state"):
+        errors.append("entry_setup_execution_readiness_state_invalid")
+    if setup.get("execution_readiness_role") != "intrabar_tape_quote_risk_recheck":
+        errors.append("entry_setup_execution_readiness_role_invalid")
+    if (
+        not isinstance(setup.get("structure_phase_sha256"), str)
+        or len(setup.get("structure_phase_sha256")) != 64
+    ):
+        errors.append("entry_setup_structure_phase_sha256_invalid")
     if (
         setup.get("setup_family") == "NO_VALID_SETUP"
         and setup.get("setup_state") not in {"INVALID", "INSUFFICIENT"}
@@ -738,6 +848,13 @@ def validate_entry_setup_evidence(evidence: Any) -> list[str]:
         and setup.get("setup_state") in {"INVALID", "INSUFFICIENT"}
     ):
         errors.append("entry_setup_family_state_inconsistent")
+    expected_phase_family = STRUCTURE_PHASE_FAMILIES.get(
+        setup.get("structure_phase"), "NO_VALID_SETUP"
+    )
+    if setup.get("setup_family") != "NO_VALID_SETUP" and (
+        setup.get("setup_family") != expected_phase_family
+    ):
+        errors.append("entry_setup_structure_phase_family_inconsistent")
     for field in (
         "positive_facts",
         "contradicting_facts",
@@ -1110,6 +1227,13 @@ def compose_entry_decision(
         "entry_setup_evidence_sha256": setup.get("evidence_sha256"),
         "entry_setup_family": family,
         "entry_setup_state": state,
+        "entry_structure_phase": setup.get("structure_phase"),
+        "entry_structure_phase_policy_version": setup.get(
+            "structure_phase_policy_version"
+        ),
+        "entry_structure_phase_sha256": setup.get("structure_phase_sha256"),
+        "entry_structure_phase_bar_end": setup.get("structure_phase_bar_end"),
+        "entry_execution_readiness_state": setup.get("execution_readiness_state"),
         "entry_ai_risk_verdict": verdict,
         "entry_ai_risk_codes": risk_codes,
         "entry_ai_veto_supported_codes": supported_veto_codes,

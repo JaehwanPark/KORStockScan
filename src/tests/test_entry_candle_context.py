@@ -115,6 +115,16 @@ def test_builder_keeps_current_session_separate_and_compresses_latest_twenty(
     assert "latest_body_ratio" in context["structure"]
     assert "latest_lower_wick_ratio" in context["structure"]
     assert "volume_direction_alignment" in context["structure"]
+    assert context["structure"]["session_high_at"].endswith("09:24:00+09:00")
+    assert context["structure"]["session_low_at"].endswith("09:00:00+09:00")
+    assert context["structure"]["bars_since_session_high"] == 0
+    assert context["structure"]["bars_since_session_low"] == 24
+    assert context["structure"]["rolling_20m_peak_drawdown_pct"] <= 0
+    assert context["structure"]["rolling_20m_low_rebound_pct"] >= 0
+    assert context["structure"]["rolling_20m_contiguous"] is True
+    assert context["structure"]["anchor_window_policy"] == (
+        "session_extrema_plus_up_to_20m_contiguous_completed_tail_no_forming_bar"
+    )
     assert context["observation_contract"] == OBSERVATION_CONTRACT
     assert context["input_bundle_version"] == "scalping_multi_timeframe_context_v1"
     assert context["multi_timeframe_context"]["session_bar_vwap"]["status"] == "pass"
@@ -162,6 +172,8 @@ def test_structure_excludes_forming_bar_and_requires_exact_window_sample(
     assert structure["window_source_bar_counts"]["20"]["return_complete"] is False
     assert structure["window_source_bar_counts"]["20"]["slope_complete"] is True
     assert -1.0 < structure["peak_drawdown_pct"] <= 0.0
+    assert structure["bars_since_session_high"] == 0
+    assert structure["bars_since_session_low"] == 19
 
 
 def test_multi_timeframe_bundle_is_not_sent_before_global_promotion(monkeypatch):
@@ -346,6 +358,9 @@ def test_builder_marks_two_or_more_missing_bars_as_source_quality_block(monkeypa
     assert "consecutive_bar_gap" in context["risk_flags"]
     assert context["source_quality"]["status"] == "blocked"
     assert context["source_quality"]["decision_window"]["status"] == "blocked"
+    assert context["structure"]["rolling_20m_contiguous"] is False
+    assert context["structure"]["rolling_20m_peak_drawdown_pct"] is None
+    assert context["structure"]["rolling_20m_low_rebound_pct"] is None
 
 
 def test_builder_keeps_sparse_ka10080_observations_but_excludes_bad_time_windows(

@@ -110,9 +110,15 @@ def test_setup_evidence_is_symbol_agnostic_and_ready_for_clean_continuation():
     )
 
     assert evidence["schema"] == ENTRY_SETUP_EVIDENCE_SCHEMA
-    assert evidence["version"] == "entry_setup_evidence_policy_v8"
+    assert evidence["version"] == "entry_setup_evidence_policy_v9"
     assert evidence["setup_family"] == "CLEAN_CONTINUATION"
     assert evidence["setup_state"] == "READY"
+    assert evidence["structure_phase"] == "continuation"
+    assert evidence["structure_phase_policy_version"] == (
+        "entry_completed_bar_structure_phase_v2"
+    )
+    assert evidence["structure_phase_stable_on_completed_bar"] is True
+    assert evidence["execution_readiness_state"] == "READY"
     assert evidence["symbol_specific_branching"] is False
     assert evidence["widget_dependency"] is False
     assert evidence["runtime_effect"] is False
@@ -308,6 +314,84 @@ def test_setup_evidence_promotes_trusted_supportive_trigger_to_ready():
     assert "trusted_supportive_trigger" in evidence["positive_facts"]
 
 
+def test_deep_drawdown_recovery_is_not_mislabeled_clean_continuation():
+    analysis = _exact_analysis()
+    analysis["completed_structure"] = {
+        "phase": "recovery_continuation",
+        "phase_policy_version": "entry_completed_bar_structure_phase_v2",
+        "peak_drawdown_pct": -10.4651,
+        "returns_pct": {"1m": 0.3257, "3m": 0.3257, "5m": -0.1621},
+    }
+    evidence = build_entry_setup_evidence(
+        exact_payload={
+            "current": {"price": 3080},
+            "entry_candle_context": {
+                "source_quality": {
+                    "decision_window": {"end_timestamp": "2026-08-07T13:45:00+09:00"}
+                }
+            },
+        },
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(),
+    )
+
+    assert evidence["setup_family"] == "RECOVERY_CONFIRMATION"
+    assert evidence["setup_state"] == "READY"
+    assert evidence["structure_phase"] == "recovery_continuation"
+    assert evidence["structure_phase_bar_end"] == "2026-08-07T13:45:00+09:00"
+    assert len(evidence["structure_phase_sha256"]) == 64
+
+
+def test_intrabar_readiness_can_change_without_rewriting_structure_phase():
+    stable_structure = {
+        "phase": "recovery_continuation",
+        "phase_policy_version": "entry_completed_bar_structure_phase_v2",
+        "peak_drawdown_pct": -8.0,
+    }
+    ready = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={**_exact_analysis(), "completed_structure": stable_structure},
+        recovery_analysis=_recovery_analysis(),
+    )
+    waiting_analysis = _exact_analysis(trusted_supportive_trigger=False)
+    waiting_analysis["completed_structure"] = stable_structure
+    waiting = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=waiting_analysis,
+        recovery_analysis=_recovery_analysis(),
+    )
+
+    assert ready["structure_phase"] == waiting["structure_phase"]
+    assert ready["structure_phase_sha256"] == waiting["structure_phase_sha256"]
+    assert ready["setup_family"] == waiting["setup_family"] == ("RECOVERY_CONFIRMATION")
+    assert ready["execution_readiness_state"] == "READY"
+    assert waiting["execution_readiness_state"] == "WAIT_CONFIRMATION"
+
+
+def test_rebound_attempt_keeps_structural_family_while_micro_confirmation_waits():
+    analysis = _exact_analysis(trusted_supportive_trigger=False)
+    analysis["completed_structure"] = {
+        "phase": "rebound_attempt",
+        "phase_policy_version": "entry_completed_bar_structure_phase_v2",
+        "peak_drawdown_pct": -4.2,
+    }
+    recovery = _recovery_analysis(clean=False)
+    recovery["eligible_for_counterfactual_probe"] = False
+    recovery["bounded_opportunity"] = {"eligible_for_one_share_probe": False}
+    recovery["recovery_confirmation_probe"] = {"eligible": False}
+
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis,
+        recovery_analysis=recovery,
+    )
+
+    assert evidence["structure_phase"] == "rebound_attempt"
+    assert evidence["setup_family"] == "RECOVERY_CONFIRMATION"
+    assert evidence["setup_state"] == "WAIT_CONFIRMATION"
+    assert evidence["recheck_reasons"] == ["TRIGGER_CONFIRMATION_RECHECK"]
+
+
 def test_tail_liquidity_fragility_is_bounded_probe_risk_not_entry_veto():
     analysis = _exact_analysis()
     analysis["executable_liquidity"] = {
@@ -378,7 +462,7 @@ def test_large_sell_only_blocker_becomes_recheck_not_probe():
         recovery_analysis=recovery,
     )
 
-    assert evidence["setup_family"] == "RECOVERY_CONFIRMATION"
+    assert evidence["setup_family"] == "CLEAN_CONTINUATION"
     assert evidence["setup_state"] == "WAIT_CONFIRMATION"
     assert evidence["recheck_reasons"] == ["LARGE_SELL_EXHAUSTION_RECHECK"]
     assert "trigger_confirmation_missing" not in evidence["contradicting_facts"]
@@ -607,7 +691,7 @@ def test_composer_uses_only_corroborated_veto_as_offline_block():
         ),
     )
     assert passed["action"] == "BUY"
-    assert passed["composer_version"] == "entry_decision_composer_policy_v7"
+    assert passed["composer_version"] == "entry_decision_composer_policy_v8"
     assert passed["score_authority"] == (
         "legacy_response_shape_only_not_a_decision_gate"
     )
@@ -815,6 +899,9 @@ def test_v2_14_detailed_replay_composes_risk_only_response(monkeypatch):
     assert request["candidate"]["tail_risk_observation_contract_sha256"] == (
         quality._sha256(quality.TAIL_RISK_OBSERVATION_CONTRACT)
     )
+    assert request["candidate"]["entry_structure_phase_policy_version"] == (
+        quality.STRUCTURE_PHASE_POLICY_VERSION
+    )
     assert request["sample_floor"]["promotion_evidence_floor"] == {
         "candidate_exposure_decision_rows": 10,
         "candidate_exposure_unique_symbols": 3,
@@ -873,6 +960,12 @@ def test_v2_14_detailed_replay_composes_risk_only_response(monkeypatch):
     assert report["entry_setup_adjudicator_summary"]["setup_state_counts"] == {
         "READY": 1
     }
+    assert report["entry_setup_evidence_version"] == (
+        request["candidate"]["entry_setup_evidence_version"]
+    )
+    assert report["entry_structure_phase_policy_version"] == (
+        quality.STRUCTURE_PHASE_POLICY_VERSION
+    )
     assert report["paired_comparisons"][0]["entry_composed_action"] == "BUY"
     assert report["runtime_effect"] is False
 
