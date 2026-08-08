@@ -200,19 +200,6 @@ RUNTIME_FEATURE_KEYS = {
     "risk_regime_source_files",
     "runtime_effect",
     "decision_authority",
-    "euphoria_risk_level",
-    "euphoria_risk_mode",
-    "euphoria_level_reason",
-    "euphoria_epoch_id",
-    "euphoria_context_status",
-    "euphoria_source_quality",
-    "euphoria_action_id",
-    "euphoria_action_type",
-    "chase_risk",
-    "retest_confirmed",
-    "profit_locked",
-    "runner_mode",
-    "exhaustion_risk",
     "reversal_signal",
     "exclude_from_ev",
     "source_quality_gate_scope",
@@ -2093,9 +2080,7 @@ def _scale_in_ai_score_source(fields: dict[str, Any], source_stage: str) -> str:
 
 def _panic_entry_action_from_stage(source_stage: str, fields: dict[str, Any]) -> str:
     explicit = _bucket_value(
-        fields.get("chosen_action")
-        or fields.get("panic_lifecycle_action_type")
-        or fields.get("euphoria_action_type"),
+        fields.get("chosen_action") or fields.get("panic_lifecycle_action_type"),
         "",
     )
     if explicit:
@@ -2106,10 +2091,6 @@ def _panic_entry_action_from_stage(source_stage: str, fields: dict[str, Any]) ->
         return "ALLOW_BOTTOMING_ENTRY"
     if "level1_entry_observed" in source_stage:
         return "ALLOW_LEVEL1_RISK_OFF_ENTRY"
-    if "retest_starter_allowed" in source_stage:
-        return "ALLOW_RETEST_STARTER"
-    if "level1_starter_observed" in source_stage:
-        return "ALLOW_LEVEL1_EUPHORIA_STARTER"
     return source_stage
 
 
@@ -2129,13 +2110,6 @@ def _panic_entry_overbought_bucket(fields: dict[str, Any], source_stage: str) ->
     )
     if explicit:
         return explicit
-    if _bucket_value(fields.get("chase_risk"), "").lower() in {"true", "1", "yes"}:
-        return "overbought_chase_risk"
-    level = _bucket_value(fields.get("euphoria_risk_level"), "")
-    if level:
-        return f"euphoria_risk_level_{level.lower()}"
-    if "euphoria" in source_stage:
-        return "euphoria_overbought_context_unobserved"
     return "panic_entry_overbought_not_applicable"
 
 
@@ -2399,14 +2373,6 @@ def _load_scalp_sim_panic_rows(
         "scalp_sim_panic_scale_in_blocked",
         "scalp_sim_partial_sell_order_assumed_filled",
         "scalp_sim_panic_context_warning",
-        "scalp_sim_euphoria_context_noop",
-        "scalp_sim_euphoria_entry_blocked",
-        "scalp_sim_euphoria_chase_entry_blocked",
-        "scalp_sim_euphoria_retest_starter_allowed",
-        "scalp_sim_euphoria_level1_starter_observed",
-        "scalp_sim_euphoria_scale_in_blocked",
-        "scalp_sim_euphoria_partial_profit_assumed_filled",
-        "scalp_sim_euphoria_action_deduped",
         "scalp_sim_sell_order_assumed_filled",
     }
     rows: list[dict[str, Any]] = []
@@ -2422,7 +2388,6 @@ def _load_scalp_sim_panic_rows(
             "exit_rule"
         ) not in {
             "scalp_sim_panic_lifecycle_full_exit",
-            "scalp_sim_euphoria_exit_on_reversal",
         }:
             continue
         if fields.get("simulation_book") != "scalp_ai_buy_all":
@@ -2432,15 +2397,10 @@ def _load_scalp_sim_panic_rows(
             "scalp_sim_panic_entry_blocked",
             "scalp_sim_panic_bottoming_entry_allowed",
             "scalp_sim_panic_level1_entry_observed",
-            "scalp_sim_euphoria_entry_blocked",
-            "scalp_sim_euphoria_chase_entry_blocked",
-            "scalp_sim_euphoria_retest_starter_allowed",
-            "scalp_sim_euphoria_level1_starter_observed",
         }:
             matrix_stage = "entry"
         elif source_stage in {
             "scalp_sim_panic_scale_in_blocked",
-            "scalp_sim_euphoria_scale_in_blocked",
         }:
             matrix_stage = "scale_in"
         else:
@@ -2549,20 +2509,6 @@ def _load_scalp_sim_panic_rows(
             "fill_quality": fields.get("fill_quality"),
             "quote_quality_state": fields.get("quote_quality_state"),
             "assumed_slippage_bps": fields.get("assumed_slippage_bps"),
-            "euphoria_context_status": fields.get("euphoria_context_status"),
-            "euphoria_risk_level": fields.get("euphoria_risk_level"),
-            "euphoria_risk_mode": fields.get("euphoria_risk_mode"),
-            "euphoria_level_reason": fields.get("euphoria_level_reason"),
-            "euphoria_epoch_id": fields.get("euphoria_epoch_id"),
-            "euphoria_source_quality": fields.get("euphoria_source_quality"),
-            "euphoria_action_id": fields.get("euphoria_action_id"),
-            "euphoria_action_type": fields.get("euphoria_action_type"),
-            "chase_risk": fields.get("chase_risk"),
-            "retest_confirmed": fields.get("retest_confirmed"),
-            "profit_locked": fields.get("profit_locked"),
-            "runner_mode": fields.get("runner_mode"),
-            "exhaustion_risk": fields.get("exhaustion_risk"),
-            "reversal_signal": fields.get("reversal_signal"),
             "exclude_from_ev": fields.get("exclude_from_ev"),
             "source_quality_gate_scope": fields.get("source_quality_gate_scope"),
             "real_gate_allowed": fields.get("real_gate_allowed"),
@@ -4262,7 +4208,6 @@ def _holding_bucket_features(row: dict[str, Any]) -> dict[str, str]:
 
 
 SCALP_SIM_CONTEXT_NOOP_EXIT_STAGES = {
-    "scalp_sim_euphoria_context_noop",
     "scalp_sim_panic_context_warning",
 }
 
@@ -4279,13 +4224,11 @@ def _exit_row_is_context_noop(row: dict[str, Any]) -> bool:
     labels = row.get("labels") if isinstance(row.get("labels"), dict) else {}
     runtime_effect = str(features.get("runtime_effect") or "").strip().lower()
     panic_status = str(features.get("panic_context_status") or "").strip().upper()
-    euphoria_status = str(features.get("euphoria_context_status") or "").strip().upper()
     return (
         bool(features.get("exclude_from_ev"))
         or labels.get("profit_not_applicable_reason") == "context_noop_excluded_from_ev"
         or runtime_effect in {"sim_noop_context_not_ok", "sim_noop_context_blocked"}
         or (panic_status not in {"", "OK"})
-        or (euphoria_status not in {"", "OK"})
     )
 
 

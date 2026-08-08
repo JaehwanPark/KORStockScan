@@ -94,7 +94,6 @@ AUTO_APPLY_ALLOWED_ROUTES = {"threshold_candidate", "normal_drift", ""}
 NON_LIVE_SELECTABLE_FAMILIES = {
     "panic_lifecycle_actuator",
     "panic_entry_freeze_guard",
-    "panic_buy_runner_tp_canary",
 }
 RETIRED_RUNTIME_ENV_KEYS = {
     "KORSTOCKSCAN_LATENCY_CANARY_PROFILE",

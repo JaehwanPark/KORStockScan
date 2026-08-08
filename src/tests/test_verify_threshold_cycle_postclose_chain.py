@@ -5410,7 +5410,6 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     (report_dir / "pattern_lab_propagation_audit").mkdir(parents=True)
     (report_dir / "market_panic_breadth").mkdir(parents=True)
     (report_dir / "panic_sell_defense").mkdir(parents=True)
-    (report_dir / "panic_buying").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_strategy_discovery_sim").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
@@ -5545,10 +5544,6 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         json.dumps({"report_type": "panic_sell_defense"}),
         encoding="utf-8",
     )
-    (report_dir / "panic_buying" / "panic_buying_2026-05-12.json").write_text(
-        json.dumps({"report_type": "panic_buying"}),
-        encoding="utf-8",
-    )
     (
         report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json"
     ).write_text("{}", encoding="utf-8")
@@ -5599,7 +5594,6 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert {
         "market_panic_breadth",
         "panic_sell_defense",
-        "panic_buying",
         "one_share_threshold_opportunity",
     }.issubset(artifact_labels)
 
@@ -5733,7 +5727,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     (report_dir / "pattern_lab_propagation_audit").mkdir(parents=True)
     (report_dir / "market_panic_breadth").mkdir(parents=True)
     (report_dir / "panic_sell_defense").mkdir(parents=True)
-    (report_dir / "panic_buying").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_strategy_discovery_sim").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
@@ -5760,7 +5753,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         "pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-12.json",
         "market_panic_breadth/market_panic_breadth_2026-05-12.json",
         "panic_sell_defense/panic_sell_defense_2026-05-12.json",
-        "panic_buying/panic_buying_2026-05-12.json",
         "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
         "swing_strategy_discovery_sim/swing_strategy_discovery_sim_2026-05-12.json",
         "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
@@ -5892,7 +5884,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "lifecycle_decision_matrix",
         "market_panic_breadth",
         "panic_sell_defense",
-        "panic_buying",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -5916,7 +5907,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-12.json",
         "market_panic_breadth/market_panic_breadth_2026-05-12.json",
         "panic_sell_defense/panic_sell_defense_2026-05-12.json",
-        "panic_buying/panic_buying_2026-05-12.json",
         "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
         "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
     ):
@@ -6060,7 +6050,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
         "panic_sell_defense",
-        "panic_buying",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -6135,7 +6124,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
-        report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",
@@ -6273,7 +6261,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
         "panic_sell_defense",
-        "panic_buying",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -6374,7 +6361,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
-        report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",
@@ -6429,7 +6415,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
         "panic_sell_defense",
-        "panic_buying",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -6531,7 +6516,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
-        report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",
@@ -6701,7 +6685,6 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
         "panic_sell_defense",
-        "panic_buying",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -6789,7 +6772,6 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
         report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
-        report_dir / "panic_buying" / "panic_buying_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",

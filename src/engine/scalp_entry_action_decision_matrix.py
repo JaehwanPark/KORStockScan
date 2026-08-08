@@ -1953,7 +1953,6 @@ def _context_unknown_reason(
         context_values = [
             row.get("risk_regime_mode"),
             row.get("panic_regime_mode"),
-            row.get("panic_buy_regime_mode"),
         ]
         return (
             "source_field_missing"

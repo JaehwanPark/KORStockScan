@@ -2120,22 +2120,6 @@ def test_observation_source_quality_audit_reviews_20260729_explicit_unknown_prov
                 },
                 record_id=5,
             ),
-            _event(
-                "scalp_sim_euphoria_context_noop",
-                {
-                    "euphoria_epoch_id": "2026-07-29|NORMAL|NORMAL|E0|unknown",
-                    "risk_regime_epoch_id": ("2026-07-29|NORMAL|NORMAL|E0|unknown"),
-                    "decision_authority": "sim_observation_only",
-                    "euphoria_context_status": "OPERATOR_DISABLED",
-                    "risk_regime_context_status": "OPERATOR_DISABLED",
-                    "euphoria_source_quality": "NOT_APPLICABLE",
-                    "source_quality_gate_scope": "sim_context_only",
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                    "exclude_from_live_approval": True,
-                },
-                record_id=6,
-            ),
         ],
     )
 
@@ -2175,14 +2159,6 @@ def test_observation_source_quality_audit_reviews_20260729_explicit_unknown_prov
     assert (
         reviewed["scalping_scanner_ws_prewarm_selected"]["effective_venue"]
         == "reviewed_scanner_venue_fail_closed_provenance"
-    )
-    assert (
-        reviewed["scalp_sim_euphoria_context_noop"]["euphoria_epoch_id"]
-        == "reviewed_disabled_euphoria_epoch_suffix_not_source_unknown"
-    )
-    assert (
-        reviewed["scalp_sim_euphoria_context_noop"]["risk_regime_epoch_id"]
-        == "reviewed_disabled_euphoria_epoch_suffix_not_source_unknown"
     )
 
 
@@ -7063,7 +7039,6 @@ def test_observation_source_quality_audit_contracts_sim_budget_and_risk_context(
             _event("sim_ai_critical_bypass", budget_fields, record_id=4),
             _event("scalp_sim_panic_action_deduped", risk_fields, record_id=5),
             _event("scalp_sim_panic_scale_in_blocked", risk_fields, record_id=6),
-            _event("scalp_sim_euphoria_context_noop", risk_fields, record_id=7),
         ],
     )
 
@@ -7076,7 +7051,6 @@ def test_observation_source_quality_audit_contracts_sim_budget_and_risk_context(
         "sim_ai_critical_bypass",
         "scalp_sim_panic_action_deduped",
         "scalp_sim_panic_scale_in_blocked",
-        "scalp_sim_euphoria_context_noop",
     ):
         assert report["stage_contracts"][stage]["status"] == "pass"
 

@@ -1778,33 +1778,6 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "entry_adm_candidate_id",
         )
     ),
-    "scalp_sim_euphoria_context_noop": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_entry_blocked": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_chase_entry_blocked": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_retest_starter_allowed": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_level1_starter_observed": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_scale_in_blocked": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_partial_profit_assumed_filled": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_partial_profit_unpriced": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
-    "scalp_sim_euphoria_action_deduped": StageContract(
-        required_fields=SCALP_SIM_RISK_CONTEXT_FIELDS
-    ),
     "ai_holding_fast_reuse_band": StageContract(
         required_fields=(
             *DIAGNOSTIC_CONTRACT_FIELDS,
@@ -3339,27 +3312,6 @@ def _reviewed_unknown_reason_for_stage_field(
             "quote_age_source"
         ) in {"", "-", "missing", "not_available_quote_age"}
 
-    def _is_reviewed_disabled_euphoria_epoch_suffix() -> bool:
-        if stage != "scalp_sim_euphoria_context_noop":
-            return False
-        if str(key or "") not in {
-            "euphoria_epoch_id",
-            "risk_regime_epoch_id",
-        }:
-            return False
-        if not str(value or "").strip().lower().endswith("|unknown"):
-            return False
-        return (
-            _field_text("decision_authority") == "sim_observation_only"
-            and _field_text("euphoria_context_status") == "OPERATOR_DISABLED"
-            and _field_text("risk_regime_context_status") == "OPERATOR_DISABLED"
-            and _field_text("euphoria_source_quality") == "NOT_APPLICABLE"
-            and _field_text("source_quality_gate_scope") == "sim_context_only"
-            and _is_falseish("actual_order_submitted")
-            and _is_trueish("broker_order_forbidden")
-            and _is_trueish("exclude_from_live_approval")
-        )
-
     def _is_reviewed_first_touch_quote_stale_not_available() -> bool:
         if stage != "stop_line_touch_first_touch_avgdown_decision_blocked":
             return False
@@ -3551,8 +3503,6 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_legacy_fast_exit_route_provenance"
     if _is_reviewed_shallow_stale_not_available():
         return "reviewed_shallow_stale_flag_not_available"
-    if _is_reviewed_disabled_euphoria_epoch_suffix():
-        return "reviewed_disabled_euphoria_epoch_suffix_not_source_unknown"
     if _is_reviewed_first_touch_quote_stale_not_available():
         return "reviewed_first_touch_quote_stale_not_available"
     if _is_reviewed_rising_missed_submit_safety_backoff_source_quality():

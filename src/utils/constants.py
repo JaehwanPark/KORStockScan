@@ -743,9 +743,6 @@ class TradingConfig:
     )
     REAL_ENTRY_PANIC_SELL_EXTRA_BPS: int = 30
     REAL_ENTRY_PANIC_SELL_BROKEN_EXTRA_BPS: int = 50
-    REAL_ENTRY_PANIC_BUY_WATCH_REDUCE_BPS: int = 10
-    REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS: int = 20
-    REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS: int = 30
     SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC: int = (
         300  # OPEN_RECLAIM never-green 조기 정리 최소 보유시간
     )
@@ -2663,15 +2660,6 @@ def _build_trading_rules() -> TradingConfig:
     env_real_entry_panic_sell_broken_extra_bps = _env_int(
         "KORSTOCKSCAN_REAL_ENTRY_PANIC_SELL_BROKEN_EXTRA_BPS"
     )
-    env_real_entry_panic_buy_watch_reduce_bps = _env_int(
-        "KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_WATCH_REDUCE_BPS"
-    )
-    env_real_entry_panic_buy_active_reduce_bps = _env_int(
-        "KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS"
-    )
-    env_real_entry_panic_buy_exhaustion_extra_bps = _env_int(
-        "KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS"
-    )
     env_reversal_add_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_ENABLED")
     env_reversal_add_pnl_min = _env_float("KORSTOCKSCAN_REVERSAL_ADD_PNL_MIN")
     env_reversal_add_pnl_max = _env_float("KORSTOCKSCAN_REVERSAL_ADD_PNL_MAX")
@@ -3110,9 +3098,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_real_entry_panic_gap_weight_enabled is not None
         or env_real_entry_panic_sell_extra_bps is not None
         or env_real_entry_panic_sell_broken_extra_bps is not None
-        or env_real_entry_panic_buy_watch_reduce_bps is not None
-        or env_real_entry_panic_buy_active_reduce_bps is not None
-        or env_real_entry_panic_buy_exhaustion_extra_bps is not None
         or env_reversal_add_enabled is not None
         or env_reversal_add_pnl_min is not None
         or env_reversal_add_pnl_max is not None
@@ -3885,21 +3870,6 @@ def _build_trading_rules() -> TradingConfig:
                 env_real_entry_panic_sell_broken_extra_bps
                 if env_real_entry_panic_sell_broken_extra_bps is not None
                 else config.REAL_ENTRY_PANIC_SELL_BROKEN_EXTRA_BPS
-            ),
-            REAL_ENTRY_PANIC_BUY_WATCH_REDUCE_BPS=(
-                env_real_entry_panic_buy_watch_reduce_bps
-                if env_real_entry_panic_buy_watch_reduce_bps is not None
-                else config.REAL_ENTRY_PANIC_BUY_WATCH_REDUCE_BPS
-            ),
-            REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS=(
-                env_real_entry_panic_buy_active_reduce_bps
-                if env_real_entry_panic_buy_active_reduce_bps is not None
-                else config.REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS
-            ),
-            REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS=(
-                env_real_entry_panic_buy_exhaustion_extra_bps
-                if env_real_entry_panic_buy_exhaustion_extra_bps is not None
-                else config.REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS
             ),
             REVERSAL_ADD_ENABLED=(
                 env_reversal_add_enabled

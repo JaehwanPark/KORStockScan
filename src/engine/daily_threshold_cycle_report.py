@@ -1456,9 +1456,6 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
         "panic_sell_defense": REPORT_DIR
         / "panic_sell_defense"
         / f"panic_sell_defense_{target_date}.json",
-        "panic_buying": REPORT_DIR
-        / "panic_buying"
-        / f"panic_buying_{target_date}.json",
         "holding_exit_decision_matrix": (
             REPORT_DIR
             / "holding_exit_decision_matrix"
@@ -1816,7 +1813,6 @@ def _holding_exit_report_source_paths(target_date: str) -> dict[str, Path]:
             "trade_review",
             "holding_exit_sentinel",
             "panic_sell_defense",
-            "panic_buying",
             "holding_exit_decision_matrix",
             "statistical_action_weight",
         }
@@ -1827,12 +1823,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     sources: dict[str, dict] = {}
     warnings: list[str] = []
     source_paths = _calibration_report_source_paths(target_date)
-    panic_buying_operator_enabled = os.environ.get(
-        "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    panic_buying_disabled = (
-        target_date >= "2026-07-28" and not panic_buying_operator_enabled
-    )
     cleanup_audit = _audit_report_only_cleanup_candidates(target_date, source_paths)
     for candidate in cleanup_audit["cleanup_candidates"]:
         warnings.append(
@@ -1841,28 +1831,15 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         )
     for name, path in source_paths.items():
         actual_path = _existing_or_gzip_path(path)
-        payload = (
-            {}
-            if name == "panic_buying" and panic_buying_disabled
-            else _read_json_dict(path)
-        )
+        payload = _read_json_dict(path)
         exists = actual_path.exists()
-        if (
-            exists
-            and not payload
-            and path.suffix == ".json"
-            and not (name == "panic_buying" and panic_buying_disabled)
-        ):
+        if exists and not payload and path.suffix == ".json":
             warnings.append(f"{name} 로드 실패 또는 빈 JSON: {actual_path}")
         sources[name] = {
             "path": str(actual_path),
             "exists": exists,
             "loaded": bool(payload),
-            "operating_status": (
-                "operator_disabled_archive_only"
-                if name == "panic_buying" and panic_buying_disabled
-                else "active"
-            ),
+            "operating_status": "active",
             "top_keys": list(payload.keys())[:20] if payload else [],
         }
 
@@ -1875,9 +1852,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     trade_review = _read_json_dict(source_paths["trade_review"])
     holding_exit_sentinel = _read_json_dict(source_paths["holding_exit_sentinel"])
     panic_sell_defense = _read_json_dict(source_paths["panic_sell_defense"])
-    panic_buying = (
-        {} if panic_buying_disabled else _read_json_dict(source_paths["panic_buying"])
-    )
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
     latency_recommendation = _read_json_dict(
@@ -2121,69 +2095,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         in {str(reason) for reason in micro_market_reasons}
         or "market_regime_snapshot_missing_or_unknown"
         in {str(reason) for reason in micro_market_reasons}
-    )
-    panic_buy_metrics = (
-        panic_buying.get("panic_buy_metrics") if isinstance(panic_buying, dict) else {}
-    )
-    panic_buy_metrics = panic_buy_metrics if isinstance(panic_buy_metrics, dict) else {}
-    panic_buy_exhaustion = (
-        panic_buying.get("exhaustion_metrics") if isinstance(panic_buying, dict) else {}
-    )
-    panic_buy_exhaustion = (
-        panic_buy_exhaustion if isinstance(panic_buy_exhaustion, dict) else {}
-    )
-    panic_buy_tp = (
-        panic_buying.get("tp_counterfactual_summary")
-        if isinstance(panic_buying, dict)
-        else {}
-    )
-    panic_buy_tp = panic_buy_tp if isinstance(panic_buy_tp, dict) else {}
-    panic_buy_micro = (
-        panic_buying.get("microstructure_detector")
-        if isinstance(panic_buying, dict)
-        else {}
-    )
-    panic_buy_micro = panic_buy_micro if isinstance(panic_buy_micro, dict) else {}
-    panic_buy_market = (
-        panic_buying.get("market_breadth_context")
-        if isinstance(panic_buying, dict)
-        else {}
-    )
-    panic_buy_market = panic_buy_market if isinstance(panic_buy_market, dict) else {}
-    panic_buy_gate = (
-        panic_buying.get("risk_regime_gate") if isinstance(panic_buying, dict) else {}
-    )
-    panic_buy_gate = panic_buy_gate if isinstance(panic_buy_gate, dict) else {}
-    panic_buy_candidates = (
-        panic_buying.get("canary_candidates")
-        if isinstance(panic_buying.get("canary_candidates"), list)
-        else []
-    )
-    panic_buy_candidate_status = {
-        str(item.get("family")): item.get("status")
-        for item in panic_buy_candidates
-        if isinstance(item, dict) and item.get("family")
-    }
-    panic_buy_source_quality_blockers: list[str] = []
-    if isinstance(panic_buy_gate.get("source_quality_blockers"), list):
-        panic_buy_source_quality_blockers.extend(
-            str(item) for item in panic_buy_gate["source_quality_blockers"]
-        )
-    panic_buy_signal_count = (
-        _safe_int(panic_buy_micro.get("panic_buy_signal_count"), 0) or 0
-    )
-    if panic_buy_signal_count > 0 and not bool(
-        panic_buy_market.get("market_wide_panic_buy_confirmed")
-    ):
-        panic_buy_source_quality_blockers.append(
-            "panic_buy_local_unconfirmed_by_market_breadth"
-        )
-    if (_safe_int(panic_buy_micro.get("missing_orderbook_count"), 0) or 0) > 0:
-        panic_buy_source_quality_blockers.append(
-            "panic_buy_orderbook_collector_coverage_gap"
-        )
-    panic_buy_source_quality_blockers = list(
-        dict.fromkeys(panic_buy_source_quality_blockers)
     )
     matrix_entries = (
         decision_matrix.get("entries")
@@ -3047,139 +2958,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 else "none"
             ),
             "candidate_status": panic_candidate_status,
-            "allowed_runtime_apply": False,
-        },
-        "panic_buying": {
-            "operating_status": (
-                "operator_disabled_archive_only" if panic_buying_disabled else "active"
-            ),
-            "panic_buy_state": (
-                panic_buying.get("panic_buy_state")
-                if isinstance(panic_buying, dict)
-                else None
-            ),
-            "panic_buy_regime_mode": (
-                panic_buying.get("panic_buy_regime_mode")
-                if isinstance(panic_buying, dict)
-                else None
-            ),
-            "panic_buy_regime_decision_authority": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get(
-                    "decision_authority"
-                )
-                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
-                else None
-            ),
-            "panic_buy_regime_runtime_effect": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get(
-                    "runtime_effect"
-                )
-                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
-                else None
-            ),
-            "panic_buy_regime_allowed_actions": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get(
-                    "allowed_actions"
-                )
-                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
-                else []
-            ),
-            "panic_buy_regime_forbidden_uses": (
-                (panic_buying.get("panic_buy_regime_contract") or {}).get(
-                    "forbidden_uses"
-                )
-                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
-                else []
-            ),
-            "risk_regime_gate_state": (
-                panic_buying.get("risk_regime_gate_state")
-                if isinstance(panic_buying, dict)
-                else None
-            ),
-            "risk_regime_gate_authority": (
-                panic_buying.get("risk_regime_gate_authority")
-                if isinstance(panic_buying, dict)
-                else None
-            ),
-            "risk_regime_threshold_mode": (
-                panic_buying.get("risk_regime_threshold_mode")
-                if isinstance(panic_buying, dict)
-                else None
-            ),
-            "confirmed_evidence_count": _safe_int(
-                panic_buy_gate.get("confirmed_evidence_count"), 0
-            )
-            or 0,
-            "runtime_effect": (
-                (panic_buying.get("policy") or {}).get("runtime_effect")
-                if isinstance(panic_buying.get("policy"), dict)
-                else None
-            ),
-            "panic_buy_active_count": _safe_int(
-                panic_buy_metrics.get("panic_buy_active_count"), 0
-            )
-            or 0,
-            "panic_buy_watch_count": _safe_int(
-                panic_buy_metrics.get("panic_buy_watch_count"), 0
-            )
-            or 0,
-            "exhaustion_candidate_count": _safe_int(
-                panic_buy_exhaustion.get("exhaustion_candidate_count"), 0
-            )
-            or 0,
-            "exhaustion_confirmed_count": _safe_int(
-                panic_buy_exhaustion.get("exhaustion_confirmed_count"), 0
-            )
-            or 0,
-            "max_panic_buy_score": _safe_float(
-                panic_buy_metrics.get("max_panic_buy_score"), None
-            ),
-            "max_exhaustion_score": _safe_float(
-                panic_buy_exhaustion.get("max_exhaustion_score"), None
-            ),
-            "avg_confidence": _safe_float(
-                panic_buy_metrics.get("avg_confidence"), None
-            ),
-            "tp_counterfactual_count": _safe_int(
-                panic_buy_tp.get("candidate_context_count"), 0
-            )
-            or 0,
-            "tp_like_exit_count": _safe_int(panic_buy_tp.get("tp_like_exit_count"), 0)
-            or 0,
-            "trailing_winner_count": _safe_int(
-                panic_buy_tp.get("trailing_winner_count"), 0
-            )
-            or 0,
-            "market_breadth_source_quality_status": panic_buy_market.get(
-                "market_panic_breadth_source_quality_status"
-            ),
-            "market_breadth_risk_on_advisory": bool(
-                panic_buy_market.get("market_panic_breadth_risk_on_advisory")
-            ),
-            "market_breadth_risk_off_advisory": bool(
-                panic_buy_market.get("market_panic_breadth_risk_off_advisory")
-            ),
-            "market_wide_panic_buy_confirmed": bool(
-                panic_buy_market.get("market_wide_panic_buy_confirmed")
-            ),
-            "missing_orderbook_count": _safe_int(
-                panic_buy_micro.get("missing_orderbook_count"), 0
-            )
-            or 0,
-            "missing_trade_aggressor_count": _safe_int(
-                panic_buy_micro.get("missing_trade_aggressor_count"), 0
-            )
-            or 0,
-            "carried_orderbook_snapshot_count": _safe_int(
-                panic_buy_micro.get("carried_orderbook_snapshot_count"), 0
-            )
-            or 0,
-            "carried_trade_aggressor_snapshot_count": _safe_int(
-                panic_buy_micro.get("carried_trade_aggressor_snapshot_count"), 0
-            )
-            or 0,
-            "source_quality_blockers": panic_buy_source_quality_blockers,
-            "candidate_status": panic_buy_candidate_status,
             "allowed_runtime_apply": False,
         },
         "decision_support": {

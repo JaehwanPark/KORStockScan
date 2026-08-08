@@ -378,7 +378,7 @@ def summarize_breadth(
     elif single_market_stock_risk_on:
         risk_on_reasons.append("single_market_listed_stock_rise_ratio_high")
     if not risk_on:
-        risk_on_reasons.append("live market breadth panic-buy thresholds not breached")
+        risk_on_reasons.append("live market breadth risk-on thresholds not breached")
 
     return {
         "metric_role": "risk_regime_state",

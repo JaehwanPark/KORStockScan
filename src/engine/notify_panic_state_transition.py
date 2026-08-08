@@ -16,8 +16,6 @@ DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "panic_state_telegram_notify_state.j
 
 SELL_ACTIVE_STATES = {"PANIC_SELL", "RECOVERY_WATCH"}
 SELL_RELEASE_STATES = {"NORMAL", "RECOVERY_CONFIRMED"}
-BUY_ACTIVE_STATES = {"PANIC_BUY_WATCH", "PANIC_BUY", "EXHAUSTION_WATCH"}
-BUY_RELEASE_STATES = {"NORMAL", "BUYING_EXHAUSTED"}
 SELL_RESTART_SUPPRESS_AFTER_RELEASE_SEC = 10 * 60
 
 
@@ -29,7 +27,6 @@ def _report_session_key(report_file: Path, report: dict) -> str:
     stem = report_file.stem
     for prefix in (
         "panic_sell_defense_",
-        "panic_buying_",
         "market_panic_breadth_",
     ):
         if stem.startswith(prefix):
@@ -45,7 +42,7 @@ def _previous_session_key(previous: dict) -> str:
         return value[:10]
     report_file = str(previous.get("report_file") or "")
     stem = Path(report_file).stem
-    for prefix in ("panic_sell_defense_", "panic_buying_"):
+    for prefix in ("panic_sell_defense_",):
         if stem.startswith(prefix):
             return stem.replace(prefix, "", 1)[:10]
     return ""
@@ -133,8 +130,6 @@ def _state_value(kind: str, report: dict) -> str:
         ):
             return "RECOVERY_WATCH"
         return str(report.get("panic_state") or "UNKNOWN")
-    if kind == "panic_buying":
-        return str(report.get("panic_buy_state") or "UNKNOWN")
     raise ValueError(f"unsupported kind: {kind}")
 
 
@@ -145,10 +140,6 @@ def _state_phase(kind: str, value: str) -> str:
         if value in SELL_RELEASE_STATES:
             return "released"
         return "unknown"
-    if value in BUY_ACTIVE_STATES:
-        return "active"
-    if value in BUY_RELEASE_STATES:
-        return "released"
     return "unknown"
 
 
@@ -343,42 +334,10 @@ def _message_for_sell(report: dict, transition: str) -> str:
     ).replace("\n\n", "\n")
 
 
-def _message_for_buying(report: dict, transition: str) -> str:
-    metrics = (
-        report.get("panic_buy_metrics")
-        if isinstance(report.get("panic_buy_metrics"), dict)
-        else {}
-    )
-    if transition == "release":
-        title = "✅ 패닉바잉 경보 해제"
-        body = "급한 매수세가 진정되어 패닉바잉 관찰을 종료합니다."
-        intensity_line = "- 해제 상태\n  🟢 과열 진정 · 신규 자동매매 변경 없음"
-    elif transition == "status":
-        title = "ℹ️ 패닉바잉 알림 테스트"
-        body = "현재 패닉바잉 알림 상태를 관리자 테스트로 확인합니다."
-        intensity_line = (
-            f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
-        )
-    else:
-        title = "⚠️ 패닉바잉 주의"
-        body = "시장에 급한 매수세가 감지되었습니다. 단기 과열과 소진 가능성을 함께 볼 구간입니다."
-        intensity_line = (
-            f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
-        )
-    return "\n".join(
-        [
-            title,
-            body,
-            intensity_line,
-            "- 자동매매 변경: 없음",
-        ]
-    )
-
-
 def _build_message(kind: str, report: dict, transition: str) -> str:
-    if kind == "panic_sell":
-        return _message_for_sell(report, transition)
-    return _message_for_buying(report, transition)
+    if kind != "panic_sell":
+        raise ValueError(f"unsupported kind: {kind}")
+    return _message_for_sell(report, transition)
 
 
 def notify_from_report(
@@ -531,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Notify Telegram users for panic start/release transitions."
     )
     parser.add_argument("--report-file", required=True)
-    parser.add_argument("--kind", choices=["panic_sell", "panic_buying"], required=True)
+    parser.add_argument("--kind", choices=["panic_sell"], required=True)
     parser.add_argument("--audience", choices=["all", "admin"], default="all")
     parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE))
     parser.add_argument(

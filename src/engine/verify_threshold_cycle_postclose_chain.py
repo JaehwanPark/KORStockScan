@@ -8,7 +8,6 @@ import gzip
 import hashlib
 import json
 import math
-import os
 import re
 from collections import Counter
 from datetime import date, datetime, time as dtime
@@ -1137,9 +1136,6 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "panic_sell_defense": REPORT_DIR
         / "panic_sell_defense"
         / f"panic_sell_defense_{target_date}.json",
-        "panic_buying": REPORT_DIR
-        / "panic_buying"
-        / f"panic_buying_{target_date}.json",
         "threshold_cycle_ev": REPORT_DIR
         / "threshold_cycle_ev"
         / f"threshold_cycle_ev_{target_date}.json",
@@ -1290,11 +1286,6 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "checklists"
         / f"{next_day}-stage2-todo-checklist.md",
     }
-    panic_buying_operator_enabled = os.environ.get(
-        "KORSTOCKSCAN_PANIC_BUYING_REPORT_OPERATOR_OVERRIDE", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if target_date >= "2026-07-28" and not panic_buying_operator_enabled:
-        paths.pop("panic_buying", None)
     return paths
 
 

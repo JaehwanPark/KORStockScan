@@ -111,20 +111,6 @@ _CONTRACTS: dict[str, dict[str, Any]] = {
             "rollback_tests",
         ],
     },
-    "panic_buy_runner_tp_canary": {
-        "approval_contract_status": "contract_missing",
-        "approval_artifact_template": "panic_buy_runner_tp_canary_{date}.json",
-        "approval_artifact_consumer": None,
-        "preopen_env_ready": False,
-        "runtime_guard_ready": False,
-        "runtime_scope": "not_live_ready",
-        "missing_components": [
-            "approval_artifact_loader",
-            "preopen_env_mapping",
-            "tp_runner_runtime_guard",
-            "rollback_tests",
-        ],
-    },
 }
 
 

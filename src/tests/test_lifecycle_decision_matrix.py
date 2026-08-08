@@ -2544,7 +2544,7 @@ def test_institutional_flow_features_do_not_leak_across_source_dates():
     assert set(attribution["by_regime"]) == {"DUAL_ACCUMULATION", "DISTRIBUTION"}
 
 
-def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_split(
+def test_lifecycle_matrix_keeps_panic_sell_lifecycle_source_contract(
     tmp_path, monkeypatch
 ):
     matrix_dir = tmp_path / "matrix"
@@ -2567,50 +2567,6 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
         ),
     )
     events = [
-        {
-            "stage": "scalp_sim_euphoria_partial_profit_assumed_filled",
-            "stock_code": "000001",
-            "emitted_at": "2026-05-20T10:00:00+09:00",
-            "fields": {
-                "simulation_book": "scalp_ai_buy_all",
-                "source_family": "panic_lifecycle_actuator",
-                "family_type": "sim_lifecycle_source",
-                "live_selectable": False,
-                "preopen_apply_allowed": False,
-                "env_apply_allowed": False,
-                "threshold_env_mutation_allowed": False,
-                "real_order_allowed": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "decision_authority": "sim_observation_only",
-                "risk_context_owner": "euphoria",
-                "risk_direction": "risk_on_euphoria",
-                "action_namespace": "euphoria_lifecycle",
-                "euphoria_action_type": "TAKE_PARTIAL_PROFIT_RUNNER",
-                "euphoria_risk_level": 2,
-                "euphoria_epoch_id": "euphoria-1",
-                "realized_profit_rate": "0.8",
-                "exit_rule": "scalp_sim_euphoria_runner_partial_profit",
-            },
-        },
-        {
-            "stage": "scalp_sim_euphoria_context_noop",
-            "stock_code": "000002",
-            "emitted_at": "2026-05-20T10:01:00+09:00",
-            "fields": {
-                "simulation_book": "scalp_ai_buy_all",
-                "source_family": "panic_lifecycle_actuator",
-                "family_type": "sim_lifecycle_source",
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "risk_context_owner": "euphoria",
-                "risk_direction": "risk_on_euphoria",
-                "action_namespace": "euphoria_lifecycle",
-                "runtime_effect": "SIM_NOOP_CONTEXT_NOT_OK",
-                "exclude_from_ev": True,
-                "euphoria_context_status": "SOURCE_QUALITY_BLOCKED",
-            },
-        },
         {
             "stage": "scalp_sim_panic_context_warning",
             "stock_code": "000003",
@@ -2642,28 +2598,7 @@ def test_lifecycle_matrix_keeps_panic_lifecycle_source_contract_and_euphoria_spl
         for row in report["examples"]
         if row["source"] == "scalp_sim_panic_pipeline_events"
     ]
-    assert len(rows) == 3
-    euphoria_row = next(
-        row for row in rows if row["runtime_features"].get("euphoria_action_type")
-    )
-    features = euphoria_row["runtime_features"]
-    assert features["source_family"] == "panic_lifecycle_actuator"
-    assert features["family_type"] == "sim_lifecycle_source"
-    assert features["live_selectable"] is False
-    assert features["risk_context_owner"] == "euphoria"
-    assert features["action_namespace"] == "euphoria_lifecycle"
-    assert features["euphoria_action_type"] == "TAKE_PARTIAL_PROFIT_RUNNER"
-    noop_row = next(
-        row for row in rows if row["runtime_features"].get("exclude_from_ev")
-    )
-    assert noop_row["stage_ev_composite_pct"] is None
-    assert noop_row["outcome_joined"] is False
-    assert mod._exit_bucket_features(noop_row) == {
-        "exit_source_stage": "scalp_sim_euphoria_context_noop",
-        "exit_rule": "scalp_sim_euphoria_context_noop_not_applicable",
-        "exit_outcome": "outcome_not_applicable_context_noop",
-        "profit_band": "profit_not_applicable_context_noop",
-    }
+    assert len(rows) == 1
     panic_noop = next(
         row for row in rows if row["source_stage"] == "scalp_sim_panic_context_warning"
     )

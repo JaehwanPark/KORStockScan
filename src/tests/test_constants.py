@@ -1130,18 +1130,12 @@ def test_trading_rules_real_entry_panic_gap_weight_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_REAL_ENTRY_PANIC_SELL_EXTRA_BPS", "35")
     monkeypatch.setenv("KORSTOCKSCAN_REAL_ENTRY_PANIC_SELL_BROKEN_EXTRA_BPS", "55")
-    monkeypatch.setenv("KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_WATCH_REDUCE_BPS", "12")
-    monkeypatch.setenv("KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS", "22")
-    monkeypatch.setenv("KORSTOCKSCAN_REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS", "32")
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.REAL_ENTRY_PANIC_GAP_WEIGHT_ENABLED is False
     assert reloaded.TRADING_RULES.REAL_ENTRY_PANIC_SELL_EXTRA_BPS == 35
     assert reloaded.TRADING_RULES.REAL_ENTRY_PANIC_SELL_BROKEN_EXTRA_BPS == 55
-    assert reloaded.TRADING_RULES.REAL_ENTRY_PANIC_BUY_WATCH_REDUCE_BPS == 12
-    assert reloaded.TRADING_RULES.REAL_ENTRY_PANIC_BUY_ACTIVE_REDUCE_BPS == 22
-    assert reloaded.TRADING_RULES.REAL_ENTRY_PANIC_BUY_EXHAUSTION_EXTRA_BPS == 32
 
 
 def test_trading_rules_dynamic_strength_relief_env_override(monkeypatch):

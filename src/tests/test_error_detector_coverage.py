@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.engine.error_detector_coverage import (
     DETECTOR_COVERAGE_EXEMPTIONS,
     REQUIRED_ARTIFACT_IDS,
@@ -9,6 +11,7 @@ from src.engine.error_detector_coverage import (
 )
 from src.engine.error_detectors.artifact_freshness import ARTIFACT_REGISTRY
 from src.engine.error_detectors.cron_completion import CRON_JOB_REGISTRY
+from src.utils.threshold_cycle_registry import THRESHOLD_STAGE_FAMILY_MAP
 
 
 def test_required_detector_coverage_registry_is_complete():
@@ -51,6 +54,25 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "update_kospi_status" in REQUIRED_ARTIFACT_IDS
     assert "main_loop" in REQUIRED_HEARTBEAT_COMPONENTS
     assert DETECTOR_COVERAGE_EXEMPTIONS["install_*"].startswith("installer/")
+
+
+def test_removed_panic_buying_execution_surfaces_do_not_exist():
+    repository_root = Path(__file__).resolve().parents[2]
+    removed_paths = (
+        "src/engine/panic_buying_state_detector.py",
+        "src/engine/panic_buying_report.py",
+        "src/tests/test_panic_buying_state_detector.py",
+        "src/tests/test_panic_buying_report.py",
+        "deploy/run_panic_buying_intraday.sh",
+        "deploy/install_panic_buying_cron.sh",
+        "docs/proposals/panic_buying_detection_codex_spec.md",
+    )
+
+    assert all(not (repository_root / path).exists() for path in removed_paths)
+    assert all(
+        not stage.startswith("scalp_sim_euphoria_")
+        for stage in THRESHOLD_STAGE_FAMILY_MAP
+    )
 
 
 def test_threshold_postclose_report_has_startup_grace_for_long_postclose_chain():

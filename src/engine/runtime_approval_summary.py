@@ -123,7 +123,6 @@ _FAMILY_DESCRIPTIONS = {
     "swing_exit_ofi_qi_smoothing": "스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축",
     "panic_sell_defense": "패닉셀 구간의 stop/rebound simulation 결과로 방어 guard와 rollback 조건을 설계하는 축",
     "panic_entry_freeze_guard": "패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축",
-    "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
     "scalp_sim_overnight_ai_carry": "장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축",
     "swing_strategy_discovery_sim": "스윙 safe pool 전체를 공격적 sim-only lifecycle arm으로 전개하고 label/EV를 축적하는 source-only 탐색 축",
     "swing_lifecycle_decision_matrix": "스윙 probe와 discovery sim을 하나의 lifecycle bucket attribution으로 통합하는 source-only Swing LDM",
@@ -153,7 +152,6 @@ _BASELINE_APPLICATION = {
     "overbought_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "panic_sell_defense": "report-only: 주문/청산/threshold/runtime env 변경 없음",
     "panic_entry_freeze_guard": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
-    "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
     "scalp_sim_overnight_ai_carry": "source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음",
     "swing_strategy_discovery_sim": "source-only: 가상 후보/arm/label/EV 분석만 수행, runtime threshold apply 권한 없음",
     "swing_lifecycle_decision_matrix": "source-only: sim 후보 자동승인 입력만 만들며 real order/approval/env apply 권한 없음",
@@ -1382,89 +1380,6 @@ def _panic_rows(
             }
         )
 
-    panic_buy = (
-        source_metrics.get("panic_buying")
-        if isinstance(source_metrics.get("panic_buying"), dict)
-        else {}
-    )
-    if panic_buy:
-        candidate_status = (
-            panic_buy.get("candidate_status")
-            if isinstance(panic_buy.get("candidate_status"), dict)
-            else {}
-        )
-        source_quality_blockers = (
-            panic_buy.get("source_quality_blockers")
-            if isinstance(panic_buy.get("source_quality_blockers"), list)
-            else []
-        )
-        sample_count = max(
-            _as_int(panic_buy.get("confirmed_evidence_count")),
-            _as_int(panic_buy.get("tp_like_exit_count")),
-            _as_int(panic_buy.get("trailing_winner_count")),
-        )
-        contract = approval_contract_for("panic_buy_runner_tp_canary", target_date)
-        state, reasons = _panic_request_state(
-            _has_report_only_candidate(candidate_status),
-            sample_count,
-            panic_buy.get("runtime_effect"),
-            source_quality_blockers,
-            bool(contract.get("approval_live_ready")),
-        )
-        rows.append(
-            {
-                "domain": "panic_buying",
-                "family": "panic_buy_runner_tp_canary",
-                "description": _description("panic_buy_runner_tp_canary"),
-                "state": state,
-                "current_application": _current_application(
-                    "panic_buy_runner_tp_canary", state, False
-                ),
-                "state_interpretation": (
-                    "TP counterfactual 기반 runtime 전환 승인요청 후보이며 approval artifact 전 live TP 변경 없음"
-                    if state == "approval_required"
-                    else _state_interpretation(state, False)
-                ),
-                "score": panic_buy.get("max_panic_buy_score"),
-                "score_label": _format_score(panic_buy.get("max_panic_buy_score")),
-                "sample": {"count": sample_count, "floor": 1},
-                "reasons": reasons,
-                "reason_label": _reason_text(reasons),
-                "panic_buy_regime_mode": panic_buy.get("panic_buy_regime_mode"),
-                "panic_buy_regime_decision_authority": panic_buy.get(
-                    "panic_buy_regime_decision_authority"
-                ),
-                "panic_buy_regime_runtime_effect": panic_buy.get(
-                    "panic_buy_regime_runtime_effect"
-                ),
-                "risk_regime_gate_state": panic_buy.get("risk_regime_gate_state"),
-                "risk_regime_gate_authority": panic_buy.get(
-                    "risk_regime_gate_authority"
-                ),
-                "risk_regime_threshold_mode": panic_buy.get(
-                    "risk_regime_threshold_mode"
-                ),
-                "confirmed_evidence_count": _as_int(
-                    panic_buy.get("confirmed_evidence_count")
-                ),
-                "market_wide_panic_buy_confirmed": bool(
-                    panic_buy.get("market_wide_panic_buy_confirmed")
-                ),
-                "market_breadth_risk_on_advisory": bool(
-                    panic_buy.get("market_breadth_risk_on_advisory")
-                ),
-                "source_quality_blockers": source_quality_blockers,
-                "selected_auto_bounded_live": False,
-                "candidate_status": candidate_status,
-                "approval_contract_status": contract.get("approval_contract_status"),
-                "approval_live_ready": bool(contract.get("approval_live_ready")),
-                "approval_artifact_path": contract.get("approval_artifact_path"),
-                "approval_contract_missing_components": contract.get(
-                    "missing_components"
-                )
-                or [],
-            }
-        )
     return rows
 
 

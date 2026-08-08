@@ -439,7 +439,6 @@ def _probe_row(record: dict[str, Any]) -> dict[str, Any]:
                 record,
                 "panic_context",
                 "panic_regime_mode",
-                "panic_buy_regime_mode",
                 default="-",
             )
         ),
