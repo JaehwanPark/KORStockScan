@@ -156,8 +156,8 @@ Observer close는 WebSocket producer thread join 이후 호출되므로 producer
 | 핵심 파일 4개 SHA-256 | PASS | manifest 값과 모두 일치 |
 | 승인 commit이 현재 main의 ancestor | PASS | `746c015b` ancestor 확인 |
 | local working tree clean | PASS | `git status --porcelain` 출력 없음 |
-| 배포 HEAD exact commit | FAIL | local HEAD는 문서 증적 후속 commit `572c6345`; 승인 조건은 exact `746c015b` |
-| 원격 commit fetch 가능성 | CLOSED | `origin/main`을 `572c6345`까지 push해 승인 commit을 main history에 게시 |
+| 배포 HEAD exact commit | FAIL | local HEAD는 승인 commit의 문서-only 후속 descendant이며, 승인 조건은 exact `746c015b` |
+| 원격 commit fetch 가능성 | CLOSED | `origin/main`에 승인 commit을 포함한 후속 history를 push해 exact SHA를 fetch 가능하게 게시 |
 | 배포 서버 exact preflight | BLOCKED | `songstockscan.ddns.net` DNS 해석 실패로 HEAD/tree/hash/PID 확인 불가 |
 | producer p95/p99 baseline·허용폭 | BLOCKED | 배포 서버의 canary 전 baseline과 숫자 허용폭 미동결 |
 | 거래일·실행 프로세스 | BLOCKED | 토요일이며 local bot process 없음 |
