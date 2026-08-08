@@ -1,114 +1,106 @@
-# Scalp Micro-Reversion Producer Observation Canary 구현 결과
+# Scalp Micro-Reversion Producer Canary 감리 보완 결과
 
 ## 1. 판정
 
-감리 재승인 범위 안에서 producer observation hook과 forward collector의 **소스 구현 및 독립 커밋 고정**을 완료했다.
+최종 감리에서 장중 canary를 보류시킨 exclusion·shutdown·venue finding을 source-only로 보완하고 독립 커밋과 manifest를 고정했다.
 
-- producer integration commit: `0679e9071adbe4d14e7309489092793a95cb2a99`
-- source/test/deployment manifest: [producer canary integration manifest](./2026-08-08-scalp-micro-reversion-producer-canary-integration-manifest.json)
-- source 상태: `producer_hook_present=true`
-- 기본 runtime 상태: `observer_runtime_loaded=false`, `observer_runtime_effect=false`
-- 거래 권한: `trading_runtime_effect=false`, `trading_decision_effect=false`, `sim_position_effect=false`, `threshold_effect=false`, `broker_effect=false`
-- 주문 권한: `actual_order_submitted=false`, `broker_order_forbidden=true`
-- Gate B: **미종료**. 장중 canary를 기동하거나 5거래일 실데이터를 수집하지 않았다.
+- remediation commit: `24b6d04bfd05c5c16c6eb315417810c6a7547989`
+- remediation manifest: [producer canary integration manifest](./2026-08-08-scalp-micro-reversion-producer-canary-integration-manifest.json)
+- 관련 회귀: `169 passed in 3.85s`
+- 기본 상태: observer/path/discovery 모두 OFF
+- runtime/order authority: `trading_runtime_effect=false`, `trading_decision_effect=false`, `sim_position_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`
+- 운영 상태: `source_remediated_reaudit_pending`
 
-따라서 이번 결과는 “관찰 canary를 안전하게 기동할 수 있는 코드와 배포 기준선이 준비됨”을 뜻한다. 수익성, P2 실데이터 연구, sim assumed-fill, trading runtime 또는 실주문 승인이 아니다.
+이번 작업에서 bot 재기동, runtime env 변경, 신규 `REG`/`REMOVE`, 장중 데이터 수집, P2 replay, sim 또는 실주문은 실행하지 않았다. 따라서 canary 활성화는 아직 승인된 상태가 아니며 새 commit에 대한 감리 재승인을 먼저 받아야 한다.
 
-## 2. 구현 범위
+## 2. 감리 finding별 조치
 
-기존 `KiwoomWSManager`가 이미 수신한 0B snapshot만 다음 경로로 전달한다.
+### 2.1 장중 수동관리 제외
 
-```text
-existing 0B producer
-  -> explicit item venue validation
-  -> manual-control exclusion hard veto
-  -> immutable RawMarketObservation
-  -> bounded put_nowait queue
-  -> observer worker / multi-horizon detector / parent-wave path coalescer
-  -> dedicated bounded path writer
-```
+collector worker가 1초 주기로 설정 파일을 갱신한다. 파일 I/O는 producer callback에서 수행하지 않는다. 외부에서 `refresh_manual_exclusions()`를 호출하는 경로도 같은 직렬화 계약을 사용한다.
 
-[kiwoom_websocket.py](../../src/engine/kiwoom_websocket.py)는 observer flag가 켜진 경우에만 collector를 lazy import/start한다. 신규 `REG`/`REMOVE`, 종목 수, depth, KRX/NXT quota는 변경하지 않았다. [forward_collector.py](../../src/engine/scalping/micro_reversion/forward_collector.py)는 producer callback에서 JSON 직렬화, 파일 I/O, fsync, detector, replay, 통계, symbol-master I/O, broker 또는 LLM 호출을 하지 않는다.
+새 제외 종목이 발견되면 다음 상태를 worker 처리와 상호 배제한 뒤 폐기한다.
 
-기능 플래그는 모두 기본 OFF다.
+- pre-event ring row와 sequence/timestamp watermark
+- horizon별 detector state와 parent-wave state
+- active path segment
+- collector series sequence와 detector clock
+- 제외 갱신 전에 queue에 들어온 old-version envelope의 worker-side 재검증
 
-```text
-SCALP_MICRO_REVERSION_OBSERVER_ENABLED=false
-SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED=false
-SCALP_MICRO_REVERSION_DISCOVERY_ENABLED=false
-```
+Envelope/path schema에는 `manual_control_exclusion_version`, `manual_control_exclusion_checked_at`, `sequence_epoch`, `series_sequence`를 추가했다. `manual_control_event_leak_count`는 더 이상 snapshot 상수가 아니라 collector 실측 counter다. 함께 추가한 실측값은 refresh/new-exclusion/state-purge/active-segment-purge/post-exclusion-envelope/post-exclusion-event count다.
 
-관찰을 실제로 시작하려면 별도 운영 시점에 observer와 path capture만 명시적으로 켜야 한다. discovery는 Gate B 전 계속 OFF이며, 이번 작업에서는 bot 재기동이나 runtime env 변경을 수행하지 않았다.
+### 2.2 Collector 종료와 재시작
 
-## 3. 수동관리 제외와 venue 계약
+Collector는 명시적 one-shot lifecycle(`new -> running -> closing -> closed`)을 채택했다.
 
-수동관리 제외 목록은 collector 생성 시 producer callback 밖에서 적재하고, 각 envelope 생성 전에 adapter가 hard veto한다. 제외 종목은 queue, detector, path, event reference에 들어가지 않는다. synthetic regression의 `manual_control_event_leak_count=0`을 확인했다.
+- worker drain timeout이 발생해도 등록된 모든 writer의 `close()`를 시도한다.
+- 한 writer의 close 실패가 나머지 writer 정리를 막지 않는다.
+- shutdown 시작 후 새 writer 생성을 차단한다.
+- worker와 writer 오류를 수집한 뒤 종료 오류로 보고한다.
+- `close()`는 idempotent이고, closed collector의 `start()`는 fail-closed한다.
 
-Kiwoom 공식 reference gate는 다음을 고정했다.
+회귀 테스트는 worker timeout과 첫 writer close 실패를 동시에 주입하고 두 번째 writer까지 정리되는지 확인한다.
+
+### 2.3 0B venue provenance
+
+0B item은 `last_realtime_type_item["0B"]`만 사용한다. generic `last_ws_item` fallback을 제거했으며 type-specific item이 없으면 `MISSING_0B_ITEM`으로 차단한다. `_AL`은 계속 차단하고 `_NX`만 NXT로 인정한다. FID `9081`은 raw provenance일 뿐 venue 판정에 사용하지 않는다.
+
+Kiwoom reference gate는 기존 검증을 유지한다.
 
 - upstream: `Kiwoom-Securities/Kiwoom-REST-API@69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
-- 확인 시각: `2026-08-08T20:32:10+09:00`
-- 확인 경로: `kiwoom_docs/실시간시세.md`의 0B/0D, `kiwoom/realtime/decoders.py`, `kiwoom/realtime/schemas.py`, 0B/0D examples, 로컬 [Kiwoom API contract](../kiwoom-api-data-contract.md)
-- 사용 field: 0B FID `20` 체결시각, `10` 현재가, `27/28` 최우선 매도/매수, `15` 체결량
-- FID `9081`은 raw provenance로만 보존하고 venue 판정에 사용하지 않는다.
-- plain item은 KRX, `_NX`는 NXT로만 인정한다. `_AL`은 SOR view일 뿐 실제 체결 venue 증명이 아니므로 관찰 envelope 생성을 차단한다.
+- 확인 경로: `kiwoom_docs/실시간시세.md` 0B/0D, realtime decoder/schema, 공식 examples, 로컬 [Kiwoom API contract](../kiwoom-api-data-contract.md)
+- producer hook: [kiwoom_websocket.py](../../src/engine/kiwoom_websocket.py)의 `_queue_tick_event`는 0B에서만 observer를 호출하며, `_observe_micro_reversion_forward`가 예외를 격리한다. `_handle_message`는 lock 안에서 type-specific item/venue를 갱신한 snapshot copy를 hook에 전달한다.
 
-Verified tax/symbol metadata가 없는 종목도 관찰은 가능하지만 경제성 headline, P2-C confirmation, sim 승격 근거로 사용할 수 없다.
+### 2.4 Timestamp와 원천 validation 계측
 
-## 4. Runtime health 지표
+- exchange future skew tolerance: `1,000ms`; 허용 범위는 receive timestamp로 clamp하고 adjustment count를 남긴다.
+- maximum exchange-to-receive lag: `10,000ms`; 초과 row는 stale timestamp block으로 제외한다.
+- `invalid_snapshot_rate`, `venue_block_rate`, `timestamp_block_rate`, `invalid_envelope_rate`, `quote_age_missing_rate`, `bbo_complete_rate`를 callback 전체 분모로 제공한다.
 
-collector snapshot은 다음을 분리해 제공한다.
+### 2.5 Sequence와 reference/path 정합성
 
-- producer callback 및 enqueue latency p50/p95/p99
-- exchange-to-local receive gap p95, quote age p95
-- observation queue depth high-water/full/drop
-- path sequence gap/duplicate/out-of-order와 pre/active/post point 수
-- writer alive/count/restart/error, queue/full/drop, write/flush/fsync latency
-- last persisted sequence, bytes/event, bytes/trade-date, disk remaining, storage self-disable
-- observer runtime effect와 trading/sim/threshold/broker effect 불변값
+Source watermark를 `(sequence_epoch, symbol, venue, session_bucket, series_sequence)`로 명시했다. queue full과 invalid envelope로 생긴 gap은 원인별 explained gap으로 집계하고, 원인이 없는 차이는 `unexplained_sequence_gap_count`로 분리한다. Writer는 aggregate max 외에 series별 마지막 persisted epoch/sequence를 제공한다.
 
-Snapshot 실패도 producer로 전파하지 않고 observer effect를 fail-closed로 보고한다.
+Event reference와 path는 별도 append 파일을 유지하지만, clean shutdown에서 두 파일을 재독해 coverage, orphan reference, unreferenced segment를 대조한다. `reference_reconciliation_completed`가 false이거나 reconciliation error가 있으면 Gate B를 통과할 수 없다. Reference fsync latency p95/p99와 detector clock adjustment count/max도 추가했다.
 
-## 5. 코드리뷰 및 보완
+## 3. 코드리뷰 결과
 
-`korstockscan-review-gate`에 따라 구현 후 producer/consumer 계약, silent failure, runtime authority leak, queue/writer 장애 및 기존 WebSocket 회귀를 검토했다.
+`korstockscan-review-gate`에 따라 producer/consumer, silent-fail, authority leak, 경합과 종료 경로를 재검토했다.
 
-1차 리뷰에서 다음을 보완했다.
+1차 리뷰에서 shutdown 시 writer 목록을 너무 일찍 고정하면 drain 중 새 writer가 생길 수 있는 경합을 발견했다. shutdown 플래그 아래 writer 생성을 차단하고 join 시도 후 전체 writer를 다시 수집하도록 수정했다.
 
-- adapter 내부 시간만 producer latency로 오인할 수 있어 0B 전처리 전체 end-to-end callback latency reservoir로 교체했다.
-- Gate B에 필요한 path sequence gap/duplicate/out-of-order 지표를 collector snapshot에 연결했다.
-- bytes/event, bytes/trade-date, writer last error types를 추가했다.
-- snapshot 자체가 실패했을 때 `observer_runtime_effect=true`로 잘못 보일 수 있는 경로를 fail-closed `false`로 수정했다.
-- writer restart 후 drain과 sequence 연속성 회귀 테스트를 추가했다.
+재리뷰 결과 이번 remediation 범위의 미해결 코드 finding은 없다. 변경 모듈에는 broker/order/execution/AI/ADM/LDM dependency가 추가되지 않았고 producer callback은 여전히 bounded `put_nowait`까지만 수행한다.
 
-재리뷰 결과 미해결 finding은 없다.
+## 4. 검증
 
-## 6. 검증 결과
+- micro-reversion 전체 + Kiwoom WebSocket: `169 passed in 3.85s`
+- 동적 file-backed exclusion refresh: 통과
+- old-version queued envelope worker veto: 통과
+- ring/detector/parent-wave/active segment purge: 통과
+- 실측 manual-control leak: `0` synthetic regression 통과
+- worker timeout + 복수 writer cleanup + one-shot restart rejection: 통과
+- missing type-specific 0B item fail-closed: 통과
+- future skew tolerance와 stale lag block: 통과
+- queue/invalid-envelope explained gap과 unexplained gap 분리: 통과
+- per-series persisted watermark: 통과
+- reference/path 정상 coverage 100% 및 orphan/unreferenced synthetic 검출: 통과
+- reference write latency와 detector clock adjustment 계측: 통과
+- Ruff, Black, compileall, `git diff --check`: 통과
+- manifest commit/tree/archive/source 20개/test 16개 hash 재검산: 통과
 
-- micro-reversion 전체 + Kiwoom WebSocket: `159 passed in 3.74s`
-- producer adapter exception isolation: 통과
-- observation queue full/drop 및 non-blocking latency: 통과
-- writer restart/drain: 통과
-- critical disk capture-only self-disable: 통과
-- manual-control event leak: `0`
-- `_AL` venue 추정 차단: 통과
-- forbidden broker/order/execution/AI/ADM/LDM import scan: 통과
-- feature flags default OFF 및 무출력: 통과
-- Ruff, Black, `py_compile`, `git diff --check`: 통과
-- manifest source 20개/test 16개/deployment 2개 및 Git tree/archive 재계산: 통과
+## 5. 아직 닫지 않은 운영 증적
 
-## 7. Gate B와 다음 액션
+감리가 요구한 collector 계측 surface는 source와 synthetic regression으로 닫았다. 다만 다음은 실제 정상 거래일 canary 없이는 만들 수 없으므로 완료로 표시하지 않는다.
 
-다음 운영 액션은 **다음 정상 거래일에 observer/path capture만 canary로 기동하고 5거래일을 수집하는 것**이다. 기동 전에 commit/manifest 일치와 수동관리 제외 목록을 확인하고, 기동 후 `micro_reversion_forward_collector_snapshot()`을 보존한다.
+- 최소 5거래일·성숙 event 200건
+- 배포 전후 producer p95/p99 및 장중 detector-clock adjustment 실제 baseline
+- 실제 장중 queue/writer/reference/path reconciliation zero-error 결과
+- post-session compression/retention drill
 
-Gate B는 아래 조건을 모두 만족할 때만 `collector_health_pass_research_data_only`로 닫는다.
+또한 reference/path는 combined journal이 아니라 별도 파일 + shutdown reconciliation 방식이다. 따라서 reconciliation 미완료나 error는 fail-closed한다. 운영 증적이 없으므로 Gate B, P2-A/B/C, sim assumed-fill, trading runtime과 실주문은 계속 차단한다.
 
-- 최소 5거래일, 전체 성숙 event 200건 이상
-- required path field coverage 90% 이상
-- 정상장 queue drop 0, manual-control event leak 0
-- producer p95/p99 latency가 배포 전 기준보다 유의하게 악화되지 않음
-- event dedupe/hysteresis/re-arm 및 venue/session 분리 정상
-- pre/active/post coverage, restart/gap/recovery, writer/disk 상태 정상
-- post-session compression/retention dry-run 통과
+## 6. 다음 액션
 
-Gate B 전에는 P2 실데이터 replay/ranking을 실행하지 않는다. Gate B가 닫혀도 의미는 collector 건강성 승인뿐이며 P2-A/B/C는 연구 전용이다. P2-C 재감리 전 sim assumed-fill을 열지 않고, 별도 사용자 승인 전 trading runtime과 실주문을 열지 않는다.
+다음 순서는 `감리 재승인 -> 정상 거래일 observer/path canary 활성화 -> Gate B 수집`이다. 감리 재승인 전 runtime flag를 켜거나 bot을 재기동하지 않는다.
+
+Gate B는 최소 5거래일·성숙 event 200건과 함께 실제 leak/error/drop/reconciliation/validation-rate 지표를 모두 제출해야 한다. Gate B 통과는 research data collector 건강성 승인일 뿐 P2 또는 매매 권한 승인이 아니다.
