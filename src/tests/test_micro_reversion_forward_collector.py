@@ -887,7 +887,7 @@ def test_ws_producer_hook_is_called_only_for_0b(monkeypatch) -> None:
     assert collector.calls == 1
 
 
-def test_ws_stop_retains_collector_until_retryable_close_succeeds() -> None:
+def test_ws_stop_retains_collector_until_retryable_close_succeeds(monkeypatch) -> None:
     class RetryCollector:
         def __init__(self) -> None:
             self.close_calls = 0
@@ -901,6 +901,11 @@ def test_ws_stop_retains_collector_until_retryable_close_succeeds() -> None:
     manager = KiwoomWSManager("test-token")
     manager._stop_event.set()
     manager._micro_reversion_forward_collector = collector
+    monkeypatch.setattr(
+        manager,
+        "_persist_micro_reversion_canary_snapshot",
+        lambda: None,
+    )
 
     manager.stop()
     assert manager._micro_reversion_forward_collector is collector
@@ -923,6 +928,123 @@ def test_ws_producer_integration_remains_default_off(monkeypatch) -> None:
     assert snapshot["observer_runtime_effect"] is False
     assert snapshot["trading_runtime_effect"] is False
     assert snapshot["actual_order_submitted"] is False
+
+
+def test_ws_canary_guard_stops_observer_without_stopping_bot(monkeypatch) -> None:
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    close_calls = []
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: close_calls.append("observer_close"),
+    )
+
+    manager._enforce_micro_reversion_canary_guard(
+        {
+            "canary_guard": {
+                "stop_required": True,
+                "stop_reasons": ["nonzero_stop_metric:worker_error_count=1"],
+            }
+        }
+    )
+
+    assert close_calls == ["observer_close"]
+    assert manager._started is True
+    assert "worker_error_count=1" in (
+        manager._micro_reversion_forward_collector_stop_reason
+    )
+
+
+def test_ws_canary_auto_stop_is_latched_for_manager_lifetime(monkeypatch) -> None:
+    monkeypatch.setenv("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", "true")
+    manager = KiwoomWSManager("test-token")
+    manager._micro_reversion_forward_collector_stop_reason = "worker_error_count=1"
+
+    manager._start_micro_reversion_forward_collector()
+
+    assert manager._micro_reversion_forward_collector is None
+    assert manager._micro_reversion_forward_collector_error == "CanaryAutoStopLatched"
+
+
+def test_ws_canary_monitor_failure_closes_only_observer(monkeypatch) -> None:
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager._micro_reversion_forward_collector = object()
+    close_calls = []
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: close_calls.append("observer_close"),
+    )
+
+    manager._fail_closed_micro_reversion_canary_monitor(OSError("disk full"))
+
+    assert close_calls == ["observer_close"]
+    assert manager._started is True
+    assert manager._micro_reversion_forward_collector_error == "OSError"
+    assert manager._micro_reversion_forward_collector_stop_reason == (
+        "canary_monitor_failure:OSError"
+    )
+
+
+def test_ws_start_does_not_overwrite_collector_with_pending_close(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", "true")
+    manager = KiwoomWSManager("test-token")
+    retained = object()
+    manager._micro_reversion_forward_collector = retained
+    monkeypatch.setattr(
+        manager,
+        "_close_micro_reversion_forward_collector",
+        lambda: None,
+    )
+
+    manager._start_micro_reversion_forward_collector()
+
+    assert manager._micro_reversion_forward_collector is retained
+    assert manager._micro_reversion_forward_collector_error == (
+        "PreviousCollectorClosePending"
+    )
+
+
+def test_ws_monitor_start_failure_closes_created_collector(
+    monkeypatch,
+) -> None:
+    class RecordingCollector:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self, *, timeout_sec: float) -> None:
+            self.close_calls += 1
+
+    collector = RecordingCollector()
+    monkeypatch.setenv("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", "true")
+    monkeypatch.setattr(
+        "src.engine.scalping.micro_reversion.forward_collector."
+        "build_forward_collector_from_env",
+        lambda *, start: collector,
+    )
+    manager = KiwoomWSManager("test-token")
+    monkeypatch.setattr(
+        manager,
+        "_start_micro_reversion_canary_monitor",
+        lambda: (_ for _ in ()).throw(RuntimeError("synthetic thread failure")),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_persist_micro_reversion_canary_snapshot",
+        lambda: None,
+    )
+
+    manager._start_micro_reversion_forward_collector()
+
+    assert collector.close_calls == 1
+    assert manager._micro_reversion_forward_collector is None
+    assert manager._micro_reversion_forward_collector_stop_reason == (
+        "canary_monitor_start_failure:RuntimeError"
+    )
 
 
 def test_forward_collector_has_no_forbidden_runtime_imports() -> None:

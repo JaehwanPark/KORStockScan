@@ -1,0 +1,26 @@
+schema = "scalp_micro_reversion_canary_guard_v1"
+baseline_id = "main_server_synthetic_0b_20260808T224512+0900"
+baseline_artifact = "docs/audit-reports/2026-08-08-scalp-micro-reversion-callback-latency-baseline.json.txt"
+baseline_scope = "main_server_same_valid_synthetic_0b_observer_off_on_preflight_only"
+derivation = "max(absolute_floor, five_times_max_observed_internal_percentile)"
+immediate_stop_policy = "any_nonzero_declared_stop_metric_or_frozen_latency_limit_breach"
+forbidden_uses = [
+  "strategy_edge_or_ev_claim",
+  "p2_policy_selection",
+  "sim_or_real_position_creation",
+  "broker_order_submission_or_cancel",
+  "threshold_provider_bot_quantity_or_cap_mutation",
+]
+
+[limits]
+minimum_callback_samples = 1000
+producer_callback_latency_p95_max_ms = 1.0
+producer_callback_latency_p99_max_ms = 2.0
+snapshot_stale_after_sec = 30.0
+
+[authority]
+decision_authority = "observer_canary_stop_only_no_trading_authority"
+runtime_effect = "observer_auto_stop_only"
+actual_order_submitted = false
+broker_order_forbidden = true
+discovery_enabled = false

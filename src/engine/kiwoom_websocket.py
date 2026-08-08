@@ -273,6 +273,11 @@ class KiwoomWSManager:
         self._scalp_condition_prewarm_codes = OrderedDict()
         self._micro_reversion_forward_collector = None
         self._micro_reversion_forward_collector_error = ""
+        self._micro_reversion_forward_collector_stop_reason = ""
+        self._micro_reversion_forward_collector_close_lock = threading.Lock()
+        self._micro_reversion_canary_snapshot_lock = threading.Lock()
+        self._micro_reversion_canary_monitor_stop_event = threading.Event()
+        self._micro_reversion_canary_monitor_thread = None
 
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -1897,16 +1902,33 @@ class KiwoomWSManager:
         if not _env_bool("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", False):
             self._micro_reversion_forward_collector = None
             self._micro_reversion_forward_collector_error = ""
+            self._micro_reversion_forward_collector_stop_reason = ""
+            self._micro_reversion_canary_monitor_stop_event.set()
             return
+        if self._micro_reversion_forward_collector_stop_reason:
+            self._micro_reversion_forward_collector_error = "CanaryAutoStopLatched"
+            log_error(
+                "[WS] micro-reversion observer restart blocked by latched "
+                f"canary stop ({self._micro_reversion_forward_collector_stop_reason})"
+            )
+            return
+        if self._micro_reversion_forward_collector is not None:
+            self._close_micro_reversion_forward_collector()
+            if self._micro_reversion_forward_collector is not None:
+                self._micro_reversion_forward_collector_error = (
+                    "PreviousCollectorClosePending"
+                )
+                log_error(
+                    "[WS] micro-reversion observer restart blocked while prior "
+                    "collector close is pending"
+                )
+                return
         try:
             from src.engine.scalping.micro_reversion.forward_collector import (
                 build_forward_collector_from_env,
             )
 
-            self._micro_reversion_forward_collector = build_forward_collector_from_env(
-                start=True
-            )
-            self._micro_reversion_forward_collector_error = ""
+            collector = build_forward_collector_from_env(start=True)
         except Exception as exc:
             self._micro_reversion_forward_collector = None
             self._micro_reversion_forward_collector_error = type(exc).__name__
@@ -1914,6 +1936,22 @@ class KiwoomWSManager:
                 "[WS] micro-reversion forward observer startup isolated "
                 f"failure: {exc}"
             )
+            return
+        self._micro_reversion_forward_collector = collector
+        self._micro_reversion_forward_collector_error = ""
+        self._micro_reversion_forward_collector_stop_reason = ""
+        try:
+            self._start_micro_reversion_canary_monitor()
+        except Exception as exc:
+            self._micro_reversion_forward_collector_error = type(exc).__name__
+            self._micro_reversion_forward_collector_stop_reason = (
+                f"canary_monitor_start_failure:{type(exc).__name__}"
+            )
+            log_error(
+                "[WS] micro-reversion canary monitor startup fail-closed "
+                f"({type(exc).__name__}): {exc}"
+            )
+            self._close_micro_reversion_forward_collector()
 
     def _observe_micro_reversion_forward(self, code, data):
         collector = self._micro_reversion_forward_collector
@@ -1945,9 +1983,16 @@ class KiwoomWSManager:
                 "isolated_error_type": (
                     self._micro_reversion_forward_collector_error or None
                 ),
+                "canary_auto_stop_reason": (
+                    self._micro_reversion_forward_collector_stop_reason or None
+                ),
             }
         try:
-            return collector.runtime_snapshot().as_dict()
+            snapshot = collector.runtime_snapshot().as_dict()
+            snapshot["canary_auto_stop_reason"] = (
+                self._micro_reversion_forward_collector_stop_reason or None
+            )
+            return snapshot
         except Exception as exc:
             self._micro_reversion_forward_collector_error = type(exc).__name__
             return {
@@ -1963,7 +2008,80 @@ class KiwoomWSManager:
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "isolated_error_type": type(exc).__name__,
+                "canary_auto_stop_reason": (
+                    self._micro_reversion_forward_collector_stop_reason or None
+                ),
             }
+
+    def _persist_micro_reversion_canary_snapshot(self):
+        """Persist and evaluate observer health outside the market-data lock."""
+
+        with self._micro_reversion_canary_snapshot_lock:
+            collector = self._micro_reversion_forward_collector
+            if collector is None and not self._micro_reversion_forward_collector_error:
+                return None
+            from src.engine.scalping.micro_reversion.canary_monitor import (
+                write_canary_runtime_snapshot,
+            )
+
+            return write_canary_runtime_snapshot(
+                self.micro_reversion_forward_collector_snapshot()
+            )
+
+    def _start_micro_reversion_canary_monitor(self):
+        """Start observer-only health monitoring outside producer callbacks."""
+
+        if self._micro_reversion_forward_collector is None:
+            return
+        thread = self._micro_reversion_canary_monitor_thread
+        if thread is not None and thread.is_alive():
+            return
+        self._micro_reversion_canary_monitor_stop_event.clear()
+        self._micro_reversion_canary_monitor_thread = threading.Thread(
+            target=self._run_micro_reversion_canary_monitor,
+            name="micro-reversion-canary-monitor",
+            daemon=True,
+        )
+        self._micro_reversion_canary_monitor_thread.start()
+
+    def _run_micro_reversion_canary_monitor(self):
+        while not self._micro_reversion_canary_monitor_stop_event.is_set():
+            if self._micro_reversion_forward_collector is None:
+                return
+            try:
+                monitor_payload = self._persist_micro_reversion_canary_snapshot()
+            except Exception as exc:
+                self._fail_closed_micro_reversion_canary_monitor(exc)
+            else:
+                self._enforce_micro_reversion_canary_guard(monitor_payload)
+            if self._micro_reversion_forward_collector is None:
+                return
+            self._micro_reversion_canary_monitor_stop_event.wait(timeout=10.0)
+
+    def _fail_closed_micro_reversion_canary_monitor(self, exc):
+        if self._micro_reversion_forward_collector is None:
+            return
+        reason = f"canary_monitor_failure:{type(exc).__name__}"
+        self._micro_reversion_forward_collector_error = type(exc).__name__
+        self._micro_reversion_forward_collector_stop_reason = reason
+        log_error(
+            "[WS] micro-reversion canary monitor fail-closed " f"({reason}): {exc}"
+        )
+        self._close_micro_reversion_forward_collector()
+
+    def _enforce_micro_reversion_canary_guard(self, monitor_payload):
+        guard = (monitor_payload or {}).get("canary_guard") or {}
+        if not guard.get("stop_required"):
+            return
+        reasons = tuple(str(row) for row in guard.get("stop_reasons") or ())
+        reason = ";".join(reasons) or "unspecified_canary_guard_failure"
+        if not self._micro_reversion_forward_collector_stop_reason:
+            self._micro_reversion_forward_collector_stop_reason = reason
+            log_error(
+                "[WS] micro-reversion observer canary auto-stop requested "
+                f"({reason})"
+            )
+        self._close_micro_reversion_forward_collector()
 
     def _dispatch_tick_events(self):
         while not self._stop_event.is_set():
@@ -1986,10 +2104,12 @@ class KiwoomWSManager:
 
     def stop(self):
         if self._stop_event.is_set():
+            self._micro_reversion_canary_monitor_stop_event.set()
             self._close_micro_reversion_forward_collector()
             return
 
         self._stop_event.set()
+        self._micro_reversion_canary_monitor_stop_event.set()
         self._started = False
         self._session_ready.clear()
         self._tick_dispatch_event.set()
@@ -2017,6 +2137,7 @@ class KiwoomWSManager:
             self._state_dispatch_thread,
             self._tick_dispatch_thread,
             self._ws_thread,
+            self._micro_reversion_canary_monitor_thread,
         ]:
             if thread and thread is not current_thread and thread.is_alive():
                 thread.join(timeout=2)
@@ -2027,8 +2148,10 @@ class KiwoomWSManager:
     def _close_micro_reversion_forward_collector(self):
         """Close the one-shot observer, retaining it when shutdown needs a retry."""
 
-        collector = self._micro_reversion_forward_collector
-        if collector is not None:
+        with self._micro_reversion_forward_collector_close_lock:
+            collector = self._micro_reversion_forward_collector
+            if collector is None:
+                return
             try:
                 collector.close(timeout_sec=10.0)
             except Exception as exc:
@@ -2039,8 +2162,23 @@ class KiwoomWSManager:
                 )
             else:
                 if self._micro_reversion_forward_collector is collector:
+                    final_snapshot_error = None
+                    try:
+                        self._persist_micro_reversion_canary_snapshot()
+                    except Exception as exc:
+                        final_snapshot_error = exc
+                        log_error(
+                            "[WS] micro-reversion final canary snapshot isolated "
+                            f"failure: {exc}"
+                        )
                     self._micro_reversion_forward_collector = None
-                    self._micro_reversion_forward_collector_error = ""
+                    self._micro_reversion_canary_monitor_stop_event.set()
+                    if final_snapshot_error is None:
+                        self._micro_reversion_forward_collector_error = ""
+                    else:
+                        self._micro_reversion_forward_collector_error = type(
+                            final_snapshot_error
+                        ).__name__
 
     @staticmethod
     def _is_login_success_message(msg_dict):

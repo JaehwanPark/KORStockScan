@@ -1,0 +1,71 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20260808T224512+0900",
+  "generated_at": "2026-08-08T22:45:12+09:00",
+  "source_base_commit": "fe12ca5c",
+  "benchmark_module_sha256": "98963c7d2a7e05eaf3eb06b3befa757914d1d2610cd64d9c7d5fd891ebb5b6b2",
+  "forward_collector_sha256": "64e55afc05c1f33a8bd7e1fb8f343dce7f49ad6c61218034db862308ded6bbab",
+  "kiwoom_websocket_sha256": "eefd802cac9678740f0da297144f38cb291f22d9f85d2a0023d8d9ef469e5a97",
+  "canary_guard_config_sha256": "c926c9121cfd184ecb162e1aa3e3da0d08e1cb479d156b87b87e30a4d5611874",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1010-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {"p50_ms": 0.000123, "p95_ms": 0.000129, "p99_ms": 0.000141, "max_ms": 0.008384, "mean_ms": 0.000125045},
+    {"p50_ms": 0.000123, "p95_ms": 0.000130, "p99_ms": 0.000145, "max_ms": 0.004078, "mean_ms": 0.0001243084},
+    {"p50_ms": 0.000123, "p95_ms": 0.000130, "p99_ms": 0.000145, "max_ms": 0.014940, "mean_ms": 0.0001275212},
+    {"p50_ms": 0.000123, "p95_ms": 0.000129, "p99_ms": 0.000141, "max_ms": 0.000239, "mean_ms": 0.0001232928},
+    {"p50_ms": 0.000122, "p95_ms": 0.000130, "p99_ms": 0.000143, "max_ms": 0.000315, "mean_ms": 0.0001232348}
+  ],
+  "observer_on_runs": [
+    {"p50_ms": 0.024410, "p95_ms": 0.027391, "p99_ms": 0.033756, "max_ms": 5.144699, "mean_ms": 0.0473912994, "collector_internal_p95_ms": 0.026090, "collector_internal_p99_ms": 0.032335, "queue_drop_count": 0, "worker_error_count": 0},
+    {"p50_ms": 0.024538, "p95_ms": 0.025718, "p99_ms": 0.033098, "max_ms": 5.131232, "mean_ms": 0.0403187236, "collector_internal_p95_ms": 0.024281, "collector_internal_p99_ms": 0.031737, "queue_drop_count": 0, "worker_error_count": 0},
+    {"p50_ms": 0.024600, "p95_ms": 0.025942, "p99_ms": 0.033298, "max_ms": 5.481887, "mean_ms": 0.0454675128, "collector_internal_p95_ms": 0.024530, "collector_internal_p99_ms": 0.031874, "queue_drop_count": 0, "worker_error_count": 0},
+    {"p50_ms": 0.024694, "p95_ms": 0.025942, "p99_ms": 0.033581, "max_ms": 5.117630, "mean_ms": 0.0485771140, "collector_internal_p95_ms": 0.024593, "collector_internal_p99_ms": 0.032212, "queue_drop_count": 0, "worker_error_count": 0},
+    {"p50_ms": 0.024612, "p95_ms": 0.025841, "p99_ms": 0.033100, "max_ms": 5.481518, "mean_ms": 0.0464220846, "collector_internal_p95_ms": 0.024373, "collector_internal_p99_ms": 0.031603, "queue_drop_count": 0, "worker_error_count": 0}
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000130,
+    "observer_off_p99_ms_max": 0.000145,
+    "observer_on_external_p95_ms_max": 0.027391,
+    "observer_on_external_p99_ms_max": 0.033756,
+    "observer_on_internal_p95_ms_max": 0.026090,
+    "observer_on_internal_p99_ms_max": 0.032335,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config_and_zero_drop_error_gap_leak_or_storage_degradation",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ],
+  "interpretation": "Offline preflight freezes observer callback safety limits only. Normal-session Gate B evidence remains pending and this artifact has no strategy, simulation, or order authority."
+}

@@ -8,7 +8,7 @@
 - integration tree: `4d0cf13453204862f471b4a8ddc55792e6e4185a`
 - manifest: [producer canary integration manifest](./2026-08-08-scalp-micro-reversion-producer-canary-integration-manifest.json)
 - 검증: micro-reversion 전체 + Kiwoom WebSocket `177 passed in 3.98s`
-- 현재 상태: `source_reaudit_pending_observer_off`
+- 현재 상태: `monitoring_delta_reviewed_observer_off_reaudit_required`
 
 이번 보완은 소스·테스트·감리 증적만 변경했다. observer/path/discovery는 모두 기본 OFF이며 bot 재기동, runtime env 변경, 신규 구독, 장중 수집, Gate B, P2 replay, sim, trading runtime, 실주문은 실행하지 않았다.
 
@@ -17,7 +17,7 @@
 ```text
 source_remediation_merge=PASS
 default_off_deployment=PASS
-observer_canary_runtime_activation=HOLD_PENDING_REAUDIT
+observer_canary_runtime_activation=HOLD_PENDING_MONITORING_DELTA_REAUDIT
 gate_b_collector_health=NOT_STARTED
 p2_real_data_replay=BLOCKED
 sim_assumed_fill=NOT_APPROVED
@@ -78,7 +78,7 @@ Lifecycle은 `NEW → RUNNING → CLOSING → CLOSE_FAILED|CLOSED`다. worker가
 
 WebSocket owner도 첫 close 실패 시 collector 참조를 유지하고 후속 `stop()`에서 재시도한다. 성공 후에만 참조와 오류 상태를 지운다.
 
-관련 소스: [collector close lifecycle](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:382), [writer shutdown gate](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:1138), [producer retry owner](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1987)
+관련 소스: [collector close lifecycle](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:382), [writer shutdown gate](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:1138), [producer retry owner](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:2148)
 
 ### 2.5 Reconciliation 비용·중복 계측
 
@@ -100,13 +100,13 @@ Clean shutdown reconciliation에 다음 지표를 추가했다.
 
 | 검증 항목 | 원문 근거 | 판정 |
 | --- | --- | --- |
-| 기본 OFF lazy load | [1894-1908](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1894) | env가 false면 collector 객체를 만들지 않음 |
-| 0B 전용 hook | [1870-1876](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1870) | `normalized_realtime_type == "0B"`에서만 호출 |
-| hook 예외 격리 | [1918-1929](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1918) | 예외를 producer로 전파하지 않고 type만 기록 |
-| snapshot 완성 위치 | [2554-2560](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:2554), [3301](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:3301) | type-specific item/venue와 trade snapshot을 market-data lock 안에서 복제 |
-| observer lock 분리 | [3302-3308](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:3302) | observer normalization/enqueue는 market-data lock 밖에서 실행 |
+| 기본 OFF lazy load | [1899](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1899) | env가 false면 collector 객체를 만들지 않음 |
+| 0B 전용 hook | [1875](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1875) | `normalized_realtime_type == "0B"`에서만 호출 |
+| hook 예외 격리 | [1956](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1956) | 예외를 producer로 전파하지 않고 type만 기록 |
+| snapshot 완성 위치 | [2697](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:2697), [3439](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:3439) | type-specific item/venue와 trade snapshot을 market-data lock 안에서 복제 |
+| observer lock 분리 | [3440](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:3440) | observer normalization/enqueue는 market-data lock 밖에서 실행 |
 | bounded hot path | [observe entry](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:492) | callback은 정규화 후 bounded `put_nowait`; detector/JSON/fsync 없음 |
-| 종료 순서·재시도 | [1987-2043](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1987) | producer threads join 후 최대 10초 collector close; 실패 시 참조 유지·재호출 가능 |
+| 종료 순서·재시도 | [2148](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:2148) | producer threads join 후 최대 10초 collector close; 실패 시 참조 유지·재호출 가능 |
 
 Observer close는 WebSocket producer thread join 이후 호출되므로 producer lock을 점유한 상태에서 기다리지 않는다. 종료는 무제한 대기가 아니라 collector `timeout_sec=10.0`으로 제한되며, 실패 시 프로세스 정상성보다 CLOSED를 거짓 보고하지 않는 fail-closed/retryable 계약을 우선한다.
 
@@ -174,3 +174,45 @@ p2_real_data_replay=BLOCKED_UNTIL_GATE_B
 ```
 
 다음 실행은 main 서버에서 callback p95/p99 baseline 및 절대/상대 허용폭을 숫자로 고정하는 것이다. 승인 source/hash/clean 검증과 latency 조건이 모두 통과한 정상 거래일에만 observer/path=true, discovery=false를 적용한다. 원격 서버 접근 복구는 더 이상 선행조건이 아니다.
+
+## 7. Main 서버 latency preflight와 fail-closed monitor 보완
+
+2026-08-08 22:45 KST에 현재 main 서버에서 동일한 유효 합성 Kiwoom 0B snapshot으로 observer OFF/ON preflight를 각각 5회 실행했다. 각 반복은 warm-up 500회와 측정 5,000회로 구성했고 observer ON은 `path_capture_enabled=true`, `discovery_enabled=false`로 고정했다.
+
+| 항목 | 최대 관측값 | 동결 한계 |
+| --- | ---: | ---: |
+| observer OFF external p95 | `0.000130ms` | 비교 기준만 사용 |
+| observer OFF external p99 | `0.000145ms` | 비교 기준만 사용 |
+| observer ON external p95 | `0.027391ms` | 참고값 |
+| observer ON external p99 | `0.033756ms` | 참고값 |
+| collector internal p95 | `0.026090ms` | `1.0ms` |
+| collector internal p99 | `0.032335ms` | `2.0ms` |
+| queue drop / worker error | `0 / 0` | `0 / 0` |
+
+수치 원본은 [callback latency baseline](./2026-08-08-scalp-micro-reversion-callback-latency-baseline.json.txt), runtime 한계는 [canary guard config](/home/ubuntu/KORStockScan/configs/scalp_micro_reversion_canary_guard.toml)에 고정했다. 이 값은 main 서버 synthetic preflight일 뿐 정상장 실제 producer latency나 전략 EV 근거가 아니다. 장중 첫 1,000 callback까지는 latency만 warm-up으로 두고 drop/error/gap/leak/storage/authority 위반은 첫 snapshot부터 즉시 중단한다.
+
+장중 관측 공백을 닫기 위해 [canary monitor](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/canary_monitor.py)를 추가하고 producer/dashboard와 분리된 observer 전용 10초 background monitor loop에 연결했다. monitor는 다음을 수행한다.
+
+- `data/runtime/scalp_micro_reversion_forward_collector/latest.json`에 atomic snapshot과 `valid_until_epoch`를 기록한다.
+- queue/path/writer drop, worker/writer/reference/reconciliation error, manual-control post-exclusion/leak, unexplained gap, orphan/unreferenced/duplicate, storage degrade/self-disable, close failure/alive count, authority invariant, 동결 p95/p99를 fail-closed로 판정한다.
+- stop metric이 발생하면 main bot이나 주문 경로를 중단하지 않고 micro-reversion observer collector만 close한다.
+- collector close를 직렬화하고 clean close 뒤 최종 reconciliation snapshot을 기록한다. final snapshot 실패는 오류 상태로 보존한다.
+- config 누락·파싱 오류·monitor write 실패도 observer만 fail-closed한다.
+
+코드리뷰에서 JSON 반환값 tuple/list 불일치, 종료 후 warm-up 상태 오표기, 상대 CWD config 경로, final snapshot 오류 상태 소실, writer liveness 미검증, auto-stop 후 동일 manager 재활성화, close-pending collector overwrite 가능성, monitor thread 시작 실패 시 collector 고립 가능성, ignored JSON 증적 누락 가능성, dashboard/callback 선후관계에 따른 마지막 tick 오류 관측 지연을 발견해 보완했다. monitor/collector targeted test는 `38 passed`, micro-reversion 전체와 Kiwoom WebSocket 회귀는 `191 passed in 4.31s`이며 Ruff, Black, compileall, JSON/TOML parser, checklist parser(`count=30`), `git diff --check`도 통과했다.
+
+이번 monitor 연결은 `kiwoom_websocket.py` 실행 소스를 변경하므로 기존 `746c015b` exact-source 조건부 승인을 그대로 사용해 장중 활성화할 수 없다. 현재 플래그와 bot 상태는 변경하지 않았으며 최신 판정은 다음과 같다.
+
+```text
+main_server_latency_preflight=PASS_SYNTHETIC_OPERATIONAL_ONLY
+numeric_latency_limits=FROZEN_P95_1MS_P99_2MS
+intraday_stop_metric_persistence=IMPLEMENTED
+observer_only_auto_stop=IMPLEMENTED
+monitoring_delta_code_review=PASS
+observer_path_canary_activation=HOLD_PENDING_MONITORING_DELTA_REAUDIT
+gate_b_collector_health=NOT_STARTED
+p2_real_data_replay=BLOCKED_UNTIL_GATE_B
+sim_or_trading_authority=NOT_APPROVED
+```
+
+다음 액션은 이 monitoring delta를 commit/manifest로 고정해 감리 재승인을 받은 뒤, 정상 거래일 장전에만 `observer=true`, `path_capture=true`, `discovery=false`로 canary를 시작하는 것이다.
