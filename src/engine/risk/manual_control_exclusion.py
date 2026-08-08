@@ -207,6 +207,35 @@ def manual_control_auto_exclusion_source(code: object) -> str:
     return ""
 
 
+def manual_control_operator_exclusion_source(code: object) -> str:
+    """Return the explicit operator source that owns an exclusion, if any.
+
+    Environment-configured exclusions are explicit operator configuration.
+    File-backed exclusions qualify only when their comment starts with the
+    protected ``manual_operator`` marker.  Automatic loss/safety exclusions
+    therefore cannot silently transfer order ownership to another service.
+    """
+    norm_code = normalize_manual_control_exclusion_code(code)
+    if not norm_code:
+        return ""
+    explicit_env_codes = frozenset(_split_codes(os.getenv(EXCLUDED_CODES_ENV, "")))
+    if norm_code in explicit_env_codes:
+        return EXCLUDED_CODES_ENV
+    path = _file_path()
+    with _WRITE_LOCK:
+        try:
+            original_text = path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    for line in original_text.splitlines():
+        uncommented, comment = _split_line_comment(line)
+        if norm_code not in set(_split_codes(uncommented)):
+            continue
+        if _manual_operator_exclusion_source_from_comment(comment):
+            return "manual_operator"
+    return ""
+
+
 def evaluate_manual_control_exclusion(code: object) -> ManualControlExclusionDecision:
     norm_code = normalize_manual_control_exclusion_code(code)
     if not norm_code:

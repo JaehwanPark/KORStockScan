@@ -68,6 +68,24 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-08 Widget Signal Auto-Trade Order Gate
+
+- Retrieved at `2026-08-08T13:11:22+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, and
+  `postman/kiwoom-openapi.postman_collection.json` for `kt10000`, `kt10001`,
+  `kt10003`, and `kt00007`.
+- The widget executor uses the ordinary domestic stock order contract. It
+  does not call an orderable-cash/deposit endpoint and does not infer that the
+  API request itself grants margin eligibility; account configuration and the
+  broker response remain authoritative. It does not substitute the credit
+  order API `kt10006`.
+- Only fills matched to the executor's exact current-trade-date order numbers
+  enter its sellable ledger. Aggregate holdings and prior-day quantities are
+  forbidden sell inputs. The gateway reads the existing shared token cache
+  only and has no issue/refresh fallback.
+
 ### 2026-08-07 Daily Runtime Token Ownership Gate
 
 - Retrieved at `2026-08-07T09:03:03+09:00` from upstream commit

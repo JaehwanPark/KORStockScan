@@ -16,6 +16,14 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 사용자 지시 구현 기록
+
+- [x] `[WidgetSignalAutoTradeDailyLedger0810] 위젯 대상 3종목 당일원장 실주문 실행기 구현` (`Due: 2026-08-10`, `Slot: PREOPEN`, `TimeWindow: 08:50~09:00`, `Track: RuntimeStability`)
+  - Source: [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [gateway.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/gateway.py), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md)
+  - 판정: 3개 위젯 producer는 관측 권한을 유지하고 별도 실행 owner가 `ENTRY_CAUTION|ENTRY_READY` 새 에피소드 매수와 final EXIT 당일 체결수량 청산만 수행한다. 전일 미청산 수량은 이력으로만 남기고 다음 거래일 원장에서 제외한다.
+  - 적용 상태: source와 systemd unit 구현 완료, 서비스 미설치·미기동이므로 현재 `runtime_effect=false`; 실제 적용 전 shared token, collector freshness, manual_operator ownership, 단일 instance를 확인한다.
+  - Rollback: 서비스 stop/disable. 장중 state 파일 삭제와 전일·수동·타 전략 수량 매도는 금지한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-07` postclose -> `2026-08-10`)
 

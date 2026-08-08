@@ -1,0 +1,28 @@
+[Unit]
+Description=KORStockScan Operator-Directed Widget Signal Auto Trader
+After=network-online.target korstockscan-samsung-widget-collector.service korstockscan-doosan-widget-collector.service korstockscan-hanwha-ocean-widget-collector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENABLED=true"
+Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY=1"
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.widget_auto_trade.service --interval-sec 1
+Restart=on-failure
+RestartSec=3
+UMask=0077
+Nice=5
+CPUQuota=10%
+MemoryMax=256M
+TasksMax=32
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -72,6 +72,62 @@ def test_manual_control_exclusion_append_adds_code_once(monkeypatch, tmp_path):
     assert path.read_text(encoding="utf-8").count("005930") == 1
 
 
+def test_manual_control_operator_source_requires_explicit_owner_marker(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # manual_operator samsung\n"
+        "034020 # auto_open_loss loss=-5.0%\n"
+        "042660\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("005930")
+        == "manual_operator"
+    )
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("034020")
+        == ""
+    )
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("042660")
+        == ""
+    )
+
+
+def test_manual_control_operator_source_accepts_explicit_env(monkeypatch, tmp_path):
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_ENV, "034020")
+    monkeypatch.setenv(
+        manual_control_exclusion.EXCLUDED_CODES_FILE_ENV,
+        str(tmp_path / "missing.txt"),
+    )
+
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("034020")
+        == manual_control_exclusion.EXCLUDED_CODES_ENV
+    )
+
+
+def test_manual_control_operator_source_rejects_legacy_watch_env(monkeypatch, tmp_path):
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(
+        manual_control_exclusion.LEGACY_WATCH_EXCLUDED_CODES_ENV, "034020"
+    )
+    monkeypatch.setenv(
+        manual_control_exclusion.EXCLUDED_CODES_FILE_ENV,
+        str(tmp_path / "missing.txt"),
+    )
+
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("034020")
+        == ""
+    )
+
+
 def test_manual_control_exclusion_remove_deletes_file_code(monkeypatch, tmp_path):
     path = tmp_path / "manual_control_excluded_codes.txt"
     path.write_text(
