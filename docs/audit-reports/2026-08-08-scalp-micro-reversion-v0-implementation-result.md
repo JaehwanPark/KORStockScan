@@ -1,5 +1,7 @@
 # Scalp Micro-Reversion V0/P0.6 구현결과 감리 보고서
 
+> Producer 연결 후속 상태는 [Producer Observation Canary 구현 결과](./2026-08-08-scalp-micro-reversion-producer-canary-result.md)가 소유한다. 본 문서의 producer 미연결/감리 대기 문구는 source-only 기준선 당시의 이력이다.
+
 - 작성일: `2026-08-08 KST`
 - 검증 기간: `2026-08-03`~`2026-08-07` 5거래일
 - canonical status: `v0_aggregate_taxable_equity_gate_failed_subcohort_execution_unresolved`
