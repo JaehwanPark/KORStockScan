@@ -14,11 +14,15 @@ def _fields(**overrides):
         "exchange_timestamp": "2026-08-08T09:00:00+09:00",
         "local_receive_timestamp": "2026-08-08T09:00:00.010+09:00",
         "source_sequence": 1,
+        "sequence_epoch": 1,
         "realtime_type": "0B",
         "trade_price": 10_000,
         "trade_qty": 10,
     }
     values.update(overrides)
+    values["series_sequence"] = overrides.get(
+        "series_sequence", values["source_sequence"]
+    )
     return values
 
 

@@ -109,6 +109,17 @@ class MultiHorizonShockDetector:
             detector.reset()
         self._waves.clear()
 
+    def drop_symbol(self, symbol: str) -> int:
+        """Discard detector and parent-wave state for a manual exclusion."""
+
+        removed = sum(
+            detector.drop_symbol(symbol) for detector in self._detectors.values()
+        )
+        wave_keys = [key for key in self._waves if key[1] == symbol]
+        for key in wave_keys:
+            del self._waves[key]
+        return removed + len(wave_keys)
+
     def process(
         self, observation: PriceObservation
     ) -> tuple[MultiHorizonShockEvent, ...]:

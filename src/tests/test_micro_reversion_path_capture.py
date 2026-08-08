@@ -28,9 +28,13 @@ def _envelope(sequence: int, second: int) -> RawMarketObservation:
         exchange_timestamp=f"2026-04-10T09:00:{second:02d}+09:00",
         local_receive_timestamp=f"2026-04-10T09:00:{second:02d}.010+09:00",
         source_sequence=sequence,
+        sequence_epoch=1,
+        series_sequence=sequence,
         realtime_type="0B",
         manual_control_exclusion_checked=True,
         manual_control_excluded=False,
+        manual_control_exclusion_version=1,
+        manual_control_exclusion_checked_at="2026-04-10T09:00:00+09:00",
         trade_price=10_000 - sequence,
         trade_qty=10,
     )
@@ -151,3 +155,15 @@ def test_event_references_append_with_observation_only_authority(
 
     assert [row["shock_event_id"] for row in rows] == ["evt-1", "evt-2"]
     assert all(row["trading_runtime_effect"] is False for row in rows)
+
+
+def test_manual_exclusion_drop_removes_ring_and_open_segment_state() -> None:
+    ring = PreEventRingBuffer(max_age_ms=30_000)
+    envelope = _envelope(1, 1)
+    assert ring.add(envelope) is True
+    coalescer = ParentWavePathCoalescer(ring)
+    coalescer.register_event(_event("evt-drop", 1, 1_000))
+
+    assert ring.drop_symbol("000001") == 1
+    assert coalescer.drop_symbol("000001") == 1
+    assert coalescer.active_segments_for(_envelope(2, 2)) == ()

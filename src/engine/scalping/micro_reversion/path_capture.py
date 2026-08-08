@@ -193,6 +193,18 @@ class PreEventRingBuffer:
                 self._evicted,
             )
 
+    def drop_symbol(self, symbol: str) -> int:
+        """Discard buffered observations and ordering state for one symbol."""
+
+        with self._lock:
+            keys = [key for key in self._points if key[0] == symbol]
+            removed = sum(len(self._points[key]) for key in keys)
+            for key in keys:
+                del self._points[key]
+                self._last_sequence.pop(key, None)
+                self._last_timestamp_ms.pop(key, None)
+            return removed
+
 
 @dataclass(slots=True)
 class _SegmentState:
@@ -392,6 +404,19 @@ class ParentWavePathCoalescer:
                 post_event_point_count=self._phase_counts[PathPhase.POST_EVENT],
             )
 
+    def drop_symbol(self, symbol: str) -> int:
+        """Abort open capture segments for a newly manual-managed symbol."""
+
+        with self._lock:
+            wave_ids = [
+                wave_id
+                for wave_id, state in self._segments.items()
+                if state.symbol == symbol
+            ]
+            for wave_id in wave_ids:
+                del self._segments[wave_id]
+            return len(wave_ids)
+
     def _expire_before(self, observed_at_ms: int) -> None:
         expired = [
             parent_wave_id
@@ -419,7 +444,10 @@ def _to_market_path_point(
         exchange_timestamp=envelope.exchange_timestamp,
         local_receive_timestamp=envelope.local_receive_timestamp,
         source_sequence=envelope.source_sequence,
+        sequence_epoch=envelope.sequence_epoch,
+        series_sequence=envelope.series_sequence,
         venue=envelope.venue,
+        session_bucket=envelope.session_bucket,
         detector_version=detector_version,
         capture_started_at=registration.capture_started_at,
         event_detected_at=event_detected_at,
@@ -433,6 +461,10 @@ def _to_market_path_point(
         aggressor_side=AggressorSide(envelope.aggressor_side.value),
         manual_control_exclusion_checked=(envelope.manual_control_exclusion_checked),
         manual_control_excluded=envelope.manual_control_excluded,
+        manual_control_exclusion_version=(envelope.manual_control_exclusion_version),
+        manual_control_exclusion_checked_at=(
+            envelope.manual_control_exclusion_checked_at
+        ),
     )
 
 

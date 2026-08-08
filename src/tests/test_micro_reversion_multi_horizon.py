@@ -46,3 +46,10 @@ def test_multi_horizon_groups_same_wave_and_state_rearms() -> None:
     assert events[0].rearm_reason == "initial_shock"
     assert events[1].rearm_reason == "recovery_then_new_impulse"
     assert events[0].as_dict()["metric_role"] == "pattern_discovery_feature"
+
+
+def test_drop_symbol_discards_detector_state() -> None:
+    detector = MultiHorizonShockDetector(MultiHorizonConfig(horizons_ms=(1_000, 3_000)))
+    detector.process(_observation(1_000, 10_000.0))
+
+    assert detector.drop_symbol("000001") == 2

@@ -79,6 +79,14 @@ class ShockDetector:
     def reset(self) -> None:
         self._states.clear()
 
+    def drop_symbol(self, symbol: str) -> int:
+        """Discard all detector history for one newly manual-managed symbol."""
+
+        keys = [key for key in self._states if key[1] == symbol]
+        for key in keys:
+            del self._states[key]
+        return len(keys)
+
     def process(self, observation: PriceObservation) -> ShockEvent | None:
         state = self._states.setdefault(observation.series_key, _SeriesState())
         if observation.observed_at_ms <= state.last_observed_at_ms:

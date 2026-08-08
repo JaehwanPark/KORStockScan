@@ -27,7 +27,7 @@ from src.engine.risk.manual_control_exclusion import (
 
 from .contracts import normalize_symbol, normalize_venue
 
-OBSERVER_ENVELOPE_SCHEMA = "scalp_micro_reversion_observation_envelope_v1"
+OBSERVER_ENVELOPE_SCHEMA = "scalp_micro_reversion_observation_envelope_v2"
 OBSERVER_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_observer_runtime_health",
     "decision_authority": "observation_transport_only_no_trading_authority",
@@ -122,9 +122,13 @@ class RawMarketObservation:
     exchange_timestamp: str
     local_receive_timestamp: str
     source_sequence: int
+    sequence_epoch: int
+    series_sequence: int
     realtime_type: str
     manual_control_exclusion_checked: bool
     manual_control_excluded: bool
+    manual_control_exclusion_version: int
+    manual_control_exclusion_checked_at: str
     trade_price: float | None = None
     trade_qty: int | None = None
     best_bid: float | None = None
@@ -146,12 +150,22 @@ class RawMarketObservation:
             raise ValueError("session_bucket is required")
         if not str(self.realtime_type).strip():
             raise ValueError("realtime_type is required")
-        if self.source_sequence < 0:
-            raise ValueError("source_sequence must not be negative")
+        if self.source_sequence < 0 or self.series_sequence < 0:
+            raise ValueError("source and series sequences must not be negative")
+        if self.source_sequence != self.series_sequence:
+            raise ValueError("source_sequence must equal series_sequence")
+        if self.sequence_epoch <= 0:
+            raise ValueError("sequence_epoch must be positive")
         if not self.manual_control_exclusion_checked:
             raise ValueError("manual-control exclusion must be checked first")
         if self.manual_control_excluded:
             raise ValueError("manual-control excluded symbols must not be observed")
+        if self.manual_control_exclusion_version <= 0:
+            raise ValueError("manual-control exclusion version must be positive")
+        _validate_aware_timestamp(
+            self.manual_control_exclusion_checked_at,
+            "manual_control_exclusion_checked_at",
+        )
         _validate_aware_timestamp(self.exchange_timestamp, "exchange_timestamp")
         _validate_aware_timestamp(
             self.local_receive_timestamp, "local_receive_timestamp"
@@ -376,17 +390,46 @@ class ObservationAdapter:
         self._manual_excluded_symbols = frozenset(
             normalize_symbol(symbol) for symbol in excluded if normalize_symbol(symbol)
         )
+        self._manual_exclusion_lock = threading.Lock()
+        self._manual_exclusion_version = 1
+        self._manual_exclusion_checked_at = _utc_now_iso()
         self._queue_depth = queue_depth
 
-    def refresh_manual_exclusions(self, symbols: Iterable[str] | None = None) -> None:
+    def refresh_manual_exclusions(
+        self, symbols: Iterable[str] | None = None
+    ) -> tuple[frozenset[str], frozenset[str], int]:
         """Refresh outside the producer callback; file access never occurs in observe."""
 
         excluded = (
             configured_manual_control_exclusion_codes() if symbols is None else symbols
         )
-        self._manual_excluded_symbols = frozenset(
+        refreshed = frozenset(
             normalize_symbol(symbol) for symbol in excluded if normalize_symbol(symbol)
         )
+        with self._manual_exclusion_lock:
+            previous = self._manual_excluded_symbols
+            if refreshed != previous:
+                self._manual_exclusion_version += 1
+            self._manual_excluded_symbols = refreshed
+            self._manual_exclusion_checked_at = _utc_now_iso()
+            return (
+                refreshed - previous,
+                previous - refreshed,
+                self._manual_exclusion_version,
+            )
+
+    def manual_exclusion_snapshot(self) -> tuple[frozenset[str], int, str]:
+        with self._manual_exclusion_lock:
+            return (
+                self._manual_excluded_symbols,
+                self._manual_exclusion_version,
+                self._manual_exclusion_checked_at,
+            )
+
+    def is_manual_excluded(self, symbol: object) -> bool:
+        normalized = normalize_symbol(symbol)
+        with self._manual_exclusion_lock:
+            return normalized in self._manual_excluded_symbols
 
     def runtime_snapshot(self) -> ObserverRuntimeSnapshot:
         return self.metrics.snapshot(self.flags, observer_runtime_loaded=True)
@@ -401,7 +444,10 @@ class ObservationAdapter:
             if not self.flags.observer_enabled:
                 return result
             symbol = normalize_symbol(envelope_fields.get("symbol"))
-            if symbol in self._manual_excluded_symbols:
+            excluded, exclusion_version, exclusion_checked_at = (
+                self.manual_exclusion_snapshot()
+            )
+            if symbol in excluded:
                 result = AdapterResult.MANUAL_CONTROL_EXCLUDED
                 return result
             try:
@@ -410,6 +456,8 @@ class ObservationAdapter:
                         **envelope_fields,
                         "manual_control_exclusion_checked": True,
                         "manual_control_excluded": False,
+                        "manual_control_exclusion_version": exclusion_version,
+                        "manual_control_exclusion_checked_at": exclusion_checked_at,
                     }
                 )
             except (TypeError, ValueError):
@@ -477,3 +525,9 @@ def _percentile(values: tuple[float, ...], percentile: int) -> float:
     ordered = sorted(values)
     index = round((len(ordered) - 1) * percentile / 100)
     return round(ordered[index], 6)
+
+
+def _utc_now_iso() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()

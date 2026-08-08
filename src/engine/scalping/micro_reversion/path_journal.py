@@ -22,7 +22,7 @@ from typing import Any, Iterable
 
 from .contracts import normalize_symbol, normalize_venue
 
-MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v2"
+MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v4"
 MARKET_PATH_AUTHORITY = "continuous_market_path_observation_only"
 MARKET_PATH_METRIC_CONTRACT = {
     "metric_role": "source_quality_gate",
@@ -59,7 +59,10 @@ class MarketPathPoint:
     exchange_timestamp: str
     local_receive_timestamp: str
     source_sequence: int
+    sequence_epoch: int
+    series_sequence: int
     venue: str
+    session_bucket: str
     detector_version: str
     capture_started_at: str
     event_detected_at: str
@@ -67,6 +70,8 @@ class MarketPathPoint:
     path_phase: str
     manual_control_exclusion_checked: bool
     manual_control_excluded: bool
+    manual_control_exclusion_version: int
+    manual_control_exclusion_checked_at: str
     capture_ended_at: str | None = None
     trade_price: float | None = None
     trade_qty: int | None = None
@@ -94,8 +99,14 @@ class MarketPathPoint:
         venue = normalize_venue(self.venue)
         if venue == "UNKNOWN":
             raise ValueError("market path venue must be explicit")
-        if self.source_sequence < 0:
-            raise ValueError("source_sequence must not be negative")
+        if not str(self.session_bucket).strip():
+            raise ValueError("market path session_bucket is required")
+        if self.source_sequence < 0 or self.series_sequence < 0:
+            raise ValueError("source and series sequences must not be negative")
+        if self.source_sequence != self.series_sequence:
+            raise ValueError("source_sequence must equal series_sequence")
+        if self.sequence_epoch <= 0:
+            raise ValueError("sequence_epoch must be positive")
         if self.dropped_message_count < 0:
             raise ValueError("dropped_message_count must not be negative")
         if not str(self.detector_version).strip():
@@ -104,6 +115,12 @@ class MarketPathPoint:
             raise ValueError("manual-control exclusion must be checked first")
         if self.manual_control_excluded:
             raise ValueError("manual-control excluded symbols must not be captured")
+        if self.manual_control_exclusion_version <= 0:
+            raise ValueError("manual-control exclusion version must be positive")
+        _parse_aware_timestamp(
+            self.manual_control_exclusion_checked_at,
+            field_name="manual_control_exclusion_checked_at",
+        )
         exchange_ts = _parse_aware_timestamp(
             self.exchange_timestamp, field_name="exchange_timestamp"
         )
@@ -181,6 +198,7 @@ class PathWriterMetrics:
     journal_writer_error_count: int
     capture_degraded: bool
     last_persisted_sequence: int | None
+    last_persisted_sequence_by_series: dict[str, dict[str, int]]
     persisted_envelope_count: int
     queue_high_water: int
     journal_queue_full_count: int
@@ -277,6 +295,7 @@ class NonBlockingPathJournalWriter:
         self._writer_errors = 0
         self._capture_degraded = False
         self._last_sequence: int | None = None
+        self._last_sequence_by_series: dict[str, dict[str, int]] = {}
         self._persisted = 0
         self._queue_high_water = 0
         self._queue_full = 0
@@ -342,6 +361,10 @@ class NonBlockingPathJournalWriter:
                 journal_writer_error_count=self._writer_errors,
                 capture_degraded=self._capture_degraded,
                 last_persisted_sequence=self._last_sequence,
+                last_persisted_sequence_by_series={
+                    key: dict(value)
+                    for key, value in self._last_sequence_by_series.items()
+                },
                 persisted_envelope_count=self._persisted,
                 queue_high_water=self._queue_high_water,
                 journal_queue_full_count=self._queue_full,
@@ -407,6 +430,18 @@ class NonBlockingPathJournalWriter:
                 else:
                     with self._lock:
                         self._last_sequence = batch[-1].source_sequence
+                        for point in batch:
+                            series_key = "|".join(
+                                (
+                                    point.symbol,
+                                    point.venue,
+                                    point.session_bucket,
+                                )
+                            )
+                            self._last_sequence_by_series[series_key] = {
+                                "sequence_epoch": point.sequence_epoch,
+                                "series_sequence": point.series_sequence,
+                            }
                         self._persisted += len(batch)
                         self._last_flush_latency_ms = write_metrics.flush_latency_ms
                         self._last_fsync_latency_ms = write_metrics.fsync_latency_ms

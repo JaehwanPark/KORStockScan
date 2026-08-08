@@ -32,7 +32,10 @@ def _point(sequence: int = 1, **overrides) -> MarketPathPoint:
         "exchange_timestamp": f"2026-08-08T09:00:0{sequence}+09:00",
         "local_receive_timestamp": f"2026-08-08T09:00:0{sequence}.010+09:00",
         "source_sequence": sequence,
+        "sequence_epoch": 1,
+        "series_sequence": sequence,
         "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
         "detector_version": "detector-v1",
         "capture_started_at": "2026-08-08T09:00:00+09:00",
         "event_detected_at": "2026-08-08T09:00:01+09:00",
@@ -40,6 +43,8 @@ def _point(sequence: int = 1, **overrides) -> MarketPathPoint:
         "path_phase": "ACTIVE_EVENT",
         "manual_control_exclusion_checked": True,
         "manual_control_excluded": False,
+        "manual_control_exclusion_version": 1,
+        "manual_control_exclusion_checked_at": "2026-08-08T09:00:00+09:00",
         "trade_price": 10_000 + sequence,
         "trade_qty": 10,
         "best_bid": 9_995,
@@ -208,6 +213,12 @@ def test_writer_restart_preserves_sequence_and_drains(tmp_path: Path) -> None:
     assert [row["source_sequence"] for row in rows] == [1, 2]
     assert metrics.journal_writer_restart_count == 1
     assert metrics.persisted_envelope_count == 2
+    assert (
+        metrics.last_persisted_sequence_by_series["000001|KRX|KRX_REGULAR"][
+            "series_sequence"
+        ]
+        == 2
+    )
     assert metrics.writer_alive is False
 
 
