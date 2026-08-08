@@ -1,0 +1,174 @@
+{
+  "schema": "scalp_micro_reversion_monitoring_delta_manifest_v1",
+  "generated_at": "2026-08-08T23:06:08+09:00",
+  "manifest_scope": "exact committed source and evidence for monitoring-delta reaudit",
+  "previous_conditionally_approved_commit": "746c015b52abe8880ea2a6317c9f2a4d6b54394f",
+  "integration_commit": "c4f48a283cd497310d59129d494c85b8077c059a",
+  "integration_tree": "7266d30d71f42bee6e189d1ec7c0ff3a78674815",
+  "integration_parent": "fe12ca5ca86051b8b2a28617c98603fb8722e8f4",
+  "integration_committed_at": "2026-08-08T23:02:49+09:00",
+  "integration_subject": "feat: add fail-closed micro-reversion canary monitor",
+  "working_tree_clean_before_manifest_generation": true,
+  "deployment_artifact": {
+    "format": "git archive --format=tar <integration_commit>",
+    "sha256": "61626a2f9eeb8a82e6872787d8c67f7b71d4bf5f3334dc92d23b29691889184e"
+  },
+  "monitoring_delta_manifest": {
+    "base_commit": "746c015b52abe8880ea2a6317c9f2a4d6b54394f",
+    "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
+    "sha256": "47eaabef61a35e9faab6e89fca70ecf6cb95e1ca4fd99d99072b8dec6c57c8c7",
+    "files": [
+      {"status": "A", "path": "configs/scalp_micro_reversion_canary_guard.toml", "sha256": "c926c9121cfd184ecb162e1aa3e3da0d08e1cb479d156b87b87e30a4d5611874"},
+      {"status": "A", "path": "docs/audit-reports/2026-08-08-scalp-micro-reversion-callback-latency-baseline.json.txt", "sha256": "b80bde76e3f6af178614106bfb368b38c7e9ac817bafc9df06d1ad57909849aa"},
+      {"status": "M", "path": "docs/audit-reports/2026-08-08-scalp-micro-reversion-producer-canary-integration-manifest.json", "sha256": "d6d79801a2f0174bca822a330511d43870a4ebd9a3bb31596d326eec5988909c"},
+      {"status": "M", "path": "docs/audit-reports/2026-08-08-scalp-micro-reversion-producer-canary-result.md", "sha256": "a84af209d9523b1204d6c5decf87c9dc1d849e7e1424114c9e752b804e0f3cea"},
+      {"status": "M", "path": "docs/checklists/2026-08-10-stage2-todo-checklist.md", "sha256": "d4b6ac8e2733b312fb71b56e028e26538e7458420357d587cce6a6ca8db127cc"},
+      {"status": "M", "path": "src/engine/kiwoom_websocket.py", "sha256": "eefd802cac9678740f0da297144f38cb291f22d9f85d2a0023d8d9ef469e5a97"},
+      {"status": "A", "path": "src/engine/scalping/micro_reversion/canary_monitor.py", "sha256": "98963c7d2a7e05eaf3eb06b3befa757914d1d2610cd64d9c7d5fd891ebb5b6b2"},
+      {"status": "A", "path": "src/tests/test_micro_reversion_canary_monitor.py", "sha256": "8d1660de4e5d031ac2d8d2b535504174d09e1c848ee299973a84f08f16568cb3"},
+      {"status": "M", "path": "src/tests/test_micro_reversion_forward_collector.py", "sha256": "5b1544cf31946fcb3de384af74b55b05fb4eb4e1dc08e9411b292da6f97994d4"}
+    ]
+  },
+  "source_manifest": {
+    "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
+    "sha256": "30f84fbadc58f0d9ac2a6a225fc9176339b990d267f2da41b9eba6fd88028c49",
+    "files": [
+      {"path": "src/engine/kiwoom_websocket.py", "sha256": "eefd802cac9678740f0da297144f38cb291f22d9f85d2a0023d8d9ef469e5a97"},
+      {"path": "src/engine/scalping/micro_reversion/__init__.py", "sha256": "d552b61af8375f5d6acb0f12afd85f160645d23ba6ba39b904bb8e73958953de"},
+      {"path": "src/engine/scalping/micro_reversion/canary_monitor.py", "sha256": "98963c7d2a7e05eaf3eb06b3befa757914d1d2610cd64d9c7d5fd891ebb5b6b2"},
+      {"path": "src/engine/scalping/micro_reversion/contracts.py", "sha256": "445ebf923d216f1fc1aa0fce1f20630ae27475cfddb4106a7812e39290c97bcd"},
+      {"path": "src/engine/scalping/micro_reversion/detector.py", "sha256": "4b94b812b295d3bfd6f167f073c8cece88df58da3c980d8e0af0351850ae3ac1"},
+      {"path": "src/engine/scalping/micro_reversion/execution_journal.py", "sha256": "019fd4d375d677c55dbcdceb8e16609e30876c1ec50cc15a405cadb902e3edb4"},
+      {"path": "src/engine/scalping/micro_reversion/forward_collector.py", "sha256": "64e55afc05c1f33a8bd7e1fb8f343dce7f49ad6c61218034db862308ded6bbab"},
+      {"path": "src/engine/scalping/micro_reversion/multi_horizon.py", "sha256": "5d7512d8aab9364f70cf5ed5fde7cefdb0bfc31320e623ba2099899e32b8fe65"},
+      {"path": "src/engine/scalping/micro_reversion/observation_adapter.py", "sha256": "0d526d8bc8679d37b95a09279949873cdd0d8401ca9bc7020726c8437abfde6a"},
+      {"path": "src/engine/scalping/micro_reversion/observation_gate.py", "sha256": "f2936ad3832b6720b9db5fa5178fccc7e24df912ff8308866b84024e5b9a0d82"},
+      {"path": "src/engine/scalping/micro_reversion/outcome_labeler.py", "sha256": "ae084596b563c06ea4396dd3ead8fb085b3ae2061aa8a6ab0250c3edc757c0fe"},
+      {"path": "src/engine/scalping/micro_reversion/p2_replay.py", "sha256": "9948e3dd6b0f330ac518bc64240710d943f5837364e9a4072a82806500cff558"},
+      {"path": "src/engine/scalping/micro_reversion/path_capture.py", "sha256": "5a7ea20b42a2513f075d01f0e84433721869a3cb346e999d1fb97706438bb483"},
+      {"path": "src/engine/scalping/micro_reversion/path_journal.py", "sha256": "2fa37863579837b9431df4643aa2227788eb07fb628ae797850902d61757876d"},
+      {"path": "src/engine/scalping/micro_reversion/registry.py", "sha256": "d07fa6790a037d973d9bd829300c12d44b1d3364ea0aed8493ead5fcd8e29314"},
+      {"path": "src/engine/scalping/micro_reversion/replay.py", "sha256": "21ed1d1bcbee8d88001aced14f2b30d272b3640924b228e210e54677e7114e35"},
+      {"path": "src/engine/scalping/micro_reversion/report.py", "sha256": "e5521a94c8101a3eaf5ef2a25d8815bf8898e33cc887f707ac2801df5e85e226"},
+      {"path": "src/engine/scalping/micro_reversion/reproducibility.py", "sha256": "f87c908c72a256e55ad2e97f15c7d22c0180a8011b1553aaa53ceb66848eb0ae"},
+      {"path": "src/engine/scalping/micro_reversion/research_gate.py", "sha256": "cc52c7a5a00592627490b33019e669ab2c8e3748a20ba8d154f76a930e12655c"},
+      {"path": "src/engine/scalping/micro_reversion/symbol_master.py", "sha256": "ad160e206df2b0692861d01c6f65ebdb7c1f25e698b311acb4a29940b403e6cf"},
+      {"path": "src/engine/scalping/micro_reversion/tax.py", "sha256": "077542274eebd110140be4a81764c20fed6b3876f1c50d6ecdab17d916a6733d"}
+    ]
+  },
+  "test_manifest": {
+    "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
+    "selection": "src/tests/test_micro_reversion_*.py plus src/tests/test_kiwoom_websocket.py",
+    "result": "191 passed in 4.30s",
+    "sha256": "64e2f1dac1bb9628608b676c29c05b7752897f349ce1e393a657c2338888c674",
+    "files": [
+      {"path": "src/tests/test_kiwoom_websocket.py", "sha256": "b459c50d48bcadb1f9b908fe4b5613fb6424e5f4a721a5edcc77b011d14ce9af"},
+      {"path": "src/tests/test_micro_reversion_canary_monitor.py", "sha256": "8d1660de4e5d031ac2d8d2b535504174d09e1c848ee299973a84f08f16568cb3"},
+      {"path": "src/tests/test_micro_reversion_contracts.py", "sha256": "7044618df4b5524c1daa91256d2a9a4d1d0f1d8aa66d7d1f5470a55237b67a27"},
+      {"path": "src/tests/test_micro_reversion_detector.py", "sha256": "6c3a3fe6af2bcc5b4f4d1c23aa4416b3afad1f7f1b192e096fe75f0ff0ce5aa0"},
+      {"path": "src/tests/test_micro_reversion_execution_journal.py", "sha256": "6fff4b89fb631da8536f41ff589ef164e3a9b24451efd49bf79b9554b49e4ef0"},
+      {"path": "src/tests/test_micro_reversion_forward_collector.py", "sha256": "5b1544cf31946fcb3de384af74b55b05fb4eb4e1dc08e9411b292da6f97994d4"},
+      {"path": "src/tests/test_micro_reversion_multi_horizon.py", "sha256": "8ff424525951291c17004e2bf4f6275b242f60273c5b51dfa7f5417bfa8af8c8"},
+      {"path": "src/tests/test_micro_reversion_observation_path.py", "sha256": "db292409f777cd04b97bd7b831a70a5884e7eb248fa745f1f1e3569e086ef128"},
+      {"path": "src/tests/test_micro_reversion_observer_runtime.py", "sha256": "442c0706d58cc04ca57cb9f4c482f94ddb41ee85ec4784d249151c767d66a15f"},
+      {"path": "src/tests/test_micro_reversion_outcome_labeler.py", "sha256": "9bd539d01a822dfa40c94c6d3566c03d7e0bc7262d2eb24322cbb8d5eaac1cf8"},
+      {"path": "src/tests/test_micro_reversion_p2_replay.py", "sha256": "4ffc1c9cb1ef786714b6e216f90561882e6f637f558e78b94ad2b46931be42e7"},
+      {"path": "src/tests/test_micro_reversion_path_capture.py", "sha256": "db4cada2fe779adaacb5e338913f33e718d4ec59db0026c64a57469f0fc53e4f"},
+      {"path": "src/tests/test_micro_reversion_registry.py", "sha256": "24f90d0d32a6cde45c78800f9c50e345e0eed48f906780a19b5366587642ed63"},
+      {"path": "src/tests/test_micro_reversion_replay.py", "sha256": "e73b95320ca80bbe0c70135c1e6079ebe739f4820f9af9f4756474201f2603bd"},
+      {"path": "src/tests/test_micro_reversion_research_gate.py", "sha256": "d6bcf588567cb1fbe5b479a711b4eba4a53f759714543cd658a0c7d01793e0c8"},
+      {"path": "src/tests/test_micro_reversion_symbol_master.py", "sha256": "c5619b02529f3f73465810fccb8b0203f6f87264092401762e115afd59a7c989"},
+      {"path": "src/tests/test_micro_reversion_tax.py", "sha256": "92acc8845da27f931416ef276669e7748fe99757987032a239027cedad1e7769"}
+    ]
+  },
+  "deployment_surface_manifest": {
+    "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
+    "sha256": "1bb8f81a1f7facb26cd0da76e533ac2c94dae960e91015ee34caf6a4135a900d",
+    "deployment_mode": "main_server_existing_kiwoom_websocket_process_default_off",
+    "runtime_enabled_during_manifest_generation": false,
+    "new_unit_or_wrapper_added": false,
+    "files": [
+      {"path": "configs/scalp_micro_reversion_canary_guard.toml", "sha256": "c926c9121cfd184ecb162e1aa3e3da0d08e1cb479d156b87b87e30a4d5611874"},
+      {"path": "src/engine/kiwoom_websocket.py", "sha256": "eefd802cac9678740f0da297144f38cb291f22d9f85d2a0023d8d9ef469e5a97"},
+      {"path": "src/engine/scalping/micro_reversion/canary_monitor.py", "sha256": "98963c7d2a7e05eaf3eb06b3befa757914d1d2610cd64d9c7d5fd891ebb5b6b2"},
+      {"path": "src/engine/scalping/micro_reversion/forward_collector.py", "sha256": "64e55afc05c1f33a8bd7e1fb8f343dce7f49ad6c61218034db862308ded6bbab"},
+      {"path": "src/engine/scalping/micro_reversion/observation_adapter.py", "sha256": "0d526d8bc8679d37b95a09279949873cdd0d8401ca9bc7020726c8437abfde6a"},
+      {"path": "src/engine/scalping/micro_reversion/path_journal.py", "sha256": "2fa37863579837b9431df4643aa2227788eb07fb628ae797850902d61757876d"},
+      {"path": "src/run_bot.sh", "sha256": "eaa1be14117c3c81c6accf0e511d29c4c87736af1c8045a7da4fb6e2ceea13f8"}
+    ]
+  },
+  "callback_latency_baseline": {
+    "schema": "scalp_micro_reversion_callback_baseline_v1",
+    "baseline_id": "main_server_synthetic_0b_20260808T224512+0900",
+    "artifact": "docs/audit-reports/2026-08-08-scalp-micro-reversion-callback-latency-baseline.json.txt",
+    "artifact_sha256": "b80bde76e3f6af178614106bfb368b38c7e9ac817bafc9df06d1ad57909849aa",
+    "scope": "main-server same valid synthetic 0B observer OFF/ON preflight only",
+    "repeats": 5,
+    "warmup_per_repeat": 500,
+    "iterations_per_repeat": 5000,
+    "observer_off_p95_ms_max": 0.000130,
+    "observer_off_p99_ms_max": 0.000145,
+    "observer_on_internal_p95_ms_max": 0.026090,
+    "observer_on_internal_p99_ms_max": 0.032335,
+    "queue_drop_count": 0,
+    "worker_error_count": 0,
+    "frozen_limits": {
+      "minimum_callback_samples": 1000,
+      "producer_callback_latency_p95_max_ms": 1.0,
+      "producer_callback_latency_p99_max_ms": 2.0,
+      "snapshot_stale_after_sec": 30.0
+    }
+  },
+  "policy_config": {
+    "observer_enabled_by_default": false,
+    "observer_path_capture_enabled_by_default": false,
+    "observer_discovery_enabled_by_default": false,
+    "observer_runtime_effect_by_default": false,
+    "new_market_data_subscription_expansion": false,
+    "monitor_interval_sec": 10.0,
+    "monitor_snapshot_path": "data/runtime/scalp_micro_reversion_forward_collector/latest.json",
+    "observer_only_auto_stop": true,
+    "main_bot_auto_stop": false,
+    "p2_real_data_discovery_run": false,
+    "selection_authority": false,
+    "sim_position_effect": false,
+    "trading_runtime_effect": false,
+    "trading_decision_effect": false,
+    "threshold_effect": false,
+    "broker_effect": false,
+    "actual_order_submitted": false,
+    "broker_order_forbidden": true
+  },
+  "runtime_schema_versions": {
+    "observation_envelope": "scalp_micro_reversion_observation_envelope_v3",
+    "forward_collector": "scalp_micro_reversion_forward_collector_v3",
+    "market_path_point": "scalp_micro_reversion_market_path_point_v5",
+    "canary_guard": "scalp_micro_reversion_canary_guard_v1",
+    "canary_monitor": "scalp_micro_reversion_canary_monitor_v1"
+  },
+  "official_kiwoom_reference_gate": {
+    "reopened_for_this_delta": false,
+    "reason": "No REST/WebSocket request, response-field, realtime FID, REG/REMOVE, reconnect/resubscribe, authentication, order, or continuation contract changed. The delta observes the existing normalized 0B snapshot and adds observer lifecycle monitoring only.",
+    "prior_verified_upstream_commit": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+    "prior_retrieved_at": "2026-08-08T20:32:10+09:00",
+    "protocol_effect": false,
+    "subscription_effect": false
+  },
+  "validation": {
+    "pytest": "PASS: 191 passed in 4.30s",
+    "ruff": "PASS",
+    "black_check": "PASS",
+    "compileall": "PASS",
+    "forbidden_authority_scan": "PASS: no broker/order/AI/ADM/LDM authority leak found in monitor or collector",
+    "unresolved_code_review_findings": 0
+  },
+  "reaudit_decision": {
+    "monitoring_delta_source_review": "PASS",
+    "manifest_integrity": "PASS",
+    "default_off_deployment": "PASS",
+    "observer_path_canary_activation": "CONDITIONAL_GO_AFTER_ARTIFACT_COMMIT_AND_CLEAN_PREOPEN_RECHECK",
+    "gate_b_collector_health": "NOT_STARTED",
+    "p2_actual_path_discovery": "BLOCKED_UNTIL_GATE_B",
+    "sim_or_trading_authority": "NOT_APPROVED"
+  }
+}
