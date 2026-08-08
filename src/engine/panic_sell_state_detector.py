@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from collections import Counter, deque
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Iterable
 
@@ -17,6 +17,7 @@ REPORT_NORMAL = "NORMAL"
 REPORT_PANIC_SELL = "PANIC_SELL"
 REPORT_RECOVERY_WATCH = "RECOVERY_WATCH"
 REPORT_RECOVERY_CONFIRMED = "RECOVERY_CONFIRMED"
+KST = timezone(timedelta(hours=9))
 
 
 class PanicInternalState(str, Enum):
@@ -64,6 +65,8 @@ class PanicSellDetectorConfig:
     cooldown_bars: int = 12
     block_long_during_recovery_candidate: bool = True
     degrade_when_orderbook_missing: bool = True
+    max_orderbook_snapshot_age_ms: float = 2_500.0
+    fallback_observation_bucket_sec: int = 15
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ class PanicCandle:
     close: float
     volume: float
     vwap: float | None = None
+    volume_observed: bool = True
 
 
 @dataclass(frozen=True)
@@ -104,6 +108,8 @@ class PanicOrderbookMicro:
     micro_state: str = "missing"
     ready: bool = False
     observer_healthy: bool = False
+    captured_at_ms: float | None = None
+    snapshot_age_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +192,11 @@ def _parse_dt(value: Any) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _epoch_ms(value: datetime) -> float:
+    normalized = value if value.tzinfo is not None else value.replace(tzinfo=KST)
+    return normalized.timestamp() * 1000.0
 
 
 def _clamp01(value: float | None) -> float:
@@ -379,6 +390,22 @@ def _orderbook_missing(orderbook: PanicOrderbookMicro | None) -> bool:
     )
 
 
+def _orderbook_fresh(
+    orderbook: PanicOrderbookMicro | None, config: PanicSellDetectorConfig
+) -> bool:
+    if orderbook is None or _orderbook_missing(orderbook):
+        return False
+    if not orderbook.ready or not orderbook.observer_healthy:
+        return False
+    if orderbook.snapshot_age_ms is None:
+        return False
+    return (
+        0.0
+        <= float(orderbook.snapshot_age_ms)
+        <= float(config.max_orderbook_snapshot_age_ms)
+    )
+
+
 def compute_panic_features(
     candles: list[PanicCandle],
     trades: list[PanicTradeFlow] | None,
@@ -405,31 +432,39 @@ def compute_panic_features(
     prev_sell_ratio = None
     if len(trades) >= 2 and trades[-2].total_volume > 0:
         prev_sell_ratio = trades[-2].sell_volume / trades[-2].total_volume
-    volumes = [max(0.0, item.volume) for item in candles]
+    volumes = [max(0.0, item.volume) for item in candles if bool(item.volume_observed)]
     volume_base = _avg(
         volumes[-max(config.long_window_bars, config.mid_window_bars) : -1]
     )
     volume_ratio = (
         (candle.volume / volume_base)
-        if volume_base and volume_base > 0
-        else (1.0 if candle.volume > 0 else 0.0)
+        if candle.volume_observed and volume_base and volume_base > 0
+        else (1.0 if candle.volume_observed and candle.volume > 0 else 0.0)
     )
-    volume_z = _zscore(candle.volume, volumes[:-1])
+    volume_z = _zscore(candle.volume, volumes[:-1]) if candle.volume_observed else 0.0
     short_return = _return_pct(candles, config.short_window_bars)
     mid_return = _return_pct(candles, config.mid_window_bars)
     long_return = _return_pct(candles, config.long_window_bars)
     close_location = _close_location(candle)
     lower_wick = _lower_wick_ratio(candle)
-    spread_ratio = _spread_ratio(orderbooks)
-    bid_depth_drop = _bid_depth_drop(orderbooks)
-    bid_depth_refill = _bid_depth_refill(
-        orderbooks, panic_baseline=panic_bid_depth_baseline
-    )
     current_orderbook = orderbooks[-1] if orderbooks else None
-    ofi_z = current_orderbook.ofi_z if current_orderbook else None
-    ofi_values = [float(item.ofi_z) for item in orderbooks if item.ofi_z is not None]
+    orderbook_fresh = _orderbook_fresh(current_orderbook, config)
+    usable_orderbooks = [item for item in orderbooks if _orderbook_fresh(item, config)]
+    spread_ratio = _spread_ratio(usable_orderbooks) if orderbook_fresh else None
+    bid_depth_drop = _bid_depth_drop(usable_orderbooks) if orderbook_fresh else None
+    bid_depth_refill = (
+        _bid_depth_refill(usable_orderbooks, panic_baseline=panic_bid_depth_baseline)
+        if orderbook_fresh
+        else None
+    )
+    ofi_z = current_orderbook.ofi_z if current_orderbook and orderbook_fresh else None
+    ofi_values = [
+        float(item.ofi_z) for item in usable_orderbooks if item.ofi_z is not None
+    ]
     ofi_cusum = _ofi_cusum(ofi_values, direction="negative")
-    qi_ewma = current_orderbook.qi_ewma if current_orderbook else None
+    qi_ewma = (
+        current_orderbook.qi_ewma if current_orderbook and orderbook_fresh else None
+    )
     micro_state = current_orderbook.micro_state if current_orderbook else "missing"
     observer_healthy = (
         current_orderbook.observer_healthy if current_orderbook else False
@@ -448,7 +483,7 @@ def compute_panic_features(
         for passed in (
             ofi_z is not None and float(ofi_z) <= -2.5,
             sell_ratio is not None and float(sell_ratio) >= config.sell_ratio_threshold,
-            volume_ratio >= config.volume_spike_threshold,
+            candle.volume_observed and volume_ratio >= config.volume_spike_threshold,
             bid_depth_drop is not None
             and float(bid_depth_drop) >= config.bid_depth_drop_threshold,
             spread_ratio is not None
@@ -476,6 +511,7 @@ def compute_panic_features(
         "volume_ratio_short": round(volume_ratio, 6),
         "volume_z": round(volume_z, 6),
         "total_volume": round(candle.volume, 6),
+        "volume_observed": bool(candle.volume_observed),
         "sell_ratio": None if sell_ratio is None else round(sell_ratio, 6),
         "buy_ratio": None if buy_ratio is None else round(buy_ratio, 6),
         "sell_pressure_decay": bool(
@@ -506,6 +542,12 @@ def compute_panic_features(
         "orderbook_ready": bool(orderbook_ready),
         "orderbook_observer_healthy": bool(observer_healthy),
         "orderbook_missing": _orderbook_missing(current_orderbook),
+        "orderbook_source_fresh": bool(orderbook_fresh),
+        "orderbook_snapshot_age_ms": (
+            None
+            if current_orderbook is None or current_orderbook.snapshot_age_ms is None
+            else round(float(current_orderbook.snapshot_age_ms), 3)
+        ),
         "no_new_low": bool(no_new_low),
         "bounce_from_low_pct": round(bounce_from_low_pct, 6),
         "panic_low_reference": panic_low,
@@ -596,9 +638,18 @@ def compute_panic_score(
         if config.degrade_when_orderbook_missing:
             panic_score = min(panic_score, 0.82)
         reasons.append("orderbook_missing_degraded")
-    if float(features.get("total_volume") or 0.0) < config.min_total_volume:
+    elif not features.get("orderbook_source_fresh"):
+        if config.degrade_when_orderbook_missing:
+            panic_score = min(panic_score, 0.82)
+        reasons.append("orderbook_stale_or_unhealthy_degraded")
+    if (
+        bool(features.get("volume_observed"))
+        and float(features.get("total_volume") or 0.0) < config.min_total_volume
+    ):
         panic_score = min(panic_score, 0.45)
         reasons.append("low_liquidity_score_capped")
+    elif not bool(features.get("volume_observed")):
+        reasons.append("bar_volume_missing_degraded")
     return round(_clamp01(panic_score), 6), reasons
 
 
@@ -682,6 +733,9 @@ def compute_recovery_score(
         + 0.15 * candle_reversal_score
         + 0.10 * vwap_reclaim_score
     )
+    if not bool(features.get("orderbook_source_fresh")):
+        recovery_score = min(recovery_score, config.recovery_score_threshold * 0.80)
+        reasons.append("recovery_requires_fresh_orderbook")
     if (
         bid_refill is not None
         and spread_ratio is not None
@@ -734,6 +788,11 @@ class PanicSellStateDetector:
         self._orderbooks: list[PanicOrderbookMicro] = []
         self._panic_vwap_value = 0.0
         self._panic_vwap_volume = 0.0
+        self.panic_candidate_start_ts: datetime | None = None
+        self.recovery_candidate_start_ts: datetime | None = None
+        self.last_transition_ts: datetime | None = None
+        self.panic_confirmation_latency_sec: float | None = None
+        self.recovery_confirmation_latency_sec: float | None = None
 
     def update(
         self,
@@ -792,6 +851,8 @@ class PanicSellStateDetector:
 
         previous_state = self.state
         panic_entered = False
+        panic_candidate_expired = False
+        recovery_candidate_rejected = False
         price_breakdown = (
             float(features["short_return_pct"]) <= -self.config.min_abs_drop_short_pct
             or float(features["mid_return_pct"]) <= -self.config.min_abs_drop_mid_pct
@@ -820,41 +881,96 @@ class PanicSellStateDetector:
 
         if self.state == PanicInternalState.NORMAL:
             if panic_candidate:
-                self._transition(PanicInternalState.PANIC_CANDIDATE)
+                self.panic_candidate_start_ts = candle.ts
+                self.panic_confirmation_latency_sec = None
+                self.recent_panic_scores.clear()
+                self.recent_panic_scores.append(panic_score)
+                self._transition(PanicInternalState.PANIC_CANDIDATE, candle.ts)
         elif self.state == PanicInternalState.PANIC_CANDIDATE:
-            if self._confirm_panic_entry():
-                self._transition(PanicInternalState.PANIC_ACTIVE)
+            if panic_candidate and self._confirm_panic_entry():
+                self.panic_confirmation_latency_sec = self._confirmation_latency_sec(
+                    candle.ts, self.panic_candidate_start_ts
+                )
+                self._transition(PanicInternalState.PANIC_ACTIVE, candle.ts)
                 self._initialize_panic_tracking(candle)
                 panic_entered = True
-            elif (
-                not panic_candidate
-                and panic_score < self.config.panic_entry_score_threshold * 0.80
+            elif not panic_candidate and (
+                panic_score < self.config.panic_entry_score_threshold * 0.80
+                or self.bars_in_state
+                >= max(1, self.config.panic_entry_confirm_window - 1)
             ):
-                self._transition(PanicInternalState.NORMAL)
+                self.panic_candidate_start_ts = None
+                self.recent_panic_scores.clear()
+                self._transition(PanicInternalState.NORMAL, candle.ts)
+                panic_candidate_expired = True
         elif self.state == PanicInternalState.PANIC_ACTIVE:
             self._update_panic_tracking(candle, orderbook_micro)
             if recovery_candidate:
-                self._transition(PanicInternalState.RECOVERY_CANDIDATE)
-            elif self.bars_in_state >= self.config.max_panic_active_bars:
-                self._transition(PanicInternalState.COOLDOWN)
-                self.cooldown_remaining = self.config.cooldown_bars
+                self.recovery_candidate_start_ts = candle.ts
+                self.recovery_confirmation_latency_sec = None
+                self.recent_recovery_scores.clear()
+                self.recent_recovery_scores.append(recovery_score)
+                self._transition(PanicInternalState.RECOVERY_CANDIDATE, candle.ts)
         elif self.state == PanicInternalState.RECOVERY_CANDIDATE:
             self._update_panic_tracking(candle, orderbook_micro)
             if panic_resumed:
-                self._transition(PanicInternalState.PANIC_ACTIVE)
-            elif self._confirm_recovery():
-                self._transition(PanicInternalState.RECOVERED)
+                self.recovery_candidate_start_ts = None
+                self.recent_recovery_scores.clear()
+                self._transition(PanicInternalState.PANIC_ACTIVE, candle.ts)
+            elif recovery_candidate and self._confirm_recovery():
+                self.recovery_confirmation_latency_sec = self._confirmation_latency_sec(
+                    candle.ts, self.recovery_candidate_start_ts
+                )
+                self._transition(PanicInternalState.RECOVERED, candle.ts)
+            elif not recovery_candidate and (
+                recovery_score < self.config.recovery_score_threshold * 0.80
+                or self.bars_in_state >= max(1, self.config.recovery_confirm_window - 1)
+            ):
+                self.recovery_candidate_start_ts = None
+                self.recent_recovery_scores.clear()
+                self._transition(PanicInternalState.PANIC_ACTIVE, candle.ts)
+                recovery_candidate_rejected = True
         elif self.state == PanicInternalState.RECOVERED:
-            self.cooldown_remaining = self.config.cooldown_bars
-            self._transition(PanicInternalState.COOLDOWN)
+            if panic_candidate:
+                self.panic_candidate_start_ts = candle.ts
+                self.recovery_candidate_start_ts = None
+                self.panic_confirmation_latency_sec = None
+                self.recovery_confirmation_latency_sec = None
+                self.recent_panic_scores.clear()
+                self.recent_panic_scores.append(panic_score)
+                self._transition(PanicInternalState.PANIC_CANDIDATE, candle.ts)
+            else:
+                self.cooldown_remaining = self.config.cooldown_bars
+                self._transition(PanicInternalState.COOLDOWN, candle.ts)
         elif self.state == PanicInternalState.COOLDOWN:
-            self.cooldown_remaining = max(0, self.cooldown_remaining - 1)
-            if self.cooldown_remaining <= 0:
-                self._reset_panic_tracking()
-                self._transition(PanicInternalState.NORMAL)
+            if panic_candidate:
+                self.panic_candidate_start_ts = candle.ts
+                self.recovery_candidate_start_ts = None
+                self.panic_confirmation_latency_sec = None
+                self.recovery_confirmation_latency_sec = None
+                self.recent_panic_scores.clear()
+                self.recent_panic_scores.append(panic_score)
+                self._transition(PanicInternalState.PANIC_CANDIDATE, candle.ts)
+            else:
+                self.cooldown_remaining = max(0, self.cooldown_remaining - 1)
+                if self.cooldown_remaining <= 0:
+                    self._reset_panic_tracking()
+                    self._transition(PanicInternalState.NORMAL, candle.ts)
+
+        if self.state == previous_state:
+            self.bars_in_state += 1
 
         self.max_panic_score = max(self.max_panic_score, panic_score)
         reasons = list(dict.fromkeys(panic_reasons + recovery_reasons))
+        if (
+            self.state == PanicInternalState.PANIC_ACTIVE
+            and self.bars_in_state >= self.config.max_panic_active_bars
+        ):
+            reasons.append("panic_active_timeout_no_release_without_recovery")
+        if panic_candidate_expired:
+            reasons.append("panic_candidate_expired_without_fresh_confirmation")
+        if recovery_candidate_rejected:
+            reasons.append("recovery_candidate_rejected_without_fresh_confirmation")
         if self.state == PanicInternalState.COOLDOWN:
             reasons.append("cooldown_active")
         return self._build_signal(
@@ -865,17 +981,29 @@ class PanicSellStateDetector:
                 **features,
                 "panic_score": panic_score,
                 "recovery_score": recovery_score,
+                "panic_confirmation_latency_sec": self.panic_confirmation_latency_sec,
+                "recovery_confirmation_latency_sec": self.recovery_confirmation_latency_sec,
+                "bars_in_state": self.bars_in_state,
             },
             panic_entered=panic_entered,
             previous_state=previous_state,
         )
 
-    def _transition(self, state: PanicInternalState) -> None:
+    def _transition(
+        self, state: PanicInternalState, ts: datetime | None = None
+    ) -> None:
         if state != self.state:
             self.state = state
             self.bars_in_state = 0
-        else:
-            self.bars_in_state += 1
+            self.last_transition_ts = ts
+
+    @staticmethod
+    def _confirmation_latency_sec(
+        now: datetime, started_at: datetime | None
+    ) -> float | None:
+        if started_at is None:
+            return None
+        return round(max(0.0, (_epoch_ms(now) - _epoch_ms(started_at)) / 1000.0), 3)
 
     def _confirm_panic_entry(self) -> bool:
         return (
@@ -909,6 +1037,8 @@ class PanicSellStateDetector:
         if recovery_score < self.config.recovery_score_threshold:
             return False
         if not bool(features.get("no_new_low")):
+            return False
+        if not bool(features.get("orderbook_source_fresh")):
             return False
         sell_ratio = features.get("sell_ratio")
         if (
@@ -959,6 +1089,7 @@ class PanicSellStateDetector:
         if (
             self.panic_bid_depth_baseline is None
             and orderbook_micro is not None
+            and _orderbook_fresh(orderbook_micro, self.config)
             and orderbook_micro.bid_depth_l5
         ):
             self.panic_bid_depth_baseline = float(orderbook_micro.bid_depth_l5)
@@ -972,6 +1103,10 @@ class PanicSellStateDetector:
         self._panic_vwap_volume = 0.0
         self.recent_panic_scores.clear()
         self.recent_recovery_scores.clear()
+        self.panic_candidate_start_ts = None
+        self.recovery_candidate_start_ts = None
+        self.panic_confirmation_latency_sec = None
+        self.recovery_confirmation_latency_sec = None
 
     def _build_signal(
         self,
@@ -988,7 +1123,6 @@ class PanicSellStateDetector:
             PanicInternalState.PANIC_CANDIDATE,
             PanicInternalState.PANIC_ACTIVE,
             PanicInternalState.RECOVERY_CANDIDATE,
-            PanicInternalState.COOLDOWN,
         }
         allow_new_long = not risk_off
         if (
@@ -1028,7 +1162,8 @@ class PanicSellStateDetector:
                 )
             ),
             recovery_candidate=self.state == PanicInternalState.RECOVERY_CANDIDATE,
-            recovery_confirmed=self.state == PanicInternalState.RECOVERED,
+            recovery_confirmed=self.state
+            in {PanicInternalState.RECOVERED, PanicInternalState.COOLDOWN},
             risk_off=bool(risk_off),
             risk_off_advisory=bool(risk_off),
             allow_new_long=bool(allow_new_long),
@@ -1068,27 +1203,28 @@ def candle_from_event(row: dict[str, Any]) -> PanicCandle | None:
             "current_price",
             "latest_price",
             "last_price",
-            "order_price",
-            "sell_price",
-            "buy_price",
-            "signal_price",
             "price",
         )
     )
     if close is None or close <= 0:
         return None
     open_value = (
-        _safe_float(_field(fields, "open", "open_price", "candle_open"), close) or close
+        _safe_float(_field(fields, "candle_open", "bar_open", "minute_open"), close)
+        or close
     )
     high = _safe_float(
-        _field(fields, "high", "high_price", "candle_high"), max(open_value, close)
+        _field(fields, "candle_high", "bar_high", "minute_high"),
+        max(open_value, close),
     ) or max(open_value, close)
     low = _safe_float(
-        _field(fields, "low", "low_price", "candle_low"), min(open_value, close)
+        _field(fields, "candle_low", "bar_low", "minute_low"),
+        min(open_value, close),
     ) or min(open_value, close)
     volume = _safe_float(
-        _field(fields, "volume", "today_vol", "trade_volume", "total_volume"), None
+        _field(fields, "bar_volume", "candle_volume", "trade_volume"),
+        None,
     )
+    volume_observed = volume is not None
     if volume is None:
         buy_volume = (
             _safe_float(_field(fields, "buy_exec_volume", "buy_volume"), 0.0) or 0.0
@@ -1097,6 +1233,7 @@ def candle_from_event(row: dict[str, Any]) -> PanicCandle | None:
             _safe_float(_field(fields, "sell_exec_volume", "sell_volume"), 0.0) or 0.0
         )
         volume = buy_volume + sell_volume
+        volume_observed = volume > 0
     vwap = _safe_float(
         _field(fields, "vwap", "vwap_price", "panic_anchored_vwap"), None
     )
@@ -1108,6 +1245,7 @@ def candle_from_event(row: dict[str, Any]) -> PanicCandle | None:
         close=close,
         volume=max(0.0, volume or 0.0),
         vwap=vwap,
+        volume_observed=volume_observed,
     )
 
 
@@ -1118,9 +1256,7 @@ def trade_flow_from_event(row: dict[str, Any]) -> PanicTradeFlow | None:
         return None
     buy_volume = _safe_float(_field(fields, "buy_exec_volume", "buy_volume"), None)
     sell_volume = _safe_float(_field(fields, "sell_exec_volume", "sell_volume"), None)
-    total_volume = _safe_float(
-        _field(fields, "total_volume", "volume", "today_vol"), None
-    )
+    total_volume = _safe_float(_field(fields, "trade_volume", "bar_volume"), None)
     if (
         (buy_volume is None or sell_volume is None)
         and total_volume is not None
@@ -1178,6 +1314,29 @@ def orderbook_micro_from_event(row: dict[str, Any]) -> PanicOrderbookMicro | Non
         ),
         default=False,
     )
+    captured_at_ms = _safe_float(
+        _field(
+            fields,
+            "orderbook_micro_captured_at_ms",
+            "quote_captured_at_ms",
+            "bbo_captured_at_ms",
+        ),
+        None,
+    )
+    snapshot_age_ms = _safe_float(
+        _field(
+            fields,
+            "orderbook_micro_snapshot_age_ms",
+            "quote_snapshot_age_ms",
+            "bbo_snapshot_age_ms",
+        ),
+        None,
+    )
+    if captured_at_ms is not None and captured_at_ms >= 100_000_000_000:
+        emitted_at_ms = _epoch_ms(ts)
+        derived_age_ms = emitted_at_ms - captured_at_ms
+        if 0.0 <= derived_age_ms <= 86_400_000.0:
+            snapshot_age_ms = max(snapshot_age_ms or 0.0, derived_age_ms)
     has_orderbook_signal = any(
         value is not None
         for value in (
@@ -1208,7 +1367,67 @@ def orderbook_micro_from_event(row: dict[str, Any]) -> PanicOrderbookMicro | Non
         micro_state=micro_state,
         ready=ready,
         observer_healthy=healthy,
+        captured_at_ms=captured_at_ms,
+        snapshot_age_ms=snapshot_age_ms,
     )
+
+
+def _market_observation_key(
+    row: dict[str, Any], candle: PanicCandle, config: PanicSellDetectorConfig
+) -> str:
+    """Return a bounded semantic identity for one market observation.
+
+    Pipeline stages frequently copy the same BBO/micro snapshot into multiple
+    events.  Counting those rows as independent detector bars makes both entry
+    and recovery confirmation depend on pipeline verbosity rather than market
+    evolution.
+    """
+
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    captured_at_ms = _safe_float(
+        _field(
+            fields,
+            "orderbook_micro_captured_at_ms",
+            "quote_captured_at_ms",
+            "bbo_captured_at_ms",
+        ),
+        None,
+    )
+    current_price = round(float(candle.close), 6)
+    cumulative_volume = _safe_float(
+        _field(fields, "today_vol", "cumulative_volume"), None
+    )
+    if captured_at_ms is not None:
+        return (
+            f"micro:{round(captured_at_ms, 3)}:{current_price}:"
+            f"{None if cumulative_volume is None else round(cumulative_volume, 3)}"
+        )
+
+    snapshot_id = str(
+        _field(
+            fields,
+            "ai_input_snapshot_id",
+            "market_snapshot_id",
+            "quote_snapshot_id",
+        )
+        or ""
+    ).strip()
+    if snapshot_id:
+        return f"snapshot:{snapshot_id}:{current_price}"
+
+    bucket_sec = max(1, int(config.fallback_observation_bucket_sec))
+    time_bucket = int(_epoch_ms(candle.ts) / 1000.0) // bucket_sec
+    fingerprint_values = (
+        _safe_float(_field(fields, "best_bid", "bid_price"), None),
+        _safe_float(_field(fields, "best_ask", "ask_price"), None),
+        _safe_float(_field(fields, "orderbook_micro_ofi_z", "ofi_z"), None),
+        cumulative_volume,
+    )
+    fingerprint = ":".join(
+        "none" if value is None else str(round(float(value), 6))
+        for value in fingerprint_values
+    )
+    return f"bucket:{time_bucket}:{current_price}:{fingerprint}"
 
 
 def summarize_microstructure_detector_from_events(
@@ -1225,10 +1444,28 @@ def summarize_microstructure_detector_from_events(
     latest_timestamps: dict[str, str] = {}
     last_event_datetimes: dict[str, datetime] = {}
     candidate_event_count = 0
+    unique_market_observation_count = 0
+    duplicate_snapshot_skipped_count = 0
     out_of_order_event_count = 0
+    recent_observation_keys: dict[str, deque[str]] = {}
+    panic_report_entry_count = 0
+    panic_active_confirmation_count = 0
+    recovery_release_transition_count = 0
+    fresh_orderbook_observation_count = 0
+    stale_or_unhealthy_observation_count = 0
+    transition_samples: deque[dict[str, Any]] = deque(maxlen=100)
+    max_observed_panic_score = 0.0
+    max_observed_recovery_score = 0.0
+    panic_near_threshold_observation_count = 0
+    panic_near_threshold_symbols: set[str] = set()
+    top_panic_candidate_samples: list[dict[str, Any]] = []
     for row in events:
         event_ts = _parse_dt(row.get("emitted_at"))
-        if as_of is not None and event_ts is not None and event_ts > as_of:
+        if (
+            as_of is not None
+            and event_ts is not None
+            and _epoch_ms(event_ts) > _epoch_ms(as_of)
+        ):
             continue
         code = str(row.get("stock_code") or "").strip()[:6]
         if not code:
@@ -1238,17 +1475,97 @@ def summarize_microstructure_detector_from_events(
             continue
         candidate_event_count += 1
         previous_dt = last_event_datetimes.get(code)
-        if previous_dt is not None and candle.ts < previous_dt:
+        if previous_dt is not None and _epoch_ms(candle.ts) < _epoch_ms(previous_dt):
             out_of_order_event_count += 1
             continue
+        observation_key = _market_observation_key(row, candle, cfg)
+        recent_keys = recent_observation_keys.setdefault(code, deque(maxlen=64))
+        if observation_key in recent_keys:
+            duplicate_snapshot_skipped_count += 1
+            continue
+        recent_keys.append(observation_key)
+        unique_market_observation_count += 1
         last_event_datetimes[code] = candle.ts
         names[code] = str(row.get("stock_name") or code)
         detector = detectors.setdefault(code, PanicSellStateDetector(cfg))
-        latest_signals[code] = detector.update(
+        previous_signal = latest_signals.get(code)
+        previous_internal_state = detector.state.value
+        current_signal = detector.update(
             candle,
             trade_flow=trade_flow_from_event(row),
             orderbook_micro=orderbook_micro_from_event(row),
         )
+        latest_signals[code] = current_signal
+        max_observed_panic_score = max(
+            max_observed_panic_score, current_signal.panic_score
+        )
+        max_observed_recovery_score = max(
+            max_observed_recovery_score, current_signal.recovery_score
+        )
+        near_threshold_floor = cfg.panic_entry_score_threshold * 0.80
+        if current_signal.panic_score >= near_threshold_floor:
+            panic_near_threshold_observation_count += 1
+            panic_near_threshold_symbols.add(code)
+            top_panic_candidate_samples.append(
+                {
+                    "stock_code": code,
+                    "stock_name": names[code],
+                    "observed_at": candle.ts.isoformat(timespec="seconds"),
+                    "panic_score": current_signal.panic_score,
+                    "entry_threshold": cfg.panic_entry_score_threshold,
+                    "short_return_pct": current_signal.metrics.get("short_return_pct"),
+                    "mid_return_pct": current_signal.metrics.get("mid_return_pct"),
+                    "sell_ratio": current_signal.metrics.get("sell_ratio"),
+                    "ofi_z": current_signal.metrics.get("ofi_z"),
+                    "orderbook_source_fresh": current_signal.metrics.get(
+                        "orderbook_source_fresh"
+                    ),
+                    "reasons": current_signal.reasons[:8],
+                }
+            )
+            top_panic_candidate_samples.sort(
+                key=lambda item: float(item["panic_score"]), reverse=True
+            )
+            del top_panic_candidate_samples[20:]
+        if current_signal.metrics.get("orderbook_source_fresh"):
+            fresh_orderbook_observation_count += 1
+        elif "orderbook_stale_or_unhealthy_degraded" in current_signal.reasons:
+            stale_or_unhealthy_observation_count += 1
+        previous_report_state = (
+            previous_signal.state if previous_signal else REPORT_NORMAL
+        )
+        if (
+            current_signal.state == REPORT_PANIC_SELL
+            and previous_report_state != REPORT_PANIC_SELL
+        ):
+            panic_report_entry_count += 1
+        if current_signal.panic_entered:
+            panic_active_confirmation_count += 1
+        if (
+            current_signal.internal_state == PanicInternalState.RECOVERED.value
+            and previous_internal_state == PanicInternalState.RECOVERY_CANDIDATE.value
+        ):
+            recovery_release_transition_count += 1
+        if current_signal.internal_state != previous_internal_state:
+            transition_samples.append(
+                {
+                    "stock_code": code,
+                    "stock_name": names[code],
+                    "observed_at": candle.ts.isoformat(timespec="seconds"),
+                    "from_internal_state": previous_internal_state,
+                    "to_internal_state": current_signal.internal_state,
+                    "report_state": current_signal.state,
+                    "panic_score": current_signal.panic_score,
+                    "recovery_score": current_signal.recovery_score,
+                    "panic_confirmation_latency_sec": current_signal.metrics.get(
+                        "panic_confirmation_latency_sec"
+                    ),
+                    "recovery_confirmation_latency_sec": current_signal.metrics.get(
+                        "recovery_confirmation_latency_sec"
+                    ),
+                    "reasons": current_signal.reasons[:8],
+                }
+            )
         latest_timestamps[code] = candle.ts.isoformat(timespec="seconds")
 
     symbol_signals: list[PanicSymbolSignal] = []
@@ -1256,6 +1573,7 @@ def summarize_microstructure_detector_from_events(
     state_counter: Counter[str] = Counter()
     missing_orderbook = 0
     degraded_orderbook = 0
+    stale_or_unhealthy_orderbook = 0
     for code, latest_signal in latest_signals.items():
         symbol_signals.append(
             PanicSymbolSignal(
@@ -1271,6 +1589,8 @@ def summarize_microstructure_detector_from_events(
             missing_orderbook += 1
         if "orderbook_missing_degraded" in latest_signal.reasons:
             degraded_orderbook += 1
+        if "orderbook_stale_or_unhealthy_degraded" in latest_signal.reasons:
+            stale_or_unhealthy_orderbook += 1
 
     ordered = sorted(
         symbol_signals,
@@ -1326,13 +1646,36 @@ def summarize_microstructure_detector_from_events(
                 "provider_route_change",
             ],
         },
+        "signal_quality_contract": {
+            "metric_role": "source_quality_gate",
+            "decision_authority": "source_quality_only",
+            "window_policy": "unique_semantic_market_observations_per_symbol_intraday",
+            "sample_floor": max(2, cfg.min_bars_required),
+            "primary_decision_metric": None,
+            "source_quality_gate": (
+                "timestamp-monotonic unique market observations; orderbook recovery "
+                f"requires ready+healthy snapshot age <= {cfg.max_orderbook_snapshot_age_ms:g}ms"
+            ),
+            "forbidden_uses": [
+                "runtime_threshold_apply",
+                "order_submit",
+                "auto_sell",
+                "bot_restart",
+                "provider_route_change",
+            ],
+        },
         "evaluated_symbol_count": len(symbol_signals),
         "streaming_input": {
             "memory_bounded": True,
-            "ordering": "jsonl_append_order_per_symbol",
+            "ordering": "jsonl_append_order_unique_semantic_snapshot_per_symbol",
             "candidate_event_count": candidate_event_count,
+            "unique_market_observation_count": unique_market_observation_count,
+            "duplicate_snapshot_skipped_count": duplicate_snapshot_skipped_count,
             "out_of_order_event_count": out_of_order_event_count,
             "out_of_order_policy": "skip_to_preserve_monotonic_detector_state",
+            "duplicate_policy": (
+                "skip repeated pipeline-stage copies of the same market snapshot"
+            ),
         },
         "risk_off_advisory_count": risk_off_count,
         "allow_new_long_false_count": allow_false_count,
@@ -1347,6 +1690,7 @@ def summarize_microstructure_detector_from_events(
         ),
         "missing_orderbook_count": missing_orderbook,
         "degraded_orderbook_count": degraded_orderbook,
+        "stale_or_unhealthy_orderbook_count": stale_or_unhealthy_orderbook,
         "state_counts": dict(sorted(state_counter.items())),
         "top_reasons": [
             {"reason": key, "count": value}
@@ -1370,6 +1714,44 @@ def summarize_microstructure_detector_from_events(
             "triggered_symbol_count": len(cusum_triggered),
             "consensus_pass_symbol_count": len(consensus_passed),
             "max_ofi_cusum_score": round(max(cusum_scores), 6) if cusum_scores else 0.0,
+        },
+        "transition_observer": {
+            "metric_role": "source_quality_instrumentation",
+            "decision_authority": "source_quality_only",
+            "window_policy": "target_date_unique_market_observations_intraday",
+            "sample_floor": max(2, cfg.min_bars_required),
+            "primary_decision_metric": None,
+            "source_quality_gate": (
+                "semantic snapshot deduplication and monotonic per-symbol event time"
+            ),
+            "forbidden_uses": [
+                "runtime_threshold_apply",
+                "order_submit",
+                "auto_sell",
+                "bot_restart",
+                "provider_route_change",
+            ],
+            "panic_report_entry_count": panic_report_entry_count,
+            "panic_active_confirmation_count": panic_active_confirmation_count,
+            "recovery_release_transition_count": recovery_release_transition_count,
+            "fresh_orderbook_observation_count": fresh_orderbook_observation_count,
+            "stale_or_unhealthy_observation_count": (
+                stale_or_unhealthy_observation_count
+            ),
+            "max_observed_panic_score": round(max_observed_panic_score, 6),
+            "max_observed_recovery_score": round(max_observed_recovery_score, 6),
+            "panic_near_threshold_floor": round(
+                cfg.panic_entry_score_threshold * 0.80, 6
+            ),
+            "panic_near_threshold_observation_count": (
+                panic_near_threshold_observation_count
+            ),
+            "panic_near_threshold_symbol_count": len(panic_near_threshold_symbols),
+            "retained_top_panic_candidate_limit": 20,
+            "retained_top_panic_candidate_samples": top_panic_candidate_samples,
+            "retained_transition_sample_count": len(transition_samples),
+            "retained_transition_sample_limit": transition_samples.maxlen,
+            "retained_transition_samples": list(transition_samples),
         },
         "metrics": {
             "max_panic_score": round(max(panic_scores), 6) if panic_scores else 0.0,

@@ -111,14 +111,27 @@ def _micro_event(
 ):
     payload = {
         "curr_price": close,
-        "open": fields.pop("open", close),
-        "high": fields.pop("high", close),
-        "low": fields.pop("low", close),
-        "volume": volume,
+        "candle_open": fields.pop("open", close),
+        "candle_high": fields.pop("high", close),
+        "candle_low": fields.pop("low", close),
+        "bar_volume": volume,
         "buy_exec_volume": buy,
         "sell_exec_volume": sell,
         **fields,
     }
+    if any(
+        key in payload
+        for key in (
+            "best_bid",
+            "best_ask",
+            "orderbook_micro_ofi_z",
+            "orderbook_micro_state",
+        )
+    ):
+        payload.setdefault(
+            "orderbook_micro_captured_at_ms", int(hhmmss.replace(":", "")) * 1000
+        )
+        payload.setdefault("orderbook_micro_snapshot_age_ms", 100)
     return _event(
         hhmmss,
         pipeline="ENTRY_PIPELINE",
@@ -707,6 +720,9 @@ def test_microstructure_detector_adds_report_only_risk_off_without_order_action(
     assert all(
         item["allowed_runtime_apply"] is False for item in report["canary_candidates"]
     )
+    markdown = report_mod.build_markdown(report)
+    assert "duplicate_snapshot_skipped_count" in markdown
+    assert "panic_active_confirmation_count" in markdown
 
 
 def test_microstructure_risk_off_needs_market_or_breadth_confirmation(

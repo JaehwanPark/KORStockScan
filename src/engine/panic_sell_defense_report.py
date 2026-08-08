@@ -1556,6 +1556,11 @@ def build_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("input_streaming"), dict)
         else {}
     )
+    transition = (
+        micro.get("transition_observer")
+        if isinstance(micro.get("transition_observer"), dict)
+        else {}
+    )
     lines = [
         f"# Panic Sell Defense {report['target_date']}",
         "",
@@ -1579,6 +1584,8 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- retained_exit_event_count: `{input_streaming.get('retained_exit_event_count', 0)}`",
         f"- full_event_list_materialized: `{str(input_streaming.get('full_event_list_materialized', True)).lower()}`",
         f"- out_of_order_event_count: `{(micro.get('streaming_input') or {}).get('out_of_order_event_count', 0)}`",
+        f"- unique_market_observation_count: `{(micro.get('streaming_input') or {}).get('unique_market_observation_count', 0)}`",
+        f"- duplicate_snapshot_skipped_count: `{(micro.get('streaming_input') or {}).get('duplicate_snapshot_skipped_count', 0)}`",
         "",
         "## 패닉 지표",
         "",
@@ -1622,6 +1629,12 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- recovery_confirmed_count: `{micro.get('recovery_confirmed_count', 0)}`",
         f"- missing_orderbook_count: `{micro.get('missing_orderbook_count', 0)}`",
         f"- degraded_orderbook_count: `{micro.get('degraded_orderbook_count', 0)}`",
+        f"- stale_or_unhealthy_orderbook_count: `{micro.get('stale_or_unhealthy_orderbook_count', 0)}`",
+        f"- panic_report_entry_count: `{transition.get('panic_report_entry_count', 0)}`",
+        f"- panic_active_confirmation_count: `{transition.get('panic_active_confirmation_count', 0)}`",
+        f"- recovery_release_transition_count: `{transition.get('recovery_release_transition_count', 0)}`",
+        f"- max_observed_panic_score: `{_fmt(transition.get('max_observed_panic_score'))}`",
+        f"- panic_near_threshold_observation_count: `{transition.get('panic_near_threshold_observation_count', 0)}`",
         f"- max_panic_score: `{_fmt((micro.get('metrics') or {}).get('max_panic_score') if isinstance(micro.get('metrics'), dict) else 0.0)}`",
         f"- max_recovery_score: `{_fmt((micro.get('metrics') or {}).get('max_recovery_score') if isinstance(micro.get('metrics'), dict) else 0.0)}`",
         f"- micro_cusum_triggered_symbol_count: `{(micro.get('micro_cusum_observer') or {}).get('triggered_symbol_count', 0) if isinstance(micro.get('micro_cusum_observer'), dict) else 0}`",
