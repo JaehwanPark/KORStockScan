@@ -143,4 +143,35 @@ Observer close는 WebSocket producer thread join 이후 호출되므로 producer
 - 실제 reference/path reconciliation duration·rows·tracked-key 규모와 zero-error 결과
 - post-session compression/retention drill
 
-다음 액션은 **새 commit·manifest·본 line-level 증적의 감리 재승인**이다. 재승인 전 observer/path flag 활성화나 bot 재기동을 하지 않는다. 재승인 후에도 canary는 기존 구독의 관찰 수집만 허용하며, Gate B 통과 전 P2 actual-data ranking을 실행하지 않는다. Gate B는 collector 건강성 승인일 뿐 sim, trading runtime 또는 실주문 승인이 아니다.
+이 단계의 다음 액션은 **새 commit·manifest·본 line-level 증적의 감리 재승인**이었다. 아래 §6의 최종 재감리에서 조건부 승인을 받았지만, canary는 여전히 기존 구독의 관찰 수집만 허용하며 Gate B 통과 전 P2 actual-data ranking을 실행하지 않는다. Gate B는 collector 건강성 승인일 뿐 sim, trading runtime 또는 실주문 승인이 아니다.
+
+## 6. 최종 재감리 승인과 활성화 preflight
+
+최종 재감리는 integration commit `746c015b52abe8880ea2a6317c9f2a4d6b54394f`에 대해 `observer_path_canary_activation=CONDITIONAL_GO`를 부여했다. 승인 범위는 기존 구독의 observer/path capture뿐이며 discovery, P2, sim, trading runtime, 주문은 계속 차단된다.
+
+2026-08-08 22:09 KST 실행한 preflight 결과는 `conditional_go_preflight_blocked`다.
+
+| 조건 | 결과 | 근거 |
+| --- | --- | --- |
+| 핵심 파일 4개 SHA-256 | PASS | manifest 값과 모두 일치 |
+| 승인 commit이 현재 main의 ancestor | PASS | `746c015b` ancestor 확인 |
+| local working tree clean | PASS | `git status --porcelain` 출력 없음 |
+| 배포 HEAD exact commit | FAIL | local HEAD는 문서 증적 후속 commit `572c6345`; 승인 조건은 exact `746c015b` |
+| 원격 commit fetch 가능성 | CLOSED | `origin/main`을 `572c6345`까지 push해 승인 commit을 main history에 게시 |
+| 배포 서버 exact preflight | BLOCKED | `songstockscan.ddns.net` DNS 해석 실패로 HEAD/tree/hash/PID 확인 불가 |
+| producer p95/p99 baseline·허용폭 | BLOCKED | 배포 서버의 canary 전 baseline과 숫자 허용폭 미동결 |
+| 거래일·실행 프로세스 | BLOCKED | 토요일이며 local bot process 없음 |
+
+따라서 플래그, runtime env, bot 상태는 변경하지 않았다. 현재 허용 설정도 아직 적용하지 않았다.
+
+```text
+SCALP_MICRO_REVERSION_OBSERVER_ENABLED=false_or_unset
+SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED=false_or_unset
+SCALP_MICRO_REVERSION_DISCOVERY_ENABLED=false_or_unset
+
+observer_path_canary_activation=HOLD_PREFLIGHT_NOT_CLOSED
+gate_b_collector_health=NOT_STARTED
+p2_real_data_replay=BLOCKED_UNTIL_GATE_B
+```
+
+다음 실행은 배포 서버 접근 복구 후 exact commit/tree/hash와 clean tree를 먼저 확인하고, 같은 서버에서 callback p95/p99 baseline 및 절대/상대 허용폭을 숫자로 고정하는 것이다. 그 두 조건이 모두 통과한 정상 거래일에만 observer/path=true, discovery=false를 적용한다.
