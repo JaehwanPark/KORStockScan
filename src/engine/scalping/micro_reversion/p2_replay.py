@@ -1,0 +1,758 @@
+"""Deterministic source-only entry x exit path replay contract.
+
+This is the P2-A engine skeleton.  It is intentionally callable only with an
+explicit in-memory path and frozen policy.  It has no data-discovery CLI, no
+ranking output, and no sim/live consumer.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from enum import StrEnum
+from typing import Any, Iterable
+
+P2_REPLAY_SCHEMA = "scalp_micro_reversion_p2_path_replay_v1"
+P2_REPLAY_AUTHORITY = "p2_path_research_only_selection_authority_false"
+P2_REPLAY_METRIC_CONTRACT = {
+    "metric_role": "primary_ev_research_candidate",
+    "decision_authority": P2_REPLAY_AUTHORITY,
+    "window_policy": "frozen_discovery_then_holdout_confirmation_joint_path",
+    "sample_floor": "owned_by_confirmation_gate_not_synthetic_tests",
+    "primary_decision_metric": "net_ev_per_all_detected_signal",
+    "source_quality_gate": (
+        "continuous_parent_wave_path_and_decision_watermark_and_"
+        "declared_fill_bound_and_same_timestamp_policy"
+    ),
+    "forbidden_uses": (
+        "real_data_policy_ranking_before_gate_b",
+        "sim_or_live_policy_selection",
+        "touch_as_real_fill",
+        "broker_order_submission",
+        "threshold_or_provider_or_bot_mutation",
+    ),
+}
+
+
+class EntryPolicy(StrEnum):
+    MARKETABLE_NEXT_ASK = "MARKETABLE_NEXT_ASK"
+    PASSIVE_EVENT_BID = "PASSIVE_EVENT_BID"
+    ONE_TICK_DEEPER = "ONE_TICK_DEEPER"
+    HYBRID_ENTRY = "HYBRID_ENTRY"
+    RECLAIM_ENTRY = "RECLAIM_ENTRY"
+
+
+class ExitPolicy(StrEnum):
+    SINGLE_TP = "SINGLE_TP"
+    PARTIAL_TP_RUNNER = "PARTIAL_TP_RUNNER"
+    TP_LADDER = "TP_LADDER"
+
+
+class FillBound(StrEnum):
+    UPPER_TOUCH = "UPPER_TOUCH"
+    LOWER_TRADE_THROUGH = "LOWER_TRADE_THROUGH"
+
+
+class SameTimestampPolicy(StrEnum):
+    STOP_FIRST = "STOP_FIRST"
+    MARK_AMBIGUOUS = "MARK_AMBIGUOUS"
+
+
+class ReplayTerminalReason(StrEnum):
+    NO_ENTRY_FILL = "NO_ENTRY_FILL"
+    TAKE_PROFIT = "TAKE_PROFIT"
+    PARTIAL_TAKE_PROFIT_THEN_STOP = "PARTIAL_TAKE_PROFIT_THEN_STOP"
+    STOP_LOSS = "STOP_LOSS"
+    HOLDING_TTL = "HOLDING_TTL"
+    AMBIGUOUS_SAME_TIMESTAMP = "AMBIGUOUS_SAME_TIMESTAMP"
+    PATH_ENDED = "PATH_ENDED"
+
+
+@dataclass(frozen=True, slots=True)
+class P2ReplayPolicy:
+    policy_id: str
+    policy_version: str
+    entry_policy: EntryPolicy
+    exit_policy: ExitPolicy
+    fill_bound: FillBound
+    entry_ttl_ms: int
+    holding_ttl_ms: int
+    take_profit_bps: float
+    stop_loss_bps: float
+    all_in_cost_bps: float
+    target_quantity: int = 1
+    partial_take_profit_fraction: float = 1.0
+    same_timestamp_policy: SameTimestampPolicy = SameTimestampPolicy.STOP_FIRST
+    entry_policy_version: str = "entry-policy-v1"
+    exit_policy_version: str = "exit-policy-v1"
+    cost_model_version: str = "all-in-cost-v1"
+    runner_max_ttl_ms: int | None = None
+    runner_trailing_bps: float | None = None
+    runner_exit_trigger: str | None = None
+    max_quote_age_ms: float = 2_500.0
+
+    def __post_init__(self) -> None:
+        if not all(
+            (
+                self.policy_id,
+                self.policy_version,
+                self.entry_policy_version,
+                self.exit_policy_version,
+                self.cost_model_version,
+            )
+        ):
+            raise ValueError("policy and component versions are required")
+        if self.entry_ttl_ms <= 0 or self.holding_ttl_ms <= 0:
+            raise ValueError("entry and holding TTL must be positive")
+        if self.take_profit_bps <= 0 or self.stop_loss_bps <= 0:
+            raise ValueError("take-profit and stop-loss bps must be positive")
+        if self.all_in_cost_bps < 0:
+            raise ValueError("all_in_cost_bps must not be negative")
+        if self.target_quantity <= 0:
+            raise ValueError("target_quantity must be positive")
+        if self.max_quote_age_ms <= 0:
+            raise ValueError("max_quote_age_ms must be positive")
+        if not 0 < self.partial_take_profit_fraction <= 1:
+            raise ValueError("partial take-profit fraction must be in (0, 1]")
+        object.__setattr__(self, "entry_policy", EntryPolicy(self.entry_policy))
+        object.__setattr__(self, "exit_policy", ExitPolicy(self.exit_policy))
+        object.__setattr__(self, "fill_bound", FillBound(self.fill_bound))
+        object.__setattr__(
+            self,
+            "same_timestamp_policy",
+            SameTimestampPolicy(self.same_timestamp_policy),
+        )
+        if self.entry_policy not in {
+            EntryPolicy.MARKETABLE_NEXT_ASK,
+            EntryPolicy.PASSIVE_EVENT_BID,
+        }:
+            raise ValueError(
+                "entry policy is declared but not implemented in P2-A skeleton"
+            )
+        if self.exit_policy is ExitPolicy.TP_LADDER:
+            raise ValueError(
+                "TP_LADDER is declared but not implemented in P2-A skeleton"
+            )
+        if self.exit_policy is ExitPolicy.SINGLE_TP:
+            if self.partial_take_profit_fraction != 1.0:
+                raise ValueError("SINGLE_TP requires partial_take_profit_fraction=1")
+        else:
+            if self.partial_take_profit_fraction >= 1.0:
+                raise ValueError("PARTIAL_TP_RUNNER requires a partial TP fraction")
+            if (
+                self.runner_max_ttl_ms is None
+                or self.runner_max_ttl_ms <= 0
+                or self.runner_trailing_bps is None
+                or self.runner_trailing_bps <= 0
+                or self.runner_exit_trigger != "TRAILING_OR_TTL"
+            ):
+                raise ValueError("PARTIAL_TP_RUNNER requires frozen runner rules")
+
+
+@dataclass(frozen=True, slots=True)
+class P2ReplayPoint:
+    exchange_timestamp_ms: int
+    local_receive_timestamp_ms: int
+    source_sequence: int
+    trade_price: float | None = None
+    trade_qty: int | None = None
+    best_bid: float | None = None
+    best_ask: float | None = None
+    low_price: float | None = None
+    high_price: float | None = None
+    quote_age_ms: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.exchange_timestamp_ms <= 0 or self.local_receive_timestamp_ms <= 0:
+            raise ValueError("timestamps must be positive")
+        if self.local_receive_timestamp_ms < self.exchange_timestamp_ms:
+            raise ValueError("receive timestamp must not precede exchange timestamp")
+        if self.source_sequence < 0:
+            raise ValueError("source_sequence must not be negative")
+        for name in (
+            "trade_price",
+            "best_bid",
+            "best_ask",
+            "low_price",
+            "high_price",
+        ):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.trade_qty is not None and self.trade_qty < 0:
+            raise ValueError("trade_qty must not be negative")
+        if self.quote_age_ms is not None and self.quote_age_ms < 0:
+            raise ValueError("quote_age_ms must not be negative")
+        if (
+            self.low_price is not None
+            and self.high_price is not None
+            and self.high_price < self.low_price
+        ):
+            raise ValueError("high_price must not be below low_price")
+        if all(
+            value is None
+            for value in (
+                self.trade_price,
+                self.best_bid,
+                self.best_ask,
+                self.low_price,
+                self.high_price,
+            )
+        ):
+            raise ValueError("point requires price evidence")
+
+    @property
+    def low(self) -> float | None:
+        values = tuple(
+            value for value in (self.low_price, self.trade_price) if value is not None
+        )
+        return min(values) if values else None
+
+    @property
+    def high(self) -> float | None:
+        values = tuple(
+            value for value in (self.high_price, self.trade_price) if value is not None
+        )
+        return max(values) if values else None
+
+
+@dataclass(frozen=True, slots=True)
+class P2PolicySnapshot:
+    policy_id: str
+    policy_version: str
+    entry_policy: EntryPolicy
+    exit_policy: ExitPolicy
+    fill_bound: FillBound
+    entry_policy_version: str
+    exit_policy_version: str
+    cost_model_version: str
+    entry_order_ttl_ms: int
+    position_holding_ttl_ms: int
+    take_profit_bps: float
+    stop_loss_bps: float
+    all_in_cost_bps: float
+    target_quantity: int
+    partial_take_profit_fraction: float
+    runner_max_ttl_ms: int | None
+    runner_trailing_bps: float | None
+    runner_exit_trigger: str | None
+    same_timestamp_policy: SameTimestampPolicy
+    max_quote_age_ms: float
+
+    @classmethod
+    def from_policy(cls, policy: P2ReplayPolicy) -> "P2PolicySnapshot":
+        return cls(
+            policy_id=policy.policy_id,
+            policy_version=policy.policy_version,
+            entry_policy=policy.entry_policy,
+            exit_policy=policy.exit_policy,
+            fill_bound=policy.fill_bound,
+            entry_policy_version=policy.entry_policy_version,
+            exit_policy_version=policy.exit_policy_version,
+            cost_model_version=policy.cost_model_version,
+            entry_order_ttl_ms=policy.entry_ttl_ms,
+            position_holding_ttl_ms=policy.holding_ttl_ms,
+            take_profit_bps=policy.take_profit_bps,
+            stop_loss_bps=policy.stop_loss_bps,
+            all_in_cost_bps=policy.all_in_cost_bps,
+            target_quantity=policy.target_quantity,
+            partial_take_profit_fraction=policy.partial_take_profit_fraction,
+            runner_max_ttl_ms=policy.runner_max_ttl_ms,
+            runner_trailing_bps=policy.runner_trailing_bps,
+            runner_exit_trigger=policy.runner_exit_trigger,
+            same_timestamp_policy=policy.same_timestamp_policy,
+            max_quote_age_ms=policy.max_quote_age_ms,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["entry_policy"] = self.entry_policy.value
+        payload["exit_policy"] = self.exit_policy.value
+        payload["fill_bound"] = self.fill_bound.value
+        payload["same_timestamp_policy"] = self.same_timestamp_policy.value
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class P2ReplayResult:
+    policy_id: str
+    policy_version: str
+    policy_contract: P2PolicySnapshot
+    fill_bound: FillBound
+    filled_quantity: int
+    unresolved_quantity: int
+    fill_fraction: float
+    average_entry_price: float | None
+    average_exit_price: float | None
+    entry_filled_at_ms: int | None
+    exited_at_ms: int | None
+    gross_return_bps: float | None
+    net_return_bps: float | None
+    net_return_per_detected_signal_bps: float | None
+    terminal_reason: ReplayTerminalReason
+    partial_fill_observed: bool
+    partial_take_profit_observed: bool
+    ambiguity_observed: bool
+    decision_watermark_timestamp_ms: int
+    decision_watermark_local_receive_timestamp_ms: int
+    decision_watermark_source_sequence: int
+    source_point_count: int
+    schema: str = P2_REPLAY_SCHEMA
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["fill_bound"] = self.fill_bound.value
+        payload["terminal_reason"] = self.terminal_reason.value
+        payload["policy_contract"] = self.policy_contract.as_dict()
+        payload.update(
+            {
+                "selection_authority": False,
+                "sim_effect": False,
+                "p2_runtime_effect": False,
+                "trading_runtime_effect": False,
+                "trading_decision_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                **P2_REPLAY_METRIC_CONTRACT,
+            }
+        )
+        return payload
+
+
+def replay_path(
+    points: Iterable[P2ReplayPoint],
+    *,
+    policy: P2ReplayPolicy,
+    decision_watermark_timestamp_ms: int,
+    decision_watermark_local_receive_timestamp_ms: int,
+    decision_watermark_source_sequence: int,
+    event_bid_price: float | None = None,
+    event_bid_quote_age_ms: float | None = None,
+) -> P2ReplayResult:
+    """Replay one frozen policy without looking before the decision watermark."""
+
+    if (
+        decision_watermark_timestamp_ms <= 0
+        or decision_watermark_local_receive_timestamp_ms
+        < decision_watermark_timestamp_ms
+        or decision_watermark_source_sequence < 0
+    ):
+        raise ValueError("decision exchange/local/sequence watermark is invalid")
+
+    path = tuple(points)
+    _validate_path(path)
+    eligible = tuple(
+        point
+        for point in path
+        if (point.exchange_timestamp_ms, point.source_sequence)
+        > (decision_watermark_timestamp_ms, decision_watermark_source_sequence)
+        and (point.local_receive_timestamp_ms, point.source_sequence)
+        > (
+            decision_watermark_local_receive_timestamp_ms,
+            decision_watermark_source_sequence,
+        )
+    )
+    entry_deadline = decision_watermark_timestamp_ms + policy.entry_ttl_ms
+    entry_price: float | None = None
+    entry_time: int | None = None
+    entry_resolution_time: int | None = None
+    entry_resolution_sequence = -1
+    filled_quantity = 0
+
+    if policy.entry_policy is EntryPolicy.MARKETABLE_NEXT_ASK:
+        for point in eligible:
+            if point.exchange_timestamp_ms > entry_deadline:
+                break
+            if point.best_ask is not None and _fresh_quote(point, policy):
+                entry_price = point.best_ask
+                entry_time = point.exchange_timestamp_ms
+                entry_resolution_time = point.exchange_timestamp_ms
+                entry_resolution_sequence = point.source_sequence
+                filled_quantity = policy.target_quantity
+                break
+    else:
+        if event_bid_price is None or event_bid_price <= 0:
+            raise ValueError("PASSIVE_EVENT_BID requires positive event_bid_price")
+        if (
+            event_bid_quote_age_ms is None
+            or event_bid_quote_age_ms < 0
+            or event_bid_quote_age_ms > policy.max_quote_age_ms
+        ):
+            raise ValueError("PASSIVE_EVENT_BID requires a fresh event bid quote")
+        entry_price = event_bid_price
+        for point in eligible:
+            if point.exchange_timestamp_ms > entry_deadline:
+                break
+            if not _passive_entry_touched(point, entry_price, policy.fill_bound):
+                continue
+            entry_time = point.exchange_timestamp_ms
+            entry_resolution_time = point.exchange_timestamp_ms
+            entry_resolution_sequence = point.source_sequence
+            if policy.fill_bound is FillBound.UPPER_TOUCH:
+                filled_quantity = policy.target_quantity
+                break
+            available = max(0, int(point.trade_qty or 0))
+            filled_quantity = min(policy.target_quantity, available)
+            break
+
+    if entry_time is None or entry_price is None or filled_quantity == 0:
+        return _empty_result(
+            policy,
+            decision_watermark_timestamp_ms,
+            decision_watermark_local_receive_timestamp_ms,
+            decision_watermark_source_sequence,
+            len(path),
+        )
+
+    assert entry_resolution_time is not None
+
+    remaining = filled_quantity
+    take_profit_quantity = max(
+        1, round(filled_quantity * policy.partial_take_profit_fraction)
+    )
+    take_profit_quantity = min(take_profit_quantity, filled_quantity)
+    take_profit_price = entry_price * (1 + policy.take_profit_bps / 10_000.0)
+    stop_price = entry_price * (1 - policy.stop_loss_bps / 10_000.0)
+    holding_deadline = entry_resolution_time + policy.holding_ttl_ms
+    proceeds = 0.0
+    exited_quantity = 0
+    exit_time: int | None = None
+    terminal = ReplayTerminalReason.PATH_ENDED
+    partial_tp = False
+    take_profit_executed_quantity = 0
+    runner_active = False
+    ambiguity = False
+    runner_deadline = holding_deadline
+    runner_peak = entry_price
+
+    holding_points = tuple(
+        point
+        for point in eligible
+        if (point.exchange_timestamp_ms, point.source_sequence)
+        > (entry_resolution_time, entry_resolution_sequence)
+    )
+    for point in holding_points:
+        if point.exchange_timestamp_ms > holding_deadline:
+            break
+        if runner_active:
+            runner_peak = max(runner_peak, point.high or runner_peak)
+            trailing_stop = runner_peak * (
+                1 - float(policy.runner_trailing_bps or 0) / 10_000.0
+            )
+            stop_price = max(stop_price, trailing_stop)
+            if point.exchange_timestamp_ms > runner_deadline:
+                break
+        stop_hit = (point.low is not None and point.low <= stop_price) or (
+            _fresh_quote(point, policy)
+            and point.best_bid is not None
+            and point.best_bid <= stop_price
+        )
+        take_profit_fill_quantity = _take_profit_fill_quantity(
+            point,
+            target_price=take_profit_price,
+            planned_quantity=(
+                0
+                if runner_active
+                else min(
+                    remaining,
+                    take_profit_quantity - take_profit_executed_quantity,
+                )
+            ),
+            bound=policy.fill_bound,
+            max_quote_age_ms=policy.max_quote_age_ms,
+        )
+        take_profit_hit = take_profit_fill_quantity > 0
+        same_point_range_crossed = (
+            point.low_price is not None
+            and point.high_price is not None
+            and point.low_price <= stop_price
+            and point.high_price >= take_profit_price
+        )
+        if stop_hit and (take_profit_hit or same_point_range_crossed):
+            ambiguity = True
+            if policy.same_timestamp_policy is SameTimestampPolicy.MARK_AMBIGUOUS:
+                terminal = ReplayTerminalReason.AMBIGUOUS_SAME_TIMESTAMP
+                exit_time = point.exchange_timestamp_ms
+                break
+            take_profit_hit = False
+        if stop_hit:
+            stop_execution_price = _stop_execution_price(
+                point, stop_price=stop_price, policy=policy
+            )
+            proceeds += remaining * stop_execution_price
+            exited_quantity += remaining
+            remaining = 0
+            exit_time = point.exchange_timestamp_ms
+            terminal = (
+                ReplayTerminalReason.PARTIAL_TAKE_PROFIT_THEN_STOP
+                if take_profit_executed_quantity > 0
+                else ReplayTerminalReason.STOP_LOSS
+            )
+            break
+        if take_profit_hit and not runner_active:
+            quantity = take_profit_fill_quantity
+            proceeds += quantity * take_profit_price
+            exited_quantity += quantity
+            remaining -= quantity
+            take_profit_executed_quantity += quantity
+            exit_time = point.exchange_timestamp_ms
+            partial_tp = remaining > 0
+            if take_profit_executed_quantity >= take_profit_quantity and remaining > 0:
+                runner_active = True
+                runner_peak = max(runner_peak, point.high or take_profit_price)
+                runner_deadline = min(
+                    holding_deadline,
+                    point.exchange_timestamp_ms + int(policy.runner_max_ttl_ms or 0),
+                )
+            if remaining == 0:
+                terminal = ReplayTerminalReason.TAKE_PROFIT
+                break
+
+    if terminal is ReplayTerminalReason.AMBIGUOUS_SAME_TIMESTAMP:
+        return P2ReplayResult(
+            policy_id=policy.policy_id,
+            policy_version=policy.policy_version,
+            policy_contract=P2PolicySnapshot.from_policy(policy),
+            fill_bound=policy.fill_bound,
+            filled_quantity=filled_quantity,
+            unresolved_quantity=remaining,
+            fill_fraction=round(filled_quantity / policy.target_quantity, 6),
+            average_entry_price=round(entry_price, 6),
+            average_exit_price=None,
+            entry_filled_at_ms=entry_time,
+            exited_at_ms=exit_time,
+            gross_return_bps=None,
+            net_return_bps=None,
+            net_return_per_detected_signal_bps=None,
+            terminal_reason=terminal,
+            partial_fill_observed=filled_quantity < policy.target_quantity,
+            partial_take_profit_observed=partial_tp,
+            ambiguity_observed=True,
+            decision_watermark_timestamp_ms=decision_watermark_timestamp_ms,
+            decision_watermark_local_receive_timestamp_ms=(
+                decision_watermark_local_receive_timestamp_ms
+            ),
+            decision_watermark_source_sequence=decision_watermark_source_sequence,
+            source_point_count=len(path),
+        )
+
+    if remaining > 0:
+        effective_deadline = runner_deadline if runner_active else holding_deadline
+        terminal_point = _last_at_or_before(holding_points, effective_deadline)
+        deadline_matured = any(
+            point.exchange_timestamp_ms >= effective_deadline
+            for point in holding_points
+        )
+        if deadline_matured and terminal_point is not None:
+            terminal_price = (
+                (
+                    terminal_point.best_bid
+                    if _fresh_quote(terminal_point, policy)
+                    else None
+                )
+                or terminal_point.trade_price
+                or terminal_point.low
+                or entry_price
+            )
+            proceeds += remaining * terminal_price
+            exited_quantity += remaining
+            remaining = 0
+            exit_time = terminal_point.exchange_timestamp_ms
+            terminal = ReplayTerminalReason.HOLDING_TTL
+
+    if remaining > 0:
+        realized_exit = proceeds / exited_quantity if exited_quantity > 0 else None
+        return P2ReplayResult(
+            policy_id=policy.policy_id,
+            policy_version=policy.policy_version,
+            policy_contract=P2PolicySnapshot.from_policy(policy),
+            fill_bound=policy.fill_bound,
+            filled_quantity=filled_quantity,
+            unresolved_quantity=remaining,
+            fill_fraction=round(filled_quantity / policy.target_quantity, 6),
+            average_entry_price=round(entry_price, 6),
+            average_exit_price=(
+                None if realized_exit is None else round(realized_exit, 6)
+            ),
+            entry_filled_at_ms=entry_time,
+            exited_at_ms=exit_time,
+            gross_return_bps=None,
+            net_return_bps=None,
+            net_return_per_detected_signal_bps=None,
+            terminal_reason=ReplayTerminalReason.PATH_ENDED,
+            partial_fill_observed=filled_quantity < policy.target_quantity,
+            partial_take_profit_observed=partial_tp,
+            ambiguity_observed=ambiguity,
+            decision_watermark_timestamp_ms=decision_watermark_timestamp_ms,
+            decision_watermark_local_receive_timestamp_ms=(
+                decision_watermark_local_receive_timestamp_ms
+            ),
+            decision_watermark_source_sequence=decision_watermark_source_sequence,
+            source_point_count=len(path),
+        )
+
+    average_exit = proceeds / exited_quantity
+    gross_bps = (average_exit / entry_price - 1.0) * 10_000.0
+    return P2ReplayResult(
+        policy_id=policy.policy_id,
+        policy_version=policy.policy_version,
+        policy_contract=P2PolicySnapshot.from_policy(policy),
+        fill_bound=policy.fill_bound,
+        filled_quantity=filled_quantity,
+        unresolved_quantity=0,
+        fill_fraction=round(filled_quantity / policy.target_quantity, 6),
+        average_entry_price=round(entry_price, 6),
+        average_exit_price=round(average_exit, 6),
+        entry_filled_at_ms=entry_time,
+        exited_at_ms=exit_time,
+        gross_return_bps=round(gross_bps, 6),
+        net_return_bps=round(gross_bps - policy.all_in_cost_bps, 6),
+        net_return_per_detected_signal_bps=round(
+            (gross_bps - policy.all_in_cost_bps)
+            * (filled_quantity / policy.target_quantity),
+            6,
+        ),
+        terminal_reason=terminal,
+        partial_fill_observed=filled_quantity < policy.target_quantity,
+        partial_take_profit_observed=partial_tp,
+        ambiguity_observed=ambiguity,
+        decision_watermark_timestamp_ms=decision_watermark_timestamp_ms,
+        decision_watermark_local_receive_timestamp_ms=(
+            decision_watermark_local_receive_timestamp_ms
+        ),
+        decision_watermark_source_sequence=decision_watermark_source_sequence,
+        source_point_count=len(path),
+    )
+
+
+def _passive_entry_touched(
+    point: P2ReplayPoint, entry_price: float, bound: FillBound
+) -> bool:
+    if bound is FillBound.UPPER_TOUCH:
+        upper_prices = tuple(
+            price
+            for price in (point.low_price, point.trade_price, point.best_ask)
+            if price is not None
+        )
+        return bool(upper_prices) and min(upper_prices) <= entry_price
+    return (
+        point.trade_price is not None
+        and point.trade_price < entry_price
+        and (point.trade_qty or 0) > 0
+    )
+
+
+def _take_profit_fill_quantity(
+    point: P2ReplayPoint,
+    *,
+    target_price: float,
+    planned_quantity: int,
+    bound: FillBound,
+    max_quote_age_ms: float,
+) -> int:
+    if bound is FillBound.UPPER_TOUCH:
+        upper_prices = tuple(
+            price
+            for price in (
+                point.high_price,
+                point.trade_price,
+                (
+                    point.best_bid
+                    if point.quote_age_ms is not None
+                    and point.quote_age_ms <= max_quote_age_ms
+                    else None
+                ),
+            )
+            if price is not None
+        )
+        return (
+            planned_quantity
+            if upper_prices and max(upper_prices) >= target_price
+            else 0
+        )
+    if (
+        point.trade_price is not None
+        and point.trade_price > target_price
+        and (point.trade_qty or 0) > 0
+    ):
+        return min(planned_quantity, int(point.trade_qty or 0))
+    return 0
+
+
+def _fresh_quote(point: P2ReplayPoint, policy: P2ReplayPolicy) -> bool:
+    return (
+        point.quote_age_ms is not None
+        and 0 <= point.quote_age_ms <= policy.max_quote_age_ms
+    )
+
+
+def _stop_execution_price(
+    point: P2ReplayPoint,
+    *,
+    stop_price: float,
+    policy: P2ReplayPolicy,
+) -> float:
+    candidates = [stop_price]
+    candidates.extend(
+        price for price in (point.low_price, point.trade_price) if price is not None
+    )
+    if _fresh_quote(point, policy) and point.best_bid is not None:
+        candidates.append(point.best_bid)
+    return min(candidates)
+
+
+def _validate_path(path: tuple[P2ReplayPoint, ...]) -> None:
+    previous: P2ReplayPoint | None = None
+    for point in path:
+        if previous is not None and (
+            point.exchange_timestamp_ms < previous.exchange_timestamp_ms
+            or point.local_receive_timestamp_ms < previous.local_receive_timestamp_ms
+            or point.source_sequence <= previous.source_sequence
+        ):
+            raise ValueError(
+                "path must increase by exchange/local timestamp and source sequence"
+            )
+        previous = point
+
+
+def _last_at_or_before(
+    points: tuple[P2ReplayPoint, ...], deadline_ms: int
+) -> P2ReplayPoint | None:
+    result = None
+    for point in points:
+        if point.exchange_timestamp_ms > deadline_ms:
+            break
+        result = point
+    return result
+
+
+def _empty_result(
+    policy: P2ReplayPolicy,
+    watermark_ts: int,
+    watermark_local_receive_ts: int,
+    watermark_sequence: int,
+    source_point_count: int,
+) -> P2ReplayResult:
+    return P2ReplayResult(
+        policy_id=policy.policy_id,
+        policy_version=policy.policy_version,
+        policy_contract=P2PolicySnapshot.from_policy(policy),
+        fill_bound=policy.fill_bound,
+        filled_quantity=0,
+        unresolved_quantity=0,
+        fill_fraction=0.0,
+        average_entry_price=None,
+        average_exit_price=None,
+        entry_filled_at_ms=None,
+        exited_at_ms=None,
+        gross_return_bps=None,
+        net_return_bps=None,
+        net_return_per_detected_signal_bps=0.0,
+        terminal_reason=ReplayTerminalReason.NO_ENTRY_FILL,
+        partial_fill_observed=False,
+        partial_take_profit_observed=False,
+        ambiguity_observed=False,
+        decision_watermark_timestamp_ms=watermark_ts,
+        decision_watermark_local_receive_timestamp_ms=watermark_local_receive_ts,
+        decision_watermark_source_sequence=watermark_sequence,
+        source_point_count=source_point_count,
+    )

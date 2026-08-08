@@ -21,8 +21,59 @@
 - [x] `[WidgetSignalAutoTradeDailyLedger0810] 위젯 대상 3종목 당일원장 실주문 실행기 구현` (`Due: 2026-08-10`, `Slot: PREOPEN`, `TimeWindow: 08:50~09:00`, `Track: RuntimeStability`)
   - Source: [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [gateway.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/gateway.py), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md)
   - 판정: 3개 위젯 producer는 관측 권한을 유지하고 별도 실행 owner가 `ENTRY_CAUTION|ENTRY_READY` 새 에피소드 매수와 final EXIT 당일 체결수량 청산만 수행한다. 전일 미청산 수량은 이력으로만 남기고 다음 거래일 원장에서 제외한다.
-  - 적용 상태: source와 systemd unit 구현 완료, 서비스 미설치·미기동이므로 현재 `runtime_effect=false`; 실제 적용 전 shared token, collector freshness, manual_operator ownership, 단일 instance를 확인한다.
+  - 적용 상태: source와 systemd unit 설치·enable 완료, 현재 서비스는 미기동(`runtime_effect=false`)이며 `korstockscan-widget-signal-auto-trader-activate-20260810.timer`가 2026-08-10 07:58 KST에 최초 기동한다. 07:55 메인 봇 기동 후 shared token, collector freshness, manual_operator ownership, 단일 instance를 확인한다.
   - Rollback: 서비스 stop/disable. 장중 state 파일 삭제와 전일·수동·타 전략 수량 매도는 금지한다.
+
+- [ ] `[WidgetSignalAutoTradeActivationVerify0810] 위젯 실주문 실행기 예약 기동 및 주문권한 검증` (`Due: 2026-08-10`, `Slot: PREOPEN`, `TimeWindow: 07:58~08:15`, `Track: RuntimeStability`)
+  - Source: [systemd unit](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.service), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md), [실행 상태](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
+  - 판정 기준: timer가 07:58 KST에 service를 1개 PID로 기동하고, 당일 shared cached token과 3개 collector fresh snapshot을 사용하며, `entry_qty=1`, `cash_precheck_performed=false`, `actual_order_submitted=false`가 최초 유효 신호 전까지 유지되는지 확인한다.
+  - 금지: token 신규 발급·갱신, 메인 봇 재기동, state 파일 삭제, 전일·수동·타 전략 수량 매도, 신호 없는 시험주문.
+  - 다음 액션: `active_ready_no_signal`, `active_and_source_qualified_entry_consumed`, `blocked_missing_daily_token`, `blocked_stale_collector`, `blocked_manual_owner_gap`, `service_start_failed` 중 하나로 닫는다.
+
+- [x] `[ScalpMicroReversionV0Implementation0808] 도박사 entry-odds 제거 및 micro-reversion V0 4개 범위 구현` (`Due: 2026-08-08`, `Slot: OFFLINE`, `TimeWindow: 15:30~18:00`, `Track: ScalpingLogic`)
+  - Source: [micro_reversion package](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion), [구현안](/home/ubuntu/KORStockScan/docs/proposals/scalp-micro-reversion-v1-plan.md)
+  - 판정: `entry_odds` source/test는 제거했고 contracts, deterministic detector, 10-minute outcome labeler, replay/report를 source-only로 구현했다. 기존 engine/order/AI/ADM/LDM에는 연결하지 않았다.
+  - 안전 계약: 수동관리 제외는 observation 등록 전 hard veto이며 `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=false`다.
+  - 검증: targeted pytest, Ruff, Black, compile, parser, `git diff --check`를 review gate에서 닫는다.
+
+- [x] `[ScalpMicroReversionV0ReplayReview0810] clean-baseline 15초~10분 V0 replay 및 coverage/EV 판정` (`Due: 2026-08-10`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~20:30`, `Track: ScalpingLogic`)
+  - Source: [V0 report JSON](/home/ubuntu/KORStockScan/data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.json), [V0 report Markdown](/home/ubuntu/KORStockScan/data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.md), [감리용 구현결과보고서](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-08-scalp-micro-reversion-v0-implementation-result.md)
+  - 판정 기준: clean baseline과 수동관리 제외를 통과한 price/BBO/micro tier별 성숙 event, 3분·5분 비용 차감 EV, p90/p95 MAE, 날짜/종목 집중도, 결손 분모를 분리한다.
+  - 금지: V0 결과를 실주문, BUY threshold, TP/stop, provider, bot, quantity/cap, broker guard 변경 근거로 사용하지 않는다.
+  - 처리 결과: `document_status=superseded`, `superseded_by=scalp_micro_reversion_v0_report_v4`, `automation_consumption_allowed=false`. 기존 `v0_gross_edge_cost_sensitive_execution_unresolved`는 중간 판정이며 정식 상태는 `v0_aggregate_taxable_equity_gate_failed_subcohort_execution_unresolved`다. 5거래일 `2,644,506` raw rows에서 수동관리 제외 `130,303` rows를 hard veto했고 event leak은 `0`이다. deduplicated observations `469,231`, shock events `2,399`; 최고 관측 60초 gross EV `+0.144501%`는 인샘플 설명값이며 selection authority가 없다.
+  - 다음 액션 실행: 비용 시나리오 `0/5/10/15/20/23bps`와 15~180초 fixed horizon을 report에 추가하고 동일 5거래일 산출물을 재생성했다. `0bps`는 friction-free이며 slippage-only가 아니다. sim/runtime 승격은 열지 않았다.
+
+- [x] `[ScalpMicroReversionTaxGateCommonCohortJournal0808] tax-aware gate·공통성숙표본·forward journal P0 구현` (`Due: 2026-08-08`, `Slot: OFFLINE`, `TimeWindow: 18:00~20:00`, `Track: ScalpingLogic`)
+  - Source: [tax.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/tax.py), [execution_journal.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/execution_journal.py), [V4 report JSON](/home/ubuntu/KORStockScan/data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.json), [감리보고서](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-08-scalp-micro-reversion-v0-implementation-result.md)
+  - 판정: 일반 과세주권 20bps counterfactual에서 최고 fixed-horizon gross `14.450139bps`, margin `-5.549861bps`로 aggregate gate는 실패했다. event tax class는 `0/2,399`로 exact gate가 차단됐으며 subcohort discovery는 유지한다. through-60s 동일표본에서는 30초 gross `15.188879bps`가 60초 `14.689606bps`보다 높아 60초 선택권한을 제거했다.
+  - 구현: canonical report-only authority, 날짜/상품별 tax contract, explicit symbol metadata 입력, incremental common-maturity report, 주문권한 없는 append-only BBO/order/fill/cancel execution journal을 추가했다.
+  - 안전 계약: 수동관리 제외는 replay/journal 전 hard veto, numeric market code 추정 금지, touch를 fill로 승격 금지, broker/order/AI/lifecycle consumer 연결 금지, `runtime_effect=false`를 유지한다.
+  - 검증: targeted pytest `29 passed`, Ruff/Black/compileall, 5거래일 V3 replay, 금지 import scan, parser, `git diff --check`를 review gate에서 닫는다.
+
+- [x] `[ScalpMicroReversionAuditRemediation0808] 감리 P0.4/P0.5 및 조건부 source-only 계약 보완` (`Due: 2026-08-08`, `Slot: OFFLINE`, `TimeWindow: 20:00~22:00`, `Track: ScalpingLogic`)
+  - Source: [micro_reversion package](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion), [구현안](/home/ubuntu/KORStockScan/docs/proposals/scalp-micro-reversion-v1-plan.md), [감리보고서](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-08-scalp-micro-reversion-v0-implementation-result.md)
+  - 구현: V4/report 재현성 sidecar, verified symbol master, OBSERVE/ECONOMIC gate 분리, CORE/DISCOVERY registry, multi-horizon parent-wave detector, non-blocking path journal, execution provenance V2, confirmation clustered LCB/tail/concentration/FDR 계약을 source-only로 추가했다.
+  - 판정: path producer·order producer에는 연결하지 않았고 P2 entry×exit joint replay와 P3 sim assumed-fill은 `blocked_no_forward_continuous_path`로 남겼다. `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=false`다.
+  - 후속 상태: 위 판정은 당시 completed evidence다. `ScalpMicroReversionObserverP2Skeleton0808`에서 P2 계약·synthetic/golden engine까지만 구현됐고, 실제 path discovery·selection·sim/runtime은 계속 blocked다.
+  - 검증: targeted pytest, Ruff, Black, compileall, 금지 import scan, 5거래일 V4 재생성, parser, `git diff --check`를 review gate에서 닫는다.
+
+- [x] `[ScalpMicroReversionObserverP2Skeleton0808] 감리 권고 observer/P2 source-only change set 구현` (`Due: 2026-08-08`, `Slot: OFFLINE`, `TimeWindow: 22:00~23:30`, `Track: ScalpingLogic`)
+  - Source: [observation_adapter.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/observation_adapter.py), [path_capture.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/path_capture.py), [p2_replay.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/p2_replay.py), [감리보고서](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-08-scalp-micro-reversion-v0-implementation-result.md)
+  - 구현: fail-isolated minimal `ObservationSink`, 기본 OFF 3개 flag, 30초 pre-event ring, parent-wave 단일 segment/reference, pre/active/post coverage, disk/partition/self-disable·runtime metric 계약, exchange/local/sequence watermark와 upper/lower fill bound를 가진 P2 synthetic/golden engine을 추가했다.
+  - 판정: producer hook과 신규 구독은 추가하지 않았다. 현재 working tree가 clean deployment baseline을 충족하지 않으므로 `observer_producer_connected=false`, `p2_real_data_discovery_run=false`, `selection_authority=false`, `trading_decision_effect=false`, `actual_order_submitted=false`다.
+  - 검증: targeted pytest `69 passed`, Ruff/Black/compileall, thin adapter import graph·금지 dependency scan, parser(`count=30`), `git diff --check`를 review gate에서 통과했다. writer full-queue shutdown은 queue marker 비의존 stop-event 회귀테스트를 추가했다.
+
+- [ ] `[ScalpMicroReversionForwardCollector0810] verified symbol 원천 적재 및 non-blocking forward path collector 연결` (`Due: 2026-08-10`, `Slot: POSTCLOSE`, `TimeWindow: 20:30~21:00`, `Track: ScalpingLogic`)
+  - Source: [symbol_master.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/symbol_master.py), [observation_adapter.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/observation_adapter.py), [path_journal.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/path_journal.py), [구현안](/home/ubuntu/KORStockScan/docs/proposals/scalp-micro-reversion-v1-plan.md)
+  - 판정 기준: clean integration commit과 source/test/deployment manifest를 먼저 만들고 공식·검증 원천의 effective-date/conflict symbol metadata를 적재한 뒤 감리 재검토를 받는다. 재승인 후 기존 구독 범위 안에서 수동관리 hard veto 뒤 immutable envelope만 bounded queue에 넣는다. post-session compression/retention dry-run, process restart/last-sequence recovery, producer latency 악화 없음, 정상장 drop 0, 5거래일·성숙 event 200건·필수 path field coverage 90%·gap/restart/recovery는 collector 건강성만 판정한다.
+  - 금지: dirty tree producer 연결, 신규 종목/호가/NXT·KRX 구독 확대, 임의 tax class 추정, 동기 JSON/fsync/detector/replay hot-path 연결, 실제 P2 data ranking 선행, sim/live·threshold·provider·bot·quantity/cap 변경.
+  - 다음 액션: `clean_baseline_missing_blocked`, `collector_health_pass_research_data_only`, `symbol_master_conflict_blocked`, `path_coverage_insufficient`, `journal_degraded`, `manual_control_leak_blocked` 중 하나로 닫는다.
+
+- [ ] `[ScalpMicroReversionP2DiscoveryAfterGateB0810] Gate B 이후 P2 actual-path discovery와 frozen confirmation 준비` (`Due: 2026-08-10`, `Slot: POSTCLOSE`, `TimeWindow: 21:00~21:15`, `Track: ScalpingLogic`)
+  - Source: [p2_replay.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/p2_replay.py), [research_gate.py](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/research_gate.py), [구현안](/home/ubuntu/KORStockScan/docs/proposals/scalp-micro-reversion-v1-plan.md)
+  - 판정 기준: `ScalpMicroReversionForwardCollector0810=collector_health_pass_research_data_only`인 경우에만 실제 path discovery를 실행한다. discovery에서 policy/cohort/cost를 고정하고 별도 confirmation window의 `net_ev_per_all_detected_signal` clustered LCB·tail·capital-time·집중도·FDR을 판정한다.
+  - 금지: Gate B 전 실제 data run/ranking, touch=fill 단일 headline, discovery 최고 EV 자동선택, confirmation 전 selection authority, sim/runtime/order 연결.
+  - 다음 액션: `blocked_gate_b_not_closed`, `discovery_source_quality_blocked`, `discovery_frozen_confirmation_pending`, `confirmation_failed`, `confirmation_passed_sim_audit_required` 중 하나로 닫는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-07` postclose -> `2026-08-10`)

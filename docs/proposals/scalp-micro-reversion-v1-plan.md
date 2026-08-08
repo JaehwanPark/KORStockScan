@@ -2,7 +2,7 @@
 
 - 작성일: `2026-08-08 KST`
 - 제안 namespace: `scalp_micro_reversion`
-- 상태: `v0_replay_implementation_recommended / execution_validation_not_ready`
+- 상태: `v0_aggregate_taxable_equity_gate_failed_subcohort_execution_unresolved / no_sim_or_runtime_promotion`
 - 실주문 권한: 없음
 - LLM 의사결정 권한: 없음
 
@@ -13,11 +13,62 @@
 따라서 진행 순서는 다음으로 제한한다.
 
 1. 기존 clean-baseline 데이터로 coverage-aware V0 replay를 실행한다.
-2. 유효한 가설만 V1 forward shadow observer로 옮겨 연속 이벤트 저널을 쌓는다.
-3. 충분한 forward 표본에서 비용 차감 EV와 tail loss를 검증한 뒤 sim assumed-fill을 연다.
-4. 실주문은 별도 사용자 승인, 별도 runtime family, 별도 rollback 계약 전에는 열지 않는다.
+2. 수동관리 제외·거래세션·최소 source 계약·detector를 통과한 종목은 세율 미확인이어도 V1 forward observation에 포함한다.
+3. exact tax class·all-in cost·OOS clustered EV LCB·tail/concentration gate를 통과한 후보만 경제성 headline 대상으로 좁힌다.
+4. 충분한 연속 경로와 forward 표본에서 비용 차감 EV와 tail loss를 검증한 뒤에만 sim assumed-fill을 별도 검토한다.
+5. 실주문은 별도 사용자 승인, 별도 runtime family, 별도 rollback 계약 전에는 열지 않는다.
 
 삭제된 `panic_buying` 코드, 리포트, artifact, euphoria stage 또는 승인 family는 입력·호환 경로·이름 재사용 대상으로 삼지 않는다.
+
+### 1.1 구현 상태 (`2026-08-08`)
+
+다음 source-only 범위가 `src/engine/scalping/micro_reversion/`에 구현됐다.
+
+- `contracts.py`: observation/event/outcome/metric authority 계약
+- `detector.py`: robust median/MAD, hysteresis, cooldown 기반 shock detector
+- `outcome_labeler.py`: 15/30/60/120/180/300/600초 future-path label
+- `replay.py`, `report.py`: clean-baseline replay, 수동관리 hard veto, JSON/Markdown report
+- `tax.py`: 날짜·상장시장·상품유형별 법정 매도세율 계약
+- `symbol_master.py`: effective-date·conflict를 포함한 verified symbol master 계약
+- `observation_gate.py`, `registry.py`: 넓은 관찰 gate와 좁은 경제성 gate, CORE/DISCOVERY 예산 분리
+- `path_journal.py`: bounded non-blocking queue와 batch/fsync를 쓰는 연속 market-path 저널 계약
+- `observation_adapter.py`: package eager import 없는 최소 sink, 수동제외 snapshot, immutable envelope, 기본 OFF flag와 runtime metric
+- `path_capture.py`: 30초 pre-event ring, parent-wave 단일 segment/reference, pre/active/post coverage
+- `p2_replay.py`: source-only frozen policy, non-lookahead watermark, fill bound·partial fill·TTL·ambiguity synthetic engine
+- `execution_journal.py`: 제출상태·주문원천·체결상태·증거자격을 분리한 receipt 계약
+- `multi_horizon.py`: 1/3/5/10/20초 탐지와 parent-wave/state re-arm 계약
+- `research_gate.py`: discovery/confirmation freeze, clustered LCB, tail·집중도·FDR 계약
+- `reproducibility.py`: input/source/config/report/test hash sidecar manifest
+
+구현은 명시적으로 인스턴스화하기 전에는 아무 동작도 하지 않는다. 기존 스캘핑 엔진, 주문, AI, ADM/LDM, threshold-cycle consumer에는 연결되지 않았다. `ObservationSink`와 thin adapter, pre-event ring, parent-wave path coalescer, runtime metric, P2-A source-only synthetic engine 계약은 구현했지만 실제 producer hook과 실제 경로 P2 실행은 하지 않았다. 세 feature flag의 기본값은 모두 `false`다. execution journal은 외부에서 관측된 실제 주문 여부를 보존할 수 있지만 journal 자체는 broker action authority가 없다.
+
+### 1.2 V0 실행 판정 (`2026-08-08`)
+
+정식 V4 replay는 `v0_aggregate_taxable_equity_gate_failed_subcohort_execution_unresolved`로 종료했다. shock pattern과 15~180초 gross reversion edge는 식별됐지만 일반 과세주권 법정비용 하한 `20bp`가 최고 fixed-horizon gross `14.450139bp`보다 높아 전체 이벤트 fixed-horizon 경제성 gate는 실패했다. 다만 tax class와 execution 자료가 부족하므로 세부 cohort와 path-based 정책 탐색은 계속 연다.
+
+| 항목 | 결과 | 판정 |
+|---|---:|---|
+| raw rows / deduplicated observations | `2,644,506 / 469,231` | 5거래일 입력 확인 |
+| shock events / symbols | `2,399 / 640` | 패턴은 식별됨 |
+| manual-control excluded rows / event leak | `130,303 / 0` | hard veto 통과 |
+| 300초 mature sample | `292` | 후보 floor `1,000` 미달 |
+| 10분 fully mature event | `99 (4.13%)` | coverage floor `90%` 미달 |
+| 15~180초 gross EV | `+0.121910% ~ +0.144501%` | gross edge 식별 |
+| 최고 관측 fixed horizon | `60초, +0.144501%` | 인샘플 설명값, 선택 권한 없음 |
+| 60초 손익분기 all-in 비용 | `14.450139bps` | 실행비용 분해 필요 |
+| 일반 과세주권 법정비용 / margin | `20bps / -5.549861bps` | aggregate gate 실패 |
+| event tax-class coverage | `0 / 2,399` | exact gate 차단 |
+| common through-60s 최고 | `30초, 15.188879bps` | 60초 selection authority 없음 |
+| 60초 EV @ 10bps / 15bps / 23bps | `+0.044501% / -0.005499% / -0.085499%` | 비용 민감 |
+| 600초 gross EV | `-0.061444%` | 장기 보유 edge 없음 |
+
+따라서 전체 이벤트 fixed-horizon 정책은 기각하지만 전략군 전체는 기각하지 않는다. forward collector와 P2-A 계약은 구현했으나 producer에 연결하거나 실제 data replay를 실행하지 않았고, sim assumed-fill·실시간 registry·실주문 adapter 승격은 열지 않는다. 다음 실행 owner는 clean integration commit/manifest와 verified symbol master 원천 적재 후, 기존 구독 범위 안에서 non-blocking producer canary를 연결하는 것이다. Phase B data-readiness가 닫힌 뒤에만 P2 실제 discovery replay를 수행한다. `0bps`는 모든 마찰을 제거한 counterfactual이며 일반 과세주권 live-relevant 비용으로 해석하지 않는다.
+
+산출물:
+
+- `data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.json`
+- `data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.md`
+- `docs/audit-reports/2026-08-08-scalp-micro-reversion-v0-implementation-result.md`
 
 ## 2. 근거 데이터
 
@@ -153,41 +204,45 @@ API adapter는 주문·계좌 endpoint를 import하거나 호출하지 않는다
 ## 6. Loose-Coupled V1 구조
 
 ```text
-existing market-data snapshot/event
+Broad Tradeable Universe
               |
               v
 manual-control exclusion veto
               |
-              v
-Pattern Propensity Scanner (slow, offline/intraday refresh)
+              +--> CORE_REGISTRY (evidence-priority)
+              |
+              +--> DISCOVERY_REGISTRY (bounded rotation)
               |
               v
-Active Symbol Registry (TTL, venue/session keyed)
+Multi-horizon Detector (deterministic, no LLM)
               |
               v
-Scream Pulse Detector (deterministic, no LLM)
+Event Path Capture + propensity re-estimation
               |
-              v
-Reversion State Machine
-              |
-              +--> Event Journal + future-path labeler
-              |
-              +--> shadow decision envelope only
+              +--> diagnostic observation envelope only
 ```
 
-V1은 기존 스캘핑 엔진의 주문 함수, AI 판단기, ADM/LDM runtime policy를 호출하지 않는다. 기존 market-data producer에서 immutable snapshot을 받는 얇은 adapter와 event journal만 연결한다.
+propensity는 관찰 허가권이 아니라 자원 배분 우선순위만 소유한다. tax class `UNKNOWN`은 DISCOVERY 관찰에는 남길 수 있지만 경제성 headline·sim 승격에는 사용할 수 없다. V1은 기존 스캘핑 엔진의 주문 함수, AI 판단기, ADM/LDM runtime policy를 호출하지 않는다. 향후 연결도 기존 market-data producer에서 immutable envelope을 받는 얇은 adapter와 bounded non-blocking queue까지만 허용한다.
 
 권장 source ownership:
 
 ```text
 src/engine/scalping/micro_reversion/
   contracts.py
-  universe.py
   detector.py
-  state_machine.py
-  journal.py
+  multi_horizon.py
+  registry.py
+  observation_gate.py
+  symbol_master.py
+  path_journal.py
+  observation_adapter.py
+  path_capture.py
+  p2_replay.py
+  execution_journal.py
+  research_gate.py
   replay.py
-  kiwoom_tick_backfill.py
+  report.py
+  reproducibility.py
 ```
 
 - live/scalping 역할이므로 `src/engine/scalping` 하위가 owner다.
@@ -222,31 +277,67 @@ IDLE
 
 trigger와 release threshold를 분리하고, 하나의 하락 파동이 여러 event로 중복 집계되지 않도록 `symbol + venue + session + event_id`를 사용한다. V0에서 threshold를 결과에 맞춰 임의 고정하지 않고 train window quantile로 만들고 다음 거래일 walk-forward window에 적용한다.
 
-## 8. 이벤트 저널 계약
+### 7.1 체결확인형 resting take-profit 변경안
 
-이벤트 시작 시 최소 필드:
+비용민감도 검증 후 `fill_confirmed_resting_take_profit_v1`은 exit 후보 중 하나로 유지한다. 현재는 `design_only_not_implemented`이며 주문 권한이 없다. 단일 TP를 확정하지 않고 `SINGLE_TP`, `PARTIAL_TP_RUNNER`, `TP_LADDER`를 entry 정책과 공동 replay한다.
 
 ```text
-event_id, symbol, venue, session_bucket, time_bucket
-detected_at, peak_at, reference_bid, reference_ask
-reference_price, micro_vwap, spread_bps
-return_z, acceleration_z, sell_pressure_z
-coverage_tier, source_quality_status
+BUY_SUBMITTED
+ -> BUY_PARTIAL_FILLED | BUY_FILLED
+ -> TARGET_PRICE_RESOLVED
+ -> TAKE_PROFIT_SUBMITTED
+    |-> TAKE_PROFIT_PARTIAL_FILLED -> TAKE_PROFIT_SUBMITTED (remaining qty)
+    |-> TAKE_PROFIT_FILLED -> CLOSED
+    |-> TTL_EXPIRED -> TTL_CANCEL_REQUESTED
+                      -> TTL_CANCEL_CONFIRMED
+                      -> DEFENSIVE_EXIT_ELIGIBLE
+                      -> CLOSED
+```
+
+- broker 주문번호 반환을 체결로 보지 않고 confirmed fill receipt만 수량 권한으로 사용한다.
+- `confirmed buy fill - sell-covered qty - open sell reserved qty`의 양수 delta만 지정가 매도한다.
+- TP1·TP2·runner allocation 합계는 confirmed sellable qty를 넘지 않는다.
+- 목표가는 실제 fill VWAP에 검증된 all-in 비용, 최소 순이익, uncertainty buffer를 더하고 tick ceiling한다.
+- 보호손절은 TP보다 우선하지만 기존 TP 취소확인과 late-fill reconciliation 전에는 같은 수량을 중복 매도하지 않는다.
+- 공식 주문 계약상 atomic OCO를 가정하지 않는다.
+- 과거 touch replay와 forward full/partial/no-fill receipt가 닫히기 전에는 sim/live adapter를 열지 않는다.
+
+## 8. 연속 경로·실행 저널 계약
+
+연속 market-path는 event baseline부터 event 이후 180초 또는 정책 종료까지 다음을 append-only로 보존한다.
+
+```text
+event_id, path_segment_id, symbol, venue
+exchange_timestamp, local_receive_timestamp, source_sequence
+trade_price, trade_qty, best_bid, best_ask, bid_depth, ask_depth
+quote_age_ms, aggressor_side, detector_version
+capture_started_at, event_detected_at, capture_ended_at
+dropped_message_count
 manual_control_exclusion_checked=true
 actual_order_submitted=false
 broker_order_forbidden=true
-decision_authority=shadow_observation_only
+decision_authority=continuous_market_path_observation_only
 ```
 
-성숙 후 다음 label을 append-only로 붙인다.
+producer dependency는 `producer → ObservationSink → thin adapter → bounded queue`로만 허용한다. hot path는 수동관리 제외, 최소 envelope 검증, `put_nowait`, metric increment만 수행하고 전용 writer가 batch append/flush/fsync를 담당한다. JSON/file/fsync/detector/replay/statistics/symbol-master I/O/broker/LLM은 hot path에서 금지한다. adapter 예외는 producer에 전파하지 않는다.
+
+active series별 20~30초 bounded ring을 유지하고 최초 shock 시 pre-event row를 한 번 flush한다. 동일 `parent_wave_id`의 1/3/5/10/20초 event는 하나의 `path_segment_id`를 공유하고 append-only event reference로 연결한다. 이후 독립 impulse가 state re-arm을 통과한 경우에만 새 segment를 연다.
+
+저장 계약은 trade date/venue/session partition, maximum open segment/file size, disk low/critical watermark, post-session compression, retention, low-disk self-disable를 선언한다. critical 상태에서는 path capture만 degraded/self-disabled로 닫고 기존 producer/runtime은 계속한다. writer 종료는 full queue에 shutdown marker를 삽입하는 방식이 아니라 독립 stop event로 drain하며 `writer_alive`와 마지막 오류유형을 보고한다. 실제 canary 전에는 운영 환경의 bytes/event/day 기준으로 watermark를 확정한다.
+
+필수 metric은 callback/enqueue p50/p95/p99, queue depth/high-water/full/drop, write/flush/fsync, sequence gap/duplicate/out-of-order, exchange/local gap과 quote age, bytes/disk, writer recovery/last sequence, pre/active/post coverage다. observer가 실제로 적재될 때는 `observer_runtime_loaded`와 `observation_capture_active`를 별도로 보고하고, `trading_decision_effect`, order/broker/sim/threshold effect는 계속 false다.
+
+execution receipt는 다음 네 축을 혼합하지 않는다.
 
 ```text
-mfe/mae at 5s, 10s, 15s, 30s, 60s
-recovery_first, continuation_first
-micro_vwap_reclaimed, reclaim_time_ms
-second_shock, cost_adjusted_return
-outcome_source_quality_status
+submission_state = NOT_SUBMITTED | SUBMITTED | UNKNOWN
+order_origin = NONE | COUNTERFACTUAL | EXTERNAL_OTHER_STRATEGY | MICRO_REVERSION
+fill_state = NOT_APPLICABLE | TOUCH_ONLY | TRADE_THROUGH | NO_FILL |
+             PARTIAL_FILL | FULL_FILL | RECEIPT_INCOMPLETE
+execution_evidence_eligible = true | false
 ```
+
+외부 전략 주문은 micro-reversion fill evidence가 될 수 없다. `NO_FILL`은 실제 submit과 terminal receipt가 모두 확인될 때만 허용한다. micro-reversion 원천은 제출 여부와 무관하게 `event_id + order_decision_id + entry_policy_version + quote_snapshot_id` pairing을 요구한다.
 
 신규 metric은 다음 계약을 함께 선언한다.
 
@@ -258,7 +349,7 @@ outcome_source_quality_status
 - `source_quality_gate`
 - `forbidden_uses`
 
-EV는 `source_quality_adjusted_ev_pct` 또는 `notional_weighted_ev_pct`로 보고한다. 승률은 `diagnostic_win_rate`로만 사용한다.
+complete-case EV는 진단값으로만 남긴다. 경제성 headline은 모든 탐지 signal을 분모로 하고 resolved/unresolved, optimistic/conservative fill bound와 clustered lower confidence bound를 함께 보고한다. 승률과 recovery rate는 진단지표로만 사용한다.
 
 ## 9. 구현 단계와 종료 조건
 
@@ -277,10 +368,10 @@ EV는 `source_quality_adjusted_ev_pct` 또는 `notional_weighted_ev_pct`로 보�
 - 수동관리 제외종목 event/API request count `0`
 - usable coverage와 결손 분모가 함께 보고됨
 
-### Phase B — V1 forward shadow observer
+### Phase B — forward collector 건강성 gate
 
-- active registry와 deterministic detector 구현
-- append-only event journal 및 future label scheduler 구현
+- CORE/DISCOVERY registry와 deterministic multi-horizon detector 구현
+- append-only continuous path journal 및 future label scheduler 연결
 - LLM, broker, order manager import 금지 test 추가
 - source-quality fail-closed와 process restart state 복원 검증
 
@@ -289,21 +380,34 @@ EV는 `source_quality_adjusted_ev_pct` 또는 `notional_weighted_ev_pct`로 보�
 - `actual_order_submitted=false`, `broker_order_forbidden=true` 고정
 - event dedupe/hysteresis/cooldown test 통과
 - venue/session 분리 test 통과
-- required micro fields forward coverage `>=90%`
+- coverage 분모 고정, required path fields forward coverage `>=90%`
+- queue drop/restart/dedupe/recovery test 통과
 - 최소 5거래일과 전체 성숙 event `>=200`
+
+이 종료조건은 수집기 건강성만 승인하며 경제성 또는 sim 승격 근거가 아니다.
+
+### P2-A — path-only joint replay
+
+Phase B data-readiness가 닫힌 뒤 실제 경로 discovery를 실행한다. 지금은 policy schema, exchange/local/sequence decision watermark, deterministic first-touch, touch upper/trade-through lower bound, partial fill, 분리된 entry/holding TTL, same-point `STOP_FIRST|AMBIGUOUS`, frozen partial-runner 규칙과 synthetic/golden test까지만 구현했다. 실제 V0/forward data run과 policy ranking은 하지 않았다.
+
+### P2-B — discovery policy selection
+
+discovery 기간에 `policy_family`, entry/exit/cost version, cohort, selected/frozen timestamp, multiple-test family를 고정한다. 결과는 `selection_authority=false`이며 tax unknown은 gross/path 진단만 허용하고 economic headline과 promotion은 false다.
+
+### P2-C — frozen confirmation
+
+별도 confirmation window에서 policy/cohort/cost/target/stop/TTL을 변경하지 않고 다음을 판정한다.
+
+- `net_ev_per_all_detected_signal` clustered lower confidence bound `> 0`
+- per-filled-trade EV와 expected fill fraction은 secondary metric
+- p90/p95 tail budget과 capital-time efficiency
+- trade_date·symbol·parent_wave concentration
+- multiple-test FDR
+- all/resolved/unresolved와 optimistic/conservative bound 동시 보고
 
 ### Phase C — sim assumed-fill 후보
 
-다음을 모두 충족할 때만 별도 작업으로 연다.
-
-- rolling parent bucket 성숙 event `>=100`
-- 보수적 비용 차감 `source_quality_adjusted_ev_pct > 0`
-- recovery Wilson lower bound가 continuation 비율보다 큼
-- p90/p95 MAE가 사전 정의한 sim risk budget 안에 있음
-- 특정 1일·1종목·thin child bucket에 성과가 집중되지 않음
-- source-quality unknown과 API 보완 provenance가 해소됨
-
-Phase C도 실주문 근거가 아니며 sim-only다.
+P2-C confirmation이 닫힌 뒤 별도 사용자 작업과 재감리로만 연다. 현재 불승인이다.
 
 ## 10. 금지사항
 
@@ -313,11 +417,11 @@ Phase C도 실주문 근거가 아니며 sim-only다.
 - selected decision-time 표본을 전체 universe 표본으로 해석
 - 승률 또는 단순 수익률 합계를 EV로 사용
 - V0/V1 결과만으로 BUY threshold, TP, stop, provider, bot, quantity, cap 변경
-- shadow observer에서 주문·취소·매도 호출
+- execution observation journal에서 주문·취소·매도 호출
 - 사용자 승인 없는 real-order adapter 추가
 
 ## 11. 최종 권고
 
 구현 가치는 있다. 다만 가치는 “즉시 매매기계”가 아니라, 평균회귀형 종목과 실제 shock-reversion event가 존재하는지 빠르게 기각하거나 확인하는 독립 검증기에서 시작한다.
 
-첫 구현 범위는 `Phase A V0 replay + coverage report`로 제한한다. V0에서 비용 차감 EV 또는 event coverage가 성립하지 않으면 V1 observer를 만들지 않고 전략을 종료한다. V0가 통과하면 V1은 기존 스캘핑 아키텍처에 주문 권한을 주지 않는 forward shadow observer로 구현한다.
+Phase A V0 replay와 P0 tax/common-maturity/journal 계약, producer-safe adapter/ring/coalescer/metric, P2-A synthetic skeleton은 완료됐다. 일반 과세주권 aggregate fixed-horizon gate는 실패했으므로 전체 이벤트 실행정책은 종료한다. 다음 실행은 clean integration commit/manifest와 verified tax metadata 원천을 닫은 뒤 기존 구독 범위 안에서 forward collector canary를 연결하는 것이다. 수집기 건강성 gate가 닫히기 전에는 실제 경로 P2 discovery를 실행하거나 정책을 ranking하지 않는다. 관측·P2 경로에는 주문권한을 부여하지 않는다.
