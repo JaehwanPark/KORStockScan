@@ -1,6 +1,7 @@
 {
   "schema": "scalp_micro_reversion_producer_canary_remediation_manifest_v2",
-  "generated_at": "2026-08-08T21:24:32+09:00",
+  "generated_at": "2026-08-08T21:26:20+09:00",
+  "manifest_generation_base_commit": "803b8db359e6831af78f889c36b35ad69d789e0b",
   "integration_commit": "24b6d04bfd05c5c16c6eb315417810c6a7547989",
   "integration_tree": "09ffc3b1d1888c3a44c45c0adcba989d580a3936",
   "working_tree_clean_before_manifest_generation": true,
