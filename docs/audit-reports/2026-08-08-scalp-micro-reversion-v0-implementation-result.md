@@ -4,14 +4,15 @@
 - 검증 기간: `2026-08-03`~`2026-08-07` 5거래일
 - canonical status: `v0_aggregate_taxable_equity_gate_failed_subcohort_execution_unresolved`
 - report schema: `scalp_micro_reversion_v0_report_v4`
-- implementation base commit: `a44875c339971a3f6ee6acb156282cc2e01ce498`
-- working tree at generation: `dirty=true`; 실제 변경 식별은 source manifest hash가 소유
-- observer producer/runtime 연결: 없음 (`clean deployment baseline` 대기)
+- source-only integration commit: `e7051399fb399615364daba45a585846c8da38f5`
+- integration tree: `4cabcc382d70cb2c1bcae328ef9e97a7a552c257`
+- integration commit 직후 working tree: `clean=true`
+- observer producer/runtime 연결: 없음 (`verified symbol master`와 producer 연결 전 감리 재승인 대기)
 - trading/sim/broker 반영: 없음
 
 ## 1. 최종 판정
 
-감리 재검토에서 승인한 `Producer Observation Adapter + Pre-event Ring Buffer + Parent-wave Path Coalescing + Runtime Observer Metrics + P2 Replay Contract/Synthetic Test Skeleton`을 관찰·연구 전용으로 구현했다. 기존 스캘핑 producer와 주문·AI·ADM/LDM·threshold consumer에는 연결하지 않았다. producer hook을 보류한 이유는 현재 working tree가 `dirty=true`여서 감리의 clean integration commit/manifest 선행조건을 아직 충족하지 못했기 때문이다.
+감리 재검토에서 승인한 `Producer Observation Adapter + Pre-event Ring Buffer + Parent-wave Path Coalescing + Runtime Observer Metrics + P2 Replay Contract/Synthetic Test Skeleton`을 관찰·연구 전용으로 구현했다. 기존 스캘핑 producer와 주문·AI·ADM/LDM·threshold consumer에는 연결하지 않았다. 구현은 clean integration commit으로 고정했고 source/test/deployment hash manifest도 생성했다. 따라서 `clean deployment baseline` 선행조건은 충족됐지만, 실제 verified symbol master 원천 적재와 producer 연결 전 감리 재승인은 아직 닫히지 않았다.
 
 일반 과세주권 전체 이벤트 fixed-horizon 전략은 계속 기각한다. 최고 관측 gross `14.450139bp`가 법정 매도비용 하한 `20bp`보다 `5.549861bp` 부족하다. 반면 세부 cohort와 path-based 정책은 아직 연속 경로가 없으므로 판정하지 않았다.
 
@@ -131,7 +132,7 @@ V4는 horizon마다 `all_detected_signal_count`, `resolved_outcome_count`, `unre
 
 이번 변경으로 열린 것은 source-only schema와 deterministic 연구 도구뿐이다. 다음 owner는 아래 순서다.
 
-1. 변경범위를 분리한 clean integration commit을 만들고 source/test/deployment hash manifest를 재생성한다.
+1. 완료: source-only 변경을 clean integration commit `e7051399`로 고정하고 source/test/deployment hash manifest를 생성했다.
 2. 공식·검증된 symbol master 원천 artifact를 공급하고 conflict/coverage report를 만든다.
 3. 구현결과보고서와 clean manifest를 감리인에게 제출해 producer 연결 전 재검토를 받는다.
 4. 감리 재승인 후 기존 구독 범위를 늘리지 않고 market-data producer에 최소 `ObservationSink` adapter만 연결한다.
@@ -143,7 +144,26 @@ V4는 horizon마다 `all_detected_signal_count`, `resolved_outcome_count`, `unre
 
 ## 6. 재현성 manifest
 
-아래 sidecar는 V4 replay 생성시점의 manifest다. 이번 P0.6 source-only 추가분은 working tree가 clean integration commit이 된 뒤 source/test/deployment manifest를 별도로 재생성한다. 따라서 아래 source hash를 producer 배포 hash로 사용하지 않는다.
+### 6.1 source-only clean integration manifest
+
+`docs/audit-reports/2026-08-08-scalp-micro-reversion-source-only-integration-manifest.json`은 source-only integration commit을 기준으로 생성했다. 소스 18개와 테스트 14개를 개별 SHA-256으로 열거하고, 동일 순서의 묶음 hash, Git tree, deterministic Git archive 배포 hash, 기본 OFF/권한 불변 config hash를 함께 고정한다.
+
+| 항목 | SHA-256 / 값 |
+|---|---|
+| integration commit | `e7051399fb399615364daba45a585846c8da38f5` |
+| integration tree | `4cabcc382d70cb2c1bcae328ef9e97a7a552c257` |
+| source manifest | `c1706dbcda6781c29bd286171db6ab7a8e2259ce0582704e374c2a7d9fcae0a4` |
+| test manifest | `6a44e4cb3561604adb841f5d02822bc4b2474ad4186b12b24e6e4a377b808f0f` |
+| policy config | `5fa484fbccd7604c519809835a62f795d607d0871cfb37c65fc11e6a8fd16488` |
+| deployment archive | `d612564e83c8b17fcf8e92a6638cc4800a46068218a5ab8211d6e632beef2e70` |
+| targeted test | `69 passed in 1.03s` |
+| producer/runtime/order authority | `false / false / false` |
+
+이 manifest는 배포 식별 증적이지 producer 연결 승인서가 아니다. 실제 연결은 verified symbol 원천과 감리 재승인 뒤 별도 change set으로만 수행한다.
+
+### 6.2 V4 replay generation sidecar
+
+아래 sidecar는 V4 replay 생성시점의 입력·리포트 재현성 manifest다. 당시 working tree는 dirty였으므로 위 clean integration manifest와 역할을 분리한다. 아래 source hash를 producer 배포 hash로 사용하지 않는다.
 
 | 항목 | SHA-256 / 값 |
 |---|---|
@@ -161,6 +181,7 @@ V4는 horizon마다 `all_detected_signal_count`, `resolved_outcome_count`, `unre
 - `data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.json`
 - `data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.md`
 - `data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.reproducibility.json`
+- `docs/audit-reports/2026-08-08-scalp-micro-reversion-source-only-integration-manifest.json`
 
 ## 7. 코드리뷰 및 검증
 
@@ -170,9 +191,12 @@ V4는 horizon마다 `all_detected_signal_count`, `resolved_outcome_count`, `unre
 - compileall: 통과
 - thin adapter import graph/금지 dependency scan: 통과
 - checklist parser (`count=30`): 통과
+- clean integration manifest JSON/schema·개별 파일·묶음·Git archive hash 재검산: 통과
 - `git diff --check`: 통과
 - 5거래일 V4 replay: 통과
 - canonical status invariant: 통과
 - 수동관리 event leak: `0`
 
-현재 코드리뷰 판정은 승인된 관찰/P2 synthetic 구현범위 내부다. producer 연결은 clean deployment baseline 전 보류, P2 실제 discovery는 Gate B 전 보류, policy selection/sim/live는 계속 불승인이다.
+코드리뷰 중 bounded queue가 가득 찬 상태에서 shutdown marker가 들어가지 못하면 writer가 남을 수 있는 결함을 발견해 독립 stop event + drain 방식과 회귀테스트로 보완했다. 매니페스트 생성 점검에서는 Git wildcard가 테스트 목록을 비우는 문제를 발견해 커밋 트리의 명시적 경로 필터 방식으로 다시 산출했다. 재리뷰 후 미해결 finding은 없다.
+
+현재 코드리뷰 판정은 승인된 관찰/P2 synthetic 구현범위 내부다. clean deployment baseline은 충족했지만 producer 연결은 verified symbol master와 감리 재승인 전 보류한다. P2 실제 discovery는 Gate B 전 보류하고 policy selection/sim/live는 계속 불승인한다.

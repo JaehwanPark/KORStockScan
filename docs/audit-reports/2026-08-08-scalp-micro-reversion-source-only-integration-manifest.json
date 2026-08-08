@@ -1,0 +1,80 @@
+{
+  "schema": "scalp_micro_reversion_source_only_integration_manifest_v1",
+  "generated_at": "2026-08-08T20:15:23+09:00",
+  "integration_commit": "e7051399fb399615364daba45a585846c8da38f5",
+  "integration_tree": "4cabcc382d70cb2c1bcae328ef9e97a7a552c257",
+  "working_tree_clean_before_manifest_generation": true,
+  "deployment_artifact": {
+    "format": "git archive --format=tar <integration_commit>",
+    "sha256": "d612564e83c8b17fcf8e92a6638cc4800a46068218a5ab8211d6e632beef2e70"
+  },
+  "source_manifest": {
+    "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
+    "sha256": "c1706dbcda6781c29bd286171db6ab7a8e2259ce0582704e374c2a7d9fcae0a4",
+    "files": [
+      {"path": "src/engine/scalping/micro_reversion/__init__.py", "sha256": "d552b61af8375f5d6acb0f12afd85f160645d23ba6ba39b904bb8e73958953de"},
+      {"path": "src/engine/scalping/micro_reversion/contracts.py", "sha256": "445ebf923d216f1fc1aa0fce1f20630ae27475cfddb4106a7812e39290c97bcd"},
+      {"path": "src/engine/scalping/micro_reversion/detector.py", "sha256": "3c903c730b920e29e2d00f40434121983d54203c8141b40fcd2183f44f137b31"},
+      {"path": "src/engine/scalping/micro_reversion/execution_journal.py", "sha256": "019fd4d375d677c55dbcdceb8e16609e30876c1ec50cc15a405cadb902e3edb4"},
+      {"path": "src/engine/scalping/micro_reversion/multi_horizon.py", "sha256": "4f28e863ae55b9678b4b6095c47d981fc2180863db33e5d04826810fc93457d2"},
+      {"path": "src/engine/scalping/micro_reversion/observation_adapter.py", "sha256": "bac9aab602600d3b7942f3ab42aa63e0492a27fbba01a8c900907cdca6ed982e"},
+      {"path": "src/engine/scalping/micro_reversion/observation_gate.py", "sha256": "f2936ad3832b6720b9db5fa5178fccc7e24df912ff8308866b84024e5b9a0d82"},
+      {"path": "src/engine/scalping/micro_reversion/outcome_labeler.py", "sha256": "ae084596b563c06ea4396dd3ead8fb085b3ae2061aa8a6ab0250c3edc757c0fe"},
+      {"path": "src/engine/scalping/micro_reversion/p2_replay.py", "sha256": "9948e3dd6b0f330ac518bc64240710d943f5837364e9a4072a82806500cff558"},
+      {"path": "src/engine/scalping/micro_reversion/path_capture.py", "sha256": "2b6425d782bef810efa21b662616db2a494e8a207705dace5a5e16a76a245902"},
+      {"path": "src/engine/scalping/micro_reversion/path_journal.py", "sha256": "b8690870d222e994177f5c546252572a97b9d2c6c1e6c22b35bac4e6f695201b"},
+      {"path": "src/engine/scalping/micro_reversion/registry.py", "sha256": "d07fa6790a037d973d9bd829300c12d44b1d3364ea0aed8493ead5fcd8e29314"},
+      {"path": "src/engine/scalping/micro_reversion/replay.py", "sha256": "21ed1d1bcbee8d88001aced14f2b30d272b3640924b228e210e54677e7114e35"},
+      {"path": "src/engine/scalping/micro_reversion/report.py", "sha256": "e5521a94c8101a3eaf5ef2a25d8815bf8898e33cc887f707ac2801df5e85e226"},
+      {"path": "src/engine/scalping/micro_reversion/reproducibility.py", "sha256": "f87c908c72a256e55ad2e97f15c7d22c0180a8011b1553aaa53ceb66848eb0ae"},
+      {"path": "src/engine/scalping/micro_reversion/research_gate.py", "sha256": "cc52c7a5a00592627490b33019e669ab2c8e3748a20ba8d154f76a930e12655c"},
+      {"path": "src/engine/scalping/micro_reversion/symbol_master.py", "sha256": "ad160e206df2b0692861d01c6f65ebdb7c1f25e698b311acb4a29940b403e6cf"},
+      {"path": "src/engine/scalping/micro_reversion/tax.py", "sha256": "077542274eebd110140be4a81764c20fed6b3876f1c50d6ecdab17d916a6733d"}
+    ]
+  },
+  "test_manifest": {
+    "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
+    "sha256": "6a44e4cb3561604adb841f5d02822bc4b2474ad4186b12b24e6e4a377b808f0f",
+    "selection": "src/tests/test_micro_reversion_*.py",
+    "result": "69 passed in 1.03s",
+    "files": [
+      {"path": "src/tests/test_micro_reversion_contracts.py", "sha256": "7044618df4b5524c1daa91256d2a9a4d1d0f1d8aa66d7d1f5470a55237b67a27"},
+      {"path": "src/tests/test_micro_reversion_detector.py", "sha256": "6c3a3fe6af2bcc5b4f4d1c23aa4416b3afad1f7f1b192e096fe75f0ff0ce5aa0"},
+      {"path": "src/tests/test_micro_reversion_execution_journal.py", "sha256": "6fff4b89fb631da8536f41ff589ef164e3a9b24451efd49bf79b9554b49e4ef0"},
+      {"path": "src/tests/test_micro_reversion_multi_horizon.py", "sha256": "6318402b06c53d4914e6cac287fb3346eccdb7ef0f3471161017ec8559b6caed"},
+      {"path": "src/tests/test_micro_reversion_observation_path.py", "sha256": "8b14720011c6a73e7bd458238f8a650d2eb6f0de3dab5badf1689a4ec00404a0"},
+      {"path": "src/tests/test_micro_reversion_observer_runtime.py", "sha256": "33f63c360163f5e47b44ae8265233660734dd61407f5f20739c50fc620250e44"},
+      {"path": "src/tests/test_micro_reversion_outcome_labeler.py", "sha256": "9bd539d01a822dfa40c94c6d3566c03d7e0bc7262d2eb24322cbb8d5eaac1cf8"},
+      {"path": "src/tests/test_micro_reversion_p2_replay.py", "sha256": "4ffc1c9cb1ef786714b6e216f90561882e6f637f558e78b94ad2b46931be42e7"},
+      {"path": "src/tests/test_micro_reversion_path_capture.py", "sha256": "4957973e4223aadb4fd1103b01ff1879c4ece8e21a975e81d8320393e06cc362"},
+      {"path": "src/tests/test_micro_reversion_registry.py", "sha256": "24f90d0d32a6cde45c78800f9c50e345e0eed48f906780a19b5366587642ed63"},
+      {"path": "src/tests/test_micro_reversion_replay.py", "sha256": "e73b95320ca80bbe0c70135c1e6079ebe739f4820f9af9f4756474201f2603bd"},
+      {"path": "src/tests/test_micro_reversion_research_gate.py", "sha256": "d6bcf588567cb1fbe5b479a711b4eba4a53f759714543cd658a0c7d01793e0c8"},
+      {"path": "src/tests/test_micro_reversion_symbol_master.py", "sha256": "c5619b02529f3f73465810fccb8b0203f6f87264092401762e115afd59a7c989"},
+      {"path": "src/tests/test_micro_reversion_tax.py", "sha256": "92acc8845da27f931416ef276669e7748fe99757987032a239027cedad1e7769"}
+    ]
+  },
+  "policy_config": {
+    "actual_order_submitted": false,
+    "automation_consumption_allowed": false,
+    "broker_order_forbidden": true,
+    "decision_authority": "audit_reproducibility_only",
+    "observer_producer_connected": false,
+    "runtime_effect": false,
+    "scalp_micro_reversion_discovery_enabled": false,
+    "scalp_micro_reversion_observer_enabled": false,
+    "scalp_micro_reversion_path_capture_enabled": false,
+    "selection_authority": false,
+    "trading_decision_effect": false
+  },
+  "policy_config_hash": "5fa484fbccd7604c519809835a62f795d607d0871cfb37c65fc11e6a8fd16488",
+  "report_artifacts": [
+    {"path": "data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.json", "sha256": "7a5e4a4ffd3f7c00a9570e4a4c12b171acdc0bda7d70cad44845ca03627f920e", "repository_tracked": false},
+    {"path": "data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.md", "sha256": "5bc6331346fe9aa70306e01dcccd60599c195858a78e57c4d375010bc423176d", "repository_tracked": true},
+    {"path": "data/report/scalp_micro_reversion_v0/scalp_micro_reversion_v0_2026-08-03_to_2026-08-07.reproducibility.json", "sha256": "7f322b07d78f1e0182c3e458d09ea40560b847157b04b562cc77289303cf4f3c", "repository_tracked": false}
+  ],
+  "removed_legacy_surface": {
+    "path": "src/engine/scalping/entry_odds",
+    "present_in_integration_tree": false
+  }
+}

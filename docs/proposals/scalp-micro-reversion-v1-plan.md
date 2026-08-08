@@ -62,7 +62,7 @@
 | 60초 EV @ 10bps / 15bps / 23bps | `+0.044501% / -0.005499% / -0.085499%` | 비용 민감 |
 | 600초 gross EV | `-0.061444%` | 장기 보유 edge 없음 |
 
-따라서 전체 이벤트 fixed-horizon 정책은 기각하지만 전략군 전체는 기각하지 않는다. forward collector와 P2-A 계약은 구현했으나 producer에 연결하거나 실제 data replay를 실행하지 않았고, sim assumed-fill·실시간 registry·실주문 adapter 승격은 열지 않는다. 다음 실행 owner는 clean integration commit/manifest와 verified symbol master 원천 적재 후, 기존 구독 범위 안에서 non-blocking producer canary를 연결하는 것이다. Phase B data-readiness가 닫힌 뒤에만 P2 실제 discovery replay를 수행한다. `0bps`는 모든 마찰을 제거한 counterfactual이며 일반 과세주권 live-relevant 비용으로 해석하지 않는다.
+따라서 전체 이벤트 fixed-horizon 정책은 기각하지만 전략군 전체는 기각하지 않는다. forward collector와 P2-A 계약은 구현했으나 producer에 연결하거나 실제 data replay를 실행하지 않았고, sim assumed-fill·실시간 registry·실주문 adapter 승격은 열지 않는다. source-only clean integration commit/manifest는 `e7051399` 기준으로 완료했다. 다음 실행 owner는 verified symbol master 원천 적재와 감리 재승인 후, 기존 구독 범위 안에서 non-blocking producer canary를 별도 change set으로 연결하는 것이다. Phase B data-readiness가 닫힌 뒤에만 P2 실제 discovery replay를 수행한다. `0bps`는 모든 마찰을 제거한 counterfactual이며 일반 과세주권 live-relevant 비용으로 해석하지 않는다.
 
 산출물:
 
@@ -424,4 +424,4 @@ P2-C confirmation이 닫힌 뒤 별도 사용자 작업과 재감리로만 연�
 
 구현 가치는 있다. 다만 가치는 “즉시 매매기계”가 아니라, 평균회귀형 종목과 실제 shock-reversion event가 존재하는지 빠르게 기각하거나 확인하는 독립 검증기에서 시작한다.
 
-Phase A V0 replay와 P0 tax/common-maturity/journal 계약, producer-safe adapter/ring/coalescer/metric, P2-A synthetic skeleton은 완료됐다. 일반 과세주권 aggregate fixed-horizon gate는 실패했으므로 전체 이벤트 실행정책은 종료한다. 다음 실행은 clean integration commit/manifest와 verified tax metadata 원천을 닫은 뒤 기존 구독 범위 안에서 forward collector canary를 연결하는 것이다. 수집기 건강성 gate가 닫히기 전에는 실제 경로 P2 discovery를 실행하거나 정책을 ranking하지 않는다. 관측·P2 경로에는 주문권한을 부여하지 않는다.
+Phase A V0 replay와 P0 tax/common-maturity/journal 계약, producer-safe adapter/ring/coalescer/metric, P2-A synthetic skeleton, source-only clean integration commit/manifest는 완료됐다. 일반 과세주권 aggregate fixed-horizon gate는 실패했으므로 전체 이벤트 실행정책은 종료한다. 다음 실행은 verified tax metadata 원천과 감리 재승인을 닫은 뒤 기존 구독 범위 안에서 forward collector canary를 별도 change set으로 연결하는 것이다. 수집기 건강성 gate가 닫히기 전에는 실제 경로 P2 discovery를 실행하거나 정책을 ranking하지 않는다. 관측·P2 경로에는 주문권한을 부여하지 않는다.
