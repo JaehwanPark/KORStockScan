@@ -1,106 +1,146 @@
-# Scalp Micro-Reversion Producer Canary 감리 보완 결과
+# Scalp Micro-Reversion Producer Canary 재감리 보완 결과
 
 ## 1. 판정
 
-최종 감리에서 장중 canary를 보류시킨 exclusion·shutdown·venue finding을 source-only로 보완하고 독립 커밋과 manifest를 고정했다.
+재감리에서 지적된 네 가지 장중 canary blocker와 producer hook 증적 부족을 source-only로 보완했다.
 
-- remediation commit: `24b6d04bfd05c5c16c6eb315417810c6a7547989`
-- remediation manifest: [producer canary integration manifest](./2026-08-08-scalp-micro-reversion-producer-canary-integration-manifest.json)
-- 관련 회귀: `169 passed in 3.85s`
-- 기본 상태: observer/path/discovery 모두 OFF
-- runtime/order authority: `trading_runtime_effect=false`, `trading_decision_effect=false`, `sim_position_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`
-- 운영 상태: `source_remediated_reaudit_pending`
+- integration commit: `746c015b52abe8880ea2a6317c9f2a4d6b54394f`
+- integration tree: `4d0cf13453204862f471b4a8ddc55792e6e4185a`
+- manifest: [producer canary integration manifest](./2026-08-08-scalp-micro-reversion-producer-canary-integration-manifest.json)
+- 검증: micro-reversion 전체 + Kiwoom WebSocket `177 passed in 3.98s`
+- 현재 상태: `source_reaudit_pending_observer_off`
 
-이번 작업에서 bot 재기동, runtime env 변경, 신규 `REG`/`REMOVE`, 장중 데이터 수집, P2 replay, sim 또는 실주문은 실행하지 않았다. 따라서 canary 활성화는 아직 승인된 상태가 아니며 새 commit에 대한 감리 재승인을 먼저 받아야 한다.
+이번 보완은 소스·테스트·감리 증적만 변경했다. observer/path/discovery는 모두 기본 OFF이며 bot 재기동, runtime env 변경, 신규 구독, 장중 수집, Gate B, P2 replay, sim, trading runtime, 실주문은 실행하지 않았다.
 
-## 2. 감리 finding별 조치
+따라서 현재 요청 판정은 다음과 같다.
 
-### 2.1 장중 수동관리 제외
+```text
+source_remediation_merge=PASS
+default_off_deployment=PASS
+observer_canary_runtime_activation=HOLD_PENDING_REAUDIT
+gate_b_collector_health=NOT_STARTED
+p2_real_data_replay=BLOCKED
+sim_assumed_fill=NOT_APPROVED
+trading_runtime=NOT_APPROVED
+real_order=NOT_APPROVED
+```
 
-collector worker가 1초 주기로 설정 파일을 갱신한다. 파일 I/O는 producer callback에서 수행하지 않는다. 외부에서 `refresh_manual_exclusions()`를 호출하는 경로도 같은 직렬화 계약을 사용한다.
+## 2. 재감리 finding별 폐쇄 내용
 
-새 제외 종목이 발견되면 다음 상태를 worker 처리와 상호 배제한 뒤 폐기한다.
+### 2.1 Exclusion add/remove 사이 stale envelope 재유입
 
-- pre-event ring row와 sequence/timestamp watermark
-- horizon별 detector state와 parent-wave state
-- active path segment
-- collector series sequence와 detector clock
-- 제외 갱신 전에 queue에 들어온 old-version envelope의 worker-side 재검증
+`manual_control_exclusion_version`은 이제 종목별 generation token으로 envelope에 기록된다. worker는 detector와 sequence-gap 계산 전에 다음 순서로 현재 상태를 재검증한다.
 
-Envelope/path schema에는 `manual_control_exclusion_version`, `manual_control_exclusion_checked_at`, `sequence_epoch`, `series_sequence`를 추가했다. `manual_control_event_leak_count`는 더 이상 snapshot 상수가 아니라 collector 실측 counter다. 함께 추가한 실측값은 refresh/new-exclusion/state-purge/active-segment-purge/post-exclusion-envelope/post-exclusion-event count다.
+`manual_control_exclusion_checked_at`은 점검 시각 provenance로 유지한다. 동일 exclusion set의 주기적 refresh만으로 정상 queue row를 폐기하지 않기 위해 equality authority로 쓰지 않고, 실제 상태 전환은 종목별 generation과 series epoch가 담당한다.
 
-### 2.2 Collector 종료와 재시작
+1. 현재 수동관리 제외 여부
+2. envelope generation과 현재 종목 generation 일치
+3. envelope `sequence_epoch`와 현재 series epoch 일치
+4. sequence gap 계산과 detector/path 처리
 
-Collector는 명시적 one-shot lifecycle(`new -> running -> closing -> closed`)을 채택했다.
+불일치 row는 detector, ring, path로 전달하지 않고 `stale_manual_exclusion_generation_envelope_count` 또는 `stale_sequence_epoch_envelope_count`를 증가시킨다. `enqueue E1 → exclusion 추가·state purge → exclusion 해제 → E1 dequeue` 경합 테스트에서 detector/path 진입은 0건이다.
 
-- worker drain timeout이 발생해도 등록된 모든 writer의 `close()`를 시도한다.
-- 한 writer의 close 실패가 나머지 writer 정리를 막지 않는다.
-- shutdown 시작 후 새 writer 생성을 차단한다.
-- worker와 writer 오류를 수집한 뒤 종료 오류로 보고한다.
-- `close()`는 idempotent이고, closed collector의 `start()`는 fail-closed한다.
+관련 소스: [worker generation/epoch gate](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:831), [종목별 generation 관리](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/observation_adapter.py:398)
 
-회귀 테스트는 worker timeout과 첫 writer close 실패를 동시에 주입하고 두 번째 writer까지 정리되는지 확인한다.
+### 2.2 Event leak counter 실측 경로
 
-### 2.3 0B venue provenance
+Detector가 event를 반환한 뒤 coalescer 등록 직전에 event symbol, 현재 exclusion, generation, epoch를 다시 검사한다. 불일치 event는 등록·reference append·path submit 전에 차단하고 다음 두 값을 실제 증가시킨다.
 
-0B item은 `last_realtime_type_item["0B"]`만 사용한다. generic `last_ws_item` fallback을 제거했으며 type-specific item이 없으면 `MISSING_0B_ITEM`으로 차단한다. `_AL`은 계속 차단하고 `_NX`만 NXT로 인정한다. FID `9081`은 raw provenance일 뿐 venue 판정에 사용하지 않는다.
+- `manual_control_post_exclusion_event_count`
+- `manual_control_event_leak_count`
 
-Kiwoom reference gate는 기존 검증을 유지한다.
+이 leak 값은 영속화된 실제 leak 수가 아니라 **등록 직전에 적발해 차단한 would-be leak 수**다. 정상 canary의 합격값은 0이다. 회귀테스트는 detector 처리 중 exclusion 변경을 주입해 두 counter가 각각 1이 되고 `shock_event_count=0`, `event_reference_persisted_count=0`인 것을 확인한다.
 
-- upstream: `Kiwoom-Securities/Kiwoom-REST-API@69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
-- 확인 경로: `kiwoom_docs/실시간시세.md` 0B/0D, realtime decoder/schema, 공식 examples, 로컬 [Kiwoom API contract](../kiwoom-api-data-contract.md)
-- producer hook: [kiwoom_websocket.py](../../src/engine/kiwoom_websocket.py)의 `_queue_tick_event`는 0B에서만 observer를 호출하며, `_observe_micro_reversion_forward`가 예외를 격리한다. `_handle_message`는 lock 안에서 type-specific item/venue를 갱신한 snapshot copy를 hook에 전달한다.
+관련 소스: [event registration guard](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:861)
 
-### 2.4 Timestamp와 원천 validation 계측
+### 2.3 In-flight producer callback 종료 barrier
 
-- exchange future skew tolerance: `1,000ms`; 허용 범위는 receive timestamp로 clamp하고 adjustment count를 남긴다.
-- maximum exchange-to-receive lag: `10,000ms`; 초과 row는 stale timestamp block으로 제외한다.
-- `invalid_snapshot_rate`, `venue_block_rate`, `timestamp_block_rate`, `invalid_envelope_rate`, `quote_age_missing_rate`, `bbo_complete_rate`를 callback 전체 분모로 제공한다.
+`observe_kiwoom_0b()`는 accepting 확인과 active callback 증가를 동일 condition 아래 수행하고, `finally`에서 감소·notify한다. `close()`는 먼저 accepting을 닫고 active callback이 0이 될 때까지 기다린 뒤에만 stop 요청과 worker drain을 시작한다.
 
-### 2.5 Sequence와 reference/path 정합성
+Callback barrier timeout이면 worker와 writer를 닫지 않고 `CLOSE_FAILED`로 남긴다. 이 때문에 이미 진입한 callback은 row를 enqueue할 수 있고 살아 있는 worker가 이를 소비한다. 후속 `close()`는 drain과 writer 종료를 재시도한다. 회귀테스트는 timestamp 처리 중 callback을 pause한 두 경우를 검증한다.
 
-Source watermark를 `(sequence_epoch, symbol, venue, session_bucket, series_sequence)`로 명시했다. queue full과 invalid envelope로 생긴 gap은 원인별 explained gap으로 집계하고, 원인이 없는 차이는 `unexplained_sequence_gap_count`로 분리한다. Writer는 aggregate max 외에 series별 마지막 persisted epoch/sequence를 제공한다.
+- close가 callback resume까지 대기한 뒤 `enqueued=processed=1`, queue 0으로 종료
+- 첫 close timeout 후 `CLOSE_FAILED`, worker 유지, callback resume, 두 번째 close 성공, queue 0
 
-Event reference와 path는 별도 append 파일을 유지하지만, clean shutdown에서 두 파일을 재독해 coverage, orphan reference, unreferenced segment를 대조한다. `reference_reconciliation_completed`가 false이거나 reconciliation error가 있으면 Gate B를 통과할 수 없다. Reference fsync latency p95/p99와 detector clock adjustment count/max도 추가했다.
+관련 소스: [callback counter](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:492), [shutdown barrier](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:382)
 
-## 3. 코드리뷰 결과
+### 2.4 Retryable shutdown lifecycle와 writer 접근 차단
 
-`korstockscan-review-gate`에 따라 producer/consumer, silent-fail, authority leak, 경합과 종료 경로를 재검토했다.
+Lifecycle은 `NEW → RUNNING → CLOSING → CLOSE_FAILED|CLOSED`다. worker가 살아 있거나 writer close/상태 확인 또는 reconciliation이 실패하면 CLOSED로 확정하지 않는다. 후속 `close()`가 worker와 모든 writer를 다시 확인해 모두 종료되고 clean reconciliation이 완료된 경우에만 CLOSED가 된다.
 
-1차 리뷰에서 shutdown 시 writer 목록을 너무 일찍 고정하면 drain 중 새 writer가 생길 수 있는 경합을 발견했다. shutdown 플래그 아래 writer 생성을 차단하고 join 시도 후 전체 writer를 다시 수집하도록 수정했다.
+`_writer_for()`는 기존 writer 조회보다 `_writers_closing`을 먼저 검사하므로 shutdown 이후 이미 닫힌 writer도 반환하지 않는다. 다음 종료 지표를 snapshot에 추가했다.
 
-재리뷰 결과 이번 remediation 범위의 미해결 코드 finding은 없다. 변경 모듈에는 broker/order/execution/AI/ADM/LDM dependency가 추가되지 않았고 producer callback은 여전히 bounded `put_nowait`까지만 수행한다.
+- `collector_close_attempt_count`
+- `collector_close_failure_count`
+- `collector_worker_alive_after_close_count`
+- `writer_alive_after_close_count`
+- `collector_last_close_error_types`
 
-## 4. 검증
+WebSocket owner도 첫 close 실패 시 collector 참조를 유지하고 후속 `stop()`에서 재시도한다. 성공 후에만 참조와 오류 상태를 지운다.
 
-- micro-reversion 전체 + Kiwoom WebSocket: `169 passed in 3.85s`
-- 동적 file-backed exclusion refresh: 통과
-- old-version queued envelope worker veto: 통과
-- ring/detector/parent-wave/active segment purge: 통과
-- 실측 manual-control leak: `0` synthetic regression 통과
-- worker timeout + 복수 writer cleanup + one-shot restart rejection: 통과
-- missing type-specific 0B item fail-closed: 통과
-- future skew tolerance와 stale lag block: 통과
-- queue/invalid-envelope explained gap과 unexplained gap 분리: 통과
-- per-series persisted watermark: 통과
-- reference/path 정상 coverage 100% 및 orphan/unreferenced synthetic 검출: 통과
-- reference write latency와 detector clock adjustment 계측: 통과
-- Ruff, Black, compileall, `git diff --check`: 통과
-- manifest commit/tree/archive/source 20개/test 16개 hash 재검산: 통과
+관련 소스: [collector close lifecycle](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:382), [writer shutdown gate](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:1138), [producer retry owner](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1987)
 
-## 5. 아직 닫지 않은 운영 증적
+### 2.5 Reconciliation 비용·중복 계측
 
-감리가 요구한 collector 계측 surface는 source와 synthetic regression으로 닫았다. 다만 다음은 실제 정상 거래일 canary 없이는 만들 수 없으므로 완료로 표시하지 않는다.
+Clean shutdown reconciliation에 다음 지표를 추가했다.
 
-- 최소 5거래일·성숙 event 200건
-- 배포 전후 producer p95/p99 및 장중 detector-clock adjustment 실제 baseline
-- 실제 장중 queue/writer/reference/path reconciliation zero-error 결과
+- `reference_reconciliation_duration_ms`
+- `reference_reconciliation_path_rows_scanned`
+- `reference_reconciliation_reference_rows_scanned`
+- `reference_reconciliation_peak_tracked_key_count`
+- `duplicate_event_reference_count`
+- `duplicate_event_id_count`
+- `duplicate_path_reference_pair_count`
+
+`peak_tracked_key_count`는 Python process RSS가 아니라 reconciliation이 동시에 보유한 식별 key 수의 보수적 proxy다. 장중 canary 후 duration과 row/key 규모가 종료 예산을 초과하면 post-session 별도 작업 분리를 검토한다. Synthetic duplicate reference 2행으로 세 중복 counter가 각각 1임을 확인했다.
+
+## 3. Producer hook line-level 증적
+
+실제 producer 원문은 integration commit과 manifest source hash에 포함했다.
+
+| 검증 항목 | 원문 근거 | 판정 |
+| --- | --- | --- |
+| 기본 OFF lazy load | [1894-1908](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1894) | env가 false면 collector 객체를 만들지 않음 |
+| 0B 전용 hook | [1870-1876](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1870) | `normalized_realtime_type == "0B"`에서만 호출 |
+| hook 예외 격리 | [1918-1929](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1918) | 예외를 producer로 전파하지 않고 type만 기록 |
+| snapshot 완성 위치 | [2554-2560](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:2554), [3301](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:3301) | type-specific item/venue와 trade snapshot을 market-data lock 안에서 복제 |
+| observer lock 분리 | [3302-3308](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:3302) | observer normalization/enqueue는 market-data lock 밖에서 실행 |
+| bounded hot path | [observe entry](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/forward_collector.py:492) | callback은 정규화 후 bounded `put_nowait`; detector/JSON/fsync 없음 |
+| 종료 순서·재시도 | [1987-2043](/home/ubuntu/KORStockScan/src/engine/kiwoom_websocket.py:1987) | producer threads join 후 최대 10초 collector close; 실패 시 참조 유지·재호출 가능 |
+
+Observer close는 WebSocket producer thread join 이후 호출되므로 producer lock을 점유한 상태에서 기다리지 않는다. 종료는 무제한 대기가 아니라 collector `timeout_sec=10.0`으로 제한되며, 실패 시 프로세스 정상성보다 CLOSED를 거짓 보고하지 않는 fail-closed/retryable 계약을 우선한다.
+
+## 4. 스키마와 검증
+
+종목별 generation 및 새 종료·reconciliation metric의 의미 변경을 반영해 스키마를 올렸다.
+
+- observation envelope: `scalp_micro_reversion_observation_envelope_v3`
+- forward collector snapshot: `scalp_micro_reversion_forward_collector_v3`
+- market path point: `scalp_micro_reversion_market_path_point_v5`
+
+최종 review gate 결과:
+
+- micro-reversion 전체 + Kiwoom WebSocket: `177 passed in 3.98s`
+- add/remove stale generation 경합: 통과
+- stale series epoch detector 이전 veto: 통과
+- event-registration leak counter 증가·영속화 0: 통과
+- in-flight callback wait/drain: 통과
+- callback barrier timeout 후 close 재시도: 통과
+- worker timeout + 모든 writer close + `CLOSE_FAILED` 재시도: 통과
+- producer 0B-only/예외 격리/owner close 재시도: 통과
+- reconciliation row/cost proxy/duplicate 계측: 통과
+- Ruff, Black, compileall, JSON parser, `git diff --check`: 통과
+
+코드 재리뷰에서 남은 source finding은 없다. Broker/order/execution/AI/ADM/LDM dependency 또는 신규 REG/REMOVE, threshold/provider/bot/quantity/cap 변경도 없다.
+
+## 5. 남은 운영 증적과 다음 액션
+
+현재 확보한 것은 source 구조와 synthetic regression이다. 다음 운영 증적은 아직 없다.
+
+- 정상 거래일 최소 5일, 성숙 event 200건
+- producer callback p95/p99와 배포 전후 latency 비교
+- 장중 queue/drop/gap/manual-control leak/writer error 실측
+- 실제 reference/path reconciliation duration·rows·tracked-key 규모와 zero-error 결과
 - post-session compression/retention drill
 
-또한 reference/path는 combined journal이 아니라 별도 파일 + shutdown reconciliation 방식이다. 따라서 reconciliation 미완료나 error는 fail-closed한다. 운영 증적이 없으므로 Gate B, P2-A/B/C, sim assumed-fill, trading runtime과 실주문은 계속 차단한다.
-
-## 6. 다음 액션
-
-다음 순서는 `감리 재승인 -> 정상 거래일 observer/path canary 활성화 -> Gate B 수집`이다. 감리 재승인 전 runtime flag를 켜거나 bot을 재기동하지 않는다.
-
-Gate B는 최소 5거래일·성숙 event 200건과 함께 실제 leak/error/drop/reconciliation/validation-rate 지표를 모두 제출해야 한다. Gate B 통과는 research data collector 건강성 승인일 뿐 P2 또는 매매 권한 승인이 아니다.
+다음 액션은 **새 commit·manifest·본 line-level 증적의 감리 재승인**이다. 재승인 전 observer/path flag 활성화나 bot 재기동을 하지 않는다. 재승인 후에도 canary는 기존 구독의 관찰 수집만 허용하며, Gate B 통과 전 P2 actual-data ranking을 실행하지 않는다. Gate B는 collector 건강성 승인일 뿐 sim, trading runtime 또는 실주문 승인이 아니다.

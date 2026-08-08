@@ -1,31 +1,31 @@
 {
-  "schema": "scalp_micro_reversion_producer_canary_remediation_manifest_v2",
-  "generated_at": "2026-08-08T21:26:20+09:00",
-  "manifest_generation_base_commit": "803b8db359e6831af78f889c36b35ad69d789e0b",
-  "integration_commit": "24b6d04bfd05c5c16c6eb315417810c6a7547989",
-  "integration_tree": "09ffc3b1d1888c3a44c45c0adcba989d580a3936",
+  "schema": "scalp_micro_reversion_producer_canary_remediation_manifest_v3",
+  "generated_at": "2026-08-08T21:57:57+09:00",
+  "manifest_generation_base_commit": "c42526827b3d0dc149fdceb7c67a9719df2f98b7",
+  "integration_commit": "746c015b52abe8880ea2a6317c9f2a4d6b54394f",
+  "integration_tree": "4d0cf13453204862f471b4a8ddc55792e6e4185a",
   "working_tree_clean_before_manifest_generation": true,
   "deployment_artifact": {
     "format": "git archive --format=tar <integration_commit>",
-    "sha256": "e9d3c2c6ca45f283a2fe0034b163201e4d4b2f2e1a77f2c749911d0aadc3fc2c"
+    "sha256": "4b06418063998a8c476da424aadaf8ee818d926abd691d5b214ccb7abf98837e"
   },
   "source_manifest": {
     "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
-    "sha256": "96d3739b90008589f38f6dbcdccbb9608f4f2df661550cf48be64843da06f218",
+    "sha256": "47c5b0e9998f0dea61f8d3592ae2ec747a402ae2c0d8c523fcd9793085236d0f",
     "files": [
-      {"path": "src/engine/kiwoom_websocket.py", "sha256": "bd0a0ed897f680fdbc2b629cfd4caac4cfda87dee5a6c53aa94f24237fc30946"},
+      {"path": "src/engine/kiwoom_websocket.py", "sha256": "3a761196ad6f5ebf71bdb63f9ce259366cb829737ab53d518b9d0fff0d99ceb4"},
       {"path": "src/engine/scalping/micro_reversion/__init__.py", "sha256": "d552b61af8375f5d6acb0f12afd85f160645d23ba6ba39b904bb8e73958953de"},
       {"path": "src/engine/scalping/micro_reversion/contracts.py", "sha256": "445ebf923d216f1fc1aa0fce1f20630ae27475cfddb4106a7812e39290c97bcd"},
       {"path": "src/engine/scalping/micro_reversion/detector.py", "sha256": "4b94b812b295d3bfd6f167f073c8cece88df58da3c980d8e0af0351850ae3ac1"},
       {"path": "src/engine/scalping/micro_reversion/execution_journal.py", "sha256": "019fd4d375d677c55dbcdceb8e16609e30876c1ec50cc15a405cadb902e3edb4"},
-      {"path": "src/engine/scalping/micro_reversion/forward_collector.py", "sha256": "6e38c301f5e30e84a98ebbfaf2241a778d40953cf3306d731d56bcab979b91fa"},
+      {"path": "src/engine/scalping/micro_reversion/forward_collector.py", "sha256": "64e55afc05c1f33a8bd7e1fb8f343dce7f49ad6c61218034db862308ded6bbab"},
       {"path": "src/engine/scalping/micro_reversion/multi_horizon.py", "sha256": "5d7512d8aab9364f70cf5ed5fde7cefdb0bfc31320e623ba2099899e32b8fe65"},
-      {"path": "src/engine/scalping/micro_reversion/observation_adapter.py", "sha256": "38e6d6389aa8790e7ba05c6cad9f704cb80608c7857ced0328c7524b6da02e75"},
+      {"path": "src/engine/scalping/micro_reversion/observation_adapter.py", "sha256": "0d526d8bc8679d37b95a09279949873cdd0d8401ca9bc7020726c8437abfde6a"},
       {"path": "src/engine/scalping/micro_reversion/observation_gate.py", "sha256": "f2936ad3832b6720b9db5fa5178fccc7e24df912ff8308866b84024e5b9a0d82"},
       {"path": "src/engine/scalping/micro_reversion/outcome_labeler.py", "sha256": "ae084596b563c06ea4396dd3ead8fb085b3ae2061aa8a6ab0250c3edc757c0fe"},
       {"path": "src/engine/scalping/micro_reversion/p2_replay.py", "sha256": "9948e3dd6b0f330ac518bc64240710d943f5837364e9a4072a82806500cff558"},
       {"path": "src/engine/scalping/micro_reversion/path_capture.py", "sha256": "5a7ea20b42a2513f075d01f0e84433721869a3cb346e999d1fb97706438bb483"},
-      {"path": "src/engine/scalping/micro_reversion/path_journal.py", "sha256": "c4c0c24ea607dffc56f87a68d5674d20b2711e0a24e960068ea1294be6534e56"},
+      {"path": "src/engine/scalping/micro_reversion/path_journal.py", "sha256": "2fa37863579837b9431df4643aa2227788eb07fb628ae797850902d61757876d"},
       {"path": "src/engine/scalping/micro_reversion/registry.py", "sha256": "d07fa6790a037d973d9bd829300c12d44b1d3364ea0aed8493ead5fcd8e29314"},
       {"path": "src/engine/scalping/micro_reversion/replay.py", "sha256": "21ed1d1bcbee8d88001aced14f2b30d272b3640924b228e210e54677e7114e35"},
       {"path": "src/engine/scalping/micro_reversion/report.py", "sha256": "e5521a94c8101a3eaf5ef2a25d8815bf8898e33cc887f707ac2801df5e85e226"},
@@ -38,14 +38,14 @@
   "test_manifest": {
     "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in path order",
     "selection": "src/tests/test_micro_reversion_*.py plus src/tests/test_kiwoom_websocket.py",
-    "result": "169 passed in 3.85s",
-    "sha256": "ec91859fed1fe5caea2d7b1505ff40d67209479ea5ce3f7b1d79a11696107fbb",
+    "result": "177 passed in 3.98s",
+    "sha256": "f88203cdf2bac0ca9f6353c80496429acf73f9e3643ebe8681d2a12358a54ad0",
     "files": [
       {"path": "src/tests/test_kiwoom_websocket.py", "sha256": "b459c50d48bcadb1f9b908fe4b5613fb6424e5f4a721a5edcc77b011d14ce9af"},
       {"path": "src/tests/test_micro_reversion_contracts.py", "sha256": "7044618df4b5524c1daa91256d2a9a4d1d0f1d8aa66d7d1f5470a55237b67a27"},
       {"path": "src/tests/test_micro_reversion_detector.py", "sha256": "6c3a3fe6af2bcc5b4f4d1c23aa4416b3afad1f7f1b192e096fe75f0ff0ce5aa0"},
       {"path": "src/tests/test_micro_reversion_execution_journal.py", "sha256": "6fff4b89fb631da8536f41ff589ef164e3a9b24451efd49bf79b9554b49e4ef0"},
-      {"path": "src/tests/test_micro_reversion_forward_collector.py", "sha256": "624724bad7942fc1a09ab95f3cbb3eaecc8348a10fa78d1d8f2b8685f197186a"},
+      {"path": "src/tests/test_micro_reversion_forward_collector.py", "sha256": "2f40228b12340d7e60a7f1c60ccb8a5dd1414c977ee120cd5c496dfc3adf1ef6"},
       {"path": "src/tests/test_micro_reversion_multi_horizon.py", "sha256": "8ff424525951291c17004e2bf4f6275b242f60273c5b51dfa7f5417bfa8af8c8"},
       {"path": "src/tests/test_micro_reversion_observation_path.py", "sha256": "db292409f777cd04b97bd7b831a70a5884e7eb248fa745f1f1e3569e086ef128"},
       {"path": "src/tests/test_micro_reversion_observer_runtime.py", "sha256": "442c0706d58cc04ca57cb9f4c482f94ddb41ee85ec4784d249151c767d66a15f"},
@@ -61,13 +61,13 @@
   },
   "deployment_surface_manifest": {
     "algorithm": "sha256 of newline-terminated '<file-sha256>  <path>' rows in listed order",
-    "sha256": "7d517b8286266c8c80b40aadef585385971917b20e55f1f9385f7ff648dc3d51",
+    "sha256": "fe6edbbd431839506e8f4a23132d6e3a586dc47cd34baab90911f2b5cbe51f0a",
     "deployment_mode": "existing_kiwoom_websocket_process_default_off",
     "new_unit_or_wrapper_added": false,
     "runtime_enabled_during_generation": false,
     "files": [
       {"path": "src/run_bot.sh", "sha256": "eaa1be14117c3c81c6accf0e511d29c4c87736af1c8045a7da4fb6e2ceea13f8"},
-      {"path": "src/engine/kiwoom_websocket.py", "sha256": "bd0a0ed897f680fdbc2b629cfd4caac4cfda87dee5a6c53aa94f24237fc30946"}
+      {"path": "src/engine/kiwoom_websocket.py", "sha256": "3a761196ad6f5ebf71bdb63f9ce259366cb829737ab53d518b9d0fff0d99ceb4"}
     ]
   },
   "policy_config": {
@@ -90,6 +90,21 @@
     "trading_runtime_effect": false
   },
   "policy_config_hash": "aa689cde2397d106ca94ef0d0e288893b3b3dc931e6acfa8f6f589d6a2e18aec",
+  "auditor_findings_closed": {
+    "stale_exclusion_generation_and_epoch_veto": true,
+    "event_registration_leak_counter_increment_path": true,
+    "inflight_producer_callback_shutdown_barrier": true,
+    "retryable_close_failed_lifecycle": true,
+    "writer_access_blocked_during_shutdown": true,
+    "producer_hook_outside_market_data_lock": true,
+    "producer_close_retry_reference_retained": true,
+    "reconciliation_cost_and_duplicate_metrics": true
+  },
+  "runtime_schema_versions": {
+    "observation_envelope": "scalp_micro_reversion_observation_envelope_v3",
+    "forward_collector": "scalp_micro_reversion_forward_collector_v3",
+    "market_path_point": "scalp_micro_reversion_market_path_point_v5"
+  },
   "official_kiwoom_reference_gate": {
     "upstream_commit": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
     "retrieved_at": "2026-08-08T20:32:10+09:00",
