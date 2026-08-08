@@ -1986,6 +1986,7 @@ class KiwoomWSManager:
 
     def stop(self):
         if self._stop_event.is_set():
+            self._close_micro_reversion_forward_collector()
             return
 
         self._stop_event.set()
@@ -2020,8 +2021,13 @@ class KiwoomWSManager:
             if thread and thread is not current_thread and thread.is_alive():
                 thread.join(timeout=2)
 
+        self._close_micro_reversion_forward_collector()
+        self.websocket = None
+
+    def _close_micro_reversion_forward_collector(self):
+        """Close the one-shot observer, retaining it when shutdown needs a retry."""
+
         collector = self._micro_reversion_forward_collector
-        self._micro_reversion_forward_collector = None
         if collector is not None:
             try:
                 collector.close(timeout_sec=10.0)
@@ -2031,8 +2037,10 @@ class KiwoomWSManager:
                     "[WS] micro-reversion forward observer shutdown isolated "
                     f"failure: {exc}"
                 )
-
-        self.websocket = None
+            else:
+                if self._micro_reversion_forward_collector is collector:
+                    self._micro_reversion_forward_collector = None
+                    self._micro_reversion_forward_collector_error = ""
 
     @staticmethod
     def _is_login_success_message(msg_dict):
@@ -2548,6 +2556,7 @@ class KiwoomWSManager:
                     if item_code and real_type != "00":
                         if item_code not in self.subscribed_codes:
                             continue
+                        tick_event_snapshot = None
                         with self.lock:
                             # 1. 초기 데이터 구조 생성
                             target = self._ensure_target_defaults(item_code)
@@ -3289,12 +3298,14 @@ class KiwoomWSManager:
                             self._persistent_repair_stuck_until_ts.pop(item_code, None)
                             self._maybe_write_dashboard_snapshot()
 
-                            # 💡 파싱 완료 후 구독자들에게 전파
-                            self._queue_tick_event(
-                                item_code,
-                                self._snapshot_target(target),
-                                realtime_type=real_type,
-                            )
+                            tick_event_snapshot = self._snapshot_target(target)
+                        # Snapshot is completed under the market-data lock; observer
+                        # normalization and enqueue stay outside that critical section.
+                        self._queue_tick_event(
+                            item_code,
+                            tick_event_snapshot,
+                            realtime_type=real_type,
+                        )
                 self._flush_deferred_scalp_condition_matches_if_allowed()
 
         except websockets.ConnectionClosed:

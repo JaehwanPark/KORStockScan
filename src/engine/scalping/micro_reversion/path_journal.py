@@ -22,7 +22,7 @@ from typing import Any, Iterable
 
 from .contracts import normalize_symbol, normalize_venue
 
-MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v4"
+MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v5"
 MARKET_PATH_AUTHORITY = "continuous_market_path_observation_only"
 MARKET_PATH_METRIC_CONTRACT = {
     "metric_role": "source_quality_gate",

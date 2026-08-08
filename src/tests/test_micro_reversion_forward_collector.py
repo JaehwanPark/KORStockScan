@@ -4,12 +4,14 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.scalping.micro_reversion.detector import DetectorConfig
 from src.engine.scalping.micro_reversion.forward_collector import (
+    CollectorLifecycle,
     ForwardCollectorConfig,
     ForwardObservationCollector,
     ProducerCanaryResult,
@@ -207,6 +209,126 @@ def test_dynamic_manual_exclusion_purges_state_and_drops_queued_envelope(
     )
 
 
+def test_add_remove_interleaving_rejects_old_generation_before_detector(
+    tmp_path,
+) -> None:
+    collector = _collector(tmp_path, path_capture_enabled=True)
+    entered = threading.Event()
+    release = threading.Event()
+    detector_calls = 0
+    original_process = collector._process_envelope
+
+    class RecordingDetector:
+        def process(self, _observation):
+            nonlocal detector_calls
+            detector_calls += 1
+            return ()
+
+        def drop_symbol(self, _symbol):
+            return 0
+
+    collector._detector = RecordingDetector()
+
+    def paused_process(envelope) -> None:
+        entered.set()
+        release.wait(timeout=2)
+        original_process(envelope)
+
+    collector._process_envelope = paused_process
+    assert (
+        collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
+        is ProducerCanaryResult.ENQUEUED
+    )
+    assert entered.wait(timeout=1)
+    assert collector.refresh_manual_exclusions(("000001",)) == ("000001",)
+    assert collector.refresh_manual_exclusions(()) == ()
+    release.set()
+    deadline = time.monotonic() + 1
+    while collector._sink.qsize() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert detector_calls == 0
+    assert runtime.worker_processed_count == 0
+    assert runtime.manual_control_post_exclusion_envelope_count == 1
+    assert runtime.stale_manual_exclusion_generation_envelope_count == 1
+    assert runtime.manual_control_event_leak_count == 0
+
+
+def test_stale_series_epoch_is_rejected_before_gap_and_detector(tmp_path) -> None:
+    collector = _collector(tmp_path, path_capture_enabled=True)
+    entered = threading.Event()
+    release = threading.Event()
+    detector_calls = 0
+    original_process = collector._process_envelope
+
+    class RecordingDetector:
+        def process(self, _observation):
+            nonlocal detector_calls
+            detector_calls += 1
+            return ()
+
+    collector._detector = RecordingDetector()
+
+    def paused_process(envelope) -> None:
+        entered.set()
+        release.wait(timeout=2)
+        original_process(envelope)
+
+    collector._process_envelope = paused_process
+    assert (
+        collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
+        is ProducerCanaryResult.ENQUEUED
+    )
+    assert entered.wait(timeout=1)
+    with collector._state_lock:
+        collector._series_epochs[("000001", "KRX", "KRX_REGULAR")] = time.time_ns()
+    release.set()
+    deadline = time.monotonic() + 1
+    while collector._sink.qsize() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert detector_calls == 0
+    assert runtime.worker_processed_count == 0
+    assert runtime.stale_sequence_epoch_envelope_count == 1
+    assert runtime.unexplained_sequence_gap_count == 0
+
+
+def test_event_registration_guard_counts_and_blocks_exclusion_leak(tmp_path) -> None:
+    collector = _collector(tmp_path, path_capture_enabled=True)
+
+    class ExcludingDetector:
+        def process(self, observation):
+            collector._adapter.refresh_manual_exclusions((observation.symbol,))
+            return (
+                SimpleNamespace(
+                    event=SimpleNamespace(symbol=observation.symbol),
+                ),
+            )
+
+    collector._detector = ExcludingDetector()
+    assert (
+        collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
+        is ProducerCanaryResult.ENQUEUED
+    )
+    deadline = time.monotonic() + 1
+    while (
+        collector.runtime_snapshot().manual_control_event_leak_count < 1
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.005)
+    collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert runtime.manual_control_post_exclusion_event_count == 1
+    assert runtime.manual_control_event_leak_count == 1
+    assert runtime.shock_event_count == 0
+    assert runtime.event_reference_persisted_count == 0
+
+
 def test_future_skew_is_bounded_and_stale_trade_time_is_blocked(tmp_path) -> None:
     collector = _collector(tmp_path)
     received_ms = int(
@@ -394,16 +516,23 @@ def test_collector_close_attempts_every_writer_after_worker_timeout(tmp_path) ->
         release.wait(timeout=2)
 
     class RecordingWriter:
-        def __init__(self, *, fail: bool = False) -> None:
+        def __init__(self, *, fail_once: bool = False) -> None:
             self.closed = False
-            self.fail = fail
+            self.fail_once = fail_once
+            self.close_calls = 0
+            self.alive = True
 
         def close(self, *, timeout_sec: float) -> None:
+            self.close_calls += 1
             self.closed = True
-            if self.fail:
+            self.alive = False
+            if self.fail_once and self.close_calls == 1:
                 raise OSError("synthetic writer close failure")
 
-    first_writer = RecordingWriter(fail=True)
+        def metrics(self):
+            return SimpleNamespace(writer_alive=self.alive)
+
+    first_writer = RecordingWriter(fail_once=True)
     second_writer = RecordingWriter()
     collector._process_envelope = blocked_process
     collector._writers[("2026-08-08", "KRX", "KRX_REGULAR")] = first_writer
@@ -418,9 +547,120 @@ def test_collector_close_attempts_every_writer_after_worker_timeout(tmp_path) ->
         collector.close(timeout_sec=0.01)
     assert first_writer.closed is True
     assert second_writer.closed is True
+    assert collector._lifecycle is CollectorLifecycle.CLOSE_FAILED
+    assert collector._close_attempts == 1
+    assert collector._close_failures == 1
     release.set()
+    collector.close(timeout_sec=1)
+    assert collector._lifecycle is CollectorLifecycle.CLOSED
+    assert first_writer.close_calls == 2
+    assert second_writer.close_calls == 2
+    assert collector._close_attempts == 2
     with pytest.raises(RuntimeError, match="one-shot"):
         collector.start()
+
+
+def test_close_waits_for_inflight_callback_then_drains_enqueued_row(
+    tmp_path, monkeypatch
+) -> None:
+    collector = _collector(tmp_path)
+    callback_entered = threading.Event()
+    callback_release = threading.Event()
+    close_errors: list[Exception] = []
+    original_timestamp = __import__(
+        "src.engine.scalping.micro_reversion.forward_collector",
+        fromlist=["_exchange_timestamp_from_0b"],
+    )._exchange_timestamp_from_0b
+
+    def paused_timestamp(*args, **kwargs):
+        callback_entered.set()
+        callback_release.wait(timeout=2)
+        return original_timestamp(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "src.engine.scalping.micro_reversion.forward_collector."
+        "_exchange_timestamp_from_0b",
+        paused_timestamp,
+    )
+    observe_result: list[ProducerCanaryResult] = []
+    observe_thread = threading.Thread(
+        target=lambda: observe_result.append(
+            collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
+        )
+    )
+    observe_thread.start()
+    assert callback_entered.wait(timeout=1)
+
+    def close_collector() -> None:
+        try:
+            collector.close(timeout_sec=1)
+        except Exception as exc:
+            close_errors.append(exc)
+
+    close_thread = threading.Thread(target=close_collector)
+    close_thread.start()
+    time.sleep(0.02)
+    assert close_thread.is_alive()
+    assert collector._active_callbacks == 1
+    callback_release.set()
+    observe_thread.join(timeout=1)
+    close_thread.join(timeout=2)
+
+    runtime = collector.runtime_snapshot()
+    assert close_errors == []
+    assert observe_result == [ProducerCanaryResult.ENQUEUED]
+    assert runtime.collector_lifecycle == CollectorLifecycle.CLOSED.value
+    assert runtime.collector_active_callback_count == 0
+    assert runtime.enqueued_count == 1
+    assert runtime.worker_processed_count == 1
+    assert collector._sink.qsize() == 0
+
+
+def test_callback_barrier_timeout_is_retryable_and_does_not_strand_row(
+    tmp_path, monkeypatch
+) -> None:
+    collector = _collector(tmp_path)
+    callback_entered = threading.Event()
+    callback_release = threading.Event()
+    module = __import__(
+        "src.engine.scalping.micro_reversion.forward_collector",
+        fromlist=["_exchange_timestamp_from_0b"],
+    )
+    original_timestamp = module._exchange_timestamp_from_0b
+
+    def paused_timestamp(*args, **kwargs):
+        callback_entered.set()
+        callback_release.wait(timeout=2)
+        return original_timestamp(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_exchange_timestamp_from_0b", paused_timestamp)
+    observe_result: list[ProducerCanaryResult] = []
+    observe_thread = threading.Thread(
+        target=lambda: observe_result.append(
+            collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
+        )
+    )
+    observe_thread.start()
+    assert callback_entered.wait(timeout=1)
+
+    with pytest.raises(RuntimeError, match="shutdown had 1 error"):
+        collector.close(timeout_sec=0.01)
+    assert collector._lifecycle is CollectorLifecycle.CLOSE_FAILED
+    assert collector._stop_requested.is_set() is False
+    assert collector._thread is not None and collector._thread.is_alive()
+
+    callback_release.set()
+    observe_thread.join(timeout=1)
+    collector.close(timeout_sec=1)
+    runtime = collector.runtime_snapshot()
+
+    assert observe_result == [ProducerCanaryResult.ENQUEUED]
+    assert runtime.collector_lifecycle == CollectorLifecycle.CLOSED.value
+    assert runtime.collector_close_attempt_count == 2
+    assert runtime.collector_close_failure_count == 1
+    assert runtime.collector_worker_alive_after_close_count == 1
+    assert runtime.enqueued_count == runtime.worker_processed_count == 1
+    assert collector._sink.qsize() == 0
 
 
 def test_forward_path_capture_persists_event_and_separates_authority(
@@ -563,6 +803,48 @@ def test_shutdown_reconciliation_detects_orphan_and_unreferenced_segments(
     assert runtime.event_reference_coverage_pct == 0.0
     assert runtime.orphan_reference_count == 1
     assert runtime.unreferenced_segment_count == 1
+    assert runtime.reference_reconciliation_duration_ms >= 0
+    assert runtime.reference_reconciliation_path_rows_scanned == 1
+    assert runtime.reference_reconciliation_reference_rows_scanned == 1
+    assert runtime.reference_reconciliation_peak_tracked_key_count >= 2
+    assert runtime.duplicate_event_reference_count == 0
+    assert runtime.duplicate_event_id_count == 0
+    assert runtime.duplicate_path_reference_pair_count == 0
+
+
+def test_shutdown_reconciliation_counts_duplicate_references(tmp_path) -> None:
+    collector = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(observer_enabled=True),
+        config=ForwardCollectorConfig(output_root=tmp_path),
+        manual_excluded_symbols=(),
+    )
+    key = ("2026-08-08", "KRX", "KRX_REGULAR")
+    path = collector.config.storage_policy.partition_path(
+        tmp_path,
+        trade_date=key[0],
+        venue=key[1],
+        session_bucket=key[2],
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"path_segment_id": "segment-1"}) + "\n")
+    reference = {
+        "path_segment_id": "segment-1",
+        "shock_event_id": "event-1",
+    }
+    path.with_name("event_references.jsonl").write_text(
+        "\n".join((json.dumps(reference), json.dumps(reference))) + "\n"
+    )
+    collector._reference_partitions.add(key)
+
+    collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert runtime.reference_reconciliation_completed is True
+    assert runtime.reference_reconciliation_path_rows_scanned == 1
+    assert runtime.reference_reconciliation_reference_rows_scanned == 2
+    assert runtime.duplicate_event_reference_count == 1
+    assert runtime.duplicate_event_id_count == 1
+    assert runtime.duplicate_path_reference_pair_count == 1
 
 
 def test_ws_producer_hook_isolates_collector_failure(monkeypatch) -> None:
@@ -581,6 +863,52 @@ def test_ws_producer_hook_isolates_collector_failure(monkeypatch) -> None:
 
     assert "000001" in manager._pending_tick_events
     assert manager._micro_reversion_forward_collector_error == "OSError"
+
+
+def test_ws_producer_hook_is_called_only_for_0b(monkeypatch) -> None:
+    class RecordingCollector:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def observe_kiwoom_0b(self, *_args, **_kwargs):
+            self.calls += 1
+
+    collector = RecordingCollector()
+    manager = KiwoomWSManager("test-token")
+    manager._micro_reversion_forward_collector = collector
+    monkeypatch.setattr(
+        "src.engine.kiwoom_websocket.observe_raw_market_data",
+        lambda *_args, **_kwargs: None,
+    )
+
+    manager._queue_tick_event("000001", _snapshot(), realtime_type="0D")
+    manager._queue_tick_event("000001", _snapshot(), realtime_type="0B")
+
+    assert collector.calls == 1
+
+
+def test_ws_stop_retains_collector_until_retryable_close_succeeds() -> None:
+    class RetryCollector:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self, *, timeout_sec: float) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("synthetic retry")
+
+    collector = RetryCollector()
+    manager = KiwoomWSManager("test-token")
+    manager._stop_event.set()
+    manager._micro_reversion_forward_collector = collector
+
+    manager.stop()
+    assert manager._micro_reversion_forward_collector is collector
+    assert manager._micro_reversion_forward_collector_error == "RuntimeError"
+
+    manager.stop()
+    assert collector.close_calls == 2
+    assert manager._micro_reversion_forward_collector is None
 
 
 def test_ws_producer_integration_remains_default_off(monkeypatch) -> None:

@@ -27,7 +27,7 @@ from src.engine.risk.manual_control_exclusion import (
 
 from .contracts import normalize_symbol, normalize_venue
 
-OBSERVER_ENVELOPE_SCHEMA = "scalp_micro_reversion_observation_envelope_v2"
+OBSERVER_ENVELOPE_SCHEMA = "scalp_micro_reversion_observation_envelope_v3"
 OBSERVER_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_observer_runtime_health",
     "decision_authority": "observation_transport_only_no_trading_authority",
@@ -392,6 +392,7 @@ class ObservationAdapter:
         )
         self._manual_exclusion_lock = threading.Lock()
         self._manual_exclusion_version = 1
+        self._manual_exclusion_generations: dict[str, int] = {}
         self._manual_exclusion_checked_at = _utc_now_iso()
         self._queue_depth = queue_depth
 
@@ -410,6 +411,10 @@ class ObservationAdapter:
             previous = self._manual_excluded_symbols
             if refreshed != previous:
                 self._manual_exclusion_version += 1
+                for symbol in refreshed.symmetric_difference(previous):
+                    self._manual_exclusion_generations[symbol] = (
+                        self._manual_exclusion_generations.get(symbol, 1) + 1
+                    )
             self._manual_excluded_symbols = refreshed
             self._manual_exclusion_checked_at = _utc_now_iso()
             return (
@@ -418,13 +423,25 @@ class ObservationAdapter:
                 self._manual_exclusion_version,
             )
 
-    def manual_exclusion_snapshot(self) -> tuple[frozenset[str], int, str]:
+    def manual_exclusion_snapshot(
+        self, symbol: object | None = None
+    ) -> tuple[frozenset[str], int, str]:
         with self._manual_exclusion_lock:
+            version = self._manual_exclusion_version
+            if symbol is not None:
+                version = self._manual_exclusion_generations.get(
+                    normalize_symbol(symbol), 1
+                )
             return (
                 self._manual_excluded_symbols,
-                self._manual_exclusion_version,
+                version,
                 self._manual_exclusion_checked_at,
             )
+
+    def manual_exclusion_generation(self, symbol: object) -> int:
+        normalized = normalize_symbol(symbol)
+        with self._manual_exclusion_lock:
+            return self._manual_exclusion_generations.get(normalized, 1)
 
     def is_manual_excluded(self, symbol: object) -> bool:
         normalized = normalize_symbol(symbol)
@@ -445,7 +462,7 @@ class ObservationAdapter:
                 return result
             symbol = normalize_symbol(envelope_fields.get("symbol"))
             excluded, exclusion_version, exclusion_checked_at = (
-                self.manual_exclusion_snapshot()
+                self.manual_exclusion_snapshot(symbol)
             )
             if symbol in excluded:
                 result = AdapterResult.MANUAL_CONTROL_EXCLUDED

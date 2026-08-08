@@ -53,7 +53,7 @@ from .path_journal import (
 )
 
 KST = ZoneInfo("Asia/Seoul")
-FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v2"
+FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v3"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
@@ -124,6 +124,7 @@ class CollectorLifecycle(StrEnum):
     NEW = "new"
     RUNNING = "running"
     CLOSING = "closing"
+    CLOSE_FAILED = "close_failed"
     CLOSED = "closed"
 
 
@@ -178,6 +179,13 @@ class ForwardCollectorSnapshot:
     unreferenced_segment_count: int
     reference_reconciliation_error_count: int
     reference_reconciliation_completed: bool
+    reference_reconciliation_duration_ms: float
+    reference_reconciliation_path_rows_scanned: int
+    reference_reconciliation_reference_rows_scanned: int
+    reference_reconciliation_peak_tracked_key_count: int
+    duplicate_event_reference_count: int
+    duplicate_event_id_count: int
+    duplicate_path_reference_pair_count: int
     path_accepted_envelope_count: int
     path_duplicate_sequence_count: int
     path_out_of_order_sequence_count: int
@@ -215,6 +223,12 @@ class ForwardCollectorSnapshot:
     writer_last_persisted_sequence_by_series: dict[str, dict[str, int]]
     writer_storage_self_disabled_count: int
     collector_lifecycle: str
+    collector_active_callback_count: int
+    collector_close_attempt_count: int
+    collector_close_failure_count: int
+    collector_worker_alive_after_close_count: int
+    writer_alive_after_close_count: int
+    collector_last_close_error_types: tuple[str, ...]
     sequence_epoch: int
     manual_control_refresh_count: int
     manual_control_new_exclusion_count: int
@@ -223,6 +237,8 @@ class ForwardCollectorSnapshot:
     manual_control_post_exclusion_envelope_count: int
     manual_control_post_exclusion_event_count: int
     manual_control_event_leak_count: int
+    stale_sequence_epoch_envelope_count: int
+    stale_manual_exclusion_generation_envelope_count: int
     detector_clock_adjustment_count: int
     detector_clock_adjustment_max_ms: int
     p2_real_data_discovery_run: bool = False
@@ -278,11 +294,13 @@ class ForwardObservationCollector:
         self._series_with_gap: set[tuple[int, str, str, str]] = set()
         self._detector_clock_ms: dict[tuple[str, str, str], int] = {}
         self._state_lock = threading.Lock()
+        self._callback_condition = threading.Condition(self._state_lock)
         self._manual_refresh_lock = threading.RLock()
         self._metrics_lock = threading.Lock()
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._accepting = False
+        self._active_callbacks = 0
         self._writers_closing = False
         self._lifecycle = CollectorLifecycle.NEW
         self._automatic_manual_refresh = manual_excluded_symbols is None
@@ -312,6 +330,13 @@ class ForwardObservationCollector:
         self._unreferenced_segments = 0
         self._reference_reconciliation_errors = 0
         self._reference_reconciliation_completed = False
+        self._reference_reconciliation_duration_ms = 0.0
+        self._reference_reconciliation_path_rows_scanned = 0
+        self._reference_reconciliation_reference_rows_scanned = 0
+        self._reference_reconciliation_peak_tracked_key_count = 0
+        self._duplicate_event_references = 0
+        self._duplicate_event_ids = 0
+        self._duplicate_path_reference_pairs = 0
         self._queue_drop_explained_gaps = 0
         self._invalid_envelope_explained_gaps = 0
         self._other_explained_gaps = 0
@@ -323,6 +348,13 @@ class ForwardObservationCollector:
         self._manual_post_exclusion_envelopes = 0
         self._manual_post_exclusion_events = 0
         self._manual_event_leaks = 0
+        self._stale_sequence_epoch_envelopes = 0
+        self._stale_manual_exclusion_generation_envelopes = 0
+        self._close_attempts = 0
+        self._close_failures = 0
+        self._worker_alive_after_close = 0
+        self._writer_alive_after_close = 0
+        self._last_close_error_types: tuple[str, ...] = ()
         self._detector_clock_adjustments = 0
         self._detector_clock_adjustment_max_ms = 0
         self._producer_callback_latency_ms: deque[float] = deque(maxlen=4_096)
@@ -333,6 +365,7 @@ class ForwardObservationCollector:
                 return
             if self._lifecycle in {
                 CollectorLifecycle.CLOSING,
+                CollectorLifecycle.CLOSE_FAILED,
                 CollectorLifecycle.CLOSED,
             }:
                 raise RuntimeError("forward collector is one-shot and already closed")
@@ -347,17 +380,50 @@ class ForwardObservationCollector:
             self._thread.start()
 
     def close(self, *, timeout_sec: float = 10.0) -> None:
-        with self._state_lock:
+        deadline = time.monotonic() + max(0.01, timeout_sec)
+        self._increment("_close_attempts")
+        callback_timeout_error: TimeoutError | None = None
+        with self._callback_condition:
             if self._lifecycle is CollectorLifecycle.CLOSED:
                 return
             thread = self._thread
             self._accepting = False
-            self._writers_closing = True
             self._lifecycle = CollectorLifecycle.CLOSING
-            self._stop_requested.set()
+            while self._active_callbacks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    callback_timeout_error = TimeoutError(
+                        "producer callbacks did not quiesce in time"
+                    )
+                    break
+                self._callback_condition.wait(timeout=remaining)
+            if callback_timeout_error is not None:
+                self._lifecycle = CollectorLifecycle.CLOSE_FAILED
+            else:
+                self._writers_closing = True
+                self._stop_requested.set()
+        if callback_timeout_error is not None:
+            with self._state_lock:
+                callback_timeout_writers = tuple(self._writers.values())
+            callback_timeout_writer_alive = 0
+            for writer in callback_timeout_writers:
+                try:
+                    callback_timeout_writer_alive += int(writer.metrics().writer_alive)
+                except Exception:
+                    callback_timeout_writer_alive += 1
+            with self._metrics_lock:
+                self._close_failures += 1
+                self._worker_alive_after_close += int(
+                    bool(thread is not None and thread.is_alive())
+                )
+                self._writer_alive_after_close += callback_timeout_writer_alive
+                self._last_close_error_types = ("TimeoutError",)
+            raise RuntimeError(
+                "forward collector shutdown had 1 error(s)"
+            ) from callback_timeout_error
         close_errors: list[Exception] = []
         if thread is not None:
-            thread.join(timeout=max(0.01, timeout_sec))
+            thread.join(timeout=max(0.01, deadline - time.monotonic()))
             if thread.is_alive():
                 close_errors.append(
                     TimeoutError("forward collector did not drain in time")
@@ -366,20 +432,51 @@ class ForwardObservationCollector:
             writers = tuple(self._writers.values())
         for writer in writers:
             try:
-                writer.close(timeout_sec=timeout_sec)
+                writer.close(timeout_sec=max(0.01, deadline - time.monotonic()))
             except Exception as exc:  # collector shutdown must inspect every writer
                 close_errors.append(exc)
+        writer_alive_count = 0
+        for writer in writers:
+            try:
+                writer_alive_count += int(writer.metrics().writer_alive)
+            except Exception as exc:
+                close_errors.append(exc)
+        if writer_alive_count:
+            close_errors.append(
+                RuntimeError(f"{writer_alive_count} path writer(s) remain alive")
+            )
         try:
             self._reconcile_references_and_paths(shutdown_clean=not close_errors)
         except Exception as exc:
             self._increment("_reference_reconciliation_errors")
             close_errors.append(exc)
-        with self._state_lock:
-            self._lifecycle = CollectorLifecycle.CLOSED
+        with self._metrics_lock:
+            reconciliation_completed = self._reference_reconciliation_completed
+        if not close_errors and not reconciliation_completed:
+            close_errors.append(
+                RuntimeError("reference reconciliation did not complete")
+            )
         if close_errors:
+            with self._metrics_lock:
+                self._worker_alive_after_close += int(
+                    bool(thread is not None and thread.is_alive())
+                )
+                self._writer_alive_after_close += writer_alive_count
+            self._record_close_failure(tuple(close_errors))
             raise RuntimeError(
                 f"forward collector shutdown had {len(close_errors)} error(s)"
             ) from close_errors[0]
+        with self._state_lock:
+            self._lifecycle = CollectorLifecycle.CLOSED
+
+    def _record_close_failure(self, errors: tuple[Exception, ...]) -> None:
+        with self._metrics_lock:
+            self._close_failures += 1
+            self._last_close_error_types = tuple(
+                type(error).__name__ for error in errors
+            )
+        with self._state_lock:
+            self._lifecycle = CollectorLifecycle.CLOSE_FAILED
 
     def refresh_manual_exclusions(
         self, symbols: tuple[str, ...] | None = None
@@ -401,17 +498,17 @@ class ForwardObservationCollector:
     ) -> ProducerCanaryResult:
         """Normalize one existing 0B snapshot and enqueue without waiting."""
 
-        with self._state_lock:
-            accepting = self._accepting
-        if not accepting:
-            return ProducerCanaryResult.DISABLED
-        if str(realtime_type or "").strip() != "0B":
-            self._increment("_unsupported_types")
-            return ProducerCanaryResult.UNSUPPORTED_REALTIME_TYPE
-        self._increment("_producer_0b_callbacks")
         callback_started_ns = time.perf_counter_ns()
+        with self._callback_condition:
+            if not self._accepting:
+                return ProducerCanaryResult.DISABLED
+            self._active_callbacks += 1
 
         try:
+            if str(realtime_type or "").strip() != "0B":
+                self._increment("_unsupported_types")
+                return ProducerCanaryResult.UNSUPPORTED_REALTIME_TYPE
+            self._increment("_producer_0b_callbacks")
             trade = snapshot.get("last_trade_tick")
             if not isinstance(trade, dict):
                 self._increment("_snapshot_blocks")
@@ -509,6 +606,10 @@ class ForwardObservationCollector:
             self._record_producer_callback_latency(
                 (time.perf_counter_ns() - callback_started_ns) / 1_000_000.0
             )
+            with self._callback_condition:
+                self._active_callbacks -= 1
+                if self._active_callbacks == 0:
+                    self._callback_condition.notify_all()
 
     def runtime_snapshot(self) -> ForwardCollectorSnapshot:
         adapter = self._adapter.runtime_snapshot()
@@ -517,6 +618,7 @@ class ForwardObservationCollector:
             writer_items = tuple(self._writers.items())
             connected = self._accepting
             lifecycle = self._lifecycle.value
+            active_callbacks = self._active_callbacks
         writers = tuple(writer for _, writer in writer_items)
         writer_metrics = tuple(writer.metrics() for writer in writers)
         aggregate = _aggregate_writer_metrics(writer_metrics)
@@ -602,6 +704,23 @@ class ForwardObservationCollector:
                 reference_reconciliation_completed=(
                     self._reference_reconciliation_completed
                 ),
+                reference_reconciliation_duration_ms=(
+                    self._reference_reconciliation_duration_ms
+                ),
+                reference_reconciliation_path_rows_scanned=(
+                    self._reference_reconciliation_path_rows_scanned
+                ),
+                reference_reconciliation_reference_rows_scanned=(
+                    self._reference_reconciliation_reference_rows_scanned
+                ),
+                reference_reconciliation_peak_tracked_key_count=(
+                    self._reference_reconciliation_peak_tracked_key_count
+                ),
+                duplicate_event_reference_count=self._duplicate_event_references,
+                duplicate_event_id_count=self._duplicate_event_ids,
+                duplicate_path_reference_pair_count=(
+                    self._duplicate_path_reference_pairs
+                ),
                 path_accepted_envelope_count=(path_quality.accepted_envelope_count),
                 path_duplicate_sequence_count=(path_quality.duplicate_sequence_count),
                 path_out_of_order_sequence_count=(
@@ -653,6 +772,14 @@ class ForwardObservationCollector:
                 ],
                 writer_storage_self_disabled_count=aggregate["self_disabled"],
                 collector_lifecycle=lifecycle,
+                collector_active_callback_count=active_callbacks,
+                collector_close_attempt_count=self._close_attempts,
+                collector_close_failure_count=self._close_failures,
+                collector_worker_alive_after_close_count=(
+                    self._worker_alive_after_close
+                ),
+                writer_alive_after_close_count=self._writer_alive_after_close,
+                collector_last_close_error_types=self._last_close_error_types,
                 sequence_epoch=self._sequence_epoch,
                 manual_control_refresh_count=self._manual_refreshes,
                 manual_control_new_exclusion_count=self._manual_new_exclusions,
@@ -665,6 +792,12 @@ class ForwardObservationCollector:
                     self._manual_post_exclusion_events
                 ),
                 manual_control_event_leak_count=self._manual_event_leaks,
+                stale_sequence_epoch_envelope_count=(
+                    self._stale_sequence_epoch_envelopes
+                ),
+                stale_manual_exclusion_generation_envelope_count=(
+                    self._stale_manual_exclusion_generation_envelopes
+                ),
                 detector_clock_adjustment_count=(self._detector_clock_adjustments),
                 detector_clock_adjustment_max_ms=(
                     self._detector_clock_adjustment_max_ms
@@ -697,11 +830,48 @@ class ForwardObservationCollector:
 
     def _process_envelope(self, envelope: RawMarketObservation) -> None:
         with self._manual_refresh_lock:
-            if self._adapter.is_manual_excluded(envelope.symbol):
+            block_reason = self._current_envelope_block_reason(envelope)
+            if block_reason is not None:
                 self._increment("_manual_post_exclusion_envelopes")
+                if block_reason == "stale_sequence_epoch":
+                    self._increment("_stale_sequence_epoch_envelopes")
+                elif block_reason == "stale_manual_exclusion_generation":
+                    self._increment("_stale_manual_exclusion_generation_envelopes")
                 return
             self._account_for_sequence_gap(envelope)
             self._process_allowed_envelope(envelope)
+
+    def _current_envelope_block_reason(
+        self, envelope: RawMarketObservation
+    ) -> str | None:
+        if self._adapter.is_manual_excluded(envelope.symbol):
+            return "manual_control_excluded"
+        if (
+            self._adapter.manual_exclusion_generation(envelope.symbol)
+            != envelope.manual_control_exclusion_version
+        ):
+            return "stale_manual_exclusion_generation"
+        series_key = (envelope.symbol, envelope.venue, envelope.session_bucket)
+        with self._state_lock:
+            current_epoch = self._series_epochs.get(series_key)
+        if current_epoch != envelope.sequence_epoch:
+            return "stale_sequence_epoch"
+        return None
+
+    def _event_registration_allowed(
+        self, envelope: RawMarketObservation, event: Any
+    ) -> bool:
+        event_symbol = normalize_symbol(
+            getattr(getattr(event, "event", None), "symbol", "")
+        )
+        if (
+            event_symbol != envelope.symbol
+            or self._current_envelope_block_reason(envelope) is not None
+        ):
+            self._increment("_manual_post_exclusion_events")
+            self._increment("_manual_event_leaks")
+            return False
+        return True
 
     def _process_allowed_envelope(self, envelope: RawMarketObservation) -> None:
         if not self.flags.path_capture_enabled:
@@ -728,6 +898,8 @@ class ForwardObservationCollector:
         events = self._detector.process(price_observation)
         registrations = []
         for event in events:
+            if not self._event_registration_allowed(envelope, event):
+                continue
             registration = self._coalescer.register_event(event)
             registrations.append(registration)
             pre_event_points = self._coalescer.points_from_registration(
@@ -856,8 +1028,14 @@ class ForwardObservationCollector:
             self._unexplained_sequence_gaps += gap_count - len(reasons)
 
     def _reconcile_references_and_paths(self, *, shutdown_clean: bool) -> None:
+        started_ns = time.perf_counter_ns()
         if not shutdown_clean:
-            self._increment("_reference_reconciliation_errors")
+            with self._metrics_lock:
+                self._reference_reconciliation_errors += 1
+                self._reference_reconciliation_completed = False
+                self._reference_reconciliation_duration_ms = (
+                    time.perf_counter_ns() - started_ns
+                ) / 1_000_000.0
             return
         with self._state_lock:
             partitions = tuple(set(self._writers) | self._reference_partitions)
@@ -865,6 +1043,12 @@ class ForwardObservationCollector:
         covered_references = 0
         orphan_references = 0
         unreferenced_segments = 0
+        path_rows_scanned = 0
+        reference_rows_scanned = 0
+        peak_tracked_keys = 0
+        duplicate_references = 0
+        duplicate_event_ids = 0
+        duplicate_pairs = 0
         errors = 0
         for trade_date, venue, session_bucket in partitions:
             path = self.config.storage_policy.partition_path(
@@ -874,15 +1058,53 @@ class ForwardObservationCollector:
                 session_bucket=session_bucket,
             )
             try:
-                path_segments = _jsonl_values(path, "path_segment_id")
-                references = _jsonl_value_rows(
-                    path.with_name("event_references.jsonl"),
-                    "path_segment_id",
-                )
+                path_rows = _jsonl_rows(path)
+                reference_rows = _jsonl_rows(path.with_name("event_references.jsonl"))
             except (OSError, ValueError, json.JSONDecodeError):
                 errors += 1
                 continue
+            path_rows_scanned += len(path_rows)
+            reference_rows_scanned += len(reference_rows)
+            path_segments = {
+                str(row.get("path_segment_id") or "").strip()
+                for row in path_rows
+                if str(row.get("path_segment_id") or "").strip()
+            }
+            references = [
+                str(row.get("path_segment_id") or "").strip() for row in reference_rows
+            ]
             reference_segments = {value for value in references if value}
+            canonical_references = [
+                json.dumps(row, sort_keys=True, separators=(",", ":"))
+                for row in reference_rows
+            ]
+            event_ids = [
+                str(row.get("shock_event_id") or "").strip()
+                for row in reference_rows
+                if str(row.get("shock_event_id") or "").strip()
+            ]
+            reference_pairs = [
+                (
+                    str(row.get("shock_event_id") or "").strip(),
+                    str(row.get("path_segment_id") or "").strip(),
+                )
+                for row in reference_rows
+                if str(row.get("shock_event_id") or "").strip()
+                and str(row.get("path_segment_id") or "").strip()
+            ]
+            duplicate_references += len(canonical_references) - len(
+                set(canonical_references)
+            )
+            duplicate_event_ids += len(event_ids) - len(set(event_ids))
+            duplicate_pairs += len(reference_pairs) - len(set(reference_pairs))
+            peak_tracked_keys = max(
+                peak_tracked_keys,
+                len(path_segments)
+                + len(reference_segments)
+                + len(set(canonical_references))
+                + len(set(event_ids))
+                + len(set(reference_pairs)),
+            )
             total_references += len(references)
             covered = sum(1 for value in references if value in path_segments)
             covered_references += covered
@@ -898,6 +1120,17 @@ class ForwardObservationCollector:
             self._unreferenced_segments = unreferenced_segments
             self._reference_reconciliation_errors += errors
             self._reference_reconciliation_completed = errors == 0
+            self._reference_reconciliation_duration_ms = (
+                time.perf_counter_ns() - started_ns
+            ) / 1_000_000.0
+            self._reference_reconciliation_path_rows_scanned = path_rows_scanned
+            self._reference_reconciliation_reference_rows_scanned = (
+                reference_rows_scanned
+            )
+            self._reference_reconciliation_peak_tracked_key_count = peak_tracked_keys
+            self._duplicate_event_references = duplicate_references
+            self._duplicate_event_ids = duplicate_event_ids
+            self._duplicate_path_reference_pairs = duplicate_pairs
 
     def _submit_points(
         self,
@@ -921,11 +1154,11 @@ class ForwardObservationCollector:
         )
         key = (trade_date, envelope.venue, envelope.session_bucket)
         with self._state_lock:
+            if self._writers_closing:
+                raise RuntimeError("path writer access blocked during shutdown")
             writer = self._writers.get(key)
             if writer is not None:
                 return writer
-            if self._writers_closing:
-                raise RuntimeError("path writer creation blocked during shutdown")
             path = self.config.storage_policy.partition_path(
                 self.config.output_root,
                 trade_date=trade_date,
@@ -1223,18 +1456,16 @@ def _rate(numerator: int, denominator: int) -> float:
     return round(100.0 * numerator / denominator, 6)
 
 
-def _jsonl_values(path: Path, field_name: str) -> set[str]:
-    return set(_jsonl_value_rows(path, field_name))
-
-
-def _jsonl_value_rows(path: Path, field_name: str) -> list[str]:
+def _jsonl_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    values: list[str] = []
+    rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
                 continue
             payload = json.loads(line)
-            values.append(str(payload.get(field_name) or "").strip())
-    return values
+            if not isinstance(payload, dict):
+                raise ValueError("JSONL row must be an object")
+            rows.append(payload)
+    return rows
