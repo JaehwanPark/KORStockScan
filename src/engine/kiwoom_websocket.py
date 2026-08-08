@@ -271,6 +271,8 @@ class KiwoomWSManager:
         self._last_remove_request_ts = {}
         self._deferred_scalp_condition_matches = OrderedDict()
         self._scalp_condition_prewarm_codes = OrderedDict()
+        self._micro_reversion_forward_collector = None
+        self._micro_reversion_forward_collector_error = ""
 
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
@@ -1870,6 +1872,8 @@ class KiwoomWSManager:
             return
 
         normalized_realtime_type = str(realtime_type or "").strip()
+        if normalized_realtime_type == "0B":
+            self._observe_micro_reversion_forward(code, data)
         if normalized_realtime_type in {"0B", "0D"}:
             try:
                 observe_raw_market_data(
@@ -1886,6 +1890,80 @@ class KiwoomWSManager:
         with self._tick_lock:
             self._pending_tick_events[code] = {"code": code, "data": data}
         self._tick_dispatch_event.set()
+
+    def _start_micro_reversion_forward_collector(self):
+        """Lazy-load the default-off observer without changing subscriptions."""
+
+        if not _env_bool("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", False):
+            self._micro_reversion_forward_collector = None
+            self._micro_reversion_forward_collector_error = ""
+            return
+        try:
+            from src.engine.scalping.micro_reversion.forward_collector import (
+                build_forward_collector_from_env,
+            )
+
+            self._micro_reversion_forward_collector = build_forward_collector_from_env(
+                start=True
+            )
+            self._micro_reversion_forward_collector_error = ""
+        except Exception as exc:
+            self._micro_reversion_forward_collector = None
+            self._micro_reversion_forward_collector_error = type(exc).__name__
+            log_error(
+                "[WS] micro-reversion forward observer startup isolated "
+                f"failure: {exc}"
+            )
+
+    def _observe_micro_reversion_forward(self, code, data):
+        collector = self._micro_reversion_forward_collector
+        if collector is None:
+            return
+        try:
+            collector.observe_kiwoom_0b(code, data, realtime_type="0B")
+        except Exception as exc:
+            self._micro_reversion_forward_collector_error = type(exc).__name__
+            log_error(
+                "[WS] micro-reversion forward observer callback isolated "
+                f"failure ({code}): {exc}"
+            )
+
+    def micro_reversion_forward_collector_snapshot(self):
+        collector = self._micro_reversion_forward_collector
+        if collector is None:
+            return {
+                "observer_runtime_loaded": False,
+                "producer_observation_connected": False,
+                "observer_runtime_effect": False,
+                "trading_runtime_effect": False,
+                "trading_decision_effect": False,
+                "sim_position_effect": False,
+                "threshold_effect": False,
+                "broker_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "isolated_error_type": (
+                    self._micro_reversion_forward_collector_error or None
+                ),
+            }
+        try:
+            return collector.runtime_snapshot().as_dict()
+        except Exception as exc:
+            self._micro_reversion_forward_collector_error = type(exc).__name__
+            return {
+                "observer_runtime_loaded": True,
+                "producer_observation_connected": True,
+                "observer_runtime_effect": False,
+                "observation_capture_active": False,
+                "trading_runtime_effect": False,
+                "trading_decision_effect": False,
+                "sim_position_effect": False,
+                "threshold_effect": False,
+                "broker_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "isolated_error_type": type(exc).__name__,
+            }
 
     def _dispatch_tick_events(self):
         while not self._stop_event.is_set():
@@ -1941,6 +2019,18 @@ class KiwoomWSManager:
         ]:
             if thread and thread is not current_thread and thread.is_alive():
                 thread.join(timeout=2)
+
+        collector = self._micro_reversion_forward_collector
+        self._micro_reversion_forward_collector = None
+        if collector is not None:
+            try:
+                collector.close(timeout_sec=10.0)
+            except Exception as exc:
+                self._micro_reversion_forward_collector_error = type(exc).__name__
+                log_error(
+                    "[WS] micro-reversion forward observer shutdown isolated "
+                    f"failure: {exc}"
+                )
 
         self.websocket = None
 
@@ -2762,6 +2852,8 @@ class KiwoomWSManager:
                                 )
                                 normalized_tick = {
                                     "time": tick_time,
+                                    "exchange_time_raw": str(values.get("20") or ""),
+                                    "exchange_code_9081": str(values.get("9081") or ""),
                                     "price": trade_price,
                                     "volume": int(trade_volume or 0),
                                     "market_suffix": current_tick_suffix,
@@ -3215,6 +3307,7 @@ class KiwoomWSManager:
             return
         self._started = True
         self._stop_event.clear()
+        self._start_micro_reversion_forward_collector()
 
         def thread_target():
             self.loop = asyncio.new_event_loop()

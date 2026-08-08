@@ -114,6 +114,7 @@ def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(
                                 "10": "10110",
                                 "15": "+120",
                                 "20": "090010",
+                                "9081": "1",
                                 "27": "10110",
                                 "28": "10100",
                                 "228": "135.5",
@@ -147,6 +148,8 @@ def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(
     assert tick["best_ask"] == 10110
     assert tick["best_bid"] == 10100
     assert latest["last_trade_tick"]["price"] == 10110
+    assert latest["last_trade_tick"]["exchange_time_raw"] == "090010"
+    assert latest["last_trade_tick"]["exchange_code_9081"] == "1"
 
 
 def test_signed_trade_volume_primary_classifies_without_orderbook_touch(monkeypatch):

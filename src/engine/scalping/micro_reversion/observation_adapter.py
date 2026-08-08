@@ -5,9 +5,9 @@ broker, order, or AI dependency.  A market-data producer may hand an immutable
 envelope to :class:`ObservationAdapter`; the only downstream operation is a
 bounded ``put_nowait`` call.
 
-The adapter is not wired into the live producer by this change set.  All three
-feature flags default to disabled so importing this module has no runtime
-effect.
+The adapter may be wired to an existing market-data producer only through the
+default-off forward canary.  All three feature flags default to disabled, and
+the adapter has no subscription, trading, simulation, or policy authority.
 """
 
 from __future__ import annotations
@@ -101,11 +101,15 @@ class ObserverFeatureFlags:
                 and self.observation_capture_active
                 and self.discovery_enabled
             ),
+            "observer_runtime_effect": observer_runtime_loaded,
+            "trading_runtime_effect": False,
             "trading_decision_effect": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "sim_effect": False,
+            "sim_position_effect": False,
             "threshold_effect": False,
+            "broker_effect": False,
             **OBSERVER_METRIC_CONTRACT,
         }
 

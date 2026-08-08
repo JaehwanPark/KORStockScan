@@ -187,6 +187,30 @@ def test_close_does_not_depend_on_queue_shutdown_marker(
     assert writer.metrics().writer_alive is False
 
 
+def test_writer_restart_preserves_sequence_and_drains(tmp_path: Path) -> None:
+    writer = NonBlockingPathJournalWriter(
+        tmp_path / "path.jsonl",
+        max_batch_size=1,
+        flush_interval_sec=0.01,
+    )
+    writer.start()
+    assert writer.submit(_point(1)) is True
+    writer.close()
+
+    writer.start()
+    assert writer.submit(_point(2)) is True
+    writer.close()
+
+    rows = [
+        json.loads(line) for line in (tmp_path / "path.jsonl").read_text().splitlines()
+    ]
+    metrics = writer.metrics()
+    assert [row["source_sequence"] for row in rows] == [1, 2]
+    assert metrics.journal_writer_restart_count == 1
+    assert metrics.persisted_envelope_count == 2
+    assert metrics.writer_alive is False
+
+
 def test_storage_policy_partitions_by_date_venue_and_session(tmp_path: Path) -> None:
     path = PathStoragePolicy().partition_path(
         tmp_path,
