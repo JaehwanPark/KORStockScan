@@ -53,6 +53,10 @@ from .path_journal import (
 )
 
 KST = ZoneInfo("Asia/Seoul")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_OUTPUT_ROOT = (
+    REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
+)
 FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v3"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
@@ -94,7 +98,7 @@ class ProducerCanaryResult(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ForwardCollectorConfig:
-    output_root: Path = Path("data/observations/scalp_micro_reversion_forward")
+    output_root: Path = DEFAULT_OUTPUT_ROOT
     observation_queue_size: int = 10_000
     path_queue_size: int = 10_000
     path_batch_size: int = 256
@@ -1226,11 +1230,13 @@ def build_forward_collector_from_env(
     flags = ObserverFeatureFlags.from_env()
     if not flags.observer_enabled:
         return None
-    output_root = Path(
-        os.getenv(
-            "SCALP_MICRO_REVERSION_PATH_ROOT",
-            "data/observations/scalp_micro_reversion_forward",
-        )
+    configured_output_root = Path(
+        os.getenv("SCALP_MICRO_REVERSION_PATH_ROOT", str(DEFAULT_OUTPUT_ROOT))
+    )
+    output_root = (
+        configured_output_root
+        if configured_output_root.is_absolute()
+        else REPOSITORY_ROOT / configured_output_root
     )
     config = ForwardCollectorConfig(
         output_root=output_root,

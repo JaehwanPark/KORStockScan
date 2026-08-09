@@ -97,6 +97,22 @@ def test_factory_is_default_off_and_creates_no_output(tmp_path, monkeypatch) -> 
     assert list(tmp_path.iterdir()) == []
 
 
+def test_factory_resolves_default_output_from_repository_not_process_cwd(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SCALP_MICRO_REVERSION_OBSERVER_ENABLED", "true")
+    monkeypatch.setenv("SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED", "true")
+    monkeypatch.delenv("SCALP_MICRO_REVERSION_PATH_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    collector = build_forward_collector_from_env(start=False)
+
+    assert collector is not None
+    assert collector.config.output_root == (
+        Path(__file__).parents[2] / "data/observations/scalp_micro_reversion_forward"
+    )
+
+
 def test_integrated_al_item_is_captured_as_sor_without_exchange_guess(
     tmp_path,
 ) -> None:
