@@ -23,6 +23,3 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=6
 NoNewPrivileges=true
 PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target

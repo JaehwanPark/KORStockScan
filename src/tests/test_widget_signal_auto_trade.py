@@ -426,3 +426,19 @@ def test_service_single_instance_lock_is_exclusive(tmp_path):
     replacement = service_module._acquire_single_instance_lock(lock_path)
     assert replacement is not None
     replacement.close()
+
+
+def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
+    service = Path(
+        "deploy/systemd/korstockscan-widget-signal-auto-trader.service"
+    ).read_text(encoding="utf-8")
+    timer = Path(
+        "deploy/systemd/korstockscan-widget-signal-auto-trader.timer"
+    ).read_text(encoding="utf-8")
+
+    assert "WantedBy=multi-user.target" not in service
+    assert "OnCalendar=Mon..Fri *-*-* 07:58:00 Asia/Seoul" in timer
+    assert "Persistent=true" in timer
+    assert "AccuracySec=1s" in timer
+    assert "Unit=korstockscan-widget-signal-auto-trader.service" in timer
+    assert "WantedBy=timers.target" in timer

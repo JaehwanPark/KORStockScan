@@ -1,0 +1,11 @@
+[Unit]
+Description=Start KORStockScan Widget Signal Auto Trader After Main Bot
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 07:58:00 Asia/Seoul
+Persistent=true
+AccuracySec=1s
+Unit=korstockscan-widget-signal-auto-trader.service
+
+[Install]
+WantedBy=timers.target

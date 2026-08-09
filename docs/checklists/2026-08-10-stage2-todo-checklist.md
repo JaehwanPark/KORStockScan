@@ -21,14 +21,19 @@
 - [x] `[WidgetSignalAutoTradeDailyLedger0810] 위젯 대상 3종목 당일원장 실주문 실행기 구현` (`Due: 2026-08-10`, `Slot: PREOPEN`, `TimeWindow: 08:50~09:00`, `Track: RuntimeStability`)
   - Source: [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [gateway.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/gateway.py), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md)
   - 판정: 3개 위젯 producer는 관측 권한을 유지하고 별도 실행 owner가 `ENTRY_CAUTION|ENTRY_READY` 새 에피소드 매수와 final EXIT 당일 체결수량 청산만 수행한다. 전일 미청산 수량은 이력으로만 남기고 다음 거래일 원장에서 제외한다.
-  - 적용 상태: source와 systemd unit 설치·enable 완료, 현재 서비스는 미기동(`runtime_effect=false`)이며 `korstockscan-widget-signal-auto-trader-activate-20260810.timer`가 2026-08-10 07:58 KST에 최초 기동한다. 07:55 메인 봇 기동 후 shared token, collector freshness, manual_operator ownership, 단일 instance를 확인한다.
-  - Rollback: 서비스 stop/disable. 장중 state 파일 삭제와 전일·수동·타 전략 수량 매도는 금지한다.
+  - 적용 상태: 07:11 서버 부팅 시 service direct enable이 timer보다 먼저 기동되는 sequencing 결함을 확인했다. service를 static unit으로 전환하고 평일 07:58 KST `korstockscan-widget-signal-auto-trader.timer`를 단일 기동 owner로 설치·enable했다. 현재 PID는 중단하거나 교체하지 않았다.
+  - Rollback: timer disable 후 서비스 stop. 장중 state 파일 삭제와 전일·수동·타 전략 수량 매도는 금지한다.
 
-- [ ] `[WidgetSignalAutoTradeActivationVerify0810] 위젯 실주문 실행기 예약 기동 및 주문권한 검증` (`Due: 2026-08-10`, `Slot: PREOPEN`, `TimeWindow: 07:58~08:15`, `Track: RuntimeStability`)
-  - Source: [systemd unit](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.service), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md), [실행 상태](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
+- [x] `[WidgetSignalAutoTradeActivationVerify0810] 위젯 실주문 실행기 예약 기동 및 주문권한 검증` (`Due: 2026-08-10`, `Slot: PREOPEN`, `TimeWindow: 07:58~08:15`, `Track: RuntimeStability`)
+  - Source: [systemd service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.service), [systemd timer](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.timer), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md), [실행 상태](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
   - 판정 기준: timer가 07:58 KST에 service를 1개 PID로 기동하고, 당일 shared cached token과 3개 collector fresh snapshot을 사용하며, `entry_qty=1`, `cash_precheck_performed=false`, `actual_order_submitted=false`가 최초 유효 신호 전까지 유지되는지 확인한다.
   - 금지: token 신규 발급·갱신, 메인 봇 재기동, state 파일 삭제, 전일·수동·타 전략 수량 매도, 신호 없는 시험주문.
-  - 다음 액션: `active_ready_no_signal`, `active_and_source_qualified_entry_consumed`, `blocked_missing_daily_token`, `blocked_stale_collector`, `blocked_manual_owner_gap`, `service_start_failed` 중 하나로 닫는다.
+  - 처리 결과: `activation_sequencing_defect_remediated + active_ready_no_signal`. 07:58 일회성 timer는 이미 07:11에 기동된 PID를 재사용해 최초 기동 계약에는 실패했지만, 단일 PID, 당일 shared token, 세 종목 `manual_operator`, fresh CLOSED-session snapshot, `entry_qty=1`, `cash_precheck_performed=false`, `actual_order_submitted=false`를 확인했다. direct boot enable을 제거하고 일일 timer를 단일 owner로 전환했다.
+
+- [ ] `[WidgetSignalAutoTradeDailyTimerBootVerify0811] 위젯 일일 timer 단일-owner 차기 부팅 검증` (`Due: 2026-08-11`, `Slot: PREOPEN`, `TimeWindow: 07:50~08:15`, `Track: RuntimeStability`)
+  - Source: [systemd service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.service), [systemd timer](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.timer), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md)
+  - 판정 기준: 서버 부팅 직후 service가 직접 기동되지 않고 07:58 timer가 단일 PID를 최초 기동하며, 07:55 메인 봇과 당일 shared token 뒤에 시작한 provenance를 남긴다. 주문·state 파일을 변경하지 않고 `active_ready_no_signal` 또는 실제 source-qualified 신호 결과로 닫는다.
+  - Rollback: timer disable 후 service stop. direct service enable 복원은 금지한다.
 
 - [x] `[ScalpMicroReversionV0Implementation0808] 도박사 entry-odds 제거 및 micro-reversion V0 4개 범위 구현` (`Due: 2026-08-08`, `Slot: OFFLINE`, `TimeWindow: 15:30~18:00`, `Track: ScalpingLogic`)
   - Source: [micro_reversion package](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion), [구현안](/home/ubuntu/KORStockScan/docs/proposals/scalp-micro-reversion-v1-plan.md)

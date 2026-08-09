@@ -52,12 +52,19 @@
 ## 배포와 롤백
 
 서비스 원본은
-`deploy/systemd/korstockscan-widget-signal-auto-trader.service`다. 이 파일은 저장소에
-추가된 것만으로 실행되지 않는다. 운영자가 systemd에 설치·enable/start해야 실제
-주문이 시작된다. 시작 전 3개 collector freshness, 공유 토큰, 세 종목의
-`manual_operator` 제외를 확인한다.
+`deploy/systemd/korstockscan-widget-signal-auto-trader.service`, 일일 기동 owner는
+`deploy/systemd/korstockscan-widget-signal-auto-trader.timer`다. 서비스 unit은
+static이며 직접 enable하지 않는다. 평일 07:58 KST timer만 enable해 07:55 메인 봇
+기동과 당일 공유 토큰 준비 뒤 서비스를 시작한다. 서버가 07:58 이후 기동되면
+`Persistent=true`에 따라 누락된 기동을 보충하지만, 주문 전 shared cached token과
+source freshness guard는 그대로 적용한다. 시작 전 3개 collector freshness, 공유
+토큰, 세 종목의 `manual_operator` 제외를 확인한다.
 
-즉시 롤백은 서비스를 stop/disable하는 것이다. 재시작 전
+설치 시 service와 timer 파일을 `/etc/systemd/system/`에 배치한 뒤 service의 기존
+boot enable을 제거하고 timer만 enable한다. `systemctl enable
+korstockscan-widget-signal-auto-trader.service`는 기동 owner를 중복시키므로 금지한다.
+
+즉시 롤백은 timer를 disable하고 서비스를 stop하는 것이다. 재시작 전
 `data/runtime/widget_signal_auto_trade_state.json`의 `SUBMITTING`, `SUBMITTED`,
 `CANCEL_REQUESTED`, `AMBIGUOUS` 주문을 확인한다. 상태 파일 삭제는 중복 주문 또는
 당일 매도 원장 유실을 만들 수 있으므로 장중에는 금지한다.
