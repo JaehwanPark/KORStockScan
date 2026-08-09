@@ -129,13 +129,30 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   individual event. Post-probe may therefore consume fresh, route-consistent
   `_AL` 0B/0D only when the filled probe has a frozen `SOR` broker route, an
   active position, a bundle ID, fill price, and fill timestamp. Venue
-  attribution remains false. Missing frozen fill lineage or any route/suffix
-  conflict fails closed.
+  attribution to an underlying KRX/NXT execution exchange remains false.
+  Missing frozen fill lineage or any route/suffix conflict fails closed.
 - A pre-submit pressure snapshot cannot be reused as post-fill signed-pressure
   evidence. Mixed QI/OFI orderbook evidence remains mixed rather than being
   promoted to a positive or negative venue signal. These source corrections
   do not bypass AI DROP, broker/account/order/quantity/cooldown, stale quote,
   price freshness, exit-token, or hard/protect/emergency guards.
+
+### 2026-08-10 Micro-Reversion SOR Forward-Collection Gate
+
+- Retrieved at `2026-08-10T08:14:48+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`,
+  `kiwoom/realtime/events.py`, `kiwoom/realtime/decoders.py`,
+  `kiwoom/specs.py`, and `postman/kiwoom-openapi.postman_collection.json`.
+- Micro-reversion forward collection may preserve an explicit `_AL` item as
+  `venue=SOR` and partition it into `SOR_PREMARKET`, `SOR_REGULAR`, or
+  `SOR_AFTERMARKET`. This is route attribution only: it must not be relabeled
+  as KRX or NXT, combined with exchange-specific cohorts, or used as execution
+  venue proof. Optional/empty 0B field `9081` does not invalidate the SOR route
+  item and grants no KRX/NXT inference authority; a conflicting declared venue
+  still fails closed.
+- This change adds no REG/REMOVE request, subscription item, order, threshold,
+  provider, quantity, cap, broker-guard, or bot-state authority.
 
 ### 2026-07-27 ka10017 Previous-Limit-Down Observation Gate
 

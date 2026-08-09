@@ -97,12 +97,43 @@ def test_factory_is_default_off_and_creates_no_output(tmp_path, monkeypatch) -> 
     assert list(tmp_path.iterdir()) == []
 
 
-def test_integrated_al_item_is_blocked_without_venue_guess(tmp_path) -> None:
+def test_integrated_al_item_is_captured_as_sor_without_exchange_guess(
+    tmp_path,
+) -> None:
+    collector = _collector(tmp_path)
+    payload = _snapshot(item="000001_AL", venue="", exchange_time="085959000")
+    payload["last_trade_tick"]["exchange_code_9081"] = ""
+    try:
+        result = collector.observe_kiwoom_0b(
+            "000001",
+            payload,
+            realtime_type="0B",
+        )
+        deadline = time.monotonic() + 1
+        while (
+            collector.runtime_snapshot().worker_processed_count < 1
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        snapshot = collector.runtime_snapshot()
+        series_keys = set(collector._source_sequences)
+    finally:
+        collector.close()
+
+    assert result is ProducerCanaryResult.ENQUEUED
+    assert snapshot.enqueued_count == 1
+    assert snapshot.worker_processed_count == 1
+    assert snapshot.raw_exchange_code_9081_observed_count == 0
+    assert snapshot.missing_or_conflicting_venue_count == 0
+    assert ("000001", "SOR", "SOR_PREMARKET") in series_keys
+
+
+def test_integrated_al_item_blocks_conflicting_declared_exchange(tmp_path) -> None:
     collector = _collector(tmp_path)
     try:
         result = collector.observe_kiwoom_0b(
             "000001",
-            _snapshot(item="000001_AL", venue=""),
+            _snapshot(item="000001_AL", venue="KRX"),
             realtime_type="0B",
         )
         snapshot = collector.runtime_snapshot()
@@ -110,7 +141,7 @@ def test_integrated_al_item_is_blocked_without_venue_guess(tmp_path) -> None:
         collector.close()
 
     assert result is ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
-    assert snapshot.raw_exchange_code_9081_observed_count == 0
+    assert snapshot.enqueued_count == 0
     assert snapshot.missing_or_conflicting_venue_count == 1
 
 

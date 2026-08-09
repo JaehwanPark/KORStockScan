@@ -1253,7 +1253,10 @@ def build_forward_collector_from_env(
 def _explicit_item_venue(item: str) -> str:
     raw = str(item or "").strip().upper()
     if raw.endswith("_AL"):
-        return ""
+        # Kiwoom documents _AL as the explicit SOR subscription route.  It
+        # does not identify the underlying KRX/NXT execution venue, so keep it
+        # in a separate SOR cohort instead of guessing either exchange.
+        return "SOR"
     if raw.endswith("_NX"):
         return "NXT"
     return "KRX" if raw else ""
@@ -1302,6 +1305,12 @@ def _session_bucket(venue: str, clock: datetime_time) -> str:
         if local_clock < datetime_time(15, 30):
             return "NXT_REGULAR_OVERLAP"
         return "NXT_AFTERMARKET"
+    if venue == "SOR":
+        if local_clock < datetime_time(9, 0):
+            return "SOR_PREMARKET"
+        if local_clock < datetime_time(15, 30):
+            return "SOR_REGULAR"
+        return "SOR_AFTERMARKET"
     if local_clock < datetime_time(9, 0):
         return "KRX_PREMARKET"
     if local_clock < datetime_time(15, 30):
