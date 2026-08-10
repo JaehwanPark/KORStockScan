@@ -1,5 +1,5 @@
 schema = "scalp_micro_reversion_canary_guard_v1"
-baseline_id = "main_server_synthetic_0b_20260810T093539+0900"
+baseline_id = "main_server_synthetic_0b_20260810T094257+0900"
 baseline_artifact = "docs/audit-reports/2026-08-10-scalp-micro-reversion-callback-latency-baseline-canonical-stream.json.txt"
 baseline_scope = "main_server_same_valid_synthetic_0b_observer_off_on_preflight_only"
 derivation = "max(absolute_floor, five_times_max_observed_internal_percentile)"

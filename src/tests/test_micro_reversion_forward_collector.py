@@ -474,6 +474,39 @@ def test_observation_queue_full_is_nonblocking_and_counted(tmp_path) -> None:
     assert snapshot.observation_dropped_envelope_count == 1
 
 
+def test_crossed_optional_bbo_is_sanitized_without_losing_trade_sequence(
+    tmp_path,
+) -> None:
+    collector = _collector(tmp_path, path_capture_enabled=True)
+    snapshot = _snapshot()
+    snapshot["last_trade_tick"]["best_bid"] = 10_100
+    snapshot["last_trade_tick"]["best_ask"] = 10_000
+
+    assert (
+        collector.observe_kiwoom_0b("000001", snapshot, realtime_type="0B")
+        is ProducerCanaryResult.ENQUEUED
+    )
+    deadline = time.monotonic() + 1
+    while (
+        collector.runtime_snapshot().worker_processed_count < 1
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.005)
+    collector.close()
+
+    runtime = collector.runtime_snapshot()
+    stream = next(tmp_path.rglob("market_stream.jsonl"))
+    row = json.loads(stream.read_text(encoding="utf-8"))
+    assert runtime.crossed_bbo_sanitized_count == 1
+    assert runtime.crossed_bbo_sanitized_rate == 100.0
+    assert runtime.adapter_invalid_envelope_count == 0
+    assert runtime.observation_dropped_envelope_count == 0
+    assert row["trade_price"] == 10_000
+    assert row["best_bid"] is None
+    assert row["best_ask"] is None
+    assert row["quote_age_ms"] is None
+
+
 def test_series_gap_attributes_queue_and_invalid_envelope_losses(tmp_path) -> None:
     collector = _collector(tmp_path, queue_size=1)
     entered = threading.Event()

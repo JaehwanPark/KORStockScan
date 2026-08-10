@@ -1,7 +1,7 @@
 {
   "schema": "scalp_micro_reversion_callback_baseline_v1",
-  "baseline_id": "main_server_synthetic_0b_20260810T093539+0900",
-  "generated_at": "2026-08-10T09:35:39+09:00",
+  "baseline_id": "main_server_synthetic_0b_20260810T094257+0900",
+  "generated_at": "2026-08-10T09:42:57+09:00",
   "host": {
     "hostname": "ip-172-31-34-105",
     "machine": "aarch64",
@@ -18,26 +18,26 @@
     "repeat_count": 5
   },
   "observer_off_runs": [
-    {"p50_ms": 0.00012, "p95_ms": 0.000125, "p99_ms": 0.000138, "max_ms": 0.011952, "mean_ms": 0.00012358640000000002},
-    {"p50_ms": 0.000122, "p95_ms": 0.000129, "p99_ms": 0.000144, "max_ms": 0.000232, "mean_ms": 0.0001231294},
-    {"p50_ms": 0.000121, "p95_ms": 0.000129, "p99_ms": 0.000145, "max_ms": 0.000224, "mean_ms": 0.0001224536},
-    {"p50_ms": 0.000123, "p95_ms": 0.00013, "p99_ms": 0.000144, "max_ms": 0.015039, "mean_ms": 0.0001270214},
-    {"p50_ms": 0.000122, "p95_ms": 0.000129, "p99_ms": 0.000143, "max_ms": 0.013266, "mean_ms": 0.0001273564}
+    {"p50_ms": 0.000121, "p95_ms": 0.000127, "p99_ms": 0.000138, "max_ms": 0.000426, "mean_ms": 0.00012162900000000001},
+    {"p50_ms": 0.000122, "p95_ms": 0.000129, "p99_ms": 0.000144, "max_ms": 0.01551, "mean_ms": 0.0001278588},
+    {"p50_ms": 0.000122, "p95_ms": 0.000129, "p99_ms": 0.000144, "max_ms": 0.000384, "mean_ms": 0.0001231124},
+    {"p50_ms": 0.000123, "p95_ms": 0.00013, "p99_ms": 0.000144, "max_ms": 0.000335, "mean_ms": 0.0001234258},
+    {"p50_ms": 0.000123, "p95_ms": 0.00013, "p99_ms": 0.000143, "max_ms": 0.008785, "mean_ms": 0.0001250674}
   ],
   "observer_on_runs": [
-    {"p50_ms": 0.024073, "p95_ms": 0.029078, "p99_ms": 0.042027, "max_ms": 10.64778, "mean_ms": 0.0468326334, "collector_internal_p95_ms": 0.027487, "collector_internal_p99_ms": 0.043521, "queue_drop_count": 0.0, "worker_error_count": 0.0},
-    {"p50_ms": 0.024445, "p95_ms": 0.02759, "p99_ms": 0.039567, "max_ms": 12.828569, "mean_ms": 0.048400514199999994, "collector_internal_p95_ms": 0.02596, "collector_internal_p99_ms": 0.03661, "queue_drop_count": 0.0, "worker_error_count": 0.0},
-    {"p50_ms": 0.024619, "p95_ms": 0.030333, "p99_ms": 0.060903, "max_ms": 16.177192, "mean_ms": 0.053862628600000004, "collector_internal_p95_ms": 0.028675, "collector_internal_p99_ms": 0.058727, "queue_drop_count": 0.0, "worker_error_count": 0.0},
-    {"p50_ms": 0.024632, "p95_ms": 0.029275, "p99_ms": 0.042344, "max_ms": 13.463038, "mean_ms": 0.0473948892, "collector_internal_p95_ms": 0.027208, "collector_internal_p99_ms": 0.040078, "queue_drop_count": 0.0, "worker_error_count": 0.0},
-    {"p50_ms": 0.02467, "p95_ms": 0.02766, "p99_ms": 0.040834, "max_ms": 16.304462, "mean_ms": 0.0486124678, "collector_internal_p95_ms": 0.025833, "collector_internal_p99_ms": 0.037548, "queue_drop_count": 0.0, "worker_error_count": 0.0}
+    {"p50_ms": 0.024311, "p95_ms": 0.028261, "p99_ms": 0.036636, "max_ms": 9.129301, "mean_ms": 0.039211394999999996, "collector_internal_p95_ms": 0.026242, "collector_internal_p99_ms": 0.034122, "queue_drop_count": 0.0, "worker_error_count": 0.0},
+    {"p50_ms": 0.024664, "p95_ms": 0.029367, "p99_ms": 0.039637, "max_ms": 10.281183, "mean_ms": 0.050046242, "collector_internal_p95_ms": 0.026868, "collector_internal_p99_ms": 0.037121, "queue_drop_count": 0.0, "worker_error_count": 0.0},
+    {"p50_ms": 0.024802, "p95_ms": 0.029567, "p99_ms": 0.044418, "max_ms": 10.70376, "mean_ms": 0.052079395599999995, "collector_internal_p95_ms": 0.026503, "collector_internal_p99_ms": 0.040737, "queue_drop_count": 0.0, "worker_error_count": 0.0},
+    {"p50_ms": 0.02491, "p95_ms": 0.02967, "p99_ms": 0.042955, "max_ms": 20.372422, "mean_ms": 0.0562881438, "collector_internal_p95_ms": 0.027343, "collector_internal_p99_ms": 0.039981, "queue_drop_count": 0.0, "worker_error_count": 0.0},
+    {"p50_ms": 0.024864, "p95_ms": 0.028376, "p99_ms": 0.03945, "max_ms": 14.008012, "mean_ms": 0.048104961200000004, "collector_internal_p95_ms": 0.026291, "collector_internal_p99_ms": 0.037046, "queue_drop_count": 0.0, "worker_error_count": 0.0}
   ],
   "summary": {
     "observer_off_p95_ms_max": 0.00013,
-    "observer_off_p99_ms_max": 0.000145,
-    "observer_on_external_p95_ms_max": 0.030333,
-    "observer_on_external_p99_ms_max": 0.060903,
-    "observer_on_internal_p95_ms_max": 0.028675,
-    "observer_on_internal_p99_ms_max": 0.058727,
+    "observer_off_p99_ms_max": 0.000144,
+    "observer_on_external_p95_ms_max": 0.02967,
+    "observer_on_external_p99_ms_max": 0.044418,
+    "observer_on_internal_p95_ms_max": 0.027343,
+    "observer_on_internal_p99_ms_max": 0.040737,
     "queue_drop_count": 0,
     "worker_error_count": 0
   },
@@ -62,14 +62,14 @@
     "threshold_provider_bot_quantity_or_cap_mutation",
     "p2_policy_selection_or_economic_edge_claim"
   ],
-  "source_base_commit": "ada113f8b227fdf17dcb74d00f09a56670de1e39",
+  "source_base_commit": "98c7b00d11ec6513618822852ed0e92048172fd3",
   "benchmark_module_sha256": "f6f01ce674f16c490eae516cd0699ade4e12da96b53de71cf887e24739c9ed11",
-  "forward_collector_sha256": "d05c278dd7a3087b5c82e07dda627fad0cec4828118ef024672b37bd93467372",
+  "forward_collector_sha256": "c703b8c7317590686a57bc85f87ddce727660820dedcb043f05af67b485c173f",
   "path_journal_sha256": "6012683577b09ff69767f5473ff243bbb0db7a963efab9fe37eb253a72b9284e",
   "path_capture_sha256": "11040fc97ed06425aa6c4c7115c1bbd4d8f6c9c058e8b0c23b30ced0f3c634dc",
   "p2_replay_sha256": "7be96c8a71adb852326aa4de8fe14a0a9f195979a02f6a2298b42c642bc47cc4",
   "storage_maintenance_sha256": "aa7ec72ffbdb6b6d402138cf667c7bd669b10cf867c21af518acda4d3080bc27",
   "kiwoom_websocket_sha256": "eefd802cac9678740f0da297144f38cb291f22d9f85d2a0023d8d9ef469e5a97",
-  "canary_guard_config_sha256": "0ee56e156081d91c18f8391942918f6f3d26a3fd2ea009812b600affdaf8dfef",
+  "canary_guard_config_sha256": "83b90f21b535c1e1d8f29cb5c91abb0438f9b119b551ae690ebbddc856b40a96",
   "interpretation": "main_server_canonical_stream_synthetic_preflight_only_no_strategy_edge_or_runtime_promotion_authority"
 }

@@ -81,6 +81,23 @@ FORWARD_COLLECTOR_METRIC_CONTRACT = {
         "economic_headline_without_verified_tax_and_cost",
     ),
 }
+CROSSED_BBO_SANITIZATION_METRIC_CONTRACT = {
+    "metric_role": "source_quality_diagnostic",
+    "decision_authority": "observation_input_sanitization_only",
+    "window_policy": "current_process_cumulative",
+    "sample_floor": "not_applicable_per_observation_contract",
+    "primary_decision_metric": "crossed_bbo_sanitized_rate",
+    "source_quality_gate": (
+        "positive_trade_evidence_retained_with_crossed_optional_bbo_removed"
+    ),
+    "forbidden_uses": (
+        "entry_or_exit_decision",
+        "touch_or_fill_inference",
+        "broker_order_submission",
+        "threshold_provider_bot_quantity_or_cap_mutation",
+        "gate_b_quote_coverage_imputation",
+    ),
+}
 
 
 class ProducerCanaryResult(StrEnum):
@@ -161,6 +178,8 @@ class ForwardCollectorSnapshot:
     missing_or_conflicting_venue_count: int
     invalid_exchange_timestamp_count: int
     invalid_trade_snapshot_count: int
+    crossed_bbo_sanitized_count: int
+    crossed_bbo_sanitized_rate: float
     future_exchange_timestamp_adjustment_count: int
     stale_exchange_timestamp_block_count: int
     invalid_snapshot_rate: float
@@ -271,7 +290,13 @@ class ForwardCollectorSnapshot:
     broker_order_forbidden: bool = True
 
     def as_dict(self) -> dict[str, Any]:
-        return {**asdict(self), **FORWARD_COLLECTOR_METRIC_CONTRACT}
+        return {
+            **asdict(self),
+            **FORWARD_COLLECTOR_METRIC_CONTRACT,
+            "metric_contracts": {
+                "crossed_bbo_sanitization": (CROSSED_BBO_SANITIZATION_METRIC_CONTRACT)
+            },
+        }
 
 
 class ForwardObservationCollector:
@@ -330,6 +355,7 @@ class ForwardObservationCollector:
         self._venue_blocks = 0
         self._timestamp_blocks = 0
         self._snapshot_blocks = 0
+        self._crossed_bbo_sanitized = 0
         self._future_timestamp_adjustments = 0
         self._stale_timestamp_blocks = 0
         self._quote_age_missing = 0
@@ -586,6 +612,14 @@ class ForwardObservationCollector:
             quote_age = _nonnegative_float_or_none(trade.get("quote_age_ms"))
             best_bid = _positive_float_or_none(trade.get("best_bid"))
             best_ask = _positive_float_or_none(trade.get("best_ask"))
+            if best_bid is not None and best_ask is not None and best_ask < best_bid:
+                # 0B may carry an internally crossed optional touch while a
+                # valid trade is still present. Retain the trade-only row and
+                # forbid touch/fill use instead of losing the source sequence.
+                best_bid = None
+                best_ask = None
+                quote_age = None
+                self._increment("_crossed_bbo_sanitized")
             if quote_age is None:
                 self._increment("_quote_age_missing")
             if best_bid is not None and best_ask is not None:
@@ -690,6 +724,10 @@ class ForwardObservationCollector:
                 missing_or_conflicting_venue_count=self._venue_blocks,
                 invalid_exchange_timestamp_count=self._timestamp_blocks,
                 invalid_trade_snapshot_count=self._snapshot_blocks,
+                crossed_bbo_sanitized_count=self._crossed_bbo_sanitized,
+                crossed_bbo_sanitized_rate=_rate(
+                    self._crossed_bbo_sanitized, self._producer_0b_callbacks
+                ),
                 future_exchange_timestamp_adjustment_count=(
                     self._future_timestamp_adjustments
                 ),
