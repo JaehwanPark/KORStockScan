@@ -22634,6 +22634,7 @@ def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     assert hold_fields["runtime_effect"] is True
     assert hold_fields["actual_order_submitted"] is False
     assert hold_fields["broker_order_forbidden"] is True
+    assert hold_fields["sample_prices"] == [17300]
 
 
 def test_protect_trailing_loss_floor_holds_near_flat_break(monkeypatch):

@@ -18,6 +18,18 @@
 
 ## 사용자 지시 구현 기록
 
+- [x] `[SmoothingAttributionOpportunityClosure0810] trailing lineage·protect buffer counterfactual 보완` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 16:30~17:10`, `Track: TuningAutomation`)
+  - Source: [holding runtime](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sell receipt](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [daily threshold report](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
+  - 판정/변경: DB `record_id`가 없는 trailing continuation V2 arm도 runtime position key를 sell receipt까지 전달해 exact lineage로 완료손익을 결합한다. protect-trailing report-only grid는 producer가 남긴 실제 가격 표본과 원 trailing stop에서 `buffer_pct=0.50/0.80/1.00/1.25/1.50`별 below ratio·median 조건을 재계산한다.
+  - 안전 계약: 두 보완은 attribution/source-only 계산만 확장하고 새 runtime/receipt 필드는 관측 provenance만 추가한다. 실매도·보유 결정을 바꾸지 않으며 counterfactual report는 `runtime_effect=false`, `allowed_runtime_apply=false`를 유지한다. hard/protect/emergency stop, broker/account/order/quantity/cooldown, provider, bot, cap, threshold 권한은 변경하지 않는다. 과거 raw sample-price 결손 row는 후보 계산에서 명시적으로 제외한다.
+  - 검증/롤백: targeted daily-report·holding·receipt 테스트, compile, Ruff/Black, checklist parser, `git diff --check`를 review gate에서 통과해야 한다. 롤백은 sell receipt lineage 필드와 protect grid V2/sample-price 필드를 제거해 기존 record-id/grid V1 경로로 복귀하며 기존 raw/report 산출물은 삭제하지 않는다.
+
+- [ ] `[SmoothingSourceOnlyPathJournal0811] soft-stop·OFI exact 대안경로 source-only 수집` (`Due: 2026-08-11`, `Slot: POSTCLOSE`, `TimeWindow: 20:30~21:00`, `Track: TuningAutomation`)
+  - Source: [holding runtime](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [post-sell feedback](/home/ubuntu/KORStockScan/src/engine/sniper_post_sell_feedback.py), [daily threshold report](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
+  - 판정 기준: live confirmation이 OFF이거나 OFI 대안 action이 미실행이어도 exact position/trace/snapshot lineage로 source-only arm과 10/20/40/60/90초 MFE·MAE·effective-price 경로를 수집하고, 결손·만기·hard/emergency breach를 분리한다. soft-stop floor 10, OFI floor 20 전에는 EV 승격을 금지한다.
+  - 안전/금지: `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=false`, `allowed_runtime_apply=false`를 고정한다. 실보유·매도, stop/TP/trailing threshold, provider, bot, quantity/cap, broker/account/order/cooldown guard를 변경하지 않으며, source-only 결과는 단독 live 승격 근거로 사용하지 않는다.
+  - 완료 조건: source-quality audit가 새 stage/필드를 통과하고, exact-path coverage·exclusion reason·비용 반영 `source_quality_adjusted_ev_pct`가 daily/rolling report와 postclose verifier까지 동일 lineage로 연결된다.
+
 - [x] `[SamsungWidgetIntradayRegimeExecutionGuard0810] 삼성전자 하락 레짐·저항 회복 유지 실행자격 보완` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 13:20~14:00`, `Track: RuntimeStability`)
   - Source: [삼성전자 판정기](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_widget_advisory.py), [삼성전자 계약](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_widget_contract.py), [위젯 자동매매기](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [당일 관측](/home/ubuntu/KORStockScan/data/report/samsung_widget_advisory_observation/samsung_widget_advisory_20260810.jsonl)
   - 판정/변경: 3·5분 `flat`이 15~30분 lower-high/lower-low 하락 구조를 가리던 결함을 분리했다. 삼성전자 판정기는 하락 레짐에서 저항 회복과 고점·저점 상승이 함께 확인되기 전까지 WATCH를 유지하고, VWAP 단독 회복은 higher-high-and-low가 없으면 진입으로 승격하지 않는다. 삼성전자 자동매매기는 저항 회복 후 직전 두 확정봉 종가가 저항을 엄격히 상회한 경우만 `ENTRY_CAUTION|ENTRY_READY`를 소비한다.

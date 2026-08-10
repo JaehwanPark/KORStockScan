@@ -289,6 +289,8 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "pre_add_avg_price",
     "pre_add_qty",
     "scalp_live_simulator",
+    "scalp_trailing_continuation_recheck_consumed_id",
+    "scalp_trailing_continuation_recheck_consumed_position_key",
     "scale_in_incremental_realized_delta_pct",
     "sell_execution_order_no",
     "simulation_book",
@@ -605,6 +607,10 @@ _SELL_COMPLETE_RESET_KEYS = (
     *_EXIT_DECISION_RESET_KEYS,
     *_POSITION_PEAK_RESET_KEYS,
     "rising_missed_scout_upgraded",
+    "scalp_trailing_continuation_recheck_consumed_id",
+    "scalp_trailing_continuation_recheck_consumed_position_key",
+    "scalp_trailing_continuation_recheck_second_extension_logged_position_key",
+    "scalp_trailing_continuation_runtime_position_token",
 )
 _ENTRY_RECEIPT_FILLED_BY_ORDER_KEY = "_entry_receipt_filled_by_order_no"
 _ENTRY_RECEIPT_REQUESTED_BY_ORDER_KEY = "_entry_receipt_requested_by_order_no"
@@ -682,6 +688,19 @@ def _log_holding_pipeline(
         record_id=target_id,
         fields=fields,
     )
+
+
+def _trailing_continuation_receipt_fields(stock: dict[str, Any]) -> dict[str, Any]:
+    """Carry the exact recheck lineage into the terminal broker receipt."""
+    return {
+        "trailing_continuation_recheck_id": str(
+            stock.get("scalp_trailing_continuation_recheck_consumed_id") or "-"
+        ),
+        "trailing_continuation_position_key": str(
+            stock.get("scalp_trailing_continuation_recheck_consumed_position_key")
+            or "-"
+        ),
+    }
 
 
 def _run_probe_fill_continuation(target_stock: dict[str, Any], code: str) -> None:
@@ -1624,6 +1643,7 @@ def _handle_scalp_revive_sell_execution(
                 or "MANUAL",
                 revive=True,
                 new_watch_id=int(new_watch_id or 0),
+                **_trailing_continuation_receipt_fields(target_stock),
                 **scout_ai_execution_attribution_fields(
                     target_stock,
                     stage="sell_completed",
@@ -2695,6 +2715,7 @@ def _update_db_for_sell(
                 opening_rotation_window_version=receipt_snapshot.get(
                     "opening_rotation_window_version", "-"
                 ),
+                **_trailing_continuation_receipt_fields(receipt_snapshot),
                 **_sell_completion_contract_fields(completed_position_tag),
             )
             try:

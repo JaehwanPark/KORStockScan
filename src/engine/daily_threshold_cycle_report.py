@@ -82,6 +82,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "avg_down_count",
     "blocked_reason",
     "below_ratio",
+    "buffered_stop_price",
     "broker_order_forbidden",
     "broker_qty_cap",
     "budget_authority",
@@ -133,6 +134,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "last_add_type",
     "latest_strength",
     "latest_price",
+    "median_price",
     "mae_bps",
     "mfe_bps",
     "micro_vwap_bps",
@@ -171,6 +173,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "resolved_vs_curr_bps",
     "resolved_price",
     "sample_count",
+    "sample_prices",
     "sample_span_sec",
     "scalp_sim_entry_qty_source",
     "scale_in_action_type",
@@ -196,6 +199,9 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "tier",
     "tier_reason",
     "time_bucket",
+    "trailing_continuation_position_key",
+    "trailing_continuation_recheck_id",
+    "trailing_stop_price",
     "trade_type",
     "target_budget",
     "safe_budget",
@@ -930,6 +936,20 @@ def _percentile(values: list[float], pct: float, default: float = 0.0) -> float:
     return cleaned[rank]
 
 
+def _median_numeric(values: list[float], default: float = 0.0) -> float:
+    cleaned = sorted(
+        float(value)
+        for value in values
+        if value is not None and math.isfinite(float(value))
+    )
+    if not cleaned:
+        return default
+    middle = len(cleaned) // 2
+    if len(cleaned) % 2:
+        return cleaned[middle]
+    return (cleaned[middle - 1] + cleaned[middle]) / 2.0
+
+
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
@@ -1126,12 +1146,14 @@ def _read_threshold_jsonl(path: Path) -> list[dict]:
     return rows
 
 
-def _compact_threshold_cycle_field_value(value: Any) -> Any:
+def _compact_threshold_cycle_field_value(
+    value: Any, *, max_list_items: int = 20
+) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, (list, tuple)):
         compact: list[Any] = []
-        for item in value[:20]:
+        for item in value[: max(0, int(max_list_items))]:
             if item is None or isinstance(item, (str, int, float, bool)):
                 compact.append(item)
             else:
@@ -1165,7 +1187,12 @@ def _compact_threshold_cycle_event(payload: dict) -> dict:
         for key in THRESHOLD_EVENT_FIELD_KEEP_KEYS:
             if key not in fields:
                 continue
-            value = _compact_threshold_cycle_field_value(fields[key])
+            if key == "sample_prices" and isinstance(fields[key], (list, tuple)):
+                value = _compact_threshold_cycle_field_value(
+                    list(fields[key])[-60:], max_list_items=60
+                )
+            else:
+                value = _compact_threshold_cycle_field_value(fields[key])
             if (
                 isinstance(value, str)
                 and len(value) <= THRESHOLD_EVENT_MAX_INTERNED_FIELD_VALUE_CHARS
@@ -8344,6 +8371,48 @@ def _completed_valid_profit_index(events: list[dict]) -> dict[str, list[dict]]:
     return completed_by_record
 
 
+def _completed_valid_profit_position_index(
+    events: list[dict],
+) -> dict[tuple[str, str], list[dict]]:
+    """Index terminal fills by exact runtime position and recheck lineage."""
+    completed_by_position: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for event in _events_for_stage(events, "sell_completed"):
+        fields = _event_fields(event)
+        position_key = str(
+            fields.get("trailing_continuation_position_key") or ""
+        ).strip()
+        recheck_id = str(fields.get("trailing_continuation_recheck_id") or "").strip()
+        profit_rate = _safe_float(fields.get("profit_rate"), None)
+        if position_key in {"", "-"} or recheck_id in {"", "-"} or profit_rate is None:
+            continue
+        completed_by_position[(position_key, recheck_id)].append(event)
+    for rows in completed_by_position.values():
+        rows.sort(key=lambda row: str(row.get("emitted_at") or ""))
+    return completed_by_position
+
+
+def _next_completed_valid_position_outcome(
+    completed_by_position: dict[tuple[str, str], list[dict]],
+    *,
+    position_key: str,
+    recheck_id: str,
+    after_at: str,
+) -> dict | None:
+    if (
+        not position_key
+        or position_key == "-"
+        or not recheck_id
+        or recheck_id == "-"
+        or not after_at
+    ):
+        return None
+    for candidate in completed_by_position.get((position_key, recheck_id), []):
+        completed_at = str(candidate.get("emitted_at") or "")
+        if completed_at and completed_at >= after_at:
+            return candidate
+    return None
+
+
 def _record_profit_path_index(events: list[dict]) -> dict[str, list[dict]]:
     """Index record-linked profit observations for diagnostic forward excursions."""
     paths: dict[str, list[dict]] = defaultdict(list)
@@ -8549,6 +8618,7 @@ def _build_trailing_continuation_recheck_attribution(
             terminal_by_recheck_id[recheck_id] = event
 
     completed_by_record = _completed_valid_profit_index(events)
+    completed_by_position = _completed_valid_profit_position_index(events)
 
     outcome_rows: list[dict[str, Any]] = []
     comparable_deltas: list[float] = []
@@ -8566,13 +8636,19 @@ def _build_trailing_continuation_recheck_attribution(
         counterfactual_sell_price = _safe_int(
             fields.get("counterfactual_executable_sell_price"), 0
         )
-        completed = None
         arm_at = str(arm.get("emitted_at") or "")
         completed = _next_completed_valid_outcome(
             completed_by_record,
             record_id=record_id,
             after_at=arm_at,
         )
+        if completed is None and not key.startswith("unattributed:"):
+            completed = _next_completed_valid_position_outcome(
+                completed_by_position,
+                position_key=key,
+                recheck_id=recheck_id,
+                after_at=arm_at,
+            )
         actual_profit = (
             _safe_float(_event_fields(completed).get("profit_rate"), None)
             if completed is not None
@@ -8585,8 +8661,8 @@ def _build_trailing_continuation_recheck_attribution(
             exclusion_reason = "legacy_contract_not_comparable"
         elif key in one_shot_violation_key_set:
             exclusion_reason = "one_shot_contract_violation"
-        elif not record_id:
-            exclusion_reason = "record_id_missing"
+        elif not record_id and key.startswith("unattributed:"):
+            exclusion_reason = "position_lineage_missing"
         elif counterfactual_profit is None:
             exclusion_reason = "counterfactual_profit_missing"
         elif counterfactual_sell_price <= 0:
@@ -8651,7 +8727,7 @@ def _build_trailing_continuation_recheck_attribution(
         "sample_floor": 20,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": (
-            "one_arm_per_position_with_record_id_executable_counterfactual_price_"
+            "one_arm_per_position_with_exact_position_lineage_executable_counterfactual_price_"
             "and_completed_valid_profit_rate"
         ),
         "runtime_effect": False,
@@ -9293,103 +9369,139 @@ def _build_protect_trailing_counterfactual_grid(
     for min_span_sec in (5, 8, 12):
         for min_samples in (3, 4, 5):
             for below_ratio in (0.60, 0.67, 0.75):
-                exposure_count = 0
-                matched_observation_count = 0
-                transition_events: list[dict] = []
-                for event in matched_events:
-                    fields = _event_fields(event)
-                    span = _safe_float(fields.get("sample_span_sec"), None)
-                    sample_count = _safe_int(fields.get("sample_count"), 0)
-                    observed_below_ratio = _safe_float(fields.get("below_ratio"), None)
-                    median_price = _safe_float(fields.get("median_price"), None)
-                    buffered_stop_price = _safe_float(
-                        fields.get("buffered_stop_price"), None
-                    )
-                    if (
-                        span is not None
-                        and observed_below_ratio is not None
-                        and median_price is not None
-                        and buffered_stop_price is not None
-                        and span >= min_span_sec
-                        and sample_count >= min_samples
-                        and median_price <= buffered_stop_price
-                        and observed_below_ratio >= below_ratio
+                for buffer_pct in (0.50, 0.80, 1.00, 1.25, 1.50):
+                    exposure_count = 0
+                    matched_observation_count = 0
+                    transition_events: list[dict] = []
+                    source_exclusion_reasons: Counter = Counter()
+                    for event in matched_events:
+                        fields = _event_fields(event)
+                        span = _safe_float(fields.get("sample_span_sec"), None)
+                        declared_sample_count = _safe_int(fields.get("sample_count"), 0)
+                        trailing_stop_price = _safe_float(
+                            fields.get("trailing_stop_price"), None
+                        )
+                        raw_prices = fields.get("sample_prices")
+                        if isinstance(raw_prices, str):
+                            raw_prices = [
+                                item.strip()
+                                for item in raw_prices.split(",")
+                                if item.strip()
+                            ]
+                        prices = [
+                            float(value)
+                            for item in (
+                                raw_prices if isinstance(raw_prices, list) else []
+                            )
+                            if (value := _safe_float(item, None)) is not None
+                            and value > 0
+                        ]
+                        if span is None or trailing_stop_price is None:
+                            source_exclusion_reasons[
+                                "span_or_trailing_stop_missing"
+                            ] += 1
+                            continue
+                        if not prices:
+                            source_exclusion_reasons["sample_prices_missing"] += 1
+                            continue
+                        if declared_sample_count != len(prices):
+                            source_exclusion_reasons[
+                                "sample_count_price_list_mismatch"
+                            ] += 1
+                            continue
+                        candidate_buffered_stop = trailing_stop_price * (
+                            1.0 - (buffer_pct / 100.0)
+                        )
+                        median_price = _median_numeric(prices, 0.0)
+                        candidate_below_ratio = sum(
+                            price <= candidate_buffered_stop for price in prices
+                        ) / len(prices)
+                        if (
+                            span >= min_span_sec
+                            and len(prices) >= min_samples
+                            and median_price <= candidate_buffered_stop
+                            and candidate_below_ratio >= below_ratio
+                        ):
+                            matched_observation_count += 1
+                            if id(event) in hold_event_ids:
+                                exposure_count += 1
+                                transition_events.append(event)
+                    outcome_rows: list[dict] = []
+                    exclusion_reasons: Counter = Counter()
+                    seen_records: set[str] = set()
+                    for event in sorted(
+                        transition_events,
+                        key=lambda row: str(row.get("emitted_at") or ""),
                     ):
-                        matched_observation_count += 1
-                        if id(event) in hold_event_ids:
-                            exposure_count += 1
-                            transition_events.append(event)
-                outcome_rows: list[dict] = []
-                exclusion_reasons: Counter = Counter()
-                seen_records: set[str] = set()
-                for event in sorted(
-                    transition_events,
-                    key=lambda row: str(row.get("emitted_at") or ""),
-                ):
-                    record_id = str(event.get("record_id") or "").strip()
-                    if not record_id:
-                        exclusion_reasons["record_id_missing"] += 1
-                        continue
-                    if record_id in seen_records:
-                        exclusion_reasons["duplicate_position_transition"] += 1
-                        continue
-                    candidate_profit = _safe_float(
-                        _event_fields(event).get("profit_rate"), None
+                        record_id = str(event.get("record_id") or "").strip()
+                        if not record_id:
+                            exclusion_reasons["record_id_missing"] += 1
+                            continue
+                        if record_id in seen_records:
+                            exclusion_reasons["duplicate_position_transition"] += 1
+                            continue
+                        candidate_profit = _safe_float(
+                            _event_fields(event).get("profit_rate"), None
+                        )
+                        if candidate_profit is None:
+                            exclusion_reasons["decision_profit_rate_missing"] += 1
+                            continue
+                        completed = _next_completed_valid_outcome(
+                            completed_by_record,
+                            record_id=record_id,
+                            after_at=str(event.get("emitted_at") or ""),
+                        )
+                        if completed is None:
+                            exclusion_reasons["completed_valid_profit_pending"] += 1
+                            continue
+                        completed_profit = _safe_float(
+                            _event_fields(completed).get("profit_rate"), None
+                        )
+                        if completed_profit is None:
+                            exclusion_reasons["completed_valid_profit_pending"] += 1
+                            continue
+                        seen_records.add(record_id)
+                        completed_at = str(completed.get("emitted_at") or "")
+                        path_metrics = _forward_profit_path_metrics(
+                            paths_by_record,
+                            record_id=record_id,
+                            after_at=str(event.get("emitted_at") or ""),
+                            through_at=completed_at,
+                            anchor_profit_rate=float(candidate_profit),
+                        )
+                        outcome_row = {
+                            "record_id": record_id,
+                            "control_profit_rate": float(completed_profit),
+                            "counterfactual_profit_rate": float(candidate_profit),
+                        }
+                        if path_metrics:
+                            outcome_row.update(path_metrics)
+                        outcome_rows.append(outcome_row)
+                    outcome_summary = _counterfactual_ev_summary(outcome_rows)
+                    candidates.append(
+                        {
+                            "min_span_sec": min_span_sec,
+                            "min_samples": min_samples,
+                            "below_ratio": below_ratio,
+                            "buffer_pct": buffer_pct,
+                            "matched_observation_count": matched_observation_count,
+                            "candidate_exposure_count": exposure_count,
+                            **outcome_summary,
+                            "source_exclusion_reason_counts": dict(
+                                sorted(source_exclusion_reasons.items())
+                            ),
+                            "outcome_exclusion_reason_counts": dict(
+                                sorted(exclusion_reasons.items())
+                            ),
+                        }
                     )
-                    if candidate_profit is None:
-                        exclusion_reasons["decision_profit_rate_missing"] += 1
-                        continue
-                    completed = _next_completed_valid_outcome(
-                        completed_by_record,
-                        record_id=record_id,
-                        after_at=str(event.get("emitted_at") or ""),
-                    )
-                    if completed is None:
-                        exclusion_reasons["completed_valid_profit_pending"] += 1
-                        continue
-                    completed_profit = _safe_float(
-                        _event_fields(completed).get("profit_rate"), None
-                    )
-                    if completed_profit is None:
-                        exclusion_reasons["completed_valid_profit_pending"] += 1
-                        continue
-                    seen_records.add(record_id)
-                    completed_at = str(completed.get("emitted_at") or "")
-                    path_metrics = _forward_profit_path_metrics(
-                        paths_by_record,
-                        record_id=record_id,
-                        after_at=str(event.get("emitted_at") or ""),
-                        through_at=completed_at,
-                        anchor_profit_rate=float(candidate_profit),
-                    )
-                    outcome_row = {
-                        "record_id": record_id,
-                        "control_profit_rate": float(completed_profit),
-                        "counterfactual_profit_rate": float(candidate_profit),
-                    }
-                    if path_metrics:
-                        outcome_row.update(path_metrics)
-                    outcome_rows.append(outcome_row)
-                outcome_summary = _counterfactual_ev_summary(outcome_rows)
-                candidates.append(
-                    {
-                        "min_span_sec": min_span_sec,
-                        "min_samples": min_samples,
-                        "below_ratio": below_ratio,
-                        "matched_observation_count": matched_observation_count,
-                        "candidate_exposure_count": exposure_count,
-                        **outcome_summary,
-                        "outcome_exclusion_reason_counts": dict(
-                            sorted(exclusion_reasons.items())
-                        ),
-                    }
-                )
     candidates.sort(
         key=lambda row: (
             -int(row["candidate_exposure_count"]),
             int(row["min_span_sec"]),
             int(row["min_samples"]),
             float(row["below_ratio"]),
+            float(row["buffer_pct"]),
         )
     )
     sample_floor = 20
@@ -9402,13 +9514,15 @@ def _build_protect_trailing_counterfactual_grid(
         [_safe_int(row.get("mature_outcome_count"), 0) for row in candidates] or [0]
     )
     return {
-        "schema": "protect_trailing_smoothing_counterfactual_grid_v1",
+        "schema": "protect_trailing_smoothing_counterfactual_grid_v2",
         "metric_role": "sim_probe_ev",
         "decision_authority": "source_only_counterfactual_no_runtime_change",
         "window_policy": "daily_exposure_then_clean_baseline_rolling_exit_outcome",
         "sample_floor": sample_floor,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "complete_smoothing_window_and_completed_valid_profit",
+        "source_quality_gate": (
+            "exact_price_samples_trailing_stop_and_completed_valid_profit"
+        ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,

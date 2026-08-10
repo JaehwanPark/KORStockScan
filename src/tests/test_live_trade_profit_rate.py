@@ -248,6 +248,28 @@ def test_trade_profit_helper_accounts_for_costs():
     assert calculate_net_profit_rate(14320, 14420) == 0.47
 
 
+def test_trailing_continuation_lineage_is_snapshotted_then_reset():
+    stock = {
+        "scalp_trailing_continuation_recheck_consumed_id": "scr-runtime-7",
+        "scalp_trailing_continuation_recheck_consumed_position_key": (
+            "runtime:123456:position-7"
+        ),
+    }
+
+    fields = receipts._trailing_continuation_receipt_fields(stock)
+
+    assert fields == {
+        "trailing_continuation_recheck_id": "scr-runtime-7",
+        "trailing_continuation_position_key": "runtime:123456:position-7",
+    }
+    assert all(key in receipts._SELL_RECEIPT_SNAPSHOT_KEYS for key in stock)
+    assert all(key in receipts._SELL_COMPLETE_RESET_KEYS for key in stock)
+    assert (
+        "scalp_trailing_continuation_runtime_position_token"
+        in receipts._SELL_COMPLETE_RESET_KEYS
+    )
+
+
 def test_sell_receipt_persists_net_profit_rate(monkeypatch):
     record = type(
         "Record",
@@ -436,6 +458,10 @@ def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch
         "pre_add_qty": 10,
         "post_add_qty": 20,
         "last_exit_rule": "protect_trailing_stop",
+        "scalp_trailing_continuation_recheck_consumed_id": "scr-runtime-7",
+        "scalp_trailing_continuation_recheck_consumed_position_key": (
+            "runtime:123456:position-7"
+        ),
     }
 
     receipts._update_db_for_sell(
@@ -466,6 +492,10 @@ def test_sell_receipt_propagates_scale_in_counterfactual_diagnostics(monkeypatch
     assert logged["kwargs"]["post_add_avg_price"] == 100000.0
     assert logged["kwargs"]["pre_add_qty"] == 10
     assert logged["kwargs"]["post_add_qty"] == 20
+    assert logged["kwargs"]["trailing_continuation_recheck_id"] == "scr-runtime-7"
+    assert logged["kwargs"]["trailing_continuation_position_key"] == (
+        "runtime:123456:position-7"
+    )
     assert len(post_sell_calls) == 1
     assert (
         post_sell_calls[0]["stock"]["no_scale_in_counterfactual_profit_pct"]

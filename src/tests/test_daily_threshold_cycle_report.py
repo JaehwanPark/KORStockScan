@@ -404,7 +404,7 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     )
     assert protect_trailing["recommended"]["min_samples"] >= 3
     assert protect_trailing["recommended"]["buffer_pct"] == 1.0
-    assert protect_trailing["counterfactual_exploration"]["candidate_count"] == 27
+    assert protect_trailing["counterfactual_exploration"]["candidate_count"] == 135
     assert (
         protect_trailing["counterfactual_exploration"]["allowed_runtime_apply"] is False
     )
@@ -3748,9 +3748,12 @@ def test_smoothing_counterfactual_grids_join_mature_cost_aware_outcomes():
             "fields": {
                 "sample_span_sec": "5",
                 "sample_count": "3",
+                "sample_prices": [9900, 9950, 10000],
                 "below_ratio": "0.75",
                 "median_price": "9900",
-                "buffered_stop_price": "10000",
+                "trailing_stop_price": "10000",
+                "buffered_stop_price": "9950",
+                "buffer_pct": "0.50",
                 "profit_rate": "-0.50",
             },
         },
@@ -3808,6 +3811,7 @@ def test_smoothing_counterfactual_grids_join_mature_cost_aware_outcomes():
         if row["min_span_sec"] == 5
         and row["min_samples"] == 3
         and row["below_ratio"] == 0.6
+        and row["buffer_pct"] == 0.5
     )
     assert protect_candidate["mature_outcome_count"] == 1
     assert protect_candidate["source_quality_adjusted_ev_pct"] == 0.5
@@ -3862,8 +3866,10 @@ def test_smoothing_counterfactuals_exclude_unobserved_action_paths():
             "fields": {
                 "sample_span_sec": "12",
                 "sample_count": "5",
+                "sample_prices": [9880, 9890, 9900, 9910, 9920],
                 "below_ratio": "0.90",
                 "median_price": "9900",
+                "trailing_stop_price": "10000",
                 "buffered_stop_price": "10000",
                 "profit_rate": "-0.50",
             },
@@ -3947,6 +3953,7 @@ def test_smoothing_counterfactuals_exclude_unobserved_action_paths():
         if row["min_span_sec"] == 5
         and row["min_samples"] == 3
         and row["below_ratio"] == 0.6
+        and row["buffer_pct"] == 0.5
     )
     assert protect_candidate["matched_observation_count"] == 1
     assert protect_candidate["candidate_exposure_count"] == 0
@@ -4013,8 +4020,98 @@ def test_trailing_recheck_unattributed_arms_are_not_false_one_shot_violations():
     assert attribution["armed_count"] == 2
     assert attribution["one_shot_violation_count"] == 0
     assert {row["exclusion_reason"] for row in attribution["rows"]} == {
-        "record_id_missing"
+        "position_lineage_missing"
     }
+
+
+def test_trailing_recheck_joins_completed_outcome_by_exact_position_lineage():
+    events = [
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "stock_code": "000002",
+            "emitted_at": "2026-08-05T10:00:01+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": "scr-runtime-2",
+                "recheck_position_key": "runtime:000002:position-2",
+                "counterfactual_profit_rate": "0.20",
+                "counterfactual_executable_sell_price": 10000,
+            },
+        },
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "stock_code": "000002",
+            "emitted_at": "2026-08-05T10:00:16+09:00",
+            "fields": {
+                "recheck_state": "ttl_expired",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": "scr-runtime-2",
+                "recheck_position_key": "runtime:000002:position-2",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 99,
+            "stock_code": "000002",
+            "emitted_at": "2026-08-05T10:00:17+09:00",
+            "fields": {
+                "profit_rate": "0.80",
+                "trailing_continuation_recheck_id": "scr-runtime-2",
+                "trailing_continuation_position_key": "runtime:000002:position-2",
+            },
+        },
+    ]
+
+    attribution = report_mod._build_trailing_continuation_recheck_attribution(events)
+
+    assert attribution["comparable_outcome_count"] == 1
+    assert attribution["source_quality_adjusted_ev_pct"] == 0.6
+    assert attribution["rows"][0]["exclusion_reason"] is None
+
+
+def test_trailing_recheck_rejects_position_lineage_with_mismatched_recheck_id():
+    events = [
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "emitted_at": "2026-08-05T10:00:01+09:00",
+            "fields": {
+                "recheck_state": "armed",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": "scr-arm",
+                "recheck_position_key": "runtime:000002:position-2",
+                "counterfactual_profit_rate": "0.20",
+                "counterfactual_executable_sell_price": 10000,
+            },
+        },
+        {
+            "stage": "scalp_trailing_continuation_recheck",
+            "emitted_at": "2026-08-05T10:00:16+09:00",
+            "fields": {
+                "recheck_state": "ttl_expired",
+                "recheck_contract_version": "bounded_one_shot_attribution_v2",
+                "recheck_id": "scr-arm",
+                "recheck_position_key": "runtime:000002:position-2",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 99,
+            "emitted_at": "2026-08-05T10:00:17+09:00",
+            "fields": {
+                "profit_rate": "0.80",
+                "trailing_continuation_recheck_id": "scr-other",
+                "trailing_continuation_position_key": "runtime:000002:position-2",
+            },
+        },
+    ]
+
+    attribution = report_mod._build_trailing_continuation_recheck_attribution(events)
+
+    assert attribution["comparable_outcome_count"] == 0
+    assert attribution["rows"][0]["exclusion_reason"] == (
+        "completed_valid_profit_pending"
+    )
 
 
 def test_trailing_recheck_requires_executable_counterfactual_price_for_ev():
@@ -4301,6 +4398,26 @@ def test_smoothing_attribution_fields_survive_event_compaction():
 
     event = report_mod._compact_threshold_cycle_event(
         {"stage": "scalp_trailing_continuation_recheck", "fields": fields}
+    )
+
+    assert event["fields"] == fields
+
+
+def test_smoothing_price_and_receipt_lineage_survive_event_compaction():
+    sample_prices = list(range(9900, 9925))
+    fields = {
+        "sample_count": len(sample_prices),
+        "sample_prices": sample_prices,
+        "sample_span_sec": 12,
+        "trailing_stop_price": 10000,
+        "buffered_stop_price": 9920,
+        "median_price": 9912,
+        "trailing_continuation_recheck_id": "scr-runtime-1",
+        "trailing_continuation_position_key": "runtime:000001:position-1",
+    }
+
+    event = report_mod._compact_threshold_cycle_event(
+        {"stage": "protect_trailing_smooth_hold", "fields": fields}
     )
 
     assert event["fields"] == fields
