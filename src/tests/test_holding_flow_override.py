@@ -493,6 +493,67 @@ def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
     )
 
 
+def test_ofi_runtime_off_arms_exact_source_only_exit_without_changing_hold(
+    monkeypatch,
+):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=False),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_holding_flow_ofi_state",
+        lambda stock, code, *, curr_price, now_ts=None: (
+            {
+                "ready": True,
+                "micro_state": "bearish",
+                "observer_healthy": True,
+                "snapshot_age_ms": 100,
+            },
+            handlers.OfiSmoothingState(
+                regime=handlers.OFI_STABLE_BEARISH,
+                micro_score_smooth=-0.62,
+            ),
+        ),
+    )
+    stock = _stock()
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=DummyFlowAI("HOLD"),
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-1.10,
+        peak_profit=0.00,
+        drawdown=1.10,
+        current_ai_score=25,
+        held_sec=80,
+        curr_price=10000,
+        buy_price=10110,
+        now_ts=1000.0,
+    )
+
+    assert proceed is False
+    armed = next(
+        fields for stage, fields in logs if stage == "smoothing_source_only_path_armed"
+    )
+    assert armed["journal_family"] == "holding_flow_ofi_smoothing"
+    assert armed["journal_alternative_action"] == "EXIT"
+    assert armed["journal_control_action"] == "HOLD"
+    assert armed["runtime_family_enabled"] is False
+    assert armed["alternative_executed"] is False
+    assert armed["exact_lineage_status"] == "source_exact"
+    assert armed["runtime_effect"] is False
+    assert armed["allowed_runtime_apply"] is False
+
+
 def test_flow_exit_bullish_ofi_debounce_count_limit_allows_sell(monkeypatch):
     logs = []
     _patch_holding_context(monkeypatch, logs)

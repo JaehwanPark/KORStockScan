@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from src.engine import observation_source_quality_audit as audit
+from src.engine.scalping.smoothing_source_only_path_journal import (
+    arm_source_only_path,
+    observe_source_only_paths,
+)
 
 
 def test_main_fails_closed_when_heavy_analysis_lock_is_busy(
@@ -422,6 +426,65 @@ def test_protect_trailing_smooth_hold_contract_passes(monkeypatch, tmp_path):
         report["stage_contracts"]["protect_trailing_smooth_confirmed"]["status"]
         == "pass"
     )
+    assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+
+
+def test_smoothing_source_only_path_contracts_pass(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    state, armed = arm_source_only_path(
+        None,
+        family="holding_flow_ofi_smoothing",
+        position_key="record:1",
+        trace_id="trace-1",
+        snapshot_id="snapshot-1",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=1000.0,
+        effective_price=10000,
+        effective_profit_rate=-0.5,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="runtime_disabled",
+    )
+    state, horizon_events = observe_source_only_paths(
+        state,
+        position_key="record:1",
+        now_ts=1010.0,
+        effective_price=10010,
+        effective_profit_rate=-0.4,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        hard_breach=False,
+        emergency_breach=False,
+    )
+    _state, close_events = observe_source_only_paths(
+        state,
+        position_key="record:1",
+        now_ts=1015.0,
+        effective_price=9800,
+        effective_profit_rate=-2.1,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        hard_breach=False,
+        emergency_breach=True,
+    )
+    generated = [armed, *horizon_events, *close_events]
+    _write_events(
+        tmp_path,
+        "2026-07-15",
+        [_event(item["stage"], item["fields"]) for item in generated if item],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-07-15")
+
+    for stage in (
+        "smoothing_source_only_path_armed",
+        "smoothing_source_only_path_horizon",
+        "smoothing_source_only_path_closed",
+    ):
+        assert report["stage_contracts"][stage]["status"] == "pass"
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
 
 

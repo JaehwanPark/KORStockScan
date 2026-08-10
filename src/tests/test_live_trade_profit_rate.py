@@ -268,6 +268,8 @@ def test_trailing_continuation_lineage_is_snapshotted_then_reset():
         "scalp_trailing_continuation_runtime_position_token"
         in receipts._SELL_COMPLETE_RESET_KEYS
     )
+    assert "smoothing_source_only_path_journals" in receipts._SELL_COMPLETE_RESET_KEYS
+    assert "smoothing_source_only_path_journals" in receipts._SELL_REVIVE_RESET_KEYS
 
 
 def test_sell_receipt_persists_net_profit_rate(monkeypatch):

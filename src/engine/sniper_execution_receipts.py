@@ -376,6 +376,7 @@ _POSITION_PEAK_RESET_KEYS = (
 )
 _SELL_REVIVE_RESET_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
+    "smoothing_source_only_path_journals",
     "odno",
     "order_time",
     "order_price",
@@ -496,6 +497,7 @@ _SELL_REVIVE_RESET_KEYS = (
 _SELL_COMPLETE_RESET_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
+    "smoothing_source_only_path_journals",
     "pending_sell_msg",
     "sell_odno",
     "sell_ord_no",
