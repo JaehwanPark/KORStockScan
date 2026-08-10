@@ -10441,6 +10441,22 @@ def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution
         kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
 
 
+def test_execution_dependencies_bind_non_revive_smoothing_registration(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(kiwoom_sniper_v2, "_EXECUTION_DEPS", {})
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "bind_execution_dependencies",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    kiwoom_sniper_v2._ensure_execution_deps()
+
+    assert captured["smoothing_non_revive_post_sell_register_callback"] is (
+        kiwoom_sniper_v2.sniper_state_handlers.register_non_revive_smoothing_post_sell_paths
+    )
+
+
 def test_scanner_promotion_pending_attach_skips_already_attached_target(monkeypatch):
     kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
     monkeypatch.setattr(
@@ -11018,6 +11034,15 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     emitted = []
     published = []
     targets = []
+    # DB recovery may restore an explicit Opening owner only while the
+    # PREOPEN-approved Opening watch window is active.  The strategy baseline
+    # is intentionally disabled when the target-date policy artifact is
+    # absent, so make the successful recovery contract explicit in this test.
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scalping_watch_budget_opening_window_active",
+        lambda _now_ts: True,
+    )
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "emit_pipeline_event",

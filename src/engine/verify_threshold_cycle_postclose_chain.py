@@ -623,7 +623,7 @@ def _smoothing_source_only_path_journal_contract_status(
         local: list[str] = []
         if not isinstance(journal, dict):
             return [f"{label}_journal_missing"]
-        if journal.get("schema") != "smoothing_source_only_path_journal_v1":
+        if journal.get("schema") != "smoothing_source_only_path_journal_v3":
             local.append(f"{label}_schema_invalid")
         if _safe_int(journal.get("sample_floor"), 0) != sample_floor:
             local.append(f"{label}_sample_floor_invalid")
@@ -640,6 +640,37 @@ def _smoothing_source_only_path_journal_contract_status(
             local.append(f"{label}_primary_metric_invalid")
         if not isinstance(journal.get("exclusion_reason_counts"), dict):
             local.append(f"{label}_exclusion_reason_counts_missing")
+        if not isinstance(journal.get("guarded_terminal_reason_counts"), dict):
+            local.append(f"{label}_guarded_terminal_reason_counts_missing")
+        phase_summary = journal.get("observation_phase_summary")
+        if not isinstance(phase_summary, dict) or not all(
+            isinstance(phase_summary.get(phase), dict)
+            for phase in (
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            )
+        ):
+            local.append(f"{label}_observation_phase_summary_invalid")
+        elif any(
+            not all(
+                key in phase_summary[phase]
+                for key in (
+                    "arm_count",
+                    "horizon_count",
+                    "ev_eligible_horizon_count",
+                    "excluded_horizon_count",
+                    "status_counts",
+                    "registration_status_counts",
+                )
+            )
+            for phase in (
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            )
+        ):
+            local.append(f"{label}_observation_phase_counts_missing")
         horizons = (
             journal.get("horizons") if isinstance(journal.get("horizons"), dict) else {}
         )
@@ -654,6 +685,15 @@ def _smoothing_source_only_path_journal_contract_status(
                 "source_quality_adjusted_ev_pct" not in summary
             ):
                 local.append(f"{label}_{horizon}s_ev_missing")
+            elif not all(
+                key in summary
+                for key in (
+                    "exact_observed_count",
+                    "guarded_terminal_count",
+                    "ev_eligible_count",
+                )
+            ):
+                local.append(f"{label}_{horizon}s_guarded_ev_counts_missing")
         rows = journal.get("rows") if isinstance(journal.get("rows"), list) else []
         for index, row in enumerate(rows):
             if not isinstance(row, dict):
@@ -664,6 +704,67 @@ def _smoothing_source_only_path_journal_contract_status(
             for key in ("journal_arm_id", "position_key", "trace_id", "snapshot_id"):
                 if str(row.get(key) or "").strip() in {"", "-"}:
                     local.append(f"{label}_row_{index}_{key}_missing")
+            if (_safe_int(row.get("reference_buy_price"), 0) or 0) <= 0:
+                local.append(f"{label}_row_{index}_reference_buy_price_invalid")
+            if row.get("observation_phase") not in {
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            }:
+                local.append(f"{label}_row_{index}_observation_phase_invalid")
+            if "post_sell_registration_status" not in row:
+                local.append(
+                    f"{label}_row_{index}_post_sell_registration_status_missing"
+                )
+        if isinstance(phase_summary, dict):
+            for phase in (
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            ):
+                summary = phase_summary.get(phase)
+                if not isinstance(summary, dict):
+                    continue
+                phase_rows = [
+                    row
+                    for row in rows
+                    if isinstance(row, dict) and row.get("observation_phase") == phase
+                ]
+                phase_eligible = [
+                    row
+                    for row in phase_rows
+                    if row.get("status")
+                    in {
+                        "observed",
+                        "guarded_terminal_hard_breach",
+                        "guarded_terminal_emergency_breach",
+                    }
+                    and row.get("opportunity_ev_delta_pct") is not None
+                ]
+                registration_status_arms: dict[str, set[str]] = {}
+                for row in phase_rows:
+                    status = str(row.get("post_sell_registration_status") or "-")
+                    if status != "-":
+                        registration_status_arms.setdefault(status, set()).add(
+                            str(row.get("journal_arm_id") or "-")
+                        )
+                expected = {
+                    "arm_count": len(
+                        {str(row.get("journal_arm_id") or "-") for row in phase_rows}
+                    ),
+                    "horizon_count": len(phase_rows),
+                    "ev_eligible_horizon_count": len(phase_eligible),
+                    "excluded_horizon_count": len(phase_rows) - len(phase_eligible),
+                    "status_counts": dict(
+                        Counter(str(row.get("status") or "-") for row in phase_rows)
+                    ),
+                    "registration_status_counts": {
+                        status: len(arm_ids)
+                        for status, arm_ids in sorted(registration_status_arms.items())
+                    },
+                }
+                if any(summary.get(key) != value for key, value in expected.items()):
+                    local.append(f"{label}_{phase}_phase_counts_inconsistent")
         return local
 
     def row_signatures(journal: dict[str, Any]) -> set[tuple[Any, ...]]:
@@ -677,6 +778,8 @@ def _smoothing_source_only_path_journal_contract_status(
                 _safe_int(row.get("horizon_sec"), -1),
                 row.get("status"),
                 row.get("opportunity_ev_delta_pct"),
+                row.get("observation_phase"),
+                row.get("post_sell_registration_status"),
             )
             for row in rows
             if isinstance(row, dict)

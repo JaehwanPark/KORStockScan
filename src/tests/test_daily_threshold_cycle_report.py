@@ -4544,6 +4544,14 @@ def test_smoothing_source_only_journal_separates_emergency_and_missing_horizons(
             "fields": {
                 **lineage,
                 "close_reason": "emergency_breach",
+                "terminal_effective_price": 9_800,
+                "terminal_effective_profit_rate": -2.1,
+                "terminal_effective_price_source": "ws",
+                "terminal_effective_price_quality": "single_source",
+                "path_mfe_profit_rate": -0.5,
+                "path_mae_profit_rate": -2.1,
+                "path_price_quality_valid_sample_count": 2,
+                "path_price_quality_invalid_sample_count": 0,
                 "hard_breach": False,
                 "emergency_breach": True,
             },
@@ -4555,8 +4563,120 @@ def test_smoothing_source_only_journal_separates_emergency_and_missing_horizons(
     )
 
     assert journal["sample_floor"] == 20
-    assert journal["exact_complete_path_count"] == 0
-    assert journal["exclusion_reason_counts"] == {"emergency_breach_before_horizon": 5}
+    assert journal["exact_complete_path_count"] == 1
+    assert journal["exclusion_reason_counts"] == {}
+    assert journal["guarded_terminal_reason_counts"] == {"emergency_breach": 1}
+    assert journal["horizons"]["90"]["guarded_terminal_count"] == 1
+    assert journal["horizons"]["90"]["source_quality_adjusted_ev_pct"] == 1.6
+
+
+def test_smoothing_source_only_soft_stop_counts_guarded_downside_in_ev():
+    lineage = {
+        "journal_arm_id": "sj-soft-guarded",
+        "journal_family": "soft_stop_whipsaw_confirmation",
+        "journal_position_key": "record:88",
+        "journal_trace_id": "trace-88",
+        "journal_snapshot_id": "snapshot-88",
+        "journal_alternative_action": "HOLD",
+        "journal_control_action": "EXIT",
+        "journal_started_at_epoch": 1000.0,
+        "exact_lineage_status": "source_exact",
+    }
+    events = [
+        {
+            "stage": "smoothing_source_only_path_armed",
+            "record_id": 88,
+            "emitted_at": "2026-08-10T10:00:00+09:00",
+            "fields": {
+                **lineage,
+                "anchor_effective_profit_rate": -1.5,
+                "anchor_effective_price_source": "ws",
+                "anchor_effective_price_quality": "single_source",
+            },
+        },
+        {
+            "stage": "smoothing_source_only_path_closed",
+            "record_id": 88,
+            "emitted_at": "2026-08-10T10:00:05+09:00",
+            "fields": {
+                **lineage,
+                "close_reason": "hard_breach",
+                "terminal_effective_price": 9_900,
+                "terminal_effective_profit_rate": -2.0,
+                "terminal_effective_price_source": "ws",
+                "terminal_effective_price_quality": "single_source",
+                "path_mfe_profit_rate": -1.5,
+                "path_mae_profit_rate": -2.0,
+                "path_price_quality_valid_sample_count": 2,
+                "path_price_quality_invalid_sample_count": 0,
+                "hard_breach": True,
+                "emergency_breach": False,
+            },
+        },
+    ]
+
+    journal = report_mod._build_smoothing_source_only_path_journal(
+        events, family="soft_stop_whipsaw_confirmation"
+    )
+
+    assert journal["horizons"]["10"]["source_quality_adjusted_ev_pct"] == -0.5
+    assert journal["horizons"]["90"]["source_quality_adjusted_ev_pct"] == -0.5
+    assert journal["horizons"]["90"]["ev_eligible_count"] == 1
+    assert journal["rows"][-1]["status"] == "guarded_terminal_hard_breach"
+
+
+def test_smoothing_source_only_reports_non_revive_exact_coverage_gap():
+    lineage = {
+        "journal_arm_id": "sj-soft-non-revive-gap",
+        "journal_family": "soft_stop_whipsaw_confirmation",
+        "journal_position_key": "record:89",
+        "journal_trace_id": "trace-89",
+        "journal_snapshot_id": "snapshot-89",
+        "journal_alternative_action": "HOLD",
+        "journal_control_action": "EXIT",
+        "journal_started_at_epoch": 1786343395.0,
+        "exact_lineage_status": "source_exact",
+    }
+    events = [
+        {
+            "stage": "smoothing_source_only_path_armed",
+            "record_id": 89,
+            "emitted_at": "2026-08-10T15:29:55+09:00",
+            "fields": {
+                **lineage,
+                "anchor_effective_profit_rate": -1.5,
+                "reference_buy_price": 10_100,
+                "anchor_effective_price_source": "ws",
+                "anchor_effective_price_quality": "single_source",
+            },
+        },
+        {
+            "stage": "sell_completed",
+            "record_id": 89,
+            "emitted_at": "2026-08-10T15:30:00+09:00",
+            "fields": {
+                "profit_rate": -1.5,
+                "revive": False,
+                "smoothing_non_revive_post_sell_registration_status": (
+                    "registration_callback_error"
+                ),
+            },
+        },
+    ]
+
+    journal = report_mod._build_smoothing_source_only_path_journal(
+        events, family="soft_stop_whipsaw_confirmation"
+    )
+
+    assert journal["schema"] == "smoothing_source_only_path_journal_v3"
+    assert journal["exclusion_reason_counts"] == {
+        "non_revive_post_sell_observer_missing": 5
+    }
+    phase = journal["observation_phase_summary"]["post_sell_non_revive"]
+    assert phase["arm_count"] == 1
+    assert phase["horizon_count"] == 5
+    assert phase["ev_eligible_horizon_count"] == 0
+    assert phase["registration_status_counts"] == {"registration_callback_error": 1}
 
 
 def test_smoothing_source_only_ofi_excludes_journal_native_lineage_from_ev():

@@ -442,6 +442,7 @@ def test_smoothing_source_only_path_contracts_pass(monkeypatch, tmp_path):
         now_ts=1000.0,
         effective_price=10000,
         effective_profit_rate=-0.5,
+        reference_buy_price=10100,
         effective_price_source="ws",
         effective_price_quality="single_source",
         runtime_family_enabled=False,
@@ -486,6 +487,17 @@ def test_smoothing_source_only_path_contracts_pass(monkeypatch, tmp_path):
     ):
         assert report["stage_contracts"][stage]["status"] == "pass"
     assert report["summary"]["hard_blocking_contract_gap_count"] == 0
+
+
+def test_smoothing_source_only_path_contract_rejects_nonpositive_buy_price():
+    contract = audit.STAGE_CONTRACTS["smoothing_source_only_path_armed"]
+    violations = audit._row_contract_violations(
+        "smoothing_source_only_path_armed",
+        {"fields": {"reference_buy_price": 0}},
+        contract,
+    )
+
+    assert "reference_buy_price_positive_contract" in violations["invalid_fields"]
 
 
 def test_market_halt_session_events_artifact_is_gitignored():

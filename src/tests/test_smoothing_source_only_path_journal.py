@@ -17,6 +17,7 @@ def _arm(state=None):
         now_ts=1000.0,
         effective_price=10_000,
         effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
         effective_price_source="ws",
         effective_price_quality="single_source",
         runtime_family_enabled=False,
@@ -33,6 +34,7 @@ def test_source_only_journal_emits_exact_horizons_without_runtime_authority():
     assert armed["fields"]["allowed_runtime_apply"] is False
     assert armed["fields"]["broker_order_forbidden"] is True
     assert armed["fields"]["exact_lineage_status"] == "source_exact"
+    assert armed["fields"]["reference_buy_price"] == 10_100
 
     emitted = []
     for horizon in HORIZONS_SEC:
@@ -89,6 +91,10 @@ def test_source_only_journal_deduplicates_arm_and_closes_on_emergency():
     assert closed_state["arms"] == {}
     assert [event["stage"] for event in events] == ["smoothing_source_only_path_closed"]
     assert events[0]["fields"]["close_reason"] == "emergency_breach"
+    assert events[0]["fields"]["terminal_effective_price"] == 9_800
+    assert events[0]["fields"]["terminal_effective_profit_rate"] == -2.1
+    assert events[0]["fields"]["terminal_effective_price_quality"] == "single_source"
+    assert events[0]["fields"]["path_mae_profit_rate"] == -2.1
 
 
 def test_source_only_journal_keeps_oldest_arm_across_new_source_snapshots():
@@ -104,6 +110,7 @@ def test_source_only_journal_keeps_oldest_arm_across_new_source_snapshots():
         now_ts=1002.0,
         effective_price=10_020,
         effective_profit_rate=-1.3,
+        reference_buy_price=10_100,
         effective_price_source="ws",
         effective_price_quality="single_source",
         runtime_family_enabled=False,
@@ -129,6 +136,7 @@ def test_source_only_journal_marks_missing_source_lineage_and_deduplicates_it():
         "now_ts": 1000.0,
         "effective_price": 10_000,
         "effective_profit_rate": -0.5,
+        "reference_buy_price": 10_100,
         "effective_price_source": "ws",
         "effective_price_quality": "single_source",
         "runtime_family_enabled": False,
@@ -143,6 +151,30 @@ def test_source_only_journal_marks_missing_source_lineage_and_deduplicates_it():
     assert armed["fields"]["journal_trace_id"].startswith("journal-trace:")
     assert duplicate is None
     assert len(duplicate_state["arms"]) == 1
+
+
+def test_source_only_journal_rejects_missing_reference_buy_price():
+    state, armed = arm_source_only_path(
+        None,
+        family="holding_flow_ofi_smoothing",
+        position_key="record:8",
+        trace_id="trace-8",
+        snapshot_id="snapshot-8",
+        alternative_action="EXIT",
+        control_action="HOLD",
+        now_ts=1000.0,
+        effective_price=10_000,
+        effective_profit_rate=-0.5,
+        reference_buy_price=0,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="runtime_disabled",
+    )
+
+    assert armed is None
+    assert state["arms"] == {}
 
 
 def test_source_only_journal_keeps_full_path_excursions_without_tick_list():

@@ -11,7 +11,7 @@ from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:
     return {
-        "schema": "smoothing_source_only_path_journal_v1",
+        "schema": "smoothing_source_only_path_journal_v3",
         "sample_floor": sample_floor,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "runtime_effect": False,
@@ -20,10 +20,28 @@ def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:
         "broker_order_forbidden": True,
         "eligible_for_live_review": False,
         "exclusion_reason_counts": {},
+        "guarded_terminal_reason_counts": {},
+        "observation_phase_summary": {
+            phase: {
+                "arm_count": 1 if phase == "holding" else 0,
+                "horizon_count": 5 if phase == "holding" else 0,
+                "ev_eligible_horizon_count": 5 if phase == "holding" else 0,
+                "excluded_horizon_count": 0,
+                "status_counts": {"observed": 5} if phase == "holding" else {},
+                "registration_status_counts": {},
+            }
+            for phase in (
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            )
+        },
         "horizons": {
             str(horizon): {
                 "source_quality_adjusted_ev_pct": 0.1,
                 "exact_observed_count": 1,
+                "guarded_terminal_count": 0,
+                "ev_eligible_count": 1,
             }
             for horizon in (10, 20, 40, 60, 90)
         },
@@ -33,6 +51,9 @@ def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:
                 "position_key": "record:1",
                 "trace_id": "trace:1",
                 "snapshot_id": "snapshot:1",
+                "reference_buy_price": 10_100,
+                "observation_phase": "holding",
+                "post_sell_registration_status": "-",
                 "horizon_sec": horizon,
                 "status": "observed",
                 "opportunity_ev_delta_pct": 0.1,
@@ -97,6 +118,56 @@ def test_smoothing_source_only_path_journal_contract_rejects_lineage_drop():
     assert (
         "soft_stop_whipsaw_confirmation_rolling_5d_daily_lineage_mismatch"
         in status["issues"]
+    )
+
+
+def test_smoothing_source_only_path_journal_contract_rejects_invalid_buy_price():
+    soft = _smoothing_journal(10, arm_id="soft:1")
+    soft["rows"][0]["reference_buy_price"] = 0
+    families = {
+        "soft_stop_whipsaw_confirmation": {"source_only_path_journal": soft},
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+
+    status = mod._smoothing_source_only_path_journal_contract_status(
+        {"threshold_snapshot": families},
+        {
+            "windows": {"rolling_5d": ["2026-08-10"]},
+            "threshold_snapshot_by_window": {"rolling_5d": families},
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert any(
+        issue.endswith("row_0_reference_buy_price_invalid")
+        for issue in status["issues"]
+    )
+
+
+def test_smoothing_source_only_path_journal_contract_rejects_phase_count_drift():
+    soft = _smoothing_journal(10, arm_id="soft:1")
+    soft["observation_phase_summary"]["holding"]["horizon_count"] = 4
+    families = {
+        "soft_stop_whipsaw_confirmation": {"source_only_path_journal": soft},
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+
+    status = mod._smoothing_source_only_path_journal_contract_status(
+        {"threshold_snapshot": families},
+        {
+            "windows": {"rolling_5d": ["2026-08-10"]},
+            "threshold_snapshot_by_window": {"rolling_5d": families},
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert any(
+        issue.endswith("holding_phase_counts_inconsistent")
+        for issue in status["issues"]
     )
 
 

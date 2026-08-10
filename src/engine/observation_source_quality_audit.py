@@ -1604,6 +1604,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "journal_started_at_epoch",
             "anchor_effective_price",
             "anchor_effective_profit_rate",
+            "reference_buy_price",
             "anchor_effective_price_source",
             "anchor_effective_price_quality",
             "runtime_family_enabled",
@@ -1636,6 +1637,7 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "exact_lineage_status",
             "horizon_sec",
             "horizon_status",
+            "observation_phase",
             "observation_elapsed_sec",
             "observation_lag_sec",
             "effective_price",
@@ -1673,6 +1675,15 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "journal_snapshot_id",
             "exact_lineage_status",
             "close_reason",
+            "observation_phase",
+            "terminal_effective_price",
+            "terminal_effective_profit_rate",
+            "terminal_effective_price_source",
+            "terminal_effective_price_quality",
+            "path_mfe_profit_rate",
+            "path_mae_profit_rate",
+            "path_price_quality_valid_sample_count",
+            "path_price_quality_invalid_sample_count",
             "hard_breach",
             "emergency_breach",
         ),
@@ -4339,6 +4350,10 @@ def _row_contract_violations(
         fields.get("invalid_flow_state_label")
     ):
         invalid.append("flow_state")
+    if stage == "smoothing_source_only_path_armed":
+        reference_buy_price = _safe_float(fields.get("reference_buy_price"))
+        if reference_buy_price is None or reference_buy_price <= 0:
+            invalid.append("reference_buy_price_positive_contract")
     if "gatekeeper" in stage and _is_present(
         fields.get("invalid_gatekeeper_action_label")
     ):
