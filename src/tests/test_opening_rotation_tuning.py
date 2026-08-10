@@ -114,6 +114,8 @@ def _episode_rows(
         "opening_rotation_margin_orderable_qty_cap": 120,
         "opening_rotation_margin_requested_unit_price": 10_000,
         "opening_rotation_margin_cash_guard_bypassed": True,
+        "opening_rotation_margin_order_api": "kt10000",
+        "opening_rotation_margin_credit_order_api_used": False,
     }
     return [
         _event(
@@ -121,6 +123,16 @@ def _episode_rows(
             f"{target_date}T09:10:00+09:00",
             code,
             common,
+        ),
+        _event(
+            "opening_rotation_redundant_submit_guard_bypassed",
+            f"{target_date}T09:10:01+09:00",
+            code,
+            {
+                **common,
+                "opening_rotation_redundant_submit_guard": "pre_submit_liquidity",
+                "opening_rotation_redundant_submit_guard_would_block": True,
+            },
         ),
         _event(
             "holding_started",
@@ -202,6 +214,21 @@ def test_postclose_selects_only_one_predeclared_axis_with_strict_sample_floors(
     assert report["funnel"]["margin_authorized_episode_count"] == 36
     assert report["funnel"]["margin_cash_guard_bypassed_episode_count"] == 36
     assert report["funnel"]["margin_applied_rate_counts"] == {"40": 36}
+    assert report["funnel"]["margin_order_api_counts"] == {"kt10000": 36}
+    assert report["funnel"]["margin_credit_order_api_used_episode_count"] == 0
+    assert report["funnel"]["margin_order_contract_violation_count"] == 0
+    assert report["funnel"]["duplicate_submit_guard_bypass_episode_count"] == 36
+    assert report["funnel"]["duplicate_submit_guard_bypass_filled_episode_count"] == 36
+    assert (
+        report["funnel"]["duplicate_submit_guard_bypass_complete_episode_count"] == 36
+    )
+    assert report["funnel"]["duplicate_submit_guard_bypass_counts"] == {
+        "pre_submit_liquidity": 36
+    }
+    assert (
+        report["downstream_guard_overlap"]["performance"]["complete_episode_count"]
+        == 36
+    )
     assert report["selected_candidate"]["axis"] == "day_change_lower"
     assert report["selected_candidate"]["value"] == 2.0
     assert candidate["status"] == "eligible"
@@ -232,6 +259,71 @@ def test_postclose_blocks_tuning_when_source_quality_is_missing(tmp_path):
     )
 
     assert report["status"] == "source_quality_blocked"
+    assert report["performance"]["source_quality_adjusted_ev_pct"] is None
+    assert candidate["status"] == "no_change"
+
+
+def test_postclose_blocks_tuning_on_margin_order_contract_violation(tmp_path):
+    events = tmp_path / "events"
+    audits = tmp_path / "audits"
+    policy = OpeningRotationRuntimePolicy(target_date="2026-08-08")
+    rows = _episode_rows(
+        target_date="2026-08-08",
+        index=1,
+        profit_rate=0.5,
+        day_change_pct=2.5,
+        policy=policy,
+    )
+    # A later valid receipt must not erase an earlier forbidden-order event.
+    rows[0]["fields"]["opening_rotation_margin_order_api"] = "kt10006"
+    rows[0]["fields"]["opening_rotation_margin_credit_order_api_used"] = True
+    _write_jsonl(events / "pipeline_events_2026-08-08.jsonl", rows)
+    _audit(audits, "2026-08-08")
+
+    report, candidate = build_postclose_report(
+        "2026-08-08",
+        events_dir=events,
+        source_quality_dir=audits,
+        runtime_root=tmp_path / "runtime",
+    )
+
+    assert report["status"] == "source_quality_blocked"
+    assert report["source_quality"]["margin_order_contract_violation_count"] == 1
+    assert report["funnel"]["margin_order_contract_violation_count"] == 1
+    assert report["funnel"]["margin_credit_order_api_used_episode_count"] == 1
+    assert report["performance"]["source_quality_adjusted_ev_pct"] is None
+    assert candidate["status"] == "no_change"
+
+
+def test_postclose_preserves_missing_margin_order_provenance_as_sticky_violation(
+    tmp_path,
+):
+    events = tmp_path / "events"
+    audits = tmp_path / "audits"
+    policy = OpeningRotationRuntimePolicy(target_date="2026-08-08")
+    rows = _episode_rows(
+        target_date="2026-08-08",
+        index=1,
+        profit_rate=0.5,
+        day_change_pct=2.5,
+        policy=policy,
+    )
+    # Later complete receipts are valid, but the first authorized event was not.
+    rows[0]["fields"].pop("opening_rotation_margin_order_api")
+    rows[0]["fields"].pop("opening_rotation_margin_credit_order_api_used")
+    _write_jsonl(events / "pipeline_events_2026-08-08.jsonl", rows)
+    _audit(audits, "2026-08-08")
+
+    report, candidate = build_postclose_report(
+        "2026-08-08",
+        events_dir=events,
+        source_quality_dir=audits,
+        runtime_root=tmp_path / "runtime",
+    )
+
+    assert report["status"] == "source_quality_blocked"
+    assert report["source_quality"]["margin_order_contract_violation_count"] == 1
+    assert report["funnel"]["margin_order_contract_violation_count"] == 1
     assert report["performance"]["source_quality_adjusted_ev_pct"] is None
     assert candidate["status"] == "no_change"
 

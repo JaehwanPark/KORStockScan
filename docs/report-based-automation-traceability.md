@@ -140,6 +140,27 @@ Postclose chain은 direct predecessor artifact 계약을 갖는다. 후행 단�
 
 | `data/report/ai_entry_setup_paired_replay_batch/ai_entry_setup_paired_replay_batch_YYYY-MM-DD.json` and venue/session-suffixed V2.14 control/paired/detailed artifacts | `src.engine.scalping.entry_setup_paired_replay_batch` via `deploy/run_ai_entry_setup_paired_replay_postclose.sh` at 21:05 KST after predecessor DONE | postclose V2.14 setup-risk review and KRX bounded-live candidate producer | full-day mature exact cohort -> outcome-blind setup-state/symbol-stratified checkpoint -> same-contract/venue/session cumulative attribution -> KRX candidate handoff | `EntrySetupRiskOOSFullDay0806` | The late offline runner waits for the main postclose controller and 60-minute horizon, then executes KRX regular and NXT aftermarket separately. It uses the existing OpenAI route, rejects KRX `provider=none`, and selects at most 30 new calls per cohort without outcome fields. Decision-time `READY/WAIT_CONFIRMATION/OTHER` weights are `60/30/10` with symbol diversity so INVALID-heavy rows cannot exhaust the checkpoint; a policy-version change invalidates stale selection reuse. Provider timeout retry runs at most three wrapper attempts, reuses every validated result, retries only failed IDs, and records the full checkpoint state distribution separately from the retry subset. Cumulative learning starts at one row, but full performance promotion retains exposure 10/3, positive cost-adjusted EV, non-worse opportunity value, complete cost provenance, and bounded risk. Probe-arm 10/3 opens only the separately guarded one-share exploration authority described in the live-policy row and does not lower performance floors. NXT failures remain explicit, their next action remains NXT-control collection, and NXT never inherits KRX authority. The artifacts remain `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, and `broker_order_forbidden=true`. |
 
+Opening Rotation margin addendum: `opening_rotation_profile_tuning_v2` consumes
+the exact `kt00011` checked price and discrete applied tier together with
+`margin_order_api=kt10000` and `margin_credit_order_api_used=false` from entry,
+BUY/SELL receipt, and completion events. A missing, non-`kt10000`, credit-order,
+or conflicting episode observation is retained as seen evidence and sets
+`tuning_input_allowed=false`; later events cannot overwrite the violation.
+
+Opening Rotation downstream-guard ownership addendum: once the strategy's
+mechanical entry profile qualifies a promotion, generic alpha/legacy-context
+guards (`pre_submit_micro_context_availability`, `pre_submit_liquidity`,
+`pre_submit_overbought_pullback`, `real_weak_pullback`,
+`weak_context_late_entry`, and the stale generic
+`krx_direct_canary_live_ai_wait`) are counterfactual observations rather than a
+second veto. Each would-block result is recorded once per episode as
+`opening_rotation_redundant_submit_guard_bypassed`; the postclose report
+separates bypassed, filled, and complete episode counts, per-guard counts, and
+cost-adjusted complete-episode performance. This attribution is diagnostic and
+cannot authorize additional bypasses. Freshness/stale/conflict, final price
+drift, live limit/VI, account/order/quantity/cooldown, exact-price margin,
+greenfield/broker submit, and hard/protect/emergency safeguards remain enforced.
+
 ## 2.1 Postclose Chain Contract
 
 `deploy/run_threshold_cycle_postclose.sh`의 최신 순서는 아래 계약을 따른다.

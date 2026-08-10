@@ -70,7 +70,7 @@ are confirmed and the local producer-to-consumer contract is reviewed.
 
 ### 2026-08-10 Opening Rotation Margin Orderability Gate
 
-- Retrieved at `2026-08-10T18:06:07+09:00` from upstream commit
+- Rechecked at `2026-08-10T18:35:18+09:00` from upstream commit
   `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
 - Inspected `kiwoom_docs/계좌.md`, `kiwoom_docs/주문.md`,
   `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
@@ -89,6 +89,9 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   expensive executable pre-submit price. A missing/error response, an unknown
   or `100%` applied rate, zero quantity, inconsistent amount, or a failed
   exact-price recheck cannot grant margin authority.
+- `aplc_rt` is matched as an exact discrete integer tier. A fractional or
+  malformed percentage is not rounded into an eligible bucket, and the local
+  `uv` request provenance must exactly match the price being authorized.
 - The resulting capacity enters the existing central sizing allocator as a
   broker quantity cap; Opening then reduces an allocator-approved positive
   quantity to exactly one share. The actual order remains ordinary KRX
@@ -96,6 +99,10 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   increase quantity, enable scale-in, or bypass time, stale/conflict,
   specialist-owner, account/order/cooldown, absolute-budget, position,
   broker-response, or hard/protect/emergency safety vetoes.
+- BUY/SELL receipts retain `margin_order_api=kt10000` and
+  `margin_credit_order_api_used=false`. A missing or conflicting value in any
+  event of a margin-authorized episode blocks that episode set from postclose
+  tuning authority; later normal defaults cannot erase the earlier evidence.
 
 ### 2026-08-08 Widget Signal Auto-Trade Order Gate
 

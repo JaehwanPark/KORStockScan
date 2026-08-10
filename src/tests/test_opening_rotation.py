@@ -128,6 +128,29 @@ def test_kt00011_parser_exposes_applied_margin_orderable_capacity(monkeypatch):
     assert snapshot["requested_unit_price"] == 10_000
 
 
+def test_kt00011_parser_does_not_round_fractional_applied_margin_rate(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "return_code": 0,
+                "aplc_rt": "39.6%",
+                "profa_40ord_alow_amt": "000001200000",
+                "profa_40ord_alowq": "000000000120",
+            }
+        ],
+    )
+
+    snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
+        "token", "005930", unit_price=10_000
+    )
+
+    assert snapshot["applied_margin_rate"] == 0
+    assert snapshot["applied_margin_tier_recognized"] is False
+    assert snapshot["applied_orderable_qty"] == 0
+
+
 @pytest.mark.parametrize("raw_return_code", [None, "invalid"])
 def test_kt00011_parser_rejects_missing_or_invalid_return_code(
     monkeypatch,
@@ -166,6 +189,7 @@ def test_opening_margin_budget_uses_broker_tier_when_cash_guard_is_zero():
             "kt00011_applied_margin_tier_recognized": True,
             "kt00011_applied_orderable_amount": 1_200_000,
             "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 10_000,
         },
         unit_price=10_000,
     )
@@ -235,6 +259,7 @@ def test_opening_margin_budget_fails_closed_on_ineligible_broker_capacity(
             "kt00011_applied_margin_tier_recognized": True,
             "kt00011_applied_orderable_amount": amount,
             "kt00011_applied_orderable_qty": qty,
+            "kt00011_requested_unit_price": 10_000,
         },
         unit_price=10_000,
     )
@@ -256,12 +281,37 @@ def test_opening_margin_budget_fails_closed_on_broker_lookup_error():
             "kt00011_applied_margin_tier_recognized": True,
             "kt00011_applied_orderable_amount": 1_200_000,
             "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 10_000,
         },
         unit_price=10_000,
     )
 
     assert context["opening_rotation_margin_one_share_authorized"] is False
     assert context["opening_rotation_margin_authority_reason"] == "kt00011_error"
+    assert context["budget_base"] == 0
+
+
+def test_opening_margin_budget_rejects_different_kt00011_checked_price():
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 9_990,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is False
+    assert context["opening_rotation_margin_authority_reason"] == (
+        "kt00011_requested_unit_price_mismatch"
+    )
+    assert context["opening_rotation_margin_requested_unit_price"] == 9_990
     assert context["budget_base"] == 0
 
 
@@ -2091,6 +2141,173 @@ def test_margin_capacity_stays_inside_allocator_and_one_share_submit_contract():
     assert "kt10006" not in submit_source
 
 
+@pytest.mark.parametrize(
+    "guard_name",
+    sorted(handlers._OPENING_ROTATION_REDUNDANT_SUBMIT_GUARDS),
+)
+def test_opening_rotation_bypasses_only_declared_duplicate_submit_alpha_guards(
+    guard_name,
+):
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name=guard_name,
+        )
+        is False
+    )
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=False,
+            guard_name=guard_name,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "guard_name",
+    [
+        "exit_authority_conflict",
+        "same_symbol_loss_reentry_cooldown",
+        "latency_stale_conflict",
+        "observed_mark_gap",
+        "caution_stale_negative_micro",
+        "opening_quote_tick_1s_freshness",
+        "late_entry_price_drift",
+        "pre_submit_price",
+        "lower_upper_limit_live",
+        "account_order_quantity",
+        "margin_exact_price",
+        "scanner_generation",
+        "greenfield_authority",
+        "broker_submit",
+    ],
+)
+def test_opening_rotation_keeps_submit_and_hard_safety_guards(guard_name):
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name=guard_name,
+        )
+        is True
+    )
+
+
+def test_opening_rotation_duplicate_guard_bypass_has_episode_provenance(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: logs.append((args, fields)),
+    )
+    stock = {
+        "opening_rotation_episode_id": "OREP-1",
+        "opening_rotation_redundant_submit_guard_bypasses": [],
+    }
+
+    handlers._record_opening_rotation_redundant_submit_guard_bypass(
+        stock,
+        "005930",
+        guard_name="pre_submit_liquidity",
+        guard_fields={"pre_submit_liquidity_reason": "below_min_liquidity"},
+    )
+    handlers._record_opening_rotation_redundant_submit_guard_bypass(
+        stock,
+        "005930",
+        guard_name="pre_submit_liquidity",
+    )
+    handlers._record_opening_rotation_redundant_submit_guard_bypass(
+        stock,
+        "005930",
+        guard_name="weak_context_late_entry",
+    )
+
+    assert stock["opening_rotation_redundant_submit_guard_bypass_count"] == 2
+    assert stock["opening_rotation_redundant_submit_guard_bypasses"] == [
+        "pre_submit_liquidity",
+        "weak_context_late_entry",
+    ]
+    provenance = handlers._opening_rotation_provenance_fields(stock)
+    assert provenance["opening_rotation_redundant_submit_guard_bypass_count"] == 2
+    assert provenance["opening_rotation_redundant_submit_guard_bypasses"] == (
+        "pre_submit_liquidity,weak_context_late_entry"
+    )
+    assert logs[0][0][2] == "opening_rotation_redundant_submit_guard_bypassed"
+    assert len(logs) == 2
+    assert logs[0][1]["actual_order_submitted"] is False
+    assert logs[0][1]["broker_order_forbidden"] is False
+    assert "stale_or_conflict_bypass" in logs[0][1]["forbidden_uses"]
+
+
+def test_opening_rotation_duplicate_guard_bypass_is_wired_before_common_blocks():
+    submit_source = inspect.getsource(handlers._submit_watching_triggered_entry)
+
+    for guard_name in handlers._OPENING_ROTATION_REDUNDANT_SUBMIT_GUARDS:
+        assert f'guard_name="{guard_name}"' in submit_source
+    for hard_guard_call in (
+        "_is_standard_stale_submit_block",
+        "_evaluate_caution_stale_negative_micro_submit_block",
+        "_limit_down_live_pre_submit_guard",
+        "_upper_limit_live_pre_submit_guard",
+        "_stage_buy_order_submission",
+    ):
+        assert hard_guard_call in submit_source
+
+
+def test_opening_rotation_ignores_stale_generic_ai_wait_veto_without_weakening_latency(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_KRX_DIRECT_CANARY_LIVE_AI_WAIT_BLOCK_ENABLED", "true"
+    )
+    now_ts = datetime(2026, 7, 20, 9, 20).timestamp()
+    verdict = handlers._evaluate_krx_direct_canary_live_ai_wait_submit_block(
+        strategy="SCALPING",
+        stock={
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 1.0,
+        },
+        runtime={"effective_venue": "KRX"},
+        latency_gate={
+            "latency_state": "DANGER",
+            "latency_true_ofi_direct_canary_applied": True,
+        },
+        entry_ai_submit_authority={},
+        retry_fields={},
+        now_ts=now_ts,
+    )
+
+    assert verdict["blocked"] is True
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name="krx_direct_canary_live_ai_wait",
+        )
+        is False
+    )
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name="latency_stale_conflict",
+        )
+        is True
+    )
+
+
+def test_holding_common_trailing_does_not_overwrite_an_existing_exit_owner():
+    holding_source = inspect.getsource(handlers.handle_holding_state)
+
+    assert (
+        "not is_sell_signal\n"
+        "        and trailing_stop_price > 0\n"
+        "        and curr_p <= trailing_stop_price"
+    ) in holding_source
+    assert holding_source.index(
+        'exit_rule = "opening_rotation_common_trailing_stop"'
+    ) < (holding_source.index('exit_rule = "protect_trailing_stop"'))
+
+
 def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
     handlers.COOLDOWNS = {}
     handlers.ALERTED_STOCKS = set()
@@ -2490,6 +2707,8 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
         "opening_rotation_margin_orderable_qty_cap": 120,
         "opening_rotation_margin_requested_unit_price": 10_010,
         "opening_rotation_margin_cash_guard_bypassed": True,
+        "opening_rotation_margin_order_api": "kt10000",
+        "opening_rotation_margin_credit_order_api_used": False,
     }
     monkeypatch.setattr(
         sniper_execution_receipts.kiwoom_utils,
@@ -2539,6 +2758,8 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
     assert target_log["opening_rotation_margin_one_share_authorized"] is True
     assert target_log["opening_rotation_margin_rate"] == 40
     assert target_log["opening_rotation_margin_cash_guard_bypassed"] is True
+    assert target_log["opening_rotation_margin_order_api"] == "kt10000"
+    assert target_log["opening_rotation_margin_credit_order_api_used"] is False
     assert stock["opening_rotation_profit_target_order_no"] == "SELL-1"
     assert stock["preset_tp_ord_no"] == "SELL-1"
     assert logs[-1][0][3] == "opening_rotation_profit_target_ordered"

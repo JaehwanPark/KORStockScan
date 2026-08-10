@@ -918,7 +918,11 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
             return 0
         try:
             clean = str(v).replace(",", "").replace("+", "").replace("%", "").strip()
-            return int(round(float(clean)))
+            parsed = float(clean)
+            # Official kt00011 margin tiers are discrete integer percentages.
+            # Never round a malformed/unknown fractional rate into an eligible
+            # tier because aplc_rt selects which orderable bucket is trusted.
+            return int(parsed) if parsed.is_integer() else 0
         except (ValueError, TypeError):
             return 0
 

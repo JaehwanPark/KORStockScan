@@ -2597,12 +2597,15 @@ def _apply_opening_rotation_margin_budget_authority(
     margin_qty = max(0, _safe_int(resolved.get("kt00011_applied_orderable_qty"), 0))
     recognized = bool(resolved.get("kt00011_applied_margin_tier_recognized", False))
     error = str(resolved.get("kt00011_error") or "").strip()
+    checked_price = max(0, _safe_int(resolved.get("kt00011_requested_unit_price"), 0))
 
     authorized = False
     if price <= 0:
         reason = "invalid_unit_price"
     elif error:
         reason = "kt00011_error"
+    elif checked_price != price:
+        reason = "kt00011_requested_unit_price_mismatch"
     elif not recognized:
         reason = "applied_margin_tier_unrecognized"
     elif margin_rate not in {20, 30, 40, 50, 60}:
@@ -2624,7 +2627,7 @@ def _apply_opening_rotation_margin_budget_authority(
             "opening_rotation_margin_rate": margin_rate,
             "opening_rotation_margin_orderable_amount": margin_amount,
             "opening_rotation_margin_orderable_qty_cap": margin_qty,
-            "opening_rotation_margin_requested_unit_price": price,
+            "opening_rotation_margin_requested_unit_price": checked_price,
             "opening_rotation_margin_cash_guard_bypassed": bool(
                 authorized
                 and (
@@ -51676,6 +51679,125 @@ def _opening_rotation_contract_fields(*, runtime_effect: bool) -> dict:
     }
 
 
+_OPENING_ROTATION_REDUNDANT_SUBMIT_GUARDS = frozenset(
+    {
+        "pre_submit_micro_context_availability",
+        "pre_submit_liquidity",
+        "pre_submit_overbought_pullback",
+        "real_weak_pullback",
+        "weak_context_late_entry",
+        "krx_direct_canary_live_ai_wait",
+    }
+)
+
+
+def _opening_rotation_submit_guard_enforced(
+    *, opening_rotation_active: bool, guard_name: str
+) -> bool:
+    """Keep hard revalidation while removing a second generic alpha screen.
+
+    Opening Rotation has already qualified fresh trusted tape, spread, pressure,
+    pullback, and reacceleration.  The generic scalping submit path still owns
+    broker/account/order/quantity/cooldown, stale/conflict, price, venue, and
+    exchange-limit safety.  Only the named generic alpha/source-shape screens
+    are redundant for this mechanical owner.
+    """
+
+    return not (
+        bool(opening_rotation_active)
+        and str(guard_name or "").strip() in _OPENING_ROTATION_REDUNDANT_SUBMIT_GUARDS
+    )
+
+
+def _record_opening_rotation_redundant_submit_guard_bypass(
+    stock: dict,
+    code: str,
+    *,
+    guard_name: str,
+    guard_fields: dict | None = None,
+) -> None:
+    """Record the counterfactual generic veto without restoring its authority."""
+
+    normalized_guard = str(guard_name or "").strip()
+    if normalized_guard not in _OPENING_ROTATION_REDUNDANT_SUBMIT_GUARDS:
+        return
+    raw_prior = (stock or {}).get(
+        "opening_rotation_redundant_submit_guard_bypasses", []
+    )
+    if isinstance(raw_prior, str):
+        raw_prior = raw_prior.split(",")
+    elif not isinstance(raw_prior, (list, tuple, set)):
+        raw_prior = []
+    prior = [str(value).strip() for value in raw_prior if str(value).strip()]
+    if normalized_guard in prior:
+        return
+    prior.append(normalized_guard)
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "opening_rotation_redundant_submit_guard_bypasses": prior,
+            "opening_rotation_redundant_submit_guard_bypass_count": len(prior),
+        },
+    )
+    provenance_fields = _opening_rotation_provenance_fields(stock)
+    _log_entry_pipeline(
+        stock,
+        code,
+        "opening_rotation_redundant_submit_guard_bypassed",
+        opening_rotation_redundant_submit_guard=normalized_guard,
+        opening_rotation_redundant_submit_guard_would_block=True,
+        opening_rotation_redundant_submit_guard_class=(
+            "generic_alpha_or_legacy_context_duplicate"
+        ),
+        opening_rotation_preserved_submit_guards=(
+            "exit_authority,cooldown,position_or_pending_order,upper_limit,"
+            "buy_pause,latency_stale_conflict,observed_mark_gap,"
+            "caution_stale_negative_micro,opening_quote_tick_1s_freshness,"
+            "final_price_drift,pre_submit_price,lower_upper_limit_live,"
+            "account_order_quantity,margin_exact_price,scanner_generation,"
+            "greenfield_authority,broker_submit"
+        ),
+        metric_role="funnel_count",
+        decision_authority=(
+            "opening_rotation_mechanical_entry_owner_duplicate_alpha_filter"
+        ),
+        window_policy="same_promotion_episode_qualification_to_broker_submit",
+        sample_floor="one_opening_rotation_qualified_episode",
+        primary_decision_metric=(
+            "opening_rotation_redundant_submit_guard_bypass_count"
+        ),
+        source_quality_gate=(
+            "opening_rotation_fresh_trusted_entry_context_and_final_submit_revalidation"
+        ),
+        runtime_effect=True,
+        allowed_runtime_apply=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        forbidden_uses=(
+            "stale_or_conflict_bypass,price_or_venue_guard_bypass,"
+            "account_order_quantity_cooldown_or_margin_guard_bypass,"
+            "greenfield_or_broker_guard_bypass,hard_safety_relaxation,"
+            "provider_route_change,scale_in,quantity_or_cap_change"
+        ),
+        **provenance_fields,
+        **_without_entry_pipeline_fields(
+            guard_fields if isinstance(guard_fields, dict) else {},
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+            "forbidden_uses",
+            *provenance_fields.keys(),
+        ),
+    )
+
+
 def _opening_rotation_no_pullback_continuation_fields(
     stock: dict | None,
     *,
@@ -51801,6 +51923,11 @@ def _opening_rotation_provenance_fields(stock: dict | None) -> dict[str, Any]:
         or stock.get("opening_rotation_episode_id")
     ):
         return {}
+    bypass_values = stock.get("opening_rotation_redundant_submit_guard_bypasses", [])
+    if isinstance(bypass_values, str):
+        bypass_values = bypass_values.split(",")
+    elif not isinstance(bypass_values, (list, tuple, set)):
+        bypass_values = []
     return {
         "opening_rotation_episode_id": stock.get("opening_rotation_episode_id", "-"),
         "opening_rotation_episode_promotion_id": stock.get(
@@ -51842,11 +51969,18 @@ def _opening_rotation_provenance_fields(stock: dict | None) -> dict[str, Any]:
             stock.get("opening_rotation_margin_cash_guard_bypassed", False)
         ),
         "opening_rotation_margin_order_api": stock.get(
-            "opening_rotation_margin_order_api", "kt10000"
+            "opening_rotation_margin_order_api"
         ),
-        "opening_rotation_margin_credit_order_api_used": bool(
-            stock.get("opening_rotation_margin_credit_order_api_used", False)
+        "opening_rotation_margin_credit_order_api_used": stock.get(
+            "opening_rotation_margin_credit_order_api_used"
         ),
+        "opening_rotation_redundant_submit_guard_bypass_count": _safe_int(
+            stock.get("opening_rotation_redundant_submit_guard_bypass_count"), 0
+        ),
+        "opening_rotation_redundant_submit_guard_bypasses": ",".join(
+            str(value).strip() for value in bypass_values if str(value).strip()
+        )
+        or "-",
     }
 
 
@@ -52872,6 +53006,8 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 "opening_rotation_policy_schema_version": (
                     active_runtime_policy.schema_version
                 ),
+                "opening_rotation_redundant_submit_guard_bypasses": [],
+                "opening_rotation_redundant_submit_guard_bypass_count": 0,
             },
             pop_fields=[
                 "opening_rotation_margin_one_share_authorized",
@@ -58998,7 +59134,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             initial_formula_version=initial_formula_version,
         )
         sizing_decision = resolve_scalping_allocation(sizing_context)
-        if opening_rotation_active and sizing_decision.effective_qty > 1:
+        if opening_rotation_active:
+            # Keep the one-share contract inside the central allocator itself,
+            # including later final-price recalculations with a larger margin
+            # capacity.  The order planner must not be the first quantity cap.
             sizing_context = dataclass_replace(sizing_context, stage_qty_cap=1)
             sizing_decision = resolve_scalping_allocation(sizing_context)
         sizing_fields = _store_scalping_sizing_decision(
@@ -60283,7 +60422,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         orderbook_fields=entry_orderbook_micro_fields,
         microstructure_fields=microstructure_submit_log_fields,
     )
-    if pre_submit_micro_unavailable_guard.get("blocked"):
+    pre_submit_micro_guard_enforced = _opening_rotation_submit_guard_enforced(
+        opening_rotation_active=opening_rotation_active,
+        guard_name="pre_submit_micro_context_availability",
+    )
+    if (
+        pre_submit_micro_unavailable_guard.get("blocked")
+        and pre_submit_micro_guard_enforced
+    ):
         retry_micro_fields = _refresh_pre_submit_micro_context_before_block(
             stock=stock,
             code=code,
@@ -60301,7 +60447,22 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             microstructure_fields=microstructure_submit_log_fields,
         )
         pre_submit_micro_unavailable_guard.update(retry_micro_fields)
-    if pre_submit_micro_unavailable_guard.get("blocked"):
+    if (
+        pre_submit_micro_unavailable_guard.get("blocked")
+        and not pre_submit_micro_guard_enforced
+    ):
+        _record_opening_rotation_redundant_submit_guard_bypass(
+            stock,
+            code,
+            guard_name="pre_submit_micro_context_availability",
+            guard_fields=_merge_entry_pipeline_field_groups(
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                pre_submit_micro_unavailable_guard,
+            ),
+        )
+    elif pre_submit_micro_unavailable_guard.get("blocked"):
         pre_submit_micro_backoff_fields = _record_rising_missed_submit_safety_backoff(
             stock,
             code,
@@ -61683,7 +61844,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             now_ts=now_ts,
         )
     )
-    if krx_direct_canary_ai_wait_block.get("blocked"):
+    if krx_direct_canary_ai_wait_block.get(
+        "blocked"
+    ) and not _opening_rotation_submit_guard_enforced(
+        opening_rotation_active=opening_rotation_active,
+        guard_name="krx_direct_canary_live_ai_wait",
+    ):
+        _record_opening_rotation_redundant_submit_guard_bypass(
+            stock,
+            code,
+            guard_name="krx_direct_canary_live_ai_wait",
+            guard_fields=_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                entry_ai_submit_authority,
+                krx_direct_canary_ai_wait_block,
+            ),
+        )
+    elif krx_direct_canary_ai_wait_block.get("blocked"):
         backoff_fields = _record_rising_missed_submit_safety_backoff(
             stock,
             code,
@@ -61847,10 +62027,28 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
 
     greenfield_active = greenfield_authority_active()
 
-    if (
+    liquidity_guard_would_block = bool(
         strategy == "SCALPING"
         and real_pre_submit_guard_verdicts.get("liquidity_guard_action") == "BLOCK"
+    )
+    if liquidity_guard_would_block and not _opening_rotation_submit_guard_enforced(
+        opening_rotation_active=opening_rotation_active,
+        guard_name="pre_submit_liquidity",
     ):
+        _record_opening_rotation_redundant_submit_guard_bypass(
+            stock,
+            code,
+            guard_name="pre_submit_liquidity",
+            guard_fields=_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                pre_ai_gate_submit_log_fields,
+            ),
+        )
+    elif liquidity_guard_would_block:
         min_liquidity = _safe_int(
             real_pre_submit_guard_verdicts.get("min_liquidity"),
             _rule_int("MIN_SCALP_LIQUIDITY", 500_000_000),
@@ -61963,10 +62161,28 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             return False
 
-    if (
+    overbought_guard_would_block = bool(
         strategy == "SCALPING"
         and real_pre_submit_guard_verdicts.get("overbought_guard_action") == "BLOCK"
+    )
+    if overbought_guard_would_block and not _opening_rotation_submit_guard_enforced(
+        opening_rotation_active=opening_rotation_active,
+        guard_name="pre_submit_overbought_pullback",
     ):
+        _record_opening_rotation_redundant_submit_guard_bypass(
+            stock,
+            code,
+            guard_name="pre_submit_overbought_pullback",
+            guard_fields=_merge_entry_pipeline_field_groups(
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                pre_ai_gate_submit_log_fields,
+            ),
+        )
+    elif overbought_guard_would_block:
         overbought_context = (
             scalp_pre_ai_gate_context.get("overbought")
             if isinstance(scalp_pre_ai_gate_context.get("overbought"), dict)
@@ -62059,7 +62275,27 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         orderbook_fields=entry_orderbook_micro_fields,
         microstructure_fields=microstructure_submit_log_fields,
     )
-    if weak_pullback_block_verdict.get("blocked"):
+    if weak_pullback_block_verdict.get(
+        "blocked"
+    ) and not _opening_rotation_submit_guard_enforced(
+        opening_rotation_active=opening_rotation_active,
+        guard_name="real_weak_pullback",
+    ):
+        _record_opening_rotation_redundant_submit_guard_bypass(
+            stock,
+            code,
+            guard_name="real_weak_pullback",
+            guard_fields=_merge_entry_pipeline_field_groups(
+                pre_ai_gate_submit_log_fields,
+                real_pre_submit_guard_fields,
+                submit_revalidation_fields,
+                latency_price_snapshot,
+                entry_orderbook_micro_fields,
+                microstructure_submit_log_fields,
+                weak_pullback_block_verdict,
+            ),
+        )
+    elif weak_pullback_block_verdict.get("blocked"):
         log_info(
             f"[REAL_WEAK_PULLBACK_ENTRY_BLOCK] {stock.get('name')}({code}) "
             f"reason={weak_pullback_block_verdict.get('reason')} "
@@ -62161,6 +62397,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     opening_margin_pre_submit_price,
                     _rule_float("MAX_POSITION_PCT", 0.20),
                 ),
+                stage_qty_cap=1,
             )
         elif prior_margin_authorized and sizing_context is not None:
             # A prior margin snapshot cannot authorize submission after the
@@ -62970,7 +63207,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             microstructure_fields=microstructure_submit_log_fields,
             orderbook_fields=entry_orderbook_micro_fields,
         )
-        if weak_context_guard.get("blocked"):
+        if weak_context_guard.get(
+            "blocked"
+        ) and not _opening_rotation_submit_guard_enforced(
+            opening_rotation_active=opening_rotation_active,
+            guard_name="weak_context_late_entry",
+        ):
+            _record_opening_rotation_redundant_submit_guard_bypass(
+                stock,
+                code,
+                guard_name="weak_context_late_entry",
+                guard_fields=_merge_entry_pipeline_field_groups(
+                    real_pre_submit_guard_fields,
+                    price_snapshot,
+                    late_drift_guard.get("fields") or {},
+                    weak_context_guard.get("fields") or {},
+                    microstructure_submit_log_fields,
+                ),
+            )
+        elif weak_context_guard.get("blocked"):
             _log_entry_pipeline(
                 stock,
                 code,
@@ -76546,7 +76801,7 @@ def handle_holding_state(
         elif _ra_elapsed >= _ra_eval_sec:
             _mutate_stock_state(stock, set_fields={"reversal_add_state": ""})
 
-    if trailing_stop_price > 0 and curr_p <= trailing_stop_price:
+    if not is_sell_signal and trailing_stop_price > 0 and curr_p <= trailing_stop_price:
         if _protect_trailing_break_confirmed(
             stock,
             code,

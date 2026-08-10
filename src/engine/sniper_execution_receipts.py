@@ -253,8 +253,10 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "opening_rotation_margin_one_share_authorized",
     "opening_rotation_margin_orderable_amount",
     "opening_rotation_margin_orderable_qty_cap",
+    "opening_rotation_margin_order_api",
     "opening_rotation_margin_rate",
     "opening_rotation_margin_requested_unit_price",
+    "opening_rotation_margin_credit_order_api_used",
     "opening_rotation_profile_id",
     "opening_rotation_policy_hash",
     "opening_rotation_policy_schema_version",
@@ -314,8 +316,10 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "opening_rotation_margin_one_share_authorized",
     "opening_rotation_margin_orderable_amount",
     "opening_rotation_margin_orderable_qty_cap",
+    "opening_rotation_margin_order_api",
     "opening_rotation_margin_rate",
     "opening_rotation_margin_requested_unit_price",
+    "opening_rotation_margin_credit_order_api_used",
     "opening_rotation_profile_id",
     "opening_rotation_policy_hash",
     "opening_rotation_policy_schema_version",
@@ -2463,6 +2467,12 @@ def _submit_opening_rotation_profit_order(
         opening_rotation_margin_cash_guard_bypassed=bool(
             target_stock.get("opening_rotation_margin_cash_guard_bypassed", False)
         ),
+        opening_rotation_margin_order_api=target_stock.get(
+            "opening_rotation_margin_order_api"
+        ),
+        opening_rotation_margin_credit_order_api_used=target_stock.get(
+            "opening_rotation_margin_credit_order_api_used"
+        ),
         buy_fill_price=buy_fill_price,
         target_price=target_price,
         qty=1,
@@ -3121,6 +3131,12 @@ def _update_db_for_sell(
                     receipt_snapshot.get(
                         "opening_rotation_margin_cash_guard_bypassed", False
                     )
+                ),
+                opening_rotation_margin_order_api=receipt_snapshot.get(
+                    "opening_rotation_margin_order_api"
+                ),
+                opening_rotation_margin_credit_order_api_used=receipt_snapshot.get(
+                    "opening_rotation_margin_credit_order_api_used"
                 ),
                 mae_pct=receipt_snapshot.get("mae_pct", "-"),
                 mfe_pct=receipt_snapshot.get("mfe_pct", "-"),
@@ -3996,6 +4012,12 @@ def _handle_entry_buy_execution(
         ),
         opening_rotation_margin_cash_guard_bypassed=bool(
             target_stock.get("opening_rotation_margin_cash_guard_bypassed", False)
+        ),
+        opening_rotation_margin_order_api=target_stock.get(
+            "opening_rotation_margin_order_api"
+        ),
+        opening_rotation_margin_credit_order_api_used=target_stock.get(
+            "opening_rotation_margin_credit_order_api_used"
         ),
         buy_price=f"{float(new_avg or 0):.2f}",
         buy_qty=int(new_qty or 0),

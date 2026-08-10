@@ -256,6 +256,35 @@ def _merge_episode(
     episode.setdefault("date", target_date)
     episode.setdefault("stages", [])
     episode["stages"].append(stage)
+    margin_authorized_event = _truthy(
+        fields.get("opening_rotation_margin_one_share_authorized")
+    )
+    if margin_authorized_event:
+        episode["margin_one_share_authorized_seen"] = True
+    margin_order_api = str(
+        fields.get("opening_rotation_margin_order_api") or ""
+    ).strip()
+    if margin_authorized_event and not margin_order_api:
+        episode["margin_order_api_missing_seen"] = True
+    if margin_order_api and margin_order_api != "kt10000":
+        episode["margin_non_kt10000_order_api_seen"] = True
+    if margin_authorized_event and (
+        "opening_rotation_margin_credit_order_api_used" not in fields
+        or fields.get("opening_rotation_margin_credit_order_api_used")
+        in (None, "", "-")
+    ):
+        episode["margin_credit_order_api_used_missing_seen"] = True
+    if _truthy(fields.get("opening_rotation_margin_credit_order_api_used")):
+        episode["margin_credit_order_api_used_seen"] = True
+    if stage == "opening_rotation_redundant_submit_guard_bypassed":
+        guard_name = str(
+            fields.get("opening_rotation_redundant_submit_guard") or "unknown"
+        ).strip()
+        guard_counts = episode.setdefault("redundant_submit_guard_bypass_counts", {})
+        guard_counts[guard_name] = _safe_int(guard_counts.get(guard_name), 0) + 1
+        episode["redundant_submit_guard_bypass_count"] = sum(
+            _safe_int(value, 0) for value in guard_counts.values()
+        )
     identity_targets = {
         "promotion_id",
         "profile_id",
@@ -303,6 +332,11 @@ def _merge_episode(
         (
             "opening_rotation_margin_cash_guard_bypassed",
             "margin_cash_guard_bypassed",
+        ),
+        ("opening_rotation_margin_order_api", "margin_order_api"),
+        (
+            "opening_rotation_margin_credit_order_api_used",
+            "margin_credit_order_api_used",
         ),
         ("opening_rotation_profit_target_price", "target_price"),
         ("buy_price", "buy_price"),
@@ -759,12 +793,29 @@ def build_postclose_report(
         )
         for row in episodes.values()
     )
+    margin_order_contract_violations = [
+        row
+        for row in strict_episodes
+        if bool(row.get("margin_one_share_authorized_seen"))
+        and (
+            bool(row.get("margin_order_api_missing_seen"))
+            or bool(row.get("margin_credit_order_api_used_missing_seen"))
+            or bool(row.get("margin_non_kt10000_order_api_seen"))
+            or bool(row.get("margin_credit_order_api_used_seen"))
+        )
+    ]
     complete = [
         row
         for row in strict_episodes
         if row.get("completed") and _safe_float(row.get("profit_rate")) is not None
     ]
     source_quality = _source_quality(relevant_dates, root=source_quality_dir)
+    source_quality["margin_order_contract_violation_count"] = len(
+        margin_order_contract_violations
+    )
+    if margin_order_contract_violations:
+        source_quality["status"] = "blocked"
+        source_quality["tuning_input_allowed"] = False
     source_quality_pass = bool(source_quality["tuning_input_allowed"])
     active_policy = _latest_policy_before(
         target_date, root=runtime_root, inclusive=True
@@ -789,6 +840,26 @@ def build_postclose_report(
         for row in holding_ai_rows
         if _safe_float(row.get("holding_ai_counterfactual_delta_pct")) is not None
     ]
+    duplicate_guard_bypass_episodes = [
+        row
+        for row in strict_episodes
+        if _safe_int(row.get("redundant_submit_guard_bypass_count"), 0) > 0
+    ]
+    duplicate_guard_bypass_complete = [
+        row
+        for row in complete
+        if _safe_int(row.get("redundant_submit_guard_bypass_count"), 0) > 0
+    ]
+    duplicate_guard_bypass_counts = Counter()
+    for row in duplicate_guard_bypass_episodes:
+        duplicate_guard_bypass_counts.update(
+            {
+                str(guard_name): _safe_int(count, 0)
+                for guard_name, count in (
+                    row.get("redundant_submit_guard_bypass_counts") or {}
+                ).items()
+            }
+        )
     completed_by_day_bin = {
         label: [
             row
@@ -965,7 +1036,7 @@ def build_postclose_report(
                 bool(row.get("buy_filled")) for row in strict_episodes
             ),
             "margin_authorized_episode_count": sum(
-                _truthy(row.get("margin_one_share_authorized"))
+                bool(row.get("margin_one_share_authorized_seen"))
                 for row in strict_episodes
             ),
             "margin_cash_guard_bypassed_episode_count": sum(
@@ -978,6 +1049,20 @@ def build_postclose_report(
                     for row in strict_episodes
                     if row.get("margin_rate") not in (None, "", "-", 0, "0")
                 ).most_common()
+            ),
+            "margin_order_api_counts": dict(
+                Counter(
+                    str(row.get("margin_order_api") or "missing")
+                    for row in strict_episodes
+                    if _truthy(row.get("margin_one_share_authorized"))
+                ).most_common()
+            ),
+            "margin_credit_order_api_used_episode_count": sum(
+                bool(row.get("margin_credit_order_api_used_seen"))
+                for row in strict_episodes
+            ),
+            "margin_order_contract_violation_count": len(
+                margin_order_contract_violations
             ),
             "best_bid_fill_within_10s_count": sum(
                 (_safe_float(row.get("buy_submit_to_fill_ms"), 10001.0) or 10001.0)
@@ -1019,6 +1104,41 @@ def build_postclose_report(
                 round(fmean(fill_slippage_bps), 6) if fill_slippage_bps else None
             ),
             "wait_drop_reason_counts": dict(funnel_reasons.most_common()),
+            "duplicate_submit_guard_bypass_episode_count": len(
+                duplicate_guard_bypass_episodes
+            ),
+            "duplicate_submit_guard_bypass_filled_episode_count": sum(
+                bool(row.get("buy_filled")) for row in duplicate_guard_bypass_episodes
+            ),
+            "duplicate_submit_guard_bypass_complete_episode_count": len(
+                duplicate_guard_bypass_complete
+            ),
+            "duplicate_submit_guard_bypass_counts": dict(
+                duplicate_guard_bypass_counts.most_common()
+            ),
+        },
+        "downstream_guard_overlap": {
+            "status": (
+                "duplicate_alpha_guard_bypass_outcomes_available"
+                if duplicate_guard_bypass_complete
+                else "waiting_for_complete_duplicate_guard_bypass_episode"
+            ),
+            "entry_owner": "opening_rotation_mechanical_entry_owner",
+            "bypassed_guard_class": "generic_alpha_or_legacy_context_duplicate",
+            "preserved_guard_class": (
+                "stale_conflict_price_venue_account_order_quantity_cooldown_margin_"
+                "greenfield_broker_and_hard_safety"
+            ),
+            "performance": _performance(
+                duplicate_guard_bypass_complete,
+                source_quality_pass=source_quality_pass,
+            ),
+            "runtime_effect": False,
+            "decision_authority": "postclose_attribution_only",
+            "forbidden_uses": (
+                "additional_guard_bypass|hard_safety_relaxation|intraday_mutation|"
+                "scale_in|quantity_or_cap_change|provider_or_bot_change"
+            ),
         },
         "day_change_distribution": {
             **{label: int(day_bins.get(label, 0)) for label in DAY_CHANGE_BIN_LABELS},
@@ -1172,6 +1292,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
             f"- Source quality: `{report['source_quality']['status']}`",
             f"- Promotions / strict episodes / complete: {funnel['unique_scanner_promotion_count']} / {funnel['strict_episode_count']} / {funnel['complete_episode_count']}",
             f"- Margin authorized / cash-guard bypassed episodes: {funnel['margin_authorized_episode_count']} / {funnel['margin_cash_guard_bypassed_episode_count']}",
+            f"- Duplicate submit-alpha bypassed / filled / complete episodes: {funnel['duplicate_submit_guard_bypass_episode_count']} / {funnel['duplicate_submit_guard_bypass_filled_episode_count']} / {funnel['duplicate_submit_guard_bypass_complete_episode_count']}",
             f"- Source-quality-adjusted EV: `{performance['source_quality_adjusted_ev_pct']}`",
             f"- Selected axis: `{selected.get('axis', '-')}` → `{selected.get('value', '-')}`",
             f"- Rollback: `{report['rollback']['triggered']}`",
