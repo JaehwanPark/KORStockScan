@@ -4487,6 +4487,9 @@ def test_smoothing_source_only_journal_builds_exact_horizon_ev_without_live_auth
     assert journal["runtime_effect"] is False
     assert journal["allowed_runtime_apply"] is False
     assert journal["horizons"]["90"]["source_quality_adjusted_ev_pct"] == 0.9
+    assert journal["horizons"]["90"]["exact_observed_ev_pct"] == 0.9
+    assert journal["horizons"]["90"]["guarded_terminal_ev_pct"] is None
+    assert journal["horizons"]["90"]["downside_p10_opportunity_ev_pct"] == 0.9
 
     daily = report_mod.build_daily_threshold_cycle_report(
         "2026-08-10",
@@ -4509,6 +4512,149 @@ def test_smoothing_source_only_journal_builds_exact_horizon_ev_without_live_auth
     ]["source_only_path_journal"]
     assert daily_journal["rows"] == rolling_journal["rows"]
     assert rolling_journal["horizons"]["90"]["source_quality_adjusted_ev_pct"] == 0.9
+    rolling_decision = cumulative["smoothing_source_only_rolling_decision"]
+    assert rolling_decision["runtime_effect"] is False
+    assert rolling_decision["allowed_runtime_apply"] is False
+    assert (
+        rolling_decision["families"]["soft_stop_whipsaw_confirmation"]["decision"]
+        == "source_quality_blocked"
+    )
+    assert "Smoothing Source-Only Rolling Decision" in (
+        report_mod.render_cumulative_threshold_cycle_markdown(cumulative)
+    )
+
+
+def test_smoothing_rolling_decision_opens_review_only_after_all_windows_pass():
+    def journal(sample_floor: int, ev: float) -> dict:
+        return {
+            "schema": "smoothing_source_only_path_journal_v3",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "eligible_for_live_review": False,
+            "exact_complete_path_count": sample_floor,
+            "exclusion_reason_counts": {},
+            "observation_phase_summary": {},
+            "horizons": {
+                "90": {
+                    "source_quality_adjusted_ev_pct": ev,
+                    "downside_p10_opportunity_ev_pct": -0.4,
+                    "guarded_terminal_count": 2,
+                    "guarded_terminal_rate": 0.1,
+                    "guarded_terminal_ev_pct": -0.2,
+                }
+            },
+        }
+
+    snapshots = {
+        window: {
+            "soft_stop_whipsaw_confirmation": {
+                "source_only_path_journal": journal(10, 0.2)
+            },
+            "holding_flow_ofi_smoothing": {
+                "source_only_path_journal": journal(20, 0.1)
+            },
+        }
+        for window in ("rolling_5d", "rolling_10d", "rolling_20d")
+    }
+
+    decision = report_mod._build_smoothing_source_only_rolling_decision(snapshots)
+
+    assert decision["eligible_for_live_review"] is False
+    assert decision["runtime_effect"] is False
+    assert all(
+        item["decision"] == "source_only_bounded_review_ready"
+        for item in decision["families"].values()
+    )
+    assert all(
+        item["next_action"] == "review_one_same_stage_bounded_canary_candidate"
+        for item in decision["families"].values()
+    )
+    assert all(
+        item["all_risk_evidence_ready"] is True and item["risk_review_required"] is True
+        for item in decision["families"].values()
+    )
+
+
+def test_smoothing_rolling_decision_holds_conflicting_positive_direction():
+    def journal(ev: float) -> dict:
+        return {
+            "schema": "smoothing_source_only_path_journal_v3",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "eligible_for_live_review": False,
+            "exact_complete_path_count": 20,
+            "exclusion_reason_counts": {},
+            "observation_phase_summary": {},
+            "horizons": {
+                "90": {
+                    "source_quality_adjusted_ev_pct": ev,
+                    "downside_p10_opportunity_ev_pct": -0.6,
+                    "guarded_terminal_count": 1,
+                    "guarded_terminal_rate": 0.05,
+                    "guarded_terminal_ev_pct": -0.3,
+                }
+            },
+        }
+
+    snapshots = {
+        window: {
+            "soft_stop_whipsaw_confirmation": {"source_only_path_journal": journal(ev)},
+            "holding_flow_ofi_smoothing": {"source_only_path_journal": journal(ev)},
+        }
+        for window, ev in (
+            ("rolling_5d", 0.2),
+            ("rolling_10d", -0.1),
+            ("rolling_20d", 0.05),
+        )
+    }
+
+    decision = report_mod._build_smoothing_source_only_rolling_decision(snapshots)
+
+    assert all(
+        item["decision"] == "hold_direction_conflict"
+        for item in decision["families"].values()
+    )
+
+
+def test_smoothing_rolling_decision_holds_when_downside_evidence_is_missing():
+    journal = {
+        "schema": "smoothing_source_only_path_journal_v3",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "eligible_for_live_review": False,
+        "exact_complete_path_count": 20,
+        "exclusion_reason_counts": {},
+        "observation_phase_summary": {},
+        "horizons": {
+            "90": {
+                "source_quality_adjusted_ev_pct": 0.2,
+                "downside_p10_opportunity_ev_pct": None,
+                "guarded_terminal_count": 0,
+                "guarded_terminal_rate": None,
+                "guarded_terminal_ev_pct": None,
+            }
+        },
+    }
+    snapshots = {
+        window: {
+            "soft_stop_whipsaw_confirmation": {"source_only_path_journal": journal},
+            "holding_flow_ofi_smoothing": {"source_only_path_journal": journal},
+        }
+        for window in ("rolling_5d", "rolling_10d", "rolling_20d")
+    }
+
+    decision = report_mod._build_smoothing_source_only_rolling_decision(snapshots)
+
+    assert all(
+        item["decision"] == "hold_outcome" and item["all_risk_evidence_ready"] is False
+        for item in decision["families"].values()
+    )
 
 
 def test_smoothing_source_only_journal_separates_emergency_and_missing_horizons():
@@ -4568,6 +4714,8 @@ def test_smoothing_source_only_journal_separates_emergency_and_missing_horizons(
     assert journal["guarded_terminal_reason_counts"] == {"emergency_breach": 1}
     assert journal["horizons"]["90"]["guarded_terminal_count"] == 1
     assert journal["horizons"]["90"]["source_quality_adjusted_ev_pct"] == 1.6
+    assert journal["horizons"]["90"]["guarded_terminal_ev_pct"] == 1.6
+    assert journal["horizons"]["90"]["guarded_terminal_rate"] == 1.0
 
 
 def test_smoothing_source_only_soft_stop_counts_guarded_downside_in_ev():

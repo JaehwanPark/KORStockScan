@@ -102,6 +102,17 @@
   - 금지: predecessor 복구 대기 통과만으로 V2.14를 live activation으로 간주하거나 promotion/source-quality/누적 EV/risk guard를 우회하지 않는다.
   - 다음 액션: `recovered_then_evaluated`, `predecessor_timeout`, `promotion_guard_blocked`, `activated_and_preopen_pending`, `runner_failed_needs_fix` 중 하나로 닫는다.
 
+- [x] `[SmoothingRollingDecisionConsumerImplementation0811] exact-path rolling 의사결정 consumer 구현·리뷰` (`Due: 2026-08-11`, `Slot: PREOPEN`, `TimeWindow: 08:20~09:10`, `Track: TuningAutomation`)
+  - Source: [daily/rolling report](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [postclose verifier](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [traceability](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 완료 결과 (`2026-08-11`): `smoothing_source_only_rolling_decision_v1` consumer가 soft-stop 10건·OFI 20건 floor, rolling 5/10/20일 90초 source-quality-adjusted EV, downside p10, guarded-terminal 비율/EV, phase/exclusion을 함께 판정한다. 표본·EV·downside 근거가 모두 완성되고 세 window가 양수일 때만 `source_only_bounded_review_ready`를 내며, 이 상태도 단일 same-stage bounded-canary 설계 검토만 열고 runtime/PREOPEN 권한은 갖지 않는다. verifier는 ready/hold 상태 drift와 권한·metric contract 결손을 fail로 닫는다.
+  - 리뷰/검증: 1차 리뷰에서 downside evidence 미완성 통과, 보수적 오분류 미검출, metric contract 누락, R1/R2 traceability 귀속 오류를 보완했다. 최종 리뷰에서 verifier의 metric contract 누락과 downside readiness 플래그 신뢰를 독립 재계산으로 보완했다. 재리뷰 미해결 finding=`0`; daily/verifier pytest=`294 passed`, smoothing runtime/source-quality integration pytest=`216 passed`, checklist parser pytest=`60 passed`, Ruff/Black/compileall/`git diff --check`=`pass`다. Bot/PID/runtime env와 실주문 상태는 변경하지 않았다.
+
+- [ ] `[SmoothingRollingDecisionConsumer0812] exact-path rolling 의사결정 consumer 최초 검증` (`Due: 2026-08-12`, `Slot: POSTCLOSE`, `TimeWindow: 21:00~21:20`, `Track: TuningAutomation`)
+  - Source: [daily/rolling report](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [postclose verifier](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py), [threshold_cycle_cumulative_2026-08-11.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_2026-08-11.json)
+  - 판정 기준: `smoothing_source_only_path_journal_v3`와 `smoothing_source_only_rolling_decision_v1`이 soft-stop 10건·OFI 20건 floor, rolling 5/10/20일 90초 source-quality-adjusted EV, downside p10, guarded-terminal 비율/EV, holding/revive/non-revive phase와 exclusion을 함께 보존하는지 확인한다. 세 rolling window가 모두 양수이면 `source_only_bounded_review_ready`, 일부만 양수이면 `hold_direction_conflict`, 전부 비양수이면 `hold_no_edge`, 표본 미달이면 `hold_sample`로 닫는다.
+  - 금지: source-only decision을 standalone live promotion, PREOPEN env mutation, hard/protect/emergency 우회, provider/bot/cap/quantity 변경 근거로 사용하지 않는다. `source_only_bounded_review_ready`는 동일 holding/exit stage 단일 bounded-canary 설계 검토만 열 수 있다.
+  - 다음 액션: `source_quality_blocked`, `hold_sample`, `hold_outcome`, `hold_direction_conflict`, `hold_no_edge`, `source_only_bounded_review_ready` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 

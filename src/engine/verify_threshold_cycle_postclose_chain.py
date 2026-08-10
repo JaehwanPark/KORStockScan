@@ -818,6 +818,181 @@ def _smoothing_source_only_path_journal_contract_status(
         }
         issues.extend(family_issues)
 
+    rolling_decision = cumulative_report.get("smoothing_source_only_rolling_decision")
+    rolling_decision_required = str(cumulative_report.get("date") or "") >= (
+        "2026-08-11"
+    )
+    if isinstance(rolling_decision, dict):
+        if rolling_decision.get("schema") != (
+            "smoothing_source_only_rolling_decision_v1"
+        ):
+            issues.append("smoothing_rolling_decision_schema_invalid")
+        for key, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+            ("broker_order_forbidden", True),
+            ("eligible_for_live_review", False),
+        ):
+            if rolling_decision.get(key) is not expected:
+                issues.append(f"smoothing_rolling_decision_{key}_invalid")
+        if rolling_decision.get("primary_decision_metric") != (
+            "source_quality_adjusted_ev_pct"
+        ):
+            issues.append("smoothing_rolling_decision_primary_metric_invalid")
+        for key, expected in (
+            ("metric_role", "sim_probe_ev"),
+            (
+                "decision_authority",
+                "source_only_rolling_review_no_runtime_change",
+            ),
+            (
+                "window_policy",
+                "rolling_5d_10d_20d_primary_90s_with_guarded_downside",
+            ),
+            (
+                "forbidden_uses",
+                "standalone_live_promotion|hard_or_emergency_bypass|"
+                "threshold_apply|provider_route_change|quantity_or_cap_change|"
+                "bot_restart",
+            ),
+        ):
+            if rolling_decision.get(key) != expected:
+                issues.append(f"smoothing_rolling_decision_{key}_invalid")
+        if rolling_decision.get("sample_floor") != families:
+            issues.append("smoothing_rolling_decision_sample_floor_contract_invalid")
+        if not str(rolling_decision.get("source_quality_gate") or "").strip():
+            issues.append("smoothing_rolling_decision_source_quality_gate_missing")
+        rolling_families = (
+            rolling_decision.get("families")
+            if isinstance(rolling_decision.get("families"), dict)
+            else {}
+        )
+        valid_decisions = {
+            "source_quality_blocked",
+            "hold_sample",
+            "hold_outcome",
+            "source_only_bounded_review_ready",
+            "hold_direction_conflict",
+            "hold_no_edge",
+        }
+        for family, sample_floor in families.items():
+            family_decision = rolling_families.get(family)
+            if not isinstance(family_decision, dict):
+                issues.append(f"{family}_rolling_decision_missing")
+                continue
+            decision = str(family_decision.get("decision") or "")
+            if decision not in valid_decisions:
+                issues.append(f"{family}_rolling_decision_invalid")
+            if _safe_int(family_decision.get("sample_floor"), 0) != sample_floor:
+                issues.append(f"{family}_rolling_decision_sample_floor_invalid")
+            window_evidence = (
+                family_decision.get("window_evidence")
+                if isinstance(family_decision.get("window_evidence"), dict)
+                else {}
+            )
+            required_decision_windows = {
+                "rolling_5d",
+                "rolling_10d",
+                "rolling_20d",
+            }
+            if set(window_evidence) != required_decision_windows:
+                issues.append(f"{family}_rolling_decision_windows_invalid")
+            ready_windows = 0
+            primary_ev_windows = 0
+            positive_ev_windows = 0
+            risk_ready_windows = 0
+            for window in required_decision_windows:
+                evidence = window_evidence.get(window)
+                if not isinstance(evidence, dict):
+                    continue
+                if evidence.get("sample_floor_met") is True and (
+                    _safe_int(evidence.get("exact_complete_path_count"), 0)
+                    >= sample_floor
+                ):
+                    ready_windows += 1
+                primary_ev = _safe_float(evidence.get("primary_90s_ev_pct"), None)
+                if primary_ev is not None:
+                    primary_ev_windows += 1
+                if primary_ev is not None and primary_ev > 0.0:
+                    positive_ev_windows += 1
+                downside_p10 = _safe_float(
+                    evidence.get("primary_90s_downside_p10_ev_pct"), None
+                )
+                guarded_terminal_count = _safe_int(
+                    evidence.get("primary_90s_guarded_terminal_count"), -1
+                )
+                guarded_terminal_rate = _safe_float(
+                    evidence.get("primary_90s_guarded_terminal_rate"), None
+                )
+                guarded_terminal_ev = _safe_float(
+                    evidence.get("primary_90s_guarded_terminal_ev_pct"), None
+                )
+                calculated_risk_ready = downside_p10 is not None and (
+                    guarded_terminal_count == 0
+                    or (
+                        guarded_terminal_count is not None
+                        and guarded_terminal_count > 0
+                        and guarded_terminal_rate is not None
+                        and 0.0 <= guarded_terminal_rate <= 1.0
+                        and guarded_terminal_ev is not None
+                    )
+                )
+                if calculated_risk_ready:
+                    risk_ready_windows += 1
+                if evidence.get("risk_evidence_ready") is not calculated_risk_ready:
+                    issues.append(
+                        f"{family}_{window}_rolling_decision_risk_evidence_state_drift"
+                    )
+                for key in (
+                    "primary_90s_downside_p10_ev_pct",
+                    "primary_90s_guarded_terminal_count",
+                    "primary_90s_guarded_terminal_rate",
+                    "primary_90s_guarded_terminal_ev_pct",
+                    "risk_evidence_ready",
+                    "exclusion_reason_counts",
+                    "observation_phase_summary",
+                ):
+                    if (
+                        evidence.get("status") != "journal_missing"
+                        and key not in evidence
+                    ):
+                        issues.append(
+                            f"{family}_{window}_rolling_decision_{key}_missing"
+                        )
+            window_count = len(required_decision_windows)
+            if family_decision.get("contract_gaps"):
+                expected_decision = "source_quality_blocked"
+            elif ready_windows != window_count:
+                expected_decision = "hold_sample"
+            elif (
+                primary_ev_windows != window_count or risk_ready_windows != window_count
+            ):
+                expected_decision = "hold_outcome"
+            elif positive_ev_windows == window_count:
+                expected_decision = "source_only_bounded_review_ready"
+            elif positive_ev_windows > 0:
+                expected_decision = "hold_direction_conflict"
+            else:
+                expected_decision = "hold_no_edge"
+            if decision != expected_decision:
+                issues.append(f"{family}_rolling_decision_state_drift")
+            if (
+                family_decision.get("all_samples_ready")
+                is not (ready_windows == window_count)
+                or family_decision.get("all_primary_ev_present")
+                is not (primary_ev_windows == window_count)
+                or family_decision.get("all_risk_evidence_ready")
+                is not (risk_ready_windows == window_count)
+                or _safe_int(
+                    family_decision.get("positive_primary_ev_window_count"), -1
+                )
+                != positive_ev_windows
+            ):
+                issues.append(f"{family}_rolling_decision_summary_drift")
+    elif rolling_decision_required:
+        issues.append("smoothing_source_only_rolling_decision_missing")
+
     if not feature_present:
         if feature_required:
             return {
@@ -837,6 +1012,12 @@ def _smoothing_source_only_path_journal_contract_status(
         "runtime_effect": False,
         "issues": sorted(set(issues)),
         "families": family_status,
+        "rolling_decision_status": (
+            "pass"
+            if isinstance(rolling_decision, dict)
+            and not any("rolling_decision" in issue for issue in issues)
+            else "fail" if rolling_decision_required else "not_applicable"
+        ),
     }
 
 
@@ -5657,7 +5838,6 @@ def build_threshold_cycle_postclose_verification(
 
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
-    threshold_cycle_calibration = _load_json(paths["threshold_cycle_calibration"])
     threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
     threshold_cycle_cumulative = _load_json(paths["threshold_cycle_cumulative"])
     smoothing_source_only_path_journal = (
@@ -7555,6 +7735,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- runtime_apply_gap_issues: `{runtime_gap.get('issues') or []}`",
         f"- smoothing_source_only_path_journal: `{smoothing_journal.get('status') or '-'}`",
         f"- smoothing_source_only_path_journal_issues: `{smoothing_journal.get('issues') or []}`",
+        f"- smoothing_source_only_rolling_decision: `{smoothing_journal.get('rolling_decision_status') or '-'}`",
         "",
         "## Warning Follow-Up Summary",
         f"- status: `{warning_followup.get('status') or '-'}`",

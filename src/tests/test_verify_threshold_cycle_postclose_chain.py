@@ -63,6 +63,61 @@ def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:
     }
 
 
+def _smoothing_rolling_decision() -> dict:
+    return {
+        "schema": "smoothing_source_only_rolling_decision_v1",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "source_only_rolling_review_no_runtime_change",
+        "window_policy": "rolling_5d_10d_20d_primary_90s_with_guarded_downside",
+        "sample_floor": {
+            "soft_stop_whipsaw_confirmation": 10,
+            "holding_flow_ofi_smoothing": 20,
+        },
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "journal_v3_exact_lineage_and_guarded_downside",
+        "forbidden_uses": (
+            "standalone_live_promotion|hard_or_emergency_bypass|threshold_apply|"
+            "provider_route_change|quantity_or_cap_change|bot_restart"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "eligible_for_live_review": False,
+        "families": {
+            family: {
+                "decision": "source_only_bounded_review_ready",
+                "sample_floor": floor,
+                "all_samples_ready": True,
+                "all_primary_ev_present": True,
+                "all_risk_evidence_ready": True,
+                "positive_primary_ev_window_count": 3,
+                "contract_gaps": [],
+                "window_evidence": {
+                    window: {
+                        "status": "ready",
+                        "sample_floor_met": True,
+                        "exact_complete_path_count": floor,
+                        "primary_90s_ev_pct": 0.1,
+                        "primary_90s_downside_p10_ev_pct": -0.2,
+                        "primary_90s_guarded_terminal_count": 1,
+                        "primary_90s_guarded_terminal_rate": 0.1,
+                        "primary_90s_guarded_terminal_ev_pct": -0.1,
+                        "risk_evidence_ready": True,
+                        "exclusion_reason_counts": {},
+                        "observation_phase_summary": {},
+                    }
+                    for window in ("rolling_5d", "rolling_10d", "rolling_20d")
+                },
+            }
+            for family, floor in (
+                ("soft_stop_whipsaw_confirmation", 10),
+                ("holding_flow_ofi_smoothing", 20),
+            )
+        },
+    }
+
+
 def test_smoothing_source_only_path_journal_contract_verifies_daily_rolling_lineage():
     daily_families = {
         "soft_stop_whipsaw_confirmation": {
@@ -179,6 +234,107 @@ def test_smoothing_source_only_path_journal_contract_requires_rollout_artifacts(
 
     assert status["status"] == "fail"
     assert status["issues"] == ["smoothing_source_only_path_journal_missing"]
+
+
+def test_smoothing_source_only_contract_requires_rolling_decision_from_0811():
+    families = {
+        "soft_stop_whipsaw_confirmation": {
+            "source_only_path_journal": _smoothing_journal(10, arm_id="soft:1")
+        },
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+    cumulative = {
+        "date": "2026-08-11",
+        "windows": {
+            "cumulative": ["2026-08-11"],
+            "rolling_5d": ["2026-08-11"],
+        },
+        "threshold_snapshot_by_window": {
+            "cumulative": families,
+            "rolling_5d": families,
+        },
+    }
+
+    status = mod._smoothing_source_only_path_journal_contract_status(
+        {"date": "2026-08-11", "threshold_snapshot": families}, cumulative
+    )
+
+    assert status["status"] == "fail"
+    assert "smoothing_source_only_rolling_decision_missing" in status["issues"]
+
+    cumulative["smoothing_source_only_rolling_decision"] = _smoothing_rolling_decision()
+    status = mod._smoothing_source_only_path_journal_contract_status(
+        {"date": "2026-08-11", "threshold_snapshot": families}, cumulative
+    )
+    assert status["status"] == "pass"
+    assert status["rolling_decision_status"] == "pass"
+
+
+def test_smoothing_rolling_decision_rejects_unready_review_state():
+    decision = _smoothing_rolling_decision()
+    evidence = decision["families"]["holding_flow_ofi_smoothing"]["window_evidence"][
+        "rolling_5d"
+    ]
+    evidence["sample_floor_met"] = False
+    evidence["exact_complete_path_count"] = 19
+    families = {
+        "soft_stop_whipsaw_confirmation": {
+            "source_only_path_journal": _smoothing_journal(10, arm_id="soft:1")
+        },
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+
+    status = mod._smoothing_source_only_path_journal_contract_status(
+        {"date": "2026-08-11", "threshold_snapshot": families},
+        {
+            "date": "2026-08-11",
+            "windows": {"rolling_5d": ["2026-08-11"]},
+            "threshold_snapshot_by_window": {"rolling_5d": families},
+            "smoothing_source_only_rolling_decision": decision,
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert "holding_flow_ofi_smoothing_rolling_decision_state_drift" in status["issues"]
+
+
+def test_smoothing_rolling_decision_recalculates_risk_and_metric_contract():
+    decision = _smoothing_rolling_decision()
+    decision["metric_role"] = "diagnostic_only"
+    evidence = decision["families"]["holding_flow_ofi_smoothing"]["window_evidence"][
+        "rolling_5d"
+    ]
+    evidence["primary_90s_downside_p10_ev_pct"] = None
+    families = {
+        "soft_stop_whipsaw_confirmation": {
+            "source_only_path_journal": _smoothing_journal(10, arm_id="soft:1")
+        },
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+
+    status = mod._smoothing_source_only_path_journal_contract_status(
+        {"date": "2026-08-11", "threshold_snapshot": families},
+        {
+            "date": "2026-08-11",
+            "windows": {"rolling_5d": ["2026-08-11"]},
+            "threshold_snapshot_by_window": {"rolling_5d": families},
+            "smoothing_source_only_rolling_decision": decision,
+        },
+    )
+
+    assert status["status"] == "fail"
+    assert "smoothing_rolling_decision_metric_role_invalid" in status["issues"]
+    assert (
+        "holding_flow_ofi_smoothing_rolling_5d_rolling_decision_"
+        "risk_evidence_state_drift"
+    ) in status["issues"]
+    assert "holding_flow_ofi_smoothing_rolling_decision_state_drift" in status["issues"]
 
 
 def test_artifact_paths_separate_daily_report_from_calibration_payload():
@@ -4861,6 +5017,11 @@ def test_postclose_markdown_surfaces_ldm_and_active_priority_diagnosis():
                     "top_candidate_prefixes": [["{}", 3]],
                 },
             },
+            "smoothing_source_only_path_journal": {
+                "status": "pass",
+                "issues": [],
+                "rolling_decision_status": "pass",
+            },
         }
     )
 
@@ -4870,6 +5031,7 @@ def test_postclose_markdown_surfaces_ldm_and_active_priority_diagnosis():
         "match_absence_diagnosis: `posterior_dimension_leaked_into_priority`"
         in markdown
     )
+    assert "smoothing_source_only_rolling_decision: `pass`" in markdown
 
 
 def test_swing_entry_bottleneck_handoff_fails_when_downstream_missing():

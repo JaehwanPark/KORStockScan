@@ -9392,6 +9392,12 @@ def _build_smoothing_source_only_path_journal(
             row for row in valid if row["status"].startswith("guarded_terminal_")
         ]
         deltas = [float(row["opportunity_ev_delta_pct"]) for row in valid]
+        exact_deltas = [
+            float(row["opportunity_ev_delta_pct"]) for row in exact_observed
+        ]
+        guarded_terminal_deltas = [
+            float(row["opportunity_ev_delta_pct"]) for row in guarded_terminal
+        ]
         horizon_summary[str(horizon)] = {
             "arm_count": len(horizon_rows),
             "exact_observed_count": len(exact_observed),
@@ -9399,6 +9405,20 @@ def _build_smoothing_source_only_path_journal(
             "ev_eligible_count": len(valid),
             "source_quality_adjusted_ev_pct": (
                 round(_avg(deltas) or 0.0, 6) if deltas else None
+            ),
+            "exact_observed_ev_pct": (
+                round(_avg(exact_deltas) or 0.0, 6) if exact_deltas else None
+            ),
+            "guarded_terminal_ev_pct": (
+                round(_avg(guarded_terminal_deltas) or 0.0, 6)
+                if guarded_terminal_deltas
+                else None
+            ),
+            "guarded_terminal_rate": (
+                round(len(guarded_terminal) / len(valid), 6) if valid else None
+            ),
+            "downside_p10_opportunity_ev_pct": (
+                round(_percentile(deltas, 10), 6) if deltas else None
             ),
             "status_counts": dict(Counter(row["status"] for row in horizon_rows)),
         }
@@ -16079,6 +16099,184 @@ def _threshold_snapshot_from_families(
     return snapshot
 
 
+def _build_smoothing_source_only_rolling_decision(
+    family_snapshots: dict[str, dict],
+) -> dict[str, Any]:
+    """Close exact-path evidence into a review decision without runtime authority."""
+
+    family_floors = {
+        "soft_stop_whipsaw_confirmation": 10,
+        "holding_flow_ofi_smoothing": 20,
+    }
+    required_windows = ("rolling_5d", "rolling_10d", "rolling_20d")
+    family_decisions: dict[str, Any] = {}
+    for family, sample_floor in family_floors.items():
+        window_evidence: dict[str, Any] = {}
+        contract_gaps: list[str] = []
+        sample_ready_by_window: list[bool] = []
+        risk_evidence_ready_by_window: list[bool] = []
+        primary_evs: list[float] = []
+        risk_flags: list[str] = []
+        for window in required_windows:
+            snapshot = family_snapshots.get(window)
+            snapshot = snapshot if isinstance(snapshot, dict) else {}
+            family_snapshot = snapshot.get(family)
+            family_snapshot = (
+                family_snapshot if isinstance(family_snapshot, dict) else {}
+            )
+            journal = family_snapshot.get("source_only_path_journal")
+            if not isinstance(journal, dict):
+                contract_gaps.append(f"{window}:journal_missing")
+                window_evidence[window] = {
+                    "status": "journal_missing",
+                    "sample_floor": sample_floor,
+                    "sample_floor_met": False,
+                    "exact_complete_path_count": 0,
+                    "primary_90s_ev_pct": None,
+                }
+                sample_ready_by_window.append(False)
+                risk_evidence_ready_by_window.append(False)
+                continue
+            if journal.get("schema") != "smoothing_source_only_path_journal_v3":
+                contract_gaps.append(f"{window}:schema_invalid")
+            if any(
+                journal.get(key) is not expected
+                for key, expected in (
+                    ("runtime_effect", False),
+                    ("allowed_runtime_apply", False),
+                    ("actual_order_submitted", False),
+                    ("broker_order_forbidden", True),
+                    ("eligible_for_live_review", False),
+                )
+            ):
+                contract_gaps.append(f"{window}:authority_contract_invalid")
+            exact_count = _safe_int(journal.get("exact_complete_path_count"), 0) or 0
+            sample_ready = exact_count >= sample_floor
+            horizons = (
+                journal.get("horizons")
+                if isinstance(journal.get("horizons"), dict)
+                else {}
+            )
+            primary = horizons.get("90")
+            primary = primary if isinstance(primary, dict) else {}
+            primary_ev = _safe_float(
+                primary.get("source_quality_adjusted_ev_pct"), None
+            )
+            downside_p10 = _safe_float(
+                primary.get("downside_p10_opportunity_ev_pct"), None
+            )
+            guarded_terminal_count = (
+                _safe_int(primary.get("guarded_terminal_count"), 0) or 0
+            )
+            guarded_terminal_rate = _safe_float(
+                primary.get("guarded_terminal_rate"), None
+            )
+            guarded_terminal_ev = _safe_float(
+                primary.get("guarded_terminal_ev_pct"), None
+            )
+            risk_evidence_ready = downside_p10 is not None and (
+                guarded_terminal_count == 0
+                or (
+                    guarded_terminal_rate is not None
+                    and guarded_terminal_ev is not None
+                )
+            )
+            if primary_ev is not None:
+                primary_evs.append(primary_ev)
+            sample_ready_by_window.append(sample_ready)
+            risk_evidence_ready_by_window.append(risk_evidence_ready)
+            if downside_p10 is not None and downside_p10 < 0.0:
+                risk_flags.append(f"{window}:negative_downside_p10")
+            if guarded_terminal_ev is not None and guarded_terminal_ev < 0.0:
+                risk_flags.append(f"{window}:negative_guarded_terminal_ev")
+            window_evidence[window] = {
+                "status": "ready" if sample_ready else "hold_sample",
+                "sample_floor": sample_floor,
+                "sample_floor_met": sample_ready,
+                "exact_complete_path_count": exact_count,
+                "primary_90s_ev_pct": primary_ev,
+                "primary_90s_downside_p10_ev_pct": downside_p10,
+                "primary_90s_guarded_terminal_count": guarded_terminal_count,
+                "primary_90s_guarded_terminal_rate": guarded_terminal_rate,
+                "primary_90s_guarded_terminal_ev_pct": guarded_terminal_ev,
+                "risk_evidence_ready": risk_evidence_ready,
+                "exclusion_reason_counts": (
+                    journal.get("exclusion_reason_counts")
+                    if isinstance(journal.get("exclusion_reason_counts"), dict)
+                    else {}
+                ),
+                "observation_phase_summary": (
+                    journal.get("observation_phase_summary")
+                    if isinstance(journal.get("observation_phase_summary"), dict)
+                    else {}
+                ),
+            }
+
+        all_samples_ready = len(sample_ready_by_window) == len(
+            required_windows
+        ) and all(sample_ready_by_window)
+        all_primary_ev_present = len(primary_evs) == len(required_windows)
+        all_risk_evidence_ready = len(risk_evidence_ready_by_window) == len(
+            required_windows
+        ) and all(risk_evidence_ready_by_window)
+        positive_window_count = sum(value > 0.0 for value in primary_evs)
+        if contract_gaps:
+            decision = "source_quality_blocked"
+            next_action = "repair_journal_contract_then_regenerate"
+        elif not all_samples_ready:
+            decision = "hold_sample"
+            next_action = "keep_collecting_exact_paths"
+        elif not all_primary_ev_present or not all_risk_evidence_ready:
+            decision = "hold_outcome"
+            next_action = "repair_primary_90s_ev_or_guarded_downside_join"
+        elif positive_window_count == len(required_windows):
+            decision = "source_only_bounded_review_ready"
+            next_action = "review_one_same_stage_bounded_canary_candidate"
+        elif positive_window_count > 0:
+            decision = "hold_direction_conflict"
+            next_action = "keep_collecting_until_rolling_direction_converges"
+        else:
+            decision = "hold_no_edge"
+            next_action = "retain_current_runtime_policy"
+        family_decisions[family] = {
+            "decision": decision,
+            "sample_floor": sample_floor,
+            "required_windows": list(required_windows),
+            "all_samples_ready": all_samples_ready,
+            "all_primary_ev_present": all_primary_ev_present,
+            "all_risk_evidence_ready": all_risk_evidence_ready,
+            "positive_primary_ev_window_count": positive_window_count,
+            "risk_review_required": bool(risk_flags),
+            "risk_flags": sorted(set(risk_flags)),
+            "contract_gaps": sorted(set(contract_gaps)),
+            "window_evidence": window_evidence,
+            "next_action": next_action,
+        }
+
+    return {
+        "schema": "smoothing_source_only_rolling_decision_v1",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "source_only_rolling_review_no_runtime_change",
+        "window_policy": "rolling_5d_10d_20d_primary_90s_with_guarded_downside",
+        "sample_floor": dict(family_floors),
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "journal_v3_exact_lineage_fresh_effective_price_complete_horizons_"
+            "and_guarded_downside"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "eligible_for_live_review": False,
+        "forbidden_uses": (
+            "standalone_live_promotion|hard_or_emergency_bypass|threshold_apply|"
+            "provider_route_change|quantity_or_cap_change|bot_restart"
+        ),
+        "families": family_decisions,
+    }
+
+
 def build_cumulative_threshold_cycle_report(
     target_date: str,
     *,
@@ -16245,6 +16443,9 @@ def build_cumulative_threshold_cycle_report(
         "completed_by_source": completed_source_summary_by_window,
         "scalp_simulator": scalp_simulator_by_window,
         "threshold_snapshot_by_window": family_snapshots,
+        "smoothing_source_only_rolling_decision": (
+            _build_smoothing_source_only_rolling_decision(family_snapshots)
+        ),
         "calibration_source_bundle_by_window": report_sources_by_window,
         "apply_candidate_list_by_window": family_apply_candidates,
         "source_flags": source_flags,
@@ -16358,6 +16559,46 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
                         _markdown_value(summary.get("upside_p90_profit_rate")),
                         _markdown_value(summary.get("win_rate")),
                         _markdown_value(summary.get("loss_rate")),
+                    ]
+                )
+                + " |"
+            )
+    smoothing_decision = (
+        report.get("smoothing_source_only_rolling_decision")
+        if isinstance(report.get("smoothing_source_only_rolling_decision"), dict)
+        else {}
+    )
+    smoothing_families = (
+        smoothing_decision.get("families")
+        if isinstance(smoothing_decision.get("families"), dict)
+        else {}
+    )
+    if smoothing_families:
+        lines.extend(
+            [
+                "",
+                "## Smoothing Source-Only Rolling Decision",
+                "",
+                "| family | decision | samples_ready | EV_windows_positive | risk_ready | risk_review | next_action |",
+                "| --- | --- | --- | ---: | --- | --- | --- |",
+            ]
+        )
+        for family, decision in smoothing_families.items():
+            if not isinstance(decision, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _markdown_value(family),
+                        _markdown_value(decision.get("decision")),
+                        _markdown_value(decision.get("all_samples_ready")),
+                        _markdown_value(
+                            decision.get("positive_primary_ev_window_count")
+                        ),
+                        _markdown_value(decision.get("all_risk_evidence_ready")),
+                        _markdown_value(decision.get("risk_review_required")),
+                        _markdown_value(decision.get("next_action")),
                     ]
                 )
                 + " |"
