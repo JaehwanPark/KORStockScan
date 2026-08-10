@@ -408,8 +408,7 @@ def _candidate_from_runtime_gap(row: dict[str, Any]) -> dict[str, Any]:
     )
     explicit_source_only_exclusion = (
         derived == "source_only_explicit_exclusion"
-        or str(row.get("final_disposition") or "")
-        == "source_only_explicit_exclusion"
+        or str(row.get("final_disposition") or "") == "source_only_explicit_exclusion"
         or str(row.get("producer_state") or "") == "entry_only_bridge_metadata"
     )
     return {
@@ -584,9 +583,7 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
         if isinstance(contract.get("observation_breakdown"), dict)
         else {}
     )
-    axis_rows = (
-        breakdown.get("axes") if isinstance(breakdown.get("axes"), dict) else {}
-    )
+    axis_rows = breakdown.get("axes") if isinstance(breakdown.get("axes"), dict) else {}
     blockers: list[dict[str, Any]] = []
     for axis in selected_axes:
         axis_row = axis_rows.get(axis) if isinstance(axis_rows.get(axis), dict) else {}
@@ -613,9 +610,7 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
                 or "same_session_unique_attempt_submit_funnel",
                 "sample_floor": breakdown.get("sample_floor")
                 or "one_explicit_attempt_per_axis",
-                "primary_decision_metric": breakdown.get(
-                    "primary_decision_metric"
-                )
+                "primary_decision_metric": breakdown.get("primary_decision_metric")
                 or "causal_bottleneck_axis_observed_count",
                 "source_quality_gate": breakdown.get("source_quality_gate")
                 or "lossless_attempt_key_and_explicit_stage_provenance",
@@ -952,8 +947,7 @@ def build_conversion_lane(
         if (
             candidate.get("primary_ev") is not None
             or candidate.get("next_blocker") in {"source_quality", "bridge_contract"}
-            or candidate.get("conversion_state")
-            == "terminal_source_only_exclusion"
+            or candidate.get("conversion_state") == "terminal_source_only_exclusion"
         ):
             candidates.append(candidate)
             seen.add(candidate["candidate_id"])

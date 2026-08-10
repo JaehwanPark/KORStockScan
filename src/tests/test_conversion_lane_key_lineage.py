@@ -1989,9 +1989,7 @@ def test_conversion_lane_terminal_entry_metadata_is_not_open_bridge_blocker(
                     "bridge_state": "excluded",
                     "final_disposition": "source_only_explicit_exclusion",
                     "derived_review_category": "source_only_explicit_exclusion",
-                    "failure_reason": (
-                        "entry_only_bridge_metadata_not_live_candidate"
-                    ),
+                    "failure_reason": ("entry_only_bridge_metadata_not_live_candidate"),
                 }
             ]
         },

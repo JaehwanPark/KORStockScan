@@ -672,9 +672,7 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         == "exact_latest_watching_ai_trace"
         and _field_first(event.fields, ("pre_submit_parent_ai_attempt_trace_id",))
         == _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
-        and _is_truthy_text(
-            event.fields.get("pre_submit_parent_ai_attempt_trusted")
-        )
+        and _is_truthy_text(event.fields.get("pre_submit_parent_ai_attempt_trusted"))
         and _is_truthy_text(event.fields.get("pre_submit_parent_ai_source_fresh"))
     ]
     linked = [
@@ -687,15 +685,11 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         _ai_trace_key(event) for event in linked if event.stage == "budget_pass"
     }
     linked_block = {
-        _ai_trace_key(event)
-        for event in linked
-        if event.stage in BUDGET_BLOCKER_STAGES
+        _ai_trace_key(event) for event in linked if event.stage in BUDGET_BLOCKER_STAGES
     }
     stage_counts = Counter(event.stage for event in linked)
     coverage_pct = (
-        round((len(linked) / len(lineage_events)) * 100.0, 2)
-        if lineage_events
-        else 0.0
+        round((len(linked) / len(lineage_events)) * 100.0, 2) if lineage_events else 0.0
     )
     if linked_block:
         status = "explicit_ai_trace_budget_block_observed"
@@ -2019,25 +2013,19 @@ def _entry_submit_drought_observation_breakdown(
                 if "UPSTREAM_GATE" in weak_contract_matches
                 else "no_current_signal"
             ),
-            "observed_count": int(
-                session_summary.get("upstream_block_unique", 0) or 0
-            ),
+            "observed_count": int(session_summary.get("upstream_block_unique", 0) or 0),
             "evidence": {
                 "upstream_blocker_top": (
                     upstream_blockers if isinstance(upstream_blockers, list) else []
                 ),
                 "budget_to_ai_unique_pct": ratios.get("budget_to_ai_unique_pct"),
-                "ai_action_event_counts": session_summary.get(
-                    "ai_action_event_counts"
-                )
+                "ai_action_event_counts": session_summary.get("ai_action_event_counts")
                 or {},
                 "ai_action_unique_counts": session_summary.get(
                     "ai_action_unique_counts"
                 )
                 or {},
-                "ai_terminal_reason_top": session_summary.get(
-                    "ai_terminal_reason_top"
-                )
+                "ai_terminal_reason_top": session_summary.get("ai_terminal_reason_top")
                 or [],
             },
             "next_repair_action": (
