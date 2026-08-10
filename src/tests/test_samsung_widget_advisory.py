@@ -591,6 +591,7 @@ def test_structure_does_not_promote_single_unconfirmed_pivot_to_support():
     structure = advisory._structure_features(bars)
 
     assert structure["candidate_support"] == 99_000
+    assert structure["candidate_support_age_bars"] == 4
     assert structure["confirmed_support"] is None
     assert structure["support_confirmation"] == "unconfirmed"
 
@@ -1770,13 +1771,57 @@ def test_core_blocker_is_reported_before_no_chase():
         "samsung_change_pct": -2.0,
         "sk_hynix_change_pct": 0.5,
         "kospi_change_pct": 0.5,
+        "same_window": {
+            "sk_hynix": {"5m": {"relative_return_pct_point": -1.0}},
+            "kospi": {"5m": {"relative_return_pct_point": -1.0}},
+        },
     }
 
     result = advisory.evaluate_advisory(**inputs)
 
     assert result["state"] == "WATCH"
-    assert "relative_strength_not_weak" in result["unmet_conditions"]
+    assert "relative_strength_weak" in result["unmet_conditions"]
     assert "price_more_than_30bp_above_support" not in result["reasons"]
+    assert result["derived"]["latent_next_blockers"] == [
+        "recent_runup_near_rolling_high",
+        "price_above_dynamic_two_tick_chase_limit",
+    ]
+
+
+def test_transient_relative_weakness_demotes_complete_recovery_to_caution():
+    inputs = _ready_input()
+    inputs["relative"] = {
+        "samsung_change_pct": 0.5,
+        "sk_hynix_change_pct": 1.1,
+        "kospi_change_pct": 0.6,
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["derived"]["relative_strength_policy"]["caution_only"] is True
+    assert result["derived"]["relative_strength_policy"]["hard_veto"] is False
+    assert "relative_weakness_caution_only" in result["reasons"]
+    assert "relative_strength_weak" in result["unmet_conditions"]
+
+
+def test_session_and_same_window_relative_weakness_remains_hard_veto():
+    inputs = _ready_input()
+    inputs["relative"] = {
+        "samsung_change_pct": -1.0,
+        "sk_hynix_change_pct": 0.5,
+        "kospi_change_pct": 0.5,
+        "same_window": {
+            "sk_hynix": {"5m": {"relative_return_pct_point": -1.0}},
+            "kospi": {"5m": {"relative_return_pct_point": -1.0}},
+        },
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "WATCH"
+    assert result["derived"]["relative_strength_policy"]["hard_veto"] is True
+    assert result["derived"]["relative_strength_policy"]["caution_only"] is False
 
 
 def test_missing_confirmed_support_is_watch_with_candidate_provenance(monkeypatch):
@@ -2269,9 +2314,243 @@ def test_volume_confirmation_requires_both_bar_directions():
     passed, metadata = advisory._volume_confirmation(bars)
 
     assert passed is False
-    assert metadata["rising_volume_sample_count"] == 8
+    assert metadata["rising_volume_sample_count"] == 7
     assert metadata["falling_volume_sample_count"] == 0
     assert metadata["volume_minimum_composition_met"] is False
+    assert metadata["opening_bar_excluded"] is True
+
+
+def test_opening_auction_volume_is_normalized_for_early_recovery():
+    start = datetime(2026, 8, 10, 9, 0, tzinfo=KST)
+    rows = [
+        (236_000, 233_000, 626_341),
+        (233_500, 231_500, 142_224),
+        (231_500, 232_000, 145_583),
+        (232_000, 233_000, 101_596),
+        (233_000, 232_250, 56_205),
+        (232_500, 234_000, 54_712),
+        (234_000, 235_500, 78_172),
+    ]
+    bars = [
+        advisory.MinuteBar(
+            (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S"),
+            open_price,
+            max(open_price, close),
+            min(open_price, close),
+            close,
+            volume,
+        )
+        for index, (open_price, close, volume) in enumerate(rows)
+    ]
+
+    passed, metadata = advisory._volume_confirmation(bars)
+
+    assert passed is True
+    assert metadata["opening_bar_excluded"] is True
+    assert metadata["opening_bar_source_time"] == "20260810090000"
+    assert metadata["opening_bar_volume"] == 626_341
+    assert metadata["rebound_to_decline_volume_ratio"] >= 0.9
+    assert metadata["required_rebound_to_decline_volume_ratio"] == 0.9
+
+
+def test_non_opening_volume_keeps_full_rebound_ratio_requirement():
+    start = datetime(2026, 8, 10, 9, 1, tzinfo=KST)
+    rows = [
+        (100_000, 100_100, 90),
+        (100_100, 100_000, 100),
+        (100_000, 100_100, 100),
+        (100_100, 100_000, 100),
+        (100_000, 100_100, 95),
+    ]
+    bars = [
+        advisory.MinuteBar(
+            (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S"),
+            open_price,
+            max(open_price, close),
+            min(open_price, close),
+            close,
+            volume,
+        )
+        for index, (open_price, close, volume) in enumerate(rows)
+    ]
+
+    passed, metadata = advisory._volume_confirmation(bars)
+
+    assert passed is False
+    assert metadata["opening_bar_excluded"] is False
+    assert metadata["rebound_to_decline_volume_ratio"] == 0.95
+    assert metadata["required_rebound_to_decline_volume_ratio"] == 1.0
+
+
+def test_candidate_support_vwap_recovery_emits_bounded_krx_caution():
+    start = datetime(2026, 8, 10, 9, 0, tzinfo=KST)
+    rows = [
+        (236_000, 236_500, 233_000, 233_000, 626_341),
+        (233_500, 233_500, 231_500, 231_500, 142_224),
+        (231_500, 232_500, 231_000, 232_000, 145_583),
+        (232_000, 233_000, 231_500, 233_000, 101_596),
+        (233_000, 233_000, 232_000, 232_250, 56_205),
+        (232_500, 234_000, 232_000, 234_000, 54_712),
+    ]
+    bars = [
+        advisory.MinuteBar(
+            (start + timedelta(minutes=index)).strftime("%Y%m%d%H%M%S"),
+            open_price,
+            high,
+            low,
+            close,
+            volume,
+        )
+        for index, (open_price, high, low, close, volume) in enumerate(rows)
+    ]
+    observed_at = datetime(2026, 8, 10, 9, 6, 4, tzinfo=KST)
+    inputs = {
+        "observed_at": observed_at,
+        "context": advisory.session_context(observed_at),
+        "current_price": 234_000,
+        "bars": bars,
+        "bbo": {"best_bid": 233_500, "best_ask": 234_000, "age_sec": 0},
+        "previous_day": {
+            "date": "20260807",
+            "open": 235_000,
+            "high": 239_500,
+            "low": 229_000,
+            "close": 231_000,
+        },
+        "relative": {
+            "samsung_change_pct": 1.0,
+            "sk_hynix_change_pct": 0.8,
+            "kospi_change_pct": 0.5,
+        },
+        "external_points": _external(),
+        "flow": {
+            "status": "PARTIAL",
+            "live_for_current_session": True,
+            "foreign_nonworsening": False,
+            "program_nonworsening": True,
+        },
+        "premarket": {
+            "date": "2026-08-10",
+            "vwap": 235_500,
+        },
+    }
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["trigger"] == "candidate_support_vwap_recovery_caution"
+    assert result["entry_price_low"] == 233_500
+    assert result["entry_price_high"] == 234_000
+    assert result["derived"]["candidate_support"] == 231_000
+    assert result["derived"]["candidate_support_age_bars"] == 3
+    assert (
+        result["derived"]["candidate_support_caution"]["ready_promotion_forbidden"]
+        is True
+    )
+    assert result["invalidation_price"] == 230_000
+    assert "premarket_vwap_not_recovered" in result["unmet_conditions"]
+    assert contract.advisory_contract_is_valid(
+        result,
+        snapshot_observed_at=observed_at,
+        context=inputs["context"],
+        evaluated_at=observed_at,
+    )
+
+    promotion = advisory.AdvisoryPromotionFilter()
+    assert promotion.apply(result)["state"] == "WATCH"
+    assert promotion.apply(result)["state"] == "ENTRY_CAUTION"
+
+
+def test_candidate_support_recovery_keeps_two_tick_no_chase_guard(monkeypatch):
+    inputs = _ready_input(current_price=101_500)
+    inputs["bbo"] = {"best_bid": 101_400, "best_ask": 101_500, "age_sec": 0}
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 100_000)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            "higher_low": False,
+            "higher_high": False,
+            "higher_high_and_low": False,
+            "retest_held": False,
+            "retest_rebound_confirmed": False,
+            "confirmed_support": None,
+            "candidate_support": 100_000,
+            "support_confirmation": "unconfirmed",
+            "confirmed_support_age_bars": None,
+            "candidate_support_age_bars": 3,
+            "recent_resistance": 102_000,
+        },
+    )
+    monkeypatch.setattr(
+        advisory,
+        "_volume_confirmation",
+        lambda _bars: (
+            False,
+            {
+                "rising_volume_sample_count": 3,
+                "falling_volume_sample_count": 1,
+                "zero_volume_ratio": 0.0,
+                "volume_minimum_composition_met": True,
+                "retest_volume_contracted": None,
+            },
+        ),
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "NO_CHASE"
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+    assert result["derived"]["candidate_support_caution"]["eligible"] is True
+    assert result["derived"]["latent_next_blockers"] == [
+        "price_above_dynamic_two_tick_chase_limit"
+    ]
+
+
+def test_candidate_support_recovery_preserves_recent_trade_reversal_veto(monkeypatch):
+    inputs = _ready_input(current_price=100_400)
+    inputs["recent_trade_negative_veto"] = True
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 100_000)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            "higher_low": False,
+            "higher_high": False,
+            "higher_high_and_low": False,
+            "retest_held": False,
+            "retest_rebound_confirmed": False,
+            "confirmed_support": None,
+            "candidate_support": 100_000,
+            "support_confirmation": "unconfirmed",
+            "confirmed_support_age_bars": None,
+            "candidate_support_age_bars": 3,
+            "recent_resistance": 102_000,
+        },
+    )
+    monkeypatch.setattr(
+        advisory,
+        "_volume_confirmation",
+        lambda _bars: (
+            False,
+            {
+                "rising_volume_sample_count": 3,
+                "falling_volume_sample_count": 1,
+                "zero_volume_ratio": 0.0,
+                "volume_minimum_composition_met": True,
+                "retest_volume_contracted": None,
+            },
+        ),
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "WATCH"
+    assert "recent_rest_prints_descending" in result["unmet_conditions"]
+    assert result["derived"]["candidate_support_caution"]["safety_blockers"] == [
+        "recent_rest_prints_descending"
+    ]
 
 
 def test_collector_scope_change_clears_session_local_caches(tmp_path):

@@ -84,6 +84,11 @@ TREND_TICK_MULTIPLIERS = {
 }
 RELATIVE_UNDERPERFORMANCE_LIMIT_PCT = 0.50
 TACTICAL_CHASE_LIMIT_PCT = 0.30
+STANDARD_VOLUME_REBOUND_RATIO_MIN = 1.00
+OPENING_VOLUME_REBOUND_RATIO_MIN = 0.90
+CANDIDATE_SUPPORT_CAUTION_MIN_HOLD_BARS = 3
+CANDIDATE_SUPPORT_CAUTION_MAX_HOLD_BARS = 5
+CANDIDATE_SUPPORT_CAUTION_MAX_RECOVERY_PCT = 1.50
 RECENT_RUNUP_LOOKBACK_BARS = 20
 RECENT_RUNUP_NO_CHASE_PCT = 0.80
 RECENT_RUNUP_NO_CHASE_TICKS = 4
@@ -447,6 +452,7 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
     candidate_support: int | None = None
     support_confirmation = "unconfirmed"
     confirmed_support_age_bars: int | None = None
+    candidate_support_age_bars: int | None = None
     latest_structure_low: int | None = None
     if len(recent) >= 6:
         prior_window = recent[-6:-3]
@@ -492,6 +498,11 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
         confirmed_support_age_bars = len(recent) - 1 - latest_low_index
     if candidate_support is None:
         candidate_support = latest_structure_low
+    if candidate_support is not None:
+        candidate_support_index = max(
+            index for index, bar in enumerate(recent) if bar.low == candidate_support
+        )
+        candidate_support_age_bars = len(recent) - 1 - candidate_support_index
 
     resistance_rows = recent[:-2] if len(recent) >= 5 else recent[:-1]
     recent_resistance = (
@@ -507,6 +518,7 @@ def _structure_features(bars: list[MinuteBar]) -> dict[str, Any]:
         "candidate_support": candidate_support,
         "support_confirmation": support_confirmation,
         "confirmed_support_age_bars": confirmed_support_age_bars,
+        "candidate_support_age_bars": candidate_support_age_bars,
         "recent_resistance": recent_resistance,
     }
 
@@ -515,10 +527,21 @@ def _volume_confirmation(
     bars: list[MinuteBar],
 ) -> tuple[bool, dict[str, Any]]:
     recent = bars[-8:]
-    rising = [bar.volume for bar in recent if bar.close > bar.open and bar.volume > 0]
-    falling = [bar.volume for bar in recent if bar.close < bar.open and bar.volume > 0]
+    opening_bar_excluded = bool(recent and recent[0].source_time.endswith("090000"))
+    comparison = recent[1:] if opening_bar_excluded else recent
+    rising = [
+        bar.volume for bar in comparison if bar.close > bar.open and bar.volume > 0
+    ]
+    falling = [
+        bar.volume for bar in comparison if bar.close < bar.open and bar.volume > 0
+    ]
     rising_avg = sum(rising) / len(rising) if rising else None
     falling_avg = sum(falling) / len(falling) if falling else None
+    required_volume_ratio = (
+        OPENING_VOLUME_REBOUND_RATIO_MIN
+        if opening_bar_excluded
+        else STANDARD_VOLUME_REBOUND_RATIO_MIN
+    )
     zero_volume_count = sum(bar.volume <= 0 for bar in recent)
     zero_volume_ratio = zero_volume_count / len(recent) if recent else 1.0
     minimum_composition_met = (
@@ -528,17 +551,23 @@ def _volume_confirmation(
         minimum_composition_met
         and rising_avg is not None
         and falling_avg is not None
-        and rising_avg >= falling_avg
+        and rising_avg >= falling_avg * required_volume_ratio
     )
     pivots = _pivot_lows(recent)
     first_test_volume = None
     retest_volume = None
     retest_volume_contracted = None
     if len(pivots) >= 2:
-        first_test_volume = recent[pivots[-2][0]].volume
-        retest_volume = recent[pivots[-1][0]].volume
-        if first_test_volume > 0 and retest_volume > 0:
-            retest_volume_contracted = retest_volume <= first_test_volume
+        first_index, _first_low = pivots[-2]
+        second_index, _second_low = pivots[-1]
+        # Adjacent falling lows are one impulse, not two independent tests.
+        # Keep volume retest semantics aligned with ``_structure_features``.
+        between_tests = recent[first_index + 1 : second_index]
+        if second_index >= first_index + 2 and between_tests:
+            first_test_volume = recent[first_index].volume
+            retest_volume = recent[second_index].volume
+            if first_test_volume > 0 and retest_volume > 0:
+                retest_volume_contracted = retest_volume <= first_test_volume
     passed = rebound_confirmed and retest_volume_contracted is not False
     return passed, {
         "rebound_avg_volume": round(rising_avg, 2) if rising_avg is not None else None,
@@ -553,6 +582,17 @@ def _volume_confirmation(
         "zero_volume_count": zero_volume_count,
         "zero_volume_ratio": round(zero_volume_ratio, 4),
         "volume_minimum_composition_met": minimum_composition_met,
+        "opening_bar_excluded": opening_bar_excluded,
+        "opening_bar_source_time": (
+            recent[0].source_time if opening_bar_excluded else None
+        ),
+        "opening_bar_volume": recent[0].volume if opening_bar_excluded else None,
+        "rebound_to_decline_volume_ratio": (
+            round(rising_avg / falling_avg, 4)
+            if rising_avg is not None and falling_avg
+            else None
+        ),
+        "required_rebound_to_decline_volume_ratio": required_volume_ratio,
     }
 
 
@@ -1434,7 +1474,11 @@ def evaluate_advisory(
         "relative_strength_not_weak": relative_ok,
         "spread_within_two_ticks": spread_ok,
     }
-    unmet = [name for name, passed in core_checks.items() if not passed]
+    unmet = [
+        name
+        for name, passed in core_checks.items()
+        if not passed and name != "relative_strength_not_weak"
+    ]
     unmet.extend(relative_issues)
     reasons = [name for name, passed in core_checks.items() if passed]
     if relative_assessment["session_underperformance_cleared"]:
@@ -1476,13 +1520,121 @@ def evaluate_advisory(
             reasons.append("premarket_aux_supportive")
 
     if structural_support is None:
+        candidate_support_age = structure.get("candidate_support_age_bars")
+        candidate_hold_confirmed = bool(
+            isinstance(candidate_support_age, int)
+            and CANDIDATE_SUPPORT_CAUTION_MIN_HOLD_BARS
+            <= candidate_support_age
+            <= CANDIDATE_SUPPORT_CAUTION_MAX_HOLD_BARS
+        )
+        candidate_recovery_pct = (
+            round(
+                ((current_price - candidate_support) / candidate_support) * 100,
+                4,
+            )
+            if candidate_support and current_price >= candidate_support
+            else None
+        )
+        candidate_tactical_support = (
+            clamp_price_to_tick(vwap) if vwap_reclaimed and vwap else None
+        )
+        candidate_two_tick_limit_pct = (
+            (
+                (
+                    move_price_by_ticks(candidate_tactical_support, 2)
+                    - candidate_tactical_support
+                )
+                / candidate_tactical_support
+            )
+            * 100
+            if candidate_tactical_support
+            else None
+        )
+        candidate_chase_limit_pct = (
+            max(TACTICAL_CHASE_LIMIT_PCT, candidate_two_tick_limit_pct)
+            if candidate_two_tick_limit_pct is not None
+            else None
+        )
+        candidate_chase_pct = (
+            ((current_price - candidate_tactical_support) / candidate_tactical_support)
+            * 100
+            if candidate_tactical_support
+            else None
+        )
+        candidate_volume_composition = bool(
+            volume_meta.get("volume_minimum_composition_met")
+            and int(volume_meta.get("rising_volume_sample_count") or 0) >= 3
+            and int(volume_meta.get("falling_volume_sample_count") or 0) >= 1
+        )
+        candidate_safety_blockers = []
+        if recent_trade_negative_veto:
+            candidate_safety_blockers.append("recent_rest_prints_descending")
+        if live_reversal_veto:
+            candidate_safety_blockers.append("live_price_reversal_with_ask_pressure")
+        if external_risk["level"] == "HOLD":
+            candidate_safety_blockers.append("external_risk_hold")
+        candidate_caution_core = bool(
+            context.name == "KRX_REGULAR"
+            and candidate_support
+            and candidate_hold_confirmed
+            and candidate_recovery_pct is not None
+            and candidate_recovery_pct <= CANDIDATE_SUPPORT_CAUTION_MAX_RECOVERY_PCT
+            and candidate_tactical_support
+            and vwap_reclaimed
+            and trends_ok
+            and relative_ok
+            and spread_ok
+            and candidate_volume_composition
+            and not flow_negative
+            and external_risk["level"] != "HOLD"
+            and not candidate_safety_blockers
+        )
+        candidate_caution_within_chase = bool(
+            candidate_caution_core
+            and candidate_chase_pct is not None
+            and candidate_chase_limit_pct is not None
+            and candidate_chase_pct <= candidate_chase_limit_pct
+        )
+        candidate_caution_meta = {
+            "eligible": candidate_caution_core,
+            "candidate_support_age_bars": candidate_support_age,
+            "minimum_hold_bars": CANDIDATE_SUPPORT_CAUTION_MIN_HOLD_BARS,
+            "maximum_hold_bars": CANDIDATE_SUPPORT_CAUTION_MAX_HOLD_BARS,
+            "recovery_pct": (
+                candidate_recovery_pct if candidate_recovery_pct is not None else None
+            ),
+            "maximum_recovery_pct": CANDIDATE_SUPPORT_CAUTION_MAX_RECOVERY_PCT,
+            "tactical_support": candidate_tactical_support,
+            "tactical_chase_pct": (
+                round(candidate_chase_pct, 4)
+                if candidate_chase_pct is not None
+                else None
+            ),
+            "dynamic_chase_limit_pct": (
+                round(candidate_chase_limit_pct, 4)
+                if candidate_chase_limit_pct is not None
+                else None
+            ),
+            "volume_composition_met": candidate_volume_composition,
+            "safety_blockers": candidate_safety_blockers,
+            "ready_promotion_forbidden": True,
+            "authority": ADVISORY_AUTHORITY,
+            "runtime_effect": False,
+            "metric_contract": METRIC_CONTRACT,
+        }
         base.update(
             {
                 "state": "WATCH",
                 "raw_state": "WATCH",
                 "reasons": reasons,
                 "unmet_conditions": list(
-                    dict.fromkeys(["confirmed_support_missing", *unmet])
+                    dict.fromkeys(
+                        [
+                            "confirmed_support_missing",
+                            *unmet,
+                            *candidate_safety_blockers,
+                        ]
+                    )
                 ),
                 "derived": {
                     "session_vwap": vwap,
@@ -1492,6 +1644,7 @@ def evaluate_advisory(
                     "confirmed_support_age_bars": structure.get(
                         "confirmed_support_age_bars"
                     ),
+                    "candidate_support_age_bars": candidate_support_age,
                     "session_anchor": session_anchor,
                     "recent_resistance": recent_resistance,
                     "minute_trends": trends,
@@ -1500,11 +1653,53 @@ def evaluate_advisory(
                     "higher_high_and_low": structure["higher_high_and_low"],
                     "retest_held": structure["retest_held"],
                     "retest_rebound_confirmed": structure["retest_rebound_confirmed"],
+                    "candidate_support_caution": candidate_caution_meta,
                     **volume_meta,
                 },
                 "flow": flow,
             }
         )
+        if candidate_caution_within_chase:
+            entry_low = max(candidate_tactical_support, best_bid)
+            entry_high = min(
+                best_ask, move_price_by_ticks(candidate_tactical_support, 2)
+            )
+            if entry_low <= entry_high:
+                base.update(
+                    {
+                        "state": "ENTRY_CAUTION",
+                        "raw_state": "ENTRY_CAUTION",
+                        "entry_price_low": entry_low,
+                        "entry_price_high": entry_high,
+                        "trigger": "candidate_support_vwap_recovery_caution",
+                        "trigger_price": candidate_tactical_support,
+                        "invalidation": "candidate_support_break",
+                        "invalidation_price": move_price_by_ticks(
+                            candidate_support, -2
+                        ),
+                        "reasons": list(
+                            dict.fromkeys(
+                                [
+                                    *reasons,
+                                    "candidate_support_hold_confirmed",
+                                    "opening_recovery_caution",
+                                ]
+                            )
+                        ),
+                    }
+                )
+                return base
+        if (
+            candidate_caution_core
+            and candidate_chase_pct is not None
+            and candidate_chase_limit_pct is not None
+            and candidate_chase_pct > candidate_chase_limit_pct
+        ):
+            base["state"] = base["raw_state"] = "NO_CHASE"
+            base["reasons"] = ["price_above_dynamic_two_tick_chase_limit"]
+            base["derived"]["latent_next_blockers"] = [
+                "price_above_dynamic_two_tick_chase_limit"
+            ]
         return base
     soft_invalidation = move_price_by_ticks(structural_support, -1)
     hard_invalidation = move_price_by_ticks(structural_support, -2)
@@ -1675,6 +1870,31 @@ def evaluate_advisory(
             "flow": flow,
         }
     )
+    relative_severe_veto = bool(
+        relative_assessment.get("session_underperformance") is True
+        and relative_assessment.get("same_window_negative_veto") is True
+    )
+    relative_caution_only = bool(
+        not relative_ok
+        and relative_assessment.get("session_underperformance") is not None
+        and structure_ok
+        and reclaim_ok
+        and volume_ok
+        and trends_ok
+        and spread_ok
+        and not relative_severe_veto
+    )
+    base["derived"]["relative_strength_policy"] = {
+        "hard_veto": relative_severe_veto,
+        "caution_only": relative_caution_only,
+        "policy": "own_recovery_can_demote_transient_relative_weakness_to_caution",
+        "authority": ADVISORY_AUTHORITY,
+        "runtime_effect": False,
+    }
+    if relative_caution_only:
+        base["reasons"] = list(
+            dict.fromkeys([*base["reasons"], "relative_weakness_caution_only"])
+        )
     if recent_trade_negative_veto or live_reversal_veto:
         base["state"] = base["raw_state"] = "WATCH"
         if recent_trade_negative_veto:
@@ -1833,8 +2053,21 @@ def evaluate_advisory(
             )
             return base
 
-    all_core_passed = all(core_checks.values())
+    non_relative_core_passed = all(
+        passed
+        for name, passed in core_checks.items()
+        if name != "relative_strength_not_weak"
+    )
+    all_core_passed = bool(
+        non_relative_core_passed and (relative_ok or relative_caution_only)
+    )
     if not all_core_passed:
+        latent_next_blockers: list[str] = []
+        if near_recent_high and recent_runup_pct >= recent_runup_limit_pct:
+            latent_next_blockers.append("recent_runup_near_rolling_high")
+        if tactical_chase_pct > dynamic_chase_limit_pct:
+            latent_next_blockers.append("price_above_dynamic_two_tick_chase_limit")
+        base["derived"]["latent_next_blockers"] = latent_next_blockers
         base["state"] = base["raw_state"] = "WATCH"
         return base
 
@@ -1868,6 +2101,7 @@ def evaluate_advisory(
         base["unmet_conditions"].append("external_risk_hold")
     elif (
         external_risk["level"] in {"CAUTION", "DATA_LIMITED"}
+        or relative_caution_only
         or flow_negative
         or flow_data_limited
         or premarket_aux_weak
