@@ -18,6 +18,28 @@
 
 ## 사용자 지시 구현 기록
 
+- [x] `[SamsungWidgetEarlyReversalConflictGuard0810] 삼성전자 early-reversal 과진입·청산경고 충돌 보완` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 10:45~11:05`, `Track: RuntimeStability`)
+  - Source: [삼성전자 판정기](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_widget_advisory.py), [당일 관측](/home/ubuntu/KORStockScan/data/report/samsung_widget_advisory_observation/samsung_widget_advisory_20260810.jsonl), [자동매매 원장](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
+  - 판정/변경: 당일 KRX `ENTRY_CAUTION` 4회·`ENTRY_READY` 0회에서 VWAP/저항 회복과 반등 거래량이 모두 없는 early-reversal 3건이 반복 진입됐다. before는 확정 retest만으로 두 확인이 모두 pending이어도 caution을 허용했으나, after는 저항/VWAP 회복 전 진입에 `rebound_volume_confirmed=true`를 필수로 하고 신규 진입과 같은 관측의 `EXIT_CAUTION|EXIT_READY` 충돌을 `WATCH`로 즉시 강등한다.
+  - 안전/적용: source-quality·BBO·stale·주문·수량·토큰·계좌 guard는 변경하지 않는다. 같은 관측 충돌 강등 시 promotion streak를 초기화하고 새로 생긴 exit-entry link만 제거하며 기존 활성 진입 에피소드의 청산 provenance는 유지한다. 구현 당시 collector PID `133923`, auto-trader PID `140929`에는 미반영이며 사용자 재기동 지시 전 적용하지 않는다.
+  - 적용 결과 (`2026-08-10 10:55~10:56 KST`): review gate에서 위젯·API·텔레그램·자동매매 회귀 `291 passed`, Black/Ruff/compileall/diff-check/checklist parser(`count=30`)를 통과한 뒤 삼성 collector PID `133923 -> 158222`, widget auto-trader PID `140929 -> 158661`로 순차 재기동했다. 새 snapshot은 `source_quality=PASS`, advisory=`WATCH`, exit=`EXIT_CAUTION`, `entry_exit_conflict_guard.blocked=false`와 새 metric contract를 기록했다. 자동매매 원장의 기존 체결 이력과 삼성전자 미체결 +1% 익절 주문은 보존했으며 메인 봇·Gunicorn·두산·한화 collector는 재기동하지 않았다.
+  - Rollback: early-reversal volume floor와 same-observation conflict arbiter를 제거해 확정 retest caution 경로로 복귀한다. rollback 시에도 기존 자동매매 state·미체결 익절 주문·당일 원장을 삭제하지 않는다.
+
+- [x] `[SamsungWidgetEntryLinkedExitNotify0810] 삼성전자 진입 연계 청산 알림 에피소드 보완` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 10:10~10:30`, `Track: RuntimeStability`)
+  - Source: [삼성전자 판정기](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_widget_advisory.py), [텔레그램 알림기](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_widget_entry_notify.py), [당일 관측](/home/ubuntu/KORStockScan/data/report/samsung_widget_advisory_observation/samsung_widget_advisory_20260810.jsonl)
+  - 판정: holding-independent `EXIT_READY`는 위젯 관측값으로 유지하되 텔레그램 청산 알림은 실제로 발송된 활성 진입 에피소드당 1회만 허용한다. 신규 진입 없이 낮아지는 지지선은 새 청산 알림으로 재발송하지 않으며, 청산 취소 시 오래된 entry episode provenance를 제거한다.
+  - 보완/롤백: 성공한 ENTRY/EXIT 텔레그램 API 호출은 저빈도 append-only audit에 기록한다. 롤백은 entry-linked notifier gate와 audit writer를 제거해 기존 holding-independent 발송으로 복귀하되 위젯 판정·주문·수량·토큰·메인 봇 권한은 변경하지 않는다.
+
+- [x] `[HanwhaOceanDeterioratingFlowReclaimGuard0810] 한화오션 수급악화·저항 미회복 진입 결함 보완` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 10:10~10:30`, `Track: RuntimeStability`)
+  - Source: [한화오션 판정기](/home/ubuntu/KORStockScan/src/engine/monitoring/hanwha_ocean_widget_advisory.py), [한화오션 계약](/home/ubuntu/KORStockScan/src/engine/monitoring/hanwha_ocean_widget_contract.py), [당일 관측](/home/ubuntu/KORStockScan/data/report/hanwha_ocean_widget_advisory_observation/hanwha_ocean_widget_advisory_20260810.jsonl)
+  - 판정: 09:51 첫 신호는 `flow_signal=DETERIORATING`이고 최근 저항을 회복하지 못했는데도 `ENTRY_CAUTION`으로 승격된 뒤 09:56 지지 이탈 청산됐다. 수급악화 단독 전면 차단은 피하고, 관측 수급악화와 최근 저항 미회복이 동시에 있는 경우만 `WATCH`로 유지한다.
+  - 보완/롤백: 최근 저항을 회복한 구조는 기존 `ENTRY_CAUTION` 경로를 유지한다. 재리뷰에서 외국인·프로그램 중 한쪽만 관측된 악화 label도 negative evidence로 동일하게 처리하고, 한쪽 관측 `NONWORSENING`과 완전 결측은 이 guard로 차단하지 않도록 보완했다. 롤백은 결합 guard와 계약 문구를 제거해 기존 VWAP first-pullback 정책으로 복귀하며 source-quality·스프레드·상대강도·외부위험 계약은 유지한다.
+
+- [x] `[DoosanWidgetExtendedRunupPullbackGuard0810] 두산 고점부 얕은 눌림 진입 차단` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:20`, `Track: RuntimeStability`)
+  - Source: [doosan_widget_advisory.py](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_advisory.py), [두산 계약](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_contract.py), [장중 관측](/home/ubuntu/KORStockScan/data/report/doosan_widget_advisory_observation/doosan_widget_advisory_20260810.jsonl)
+  - 판정: 현재 코드 replay는 09:28 초기 반등을 `ENTRY_CAUTION`으로 복원하지만, 09:59 신호는 최근 저점 대비 확장 상승 후 고점에서 2틱만 눌린 상태를 허용한 지연 진입이었다.
+  - 보완/롤백: 두산 전용으로 최근 상승폭 `0.80%` 이상이면 최근 고점 대비 최소 3틱 눌림 전까지 `NO_CHASE`로 유지한다. source-quality·외부위험·상대강도·수급·스프레드 guard는 유지하며, 롤백은 두 상수를 제거하고 기존 공통 2틱 chase guard로 복귀한다.
+
 - [x] `[WidgetSignalAutoTradeTakeProfit0810] 위젯 매수체결 직후 +1% 익절 지정가 연결` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 09:45~10:15`, `Track: RuntimeStability`)
   - Source: [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [gateway.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/gateway.py), [운영 계약](/home/ubuntu/KORStockScan/docs/widget-signal-auto-trading-runbook.md)
   - 판정: exact 주문번호로 매수 체결가·수량을 확인한 뒤 체결 평균가 대비 최소 +1.00%인 첫 유효 호가에 당일 위젯 소유 수량만 보통 지정가 매도한다. 부분체결은 미보호 증가분만 추가하며 final EXIT는 익절 잔량 취소·reconciliation 후 남은 수량만 청산한다.

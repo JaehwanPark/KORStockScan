@@ -138,6 +138,63 @@ def test_doosan_policy_keeps_absorption_recovery_in_watch():
     assert "doosan_standard_rebound_volume_required" in result["unmet_conditions"]
 
 
+def test_doosan_policy_blocks_shallow_pullback_after_extended_runup():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(now)
+    source["derived"]["recent_runup_chase_guard"] = {
+        "runup_pct": 0.90,
+        "recent_high": 99_200,
+        "recent_low": 98_300,
+    }
+
+    result = doosan.apply_doosan_entry_policy(
+        source,
+        current_price=99_000,
+        bars=_bars([100_000, 99_300, 99_000]),
+        context=contract.session_context(now),
+    )
+
+    assert result["state"] == "NO_CHASE"
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+    assert result["reasons"] == ["doosan_extended_runup_pullback_too_shallow"]
+    assert "doosan_three_tick_pullback_pending" in result["unmet_conditions"]
+    assert result["doosan_policy"]["extended_runup_pullback_guard"] == {
+        "applied": True,
+        "runup_pct": 0.9,
+        "trigger_pct": 0.8,
+        "recent_high": 99_200,
+        "minimum_pullback_ticks": 3,
+        "maximum_entry_price": 98_900,
+        "authority": "widget_advisory_only",
+        "runtime_effect": False,
+    }
+
+
+def test_doosan_policy_allows_three_tick_pullback_after_extended_runup():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(now)
+    source["entry_price_low"] = 98_900
+    source["entry_price_high"] = 98_900
+    source["derived"]["recent_runup_chase_guard"] = {
+        "runup_pct": 0.90,
+        "recent_high": 99_200,
+        "recent_low": 98_300,
+    }
+
+    result = doosan.apply_doosan_entry_policy(
+        source,
+        current_price=98_900,
+        bars=_bars([100_000, 99_300, 98_900]),
+        context=contract.session_context(now),
+    )
+
+    assert result["state"] == "ENTRY_CAUTION"
+    assert result["entry_price_low"] == 98_900
+    assert result["entry_price_high"] == 98_900
+    assert result["doosan_policy"]["extended_runup_pullback_guard"]["applied"] is False
+
+
 def test_high_tier_does_not_override_portable_recovery_caution():
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     source = _base_advisory(now)

@@ -167,6 +167,44 @@ def apply_doosan_entry_policy(
         )
         return result
 
+    recent_runup = derived.get("recent_runup_chase_guard")
+    recent_runup = recent_runup if isinstance(recent_runup, dict) else {}
+    try:
+        recent_runup_pct = float(recent_runup.get("runup_pct") or 0.0)
+        recent_high = int(recent_runup.get("recent_high") or 0)
+    except (TypeError, ValueError):
+        recent_runup_pct = 0.0
+        recent_high = 0
+    minimum_pullback_price = (
+        move_price_by_ticks(recent_high, -contract.EXTENDED_RUNUP_MIN_PULLBACK_TICKS)
+        if recent_high > 0
+        else None
+    )
+    extended_runup_pullback_pending = bool(
+        recent_runup_pct >= contract.EXTENDED_RUNUP_TRIGGER_PCT
+        and minimum_pullback_price is not None
+        and current_price > minimum_pullback_price
+    )
+    policy["extended_runup_pullback_guard"] = {
+        "applied": extended_runup_pullback_pending,
+        "runup_pct": round(recent_runup_pct, 4),
+        "trigger_pct": contract.EXTENDED_RUNUP_TRIGGER_PCT,
+        "recent_high": recent_high or None,
+        "minimum_pullback_ticks": contract.EXTENDED_RUNUP_MIN_PULLBACK_TICKS,
+        "maximum_entry_price": minimum_pullback_price,
+        "authority": ADVISORY_AUTHORITY,
+        "runtime_effect": False,
+    }
+    if extended_runup_pullback_pending:
+        result["state"] = result["raw_state"] = "NO_CHASE"
+        result["entry_price_low"] = None
+        result["entry_price_high"] = None
+        result["reasons"] = ["doosan_extended_runup_pullback_too_shallow"]
+        result["unmet_conditions"] = _append_unique(
+            result.get("unmet_conditions"), "doosan_three_tick_pullback_pending"
+        )
+        return result
+
     result["reasons"] = _append_unique(
         result.get("reasons"), "doosan_drawdown_rebound_profile"
     )

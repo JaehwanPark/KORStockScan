@@ -168,6 +168,7 @@ def test_exit_advisory_cancels_after_two_completed_support_reclaims():
         bars=bars,
         bbo={"best_bid": 99_400, "best_ask": 99_500},
         source_quality=quality,
+        entry_advisory={"state": "ENTRY_CAUTION"},
     )
     bars.append(_bars(start + timedelta(minutes=7), [99_000])[0])
     ready = machine.apply(
@@ -179,6 +180,7 @@ def test_exit_advisory_cancels_after_two_completed_support_reclaims():
     )
     support = ready["broken_support"]
     assert support is not None
+    assert ready["continuity"]["entry_episode_id"] is not None
     bars.extend(
         [
             advisory.MinuteBar(
@@ -214,6 +216,65 @@ def test_exit_advisory_cancels_after_two_completed_support_reclaims():
     assert cancelled["state"] == "EXIT_CANCELLED"
     assert cancelled["reasons"] == ["broken_support_reclaimed_two_bars"]
     assert cancelled["reference_exit_price"] is None
+    assert cancelled["continuity"]["entry_episode_id"] is None
+
+
+def test_same_observation_exit_warning_blocks_new_entry_episode():
+    entry = {
+        "state": "ENTRY_CAUTION",
+        "raw_state": "ENTRY_CAUTION",
+        "entry_price_low": 99_900,
+        "entry_price_high": 100_000,
+        "unmet_conditions": ["vwap_or_resistance_reclaimed"],
+        "derived": {},
+    }
+    exit_advisory = {
+        "state": "EXIT_CAUTION",
+        "entry_episode_reset": True,
+    }
+
+    blocked = advisory._apply_entry_exit_conflict_guard(entry, exit_advisory)
+
+    assert blocked is True
+    assert entry["state"] == "WATCH"
+    assert entry["raw_state"] == "WATCH"
+    assert entry["entry_price_low"] is None
+    assert entry["entry_price_high"] is None
+    assert entry["confirmation_streak"] == 1
+    assert "same_observation_exit_warning_active" in entry["unmet_conditions"]
+    assert entry["derived"]["entry_exit_conflict_guard"]["blocked"] is True
+
+
+def test_exit_warning_does_not_erase_existing_entry_episode_provenance():
+    entry = {
+        "state": "ENTRY_CAUTION",
+        "raw_state": "ENTRY_CAUTION",
+        "entry_price_low": 99_900,
+        "entry_price_high": 100_000,
+        "unmet_conditions": [],
+        "derived": {},
+    }
+    exit_advisory = {
+        "state": "EXIT_CAUTION",
+        "entry_episode_reset": False,
+    }
+
+    blocked = advisory._apply_entry_exit_conflict_guard(entry, exit_advisory)
+
+    assert blocked is False
+    assert entry["state"] == "ENTRY_CAUTION"
+    assert entry["derived"]["entry_exit_conflict_guard"]["blocked"] is False
+
+
+def test_exit_machine_can_remove_only_rejected_same_cycle_entry_link():
+    machine = advisory.ExitAdvisoryStateMachine()
+    machine._entry_was_actionable = True
+    machine._entry_episode_id = "2026-08-10:KRX_REGULAR:20260810104000"
+
+    assert machine.reject_current_entry_episode_reset() is True
+    assert machine.snapshot()["entry_was_actionable"] is False
+    assert machine.snapshot()["entry_episode_id"] is None
+    assert machine.reject_current_entry_episode_reset() is False
 
 
 def test_exit_advisory_no_new_low_cancel_requires_support_rearm():
@@ -1010,12 +1071,14 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
             "20260805103200", 245_250, 247_000, 245_000, 246_500, 83_510
         ),
     )
+    pullback_input = _recovery_episode_advisory(
+        start + timedelta(minutes=3),
+        volume_confirmed=False,
+        current_price=246_000,
+    )
+    pullback_input["unmet_conditions"].append("early_reversal_rebound_volume_required")
     pullback = filter_.apply(
-        _recovery_episode_advisory(
-            start + timedelta(minutes=3),
-            volume_confirmed=False,
-            current_price=246_000,
-        ),
+        pullback_input,
         current_price=246_000,
         bbo={"best_bid": 246_000, "best_ask": 246_500},
         latest_bar=advisory.MinuteBar(
@@ -1028,12 +1091,16 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
     assert breakout["recovery_continuity"]["reclaimed_bar"] == "20260805103200"
     restored_filter = advisory.AdvisoryRecoveryEpisodeFilter()
     assert restored_filter.restore(breakout) is True
+    restored_pullback_input = _recovery_episode_advisory(
+        start + timedelta(minutes=3),
+        volume_confirmed=False,
+        current_price=246_000,
+    )
+    restored_pullback_input["unmet_conditions"].append(
+        "early_reversal_rebound_volume_required"
+    )
     restored_pullback = restored_filter.apply(
-        _recovery_episode_advisory(
-            start + timedelta(minutes=3),
-            volume_confirmed=False,
-            current_price=246_000,
-        ),
+        restored_pullback_input,
         current_price=246_000,
         bbo={"best_bid": 246_000, "best_ask": 246_500},
         latest_bar=advisory.MinuteBar(
@@ -1046,6 +1113,7 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
     assert pullback["entry_price_high"] == 246_500
     assert "recent_rebound_volume_grace" in pullback["reasons"]
     assert "regular_flow_unavailable" in pullback["unmet_conditions"]
+    assert "early_reversal_rebound_volume_required" not in pullback["unmet_conditions"]
     assert pullback["derived"]["recovery_episode"]["reclaim_age_bars"] == 1
     assert pullback["runtime_effect"] is False
     assert pullback["actual_order_submitted"] is False
@@ -1912,7 +1980,7 @@ def test_completed_close_below_support_confirms_break(monkeypatch):
     )
 
 
-def test_confirmed_retest_can_emit_early_reversal_caution(monkeypatch):
+def test_confirmed_retest_without_rebound_volume_stays_watch(monkeypatch):
     inputs = _ready_input(current_price=100_200)
     first_bar = inputs["bars"][0]
     inputs["bars"][0] = advisory.MinuteBar(
@@ -1973,15 +2041,97 @@ def test_confirmed_retest_can_emit_early_reversal_caution(monkeypatch):
 
     result = advisory.evaluate_advisory(**inputs)
 
+    assert result["state"] == "WATCH"
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+    assert (
+        result["derived"]["early_reversal_confirmation_floor"][
+            "pre_volume_structure_eligible"
+        ]
+        is True
+    )
+    assert "vwap_or_resistance_reclaimed" in result["unmet_conditions"]
+    assert "rebound_volume_confirmed" in result["unmet_conditions"]
+    assert "early_reversal_rebound_volume_required" in result["unmet_conditions"]
+
+
+def test_confirmed_retest_with_rebound_volume_can_emit_early_reversal_caution(
+    monkeypatch,
+):
+    inputs = _ready_input(current_price=100_200)
+    first_bar = inputs["bars"][0]
+    inputs["bars"][0] = advisory.MinuteBar(
+        source_time=first_bar.source_time,
+        open=first_bar.open,
+        high=101_500,
+        low=100_000,
+        close=first_bar.close,
+        volume=first_bar.volume,
+    )
+    pullback_bar = inputs["bars"][5]
+    inputs["bars"][5] = advisory.MinuteBar(
+        source_time=pullback_bar.source_time,
+        open=pullback_bar.open,
+        high=pullback_bar.high,
+        low=99_500,
+        close=pullback_bar.close,
+        volume=pullback_bar.volume,
+    )
+    inputs["bbo"] = {"best_bid": 100_100, "best_ask": 100_200, "age_sec": 0}
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 101_000)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 100_000,
+            "candidate_support": 100_000,
+            "recent_resistance": 101_000,
+            "higher_high": True,
+            "higher_low": True,
+            "higher_high_and_low": True,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "support_confirmation": "retest_held",
+        },
+    )
+    monkeypatch.setattr(
+        advisory,
+        "_volume_confirmation",
+        lambda _bars: (
+            True,
+            {
+                "rebound_avg_volume": 1_600.0,
+                "decline_avg_volume": 1_500.0,
+                "first_test_volume": 1_500,
+                "retest_volume": 1_000,
+                "retest_volume_contracted": True,
+                "rising_volume_sample_count": 2,
+                "falling_volume_sample_count": 2,
+                "zero_volume_count": 0,
+                "zero_volume_ratio": 0.0,
+                "volume_minimum_composition_met": True,
+            },
+        ),
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
     assert result["state"] == "ENTRY_CAUTION"
     assert result["trigger"] == "confirmed_retest_early_reversal"
     assert result["entry_price_low"] == 100_100
     assert result["entry_price_high"] == 100_200
     assert (
+        result["derived"]["early_reversal_confirmation_floor"][
+            "rebound_volume_confirmed"
+        ]
+        is True
+    )
+    assert (
         result["derived"]["early_reversal_caution"]["ready_promotion_forbidden"] is True
     )
     assert "vwap_or_resistance_reclaimed" in result["unmet_conditions"]
-    assert "rebound_volume_confirmed" in result["unmet_conditions"]
 
 
 def test_recent_runup_guard_blocks_shifted_support_entry_near_rolling_high(

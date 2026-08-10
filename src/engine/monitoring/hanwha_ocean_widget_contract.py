@@ -44,7 +44,9 @@ METRIC_CONTRACT = {
     "primary_decision_metric": "none_operator_advisory",
     "source_quality_gate": (
         "fresh_coherent_quote_bbo_completed_1m_and_previous_day_ohlc;"
-        "high_requires_observed_peer_kospi_flow_and_usdkrw_context"
+        "high_requires_observed_peer_kospi_flow_and_usdkrw_context;"
+        "full_or_single_component_deteriorating_observed_flow_requires_"
+        "recent_resistance_reclaim"
     ),
     "forbidden_uses": [
         "real_order_submission",

@@ -31,6 +31,8 @@ EPISODE_POLICY = "multiple_non_overlapping_after_exit_and_new_bar_rearm"
 MIN_SESSION_DRAWDOWN_PCT = -0.50
 HIGH_CONFIDENCE_DRAWDOWN_PCT = -1.00
 ENTRY_TARGET_PCT = 1.00
+EXTENDED_RUNUP_TRIGGER_PCT = 0.80
+EXTENDED_RUNUP_MIN_PULLBACK_TICKS = 3
 EXIT_EVENT_REASONS = frozenset(
     {
         "doosan_target_1pct_reached",

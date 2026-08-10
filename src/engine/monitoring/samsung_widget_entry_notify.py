@@ -26,8 +26,28 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "samsung_widget_entry_telegram_notify_state.json"
 )
+DEFAULT_AUDIT_DIRECTORY = (
+    PROJECT_ROOT / "data" / "report" / "samsung_widget_telegram_notify_audit"
+)
 DEFAULT_REARM_SEC = 120
 DEFAULT_RETRY_SEC = 30
+
+NOTIFICATION_AUDIT_CONTRACT = {
+    "metric_role": "diagnostic_notification_delivery",
+    "decision_authority": ADVISORY_AUTHORITY,
+    "window_policy": "append_only_trade_date_entry_linked_episode",
+    "sample_floor": "one_valid_notification_attempt",
+    "primary_decision_metric": "telegram_api_send_status",
+    "source_quality_gate": "fresh_contract_valid_advisory_and_active_entry_episode",
+    "forbidden_uses": [
+        "real_order_submission",
+        "account_or_quantity_decision",
+        "trading_runtime_threshold",
+        "provider_route_change",
+        "bot_process_control",
+        "automatic_live_promotion",
+    ],
+}
 
 ConfigLoader = Callable[[], tuple[str, str]]
 Sender = Callable[[str, str, str], None]
@@ -218,7 +238,7 @@ def build_entry_message(payload: dict[str, Any]) -> str:
 
 
 def build_exit_message(payload: dict[str, Any]) -> str:
-    """Render a holding-independent EXIT_READY observation for the admin."""
+    """Render an entry-linked EXIT_READY observation for the admin."""
     advisory = payload.get("exit_advisory") or {}
     valid_until = _parse_timestamp(advisory.get("valid_until"))
     valid_text = valid_until.strftime("%H:%M:%S") if valid_until else "-"
@@ -233,7 +253,7 @@ def build_exit_message(payload: dict[str, Any]) -> str:
         and continuity.get("caution_kind") == "local_peak_rollover"
     )
     lines = [
-        "🔴 [삼성전자 청산 관찰 알림]",
+        "🔴 [삼성전자 청산 알림]",
         (
             "상태: EXIT_READY / 고점 이탈·하락 지속 확인"
             if local_peak_exit
@@ -256,13 +276,13 @@ def build_exit_message(payload: dict[str, Any]) -> str:
             f"세션: {advisory.get('session') or '-'} / "
             f"venue={payload.get('market_venue') or '-'}"
         ),
-        "권한: 보유 무관 관측용 · 자동매도/주문 아님",
+        "권한: 진입 알림 연계 관측용 · 자동매도/주문 아님",
     ]
     return "\n".join(lines)
 
 
 class SamsungWidgetEntryTelegramNotifier:
-    """Send one admin notice per confirmed entry or EXIT_READY episode.
+    """Send one admin notice per confirmed entry-linked advisory episode.
 
     The historical class name remains as a compatibility surface for the
     collector and service unit. Entry and exit retry/dedup state are kept
@@ -279,6 +299,7 @@ class SamsungWidgetEntryTelegramNotifier:
         rearm_sec: int = DEFAULT_REARM_SEC,
         retry_sec: int = DEFAULT_RETRY_SEC,
         enabled: bool | None = None,
+        audit_directory: Path | None = None,
     ) -> None:
         self.state_file = state_file
         self.config_loader = config_loader
@@ -286,6 +307,15 @@ class SamsungWidgetEntryTelegramNotifier:
         self.rearm_sec = max(0, int(rearm_sec))
         self.retry_sec = max(1, int(retry_sec))
         self.enabled = _env_enabled() if enabled is None else bool(enabled)
+        self.audit_directory = (
+            audit_directory
+            if audit_directory is not None
+            else (
+                DEFAULT_AUDIT_DIRECTORY
+                if state_file == DEFAULT_STATE_FILE
+                else state_file.parent / "telegram_audit"
+            )
+        )
         self._state = _load_state(state_file)
 
     @staticmethod
@@ -539,6 +569,52 @@ class SamsungWidgetEntryTelegramNotifier:
     def _save(self) -> None:
         _atomic_write_state(self.state_file, self._state)
 
+    def _append_delivery_audit(
+        self,
+        *,
+        payload: dict[str, Any],
+        observed_at: datetime,
+        event_type: str,
+        status: str,
+        episode_key: str,
+    ) -> None:
+        """Persist low-volume delivery provenance without affecting advisory flow."""
+        now = _as_kst(observed_at)
+        advisory = payload.get("advisory") or {}
+        exit_advisory = payload.get("exit_advisory") or {}
+        row = {
+            "observed_at_kst": now.isoformat(),
+            "event_type": event_type,
+            "status": status,
+            "episode_key": episode_key,
+            "current_price": _positive_int(payload.get("current_price")),
+            "advisory_state": advisory.get("state"),
+            "exit_advisory_state": exit_advisory.get("state"),
+            "session": advisory.get("session") or exit_advisory.get("session"),
+            "market_venue": payload.get("market_venue"),
+            "authority": ADVISORY_AUTHORITY,
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "telegram_audience": "ADMIN_ONLY",
+            "metric_contract": NOTIFICATION_AUDIT_CONTRACT,
+        }
+        target = self.audit_directory / (
+            f"samsung_widget_telegram_notify_{now.strftime('%Y%m%d')}.jsonl"
+        )
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+                handle.write("\n")
+        except OSError as exc:
+            self._state["last_audit_error"] = type(exc).__name__
+            self._state["last_audit_error_at"] = now.isoformat()
+            self._save()
+        else:
+            self._state["last_audit_error"] = None
+            self._state["last_audit_written_at"] = now.isoformat()
+            self._save()
+
     def _observe_exit_ready(
         self, payload: dict[str, Any], *, now: datetime, scope: str
     ) -> str:
@@ -568,6 +644,13 @@ class SamsungWidgetEntryTelegramNotifier:
         if not token or not admin_id:
             self._state["last_exit_attempt_status"] = "missing_config"
             self._save()
+            self._append_delivery_audit(
+                payload=payload,
+                observed_at=now,
+                event_type="EXIT",
+                status="missing_config",
+                episode_key=str(self._state.get("entry_episode_id") or episode_key),
+            )
             return "exit_missing_config"
         try:
             self.sender(token, admin_id, build_exit_message(payload))
@@ -575,6 +658,13 @@ class SamsungWidgetEntryTelegramNotifier:
             self._state["last_exit_attempt_status"] = "failed"
             self._state["last_exit_error"] = type(exc).__name__
             self._save()
+            self._append_delivery_audit(
+                payload=payload,
+                observed_at=now,
+                event_type="EXIT",
+                status="failed",
+                episode_key=str(self._state.get("entry_episode_id") or episode_key),
+            )
             return "exit_send_failed"
 
         self._state.update(
@@ -597,6 +687,13 @@ class SamsungWidgetEntryTelegramNotifier:
             }
         )
         self._save()
+        self._append_delivery_audit(
+            payload=payload,
+            observed_at=now,
+            event_type="EXIT",
+            status="sent",
+            episode_key=str(self._state.get("entry_episode_id") or episode_key),
+        )
         return "exit_sent"
 
     def observe(self, payload: dict[str, Any], observed_at: datetime) -> str:
@@ -614,7 +711,16 @@ class SamsungWidgetEntryTelegramNotifier:
         if exit_state == "EXIT_READY":
             if not self._exit_contract_valid(payload, now):
                 return "invalid_exit_contract"
-            if self._state.get("active"):
+            if not self._state.get("active"):
+                exit_episode_key = self._exit_episode_key(payload, scope)
+                if (
+                    self._state.get("last_exit_episode_key") == exit_episode_key
+                    and self._state.get("last_exit_attempt_status") == "sent"
+                ):
+                    return "duplicate_exit_episode"
+                return "exit_without_active_entry_episode"
+            result = self._observe_exit_ready(payload, now=now, scope=scope)
+            if result in {"exit_sent", "duplicate_exit_episode"}:
                 exit_advisory = payload.get("exit_advisory") or {}
                 self._close_entry_episode(
                     now=now,
@@ -625,12 +731,7 @@ class SamsungWidgetEntryTelegramNotifier:
                     session=exit_advisory.get("session"),
                     peak_price=_positive_int(exit_advisory.get("peak_price")),
                 )
-            else:
-                exit_episode_key = self._exit_episode_key(payload, scope)
-                if self._state.get("last_exit_episode_key") != exit_episode_key:
-                    self._state["non_actionable_since"] = now.isoformat()
-                    self._save()
-            return self._observe_exit_ready(payload, now=now, scope=scope)
+            return result
 
         invalidation_reason = self._active_episode_invalidation_reason(payload)
         if invalidation_reason:
@@ -673,6 +774,13 @@ class SamsungWidgetEntryTelegramNotifier:
             self._state["last_attempt_at"] = now.isoformat()
             self._state["last_attempt_status"] = "missing_config"
             self._save()
+            self._append_delivery_audit(
+                payload=payload,
+                observed_at=now,
+                event_type="ENTRY",
+                status="missing_config",
+                episode_key=f"{scope}:{now.isoformat()}",
+            )
             return "missing_config"
 
         self._state["last_attempt_at"] = now.isoformat()
@@ -682,6 +790,13 @@ class SamsungWidgetEntryTelegramNotifier:
             self._state["last_attempt_status"] = "failed"
             self._state["last_error"] = type(exc).__name__
             self._save()
+            self._append_delivery_audit(
+                payload=payload,
+                observed_at=now,
+                event_type="ENTRY",
+                status="failed",
+                episode_key=f"{scope}:{now.isoformat()}",
+            )
             return "send_failed"
 
         self._state.update(
@@ -726,4 +841,11 @@ class SamsungWidgetEntryTelegramNotifier:
             }
         )
         self._save()
+        self._append_delivery_audit(
+            payload=payload,
+            observed_at=now,
+            event_type="ENTRY",
+            status="sent",
+            episode_key=str(self._state.get("entry_episode_id") or ""),
+        )
         return "sent"

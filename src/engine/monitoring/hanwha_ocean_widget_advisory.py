@@ -61,6 +61,13 @@ from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_tick
 from src.utils import kiwoom_utils
 
 ACTIONABLE_ENTRY_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
+DETERIORATING_FLOW_SIGNALS = frozenset(
+    {
+        "DETERIORATING",
+        "PROGRAM_DETERIORATING_FOREIGN_LIMITED",
+        "FOREIGN_DETERIORATING_PROGRAM_LIMITED",
+    }
+)
 
 
 def _now_kst() -> datetime:
@@ -110,6 +117,8 @@ def apply_hanwha_ocean_entry_policy(
     base_state = str(result.get("raw_state") or result.get("state") or "DATA_WAIT")
     auxiliary_context = result.get("auxiliary_context")
     auxiliary_context = auxiliary_context if isinstance(auxiliary_context, dict) else {}
+    flow_signal = str(auxiliary_context.get("flow_signal") or "DATA_LIMITED")
+    deteriorating_flow_observed = flow_signal in DETERIORATING_FLOW_SIGNALS
     auxiliary_observed = auxiliary_context.get("status") == "OBSERVED"
     auxiliary_high_ready = bool(auxiliary_observed and base_state == "ENTRY_READY")
     tier = "HIGH" if high_confidence_structure and auxiliary_high_ready else "STANDARD"
@@ -134,6 +143,9 @@ def apply_hanwha_ocean_entry_policy(
         "external_context_authority": "negative_risk_only_no_positive_promotion",
         "auxiliary_context_status": auxiliary_context.get("status") or "LIMITED",
         "auxiliary_high_ready": auxiliary_high_ready,
+        "flow_signal": flow_signal,
+        "deteriorating_flow_observed": deteriorating_flow_observed,
+        "deteriorating_flow_resistance_reclaim_required": True,
         "episode_policy": contract.EPISODE_POLICY,
     }
     result["strategy_profile"] = contract.STRATEGY_PROFILE
@@ -174,6 +186,17 @@ def apply_hanwha_ocean_entry_policy(
             "hanwha_ocean_standard_rebound_volume_required",
         )
         return result
+    if deteriorating_flow_observed and not resistance_reclaimed:
+        result["state"] = result["raw_state"] = "WATCH"
+        result["entry_price_low"] = None
+        result["entry_price_high"] = None
+        policy["flow_resistance_guard_blocked"] = True
+        result["unmet_conditions"] = _append_unique(
+            result.get("unmet_conditions"),
+            "hanwha_ocean_deteriorating_flow_requires_resistance_reclaim",
+        )
+        return result
+    policy["flow_resistance_guard_blocked"] = False
 
     result["reasons"] = _append_unique(
         result.get("reasons"), "hanwha_ocean_vwap_first_pullback_profile"

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from src.engine.monitoring import hanwha_ocean_widget_advisory as hanwha_ocean
 from src.engine.monitoring import hanwha_ocean_widget_contract as contract
 from src.engine.monitoring.samsung_widget_advisory import (
@@ -156,6 +158,81 @@ def test_hanwha_ocean_policy_keeps_absorption_recovery_in_watch():
 
     assert result["state"] == "WATCH"
     assert "hanwha_ocean_standard_rebound_volume_required" in result["unmet_conditions"]
+
+
+def test_hanwha_ocean_deteriorating_flow_requires_recent_resistance_reclaim():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(now, resistance_reclaimed=False)
+    source["auxiliary_context"]["flow_signal"] = "DETERIORATING"
+
+    blocked = hanwha_ocean.apply_hanwha_ocean_entry_policy(
+        source,
+        current_price=99_000,
+        bars=_bars([98_500, 98_700, 99_000]),
+        context=contract.session_context(now),
+    )
+
+    assert blocked["state"] == "WATCH"
+    assert blocked["entry_price_low"] is None
+    assert blocked["entry_price_high"] is None
+    assert blocked["hanwha_ocean_policy"]["flow_resistance_guard_blocked"] is True
+    assert (
+        "hanwha_ocean_deteriorating_flow_requires_resistance_reclaim"
+        in blocked["unmet_conditions"]
+    )
+
+    source["derived"]["recent_resistance_reclaimed"] = True
+    allowed = hanwha_ocean.apply_hanwha_ocean_entry_policy(
+        source,
+        current_price=99_000,
+        bars=_bars([98_500, 98_700, 99_000]),
+        context=contract.session_context(now),
+    )
+    assert allowed["state"] == "ENTRY_CAUTION"
+    assert allowed["hanwha_ocean_policy"]["flow_resistance_guard_blocked"] is False
+
+
+@pytest.mark.parametrize(
+    "flow_signal",
+    [
+        "PROGRAM_DETERIORATING_FOREIGN_LIMITED",
+        "FOREIGN_DETERIORATING_PROGRAM_LIMITED",
+    ],
+)
+def test_hanwha_ocean_single_observed_deteriorating_flow_requires_reclaim(
+    flow_signal,
+):
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(now, resistance_reclaimed=False)
+    source["auxiliary_context"]["flow_signal"] = flow_signal
+
+    blocked = hanwha_ocean.apply_hanwha_ocean_entry_policy(
+        source,
+        current_price=99_000,
+        bars=_bars([98_500, 98_700, 99_000]),
+        context=contract.session_context(now),
+    )
+
+    assert blocked["state"] == "WATCH"
+    assert blocked["hanwha_ocean_policy"]["deteriorating_flow_observed"] is True
+    assert blocked["hanwha_ocean_policy"]["flow_resistance_guard_blocked"] is True
+
+
+def test_hanwha_ocean_single_observed_nonworsening_flow_does_not_block():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(now, resistance_reclaimed=False)
+    source["auxiliary_context"]["flow_signal"] = "PROGRAM_NONWORSENING_FOREIGN_LIMITED"
+
+    allowed = hanwha_ocean.apply_hanwha_ocean_entry_policy(
+        source,
+        current_price=99_000,
+        bars=_bars([98_500, 98_700, 99_000]),
+        context=contract.session_context(now),
+    )
+
+    assert allowed["state"] == "ENTRY_CAUTION"
+    assert allowed["hanwha_ocean_policy"]["deteriorating_flow_observed"] is False
+    assert allowed["hanwha_ocean_policy"]["flow_resistance_guard_blocked"] is False
 
 
 def test_high_tier_does_not_override_portable_recovery_caution():

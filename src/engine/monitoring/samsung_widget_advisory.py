@@ -1914,7 +1914,7 @@ def evaluate_advisory(
         "rebound_volume_confirmed",
         "regular_flow_unavailable",
     }
-    early_reversal_structure_eligible = bool(
+    early_reversal_pre_volume_eligible = bool(
         structure["retest_held"]
         and structure["retest_rebound_confirmed"]
         and trends_ok
@@ -1927,6 +1927,26 @@ def evaluate_advisory(
         and "vwap_or_resistance_reclaimed" in base["unmet_conditions"]
         and set(base["unmet_conditions"]).issubset(early_reversal_allowed_unmet)
     )
+    early_reversal_structure_eligible = bool(
+        early_reversal_pre_volume_eligible and volume_ok
+    )
+    base["derived"]["early_reversal_confirmation_floor"] = {
+        "pre_volume_structure_eligible": early_reversal_pre_volume_eligible,
+        "rebound_volume_required": True,
+        "rebound_volume_confirmed": volume_ok,
+        "authority": "negative_veto_only",
+        "runtime_effect": False,
+        "metric_contract": METRIC_CONTRACT,
+    }
+    if early_reversal_pre_volume_eligible and not volume_ok:
+        base["unmet_conditions"] = list(
+            dict.fromkeys(
+                [
+                    *base["unmet_conditions"],
+                    "early_reversal_rebound_volume_required",
+                ]
+            )
+        )
     recent_window = bars[-RECENT_RUNUP_LOOKBACK_BARS:]
     recent_runup_low = min(bar.low for bar in recent_window)
     recent_runup_high = max(bar.high for bar in recent_window)
@@ -2010,9 +2030,9 @@ def evaluate_advisory(
         )
         return base
 
-    # A completed-bar retest is the earliest defensible reversal observation.
-    # Keep it caution-only while VWAP/resistance or rebound-volume confirmation
-    # is still pending; it must not inherit ENTRY_READY authority.
+    # A completed-bar retest plus rebound-volume confirmation is the earliest
+    # defensible reversal observation.  It may precede VWAP/resistance reclaim,
+    # but it must not inherit ENTRY_READY authority.
     early_reversal_caution = bool(
         early_reversal_setup_eligible and tactical_chase_pct <= dynamic_chase_limit_pct
     )
@@ -2574,6 +2594,7 @@ class AdvisoryRecoveryEpisodeFilter:
                     not in {
                         "vwap_or_resistance_reclaimed",
                         "rebound_volume_confirmed",
+                        "early_reversal_rebound_volume_required",
                         "resistance_reclaim_pullback_pending",
                     }
                 ]
@@ -2872,6 +2893,14 @@ class ExitAdvisoryStateMachine:
         self._lowest_since_ready = None
         self._bars_without_new_low = 0
 
+    def reject_current_entry_episode_reset(self) -> bool:
+        """Remove only a same-cycle entry link rejected by final arbitration."""
+        if not self._entry_was_actionable or self._entry_episode_id is None:
+            return False
+        self._entry_was_actionable = False
+        self._entry_episode_id = None
+        return True
+
     def _observe_entry_episode(
         self,
         entry_advisory: dict[str, Any] | None,
@@ -3057,6 +3086,7 @@ class ExitAdvisoryStateMachine:
                     self._state = "EXIT_CANCELLED"
                     self._cancel_reason = "broken_support_reclaimed_two_bars"
                     self._clear_episode()
+                    self._entry_episode_id = None
                     self._rearm_support = None
                     self._rearm_closes = 0
                     self._rearm_age_bars = 0
@@ -3065,6 +3095,7 @@ class ExitAdvisoryStateMachine:
                     self._state = "EXIT_CANCELLED"
                     self._cancel_reason = "no_new_low_for_five_completed_bars"
                     self._clear_episode()
+                    self._entry_episode_id = None
                     self._rearm_support = rearm_support
                     self._rearm_closes = 0
                     self._rearm_age_bars = 0
@@ -3525,6 +3556,52 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8"
     )
     os.replace(temporary, path)
+
+
+def _apply_entry_exit_conflict_guard(
+    advisory: dict[str, Any], exit_advisory: dict[str, Any]
+) -> bool:
+    """Reject a newly opened entry when the same observation warns to exit."""
+    entry_state = str(advisory.get("state") or "")
+    exit_state = str(exit_advisory.get("state") or "")
+    same_cycle_entry = exit_advisory.get("entry_episode_reset") is True
+    blocked = bool(
+        entry_state in {"ENTRY_CAUTION", "ENTRY_READY"}
+        and exit_state in ExitAdvisoryStateMachine.ACTIONABLE
+        and same_cycle_entry
+    )
+    derived = advisory.get("derived")
+    if not isinstance(derived, dict):
+        derived = {}
+        advisory["derived"] = derived
+    derived["entry_exit_conflict_guard"] = {
+        "blocked": blocked,
+        "entry_state": entry_state,
+        "exit_state": exit_state,
+        "same_cycle_entry_episode": same_cycle_entry,
+        "policy": "new_entry_forbidden_during_same_observation_exit_warning",
+        "authority": "negative_veto_only",
+        "runtime_effect": False,
+        "metric_contract": METRIC_CONTRACT,
+    }
+    if not blocked:
+        return False
+    advisory["state"] = advisory["raw_state"] = "WATCH"
+    advisory["entry_price_low"] = None
+    advisory["entry_price_high"] = None
+    advisory["trigger"] = "entry_exit_conflict_wait"
+    advisory["confirmation_streak"] = 1
+    unmet_conditions = advisory.get("unmet_conditions")
+    unmet_conditions = unmet_conditions if isinstance(unmet_conditions, list) else []
+    advisory["unmet_conditions"] = list(
+        dict.fromkeys(
+            [
+                *unmet_conditions,
+                "same_observation_exit_warning_active",
+            ]
+        )
+    )
+    return True
 
 
 class ObservationRecorder:
@@ -4183,6 +4260,15 @@ class SamsungWidgetCollector:
             source_quality=exit_source_quality,
             entry_advisory=advisory,
         )
+        if _apply_entry_exit_conflict_guard(advisory, exit_advisory):
+            # The promotion filter has already observed this raw entry.  Reset
+            # it so a cleared exit warning still needs the configured two/three
+            # consecutive confirmations instead of reappearing immediately.
+            self.promotion_filter.reset()
+            if self.exit_state_machine.reject_current_entry_episode_reset():
+                exit_advisory["entry_episode_reset"] = False
+                exit_advisory["entry_conflict_rejected"] = True
+                exit_advisory["continuity"] = self.exit_state_machine.snapshot()
         day_low = _positive_int(quote.get("low_pric"))
         day_low_delta = (
             current_price - day_low
