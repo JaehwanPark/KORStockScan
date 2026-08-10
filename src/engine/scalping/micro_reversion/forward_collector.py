@@ -1,8 +1,7 @@
 """Canary-only forward collector for existing Kiwoom 0B observations.
 
 The market-data producer calls only :meth:`observe_kiwoom_0b`.  That method
-normalizes already parsed fields, applies the manual-control veto through the
-minimal observation adapter, and performs one bounded ``put_nowait``.  Pattern
+normalizes already parsed fields and performs one bounded ``put_nowait``. Pattern
 detection, path coalescing, JSON encoding, file writes, and fsync all happen on
 observer-owned worker threads.
 
@@ -58,7 +57,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OUTPUT_ROOT = (
     REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
 )
-FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v4"
+FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v5"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
@@ -67,8 +66,8 @@ FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "sample_floor": "five_trading_days_and_200_mature_events_gate_b_only",
     "primary_decision_metric": "required_path_fields_coverage_pct",
     "source_quality_gate": (
-        "official_0b_trade_time_and_explicit_item_venue_and_manual_control_veto_"
-        "and_bounded_nonblocking_transport"
+        "official_0b_trade_time_and_explicit_item_venue_and_bounded_"
+        "nonblocking_transport"
     ),
     "forbidden_uses": (
         "new_market_data_subscription",
@@ -108,7 +107,6 @@ class ProducerCanaryResult(StrEnum):
     INVALID_EXCHANGE_TIMESTAMP = "invalid_exchange_timestamp"
     INVALID_TRADE_SNAPSHOT = "invalid_trade_snapshot"
     ENQUEUED = AdapterResult.ENQUEUED.value
-    MANUAL_CONTROL_EXCLUDED = AdapterResult.MANUAL_CONTROL_EXCLUDED.value
     INVALID_ENVELOPE = AdapterResult.INVALID_ENVELOPE.value
     QUEUE_FULL = AdapterResult.QUEUE_FULL.value
     ISOLATED_ERROR = AdapterResult.ISOLATED_ERROR.value
@@ -122,7 +120,6 @@ class ForwardCollectorConfig:
     path_batch_size: int = 256
     writer_flush_interval_sec: float = 0.25
     worker_poll_interval_sec: float = 0.1
-    manual_exclusion_refresh_interval_sec: float = 1.0
     exchange_future_skew_tolerance_ms: int = 1_000
     maximum_exchange_to_receive_lag_ms: int = 10_000
     storage_policy: PathStoragePolicy = field(default_factory=PathStoragePolicy)
@@ -134,8 +131,6 @@ class ForwardCollectorConfig:
             raise ValueError("path_batch_size must be positive")
         if self.writer_flush_interval_sec <= 0 or self.worker_poll_interval_sec <= 0:
             raise ValueError("collector intervals must be positive")
-        if self.manual_exclusion_refresh_interval_sec <= 0:
-            raise ValueError("manual exclusion refresh interval must be positive")
         if self.exchange_future_skew_tolerance_ms < 0:
             raise ValueError("future skew tolerance must not be negative")
         if self.maximum_exchange_to_receive_lag_ms <= 0:
@@ -170,7 +165,6 @@ class ForwardCollectorSnapshot:
     observation_queue_high_water: int
     observation_queue_full_count: int
     observation_dropped_envelope_count: int
-    manual_control_excluded_count: int
     adapter_invalid_envelope_count: int
     adapter_isolated_error_count: int
     unsupported_realtime_type_count: int
@@ -191,6 +185,7 @@ class ForwardCollectorSnapshot:
     raw_exchange_code_9081_observed_count: int
     worker_processed_count: int
     worker_error_count: int
+    event_symbol_mismatch_count: int
     shock_event_count: int
     path_point_submitted_count: int
     path_point_dropped_count: int
@@ -267,15 +262,7 @@ class ForwardCollectorSnapshot:
     writer_alive_after_close_count: int
     collector_last_close_error_types: tuple[str, ...]
     sequence_epoch: int
-    manual_control_refresh_count: int
-    manual_control_new_exclusion_count: int
-    manual_control_state_purge_count: int
-    manual_control_active_segment_purge_count: int
-    manual_control_post_exclusion_envelope_count: int
-    manual_control_post_exclusion_event_count: int
-    manual_control_event_leak_count: int
     stale_sequence_epoch_envelope_count: int
-    stale_manual_exclusion_generation_envelope_count: int
     detector_clock_adjustment_count: int
     detector_clock_adjustment_max_ms: int
     p2_real_data_discovery_run: bool = False
@@ -308,7 +295,6 @@ class ForwardObservationCollector:
         flags: ObserverFeatureFlags,
         config: ForwardCollectorConfig | None = None,
         detector: MultiHorizonShockDetector | None = None,
-        manual_excluded_symbols: tuple[str, ...] | None = None,
     ) -> None:
         if not flags.observer_enabled:
             raise ValueError("observer flag must be enabled before collector creation")
@@ -318,7 +304,6 @@ class ForwardObservationCollector:
         self._adapter = ObservationAdapter(
             self._sink,
             flags=flags,
-            manual_excluded_symbols=manual_excluded_symbols,
             queue_depth=self._sink.qsize,
         )
         self._ring = PreEventRingBuffer()
@@ -338,7 +323,6 @@ class ForwardObservationCollector:
         self._detector_clock_ms: dict[tuple[str, str, str], int] = {}
         self._state_lock = threading.Lock()
         self._callback_condition = threading.Condition(self._state_lock)
-        self._manual_refresh_lock = threading.RLock()
         self._metrics_lock = threading.Lock()
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
@@ -346,8 +330,6 @@ class ForwardObservationCollector:
         self._active_callbacks = 0
         self._writers_closing = False
         self._lifecycle = CollectorLifecycle.NEW
-        self._automatic_manual_refresh = manual_excluded_symbols is None
-        self._next_manual_refresh_at = 0.0
         self._producer_0b_callbacks = 0
         self._enqueued = 0
         self._unsupported_types = 0
@@ -363,6 +345,7 @@ class ForwardObservationCollector:
         self._exchange_9081_observed = 0
         self._worker_processed = 0
         self._worker_errors = 0
+        self._event_symbol_mismatches = 0
         self._shock_events = 0
         self._path_submitted = 0
         self._path_dropped = 0
@@ -392,15 +375,7 @@ class ForwardObservationCollector:
         self._invalid_envelope_explained_gaps = 0
         self._other_explained_gaps = 0
         self._unexplained_sequence_gaps = 0
-        self._manual_refreshes = 0
-        self._manual_new_exclusions = 0
-        self._manual_state_purges = 0
-        self._manual_segment_purges = 0
-        self._manual_post_exclusion_envelopes = 0
-        self._manual_post_exclusion_events = 0
-        self._manual_event_leaks = 0
         self._stale_sequence_epoch_envelopes = 0
-        self._stale_manual_exclusion_generation_envelopes = 0
         self._close_attempts = 0
         self._close_failures = 0
         self._worker_alive_after_close = 0
@@ -529,17 +504,6 @@ class ForwardObservationCollector:
         with self._state_lock:
             self._lifecycle = CollectorLifecycle.CLOSE_FAILED
 
-    def refresh_manual_exclusions(
-        self, symbols: tuple[str, ...] | None = None
-    ) -> tuple[str, ...]:
-        """Refresh and purge observer state; never called by producer callbacks."""
-
-        with self._manual_refresh_lock:
-            added, _removed, _version = self._adapter.refresh_manual_exclusions(symbols)
-            self._increment("_manual_refreshes")
-            self._apply_new_manual_exclusions(added)
-            return tuple(sorted(added))
-
     def observe_kiwoom_0b(
         self,
         symbol: str,
@@ -648,8 +612,6 @@ class ForwardObservationCollector:
             )
             if result is AdapterResult.ENQUEUED:
                 self._increment("_enqueued")
-            elif result is AdapterResult.MANUAL_CONTROL_EXCLUDED:
-                self._discard_manual_exclusion_sequence(series_key, sequence_epoch)
             else:
                 self._record_sequence_loss(
                     sequence_epoch,
@@ -716,7 +678,6 @@ class ForwardObservationCollector:
                 observation_queue_high_water=adapter.queue_high_water,
                 observation_queue_full_count=adapter.queue_full_count,
                 observation_dropped_envelope_count=(adapter.dropped_envelope_count),
-                manual_control_excluded_count=(adapter.manual_control_excluded_count),
                 adapter_invalid_envelope_count=adapter.invalid_envelope_count,
                 adapter_isolated_error_count=adapter.isolated_error_count,
                 unsupported_realtime_type_count=self._unsupported_types,
@@ -751,6 +712,7 @@ class ForwardObservationCollector:
                 raw_exchange_code_9081_observed_count=(self._exchange_9081_observed),
                 worker_processed_count=self._worker_processed,
                 worker_error_count=self._worker_errors,
+                event_symbol_mismatch_count=self._event_symbol_mismatches,
                 shock_event_count=self._shock_events,
                 path_point_submitted_count=self._path_submitted,
                 path_point_dropped_count=self._path_dropped,
@@ -869,22 +831,8 @@ class ForwardObservationCollector:
                 writer_alive_after_close_count=self._writer_alive_after_close,
                 collector_last_close_error_types=self._last_close_error_types,
                 sequence_epoch=self._sequence_epoch,
-                manual_control_refresh_count=self._manual_refreshes,
-                manual_control_new_exclusion_count=self._manual_new_exclusions,
-                manual_control_state_purge_count=self._manual_state_purges,
-                manual_control_active_segment_purge_count=(self._manual_segment_purges),
-                manual_control_post_exclusion_envelope_count=(
-                    self._manual_post_exclusion_envelopes
-                ),
-                manual_control_post_exclusion_event_count=(
-                    self._manual_post_exclusion_events
-                ),
-                manual_control_event_leak_count=self._manual_event_leaks,
                 stale_sequence_epoch_envelope_count=(
                     self._stale_sequence_epoch_envelopes
-                ),
-                stale_manual_exclusion_generation_envelope_count=(
-                    self._stale_manual_exclusion_generation_envelopes
                 ),
                 detector_clock_adjustment_count=(self._detector_clock_adjustments),
                 detector_clock_adjustment_max_ms=(
@@ -904,7 +852,6 @@ class ForwardObservationCollector:
 
     def _run(self) -> None:
         while not self._stop_requested.is_set() or self._sink.qsize() > 0:
-            self._refresh_manual_exclusions_if_due()
             try:
                 envelope = self._sink.get(timeout=self.config.worker_poll_interval_sec)
             except queue.Empty:
@@ -917,34 +864,17 @@ class ForwardObservationCollector:
                 self._sink.task_done()
 
     def _process_envelope(self, envelope: RawMarketObservation) -> None:
-        with self._manual_refresh_lock:
-            block_reason = self._current_envelope_block_reason(envelope)
-            if block_reason is not None:
-                self._increment("_manual_post_exclusion_envelopes")
-                if block_reason == "stale_sequence_epoch":
-                    self._increment("_stale_sequence_epoch_envelopes")
-                elif block_reason == "stale_manual_exclusion_generation":
-                    self._increment("_stale_manual_exclusion_generation_envelopes")
-                return
-            self._account_for_sequence_gap(envelope)
-            self._process_allowed_envelope(envelope)
+        if self._is_stale_sequence_epoch(envelope):
+            self._increment("_stale_sequence_epoch_envelopes")
+            return
+        self._account_for_sequence_gap(envelope)
+        self._process_allowed_envelope(envelope)
 
-    def _current_envelope_block_reason(
-        self, envelope: RawMarketObservation
-    ) -> str | None:
-        if self._adapter.is_manual_excluded(envelope.symbol):
-            return "manual_control_excluded"
-        if (
-            self._adapter.manual_exclusion_generation(envelope.symbol)
-            != envelope.manual_control_exclusion_version
-        ):
-            return "stale_manual_exclusion_generation"
+    def _is_stale_sequence_epoch(self, envelope: RawMarketObservation) -> bool:
         series_key = (envelope.symbol, envelope.venue, envelope.session_bucket)
         with self._state_lock:
             current_epoch = self._series_epochs.get(series_key)
-        if current_epoch != envelope.sequence_epoch:
-            return "stale_sequence_epoch"
-        return None
+        return current_epoch != envelope.sequence_epoch
 
     def _event_registration_allowed(
         self, envelope: RawMarketObservation, event: Any
@@ -952,14 +882,10 @@ class ForwardObservationCollector:
         event_symbol = normalize_symbol(
             getattr(getattr(event, "event", None), "symbol", "")
         )
-        if (
-            event_symbol != envelope.symbol
-            or self._current_envelope_block_reason(envelope) is not None
-        ):
-            self._increment("_manual_post_exclusion_events")
-            self._increment("_manual_event_leaks")
+        if event_symbol != envelope.symbol:
+            self._increment("_event_symbol_mismatches")
             return False
-        return True
+        return not self._is_stale_sequence_epoch(envelope)
 
     def _process_allowed_envelope(self, envelope: RawMarketObservation) -> None:
         if not self.flags.path_capture_enabled:
@@ -1002,47 +928,6 @@ class ForwardObservationCollector:
         if registrations:
             self._add("_shock_events", len(registrations))
 
-    def _refresh_manual_exclusions_if_due(self) -> None:
-        if not self._automatic_manual_refresh:
-            return
-        now = time.monotonic()
-        if now < self._next_manual_refresh_at:
-            return
-        self._next_manual_refresh_at = (
-            now + self.config.manual_exclusion_refresh_interval_sec
-        )
-        try:
-            self.refresh_manual_exclusions()
-        except Exception:
-            self._increment("_worker_errors")
-
-    def _apply_new_manual_exclusions(self, symbols: frozenset[str]) -> None:
-        for symbol in symbols:
-            ring_rows = self._ring.drop_symbol(symbol)
-            detector_states = self._detector.drop_symbol(symbol)
-            segments = self._coalescer.drop_symbol(symbol)
-            with self._state_lock:
-                keys = [key for key in self._source_sequences if key[0] == symbol]
-                for key in keys:
-                    self._source_sequences.pop(key, None)
-                    self._detector_clock_ms.pop(key, None)
-                    self._series_epochs[key] = time.time_ns()
-                sequence_keys = [
-                    key for key in self._sequence_losses if key[1] == symbol
-                ]
-                for key in sequence_keys:
-                    self._sequence_losses.pop(key, None)
-                    self._last_worker_sequence.pop(key, None)
-            with self._metrics_lock:
-                for key in sequence_keys:
-                    self._series_with_gap.discard(key)
-            self._increment("_manual_new_exclusions")
-            self._add(
-                "_manual_state_purges",
-                ring_rows + detector_states + len(keys),
-            )
-            self._add("_manual_segment_purges", segments)
-
     def _record_sequence_loss(
         self,
         epoch: int,
@@ -1060,21 +945,6 @@ class ForwardObservationCollector:
             losses[sequence] = reason
             if len(losses) > self.config.observation_queue_size:
                 del losses[min(losses)]
-
-    def _discard_manual_exclusion_sequence(
-        self,
-        series_key: tuple[str, str, str],
-        epoch: int,
-    ) -> None:
-        tracking_key = (epoch, *series_key)
-        with self._state_lock:
-            self._source_sequences.pop(series_key, None)
-            self._detector_clock_ms.pop(series_key, None)
-            self._series_epochs[series_key] = time.time_ns()
-            self._sequence_losses.pop(tracking_key, None)
-            self._last_worker_sequence.pop(tracking_key, None)
-        with self._metrics_lock:
-            self._series_with_gap.discard(tracking_key)
 
     def _account_for_sequence_gap(self, envelope: RawMarketObservation) -> None:
         key = (
@@ -1478,7 +1348,6 @@ def _to_price_observation(
         source_quality_status="forward_0b_local_receive_ordered",
         instrument_metadata_source="missing_forward_symbol_master",
         instrument_metadata_verified=False,
-        manual_control_exclusion_checked=True,
     )
 
 
@@ -1639,12 +1508,23 @@ def _reconcile_canonical_stream(
     row_count = 0
     for stream_file in stream_files:
         for row in _iter_jsonl_rows(stream_file):
-            if row.get("schema") != "scalp_micro_reversion_market_stream_point_v1":
-                raise ValueError("unexpected canonical stream schema")
+            stream_contract = (
+                row.get("schema"),
+                row.get("metric_contract_id"),
+            )
+            if stream_contract not in {
+                (
+                    "scalp_micro_reversion_market_stream_point_v1",
+                    "scalp_micro_reversion_market_stream_contract_v1",
+                ),
+                (
+                    "scalp_micro_reversion_market_stream_point_v2",
+                    "scalp_micro_reversion_market_stream_contract_v2",
+                ),
+            }:
+                raise ValueError("unexpected canonical stream schema or contract")
             if (
-                row.get("metric_contract_id")
-                != "scalp_micro_reversion_market_stream_contract_v1"
-                or row.get("actual_order_submitted") is not False
+                row.get("actual_order_submitted") is not False
                 or row.get("broker_order_forbidden") is not True
                 or row.get("trading_runtime_effect") is not False
             ):

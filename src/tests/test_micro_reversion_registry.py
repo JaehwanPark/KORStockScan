@@ -9,8 +9,6 @@ from src.engine.scalping.micro_reversion.registry import (
 def _candidate(symbol: str, **overrides) -> RegistryCandidate:
     values = {
         "symbol": symbol,
-        "manual_control_exclusion_checked": True,
-        "manual_control_excluded": False,
         "tradeable": True,
         "minimum_source_contract_passed": True,
         "prior_path_evidence_passed": False,
@@ -29,10 +27,9 @@ def test_registry_preserves_unknown_tax_discovery_observation() -> None:
     assert "registry_priority_as_expected_value" in entry.forbidden_uses
 
 
-def test_manual_control_is_hard_reject() -> None:
-    entry = classify_candidate(_candidate("000001", manual_control_excluded=True))
-    assert entry.tier is RegistryTier.REJECT
-    assert entry.observation_allowed is False
+def test_registry_has_no_manual_control_gate() -> None:
+    entry = classify_candidate(_candidate("000001"))
+    assert "manual_control" not in entry.source_quality_gate
 
 
 def test_core_priority_never_grants_economic_headline() -> None:

@@ -1,0 +1,155 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20260810T105054+0900",
+  "generated_at": "2026-08-10T10:50:54+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1010-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000127,
+      "p99_ms": 0.000138,
+      "max_ms": 0.009706,
+      "mean_ms": 0.0001243246
+    },
+    {
+      "p50_ms": 0.000123,
+      "p95_ms": 0.000129,
+      "p99_ms": 0.000143,
+      "max_ms": 0.006942,
+      "mean_ms": 0.0001248878
+    },
+    {
+      "p50_ms": 0.000123,
+      "p95_ms": 0.00013,
+      "p99_ms": 0.000143,
+      "max_ms": 0.018028,
+      "mean_ms": 0.0001285448
+    },
+    {
+      "p50_ms": 0.000123,
+      "p95_ms": 0.000131,
+      "p99_ms": 0.000148,
+      "max_ms": 0.014341,
+      "mean_ms": 0.0001278386
+    },
+    {
+      "p50_ms": 0.000123,
+      "p95_ms": 0.000131,
+      "p99_ms": 0.000145,
+      "max_ms": 0.000242,
+      "mean_ms": 0.000123877
+    }
+  ],
+  "observer_on_runs": [
+    {
+      "p50_ms": 0.021318,
+      "p95_ms": 0.026674,
+      "p99_ms": 0.037882,
+      "max_ms": 15.437898,
+      "mean_ms": 0.045429914200000004,
+      "collector_internal_p95_ms": 0.025288,
+      "collector_internal_p99_ms": 0.037579,
+      "queue_drop_count": 0,
+      "worker_error_count": 0
+    },
+    {
+      "p50_ms": 0.021352,
+      "p95_ms": 0.025169,
+      "p99_ms": 0.052556,
+      "max_ms": 11.628656,
+      "mean_ms": 0.0406563998,
+      "collector_internal_p95_ms": 0.022727,
+      "collector_internal_p99_ms": 0.050333,
+      "queue_drop_count": 0,
+      "worker_error_count": 0
+    },
+    {
+      "p50_ms": 0.021563,
+      "p95_ms": 0.023587,
+      "p99_ms": 0.032905,
+      "max_ms": 15.344565,
+      "mean_ms": 0.046047334999999995,
+      "collector_internal_p95_ms": 0.021679,
+      "collector_internal_p99_ms": 0.030352,
+      "queue_drop_count": 0,
+      "worker_error_count": 0
+    },
+    {
+      "p50_ms": 0.021611,
+      "p95_ms": 0.023287,
+      "p99_ms": 0.03404,
+      "max_ms": 15.358341,
+      "mean_ms": 0.0464299154,
+      "collector_internal_p95_ms": 0.021849,
+      "collector_internal_p99_ms": 0.03239,
+      "queue_drop_count": 0,
+      "worker_error_count": 0
+    },
+    {
+      "p50_ms": 0.021687,
+      "p95_ms": 0.024582,
+      "p99_ms": 0.039738,
+      "max_ms": 16.831252,
+      "mean_ms": 0.051605809,
+      "collector_internal_p95_ms": 0.023494,
+      "collector_internal_p99_ms": 0.040629,
+      "queue_drop_count": 0,
+      "worker_error_count": 0
+    }
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000131,
+    "observer_off_p99_ms_max": 0.000148,
+    "observer_on_external_p95_ms_max": 0.026674,
+    "observer_on_external_p99_ms_max": 0.052556,
+    "observer_on_internal_p95_ms_max": 0.025288,
+    "observer_on_internal_p99_ms_max": 0.050333,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1,
+    "producer_callback_latency_p99_max_ms": 2,
+    "snapshot_stale_after_sec": 30
+  },
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config_and_zero_drop_error_gap_or_storage_degradation",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ],
+  "source_base_commit": "a82dcb5766c283cc5a4b83e4e539f115aacf957f",
+  "benchmark_module_sha256": "6ba18f24b93364ab5be2b1d08514ebf466f2b90f6edec40ab847bf8b6d5b1cb8",
+  "forward_collector_sha256": "aa9d65d02d93e064e93d85d81ca7055f6b65db8f82d07a2a0950e03f4719c228",
+  "path_journal_sha256": "5eeb39e73b8e3483fa10f7eef87975eca3bc468e0a2c3bfd42d78d78c631cc58",
+  "path_capture_sha256": "ccc8670d7879440062d4a1f2fe5b6cac8ab592cc6a2540436aa2cb700c964ccd",
+  "p2_replay_sha256": "5d95be682ad4058fa513ecf3d4e6b7cdbf4ec0380e53d131dcdeb4ffbf95eeb1",
+  "storage_maintenance_sha256": "aa7ec72ffbdb6b6d402138cf667c7bd669b10cf867c21af518acda4d3080bc27",
+  "kiwoom_websocket_sha256": "eefd802cac9678740f0da297144f38cb291f22d9f85d2a0023d8d9ef469e5a97",
+  "canary_guard_config_sha256": "c469cb0265de70cb8768b9c686df04fdb009f6343d2da00600ec90a8e8df9fd3",
+  "interpretation": "main_server_all_symbol_canonical_stream_synthetic_preflight_only_no_strategy_edge_or_runtime_promotion_authority"
+}

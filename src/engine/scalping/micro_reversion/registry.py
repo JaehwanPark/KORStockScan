@@ -10,13 +10,13 @@ from typing import Iterable
 
 from .contracts import normalize_symbol
 
-REGISTRY_SCHEMA = "scalp_micro_reversion_opportunity_registry_v1"
+REGISTRY_SCHEMA = "scalp_micro_reversion_opportunity_registry_v2"
 REGISTRY_METRIC_CONTRACT = {
     "metric_role": "observation_budget_priority",
     "window_policy": "daily_registry_with_deterministic_discovery_rotation",
     "sample_floor": "not_an_economic_promotion_metric",
     "primary_decision_metric": "registry_tier",
-    "source_quality_gate": "manual_control_tradeability_and_minimum_source_contract",
+    "source_quality_gate": "tradeability_and_minimum_source_contract",
     "forbidden_uses": (
         "registry_priority_as_expected_value",
         "tax_unknown_as_economic_candidate",
@@ -35,8 +35,6 @@ class RegistryTier(StrEnum):
 @dataclass(frozen=True, slots=True)
 class RegistryCandidate:
     symbol: str
-    manual_control_exclusion_checked: bool
-    manual_control_excluded: bool
     tradeable: bool
     minimum_source_contract_passed: bool
     prior_path_evidence_passed: bool
@@ -75,10 +73,6 @@ class RegistryEntry:
 
 def classify_candidate(candidate: RegistryCandidate) -> RegistryEntry:
     hard_reasons: list[str] = []
-    if not candidate.manual_control_exclusion_checked:
-        hard_reasons.append("manual_control_exclusion_not_checked")
-    elif candidate.manual_control_excluded:
-        hard_reasons.append("manual_control_excluded")
     if not candidate.tradeable:
         hard_reasons.append("not_tradeable")
     if not candidate.minimum_source_contract_passed:

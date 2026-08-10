@@ -45,9 +45,6 @@ def build_report(result: ReplayResult) -> dict[str, Any]:
         if label.mature_horizon_count == len(DEFAULT_HORIZONS_SEC)
     ]
     event_symbols = {event.symbol for event in result.events}
-    excluded_event_symbols = event_symbols.intersection(
-        result.input_stats.manual_control_excluded_codes
-    )
     mature_coverage_rate = (
         len(fully_mature_labels) / len(result.events) if result.events else None
     )
@@ -127,7 +124,6 @@ def build_report(result: ReplayResult) -> dict[str, Any]:
         event_count=len(result.events),
         fully_mature_event_count=len(fully_mature_labels),
         primary_ev_pct=primary["source_quality_adjusted_ev_pct"],
-        manual_exclusion_leak_count=len(excluded_event_symbols),
         mature_coverage_rate=mature_coverage_rate,
         trade_date_count=len(trade_dates),
         positive_day_count=positive_day_count,
@@ -143,7 +139,6 @@ def build_report(result: ReplayResult) -> dict[str, Any]:
         fully_mature_event_count=len(fully_mature_labels),
         gross_reversion_supported=gross_reversion_supported,
         primary_ev_pct=primary["source_quality_adjusted_ev_pct"],
-        manual_exclusion_leak_count=len(excluded_event_symbols),
         mature_coverage_rate=mature_coverage_rate,
         trade_date_count=len(trade_dates),
         positive_day_count=positive_day_count,
@@ -239,10 +234,6 @@ def build_report(result: ReplayResult) -> dict[str, Any]:
             "positive_300s_ev_day_count": positive_day_count,
             "max_date_ev_contribution_rate": max_date_ev_contribution_rate,
             "eligible_positive_parent_count": eligible_positive_parent_count,
-            "manual_control_excluded_row_count": (
-                result.input_stats.manual_control_excluded_row_count
-            ),
-            "manual_control_excluded_event_count": len(excluded_event_symbols),
             "deduplicated_observation_coverage_tier_counts": (
                 result.input_stats.coverage_tier_counts
             ),
@@ -294,10 +285,8 @@ def build_report(result: ReplayResult) -> dict[str, Any]:
         "source_quality": {
             "status": _source_quality_status(
                 result,
-                manual_exclusion_leak_count=len(excluded_event_symbols),
             ),
             "input_stats": result.input_stats.as_dict(),
-            "manual_control_excluded_event_symbols": sorted(excluded_event_symbols),
             "known_limitations": [
                 "selected_pipeline_observations_not_continuous_tick_feed",
                 "missing_l2_queue_and_fill_latency",
@@ -504,7 +493,6 @@ def _decision_status(
     fully_mature_event_count: int,
     gross_reversion_supported: bool,
     primary_ev_pct: float | None,
-    manual_exclusion_leak_count: int,
     mature_coverage_rate: float | None,
     trade_date_count: int,
     positive_day_count: int,
@@ -512,8 +500,6 @@ def _decision_status(
     eligible_positive_parent_count: int,
     aggregate_taxable_equity_economic_gate_passed: bool | None = None,
 ) -> str:
-    if manual_exclusion_leak_count:
-        return "source_quality_blocked_manual_exclusion_leak"
     if event_count == 0:
         return "no_shock_events_identified"
     if (
@@ -815,7 +801,6 @@ def _gate_results(
     event_count: int,
     fully_mature_event_count: int,
     primary_ev_pct: float | None,
-    manual_exclusion_leak_count: int,
     mature_coverage_rate: float | None,
     trade_date_count: int,
     positive_day_count: int,
@@ -825,12 +810,6 @@ def _gate_results(
     aggregate_taxable_equity_economic_gate_passed: bool | None,
 ) -> list[dict[str, Any]]:
     return [
-        {
-            "gate": "manual_control_exclusion_leak_count_eq_0",
-            "actual": manual_exclusion_leak_count,
-            "threshold": 0,
-            "passed": manual_exclusion_leak_count == 0,
-        },
         {
             "gate": "shock_event_count_gt_0",
             "actual": event_count,
@@ -895,13 +874,7 @@ def _gate_results(
     ]
 
 
-def _source_quality_status(
-    result: ReplayResult,
-    *,
-    manual_exclusion_leak_count: int,
-) -> str:
-    if manual_exclusion_leak_count:
-        return "fail_manual_exclusion_leak"
+def _source_quality_status(result: ReplayResult) -> str:
     if not result.observations:
         return "blocked_no_usable_observations"
     excluded_or_invalid = (
@@ -914,7 +887,7 @@ def _source_quality_status(
     )
     if excluded_or_invalid:
         return "pass_with_row_exclusions"
-    return "pass_no_manual_exclusion_leak"
+    return "pass"
 
 
 def _avg(values: list[float], *, divisor: float = 1.0) -> float | None:
@@ -987,7 +960,6 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- deduplicated observations: `{summary['deduplicated_observation_count']}`",
         f"- shock events: `{summary['event_count']}`",
         f"- fully mature events: `{summary['fully_mature_event_count']}`",
-        f"- manual-control event leaks: `{summary['manual_control_excluded_event_count']}`",
         "",
         "### Candidate gates",
         "",

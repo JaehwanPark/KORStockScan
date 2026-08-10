@@ -19,15 +19,11 @@ import time
 from collections import deque
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from typing import Any, Callable, Iterable, Protocol, runtime_checkable
-
-from src.engine.risk.manual_control_exclusion import (
-    configured_manual_control_exclusion_codes,
-)
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from .contracts import normalize_symbol, normalize_venue
 
-OBSERVER_ENVELOPE_SCHEMA = "scalp_micro_reversion_observation_envelope_v3"
+OBSERVER_ENVELOPE_SCHEMA = "scalp_micro_reversion_observation_envelope_v4"
 OBSERVER_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_observer_runtime_health",
     "decision_authority": "observation_transport_only_no_trading_authority",
@@ -35,8 +31,7 @@ OBSERVER_METRIC_CONTRACT = {
     "sample_floor": "collector_health_only_no_economic_promotion",
     "primary_decision_metric": "observation_capture_coverage_pct",
     "source_quality_gate": (
-        "manual_control_allowed_and_aware_timestamps_and_explicit_venue_"
-        "and_nonnegative_source_sequence"
+        "aware_timestamps_and_explicit_venue_and_nonnegative_source_sequence"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -52,7 +47,6 @@ OBSERVER_METRIC_CONTRACT = {
 class AdapterResult(StrEnum):
     DISABLED = "disabled"
     ENQUEUED = "enqueued"
-    MANUAL_CONTROL_EXCLUDED = "manual_control_excluded"
     INVALID_ENVELOPE = "invalid_envelope"
     QUEUE_FULL = "queue_full"
     ISOLATED_ERROR = "isolated_error"
@@ -125,10 +119,6 @@ class RawMarketObservation:
     sequence_epoch: int
     series_sequence: int
     realtime_type: str
-    manual_control_exclusion_checked: bool
-    manual_control_excluded: bool
-    manual_control_exclusion_version: int
-    manual_control_exclusion_checked_at: str
     trade_price: float | None = None
     trade_qty: int | None = None
     best_bid: float | None = None
@@ -156,16 +146,6 @@ class RawMarketObservation:
             raise ValueError("source_sequence must equal series_sequence")
         if self.sequence_epoch <= 0:
             raise ValueError("sequence_epoch must be positive")
-        if not self.manual_control_exclusion_checked:
-            raise ValueError("manual-control exclusion must be checked first")
-        if self.manual_control_excluded:
-            raise ValueError("manual-control excluded symbols must not be observed")
-        if self.manual_control_exclusion_version <= 0:
-            raise ValueError("manual-control exclusion version must be positive")
-        _validate_aware_timestamp(
-            self.manual_control_exclusion_checked_at,
-            "manual_control_exclusion_checked_at",
-        )
         _validate_aware_timestamp(self.exchange_timestamp, "exchange_timestamp")
         _validate_aware_timestamp(
             self.local_receive_timestamp, "local_receive_timestamp"
@@ -208,7 +188,6 @@ class RawMarketObservation:
         payload["aggressor_side"] = self.aggressor_side.value
         payload.update(
             {
-                "manual_control_exclusion_checked": True,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "trading_runtime_effect": False,
@@ -265,7 +244,6 @@ class ObserverRuntimeSnapshot:
     queue_high_water: int
     queue_full_count: int
     dropped_envelope_count: int
-    manual_control_excluded_count: int
     invalid_envelope_count: int
     isolated_error_count: int
     observer_runtime_loaded: bool
@@ -294,7 +272,6 @@ class ObserverRuntimeMetrics:
         self._queue_high_water = 0
         self._queue_full = 0
         self._dropped = 0
-        self._manual_excluded = 0
         self._invalid = 0
         self._isolated_error = 0
 
@@ -324,8 +301,6 @@ class ObserverRuntimeMetrics:
             if result is AdapterResult.QUEUE_FULL:
                 self._queue_full += 1
                 self._dropped += 1
-            elif result is AdapterResult.MANUAL_CONTROL_EXCLUDED:
-                self._manual_excluded += 1
             elif result is AdapterResult.INVALID_ENVELOPE:
                 self._invalid += 1
                 self._dropped += 1
@@ -357,7 +332,6 @@ class ObserverRuntimeMetrics:
                 queue_high_water=self._queue_high_water,
                 queue_full_count=self._queue_full,
                 dropped_envelope_count=self._dropped,
-                manual_control_excluded_count=self._manual_excluded,
                 invalid_envelope_count=self._invalid,
                 isolated_error_count=self._isolated_error,
                 observer_runtime_loaded=observer_runtime_loaded,
@@ -368,7 +342,7 @@ class ObserverRuntimeMetrics:
 
 
 class ObservationAdapter:
-    """Manual-exclusion-first, exception-isolated producer adapter."""
+    """Minimal, exception-isolated producer adapter."""
 
     def __init__(
         self,
@@ -376,77 +350,12 @@ class ObservationAdapter:
         *,
         flags: ObserverFeatureFlags | None = None,
         metrics: ObserverRuntimeMetrics | None = None,
-        manual_excluded_symbols: Iterable[str] | None = None,
         queue_depth: Callable[[], int] | None = None,
     ) -> None:
         self._sink = sink
         self.flags = flags or ObserverFeatureFlags.from_env()
         self.metrics = metrics or ObserverRuntimeMetrics()
-        excluded = (
-            configured_manual_control_exclusion_codes()
-            if manual_excluded_symbols is None
-            else manual_excluded_symbols
-        )
-        self._manual_excluded_symbols = frozenset(
-            normalize_symbol(symbol) for symbol in excluded if normalize_symbol(symbol)
-        )
-        self._manual_exclusion_lock = threading.Lock()
-        self._manual_exclusion_version = 1
-        self._manual_exclusion_generations: dict[str, int] = {}
-        self._manual_exclusion_checked_at = _utc_now_iso()
         self._queue_depth = queue_depth
-
-    def refresh_manual_exclusions(
-        self, symbols: Iterable[str] | None = None
-    ) -> tuple[frozenset[str], frozenset[str], int]:
-        """Refresh outside the producer callback; file access never occurs in observe."""
-
-        excluded = (
-            configured_manual_control_exclusion_codes() if symbols is None else symbols
-        )
-        refreshed = frozenset(
-            normalize_symbol(symbol) for symbol in excluded if normalize_symbol(symbol)
-        )
-        with self._manual_exclusion_lock:
-            previous = self._manual_excluded_symbols
-            if refreshed != previous:
-                self._manual_exclusion_version += 1
-                for symbol in refreshed.symmetric_difference(previous):
-                    self._manual_exclusion_generations[symbol] = (
-                        self._manual_exclusion_generations.get(symbol, 1) + 1
-                    )
-            self._manual_excluded_symbols = refreshed
-            self._manual_exclusion_checked_at = _utc_now_iso()
-            return (
-                refreshed - previous,
-                previous - refreshed,
-                self._manual_exclusion_version,
-            )
-
-    def manual_exclusion_snapshot(
-        self, symbol: object | None = None
-    ) -> tuple[frozenset[str], int, str]:
-        with self._manual_exclusion_lock:
-            version = self._manual_exclusion_version
-            if symbol is not None:
-                version = self._manual_exclusion_generations.get(
-                    normalize_symbol(symbol), 1
-                )
-            return (
-                self._manual_excluded_symbols,
-                version,
-                self._manual_exclusion_checked_at,
-            )
-
-    def manual_exclusion_generation(self, symbol: object) -> int:
-        normalized = normalize_symbol(symbol)
-        with self._manual_exclusion_lock:
-            return self._manual_exclusion_generations.get(normalized, 1)
-
-    def is_manual_excluded(self, symbol: object) -> bool:
-        normalized = normalize_symbol(symbol)
-        with self._manual_exclusion_lock:
-            return normalized in self._manual_excluded_symbols
 
     def runtime_snapshot(self) -> ObserverRuntimeSnapshot:
         return self.metrics.snapshot(self.flags, observer_runtime_loaded=True)
@@ -460,23 +369,8 @@ class ObservationAdapter:
         try:
             if not self.flags.observer_enabled:
                 return result
-            symbol = normalize_symbol(envelope_fields.get("symbol"))
-            excluded, exclusion_version, exclusion_checked_at = (
-                self.manual_exclusion_snapshot(symbol)
-            )
-            if symbol in excluded:
-                result = AdapterResult.MANUAL_CONTROL_EXCLUDED
-                return result
             try:
-                envelope = RawMarketObservation(
-                    **{
-                        **envelope_fields,
-                        "manual_control_exclusion_checked": True,
-                        "manual_control_excluded": False,
-                        "manual_control_exclusion_version": exclusion_version,
-                        "manual_control_exclusion_checked_at": exclusion_checked_at,
-                    }
-                )
+                envelope = RawMarketObservation(**envelope_fields)
             except (TypeError, ValueError):
                 result = AdapterResult.INVALID_ENVELOPE
                 return result
@@ -542,9 +436,3 @@ def _percentile(values: tuple[float, ...], percentile: int) -> float:
     ordered = sorted(values)
     index = round((len(ordered) - 1) * percentile / 100)
     return round(ordered[index], 6)
-
-
-def _utc_now_iso() -> str:
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC).isoformat()

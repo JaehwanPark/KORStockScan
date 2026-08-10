@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from src.engine.scalping.micro_reversion.contracts import (
     CoverageTier,
     PriceObservation,
@@ -22,9 +20,10 @@ def _observation(**overrides) -> PriceObservation:
     return PriceObservation(**payload)
 
 
-def test_price_observation_requires_manual_control_check_first() -> None:
-    with pytest.raises(ValueError, match="manual-control exclusion"):
-        _observation(manual_control_exclusion_checked=False)
+def test_price_observation_has_no_manual_control_contract() -> None:
+    payload = _observation().as_dict()
+    assert payload["schema"] == "scalp_micro_reversion_price_observation_v4"
+    assert not any(key.startswith("manual_control") for key in payload)
 
 
 def test_coverage_tiers_never_impute_missing_microstructure() -> None:

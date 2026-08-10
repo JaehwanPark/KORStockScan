@@ -46,7 +46,6 @@ def test_adapter_only_enqueues_immutable_envelope_when_enabled() -> None:
     adapter = ObservationAdapter(
         sink,
         flags=ObserverFeatureFlags(observer_enabled=True),
-        manual_excluded_symbols=(),
         queue_depth=sink.qsize,
     )
 
@@ -67,18 +66,17 @@ def test_adapter_only_enqueues_immutable_envelope_when_enabled() -> None:
     assert snapshot.exchange_to_receive_latency_p95_ms == 10.0
 
 
-def test_manual_control_exclusion_precedes_envelope_creation() -> None:
+def test_adapter_has_no_manual_control_classification_contract() -> None:
     sink = BoundedObservationQueue(maxsize=1)
     adapter = ObservationAdapter(
         sink,
         flags=ObserverFeatureFlags(observer_enabled=True),
-        manual_excluded_symbols=("000001",),
     )
 
-    result = adapter.observe(**_fields(trade_price=-1))
+    result = adapter.observe(**_fields())
 
-    assert result is AdapterResult.MANUAL_CONTROL_EXCLUDED
-    assert sink.qsize() == 0
+    assert result is AdapterResult.ENQUEUED
+    assert "manual_control_excluded" not in sink.get(timeout=0.01).as_dict()
 
 
 def test_adapter_isolates_sink_failure() -> None:
@@ -89,7 +87,6 @@ def test_adapter_isolates_sink_failure() -> None:
     adapter = ObservationAdapter(
         BrokenSink(),
         flags=ObserverFeatureFlags(observer_enabled=True),
-        manual_excluded_symbols=(),
     )
 
     assert adapter.observe(**_fields()) is AdapterResult.ISOLATED_ERROR

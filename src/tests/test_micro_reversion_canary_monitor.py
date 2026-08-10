@@ -33,7 +33,7 @@ def _healthy_snapshot(**overrides):
     snapshot.update({field: False for field in _FORBIDDEN_TRUE_FIELDS})
     snapshot.update(
         {
-            "schema": "scalp_micro_reversion_forward_collector_v4",
+            "schema": "scalp_micro_reversion_forward_collector_v5",
             "collector_lifecycle": "running",
             "observer_runtime_loaded": True,
             "producer_observation_connected": True,
@@ -88,7 +88,6 @@ def test_guard_stops_on_drop_leak_authority_and_latency() -> None:
     evaluation = evaluate_canary_snapshot(
         _healthy_snapshot(
             observation_dropped_envelope_count=1,
-            manual_control_event_leak_count=1,
             actual_order_submitted=True,
             producer_callback_latency_p95_ms=1.1,
             producer_callback_latency_p99_ms=2.1,
@@ -100,7 +99,6 @@ def test_guard_stops_on_drop_leak_authority_and_latency() -> None:
     assert evaluation["stop_required"] is True
     reasons = "\n".join(evaluation["stop_reasons"])
     assert "observation_dropped_envelope_count=1" in reasons
-    assert "manual_control_event_leak_count=1" in reasons
     assert "forbidden_authority_field:actual_order_submitted" in reasons
     assert "producer_callback_latency_p95_exceeded" in reasons
     assert "producer_callback_latency_p99_exceeded" in reasons

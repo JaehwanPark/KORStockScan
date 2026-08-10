@@ -33,10 +33,6 @@ def _envelope(sequence: int, second: int) -> RawMarketObservation:
         sequence_epoch=1,
         series_sequence=sequence,
         realtime_type="0B",
-        manual_control_exclusion_checked=True,
-        manual_control_excluded=False,
-        manual_control_exclusion_version=1,
-        manual_control_exclusion_checked_at="2026-04-10T09:00:00+09:00",
         trade_price=10_000 - sequence,
         trade_qty=10,
     )

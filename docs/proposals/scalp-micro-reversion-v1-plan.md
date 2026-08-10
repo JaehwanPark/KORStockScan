@@ -13,7 +13,7 @@
 따라서 진행 순서는 다음으로 제한한다.
 
 1. 기존 clean-baseline 데이터로 coverage-aware V0 replay를 실행한다.
-2. 수동관리 제외·거래세션·최소 source 계약·detector를 통과한 종목은 세율 미확인이어도 V1 forward observation에 포함한다.
+2. 거래세션·최소 source 계약·detector를 통과한 모든 종목은 세율 미확인이어도 V1 forward observation에 포함한다.
 3. exact tax class·all-in cost·OOS clustered EV LCB·tail/concentration gate를 통과한 후보만 경제성 headline 대상으로 좁힌다.
 4. 충분한 연속 경로와 forward 표본에서 비용 차감 EV와 tail loss를 검증한 뒤에만 sim assumed-fill을 별도 검토한다.
 5. 실주문은 별도 사용자 승인, 별도 runtime family, 별도 rollback 계약 전에는 열지 않는다.
@@ -27,12 +27,12 @@
 - `contracts.py`: observation/event/outcome/metric authority 계약
 - `detector.py`: robust median/MAD, hysteresis, cooldown 기반 shock detector
 - `outcome_labeler.py`: 15/30/60/120/180/300/600초 future-path label
-- `replay.py`, `report.py`: clean-baseline replay, 수동관리 hard veto, JSON/Markdown report
+- `replay.py`, `report.py`: 전체 관측 universe의 clean-baseline replay와 JSON/Markdown report
 - `tax.py`: 날짜·상장시장·상품유형별 법정 매도세율 계약
 - `symbol_master.py`: effective-date·conflict를 포함한 verified symbol master 계약
 - `observation_gate.py`, `registry.py`: 넓은 관찰 gate와 좁은 경제성 gate, CORE/DISCOVERY 예산 분리
 - `path_journal.py`: bounded non-blocking queue와 batch/fsync를 쓰는 연속 market-path 저널 계약
-- `observation_adapter.py`: package eager import 없는 최소 sink, 수동제외 snapshot, immutable envelope, 기본 OFF flag와 runtime metric
+- `observation_adapter.py`: package eager import 없는 최소 sink, immutable envelope, 기본 OFF flag와 runtime metric
 - `path_capture.py`: 30초 pre-event ring, parent-wave 단일 segment/reference, pre/active/post coverage
 - `p2_replay.py`: source-only frozen policy, non-lookahead watermark, fill bound·partial fill·TTL·ambiguity synthetic engine
 - `execution_journal.py`: 제출상태·주문원천·체결상태·증거자격을 분리한 receipt 계약
@@ -44,13 +44,13 @@
 
 ### 1.2 V0 실행 판정 (`2026-08-08`)
 
-정식 V4 replay는 `v0_aggregate_taxable_equity_gate_failed_subcohort_execution_unresolved`로 종료했다. shock pattern과 15~180초 gross reversion edge는 식별됐지만 일반 과세주권 법정비용 하한 `20bp`가 최고 fixed-horizon gross `14.450139bp`보다 높아 전체 이벤트 fixed-horizon 경제성 gate는 실패했다. 다만 tax class와 execution 자료가 부족하므로 세부 cohort와 path-based 정책 탐색은 계속 연다.
+정식 V4 replay는 당시 수동관리 제외 계약을 적용하여 `v0_aggregate_taxable_equity_gate_failed_subcohort_execution_unresolved`로 종료했다. 아래 수치는 역사적 감사 증거이며, `2026-08-10` 이후 전체 관측 universe 계약의 재평가 기준값으로 직접 사용하지 않는다. shock pattern과 15~180초 gross reversion edge는 식별됐지만 일반 과세주권 법정비용 하한 `20bp`가 최고 fixed-horizon gross `14.450139bp`보다 높아 전체 이벤트 fixed-horizon 경제성 gate는 실패했다. 다만 tax class와 execution 자료가 부족하므로 세부 cohort와 path-based 정책 탐색은 계속 연다.
 
 | 항목 | 결과 | 판정 |
 |---|---:|---|
 | raw rows / deduplicated observations | `2,644,506 / 469,231` | 5거래일 입력 확인 |
 | shock events / symbols | `2,399 / 640` | 패턴은 식별됨 |
-| manual-control excluded rows / event leak | `130,303 / 0` | hard veto 통과 |
+| 당시 manual-control 제외 rows / event leak | `130,303 / 0` | 폐기된 구 계약의 역사적 결과 |
 | 300초 mature sample | `292` | 후보 floor `1,000` 미달 |
 | 10분 fully mature event | `99 (4.13%)` | coverage floor `90%` 미달 |
 | 15~180초 gross EV | `+0.121910% ~ +0.144501%` | gross edge 식별 |
@@ -79,8 +79,8 @@
 | 범위 | 관측값 | 해석 |
 |---|---:|---|
 | pipeline events `2026-08-03`~`2026-08-07` | `2,644,506` rows | 이벤트/가격 경로 가설 탐색 가능 |
-| 수동관리 제외 후 rows | `2,514,203` | V0 universe의 상한 inventory |
-| non-manual `current_price_observed` | `2,440,443` occurrences | 중복·비정규장 관측 포함 |
+| 당시 수동관리 제외 후 rows | `2,514,203` | 폐기된 구 계약의 역사적 inventory |
+| 당시 non-manual `current_price_observed` | `2,440,443` occurrences | 폐기된 구 계약, 중복·비정규장 관측 포함 |
 | `2026-08-07` pipeline events | `471,544` rows | 단일 거래일 source-quality audit 가능 |
 | 5일 정규장 deduplicated symbol-seconds | `468,245` | coarse horizon label 재구성 가능 |
 | 완전한 best bid + best ask rows | `381` | 연속 호가 replay에는 부족 |
@@ -107,7 +107,7 @@ V0 구현 가치만 판단하기 위해 다음의 단순하고 고정된 탐색 
 ```text
 기간: 2026-08-03 ~ 2026-08-07
 세션: 09:00 ~ 15:30
-수동관리 제외: 950160, 005930, 034020, 042660
+당시 수동관리 제외(폐기된 구 계약): 950160, 005930, 034020, 042660
 가격: current_price_observed를 symbol-second로 deduplicate
 shock: 약 5초 수익률 <= -30bps
 event cooldown: 60초
@@ -185,29 +185,16 @@ event cooldown: 60초
 
 API adapter는 주문·계좌 endpoint를 import하거나 호출하지 않는다. cached token이 없으면 `source_unavailable`로 종료하며 전략 수집을 위해 토큰을 새로 발급·갱신하지 않는다.
 
-## 5. 수동관리 제외 하드 계약
+## 5. 수동관리 제외 책임 경계
 
-`evaluate_manual_control_exclusion(code)`를 다음 모든 경계의 첫 번째 검사로 사용한다.
+micro-reversion의 수집·탐지·경로 저장·replay·P2·경제성 평가는 수동관리 제외목록을 조회하거나 종목을 다르게 취급하지 않는다. 수동관리 여부는 시장 신호의 존재나 전략 가설의 평가 자격과 무관하므로 observation, registry, event, journal, report schema에도 해당 필드를 두지 않는다.
 
-1. historical replay universe 구성 전
-2. 키움 보완 API request 구성 전
-3. pattern propensity scanner 입력 전
-4. active symbol registry 등록·갱신 전
-5. 실시간 detector state 생성 전
-6. event journal write 전
-7. 향후 sim/live adapter 호출 전
-
-제외 판정은 전략 외부 guard log에 `manual_control_excluded` provenance만 남기고 해당 종목의 전략 feature, event journal row, API 요청을 생성하지 않는다. 이미 active인 종목이 장중 제외되면 내부 registry/state만 폐기한다. 주문 취소·매도·수량 변경은 수행하지 않는다.
-
-현재 제외 파일의 `950160`, `005930`, `034020`, `042660`은 V0 분석과 모든 보완 조회에서 제외한다. 특히 `034020`의 위젯 전용 owner는 이 전략의 예외가 아니다.
+수동관리 제외의 유일한 책임 경계는 실제 주문 직전의 기존 공통 매매 guard다. 향후 micro-reversion이 real-order adapter와 연결되더라도 주문 계층이 최신 제외목록을 다시 평가하여 제출을 차단해야 한다. 이 계약은 micro-reversion 내부 표본을 삭제하거나 평가를 왜곡하는 근거로 사용하지 않는다. 현재 V0/V1/P2는 broker authority 자체가 없으므로 실제 주문 경로는 열려 있지 않다.
 
 ## 6. Loose-Coupled V1 구조
 
 ```text
-Broad Tradeable Universe
-              |
-              v
-manual-control exclusion veto
+Broad Observation Universe
               |
               +--> CORE_REGISTRY (evidence-priority)
               |
@@ -313,13 +300,12 @@ trade_price, trade_qty, best_bid, best_ask, bid_depth, ask_depth
 quote_age_ms, aggressor_side, detector_version
 capture_started_at, event_detected_at, capture_ended_at
 dropped_message_count
-manual_control_exclusion_checked=true
 actual_order_submitted=false
 broker_order_forbidden=true
 decision_authority=continuous_market_path_observation_only
 ```
 
-producer dependency는 `producer → ObservationSink → thin adapter → bounded queue`로만 허용한다. hot path는 수동관리 제외, 최소 envelope 검증, `put_nowait`, metric increment만 수행하고 전용 writer가 batch append/flush/fsync를 담당한다. JSON/file/fsync/detector/replay/statistics/symbol-master I/O/broker/LLM은 hot path에서 금지한다. adapter 예외는 producer에 전파하지 않는다.
+producer dependency는 `producer → ObservationSink → thin adapter → bounded queue`로만 허용한다. hot path는 최소 envelope 검증, `put_nowait`, metric increment만 수행하고 전용 writer가 batch append/flush/fsync를 담당한다. JSON/file/fsync/detector/replay/statistics/symbol-master I/O/broker/LLM과 수동관리 제외목록 조회는 hot path에서 금지한다. adapter 예외는 producer에 전파하지 않는다.
 
 active series별 20~30초 bounded ring은 shock 탐지와 capture 시작시각 계산에만 유지한다. 저장은 accepted series sequence당 `market_stream` row를 정확히 한 번 기록하고, shock 발생 시 `symbol/venue/session/sequence_epoch + capture_started_at/event_at/capture_ended_at` window reference만 append한다. 따라서 같은 tick을 event별·segment별로 복제하지 않는다. 동일 `parent_wave_id`의 1/3/5/10/20초 event는 하나의 `path_segment_id`를 공유하며, 이후 독립 impulse가 state re-arm을 통과한 경우에만 새 segment를 연다. P2는 이 reference를 canonical stream에 join하여 필요한 pre/active/post window를 재구성한다.
 
@@ -356,7 +342,7 @@ complete-case EV는 진단값으로만 남긴다. 경제성 headline은 모든 �
 ### Phase A — V0 coverage-aware replay
 
 - clean-baseline raw inventory와 required-field coverage report 생성
-- 수동관리 제외를 적용한 event reconstruction
+- 전체 관측 universe의 동일 기준 event reconstruction
 - price/BBO/micro tier별 15/30/60초 MFE·MAE·recovery/continuation 계산
 - 날짜 walk-forward split과 보수적 거래비용 적용
 - 종목·venue·session bucket별 sample floor와 Wilson lower bound 계산
@@ -365,7 +351,7 @@ complete-case EV는 진단값으로만 남긴다. 경제성 headline은 모든 �
 
 - look-ahead 없는 deterministic replay test 통과
 - 동일 입력 재실행 결과 hash 동일
-- 수동관리 제외종목 event/API request count `0`
+- 종목별 동일 수집·탐지·평가 계약과 결과 재현성 확인
 - usable coverage와 결손 분모가 함께 보고됨
 
 ### Phase B — forward collector 건강성 gate
@@ -412,7 +398,8 @@ P2-C confirmation이 닫힌 뒤 별도 사용자 작업과 재감리로만 연�
 ## 10. 금지사항
 
 - 삭제된 panic-buying artifact 재사용 또는 이름만 변경한 복원
-- manual-control 제외종목의 scanner/API/journal/sim/live 처리
+- micro-reversion 내부에서 수동관리 제외목록을 이용한 수집·평가 차등 처리
+- 향후 실제 주문 adapter에서 기존 공통 수동관리 제외 guard 우회
 - missing orderbook/aggressor 값을 정상값 또는 0으로 대체
 - selected decision-time 표본을 전체 universe 표본으로 해석
 - 승률 또는 단순 수익률 합계를 EV로 사용

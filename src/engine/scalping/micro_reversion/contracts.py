@@ -18,10 +18,10 @@ from .tax import (
 
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 DEFAULT_HORIZONS_SEC = (15, 30, 60, 120, 180, 300, 600)
-OBSERVATION_SCHEMA = "scalp_micro_reversion_price_observation_v3"
+OBSERVATION_SCHEMA = "scalp_micro_reversion_price_observation_v4"
 EVENT_SCHEMA = "scalp_micro_reversion_shock_event_v3"
 OUTCOME_SCHEMA = "scalp_micro_reversion_outcome_label_v3"
-REPORT_SCHEMA = "scalp_micro_reversion_v0_report_v4"
+REPORT_SCHEMA = "scalp_micro_reversion_v0_report_v5"
 POLICY_VERSION = "scalp_micro_reversion_v0_robust_hysteresis_v1"
 
 DECISION_AUTHORITY = "diagnostic_replay_only_no_runtime_activation"
@@ -37,8 +37,8 @@ METRIC_CONTRACT: dict[str, Any] = {
     ),
     "primary_decision_metric": "coverage_adjusted_lower_bound_pct",
     "source_quality_gate": (
-        "manual_control_allowed_and_positive_price_and_horizon_observed_"
-        "within_lag_and_coverage_tier_not_imputed"
+        "positive_price_and_horizon_observed_within_lag_and_coverage_tier_"
+        "not_imputed"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -131,7 +131,6 @@ class PriceObservation:
     instrument_type: InstrumentType = InstrumentType.UNKNOWN
     instrument_metadata_source: str = "missing"
     instrument_metadata_verified: bool = False
-    manual_control_exclusion_checked: bool = True
     schema: str = OBSERVATION_SCHEMA
 
     def __post_init__(self) -> None:
@@ -144,8 +143,6 @@ class PriceObservation:
             raise ValueError("price must be positive")
         if not self.price_source_field:
             raise ValueError("price_source_field is required")
-        if not self.manual_control_exclusion_checked:
-            raise ValueError("manual-control exclusion must be checked first")
         object.__setattr__(self, "symbol", normalized_symbol)
         object.__setattr__(self, "venue", normalize_venue(self.venue))
         object.__setattr__(
@@ -247,7 +244,6 @@ class ShockEvent:
         payload["tax_profile"] = self.tax_profile.as_dict()
         payload.update(
             {
-                "manual_control_exclusion_checked": True,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "runtime_effect": False,

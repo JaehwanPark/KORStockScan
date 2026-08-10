@@ -277,12 +277,23 @@ def load_p2_points_from_canonical_stream(
                 row = json.loads(line)
                 if not isinstance(row, dict):
                     raise ValueError("canonical stream row must be an object")
-                if row.get("schema") != "scalp_micro_reversion_market_stream_point_v1":
-                    raise ValueError("unexpected canonical stream schema")
+                stream_contract = (
+                    row.get("schema"),
+                    row.get("metric_contract_id"),
+                )
+                if stream_contract not in {
+                    (
+                        "scalp_micro_reversion_market_stream_point_v1",
+                        "scalp_micro_reversion_market_stream_contract_v1",
+                    ),
+                    (
+                        "scalp_micro_reversion_market_stream_point_v2",
+                        "scalp_micro_reversion_market_stream_contract_v2",
+                    ),
+                }:
+                    raise ValueError("unexpected canonical stream schema or contract")
                 if (
-                    row.get("metric_contract_id")
-                    != "scalp_micro_reversion_market_stream_contract_v1"
-                    or row.get("actual_order_submitted") is not False
+                    row.get("actual_order_submitted") is not False
                     or row.get("broker_order_forbidden") is not True
                     or row.get("trading_runtime_effect") is not False
                 ):

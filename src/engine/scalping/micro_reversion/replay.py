@@ -11,9 +11,6 @@ from datetime import UTC, date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, TextIO
 
-from src.engine.risk.manual_control_exclusion import (
-    evaluate_manual_control_exclusion,
-)
 from src.utils.constants import DATA_DIR
 
 from .contracts import (
@@ -79,13 +76,10 @@ class ReplayInputStats:
     prebaseline_row_count: int
     outside_session_row_count: int
     missing_symbol_count: int
-    manual_control_excluded_row_count: int
-    manual_control_checked_symbol_count: int
     missing_price_count: int
     invalid_price_count: int
     accepted_row_count: int
     deduplicated_observation_count: int
-    manual_control_excluded_codes: tuple[str, ...]
     coverage_tier_counts: dict[str, int]
     dedupe_interval_ms: int
     conservative_total_cost_bps: float
@@ -134,8 +128,6 @@ def replay_paths(
 
     observations_by_bucket: dict[tuple[str, str, str, str, int], PriceObservation] = {}
     counters: Counter[str] = Counter()
-    excluded_codes: set[str] = set()
-    manual_control_exclusion_cache: dict[str, bool] = {}
 
     for path in normalized_paths:
         with _open_text(path) as handle:
@@ -153,8 +145,6 @@ def replay_paths(
                     row,
                     config=replay_config,
                     counters=counters,
-                    excluded_codes=excluded_codes,
-                    manual_control_exclusion_cache=manual_control_exclusion_cache,
                 )
                 if parsed is None:
                     continue
@@ -203,13 +193,10 @@ def replay_paths(
         prebaseline_row_count=counters["prebaseline_row_count"],
         outside_session_row_count=counters["outside_session_row_count"],
         missing_symbol_count=counters["missing_symbol_count"],
-        manual_control_excluded_row_count=counters["manual_control_excluded_row_count"],
-        manual_control_checked_symbol_count=len(manual_control_exclusion_cache),
         missing_price_count=counters["missing_price_count"],
         invalid_price_count=counters["invalid_price_count"],
         accepted_row_count=counters["accepted_row_count"],
         deduplicated_observation_count=len(observations),
-        manual_control_excluded_codes=tuple(sorted(excluded_codes)),
         coverage_tier_counts=dict(sorted(coverage_counts.items())),
         dedupe_interval_ms=replay_config.dedupe_interval_ms,
         conservative_total_cost_bps=replay_config.conservative_total_cost_bps,
@@ -266,22 +253,11 @@ def _parse_observation(
     *,
     config: ReplayConfig,
     counters: Counter[str],
-    excluded_codes: set[str],
-    manual_control_exclusion_cache: dict[str, bool],
 ) -> PriceObservation | None:
     symbol = normalize_symbol(row.get("stock_code") or row.get("symbol"))
     if not symbol:
         counters["missing_symbol_count"] += 1
         return None
-    if symbol not in manual_control_exclusion_cache:
-        manual_control_exclusion_cache[symbol] = evaluate_manual_control_exclusion(
-            symbol
-        ).excluded
-    if manual_control_exclusion_cache[symbol]:
-        counters["manual_control_excluded_row_count"] += 1
-        excluded_codes.add(symbol)
-        return None
-
     observed_at = _parse_datetime(
         row.get("emitted_at") or row.get("event_time") or row.get("timestamp")
     )
@@ -385,7 +361,6 @@ def _parse_observation(
         instrument_type=metadata.instrument_type,
         instrument_metadata_source=metadata.source,
         instrument_metadata_verified=metadata.verified,
-        manual_control_exclusion_checked=True,
     )
 
 

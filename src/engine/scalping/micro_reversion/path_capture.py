@@ -32,8 +32,7 @@ PATH_CAPTURE_METRIC_CONTRACT = {
     "sample_floor": "five_trading_days_and_200_mature_events_collector_health_only",
     "primary_decision_metric": "pre_active_post_path_coverage_pct",
     "source_quality_gate": (
-        "monotonic_source_sequence_and_no_manual_control_rows_and_"
-        "one_segment_per_parent_wave"
+        "monotonic_source_sequence_and_one_segment_per_parent_wave"
     ),
     "forbidden_uses": (
         "child_event_double_counting",
@@ -508,12 +507,6 @@ def _to_market_path_point(
         ask_depth=envelope.ask_depth,
         quote_age_ms=envelope.quote_age_ms,
         aggressor_side=AggressorSide(envelope.aggressor_side.value),
-        manual_control_exclusion_checked=(envelope.manual_control_exclusion_checked),
-        manual_control_excluded=envelope.manual_control_excluded,
-        manual_control_exclusion_version=(envelope.manual_control_exclusion_version),
-        manual_control_exclusion_checked_at=(
-            envelope.manual_control_exclusion_checked_at
-        ),
     )
 
 
@@ -536,12 +529,6 @@ def to_market_stream_point(envelope: RawMarketObservation) -> MarketStreamPoint:
         ask_depth=envelope.ask_depth,
         quote_age_ms=envelope.quote_age_ms,
         aggressor_side=AggressorSide(envelope.aggressor_side.value),
-        manual_control_exclusion_checked=envelope.manual_control_exclusion_checked,
-        manual_control_excluded=envelope.manual_control_excluded,
-        manual_control_exclusion_version=envelope.manual_control_exclusion_version,
-        manual_control_exclusion_checked_at=(
-            envelope.manual_control_exclusion_checked_at
-        ),
     )
 
 

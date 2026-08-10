@@ -17,7 +17,7 @@ from typing import Any
 
 from .contracts import normalize_symbol
 
-EXECUTION_JOURNAL_SCHEMA = "scalp_micro_reversion_execution_journal_v2"
+EXECUTION_JOURNAL_SCHEMA = "scalp_micro_reversion_execution_journal_v3"
 EXECUTION_JOURNAL_AUTHORITY = "execution_receipt_observation_only"
 EXECUTION_JOURNAL_METRIC_CONTRACT = {
     "metric_role": "execution_observation_provenance",
@@ -26,8 +26,8 @@ EXECUTION_JOURNAL_METRIC_CONTRACT = {
     "sample_floor": "no_promotion_until_forward_clustered_economic_gate_closes",
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
-        "manual_control_allowed_and_submission_origin_fill_state_separated_"
-        "and_terminal_receipt_required_for_no_fill"
+        "submission_origin_fill_state_separated_and_terminal_receipt_"
+        "required_for_no_fill"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -108,8 +108,6 @@ class ExecutionJournalRecord:
     order_terminal_ts: str | None = None
     order_terminal_reason: OrderTerminalReason = OrderTerminalReason.UNKNOWN
     late_fill_qty: int = 0
-    manual_control_exclusion_checked: bool = True
-    manual_control_excluded: bool = False
     schema: str = EXECUTION_JOURNAL_SCHEMA
 
     def __post_init__(self) -> None:
@@ -138,11 +136,6 @@ class ExecutionJournalRecord:
             and self.reference_ask < self.reference_bid
         ):
             raise ValueError("reference_ask must not be below reference_bid")
-        if not self.manual_control_exclusion_checked:
-            raise ValueError("manual-control exclusion must be checked first")
-        if self.manual_control_excluded:
-            raise ValueError("manual-control excluded symbols must not be journaled")
-
         submission_state = SubmissionState(self.submission_state)
         order_origin = OrderOrigin(self.order_origin)
         fill_state = FillState(self.fill_state)

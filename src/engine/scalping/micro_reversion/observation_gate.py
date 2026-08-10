@@ -7,13 +7,13 @@ from enum import StrEnum
 
 from .tax import TaxProfile
 
-OBSERVATION_GATE_SCHEMA = "scalp_micro_reversion_observation_gate_v1"
+OBSERVATION_GATE_SCHEMA = "scalp_micro_reversion_observation_gate_v2"
 OBSERVATION_GATE_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_observation_eligibility_gate",
     "window_policy": "point_in_time_pre_observation_gate",
     "sample_floor": "not_applicable_hard_eligibility_contract",
     "primary_decision_metric": "observation_allowed",
-    "source_quality_gate": "manual_control_session_detector_and_minimum_source_contract",
+    "source_quality_gate": "session_detector_and_minimum_source_contract",
     "forbidden_uses": (
         "economic_headline_from_observation_eligibility",
         "sim_or_runtime_promotion",
@@ -90,17 +90,11 @@ class EconomicGateResult:
 
 def evaluate_observation_gate(
     *,
-    manual_control_exclusion_checked: bool,
-    manual_control_excluded: bool,
     tradeable_session: bool,
     detector_condition_met: bool,
     source_contract_minimum_passed: bool,
 ) -> ObservationGateResult:
     reasons: list[str] = []
-    if not manual_control_exclusion_checked:
-        reasons.append("manual_control_exclusion_not_checked")
-    elif manual_control_excluded:
-        reasons.append("manual_control_excluded")
     if not tradeable_session:
         reasons.append("non_tradeable_session")
     if not source_contract_minimum_passed:

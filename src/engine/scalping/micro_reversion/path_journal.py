@@ -23,11 +23,11 @@ from typing import Any, Iterable
 
 from .contracts import normalize_symbol, normalize_venue
 
-MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v5"
+MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v6"
 MARKET_PATH_MANIFEST_SCHEMA = "scalp_micro_reversion_market_path_manifest_v1"
 MARKET_PATH_AUTHORITY = "continuous_market_path_observation_only"
-MARKET_STREAM_SCHEMA = "scalp_micro_reversion_market_stream_point_v1"
-MARKET_STREAM_CONTRACT_ID = "scalp_micro_reversion_market_stream_contract_v1"
+MARKET_STREAM_SCHEMA = "scalp_micro_reversion_market_stream_point_v2"
+MARKET_STREAM_CONTRACT_ID = "scalp_micro_reversion_market_stream_contract_v2"
 MARKET_STREAM_AUTHORITY = "canonical_market_stream_observation_only"
 MARKET_PATH_METRIC_CONTRACT = {
     "metric_role": "source_quality_gate",
@@ -36,8 +36,8 @@ MARKET_PATH_METRIC_CONTRACT = {
     "sample_floor": "collector_health_5d_200_events_not_economic_promotion",
     "primary_decision_metric": "pre_active_post_path_coverage_pct",
     "source_quality_gate": (
-        "manual_control_allowed_and_monotonic_source_sequence_and_"
-        "timezone_aware_exchange_and_receive_timestamps"
+        "monotonic_source_sequence_and_timezone_aware_exchange_and_receive_"
+        "timestamps"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -55,8 +55,8 @@ MARKET_STREAM_METRIC_CONTRACT = {
     "sample_floor": "five_trading_days_and_200_mature_events_gate_b_only",
     "primary_decision_metric": "canonical_stream_sequence_coverage_pct",
     "source_quality_gate": (
-        "manual_control_allowed_and_monotonic_series_sequence_and_"
-        "timezone_aware_exchange_and_receive_timestamps"
+        "monotonic_series_sequence_and_timezone_aware_exchange_and_receive_"
+        "timestamps"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -92,10 +92,6 @@ class MarketPathPoint:
     event_detected_at: str
     parent_wave_id: str
     path_phase: str
-    manual_control_exclusion_checked: bool
-    manual_control_excluded: bool
-    manual_control_exclusion_version: int
-    manual_control_exclusion_checked_at: str
     capture_ended_at: str | None = None
     trade_price: float | None = None
     trade_qty: int | None = None
@@ -135,16 +131,6 @@ class MarketPathPoint:
             raise ValueError("dropped_message_count must not be negative")
         if not str(self.detector_version).strip():
             raise ValueError("detector_version is required")
-        if not self.manual_control_exclusion_checked:
-            raise ValueError("manual-control exclusion must be checked first")
-        if self.manual_control_excluded:
-            raise ValueError("manual-control excluded symbols must not be captured")
-        if self.manual_control_exclusion_version <= 0:
-            raise ValueError("manual-control exclusion version must be positive")
-        _parse_aware_timestamp(
-            self.manual_control_exclusion_checked_at,
-            field_name="manual_control_exclusion_checked_at",
-        )
         exchange_ts = _parse_aware_timestamp(
             self.exchange_timestamp, field_name="exchange_timestamp"
         )
@@ -226,10 +212,6 @@ class MarketStreamPoint:
     venue: str
     session_bucket: str
     realtime_type: str
-    manual_control_exclusion_checked: bool
-    manual_control_excluded: bool
-    manual_control_exclusion_version: int
-    manual_control_exclusion_checked_at: str
     trade_price: float | None = None
     trade_qty: int | None = None
     best_bid: float | None = None
@@ -251,19 +233,11 @@ class MarketStreamPoint:
             raise ValueError("canonical stream sequence_epoch must be positive")
         if not self.realtime_type:
             raise ValueError("canonical stream realtime_type is required")
-        if not self.manual_control_exclusion_checked or self.manual_control_excluded:
-            raise ValueError("manual-control excluded rows must not enter the stream")
-        if self.manual_control_exclusion_version <= 0:
-            raise ValueError("manual-control exclusion version must be positive")
         exchange_ts = _parse_aware_timestamp(
             self.exchange_timestamp, field_name="exchange_timestamp"
         )
         receive_ts = _parse_aware_timestamp(
             self.local_receive_timestamp, field_name="local_receive_timestamp"
-        )
-        _parse_aware_timestamp(
-            self.manual_control_exclusion_checked_at,
-            field_name="manual_control_exclusion_checked_at",
         )
         if receive_ts < exchange_ts:
             raise ValueError("receive timestamp must not precede exchange timestamp")
@@ -856,7 +830,7 @@ def write_market_path_manifest(
         "metric_contract_id": (
             MARKET_STREAM_CONTRACT_ID
             if base.name.startswith("market_stream")
-            else "scalp_micro_reversion_market_path_contract_v5"
+            else "scalp_micro_reversion_market_path_contract_v6"
         ),
         **(
             MARKET_STREAM_METRIC_CONTRACT

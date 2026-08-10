@@ -54,7 +54,7 @@ def _write_fixture(path: Path) -> None:
     )
 
 
-def test_replay_hard_vetoes_manual_control_and_builds_10_minute_report(
+def test_replay_uses_all_symbols_and_builds_10_minute_report(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "pipeline_events_2026-08-07.jsonl"
@@ -63,17 +63,17 @@ def test_replay_hard_vetoes_manual_control_and_builds_10_minute_report(
     result = replay_paths([source], config=ReplayConfig())
     report = build_report(result)
 
-    assert report["schema"] == "scalp_micro_reversion_v0_report_v4"
-    assert result.input_stats.manual_control_excluded_codes == ("005930",)
-    assert result.input_stats.manual_control_excluded_row_count == 2
-    assert all(observation.symbol != "005930" for observation in result.observations)
+    assert report["schema"] == "scalp_micro_reversion_v0_report_v5"
+    assert {observation.symbol for observation in result.observations} == {
+        "000001",
+        "005930",
+    }
     assert all(
         observation.price_source_field == "current_price_observed"
         for observation in result.observations
     )
-    assert len(result.events) == 1
-    assert result.labels[0].mature_horizon_count == 7
-    assert report["summary"]["manual_control_excluded_event_count"] == 0
+    assert {event.symbol for event in result.events} == {"000001", "005930"}
+    assert max(label.mature_horizon_count for label in result.labels) == 7
     assert report["summary"]["raw_bbo_candidate_rows"] > 0
     assert report["summary"]["raw_micro_capture_rows"] == 0
     assert report["summary"]["raw_micro_context_candidate_rows"] == 0
@@ -117,7 +117,7 @@ def test_replay_hard_vetoes_manual_control_and_builds_10_minute_report(
         encoding="utf-8"
     )
     assert json.loads(manifest_path.read_text())["report_schema_version"] == (
-        "scalp_micro_reversion_v0_report_v4"
+        "scalp_micro_reversion_v0_report_v5"
     )
 
 
@@ -258,7 +258,18 @@ def test_replay_applies_verified_symbol_tax_metadata(tmp_path: Path) -> None:
                             metadata_source="test_official_fixture",
                             source_reference="fixture:sha256:abc",
                             verified_at="2026-08-08T10:00:00+09:00",
-                        )
+                        ),
+                        SymbolMasterRecord(
+                            symbol="A005930",
+                            listing_market=ListingMarket.KOSPI,
+                            instrument_type=InstrumentType.EQUITY,
+                            instrument_tax_class=("ordinary_taxable_equity_20bps"),
+                            effective_from=date(2026, 1, 1),
+                            effective_to=None,
+                            metadata_source="test_official_fixture",
+                            source_reference="fixture:sha256:def",
+                            verified_at="2026-08-08T10:00:00+09:00",
+                        ),
                     ]
                 )
             ),
@@ -267,10 +278,10 @@ def test_replay_applies_verified_symbol_tax_metadata(tmp_path: Path) -> None:
 
     assert report["decision"]["tax_classification_complete"] is True
     tax_policy = report["cost_model"]["statutory_tax_policy"]
-    assert tax_policy["classified_event_count"] == 1
-    assert tax_policy["verified_metadata_event_count"] == 1
+    assert tax_policy["classified_event_count"] == 2
+    assert tax_policy["verified_metadata_event_count"] == 2
     assert tax_policy["instrument_tax_class_counts"] == {
-        "ordinary_taxable_equity_20bps": 1
+        "ordinary_taxable_equity_20bps": 2
     }
     assert tax_policy["exact_sample_gate_status"] == (
         "statutory_tax_only_positive_non_tax_costs_unresolved"
@@ -287,26 +298,16 @@ def test_replay_excludes_non_object_json_rows(tmp_path: Path) -> None:
     assert result.observations == ()
 
 
-def test_manual_control_exclusion_is_evaluated_once_per_symbol(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_replay_does_not_consult_manual_control_exclusion(tmp_path: Path) -> None:
     source = tmp_path / "pipeline_events_2026-08-07.jsonl"
     _write_fixture(source)
-    calls: list[str] = []
-
-    def fake_evaluate(symbol: str) -> SimpleNamespace:
-        calls.append(symbol)
-        return SimpleNamespace(excluded=symbol == "005930")
-
-    monkeypatch.setattr(
-        "src.engine.scalping.micro_reversion.replay.evaluate_manual_control_exclusion",
-        fake_evaluate,
-    )
 
     result = replay_paths([source])
 
-    assert calls == ["000001", "005930"]
-    assert result.input_stats.manual_control_checked_symbol_count == 2
+    assert {observation.symbol for observation in result.observations} == {
+        "000001",
+        "005930",
+    }
 
 
 def test_positive_gross_negative_selected_cost_is_execution_unresolved() -> None:
@@ -315,7 +316,6 @@ def test_positive_gross_negative_selected_cost_is_execution_unresolved() -> None
         fully_mature_event_count=10,
         gross_reversion_supported=True,
         primary_ev_pct=-0.01,
-        manual_exclusion_leak_count=0,
         mature_coverage_rate=0.1,
         trade_date_count=5,
         positive_day_count=0,
@@ -332,7 +332,6 @@ def test_non_positive_gross_primary_ev_is_rejected() -> None:
         fully_mature_event_count=100,
         gross_reversion_supported=False,
         primary_ev_pct=-0.02,
-        manual_exclusion_leak_count=0,
         mature_coverage_rate=1.0,
         trade_date_count=5,
         positive_day_count=0,
@@ -349,7 +348,6 @@ def test_taxable_equity_aggregate_gate_failure_keeps_subcohort_discovery_open() 
         fully_mature_event_count=99,
         gross_reversion_supported=True,
         primary_ev_pct=-0.151012,
-        manual_exclusion_leak_count=0,
         mature_coverage_rate=0.041267,
         trade_date_count=5,
         positive_day_count=0,

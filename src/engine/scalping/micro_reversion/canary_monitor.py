@@ -47,7 +47,7 @@ CANARY_MONITOR_METRIC_CONTRACT = {
     "primary_decision_metric": "stop_required",
     "source_quality_gate": (
         "fresh_collector_snapshot_and_valid_frozen_guard_config_and_zero_"
-        "drop_error_gap_leak_or_storage_degradation"
+        "drop_error_gap_or_storage_degradation"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -98,9 +98,7 @@ _ZERO_STOP_COUNTERS = (
     "collector_close_failure_count",
     "collector_worker_alive_after_close_count",
     "writer_alive_after_close_count",
-    "manual_control_post_exclusion_envelope_count",
-    "manual_control_post_exclusion_event_count",
-    "manual_control_event_leak_count",
+    "event_symbol_mismatch_count",
 )
 
 _FORBIDDEN_TRUE_FIELDS = (
@@ -325,7 +323,6 @@ def run_callback_latency_preflight(
                     writer_flush_interval_sec=0.25,
                     worker_poll_interval_sec=0.01,
                 ),
-                manual_excluded_symbols=(),
             )
             collector.start()
             try:

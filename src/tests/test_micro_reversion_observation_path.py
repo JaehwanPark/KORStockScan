@@ -44,10 +44,6 @@ def _point(sequence: int = 1, **overrides) -> MarketPathPoint:
         "event_detected_at": "2026-08-08T09:00:01+09:00",
         "parent_wave_id": "wave-1",
         "path_phase": "ACTIVE_EVENT",
-        "manual_control_exclusion_checked": True,
-        "manual_control_excluded": False,
-        "manual_control_exclusion_version": 1,
-        "manual_control_exclusion_checked_at": "2026-08-08T09:00:00+09:00",
         "trade_price": 10_000 + sequence,
         "trade_qty": 10,
         "best_bid": 9_995,
@@ -71,18 +67,12 @@ def _stream_point(sequence: int, *, exchange_second: int) -> MarketStreamPoint:
         venue="KRX",
         session_bucket="KRX_REGULAR",
         realtime_type="0B",
-        manual_control_exclusion_checked=True,
-        manual_control_excluded=False,
-        manual_control_exclusion_version=1,
-        manual_control_exclusion_checked_at="2026-08-08T09:00:00+09:00",
         trade_price=10_000,
     )
 
 
 def test_observation_gate_is_broad_but_economic_gate_is_narrow() -> None:
     observation = evaluate_observation_gate(
-        manual_control_exclusion_checked=True,
-        manual_control_excluded=False,
         tradeable_session=True,
         detector_condition_met=True,
         source_contract_minimum_passed=True,

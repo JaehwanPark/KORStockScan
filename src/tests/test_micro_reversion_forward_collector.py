@@ -62,7 +62,6 @@ def _collector(
     path_capture_enabled: bool = False,
     detector: MultiHorizonShockDetector | None = None,
     queue_size: int = 16,
-    manual_excluded_symbols: tuple[str, ...] = (),
 ) -> ForwardObservationCollector:
     collector = ForwardObservationCollector(
         flags=ObserverFeatureFlags(
@@ -78,7 +77,6 @@ def _collector(
             worker_poll_interval_sec=0.01,
         ),
         detector=detector,
-        manual_excluded_symbols=manual_excluded_symbols,
     )
     collector.start()
     return collector
@@ -177,132 +175,6 @@ def test_0b_item_does_not_fall_back_to_generic_last_ws_item(tmp_path) -> None:
     assert runtime.missing_0b_item_count == 1
 
 
-def test_manual_control_veto_precedes_queue_and_has_zero_leak(tmp_path) -> None:
-    collector = _collector(
-        tmp_path,
-        manual_excluded_symbols=("000001",),
-    )
-    try:
-        result = collector.observe_kiwoom_0b(
-            "000001", _snapshot(price=-1), realtime_type="0B"
-        )
-        snapshot = collector.runtime_snapshot()
-    finally:
-        collector.close()
-
-    assert result is ProducerCanaryResult.MANUAL_CONTROL_EXCLUDED
-    assert snapshot.enqueued_count == 0
-    assert snapshot.manual_control_excluded_count == 1
-    assert snapshot.manual_control_event_leak_count == 0
-    assert collector._source_sequences == {}
-    assert collector._detector_clock_ms == {}
-
-
-def test_dynamic_manual_exclusion_purges_state_and_drops_queued_envelope(
-    tmp_path,
-) -> None:
-    collector = _collector(tmp_path, manual_excluded_symbols=())
-    assert (
-        collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
-        is ProducerCanaryResult.ENQUEUED
-    )
-    deadline = time.monotonic() + 1
-    while (
-        collector.runtime_snapshot().worker_processed_count < 1
-        and time.monotonic() < deadline
-    ):
-        time.sleep(0.005)
-
-    collector._manual_refresh_lock.acquire()
-    try:
-        assert (
-            collector.observe_kiwoom_0b(
-                "000001",
-                _snapshot(
-                    exchange_time="090001000",
-                    received_at_ms=(
-                        int(
-                            datetime.fromisoformat(
-                                "2026-08-08T09:00:01.010+09:00"
-                            ).timestamp()
-                            * 1_000
-                        )
-                    ),
-                ),
-                realtime_type="0B",
-            )
-            is ProducerCanaryResult.ENQUEUED
-        )
-        assert collector.refresh_manual_exclusions(("000001",)) == ("000001",)
-    finally:
-        collector._manual_refresh_lock.release()
-
-    deadline = time.monotonic() + 1
-    while (
-        collector.runtime_snapshot().manual_control_post_exclusion_envelope_count < 1
-        and time.monotonic() < deadline
-    ):
-        time.sleep(0.005)
-    runtime = collector.runtime_snapshot()
-    collector.close()
-
-    assert runtime.manual_control_new_exclusion_count == 1
-    assert runtime.manual_control_state_purge_count >= 1
-    assert runtime.manual_control_post_exclusion_envelope_count == 1
-    assert runtime.manual_control_event_leak_count == 0
-    assert (
-        collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
-        is ProducerCanaryResult.DISABLED
-    )
-
-
-def test_add_remove_interleaving_rejects_old_generation_before_detector(
-    tmp_path,
-) -> None:
-    collector = _collector(tmp_path, path_capture_enabled=True)
-    entered = threading.Event()
-    release = threading.Event()
-    detector_calls = 0
-    original_process = collector._process_envelope
-
-    class RecordingDetector:
-        def process(self, _observation):
-            nonlocal detector_calls
-            detector_calls += 1
-            return ()
-
-        def drop_symbol(self, _symbol):
-            return 0
-
-    collector._detector = RecordingDetector()
-
-    def paused_process(envelope) -> None:
-        entered.set()
-        release.wait(timeout=2)
-        original_process(envelope)
-
-    collector._process_envelope = paused_process
-    assert (
-        collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
-        is ProducerCanaryResult.ENQUEUED
-    )
-    assert entered.wait(timeout=1)
-    assert collector.refresh_manual_exclusions(("000001",)) == ("000001",)
-    assert collector.refresh_manual_exclusions(()) == ()
-    release.set()
-    deadline = time.monotonic() + 1
-    while collector._sink.qsize() and time.monotonic() < deadline:
-        time.sleep(0.005)
-    collector.close()
-    runtime = collector.runtime_snapshot()
-
-    assert detector_calls == 0
-    assert runtime.worker_processed_count == 0
-    assert runtime.manual_control_post_exclusion_envelope_count == 1
-    assert runtime.stale_manual_exclusion_generation_envelope_count == 1
-    assert runtime.manual_control_event_leak_count == 0
-
-
 def test_stale_series_epoch_is_rejected_before_gap_and_detector(tmp_path) -> None:
     collector = _collector(tmp_path, path_capture_enabled=True)
     entered = threading.Event()
@@ -344,34 +216,28 @@ def test_stale_series_epoch_is_rejected_before_gap_and_detector(tmp_path) -> Non
     assert runtime.unexplained_sequence_gap_count == 0
 
 
-def test_event_registration_guard_counts_and_blocks_exclusion_leak(tmp_path) -> None:
+def test_event_symbol_mismatch_is_blocked_and_counted(tmp_path) -> None:
     collector = _collector(tmp_path, path_capture_enabled=True)
 
-    class ExcludingDetector:
-        def process(self, observation):
-            collector._adapter.refresh_manual_exclusions((observation.symbol,))
-            return (
-                SimpleNamespace(
-                    event=SimpleNamespace(symbol=observation.symbol),
-                ),
-            )
+    class MismatchedDetector:
+        def process(self, _observation):
+            return (SimpleNamespace(event=SimpleNamespace(symbol="000002")),)
 
-    collector._detector = ExcludingDetector()
+    collector._detector = MismatchedDetector()
     assert (
         collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
         is ProducerCanaryResult.ENQUEUED
     )
     deadline = time.monotonic() + 1
     while (
-        collector.runtime_snapshot().manual_control_event_leak_count < 1
+        collector.runtime_snapshot().worker_processed_count < 1
         and time.monotonic() < deadline
     ):
         time.sleep(0.005)
     collector.close()
     runtime = collector.runtime_snapshot()
 
-    assert runtime.manual_control_post_exclusion_event_count == 1
-    assert runtime.manual_control_event_leak_count == 1
+    assert runtime.event_symbol_mismatch_count == 1
     assert runtime.shock_event_count == 0
     assert runtime.event_reference_persisted_count == 0
 
@@ -400,43 +266,6 @@ def test_future_skew_is_bounded_and_stale_trade_time_is_blocked(tmp_path) -> Non
     assert stale is ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
     assert runtime.future_exchange_timestamp_adjustment_count == 1
     assert runtime.stale_exchange_timestamp_block_count == 1
-
-
-def test_worker_refreshes_file_backed_manual_exclusions_off_producer_path(
-    tmp_path, monkeypatch
-) -> None:
-    configured = set()
-    monkeypatch.setattr(
-        "src.engine.scalping.micro_reversion.observation_adapter."
-        "configured_manual_control_exclusion_codes",
-        lambda: frozenset(configured),
-    )
-    collector = ForwardObservationCollector(
-        flags=ObserverFeatureFlags(observer_enabled=True),
-        config=ForwardCollectorConfig(
-            output_root=tmp_path,
-            worker_poll_interval_sec=0.005,
-            manual_exclusion_refresh_interval_sec=0.01,
-        ),
-    )
-    collector.start()
-    configured.add("000001")
-    deadline = time.monotonic() + 1
-    while (
-        collector.runtime_snapshot().manual_control_new_exclusion_count < 1
-        and time.monotonic() < deadline
-    ):
-        time.sleep(0.005)
-    try:
-        result = collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
-        runtime = collector.runtime_snapshot()
-    finally:
-        collector.close()
-
-    assert result is ProducerCanaryResult.MANUAL_CONTROL_EXCLUDED
-    assert runtime.manual_control_refresh_count >= 1
-    assert runtime.manual_control_new_exclusion_count == 1
-    assert runtime.manual_control_event_leak_count == 0
 
 
 def test_observation_queue_full_is_nonblocking_and_counted(tmp_path) -> None:
@@ -808,7 +637,7 @@ def test_forward_path_capture_persists_event_and_separates_authority(
     ]
     assert len(stream_rows) == snapshot.enqueued_count == 2
     assert all(
-        row["schema"] == "scalp_micro_reversion_market_stream_point_v1"
+        row["schema"] == "scalp_micro_reversion_market_stream_point_v2"
         for row in stream_rows
     )
     assert snapshot.canonical_stream_point_count == 2
@@ -876,7 +705,6 @@ def test_shutdown_reconciliation_detects_orphan_and_unreferenced_segments(
     collector = ForwardObservationCollector(
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
-        manual_excluded_symbols=(),
     )
     key = ("2026-08-08", "KRX", "KRX_REGULAR")
     path = collector.config.storage_policy.partition_path(
@@ -912,7 +740,6 @@ def test_shutdown_reconciliation_counts_duplicate_references(tmp_path) -> None:
     collector = ForwardObservationCollector(
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
-        manual_excluded_symbols=(),
     )
     key = ("2026-08-08", "KRX", "KRX_REGULAR")
     path = collector.config.storage_policy.partition_path(
@@ -947,7 +774,6 @@ def test_shutdown_reconciliation_reads_all_rotated_path_shards(tmp_path) -> None
     collector = ForwardObservationCollector(
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
-        manual_excluded_symbols=(),
     )
     key = ("2026-08-08", "KRX", "KRX_REGULAR")
     path = collector.config.storage_policy.partition_path(
@@ -990,7 +816,6 @@ def test_canonical_reference_without_stream_is_reported_as_orphan(tmp_path) -> N
     collector = ForwardObservationCollector(
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
-        manual_excluded_symbols=(),
     )
     key = ("2026-08-08", "KRX", "KRX_REGULAR")
     stream = collector.config.storage_policy.stream_partition_path(
@@ -1035,7 +860,6 @@ def test_canonical_reconciliation_fails_closed_on_authority_drift(tmp_path) -> N
     collector = ForwardObservationCollector(
         flags=ObserverFeatureFlags(observer_enabled=True),
         config=ForwardCollectorConfig(output_root=tmp_path),
-        manual_excluded_symbols=(),
     )
     key = ("2026-08-08", "KRX", "KRX_REGULAR")
     stream = collector.config.storage_policy.stream_partition_path(
@@ -1293,7 +1117,15 @@ def test_forward_collector_has_no_forbidden_runtime_imports() -> None:
         elif isinstance(node, ast.ImportFrom):
             imported.add(node.module or "")
 
-    forbidden_fragments = ("broker", "order", "execution", "ai", "adm", "ldm")
+    forbidden_fragments = (
+        "broker",
+        "order",
+        "execution",
+        "ai",
+        "adm",
+        "ldm",
+        "manual_control",
+    )
     assert not any(
         fragment in module_name.lower()
         for module_name in imported
