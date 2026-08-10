@@ -2151,6 +2151,11 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
 
 def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently():
     manager = KiwoomWSManager("test-token")
+    manager._micro_reversion_forward_collector = SimpleNamespace(
+        flags=SimpleNamespace(depth_capture_active=True),
+        observe_kiwoom_0b=lambda *_args, **_kwargs: None,
+        observe_kiwoom_0d=lambda *_args, **_kwargs: None,
+    )
     manager.subscribed_codes.add("039490")
 
     asyncio.run(
@@ -2168,10 +2173,13 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
                             "type": "0D",
                             "item": "039490_AL",
                             "values": {
+                                "21": "090001000",
                                 "41": "10010",
                                 "61": "100",
                                 "51": "10000",
                                 "71": "200",
+                                "121": "100",
+                                "125": "200",
                             },
                         },
                         {
@@ -2183,10 +2191,13 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
                             "type": "0D",
                             "item": "039490",
                             "values": {
+                                "21": "090002000",
                                 "41": "10000",
                                 "61": "150",
                                 "51": "9990",
                                 "71": "250",
+                                "121": "150",
+                                "125": "250",
                             },
                         },
                     ],
@@ -2207,6 +2218,47 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
     )
     assert snapshots["KRX|krx_regular"]["0B"]["current_price"] == 9990
     assert snapshots["KRX|krx_regular"]["0D"]["orderbook"]["bids"][0]["price"] == 9990
+    depth = manager.realtime_data["039490"]["last_depth_tick"]
+    assert depth["item"] == "039490"
+    assert depth["orderbook_time_raw"] == "090002000"
+    assert depth["ask_levels"][0] == {
+        "level": 1,
+        "price": 10000,
+        "quantity": 150,
+    }
+    assert depth["route_depth_totals"]["combined"] == {"ask": 150, "bid": 250}
+
+
+def test_0d_depth_projection_is_not_built_while_feature_is_off():
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("039490")
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0D",
+                            "item": "039490",
+                            "values": {
+                                "21": "090002000",
+                                "41": "10000",
+                                "61": "150",
+                                "51": "9990",
+                                "71": "250",
+                                "121": "150",
+                                "125": "250",
+                            },
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    assert "last_depth_tick" not in manager.realtime_data["039490"]
 
 
 def test_ws_item_effective_venue_does_not_invent_integrated_underlying_venue():

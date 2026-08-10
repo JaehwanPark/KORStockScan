@@ -29,6 +29,9 @@ MARKET_PATH_AUTHORITY = "continuous_market_path_observation_only"
 MARKET_STREAM_SCHEMA = "scalp_micro_reversion_market_stream_point_v3"
 MARKET_STREAM_CONTRACT_ID = "scalp_micro_reversion_market_stream_contract_v3"
 MARKET_STREAM_AUTHORITY = "canonical_market_stream_observation_only"
+MARKET_DEPTH_SCHEMA = "scalp_micro_reversion_market_depth_point_v1"
+MARKET_DEPTH_CONTRACT_ID = "scalp_micro_reversion_market_depth_contract_v1"
+MARKET_DEPTH_AUTHORITY = "continuous_0d_depth_observation_only"
 MARKET_STREAM_PATH_ORDER_STATUSES = frozenset(
     {
         "accept",
@@ -75,6 +78,27 @@ MARKET_STREAM_METRIC_CONTRACT = {
         "touch_as_real_fill",
         "missing_path_imputation",
         "sim_or_runtime_promotion_without_economic_gate",
+    ),
+}
+MARKET_DEPTH_METRIC_CONTRACT = {
+    "metric_role": "source_quality_and_orderbook_depth_context",
+    "decision_authority": MARKET_DEPTH_AUTHORITY,
+    "window_policy": "one_row_per_accepted_0d_callback_full_session",
+    "sample_floor": "five_trading_days_and_200_mature_events_gate_b_only",
+    "primary_decision_metric": "past_only_depth_join_coverage_pct",
+    "source_quality_gate": (
+        "official_0d_fid21_and_explicit_item_venue_and_monotonic_local_"
+        "receive_sequence_with_positive_non_crossed_best_quotes"
+    ),
+    "forbidden_uses": (
+        "broker_order_submission",
+        "broker_order_cancel",
+        "automated_sell",
+        "touch_or_depth_as_real_fill",
+        "future_or_cross_venue_depth_join",
+        "missing_depth_imputation",
+        "sim_or_runtime_promotion_without_economic_gate",
+        "threshold_provider_bot_quantity_or_cap_mutation",
     ),
 }
 
@@ -327,7 +351,118 @@ class MarketStreamPoint:
         return payload
 
 
-PathJournalPoint = MarketPathPoint | MarketStreamPoint
+@dataclass(frozen=True, slots=True)
+class MarketDepthPoint:
+    """Compact 0D snapshot kept separate from the canonical 0B stream."""
+
+    symbol: str
+    exchange_timestamp: str
+    local_receive_timestamp: str
+    source_sequence: int
+    sequence_epoch: int
+    series_sequence: int
+    venue: str
+    session_bucket: str
+    item: str
+    orderbook_time_raw: str
+    best_bid: float
+    best_ask: float
+    best_bid_qty: int
+    best_ask_qty: int
+    bid_depth: int
+    ask_depth: int
+    bid_levels: tuple[tuple[int, float, int], ...]
+    ask_levels: tuple[tuple[int, float, int], ...]
+    route_depth_totals: dict[str, dict[str, int | None]]
+    realtime_type: str = "0D"
+    schema: str = MARKET_DEPTH_SCHEMA
+
+    def __post_init__(self) -> None:
+        symbol = normalize_symbol(self.symbol)
+        venue = normalize_venue(self.venue)
+        if not symbol or venue == "UNKNOWN" or not self.session_bucket:
+            raise ValueError("depth stream requires symbol, venue, and session")
+        if not str(self.item).strip():
+            raise ValueError("depth stream item is required")
+        if self.realtime_type != "0D":
+            raise ValueError("depth stream accepts only Kiwoom 0D")
+        if self.source_sequence <= 0 or self.source_sequence != self.series_sequence:
+            raise ValueError("depth stream sequences must be positive and equal")
+        if self.sequence_epoch <= 0:
+            raise ValueError("depth stream sequence_epoch must be positive")
+        exchange_ts = _parse_aware_timestamp(
+            self.exchange_timestamp, field_name="exchange_timestamp"
+        )
+        receive_ts = _parse_aware_timestamp(
+            self.local_receive_timestamp, field_name="local_receive_timestamp"
+        )
+        if receive_ts < exchange_ts:
+            raise ValueError("depth receive timestamp must not precede exchange time")
+        _validate_positive_optional(self.best_bid, field_name="best_bid")
+        _validate_positive_optional(self.best_ask, field_name="best_ask")
+        if self.best_ask < self.best_bid:
+            raise ValueError("depth best_ask must not be below best_bid")
+        for name in ("best_bid_qty", "best_ask_qty", "bid_depth", "ask_depth"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must not be negative")
+        for side_name, levels in (
+            ("bid_levels", self.bid_levels),
+            ("ask_levels", self.ask_levels),
+        ):
+            if not levels:
+                raise ValueError(f"{side_name} must not be empty")
+            for level, price, quantity in levels:
+                if level <= 0 or price <= 0 or quantity < 0:
+                    raise ValueError(f"{side_name} contains an invalid level")
+            if tuple(row[0] for row in levels) != tuple(range(1, len(levels) + 1)):
+                raise ValueError(
+                    f"{side_name} must start at level one and be contiguous"
+                )
+        if any(
+            left[1] >= right[1]
+            for left, right in zip(self.ask_levels, self.ask_levels[1:], strict=False)
+        ):
+            raise ValueError("ask prices must increase by level")
+        if any(
+            left[1] <= right[1]
+            for left, right in zip(self.bid_levels, self.bid_levels[1:], strict=False)
+        ):
+            raise ValueError("bid prices must decrease by level")
+        if self.ask_depth < sum(row[2] for row in self.ask_levels):
+            raise ValueError("ask depth must cover retained ask levels")
+        if self.bid_depth < sum(row[2] for row in self.bid_levels):
+            raise ValueError("bid depth must cover retained bid levels")
+        combined_totals = self.route_depth_totals.get("combined")
+        if not isinstance(combined_totals, dict):
+            raise ValueError("combined route depth totals are required")
+        if (
+            combined_totals.get("bid") != self.bid_depth
+            or combined_totals.get("ask") != self.ask_depth
+        ):
+            raise ValueError("combined route totals conflict with depth fields")
+        for totals in self.route_depth_totals.values():
+            if not isinstance(totals, dict):
+                raise ValueError("route depth totals must be objects")
+            for quantity in totals.values():
+                if quantity is not None and quantity < 0:
+                    raise ValueError("route depth total must not be negative")
+        object.__setattr__(self, "symbol", symbol)
+        object.__setattr__(self, "venue", venue)
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload.update(
+            {
+                "metric_contract_id": MARKET_DEPTH_CONTRACT_ID,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "trading_runtime_effect": False,
+            }
+        )
+        return payload
+
+
+PathJournalPoint = MarketPathPoint | MarketStreamPoint | MarketDepthPoint
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,6 +586,21 @@ class PathStoragePolicy:
             venue=venue,
             session_bucket=session_bucket,
         ).with_name("market_stream.jsonl")
+
+    def depth_partition_path(
+        self,
+        root: Path,
+        *,
+        trade_date: str,
+        venue: str,
+        session_bucket: str,
+    ) -> Path:
+        return self.partition_path(
+            root,
+            trade_date=trade_date,
+            venue=venue,
+            session_bucket=session_bucket,
+        ).with_name("market_depth_stream.jsonl")
 
 
 class NonBlockingPathJournalWriter:
@@ -606,7 +756,7 @@ class NonBlockingPathJournalWriter:
                 item = None
                 if self._stop_requested.is_set():
                     stopping = True
-            if isinstance(item, (MarketPathPoint, MarketStreamPoint)):
+            if isinstance(item, (MarketPathPoint, MarketStreamPoint, MarketDepthPoint)):
                 batch.append(item)
                 self._queue.task_done()
                 if self._stop_requested.is_set() and self._queue.empty():
@@ -872,19 +1022,31 @@ def write_market_path_manifest(
         "broker_order_forbidden": True,
         "trading_runtime_effect": False,
         "row_schema": (
-            MARKET_STREAM_SCHEMA
-            if base.name.startswith("market_stream")
-            else MARKET_PATH_SCHEMA
+            MARKET_DEPTH_SCHEMA
+            if base.name.startswith("market_depth_stream")
+            else (
+                MARKET_STREAM_SCHEMA
+                if base.name.startswith("market_stream")
+                else MARKET_PATH_SCHEMA
+            )
         ),
         "metric_contract_id": (
-            MARKET_STREAM_CONTRACT_ID
-            if base.name.startswith("market_stream")
-            else "scalp_micro_reversion_market_path_contract_v6"
+            MARKET_DEPTH_CONTRACT_ID
+            if base.name.startswith("market_depth_stream")
+            else (
+                MARKET_STREAM_CONTRACT_ID
+                if base.name.startswith("market_stream")
+                else "scalp_micro_reversion_market_path_contract_v6"
+            )
         ),
         **(
-            MARKET_STREAM_METRIC_CONTRACT
-            if base.name.startswith("market_stream")
-            else MARKET_PATH_METRIC_CONTRACT
+            MARKET_DEPTH_METRIC_CONTRACT
+            if base.name.startswith("market_depth_stream")
+            else (
+                MARKET_STREAM_METRIC_CONTRACT
+                if base.name.startswith("market_stream")
+                else MARKET_PATH_METRIC_CONTRACT
+            )
         ),
     }
     target = storage_policy.manifest_path(base)
@@ -946,17 +1108,21 @@ def _validate_batch_order(
                 )
             )
         )
+        order_timestamp = (
+            point.local_receive_timestamp
+            if isinstance(point, MarketDepthPoint)
+            else point.exchange_timestamp
+        )
         current = (
-            _parse_aware_timestamp(
-                point.exchange_timestamp, field_name="exchange_timestamp"
-            ),
+            _parse_aware_timestamp(order_timestamp, field_name="ordering_timestamp"),
             point.source_sequence,
         )
         previous = last_by_segment.get(key)
         if previous is not None:
             sequence_regressed = current[1] <= previous[1]
             timestamp_regressed = (
-                isinstance(point, MarketPathPoint) and current[0] < previous[0]
+                isinstance(point, (MarketPathPoint, MarketDepthPoint))
+                and current[0] < previous[0]
             )
             if sequence_regressed or timestamp_regressed:
                 raise ValueError(

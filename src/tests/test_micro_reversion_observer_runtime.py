@@ -30,6 +30,7 @@ def test_feature_flags_default_to_all_disabled(monkeypatch) -> None:
     for name in (
         "SCALP_MICRO_REVERSION_OBSERVER_ENABLED",
         "SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED",
+        "SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED",
         "SCALP_MICRO_REVERSION_DISCOVERY_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)

@@ -1,0 +1,126 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20260810T164433+0900",
+  "generated_at": "2026-08-10T16:44:33+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1010-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "depth_capture_enabled_on": false,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {"p95_ms": 0.000130, "p99_ms": 0.000144},
+    {"p95_ms": 0.000131, "p99_ms": 0.000146},
+    {"p95_ms": 0.000131, "p99_ms": 0.000148},
+    {"p95_ms": 0.000131, "p99_ms": 0.000146},
+    {"p95_ms": 0.000131, "p99_ms": 0.000144}
+  ],
+  "observer_on_runs": [
+    {
+      "p95_ms": 0.025931,
+      "p99_ms": 0.034484,
+      "collector_internal_p95_ms": 0.024274,
+      "collector_internal_p99_ms": 0.031932,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p95_ms": 0.023362,
+      "p99_ms": 0.032868,
+      "collector_internal_p95_ms": 0.021988,
+      "collector_internal_p99_ms": 0.031389,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p95_ms": 0.024123,
+      "p99_ms": 0.036049,
+      "collector_internal_p95_ms": 0.022701,
+      "collector_internal_p99_ms": 0.034089,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p95_ms": 0.023168,
+      "p99_ms": 0.031126,
+      "collector_internal_p95_ms": 0.021670,
+      "collector_internal_p99_ms": 0.029312,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p95_ms": 0.023296,
+      "p99_ms": 0.032886,
+      "collector_internal_p95_ms": 0.021709,
+      "collector_internal_p99_ms": 0.030885,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    }
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000131,
+    "observer_off_p99_ms_max": 0.000148,
+    "observer_on_external_p95_ms_max": 0.025931,
+    "observer_on_external_p99_ms_max": 0.036049,
+    "observer_on_internal_p95_ms_max": 0.024274,
+    "observer_on_internal_p99_ms_max": 0.034089,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "depth_preflight": {
+    "callbacks": 5000,
+    "enqueued": 5000,
+    "processed": 5000,
+    "persisted": 5000,
+    "producer_callback_latency_p95_ms": 0.039224,
+    "producer_callback_latency_p99_ms": 0.092096,
+    "queue_full_count": 0,
+    "dropped_count": 0,
+    "worker_error_count": 0,
+    "writer_error_count": 0,
+    "bytes_written": 5282786,
+    "bytes_per_row": 1056.56
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "benchmark_module_sha256": "0a47007325b73f9dc8d28fcb450443dc108838be6c008211a7f3b05539202728",
+  "forward_collector_sha256": "e4af7d167f061a188f1eeb91321f17e88185e5eed2409f33f54a771bc1bc8df2",
+  "path_journal_sha256": "793d1b360723ba9fe0d31cec62e34d8187c7be2cd68f3b5b5ae49867170c8d18",
+  "path_capture_sha256": "5688253327561080077dfbecfda5e4dc7e8e14120ff77fc5c89255fc501ccda6",
+  "p2_replay_sha256": "f364463d927ac0704aeb0eab222b4243e46ac84f10eda81db80df3eb05af57ab",
+  "onset_quality_sha256": "595658610c7ba829f8f274c8ff56b64e0c1209c395724b1845c78d99640e8974",
+  "storage_maintenance_sha256": "aa7ec72ffbdb6b6d402138cf667c7bd669b10cf867c21af518acda4d3080bc27",
+  "kiwoom_websocket_sha256": "6cbdf3d54f2bbc31cd5f90fa66c8c7e6a239cde1ecf63ac5075d0791d58b3a57",
+  "canary_guard_config_sha256": "8057f32c2cfbdfeadecde48f5a1dd366922579e6134c9b5515e81a7022883ed3",
+  "source_base_commit": "2673f2f2d7d6342f5f1fbcc97e9665c350b305a1",
+  "interpretation": "Exact-source synthetic 0B callback preflight after implementing a default-OFF, separately queued 0D depth consumer. Frozen limits remain unchanged. A separate 5000-row depth preflight persisted every accepted row with zero queue, worker, or writer error; neither preflight activates runtime capture or approves P2, simulation, trading, or orders.",
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config_and_zero_drop_error_gap_or_storage_degradation",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ]
+}

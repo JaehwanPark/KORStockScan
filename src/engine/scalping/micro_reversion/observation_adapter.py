@@ -66,6 +66,7 @@ def _env_enabled(name: str) -> bool:
 class ObserverFeatureFlags:
     observer_enabled: bool = False
     path_capture_enabled: bool = False
+    depth_capture_enabled: bool = False
     discovery_enabled: bool = False
 
     @classmethod
@@ -75,12 +76,19 @@ class ObserverFeatureFlags:
             path_capture_enabled=_env_enabled(
                 "SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED"
             ),
+            depth_capture_enabled=_env_enabled(
+                "SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED"
+            ),
             discovery_enabled=_env_enabled("SCALP_MICRO_REVERSION_DISCOVERY_ENABLED"),
         )
 
     @property
     def observation_capture_active(self) -> bool:
         return self.observer_enabled and self.path_capture_enabled
+
+    @property
+    def depth_capture_active(self) -> bool:
+        return self.observer_enabled and self.depth_capture_enabled
 
     def authority_dict(
         self, *, observer_runtime_loaded: bool = False
@@ -89,6 +97,9 @@ class ObserverFeatureFlags:
             "observer_runtime_loaded": observer_runtime_loaded,
             "observation_capture_active": (
                 observer_runtime_loaded and self.observation_capture_active
+            ),
+            "depth_capture_active": (
+                observer_runtime_loaded and self.depth_capture_active
             ),
             "discovery_active": (
                 observer_runtime_loaded

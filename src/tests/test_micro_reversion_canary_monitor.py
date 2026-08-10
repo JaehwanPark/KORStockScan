@@ -8,6 +8,7 @@ from src.engine.scalping.micro_reversion.canary_monitor import (
     CANARY_GUARD_SCHEMA,
     CANARY_MONITOR_SCHEMA,
     CanaryGuard,
+    _DEPTH_ZERO_STOP_COUNTERS,
     _FORBIDDEN_TRUE_FIELDS,
     _ZERO_STOP_COUNTERS,
     evaluate_canary_snapshot,
@@ -175,6 +176,75 @@ def test_manifest_failure_is_an_immediate_stop() -> None:
         "nonzero_stop_metric:writer_manifest_error_count=1"
         in evaluation["stop_reasons"]
     )
+
+
+def test_depth_capture_request_requires_live_worker_and_zero_stop_metrics() -> None:
+    depth_metrics = {field: 0 for field in _DEPTH_ZERO_STOP_COUNTERS}
+    healthy = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            depth_capture_requested=True,
+            depth_capture_active=True,
+            depth_writer_count=1,
+            depth_writer_alive_count=1,
+            **depth_metrics,
+        ),
+        _guard(),
+    )
+    stopped = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            depth_capture_requested=True,
+            depth_capture_active=False,
+            depth_writer_count=1,
+            depth_writer_alive_count=1,
+            **depth_metrics,
+        ),
+        _guard(),
+    )
+
+    assert healthy["stop_required"] is False
+    assert stopped["stop_required"] is True
+    assert "depth_capture_requested_but_not_active" in stopped["stop_reasons"]
+
+
+def test_depth_writer_liveness_mismatch_is_an_immediate_stop() -> None:
+    depth_metrics = {field: 0 for field in _DEPTH_ZERO_STOP_COUNTERS}
+    evaluation = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            depth_capture_requested=True,
+            depth_capture_active=True,
+            depth_writer_count=2,
+            depth_writer_alive_count=1,
+            **depth_metrics,
+        ),
+        _guard(),
+    )
+
+    assert evaluation["stop_required"] is True
+    assert (
+        "depth_writer_liveness_mismatch:alive=1,expected=2"
+        in evaluation["stop_reasons"]
+    )
+
+
+def test_closed_depth_snapshot_allows_stopped_worker_and_writer() -> None:
+    depth_metrics = {field: 0 for field in _DEPTH_ZERO_STOP_COUNTERS}
+    evaluation = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            collector_lifecycle="closed",
+            observer_runtime_effect=False,
+            producer_observation_connected=False,
+            observation_capture_active=False,
+            reference_reconciliation_completed=True,
+            depth_capture_requested=True,
+            depth_capture_active=False,
+            depth_writer_count=1,
+            depth_writer_alive_count=0,
+            **depth_metrics,
+        ),
+        _guard(),
+    )
+
+    assert evaluation["stop_required"] is False
 
 
 def test_closed_snapshot_requires_completed_reconciliation() -> None:

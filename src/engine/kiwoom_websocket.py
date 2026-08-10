@@ -1877,8 +1877,10 @@ class KiwoomWSManager:
             return
 
         normalized_realtime_type = str(realtime_type or "").strip()
-        if normalized_realtime_type == "0B":
-            self._observe_micro_reversion_forward(code, data)
+        if normalized_realtime_type in {"0B", "0D"}:
+            self._observe_micro_reversion_forward(
+                code, data, realtime_type=normalized_realtime_type
+            )
         if normalized_realtime_type in {"0B", "0D"}:
             try:
                 observe_raw_market_data(
@@ -1953,18 +1955,70 @@ class KiwoomWSManager:
             )
             self._close_micro_reversion_forward_collector()
 
-    def _observe_micro_reversion_forward(self, code, data):
+    def _observe_micro_reversion_forward(self, code, data, *, realtime_type):
         collector = self._micro_reversion_forward_collector
         if collector is None:
             return
         try:
-            collector.observe_kiwoom_0b(code, data, realtime_type="0B")
+            normalized_type = str(realtime_type or "").strip()
+            if normalized_type == "0B":
+                collector.observe_kiwoom_0b(code, data, realtime_type="0B")
+            elif normalized_type == "0D":
+                collector.observe_kiwoom_0d(code, data, realtime_type="0D")
         except Exception as exc:
             self._micro_reversion_forward_collector_error = type(exc).__name__
             log_error(
                 "[WS] micro-reversion forward observer callback isolated "
                 f"failure ({code}): {exc}"
             )
+
+    def _micro_reversion_depth_capture_requested(self):
+        collector = self._micro_reversion_forward_collector
+        flags = getattr(collector, "flags", None)
+        return bool(getattr(flags, "depth_capture_active", False))
+
+    @staticmethod
+    def _build_micro_reversion_depth_tick(raw_item_code, values):
+        def unsigned_int(value, default=0):
+            normalized = str(value).replace("+", "").replace("-", "").strip()
+            return int(normalized) if normalized.isdigit() else default
+
+        ask_levels, bid_levels = [], []
+        for level in range(1, 6):
+            ask_price = unsigned_int(values.get(str(40 + level)))
+            ask_qty = unsigned_int(values.get(str(60 + level)), None)
+            bid_price = unsigned_int(values.get(str(50 + level)))
+            bid_qty = unsigned_int(values.get(str(70 + level)), None)
+            if ask_price > 0 and ask_qty is not None:
+                ask_levels.append(
+                    {"level": level, "price": ask_price, "quantity": ask_qty}
+                )
+            if bid_price > 0 and bid_qty is not None:
+                bid_levels.append(
+                    {"level": level, "price": bid_price, "quantity": bid_qty}
+                )
+        combined_ask = unsigned_int(values.get("121"), None)
+        combined_bid = unsigned_int(values.get("125"), None)
+        return {
+            "item": str(raw_item_code or ""),
+            "orderbook_time_raw": str(values.get("21") or "").strip(),
+            "received_at_ms": int(time.time() * 1000),
+            "ask_levels": ask_levels,
+            "bid_levels": bid_levels,
+            "ask_depth": combined_ask,
+            "bid_depth": combined_bid,
+            "route_depth_totals": {
+                "combined": {"ask": combined_ask, "bid": combined_bid},
+                "KRX": {
+                    "ask": unsigned_int(values.get("6064"), None),
+                    "bid": unsigned_int(values.get("6065"), None),
+                },
+                "NXT": {
+                    "ask": unsigned_int(values.get("6086"), None),
+                    "bid": unsigned_int(values.get("6087"), None),
+                },
+            },
+        }
 
     def micro_reversion_forward_collector_snapshot(self):
         collector = self._micro_reversion_forward_collector
@@ -3126,6 +3180,14 @@ class KiwoomWSManager:
 
                             # '0D' 주식호가잔량 데이터 파싱 (1~5호가)
                             if real_type == "0D":
+                                if self._micro_reversion_depth_capture_requested():
+                                    target["last_depth_tick"] = (
+                                        self._build_micro_reversion_depth_tick(
+                                            raw_item_code, values
+                                        )
+                                    )
+                                else:
+                                    target.pop("last_depth_tick", None)
                                 asks, bids = [], []
                                 for i in range(1, 6):
                                     ask_p = values.get(str(40 + i))

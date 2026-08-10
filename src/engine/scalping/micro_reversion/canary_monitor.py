@@ -115,6 +115,18 @@ _FORBIDDEN_TRUE_FIELDS = (
     "actual_order_submitted",
 )
 
+_DEPTH_ZERO_STOP_COUNTERS = (
+    "depth_queue_full_count",
+    "depth_dropped_envelope_count",
+    "depth_worker_error_count",
+    "depth_writer_queue_full_count",
+    "depth_writer_dropped_envelope_count",
+    "depth_writer_error_count",
+    "depth_writer_storage_self_disabled_count",
+    "depth_writer_manifest_error_count",
+    "depth_writer_projection_breach_count",
+)
+
 
 def load_canary_guard(path: Path | str = DEFAULT_GUARD_PATH) -> CanaryGuard:
     guard_path = Path(path)
@@ -164,6 +176,27 @@ def evaluate_canary_snapshot(
             reasons.append(f"missing_or_invalid_metric:{field}")
         elif value > 0:
             reasons.append(f"nonzero_stop_metric:{field}={_compact_number(value)}")
+    if snapshot.get("depth_capture_requested") is True:
+        if running and snapshot.get("depth_capture_active") is not True:
+            reasons.append("depth_capture_requested_but_not_active")
+        for field in _DEPTH_ZERO_STOP_COUNTERS:
+            value = _nonnegative_float(snapshot.get(field))
+            if value is None:
+                reasons.append(f"missing_or_invalid_metric:{field}")
+            elif value > 0:
+                reasons.append(f"nonzero_stop_metric:{field}={_compact_number(value)}")
+        if running:
+            depth_writer_count = _nonnegative_int(snapshot.get("depth_writer_count"))
+            depth_writer_alive_count = _nonnegative_int(
+                snapshot.get("depth_writer_alive_count")
+            )
+            if depth_writer_count is None or depth_writer_alive_count is None:
+                reasons.append("missing_or_invalid_depth_writer_liveness_metric")
+            elif depth_writer_alive_count != depth_writer_count:
+                reasons.append(
+                    "depth_writer_liveness_mismatch:"
+                    f"alive={depth_writer_alive_count},expected={depth_writer_count}"
+                )
     for field in _FORBIDDEN_TRUE_FIELDS:
         if snapshot.get(field) is not False:
             reasons.append(f"forbidden_authority_field:{field}")

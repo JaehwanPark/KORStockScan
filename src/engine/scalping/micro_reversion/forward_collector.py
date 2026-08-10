@@ -1,9 +1,9 @@
-"""Canary-only forward collector for existing Kiwoom 0B observations.
+"""Canary-only forward collector for existing Kiwoom 0B/0D observations.
 
-The market-data producer calls only :meth:`observe_kiwoom_0b`.  That method
-normalizes already parsed fields and performs one bounded ``put_nowait``. Pattern
-detection, path coalescing, JSON encoding, file writes, and fsync all happen on
-observer-owned worker threads.
+The market-data producer calls :meth:`observe_kiwoom_0b` for the canonical trade
+stream and :meth:`observe_kiwoom_0d` for a separate depth stream. Both callbacks
+perform one bounded ``put_nowait``. Pattern detection, JSON encoding, file writes,
+and fsync all happen on observer-owned worker threads.
 
 This module never registers market data, calls a broker, creates a simulated
 position, or changes an entry/exit decision.  It is loaded lazily only when the
@@ -46,6 +46,7 @@ from .path_capture import (
 )
 from .path_journal import (
     MarketPathPoint,
+    MarketDepthPoint,
     MarketStreamPoint,
     NonBlockingPathJournalWriter,
     PathStoragePolicy,
@@ -59,7 +60,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OUTPUT_ROOT = (
     REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
 )
-FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v6"
+FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v7"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
@@ -125,9 +126,11 @@ class ProducerCanaryResult(StrEnum):
     DISABLED = "disabled"
     UNSUPPORTED_REALTIME_TYPE = "unsupported_realtime_type"
     MISSING_0B_ITEM = "missing_0b_item"
+    MISSING_0D_ITEM = "missing_0d_item"
     MISSING_OR_CONFLICTING_VENUE = "missing_or_conflicting_venue"
     INVALID_EXCHANGE_TIMESTAMP = "invalid_exchange_timestamp"
     INVALID_TRADE_SNAPSHOT = "invalid_trade_snapshot"
+    INVALID_DEPTH_SNAPSHOT = "invalid_depth_snapshot"
     ENQUEUED = AdapterResult.ENQUEUED.value
     INVALID_ENVELOPE = AdapterResult.INVALID_ENVELOPE.value
     QUEUE_FULL = AdapterResult.QUEUE_FULL.value
@@ -139,6 +142,7 @@ class ForwardCollectorConfig:
     output_root: Path = DEFAULT_OUTPUT_ROOT
     observation_queue_size: int = 10_000
     path_queue_size: int = 10_000
+    depth_queue_size: int = 10_000
     path_batch_size: int = 256
     writer_flush_interval_sec: float = 0.25
     worker_poll_interval_sec: float = 0.1
@@ -148,7 +152,11 @@ class ForwardCollectorConfig:
     storage_policy: PathStoragePolicy = field(default_factory=PathStoragePolicy)
 
     def __post_init__(self) -> None:
-        if self.observation_queue_size <= 0 or self.path_queue_size <= 0:
+        if (
+            self.observation_queue_size <= 0
+            or self.path_queue_size <= 0
+            or self.depth_queue_size <= 0
+        ):
             raise ValueError("collector queue sizes must be positive")
         if self.path_batch_size <= 0:
             raise ValueError("path_batch_size must be positive")
@@ -179,8 +187,12 @@ class ForwardCollectorSnapshot:
     producer_observation_connected: bool
     observer_runtime_effect: bool
     observation_capture_active: bool
+    depth_capture_requested: bool
+    depth_capture_active: bool
     producer_0b_callback_count: int
+    producer_0d_callback_count: int
     enqueued_count: int
+    depth_enqueued_count: int
     producer_callback_latency_p50_ms: float
     producer_callback_latency_p95_ms: float
     producer_callback_latency_p99_ms: float
@@ -196,9 +208,12 @@ class ForwardCollectorSnapshot:
     adapter_isolated_error_count: int
     unsupported_realtime_type_count: int
     missing_0b_item_count: int
+    missing_0d_item_count: int
     missing_or_conflicting_venue_count: int
     invalid_exchange_timestamp_count: int
     invalid_trade_snapshot_count: int
+    invalid_depth_snapshot_count: int
+    invalid_depth_timestamp_count: int
     crossed_bbo_sanitized_count: int
     crossed_bbo_sanitized_rate: float
     future_exchange_timestamp_adjustment_count: int
@@ -212,6 +227,12 @@ class ForwardCollectorSnapshot:
     raw_exchange_code_9081_observed_count: int
     worker_processed_count: int
     worker_error_count: int
+    depth_queue_depth: int
+    depth_queue_high_water: int
+    depth_queue_full_count: int
+    depth_dropped_envelope_count: int
+    depth_worker_processed_count: int
+    depth_worker_error_count: int
     event_symbol_mismatch_count: int
     shock_event_count: int
     path_point_submitted_count: int
@@ -281,6 +302,18 @@ class ForwardCollectorSnapshot:
     writer_partition_bytes: int
     writer_projected_partition_bytes_max: int | None
     writer_projection_breach_count: int
+    depth_writer_count: int
+    depth_writer_alive_count: int
+    depth_writer_queue_depth: int
+    depth_writer_queue_high_water: int
+    depth_writer_persisted_envelope_count: int
+    depth_writer_queue_full_count: int
+    depth_writer_dropped_envelope_count: int
+    depth_writer_error_count: int
+    depth_writer_storage_self_disabled_count: int
+    depth_writer_manifest_error_count: int
+    depth_writer_projection_breach_count: int
+    depth_writer_bytes_written: int
     canonical_stream_point_count: int
     canonical_stream_duplicate_count: int
     canonical_stream_pre_window_point_count: int
@@ -338,6 +371,9 @@ class ForwardObservationCollector:
         self.flags = flags
         self.config = config or ForwardCollectorConfig()
         self._sink = BoundedObservationQueue(maxsize=self.config.observation_queue_size)
+        self._depth_sink: queue.Queue[MarketDepthPoint] = queue.Queue(
+            maxsize=self.config.depth_queue_size
+        )
         self._adapter = ObservationAdapter(
             self._sink,
             flags=flags,
@@ -354,8 +390,12 @@ class ForwardObservationCollector:
         )
         self._detector = detector or MultiHorizonShockDetector()
         self._writers: dict[tuple[str, str, str], NonBlockingPathJournalWriter] = {}
+        self._depth_writers: dict[
+            tuple[str, str, str], NonBlockingPathJournalWriter
+        ] = {}
         self._reference_partitions: set[tuple[str, str, str]] = set()
         self._source_sequences: dict[tuple[str, str, str], int] = {}
+        self._depth_source_sequences: dict[tuple[str, str, str], int] = {}
         self._sequence_epoch = time.time_ns()
         self._series_epochs: dict[tuple[str, str, str], int] = {}
         self._sequence_losses: dict[tuple[int, str, str, str], dict[int, str]] = {}
@@ -367,17 +407,23 @@ class ForwardObservationCollector:
         self._metrics_lock = threading.Lock()
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
+        self._depth_thread: threading.Thread | None = None
         self._accepting = False
         self._active_callbacks = 0
         self._writers_closing = False
         self._lifecycle = CollectorLifecycle.NEW
         self._producer_0b_callbacks = 0
+        self._producer_0d_callbacks = 0
         self._enqueued = 0
+        self._depth_enqueued = 0
         self._unsupported_types = 0
         self._missing_0b_items = 0
+        self._missing_0d_items = 0
         self._venue_blocks = 0
         self._timestamp_blocks = 0
         self._snapshot_blocks = 0
+        self._depth_snapshot_blocks = 0
+        self._depth_timestamp_blocks = 0
         self._crossed_bbo_sanitized = 0
         self._future_timestamp_adjustments = 0
         self._stale_timestamp_blocks = 0
@@ -386,6 +432,11 @@ class ForwardObservationCollector:
         self._exchange_9081_observed = 0
         self._worker_processed = 0
         self._worker_errors = 0
+        self._depth_queue_high_water = 0
+        self._depth_queue_full = 0
+        self._depth_dropped = 0
+        self._depth_worker_processed = 0
+        self._depth_worker_errors = 0
         self._event_symbol_mismatches = 0
         self._shock_events = 0
         self._path_submitted = 0
@@ -445,6 +496,13 @@ class ForwardObservationCollector:
                 daemon=True,
             )
             self._thread.start()
+            if self.flags.depth_capture_active:
+                self._depth_thread = threading.Thread(
+                    target=self._run_depth,
+                    name="micro-reversion-depth-collector",
+                    daemon=True,
+                )
+                self._depth_thread.start()
 
     def close(self, *, timeout_sec: float = 10.0) -> None:
         deadline = time.monotonic() + max(0.01, timeout_sec)
@@ -454,6 +512,7 @@ class ForwardObservationCollector:
             if self._lifecycle is CollectorLifecycle.CLOSED:
                 return
             thread = self._thread
+            depth_thread = self._depth_thread
             self._accepting = False
             self._lifecycle = CollectorLifecycle.CLOSING
             while self._active_callbacks:
@@ -470,7 +529,9 @@ class ForwardObservationCollector:
                 self._stop_requested.set()
         if callback_timeout_error is not None:
             with self._state_lock:
-                callback_timeout_writers = tuple(self._writers.values())
+                callback_timeout_writers = tuple(self._writers.values()) + tuple(
+                    self._depth_writers.values()
+                )
             callback_timeout_writer_alive = 0
             for writer in callback_timeout_writers:
                 try:
@@ -481,6 +542,9 @@ class ForwardObservationCollector:
                 self._close_failures += 1
                 self._worker_alive_after_close += int(
                     bool(thread is not None and thread.is_alive())
+                )
+                self._worker_alive_after_close += int(
+                    bool(depth_thread is not None and depth_thread.is_alive())
                 )
                 self._writer_alive_after_close += callback_timeout_writer_alive
                 self._last_close_error_types = ("TimeoutError",)
@@ -494,9 +558,17 @@ class ForwardObservationCollector:
                 close_errors.append(
                     TimeoutError("forward collector did not drain in time")
                 )
+        if depth_thread is not None:
+            depth_thread.join(timeout=max(0.01, deadline - time.monotonic()))
+            if depth_thread.is_alive():
+                close_errors.append(
+                    TimeoutError("depth collector did not drain in time")
+                )
         with self._state_lock:
             self._writers_closing = True
-            writers = tuple(self._writers.values())
+            writers = tuple(self._writers.values()) + tuple(
+                self._depth_writers.values()
+            )
         for writer in writers:
             try:
                 writer.close(timeout_sec=max(0.01, deadline - time.monotonic()))
@@ -527,6 +599,9 @@ class ForwardObservationCollector:
             with self._metrics_lock:
                 self._worker_alive_after_close += int(
                     bool(thread is not None and thread.is_alive())
+                )
+                self._worker_alive_after_close += int(
+                    bool(depth_thread is not None and depth_thread.is_alive())
                 )
                 self._writer_alive_after_close += writer_alive_count
             self._record_close_failure(tuple(close_errors))
@@ -673,17 +748,159 @@ class ForwardObservationCollector:
                 if self._active_callbacks == 0:
                     self._callback_condition.notify_all()
 
+    def observe_kiwoom_0d(
+        self,
+        symbol: str,
+        snapshot: dict[str, Any],
+        *,
+        realtime_type: str,
+    ) -> ProducerCanaryResult:
+        """Normalize one existing 0D snapshot into the separate bounded queue."""
+
+        callback_started_ns = time.perf_counter_ns()
+        with self._callback_condition:
+            if not self._accepting or not self.flags.depth_capture_active:
+                return ProducerCanaryResult.DISABLED
+            self._active_callbacks += 1
+        try:
+            if str(realtime_type or "").strip() != "0D":
+                self._increment("_unsupported_types")
+                return ProducerCanaryResult.UNSUPPORTED_REALTIME_TYPE
+            self._increment("_producer_0d_callbacks")
+            depth = snapshot.get("last_depth_tick")
+            if not isinstance(depth, dict):
+                self._increment("_depth_snapshot_blocks")
+                return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+            item = str(depth.get("item") or "").strip()
+            type_item = str(
+                (snapshot.get("last_realtime_type_item") or {}).get("0D") or ""
+            ).strip()
+            if not item or item != type_item:
+                self._increment("_missing_0d_items")
+                return ProducerCanaryResult.MISSING_0D_ITEM
+            declared_venue = (
+                str(
+                    (snapshot.get("last_realtime_type_effective_venue") or {}).get("0D")
+                    or ""
+                )
+                .strip()
+                .upper()
+            )
+            venue = _explicit_item_venue(item)
+            if not venue or declared_venue not in {"", venue}:
+                self._increment("_venue_blocks")
+                return ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
+            received_at_ms = _positive_int(depth.get("received_at_ms"))
+            timestamp_result = _exchange_timestamp_from_0b(
+                depth.get("orderbook_time_raw"),
+                received_at_ms=received_at_ms,
+                future_skew_tolerance_ms=(
+                    self.config.exchange_future_skew_tolerance_ms
+                ),
+                maximum_lag_ms=self.config.maximum_exchange_to_receive_lag_ms,
+            )
+            if timestamp_result is None:
+                self._increment("_depth_timestamp_blocks")
+                return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+            exchange_timestamp, _future_adjusted, stale = timestamp_result
+            if stale:
+                self._increment("_depth_timestamp_blocks")
+                return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+            try:
+                asks = _normalize_depth_levels(depth.get("ask_levels"), side="ask")
+                bids = _normalize_depth_levels(depth.get("bid_levels"), side="bid")
+                bid_depth = _nonnegative_int(depth.get("bid_depth"))
+                ask_depth = _nonnegative_int(depth.get("ask_depth"))
+                route_depth_totals = _normalize_route_depth_totals(
+                    depth.get("route_depth_totals")
+                )
+                if ask_depth < sum(row[2] for row in asks) or bid_depth < sum(
+                    row[2] for row in bids
+                ):
+                    raise ValueError("depth totals do not cover retained levels")
+                if route_depth_totals["combined"] != {
+                    "ask": ask_depth,
+                    "bid": bid_depth,
+                }:
+                    raise ValueError("combined route totals conflict with depth")
+            except ValueError:
+                self._increment("_depth_snapshot_blocks")
+                return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+            if not asks or not bids:
+                self._increment("_depth_snapshot_blocks")
+                return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+            best_ask = asks[0][1]
+            best_bid = bids[0][1]
+            if best_ask < best_bid:
+                self._increment("_depth_snapshot_blocks")
+                return ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+            received_at = datetime.fromtimestamp(received_at_ms / 1_000, tz=KST)
+            session_bucket = _session_bucket(venue, exchange_timestamp.timetz())
+            series_key = (normalize_symbol(symbol), venue, session_bucket)
+            sequence_epoch, series_sequence = self._next_depth_source_sequence(
+                series_key
+            )
+            point = MarketDepthPoint(
+                symbol=symbol,
+                exchange_timestamp=exchange_timestamp.isoformat(),
+                local_receive_timestamp=received_at.isoformat(),
+                source_sequence=series_sequence,
+                sequence_epoch=sequence_epoch,
+                series_sequence=series_sequence,
+                venue=venue,
+                session_bucket=session_bucket,
+                item=item,
+                orderbook_time_raw=str(depth.get("orderbook_time_raw") or "").strip(),
+                best_bid=best_bid,
+                best_ask=best_ask,
+                best_bid_qty=bids[0][2],
+                best_ask_qty=asks[0][2],
+                bid_depth=bid_depth,
+                ask_depth=ask_depth,
+                bid_levels=bids,
+                ask_levels=asks,
+                route_depth_totals=route_depth_totals,
+            )
+            try:
+                self._depth_sink.put_nowait(point)
+            except queue.Full:
+                self._increment("_depth_queue_full")
+                self._increment("_depth_dropped")
+                return ProducerCanaryResult.QUEUE_FULL
+            with self._metrics_lock:
+                self._depth_enqueued += 1
+                self._depth_queue_high_water = max(
+                    self._depth_queue_high_water, self._depth_sink.qsize()
+                )
+            return ProducerCanaryResult.ENQUEUED
+        except Exception:
+            self._increment("_depth_snapshot_blocks")
+            return ProducerCanaryResult.ISOLATED_ERROR
+        finally:
+            self._record_producer_callback_latency(
+                (time.perf_counter_ns() - callback_started_ns) / 1_000_000.0
+            )
+            with self._callback_condition:
+                self._active_callbacks -= 1
+                if self._active_callbacks == 0:
+                    self._callback_condition.notify_all()
+
     def runtime_snapshot(self) -> ForwardCollectorSnapshot:
         adapter = self._adapter.runtime_snapshot()
         with self._state_lock:
             thread = self._thread
             writer_items = tuple(self._writers.items())
+            depth_thread = self._depth_thread
+            depth_writer_items = tuple(self._depth_writers.items())
             connected = self._accepting
             lifecycle = self._lifecycle.value
             active_callbacks = self._active_callbacks
         writers = tuple(writer for _, writer in writer_items)
         writer_metrics = tuple(writer.metrics() for writer in writers)
         aggregate = _aggregate_writer_metrics(writer_metrics)
+        depth_writers = tuple(writer for _, writer in depth_writer_items)
+        depth_writer_metrics = tuple(writer.metrics() for writer in depth_writers)
+        depth_aggregate = _aggregate_writer_metrics(depth_writer_metrics)
         bytes_by_trade_date: dict[str, int] = {}
         for (trade_date, _venue, _session), metrics in zip(
             (key for key, _writer in writer_items), writer_metrics, strict=True
@@ -704,8 +921,15 @@ class ForwardObservationCollector:
                     bool(thread is not None and thread.is_alive())
                     and self.flags.observation_capture_active
                 ),
+                depth_capture_active=(
+                    bool(depth_thread is not None and depth_thread.is_alive())
+                    and self.flags.depth_capture_active
+                ),
+                depth_capture_requested=self.flags.depth_capture_active,
                 producer_0b_callback_count=self._producer_0b_callbacks,
+                producer_0d_callback_count=self._producer_0d_callbacks,
                 enqueued_count=self._enqueued,
+                depth_enqueued_count=self._depth_enqueued,
                 producer_callback_latency_p50_ms=(_percentile(callback_latency, 50)),
                 producer_callback_latency_p95_ms=(_percentile(callback_latency, 95)),
                 producer_callback_latency_p99_ms=(_percentile(callback_latency, 99)),
@@ -723,9 +947,12 @@ class ForwardObservationCollector:
                 adapter_isolated_error_count=adapter.isolated_error_count,
                 unsupported_realtime_type_count=self._unsupported_types,
                 missing_0b_item_count=self._missing_0b_items,
+                missing_0d_item_count=self._missing_0d_items,
                 missing_or_conflicting_venue_count=self._venue_blocks,
                 invalid_exchange_timestamp_count=self._timestamp_blocks,
                 invalid_trade_snapshot_count=self._snapshot_blocks,
+                invalid_depth_snapshot_count=self._depth_snapshot_blocks,
+                invalid_depth_timestamp_count=self._depth_timestamp_blocks,
                 crossed_bbo_sanitized_count=self._crossed_bbo_sanitized,
                 crossed_bbo_sanitized_rate=_rate(
                     self._crossed_bbo_sanitized, self._producer_0b_callbacks
@@ -753,6 +980,12 @@ class ForwardObservationCollector:
                 raw_exchange_code_9081_observed_count=(self._exchange_9081_observed),
                 worker_processed_count=self._worker_processed,
                 worker_error_count=self._worker_errors,
+                depth_queue_depth=self._depth_sink.qsize(),
+                depth_queue_high_water=self._depth_queue_high_water,
+                depth_queue_full_count=self._depth_queue_full,
+                depth_dropped_envelope_count=self._depth_dropped,
+                depth_worker_processed_count=self._depth_worker_processed,
+                depth_worker_error_count=self._depth_worker_errors,
                 event_symbol_mismatch_count=self._event_symbol_mismatches,
                 shock_event_count=self._shock_events,
                 path_point_submitted_count=self._path_submitted,
@@ -866,6 +1099,24 @@ class ForwardObservationCollector:
                     "projected_partition_bytes_max"
                 ],
                 writer_projection_breach_count=aggregate["projection_breaches"],
+                depth_writer_count=len(depth_writer_metrics),
+                depth_writer_alive_count=sum(
+                    1 for metric in depth_writer_metrics if metric.writer_alive
+                ),
+                depth_writer_queue_depth=depth_aggregate["queue_depth"],
+                depth_writer_queue_high_water=depth_aggregate["queue_high_water"],
+                depth_writer_persisted_envelope_count=depth_aggregate["persisted"],
+                depth_writer_queue_full_count=depth_aggregate["queue_full"],
+                depth_writer_dropped_envelope_count=depth_aggregate["dropped"],
+                depth_writer_error_count=depth_aggregate["errors"],
+                depth_writer_storage_self_disabled_count=depth_aggregate[
+                    "self_disabled"
+                ],
+                depth_writer_manifest_error_count=depth_aggregate["manifest_errors"],
+                depth_writer_projection_breach_count=depth_aggregate[
+                    "projection_breaches"
+                ],
+                depth_writer_bytes_written=depth_aggregate["bytes_written"],
                 canonical_stream_point_count=self._canonical_stream_points,
                 canonical_stream_duplicate_count=self._canonical_stream_duplicates,
                 canonical_stream_pre_window_point_count=(
@@ -912,6 +1163,15 @@ class ForwardObservationCollector:
             epoch = self._series_epochs.setdefault(series_key, self._sequence_epoch)
             return epoch, sequence
 
+    def _next_depth_source_sequence(
+        self, series_key: tuple[str, str, str]
+    ) -> tuple[int, int]:
+        with self._state_lock:
+            previous = self._depth_source_sequences.get(series_key, 0)
+            sequence = previous + 1
+            self._depth_source_sequences[series_key] = sequence
+            return self._sequence_epoch, sequence
+
     def _run(self) -> None:
         while not self._stop_requested.is_set() or self._sink.qsize() > 0:
             try:
@@ -924,6 +1184,25 @@ class ForwardObservationCollector:
                 self._increment("_worker_errors")
             finally:
                 self._sink.task_done()
+
+    def _run_depth(self) -> None:
+        while not self._stop_requested.is_set() or self._depth_sink.qsize() > 0:
+            try:
+                point = self._depth_sink.get(
+                    timeout=self.config.worker_poll_interval_sec
+                )
+            except queue.Empty:
+                continue
+            try:
+                writer = self._depth_writer_for(point)
+                if not writer.submit(point):
+                    self._increment("_depth_dropped")
+                else:
+                    self._increment("_depth_worker_processed")
+            except Exception:
+                self._increment("_depth_worker_errors")
+            finally:
+                self._depth_sink.task_done()
 
     def _process_envelope(self, envelope: RawMarketObservation) -> None:
         if self._is_stale_sequence_epoch(envelope):
@@ -1261,6 +1540,34 @@ class ForwardObservationCollector:
             self._writers[key] = writer
             return writer
 
+    def _depth_writer_for(
+        self, point: MarketDepthPoint
+    ) -> NonBlockingPathJournalWriter:
+        trade_date = datetime.fromisoformat(point.exchange_timestamp).date().isoformat()
+        key = (trade_date, point.venue, point.session_bucket)
+        with self._state_lock:
+            if self._writers_closing:
+                raise RuntimeError("depth writer access blocked during shutdown")
+            writer = self._depth_writers.get(key)
+            if writer is not None:
+                return writer
+            path = self.config.storage_policy.depth_partition_path(
+                self.config.output_root,
+                trade_date=trade_date,
+                venue=point.venue,
+                session_bucket=point.session_bucket,
+            )
+            writer = NonBlockingPathJournalWriter(
+                path,
+                max_queue_size=self.config.path_queue_size,
+                max_batch_size=self.config.path_batch_size,
+                flush_interval_sec=self.config.writer_flush_interval_sec,
+                storage_policy=self.config.storage_policy,
+            )
+            writer.start()
+            self._depth_writers[key] = writer
+            return writer
+
     def _append_reference(
         self, envelope: RawMarketObservation, reference: PathEventReference
     ) -> None:
@@ -1326,6 +1633,9 @@ def build_forward_collector_from_env(
         ),
         path_queue_size=_bounded_env_int(
             "SCALP_MICRO_REVERSION_PATH_QUEUE_SIZE", 10_000, 1, 200_000
+        ),
+        depth_queue_size=_bounded_env_int(
+            "SCALP_MICRO_REVERSION_DEPTH_QUEUE_SIZE", 10_000, 1, 200_000
         ),
         path_batch_size=_bounded_env_int(
             "SCALP_MICRO_REVERSION_PATH_BATCH_SIZE", 256, 1, 10_000
@@ -1534,6 +1844,71 @@ def _nonnegative_int_or_none(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _nonnegative_int(value: object) -> int:
+    parsed = _nonnegative_int_or_none(value)
+    if parsed is None:
+        raise ValueError("depth quantity must be a nonnegative integer")
+    return parsed
+
+
+def _normalize_depth_levels(
+    value: object,
+    *,
+    side: str,
+) -> tuple[tuple[int, float, int], ...]:
+    if side not in {"ask", "bid"}:
+        raise ValueError("depth side must be ask or bid")
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("depth levels must be a list")
+    normalized: list[tuple[int, float, int]] = []
+    for row in value:
+        if not isinstance(row, dict):
+            raise ValueError("depth level must be an object")
+        level = _positive_int(row.get("level"))
+        price = _positive_float_or_none(row.get("price"))
+        quantity = _nonnegative_int_or_none(row.get("quantity"))
+        if level <= 0 or price is None or quantity is None:
+            raise ValueError("depth level fields are invalid")
+        normalized.append((level, price, quantity))
+    normalized.sort(key=lambda row: row[0])
+    if len({row[0] for row in normalized}) != len(normalized):
+        raise ValueError("depth levels must not contain duplicates")
+    retained = tuple(normalized[:5])
+    if tuple(row[0] for row in retained) != tuple(range(1, len(retained) + 1)):
+        raise ValueError("depth levels must start at one and be contiguous")
+    prices = tuple(row[1] for row in retained)
+    if side == "ask" and any(
+        left >= right for left, right in zip(prices, prices[1:], strict=False)
+    ):
+        raise ValueError("ask prices must increase by level")
+    if side == "bid" and any(
+        left <= right for left, right in zip(prices, prices[1:], strict=False)
+    ):
+        raise ValueError("bid prices must decrease by level")
+    return retained
+
+
+def _normalize_route_depth_totals(
+    value: object,
+) -> dict[str, dict[str, int | None]]:
+    if not isinstance(value, dict):
+        raise ValueError("route depth totals must be an object")
+    normalized: dict[str, dict[str, int | None]] = {}
+    for route in ("combined", "KRX", "NXT"):
+        raw = value.get(route)
+        if not isinstance(raw, dict):
+            continue
+        normalized[route] = {
+            side: (None if raw.get(side) is None else _nonnegative_int(raw.get(side)))
+            for side in ("ask", "bid")
+        }
+    if "combined" not in normalized:
+        raise ValueError("combined depth totals are required")
+    if any(normalized["combined"].get(side) is None for side in ("ask", "bid")):
+        raise ValueError("combined depth totals must be observed")
+    return normalized
 
 
 def _nonnegative_float_or_none(value: object) -> float | None:

@@ -56,22 +56,62 @@ def _snapshot(
     }
 
 
+def _depth_snapshot(
+    *,
+    item: str = "000001",
+    venue: str = "KRX",
+    orderbook_time: str = "090000000",
+    received_at_ms: int | None = None,
+) -> dict:
+    if received_at_ms is None:
+        received_at_ms = int(
+            datetime.fromisoformat("2026-08-08T09:00:00.010+09:00").timestamp() * 1_000
+        )
+    return {
+        "last_realtime_type_item": {"0D": item},
+        "last_realtime_type_effective_venue": {"0D": venue},
+        "last_depth_tick": {
+            "item": item,
+            "orderbook_time_raw": orderbook_time,
+            "received_at_ms": received_at_ms,
+            "ask_levels": [
+                {"level": 1, "price": 10_010, "quantity": 100},
+                {"level": 2, "price": 10_020, "quantity": 200},
+            ],
+            "bid_levels": [
+                {"level": 1, "price": 10_000, "quantity": 150},
+                {"level": 2, "price": 9_990, "quantity": 250},
+            ],
+            "ask_depth": 300,
+            "bid_depth": 400,
+            "route_depth_totals": {
+                "combined": {"ask": 300, "bid": 400},
+                "KRX": {"ask": 300, "bid": 400},
+                "NXT": {"ask": 0, "bid": 0},
+            },
+        },
+    }
+
+
 def _collector(
     tmp_path: Path,
     *,
     path_capture_enabled: bool = False,
     detector: MultiHorizonShockDetector | None = None,
     queue_size: int = 16,
+    depth_capture_enabled: bool = False,
 ) -> ForwardObservationCollector:
     collector = ForwardObservationCollector(
         flags=ObserverFeatureFlags(
             observer_enabled=True,
             path_capture_enabled=path_capture_enabled,
+            depth_capture_enabled=depth_capture_enabled,
         ),
         config=ForwardCollectorConfig(
             output_root=tmp_path,
             observation_queue_size=queue_size,
             path_queue_size=16,
+            depth_queue_size=16,
             path_batch_size=4,
             writer_flush_interval_sec=0.01,
             worker_poll_interval_sec=0.01,
@@ -86,6 +126,7 @@ def test_factory_is_default_off_and_creates_no_output(tmp_path, monkeypatch) -> 
     for name in (
         "SCALP_MICRO_REVERSION_OBSERVER_ENABLED",
         "SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED",
+        "SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED",
         "SCALP_MICRO_REVERSION_DISCOVERY_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -173,6 +214,86 @@ def test_0b_item_does_not_fall_back_to_generic_last_ws_item(tmp_path) -> None:
 
     assert result is ProducerCanaryResult.MISSING_0B_ITEM
     assert runtime.missing_0b_item_count == 1
+
+
+def test_0d_depth_capture_uses_separate_journal_and_sequence(tmp_path) -> None:
+    collector = _collector(
+        tmp_path, path_capture_enabled=True, depth_capture_enabled=True
+    )
+    try:
+        result = collector.observe_kiwoom_0d(
+            "000001", _depth_snapshot(), realtime_type="0D"
+        )
+        deadline = time.monotonic() + 2
+        while (
+            collector.runtime_snapshot().depth_writer_persisted_envelope_count < 1
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+    finally:
+        collector.close()
+    runtime = collector.runtime_snapshot()
+    depth_files = tuple(tmp_path.rglob("market_depth_stream.jsonl"))
+    market_files = tuple(tmp_path.rglob("market_stream.jsonl"))
+
+    assert result is ProducerCanaryResult.ENQUEUED
+    assert runtime.producer_0d_callback_count == 1
+    assert runtime.depth_enqueued_count == 1
+    assert runtime.depth_worker_processed_count == 1
+    assert runtime.depth_writer_persisted_envelope_count == 1
+    assert len(depth_files) == 1
+    assert market_files == ()
+    row = json.loads(depth_files[0].read_text(encoding="utf-8").splitlines()[0])
+    assert row["schema"] == "scalp_micro_reversion_market_depth_point_v1"
+    assert row["realtime_type"] == "0D"
+    assert row["bid_depth"] == 400
+    assert row["ask_depth"] == 300
+    assert row["actual_order_submitted"] is False
+    assert row["broker_order_forbidden"] is True
+
+
+def test_0d_depth_capture_is_independently_default_off(tmp_path) -> None:
+    collector = _collector(tmp_path, path_capture_enabled=True)
+    try:
+        result = collector.observe_kiwoom_0d(
+            "000001", _depth_snapshot(), realtime_type="0D"
+        )
+        runtime = collector.runtime_snapshot()
+    finally:
+        collector.close()
+
+    assert result is ProducerCanaryResult.DISABLED
+    assert runtime.depth_capture_active is False
+    assert runtime.producer_0d_callback_count == 0
+    assert tuple(tmp_path.rglob("market_depth_stream.jsonl")) == ()
+
+
+def test_0d_depth_capture_rejects_missing_official_clock(tmp_path) -> None:
+    collector = _collector(tmp_path, depth_capture_enabled=True)
+    payload = _depth_snapshot(orderbook_time="")
+    try:
+        result = collector.observe_kiwoom_0d("000001", payload, realtime_type="0D")
+        runtime = collector.runtime_snapshot()
+    finally:
+        collector.close()
+
+    assert result is ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+    assert runtime.invalid_depth_timestamp_count == 1
+
+
+def test_0d_depth_capture_does_not_impute_missing_combined_totals(tmp_path) -> None:
+    collector = _collector(tmp_path, depth_capture_enabled=True)
+    payload = _depth_snapshot()
+    payload["last_depth_tick"]["ask_depth"] = None
+    payload["last_depth_tick"]["route_depth_totals"]["combined"]["ask"] = None
+    try:
+        result = collector.observe_kiwoom_0d("000001", payload, realtime_type="0D")
+        runtime = collector.runtime_snapshot()
+    finally:
+        collector.close()
+
+    assert result is ProducerCanaryResult.INVALID_DEPTH_SNAPSHOT
+    assert runtime.invalid_depth_snapshot_count == 1
 
 
 def test_stale_series_epoch_is_rejected_before_gap_and_detector(tmp_path) -> None:
@@ -1023,13 +1144,17 @@ def test_ws_producer_hook_isolates_collector_failure(monkeypatch) -> None:
     assert manager._micro_reversion_forward_collector_error == "OSError"
 
 
-def test_ws_producer_hook_is_called_only_for_0b(monkeypatch) -> None:
+def test_ws_producer_hook_routes_0b_and_0d_without_cross_call(monkeypatch) -> None:
     class RecordingCollector:
         def __init__(self) -> None:
-            self.calls = 0
+            self.trade_calls = 0
+            self.depth_calls = 0
 
         def observe_kiwoom_0b(self, *_args, **_kwargs):
-            self.calls += 1
+            self.trade_calls += 1
+
+        def observe_kiwoom_0d(self, *_args, **_kwargs):
+            self.depth_calls += 1
 
     collector = RecordingCollector()
     manager = KiwoomWSManager("test-token")
@@ -1042,7 +1167,8 @@ def test_ws_producer_hook_is_called_only_for_0b(monkeypatch) -> None:
     manager._queue_tick_event("000001", _snapshot(), realtime_type="0D")
     manager._queue_tick_event("000001", _snapshot(), realtime_type="0B")
 
-    assert collector.calls == 1
+    assert collector.trade_calls == 1
+    assert collector.depth_calls == 1
 
 
 def test_ws_stop_retains_collector_until_retryable_close_succeeds(monkeypatch) -> None:

@@ -358,6 +358,10 @@ complete-case EV는 진단값으로만 남긴다. 경제성 headline은 모든 �
 
 - CORE/DISCOVERY registry와 deterministic multi-horizon detector 구현
 - append-only continuous path journal 및 future label scheduler 연결
+- 기존 WebSocket 등록 종목의 이미 수신 중인 `0D`를 별도 bounded queue와
+  `market_depth_stream.jsonl`에 기록한다. 0B canonical stream은 그대로 두고,
+  P2는 동일 symbol/venue/session의 최신 과거 0D만 freshness 한도 안에서 offline
+  join한다. 신규 구독·route 확대와 future/cross-venue/imputed join은 금지한다.
 - LLM, broker, order manager import 금지 test 추가
 - source-quality fail-closed와 process restart state 복원 검증
 
@@ -414,3 +418,8 @@ P2-C confirmation이 닫힌 뒤 별도 사용자 작업과 재감리로만 연�
 구현 가치는 있다. 다만 가치는 “즉시 매매기계”가 아니라, 평균회귀형 종목과 실제 shock-reversion event가 존재하는지 빠르게 기각하거나 확인하는 독립 검증기에서 시작한다.
 
 Phase A V0 replay와 P0 tax/common-maturity/journal 계약, producer-safe adapter/ring/coalescer/metric, P2-A source-only joint replay와 onset 품질 진단, source-only clean integration commit/manifest는 완료됐다. 일반 과세주권 aggregate fixed-horizon gate는 실패했으므로 전체 이벤트 실행정책은 종료한다. 다음 실행은 forward collector Gate B를 닫고 실제 경로 discovery policy/cohort/cost를 별도로 동결하는 것이다. 수집기 건강성 gate가 닫히기 전에는 실제 경로 P2 discovery를 실행하거나 정책을 ranking하지 않는다. 관측·P2 경로에는 주문권한을 부여하지 않는다.
+
+0D depth 보완은 구독 추가가 아니라 기존 연속 0D producer의 누락된 관측
+consumer를 복구하는 source-quality 작업이다. 기능은 기본 OFF이며 코드리뷰 후
+별도 runtime 승인으로만 켠다. 활성화 후에는 depth join coverage와 age 분포를 먼저
+확인하고, depth 자체를 진입 또는 fill 증거로 사용하지 않는다.

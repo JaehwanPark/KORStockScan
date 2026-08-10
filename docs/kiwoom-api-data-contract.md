@@ -558,6 +558,42 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   diagnostics and must not relax broker submit, stale quote, order price,
   quantity, provider, cap, or bot-state guards.
 
+### 2026-08-10 Micro-Reversion Continuous 0D Depth Capture Gate
+
+- Official upstream revision: `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`,
+  retrieved `2026-08-10T16:24:11+09:00`.
+- Inspected authority paths:
+  `kiwoom_docs/실시간시세.md`, `kiwoom/_data/kiwoom_api_spec.json`,
+  `kiwoom/specs.py`, `kiwoom/realtime/{packets,events,decoders,schemas,stream}.py`,
+  `kiwoom/core`, and
+  `examples/국내주식/실시간시세/subscribe_domestic_stock_order_book_depth_async.py`.
+  The example is sample evidence only. The Postman collection excludes
+  WebSocket requests and therefore is not 0D authority.
+- The existing KORStockScan REG/REMOVE packets already include `0D` for every
+  registered item alongside `0B`. This implementation does not add a market
+  data type, symbol, route, REG, REMOVE, reconnect, or resubscribe path. It only
+  attaches an independently flagged observation consumer to the already
+  received 0D callback.
+- Official 0D time is FID `21`; ask prices/quantities are `41-50`/`61-70`, bid
+  prices/quantities are `51-60`/`71-80`, and combined totals are `121`/`125`.
+  KRX totals are `6064`/`6065` and NXT totals are `6086`/`6087`. The compact
+  micro-reversion row retains the best five levels plus these totals; this is an
+  explicit storage projection, not a claim that the official feed has only five
+  levels.
+- Item suffix remains authoritative for the subscription route: plain item is
+  KRX, `_NX` is NXT, and `_AL` remains the integrated SOR cohort. `_AL` must not
+  be guessed as the underlying execution venue even when KRX/NXT component
+  totals are present.
+- 0D has an independent bounded intake queue, sequence, worker, writer, and
+  `market_depth_stream.jsonl` partition. 0B canonical rows keep depth null.
+  Offline research may join only the latest past 0D row with the same
+  symbol/venue/session and an explicit freshness limit. Future, cross-route,
+  missing-value-imputed, or touch-as-fill joins are forbidden.
+- Capture is default OFF behind
+  `SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED`. Enabling it changes no trading,
+  detector, P2 selection, threshold, provider, quantity, cap, broker, or bot
+  authority. Queue/writer/drop/storage degradation is canary fail-closed.
+
 ## ka10080 and ka10081
 
 - `ka10080` is implemented through `/api/dostk/chart` with `api-id=ka10080`.
