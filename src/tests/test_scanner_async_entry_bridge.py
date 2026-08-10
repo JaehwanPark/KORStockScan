@@ -1561,7 +1561,7 @@ def test_opening_rotation_async_commit_does_not_claim_generic_result(monkeypatch
     )
 
 
-def test_opening_rotation_async_commit_yields_strategy_miss_to_generic_owner(
+def test_opening_rotation_async_commit_consumes_strategy_miss_without_ai_handoff(
     monkeypatch,
 ):
     generation = _generation("KRX")
@@ -1594,7 +1594,7 @@ def test_opening_rotation_async_commit_yields_strategy_miss_to_generic_owner(
 
     monkeypatch.setattr(handlers, "_handle_watching_opening_rotation", _opening_handler)
 
-    assert not handlers.handle_scanner_async_opening_rotation_commit(
+    assert handlers.handle_scanner_async_opening_rotation_commit(
         stock,
         "005930",
         {"curr": 1001},
@@ -1603,10 +1603,7 @@ def test_opening_rotation_async_commit_yields_strategy_miss_to_generic_owner(
         now_dt=datetime.now(),
         scanner_async_generation=generation,
     )
-    assert (
-        stock["_opening_rotation_general_entry_handoff_once_generation_id"]
-        == generation.generation_id
-    )
+    assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
 
 
 def test_opening_rotation_async_commit_does_not_handoff_unmarked_false_result(
@@ -1643,7 +1640,7 @@ def test_opening_rotation_async_commit_does_not_handoff_unmarked_false_result(
     assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
 
 
-def test_opening_rotation_handoff_marker_bypasses_same_generation_re_evaluation(
+def test_opening_rotation_legacy_handoff_marker_has_no_runtime_authority(
     monkeypatch,
 ):
     generation = _generation("KRX")
@@ -1676,15 +1673,8 @@ def test_opening_rotation_handoff_marker_bypasses_same_generation_re_evaluation(
         runtime,
         {"MIN_SCALP_LIQUIDITY": 500_000_000},
     )
-    assert (
-        stock["_opening_rotation_general_entry_handoff_once_generation_id"]
-        == generation.generation_id
-    )
-    assert runtime["opening_rotation_entry_owner_handoff"] is True
-    assert runtime["opening_rotation_entry_owner_handoff_reason"] == (
-        "pullback_not_observed"
-    )
-    runtime.pop("opening_rotation_entry_owner_handoff", None)
+    assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
+    assert "opening_rotation_entry_owner_handoff" not in runtime
     assert not handlers._handle_watching_opening_rotation(
         stock,
         "005930",
@@ -1692,11 +1682,8 @@ def test_opening_rotation_handoff_marker_bypasses_same_generation_re_evaluation(
         runtime,
         {"MIN_SCALP_LIQUIDITY": 500_000_000},
     )
-    assert (
-        stock["_opening_rotation_general_entry_handoff_once_generation_id"]
-        == generation.generation_id
-    )
-    assert runtime["opening_rotation_entry_owner_handoff"] is True
+    assert "_opening_rotation_general_entry_handoff_once_generation_id" not in stock
+    assert "opening_rotation_entry_owner_handoff" not in runtime
 
 
 def test_opening_rotation_handoff_marker_clears_for_new_generation(monkeypatch):

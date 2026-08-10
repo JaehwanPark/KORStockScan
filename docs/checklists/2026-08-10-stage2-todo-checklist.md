@@ -18,6 +18,25 @@
 
 ## 사용자 지시 구현 기록
 
+- [x] `[OpeningRotationOneShareRepair0810] Opening Rotation 1주 반복매매 보수` (`Due: 2026-08-10`, `Slot: OFFLINE`, `TimeWindow: 16:30~18:00`, `Track: ScalpingLogic`)
+  - Source: [Opening policy](/home/ubuntu/KORStockScan/src/engine/scalping/opening_rotation.py), [runtime handler](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [receipt handler](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [postclose/PREOPEN tuner](/home/ubuntu/KORStockScan/src/engine/scalping/opening_rotation_tuning.py), [automation traceability](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 구현: 모든 KRX regular scanner lineage를 대상으로 promotion TTL 60초와 실행가능성 선검사 후 두 슬롯에서 자체 `WAIT/BUY/DROP`으로 종결한다. 진입은 공통 scalping 창과 `09:03~11:40` 교집합, `+1.5~+5.0%`, 눌림·trusted tick·spread/pressure·VI/wall·2-of-5 confirmation을 사용한다. Entry AI는 호출하지 않으며 allocator가 허용한 수량을 정확히 1주로만 낮춰 fresh best bid KRX 지정가를 제출한다. 10초 취소 ambiguity는 broker reconciliation 전 새 episode를 차단한다.
+  - 청산/반복: exact 1주 BUY fill receipt 뒤 비용과 10bp slippage를 반영한 순수익 `+0.3%` 목표가를 즉시 제출한다. `-0.5%`는 손절이 아니라 episode당 holding AI 1회 trigger이며, `300/600초` timeout과 hard/protect/emergency safety를 유지한다. 목표가·AI·timeout SELL은 cancel/reconcile을 먼저 거치며 완전 SELL receipt/DB commit 후에만 같은 종목의 새 promotion 재진입 상태를 해제한다. Scale-in과 중복 매수는 금지한다.
+  - 자동화: clean baseline promotion/episode report, 등락률 외부 구간 진단, fill/slippage/target/ratchet/holding/timeout/MAE/MFE/EV attribution, predefined profile 단일축 PREOPEN apply와 첫 10 episode rollback을 연결했다. Ratchet 실주문 변경은 열지 않고 shadow만 기록한다. 현재 자료에 strict 신규 episode 표본이 없어 `+1.5~+5.0%`의 실증 승격은 아직 주장하지 않으며 표본·source-quality gate 전에는 profile 변경도 만들지 않는다.
+  - Kiwoom 공식 reference gate (`2026-08-10T17:12:43+09:00`): upstream SHA `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, `kiwoom_docs/주문.md`, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, `postman/kiwoom-openapi.postman_collection.json`을 확인했다. 기존 `kt10000/kt10001`, `/api/dostk/ordr`, `dmst_stex_tp=KRX`, 보통 지정가 `trde_tp=0`, `ord_no` receipt 계약을 재사용하고 endpoint/parser를 변경하지 않았다.
+  - 안전/운영: submit/account/order/cooldown/stale/conflict/hard safety를 우회하지 않는다. 구현 완료는 봇 재기동·실주문 활성화 승인이 아니며 이번 작업에서는 실행 PID, provider, cap, runtime env를 변경하거나 비싼 보고서를 재생성하지 않는다.
+  - 검증/리뷰: `$korstockscan-review-gate`의 구현→리뷰→보완→재리뷰를 무결점으로 닫았다. 재리뷰에서 target-date PREOPEN artifact 누락 시 활성 기본값으로 복구되던 authority leak, KRX regular provenance 누락/NXT episode EV 혼입 가능성, 동시 BUY receipt 목표가 중복-submit claim 및 broker notice/응답 race를 fail-closed·shared-lock·notice-first reconciliation으로 보완했다. Opening·tuning·watch budget·feature packet·scanner bridge·wrapper·trade-profit 대상 `pytest`는 `310 passed`; Ruff/Black·compileall·wrapper `bash -n`·tuner CLI·backlog parser·`git diff --check`를 통과했다. 기존 대형 runtime 파일 전역의 선행 `E402/F401`은 이번 변경 구간 검사에서 제외했으며, 변경 구간의 나머지 Ruff 규칙은 통과했다.
+
+- [ ] `[OpeningRotationPreopenActivation0811] Opening Rotation target-date PREOPEN artifact·기동 승인 확인` (`Due: 2026-08-11`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:50`, `Track: ScalpingLogic`)
+  - Source: [PREOPEN wrapper](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_preopen.sh), [runtime policy loader](/home/ubuntu/KORStockScan/src/engine/scalping/opening_rotation.py)
+  - 판정 기준: target-date policy schema/version/hash, 1주·2슬롯·scale-in 금지·09:03~11:40·순수익 +0.3% immutable contract를 검증한다. 실제 프로세스 재기동 또는 실주문 반영은 별도 명시 승인이 있을 때만 수행한다.
+  - 다음 액션: `artifact_verified_awaiting_restart_approval`, `schema_hash_blocked`, `source_quality_blocked`, `same_stage_owner_conflict` 중 하나로 닫는다.
+
+- [ ] `[OpeningRotationPostcloseAttribution0811] Opening Rotation 첫 runtime episode 장후 귀속 확인` (`Due: 2026-08-11`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~16:10`, `Track: ScalpingLogic`)
+  - Source: [postclose wrapper](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [Opening tuning report](/home/ubuntu/KORStockScan/src/engine/scalping/opening_rotation_tuning.py)
+  - 판정 기준: 실제 반영이 승인·수행된 경우에만 promotion/episode lineage, 10초 fill, 목표가, ambiguity/double-sell/protection failure, holding AI, 300/600초, ratchet shadow와 비용 차감 EV를 확인한다. 장중 관찰이나 intraday mutation은 요구하지 않는다.
+  - 다음 액션: `not_runtime_reflected`, `early_evidence_keep_profile`, `safety_rollback_candidate`, `sample_floor_hold`, `single_axis_preopen_candidate` 중 하나로 닫는다.
+
 - [x] `[SmoothingAttributionOpportunityClosure0810] trailing lineage·protect buffer counterfactual 보완` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 16:30~17:10`, `Track: TuningAutomation`)
   - Source: [holding runtime](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sell receipt](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [daily threshold report](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
   - 판정/변경: DB `record_id`가 없는 trailing continuation V2 arm도 runtime position key를 sell receipt까지 전달해 exact lineage로 완료손익을 결합한다. protect-trailing report-only grid는 producer가 남긴 실제 가격 표본과 원 trailing stop에서 `buffer_pct=0.50/0.80/1.00/1.25/1.50`별 below ratio·median 조건을 재계산한다.
