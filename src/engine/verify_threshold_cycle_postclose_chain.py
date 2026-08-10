@@ -244,24 +244,6 @@ def _ai_decision_action_outcome_calibration_status(
     ):
         if report.get(key) is not expected:
             errors.append(f"{key}_contract_invalid")
-    legacy = (
-        report.get("legacy_watching_score_smoothing")
-        if isinstance(report.get("legacy_watching_score_smoothing"), dict)
-        else {}
-    )
-    if legacy.get("status") != "retired_from_runtime_authority":
-        errors.append("legacy_watching_score_smoothing_not_retired")
-    if legacy.get("numeric_score_ema_used_for_live_decision") is not False:
-        errors.append("legacy_numeric_score_runtime_consumption_present")
-    for key in (
-        "projection_submitter_removed",
-        "projection_refresh_removed",
-        "runtime_env_family_removed",
-        "runtime_config_surface_removed",
-        "default_postclose_generation_removed",
-    ):
-        if legacy.get(key) is not True:
-            errors.append(f"legacy_{key}_not_closed")
     return {
         "status": "fail" if errors else "pass",
         "contract_errors": errors,

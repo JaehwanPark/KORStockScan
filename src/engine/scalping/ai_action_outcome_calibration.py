@@ -943,17 +943,6 @@ def build_report(
         "update_policy": (
             "append_exact_trace_daily_results_then_recompute_cumulative_action_outcome"
         ),
-        "legacy_watching_score_smoothing": {
-            "status": "retired_from_runtime_authority",
-            "replacement": POLICY_VERSION,
-            "numeric_score_ema_used_for_live_decision": False,
-            "projection_submitter_removed": True,
-            "projection_refresh_removed": True,
-            "runtime_env_family_removed": True,
-            "runtime_config_surface_removed": True,
-            "default_postclose_generation_removed": True,
-            "legacy_artifact_role": "explicit_archive_audit_only",
-        },
         "ofi_smoothing_audit": build_ofi_smoothing_audit(pipeline_path),
         "ofi_action_outcome_calibration": ofi_action_outcome_calibration,
         **OFFLINE_CONTRACT,

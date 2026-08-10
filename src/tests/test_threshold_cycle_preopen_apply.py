@@ -8619,66 +8619,6 @@ def test_verify_runtime_env_handoff_rejects_retired_selected_family(
     assert result["findings"][0]["severity"] == "retired_runtime_family_selected"
 
 
-def test_verify_runtime_env_handoff_ignores_removed_watching_smoothing_contract(
-    tmp_path, monkeypatch
-):
-    runtime_dir = tmp_path / "runtime_env"
-    runtime_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
-        json.dumps(
-            {
-                "target_date": "2026-07-20",
-                "selected_families": ["ai_watching_score_smoothing_report_only"],
-                "env_overrides": {
-                    "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE": "report_only"
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = mod.verify_runtime_env_handoff("2026-07-20")
-
-    assert result["status"] == "pass"
-    assert result["removed_selected_families_ignored"] == [
-        "ai_watching_score_smoothing_report_only"
-    ]
-    assert result["removed_manifest_override_keys_ignored"] == [
-        "KORSTOCKSCAN_AI_WATCHING_SCORE_SMOOTHING_MODE"
-    ]
-    assert result["selected_families"] == []
-
-
-def test_verify_runtime_env_handoff_preserves_prefiltered_removed_family_provenance(
-    tmp_path, monkeypatch
-):
-    runtime_dir = tmp_path / "runtime_env"
-    runtime_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
-        json.dumps(
-            {
-                "target_date": "2026-07-20",
-                "selected_families": [],
-                "removed_selected_families_ignored": [
-                    "ai_watching_score_smoothing_report_only"
-                ],
-                "env_overrides": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = mod.verify_runtime_env_handoff("2026-07-20")
-
-    assert result["status"] == "pass"
-    assert result["removed_selected_families_ignored"] == [
-        "ai_watching_score_smoothing_report_only"
-    ]
-    assert result["selected_families"] == []
-
-
 def test_verify_runtime_env_handoff_verifies_selected_pyramid_quality_gate(
     tmp_path, monkeypatch
 ):
@@ -8719,34 +8659,6 @@ def test_write_runtime_env_strips_all_retired_runtime_keys(tmp_path, monkeypatch
         encoding="utf-8"
     )
     assert not any(key in rendered for key in mod.RETIRED_RUNTIME_ENV_KEYS)
-
-
-def test_write_runtime_env_omits_removed_watching_family_from_selected_labels(
-    tmp_path, monkeypatch
-):
-    runtime_dir = tmp_path / "runtime_env"
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-
-    mod._write_runtime_env(
-        "2026-07-20",
-        {
-            "source_date": "2026-07-16",
-            "generated_at": "2026-07-20T08:00:00+09:00",
-            "auto_apply_selected": [
-                {"family": "ai_watching_score_smoothing_report_only"},
-                {"family": "holding_flow_ofi_smoothing"},
-            ],
-        },
-        {},
-    )
-
-    runtime_manifest = json.loads(
-        mod.runtime_env_manifest_path("2026-07-20").read_text(encoding="utf-8")
-    )
-    assert runtime_manifest["selected_families"] == ["holding_flow_ofi_smoothing"]
-    assert runtime_manifest["removed_selected_families_ignored"] == [
-        "ai_watching_score_smoothing_report_only"
-    ]
 
 
 def test_verify_runtime_env_handoff_missing_key(tmp_path, monkeypatch):

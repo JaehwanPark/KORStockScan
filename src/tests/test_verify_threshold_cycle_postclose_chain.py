@@ -214,7 +214,7 @@ def test_source_quality_hard_block_status_fails_runtime_candidate_without_handof
     assert status["workorder_handoff_present"] is False
 
 
-def test_ai_decision_action_outcome_calibration_status_closes_legacy_dependency():
+def test_ai_decision_action_outcome_calibration_status_accepts_current_contract():
     status = mod._ai_decision_action_outcome_calibration_status(
         {
             "schema": "ai_decision_action_outcome_calibration_v1",
@@ -224,15 +224,6 @@ def test_ai_decision_action_outcome_calibration_status_closes_legacy_dependency(
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "candidate_summaries": [{"candidate_prompt_version": "candidate_v1"}],
-            "legacy_watching_score_smoothing": {
-                "status": "retired_from_runtime_authority",
-                "numeric_score_ema_used_for_live_decision": False,
-                "projection_submitter_removed": True,
-                "projection_refresh_removed": True,
-                "runtime_env_family_removed": True,
-                "runtime_config_surface_removed": True,
-                "default_postclose_generation_removed": True,
-            },
         }
     )
 
@@ -6088,7 +6079,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "\n".join(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
-                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false ai_watching_score_smoothing_diagnostic=false ai_decision_action_outcome_calibration=false scalp_entry_adm=true lifecycle_decision_matrix=false code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false pattern_lab_currentness_audit=false pattern_lab_propagation_audit=false ai_decision_action_outcome_calibration=false scalp_entry_adm=true lifecycle_decision_matrix=false code_improvement_workorder=true daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",

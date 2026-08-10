@@ -67,17 +67,6 @@ def test_cumulative_calibration_updates_from_one_exact_trace(tmp_path: Path) -> 
     )
     assert report["runtime_effect"] is False
     assert report["selected_review_candidate"] is None
-    assert report["legacy_watching_score_smoothing"] == {
-        "status": "retired_from_runtime_authority",
-        "replacement": "exact_decision_trace_cumulative_action_outcome_v3",
-        "numeric_score_ema_used_for_live_decision": False,
-        "projection_submitter_removed": True,
-        "projection_refresh_removed": True,
-        "runtime_env_family_removed": True,
-        "runtime_config_surface_removed": True,
-        "default_postclose_generation_removed": True,
-        "legacy_artifact_role": "explicit_archive_audit_only",
-    }
 
 
 def test_prompt_review_candidate_requires_multi_day_bounded_exploration(
