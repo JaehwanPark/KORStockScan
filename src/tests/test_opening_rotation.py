@@ -2297,12 +2297,12 @@ def test_opening_rotation_ignores_stale_generic_ai_wait_veto_without_weakening_l
 
 def test_holding_common_trailing_does_not_overwrite_an_existing_exit_owner():
     holding_source = inspect.getsource(handlers.handle_holding_state)
+    normalized_holding_source = " ".join(holding_source.split())
 
     assert (
-        "not is_sell_signal\n"
-        "        and trailing_stop_price > 0\n"
-        "        and curr_p <= trailing_stop_price"
-    ) in holding_source
+        "if not is_sell_signal and trailing_stop_price > 0 "
+        "and curr_p <= trailing_stop_price:"
+    ) in normalized_holding_source
     assert holding_source.index(
         'exit_rule = "opening_rotation_common_trailing_stop"'
     ) < (holding_source.index('exit_rule = "protect_trailing_stop"'))
