@@ -12380,6 +12380,8 @@ def _canonicalize_rising_missed_venue_fields(
         normalized["venue_resolution"] = (
             "conflicting_explicit:venue,rising_missed_effective_venue"
         )
+        normalized["venue_source_quality_status"] = "reviewed_fail_closed"
+        normalized["venue_unknown_reviewed_reason"] = normalized["venue_resolution"]
         return normalized
 
     normalized["venue"] = rising_venue
@@ -28793,6 +28795,9 @@ def _pre_submit_parent_ai_lineage_fields(
             else "missing_ai_trace"
         )
     )
+    lineage_result_source = source.get("last_watching_ai_result_source") or (
+        "attempt_untrusted_or_not_available" if attempt_trace_id else "not_available"
+    )
     return {
         "pre_submit_parent_ai_decision_trace_id": trace_id or "-",
         "pre_submit_parent_ai_attempt_trace_id": attempt_trace_id or "-",
@@ -28802,9 +28807,7 @@ def _pre_submit_parent_ai_lineage_fields(
         "pre_submit_parent_ai_score": _safe_float(
             source.get("last_watching_ai_score"), 0.0
         ),
-        "pre_submit_parent_ai_result_source": (
-            source.get("last_watching_ai_result_source") or "unknown"
-        ),
+        "pre_submit_parent_ai_result_source": lineage_result_source,
         "pre_submit_parent_ai_confirmed_at": confirmed_at or "-",
         "pre_submit_parent_ai_age_sec": age_sec if age_sec is not None else "-",
         "pre_submit_parent_ai_max_age_sec": max_age_sec,

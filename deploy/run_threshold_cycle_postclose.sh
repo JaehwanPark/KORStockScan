@@ -1071,8 +1071,38 @@ fi
 if [ "$RUN_SCALP_SIM_OVERNIGHT_REPORT" = "true" ] || [ "$RUN_SCALP_SIM_OVERNIGHT_REPORT" = "1" ]; then
   wait_for_postclose_resources "scalp_sim_overnight"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalp_sim_overnight --date "$TARGET_DATE" --report-only
+  scalp_sim_overnight_report="$PROJECT_DIR/data/report/scalp_sim_overnight/scalp_sim_overnight_${TARGET_DATE}.json"
+  scalp_sim_overnight_active_undecided="$(
+    "$VENV_PY" - "$scalp_sim_overnight_report" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    summary = payload.get("summary") if isinstance(payload, dict) else {}
+    print(int((summary or {}).get("active_undecided_count") or 0))
+except Exception:
+    print(-1)
+PY
+  )"
+  if [ "$scalp_sim_overnight_active_undecided" -lt 0 ]; then
+    echo "[FAIL] scalp_sim_overnight late-position preflight invalid report=$scalp_sim_overnight_report"
+    exit 1
+  fi
+  if [ "$scalp_sim_overnight_active_undecided" -gt 0 ]; then
+    echo "[threshold-cycle] scalp_sim_overnight late-position recovery active_undecided=$scalp_sim_overnight_active_undecided provider=openai runtime_effect=false"
+    run_postclose_cmd env \
+      PYTHONPATH=. \
+      KORSTOCKSCAN_OPENAI_TRANSPORT_MODE="${KORSTOCKSCAN_OPENAI_TRANSPORT_MODE:-responses_ws}" \
+      KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED="${KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED:-true}" \
+      KORSTOCKSCAN_OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED="${KORSTOCKSCAN_OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED:-false}" \
+      KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off \
+      "$VENV_PY" -m src.engine.scalp_sim_overnight --date "$TARGET_DATE" --live-openai
+  fi
   wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/scalp_sim_overnight/scalp_sim_overnight_${TARGET_DATE}.json" \
+    "$scalp_sim_overnight_report" \
     "$PROJECT_DIR/data/report/scalp_sim_overnight/scalp_sim_overnight_${TARGET_DATE}.md" \
     "scalp_sim_overnight"
 fi
@@ -1870,6 +1900,9 @@ wait_for_postclose_resources "runtime_approval_summary_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary \
   --date "$TARGET_DATE" "${RUNTIME_APPROVAL_SCOPE_ARGS[@]}"
 wait_for_report_artifact   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md"   "runtime_approval_summary_final_refresh"
+wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
+wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status succeeded completed 0 1

@@ -804,6 +804,12 @@ def test_scanner_runtime_target_venue_fields_fail_closed_on_session_conflict():
             "target.market_session_bucket=nxt"
         ),
         "market_session_bucket": "UNKNOWN",
+        "venue_source_quality_status": "reviewed_fail_closed",
+        "venue_unknown_reviewed_reason": (
+            "conflicting_explicit_market_session_bucket:"
+            "payload.market_session_bucket=krx_regular,"
+            "target.market_session_bucket=nxt"
+        ),
     }
 
 
@@ -823,6 +829,11 @@ def test_scanner_runtime_target_venue_fields_fail_closed_on_session_venue_mismat
             "effective_venue=KRX,market_session_bucket=nxt"
         ),
         "market_session_bucket": "nxt",
+        "venue_source_quality_status": "reviewed_fail_closed",
+        "venue_unknown_reviewed_reason": (
+            "market_session_bucket_venue_mismatch:"
+            "effective_venue=KRX,market_session_bucket=nxt"
+        ),
     }
 
 
@@ -845,6 +856,8 @@ def test_scanner_runtime_target_venue_fields_preserve_canonical_session_by_venue
         assert fields["venue"] == venue
         assert fields["market_session_bucket"] == market_session_bucket
         assert fields["venue_resolution"].startswith("consistent_explicit:")
+        assert fields["venue_source_quality_status"] == "pass"
+        assert fields["venue_unknown_reviewed_reason"] == "not_applicable"
 
 
 def test_deadline_scheduler_callback_only_enqueues_immutable_promotion(monkeypatch):
@@ -11045,6 +11058,28 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     )
     monkeypatch.setattr(
         kiwoom_sniper_v2,
+        "evaluate_manual_control_exclusion",
+        lambda code: SimpleNamespace(excluded=False),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_SCANNER_PROMOTION_INBOX",
+        kiwoom_sniper_v2.ScannerPromotionInbox(max_active=4),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "_scanner_scheduler_startup_mode", lambda: "legacy"
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scalping_attach_capacity_decision",
+        lambda target, now_ts, *, watching_targets: (
+            True,
+            [],
+            {"scanner_watch_budget_owner": "opening_rotation"},
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
         "emit_pipeline_event",
         lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
             {"stage": stage, "code": code, "fields": fields or {}}
@@ -11079,7 +11114,7 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
         now_ts=1002.0,
     )
 
-    assert attached is True
+    assert attached is True, emitted
     assert targets[0]["id"] == 99
     assert targets[0]["added_time"] == 1002.0
     assert published == [

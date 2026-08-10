@@ -9,6 +9,68 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _source_only_context(source_key: str, summary: dict, **wrapper_fields) -> dict:
+    return {
+        "sources": {
+            source_key: {
+                "summary": {
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "summary": summary,
+                    **wrapper_fields,
+                }
+            }
+        }
+    }
+
+
+def test_pattern_lab_ai_review_resolves_rollup_only_source_dimension_gap():
+    context = _source_only_context(
+        "lifecycle_bucket_discovery_rolling10d",
+        {
+            "source_contract_status": "pass",
+            "source_quality_blocker_count": 0,
+            "code_patch_required_count": 0,
+            "automation_handoff_gap_count": 0,
+            "source_dimension_gap_count": 74,
+            "rollup_only_source_dimension_gap_count": 74,
+            "actionable_unknown_gap_count": 0,
+        },
+    )
+    result = mod._lifecycle_bucket_source_only_resolution(
+        {
+            "review_id": "lifecycle_bucket_discovery_rolling10d_source_dimension_gap",
+            "final_state": "source_quality_gap",
+        },
+        context,
+    )
+    assert result is not None
+    assert result[2]["classification"] == "rollup_only_source_dimension"
+
+
+def test_pattern_lab_ai_review_keeps_actionable_source_dimension_gap_open():
+    context = _source_only_context(
+        "lifecycle_bucket_discovery",
+        {
+            "source_contract_status": "pass",
+            "source_quality_blocker_count": 0,
+            "code_patch_required_count": 0,
+            "automation_handoff_gap_count": 0,
+            "source_dimension_gap_count": 2,
+            "rollup_only_source_dimension_gap_count": 1,
+            "actionable_unknown_gap_count": 1,
+        },
+    )
+    result = mod._lifecycle_bucket_source_only_resolution(
+        {
+            "review_id": "lifecycle_bucket_discovery_source_dimension_gap",
+            "final_state": "source_quality_gap",
+        },
+        context,
+    )
+    assert result is None
+
+
 def test_pattern_lab_ai_review_builds_two_pass_source_only_report(
     tmp_path, monkeypatch
 ):

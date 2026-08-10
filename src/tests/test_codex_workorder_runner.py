@@ -959,8 +959,11 @@ def test_regeneration_commands_run_in_required_order():
         in joined[3]
     )
     assert (
+        "src.engine.build_next_stage2_checklist --source-date 2026-06-03" in joined[4]
+    )
+    assert (
         "src.engine.verify_threshold_cycle_postclose_chain --date 2026-06-03"
-        in joined[4]
+        in joined[5]
     )
 
 
