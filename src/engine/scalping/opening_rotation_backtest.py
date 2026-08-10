@@ -14,7 +14,7 @@ import json
 import math
 import re
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -85,13 +85,16 @@ REQUIRED_REPLAY_FIELDS = (
     "day_change_pct",
     "curr_price",
     "quote_age_ms",
+    "tick_latest_age_ms",
     "quote_stale",
     "tick_context_stale",
     "tick_context_quality",
     "tick_aggressor_pressure_usable",
     "spread_bp",
+    "spread_ticks",
     "buy_pressure_10t",
     "tick_aggressor_trusted_count",
+    "trusted_tick_prices",
     "tick_acceleration_ratio",
     "price_change_10t_pct",
     "volume_ratio_pct",
@@ -113,6 +116,8 @@ FORBIDDEN_USES = (
     "incomplete_legacy_row_as_performance_sample",
     "ev_promotion_without_consumer_owned_sample_floor",
 )
+DAY_CHANGE_LOWER_GRID = (0.5, 1.0, 1.5, 2.0)
+DAY_CHANGE_UPPER_GRID = (4.0, 5.0, 6.0, 8.0)
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -287,12 +292,22 @@ def _eligible_session_dates(
 
 
 def _record_key(event: dict[str, Any], fields: dict[str, Any], target_date: str) -> str:
+    episode_id = str(fields.get("opening_rotation_episode_id") or "").strip()
+    if episode_id not in {"", "-"}:
+        return f"{target_date}:episode:{episode_id}"
+    promotion_id = str(
+        fields.get("opening_rotation_episode_promotion_id") or ""
+    ).strip()
+    if promotion_id not in {"", "-"}:
+        return f"{target_date}:promotion:{promotion_id}"
     record_id = event.get("record_id") or fields.get("record_id") or fields.get("id")
     if record_id not in (None, "", "-"):
         return f"{target_date}:record:{record_id}"
     promotion_id = str(fields.get("scanner_promotion_id") or "").strip()
+    if promotion_id not in {"", "-"}:
+        return f"{target_date}:promotion:{promotion_id}"
     code = str(event.get("stock_code") or fields.get("stock_code") or "").strip()[:6]
-    return f"{target_date}:scanner:{promotion_id or code}"
+    return f"{target_date}:scanner:{code}"
 
 
 def _is_legacy_scanner_event(event: dict[str, Any], fields: dict[str, Any]) -> bool:
@@ -331,6 +346,7 @@ def _canonical_replay_inputs(
         "day_change_pct": day_change_pct,
         "curr_price": curr_price,
         "quote_age_ms": _first(fields, "quote_age_ms", "quote_age_at_submit_ms"),
+        "tick_latest_age_ms": _first(fields, "tick_latest_age_ms"),
         "quote_stale": _first(fields, "quote_stale"),
         "tick_context_stale": _first(fields, "tick_context_stale"),
         "tick_context_quality": _first(fields, "tick_context_quality"),
@@ -340,12 +356,14 @@ def _canonical_replay_inputs(
             "microstructure_reaction_tick_aggressor_pressure_usable",
         ),
         "spread_bp": _first(fields, "spread_bp", "spread_bps"),
+        "spread_ticks": _first(fields, "spread_ticks"),
         "buy_pressure_10t": _first(fields, "buy_pressure_10t", "buy_pressure"),
         "tick_aggressor_trusted_count": _first(
             fields,
             "tick_aggressor_trusted_count",
             "microstructure_reaction_tick_aggressor_trusted_count",
         ),
+        "trusted_tick_prices": _first(fields, "trusted_tick_prices"),
         "tick_acceleration_ratio": _first(
             fields, "tick_acceleration_ratio", "tick_accel"
         ),
@@ -487,6 +505,23 @@ def build_report(
     replay_states: dict[str, dict[str, Any]] = {}
     replay_qualified_keys: set[str] = set()
     replay_qualified: list[dict[str, Any]] = []
+    day_change_profiles = {
+        f"day_change_{lower:g}_{upper:g}": replace(
+            config,
+            min_day_change_pct=lower,
+            max_day_change_pct=upper,
+        )
+        for lower in DAY_CHANGE_LOWER_GRID
+        for upper in DAY_CHANGE_UPPER_GRID
+        if lower <= upper
+    }
+    day_change_replay_states: dict[tuple[str, str], dict[str, Any]] = {}
+    day_change_replay_qualified: dict[str, set[str]] = {
+        profile_id: set() for profile_id in day_change_profiles
+    }
+    day_change_replay_reasons: dict[str, Counter] = {
+        profile_id: Counter() for profile_id in day_change_profiles
+    }
 
     for target_date in target_dates:
         path = events_dir / f"pipeline_events_{target_date}.jsonl"
@@ -821,6 +856,36 @@ def build_report(
                 missing_counts.update(replay["missing"])
                 continue
             counters["legacy_complete_packet_count"] += 1
+            promotion_id = str(
+                _first(
+                    fields,
+                    "scanner_promotion_id",
+                    "opening_rotation_promotion_id",
+                )
+                or f"LEGACY-{key}"
+            )
+            for profile_id, profile_config in day_change_profiles.items():
+                profile_key = (profile_id, key)
+                profile_decision = evaluate_entry(
+                    previous_state=day_change_replay_states.get(profile_key),
+                    feature_packet=replay["packet"],
+                    source_signature=values["source_signature"],
+                    day_change_pct=_safe_float(values["day_change_pct"]),
+                    intraday_high_price=_first(
+                        fields, "intraday_high_price", "day_high", "high_price"
+                    ),
+                    now_dt=event_dt.replace(tzinfo=None),
+                    promotion_id=promotion_id,
+                    config=profile_config,
+                )
+                day_change_replay_states[profile_key] = dict(
+                    profile_decision.get("state") or {}
+                )
+                day_change_replay_reasons[profile_id][
+                    str(profile_decision.get("reason") or "-")
+                ] += 1
+                if profile_decision.get("qualified"):
+                    day_change_replay_qualified[profile_id].add(key)
             decision = evaluate_entry(
                 previous_state=replay_states.get(key),
                 feature_packet=replay["packet"],
@@ -830,6 +895,7 @@ def build_report(
                     fields, "intraday_high_price", "day_high", "high_price"
                 ),
                 now_dt=event_dt.replace(tzinfo=None),
+                promotion_id=promotion_id,
                 config=config,
             )
             replay_states[key] = dict(decision.get("state") or {})
@@ -1007,6 +1073,44 @@ def build_report(
             "forbidden_uses": list(FORBIDDEN_USES),
         },
         "entry_time_bucket_performance": entry_time_bucket_performance,
+        "day_change_profile_replay": {
+            "status": (
+                "complete_packet_replay_available_outcome_labels_missing"
+                if legacy_complete
+                else "blocked_complete_scanner_packets_missing"
+            ),
+            "metric_role": "promotion_level_entry_replay_diagnostic",
+            "decision_authority": "retrospective_source_only_no_runtime_apply",
+            "window_policy": "clean_baseline_all_regular_scanner_promotions",
+            "sample_floor": "30_complete_episodes_10_symbols_3_trading_dates",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": "complete_fresh_scanner_packet_and_forward_path",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "outcome_status": "forward_price_path_unavailable",
+            "selection_bias_guard": (
+                "qualified promotion counts cannot promote a day-change range "
+                "without exact fill, slippage, and exit outcomes"
+            ),
+            "profiles": {
+                profile_id: {
+                    "min_day_change_pct": profile.min_day_change_pct,
+                    "max_day_change_pct": profile.max_day_change_pct,
+                    "complete_packet_evaluation_count": legacy_complete,
+                    "qualified_promotion_count": len(
+                        day_change_replay_qualified[profile_id]
+                    ),
+                    "reason_counts": dict(
+                        day_change_replay_reasons[profile_id].most_common()
+                    ),
+                    "outcome_labeled_episode_count": 0,
+                    "source_quality_adjusted_ev_pct": None,
+                    "eligible_for_preopen_apply": False,
+                }
+                for profile_id, profile in day_change_profiles.items()
+            },
+            "forbidden_uses": list(FORBIDDEN_USES),
+        },
         "source_quality": {
             "required_replay_fields": list(REQUIRED_REPLAY_FIELDS),
             "missing_field_counts": dict(missing_counts.most_common()),

@@ -605,6 +605,11 @@ def precompute_microstructure_reaction_inputs(
         if tick.get("volume_source") or tick.get("trade_volume_source")
     )
     pressure_rows = [] if explicit_untrusted_volume_present else candidate_pressure_rows
+    trusted_tick_prices = [
+        int(_safe_float(tick.get("price"), 0.0))
+        for tick, _inferred in pressure_rows
+        if _safe_float(tick.get("price"), 0.0) > 0
+    ]
     buy_vol = sum(
         _safe_float(tick.get("volume"), 0.0)
         for tick, inferred in pressure_rows
@@ -745,6 +750,9 @@ def precompute_microstructure_reaction_inputs(
         # otherwise trusted rows from a mixed window that was failed closed.
         "tick_aggressor_trusted_count": len(pressure_rows),
         "tick_aggressor_pressure_usable": bool(pressure_rows),
+        # Newest-first prices from the same rows that own trusted pressure.
+        # Consumers must not substitute heuristic/untrusted tick prices.
+        "trusted_tick_prices": trusted_tick_prices,
         "tick_sample_count": len(ticks),
         "tick_latest_time": tick_latest_time,
         "tick_age_ms": tick_age_ms,

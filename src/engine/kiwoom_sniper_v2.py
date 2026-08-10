@@ -920,7 +920,7 @@ bind_execution_dependencies(
         sniper_state_handlers.submit_entry_split_probe_residual_after_fill
     ),
     scalp_exit_completed_callback=(
-        sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
+        sniper_state_handlers.reconcile_scalp_reentry_after_sell_completed
     ),
     smoothing_non_revive_post_sell_register_callback=(
         sniper_state_handlers.register_non_revive_smoothing_post_sell_paths
@@ -1049,7 +1049,7 @@ def _ensure_execution_deps():
             sniper_state_handlers.submit_entry_split_probe_residual_after_fill
         ),
         "scalp_exit_completed_callback": (
-            sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
+            sniper_state_handlers.reconcile_scalp_reentry_after_sell_completed
         ),
         "smoothing_non_revive_post_sell_register_callback": (
             sniper_state_handlers.register_non_revive_smoothing_post_sell_paths
@@ -5006,6 +5006,13 @@ def _reset_scanner_runtime_eval_state(target):
         "scanner_evaluation_anchor_source",
         "scanner_warm_first_fresh_price",
         "scanner_warm_first_fresh_epoch",
+        "opening_rotation_1pct_state",
+        "opening_rotation_1pct_last_reason",
+        "opening_rotation_1pct_last_log_at",
+        "_opening_rotation_general_entry_handoff_once_generation_id",
+        "opening_rotation_entry_owner_handoff",
+        "opening_rotation_entry_owner_handoff_reason",
+        "opening_rotation_entry_owner_handoff_target",
     ):
         target.pop(key, None)
 
@@ -5235,6 +5242,8 @@ def _scalping_watch_budget_owner(target, now_ts=None):
         now_dt=datetime.fromtimestamp(float(now_ts)),
         explicit_owner=explicit,
         opening_config=sniper_state_handlers._opening_rotation_entry_config(),
+        effective_venue=target.get("effective_venue") or target.get("venue"),
+        market_session_bucket=target.get("market_session_bucket"),
         # DB rows created before this contract have no source metadata.  Keep
         # them in the rising-centered pool instead of inflating general slots.
         missing_default=RISING_MISSED,

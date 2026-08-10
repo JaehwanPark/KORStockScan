@@ -11,6 +11,8 @@ from src.engine.scalping.opening_rotation import (
     POSITION_TAG as OPENING_ROTATION_POSITION_TAG,
     entry_time_bucket as opening_rotation_entry_time_bucket,
     entry_window_version as opening_rotation_entry_window_version,
+    profit_target_price as opening_rotation_profit_target_price,
+    shadow_ratchet_price as opening_rotation_shadow_ratchet_price,
 )
 from src.engine.scalping.entry_split_order_plan import (
     trip_probe_runtime_circuit,
@@ -38,6 +40,7 @@ from src.engine.sniper_position_tags import (
 from src.engine.trade_profit import (
     calculate_net_profit_rate,
     calculate_net_realized_pnl,
+    get_trade_cost_rate,
 )
 from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
@@ -242,6 +245,27 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "msg_audience",
     "name",
     "opening_rotation_entry_time_bucket",
+    "opening_rotation_entry_best_bid",
+    "opening_rotation_episode_id",
+    "opening_rotation_episode_promotion_id",
+    "opening_rotation_episode_phase",
+    "opening_rotation_margin_authority_reason",
+    "opening_rotation_margin_cash_guard_bypassed",
+    "opening_rotation_margin_one_share_authorized",
+    "opening_rotation_margin_orderable_amount",
+    "opening_rotation_margin_orderable_qty_cap",
+    "opening_rotation_margin_order_api",
+    "opening_rotation_margin_rate",
+    "opening_rotation_margin_requested_unit_price",
+    "opening_rotation_margin_credit_order_api_used",
+    "opening_rotation_profile_id",
+    "opening_rotation_policy_hash",
+    "opening_rotation_policy_schema_version",
+    "opening_rotation_profit_target_price",
+    "opening_rotation_profit_target_order_no",
+    "opening_rotation_holding_ai_called",
+    "opening_rotation_ratchet_shadow_price",
+    "opening_rotation_ratchet_shadow_recorded",
     "opening_rotation_window_version",
     "pending_buy_msg",
     "scalp_live_simulator",
@@ -274,6 +298,8 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "last_exit_rule",
     "last_exit_same_symbol_soft_stop_cooldown_would_block",
     "last_exit_soft_stop_threshold_pct",
+    "mae_pct",
+    "mfe_pct",
     "msg_audience",
     "name",
     "nxt_rising_missed_tp1_partial_fill_amount",
@@ -282,6 +308,28 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "nxt_rising_missed_tp1_partial_realized_pnl_krw",
     "no_scale_in_counterfactual_profit_pct",
     "opening_rotation_entry_time_bucket",
+    "opening_rotation_entry_best_bid",
+    "opening_rotation_episode_id",
+    "opening_rotation_episode_promotion_id",
+    "opening_rotation_episode_phase",
+    "opening_rotation_margin_authority_reason",
+    "opening_rotation_margin_cash_guard_bypassed",
+    "opening_rotation_margin_one_share_authorized",
+    "opening_rotation_margin_orderable_amount",
+    "opening_rotation_margin_orderable_qty_cap",
+    "opening_rotation_margin_order_api",
+    "opening_rotation_margin_rate",
+    "opening_rotation_margin_requested_unit_price",
+    "opening_rotation_margin_credit_order_api_used",
+    "opening_rotation_profile_id",
+    "opening_rotation_policy_hash",
+    "opening_rotation_policy_schema_version",
+    "opening_rotation_profit_target_price",
+    "opening_rotation_profit_target_order_no",
+    "opening_rotation_holding_ai_called",
+    "opening_rotation_holding_ai_action",
+    "opening_rotation_ratchet_shadow_price",
+    "opening_rotation_ratchet_shadow_recorded",
     "opening_rotation_window_version",
     "pending_sell_msg",
     "post_add_avg_price",
@@ -1396,6 +1444,29 @@ def _finalize_standard_sell_execution(
     highest_prices.pop(code, None)
     target_stock["status"] = "COMPLETED"
     target_stock["sell_time"] = now.strftime("%H:%M:%S")
+    if str(target_stock.get("position_tag") or "").strip().upper() == (
+        OPENING_ROTATION_POSITION_TAG
+    ):
+        target_stock.update(
+            {
+                "opening_rotation_episode_phase": "COMPLETED",
+                "opening_rotation_episode_completed_at": now.isoformat(),
+                "opening_rotation_episode_terminal_reason": (
+                    target_stock.get("last_exit_rule")
+                    or (
+                        "profit_target_filled"
+                        if order_no
+                        == str(
+                            target_stock.get("opening_rotation_profit_target_order_no")
+                            or ""
+                        ).strip()
+                        else "sell_receipt_completed"
+                    )
+                ),
+                "opening_rotation_new_episode_blocked": False,
+                "opening_rotation_order_ambiguity": False,
+            }
+        )
     probe_bundle_id = str(
         target_stock.get("entry_split_probe_bundle_id")
         or target_stock.get("entry_split_probe_exit_bundle_id")
@@ -1937,6 +2008,38 @@ def _find_execution_target(code, exec_type, order_no):
         status_key = "BUY_ORDERED"
         order_key = "odno"
     else:
+        opening_target_candidates = [
+            stock
+            for stock in ACTIVE_TARGETS
+            if str(stock.get("code", "")).strip()[:6] == code
+            and str(stock.get("position_tag") or "").strip().upper()
+            == OPENING_ROTATION_POSITION_TAG
+            and str(stock.get("status") or "").strip().upper() == "HOLDING"
+        ]
+        if normalized_order_no:
+            opening_exact = next(
+                (
+                    stock
+                    for stock in opening_target_candidates
+                    if normalized_order_no
+                    in {
+                        str(
+                            stock.get("opening_rotation_profit_target_order_no") or ""
+                        ).strip(),
+                        str(stock.get("preset_tp_ord_no") or "").strip(),
+                    }
+                ),
+                None,
+            )
+            if opening_exact:
+                return opening_exact
+        opening_submitting = [
+            stock
+            for stock in opening_target_candidates
+            if bool(stock.get("opening_rotation_profit_target_submit_pending"))
+        ]
+        if len(opening_submitting) == 1:
+            return opening_submitting[0]
         status_key = "SELL_ORDERED"
         order_key = "sell_odno"
 
@@ -2081,7 +2184,24 @@ def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, st
             changed = True
 
     elif exec_type == "SELL":
-        if order_no and not str(target_stock.get("sell_odno", "") or "").strip():
+        if (
+            str(target_stock.get("position_tag") or "").strip().upper()
+            == OPENING_ROTATION_POSITION_TAG
+            and str(target_stock.get("status") or "").strip().upper() == "HOLDING"
+            and (
+                target_stock.get("opening_rotation_profit_target_submit_pending")
+                or order_no
+                == str(
+                    target_stock.get("opening_rotation_profit_target_order_no") or ""
+                )
+            )
+        ):
+            target_stock["opening_rotation_profit_target_order_no"] = order_no
+            target_stock["preset_tp_ord_no"] = order_no
+            target_stock["opening_rotation_profit_target_notice_status"] = status
+            target_stock["opening_rotation_profit_target_notice_at"] = time.time()
+            changed = True
+        elif order_no and not str(target_stock.get("sell_odno", "") or "").strip():
             target_stock["sell_odno"] = order_no
             changed = True
 
@@ -2163,6 +2283,256 @@ def _is_ok_response(res):
     if not isinstance(res, dict):
         return bool(res)
     return str(res.get("return_code", res.get("rt_cd", ""))) == "0"
+
+
+def _extract_order_no(response: Any) -> str:
+    if not isinstance(response, dict):
+        return ""
+    for key in ("ord_no", "odno", "order_no"):
+        value = str(response.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _submit_opening_rotation_profit_order(
+    target_stock: dict[str, Any],
+    *,
+    code: str,
+    buy_fill_price: int,
+    filled_qty: int,
+) -> bool:
+    """Place the protected one-share target only after the BUY fill receipt."""
+
+    invalid_fill = False
+    # Execution notices may be duplicated or delivered concurrently. Claim
+    # target submission under the shared state lock before price calculation
+    # or broker I/O so only one BUY receipt can own the sell-side transition.
+    with _active_state_lock():
+        if str(target_stock.get("position_tag") or "").strip().upper() != (
+            OPENING_ROTATION_POSITION_TAG
+        ):
+            return False
+        if str(
+            target_stock.get("opening_rotation_profit_target_order_no") or ""
+        ).strip():
+            return True
+        if target_stock.get("opening_rotation_profit_target_submit_pending"):
+            return True
+        if target_stock.get("opening_rotation_profit_order_protection_failed"):
+            return False
+        if filled_qty != 1 or buy_fill_price <= 0:
+            invalid_fill = True
+            target_stock.update(
+                {
+                    "opening_rotation_profit_order_protection_failed": True,
+                    "opening_rotation_new_episode_blocked": True,
+                    "opening_rotation_episode_phase": "TARGET_BLOCKED_INVARIANT",
+                    "scale_in_locked": True,
+                }
+            )
+        else:
+            target_stock["opening_rotation_profit_target_submit_pending"] = True
+    if invalid_fill:
+        log_error(
+            f"[OPENING_ROTATION_TARGET_BLOCK] {target_stock.get('name')}({code}) "
+            f"fill_price={buy_fill_price} qty={filled_qty} expected_qty=1"
+        )
+        return False
+
+    from src.engine import kiwoom_orders
+
+    try:
+        trade_cost_rate = get_trade_cost_rate()
+        # Resolve the KRX price band from the unrounded target, not the fill. A
+        # target can cross a tick-band boundary even when the fill did not.
+        raw_target_price = opening_rotation_profit_target_price(
+            buy_fill_price,
+            trade_cost_rate=trade_cost_rate,
+            tick_size=1,
+        )
+        tick_size = max(
+            1,
+            _safe_int(kiwoom_utils.get_tick_size(raw_target_price), 1),
+        )
+        target_price = opening_rotation_profit_target_price(
+            buy_fill_price,
+            trade_cost_rate=trade_cost_rate,
+            tick_size=tick_size,
+        )
+    except Exception as exc:
+        with _active_state_lock():
+            target_stock.update(
+                {
+                    "opening_rotation_profit_target_submit_pending": False,
+                    "opening_rotation_profit_order_protection_failed": True,
+                    "opening_rotation_new_episode_blocked": True,
+                    "opening_rotation_episode_phase": "TARGET_PRICE_RESOLUTION_FAILED",
+                    "opening_rotation_profit_target_submit_error": str(exc)[:240],
+                    "scale_in_locked": True,
+                }
+            )
+        log_error(
+            f"[OPENING_ROTATION_TARGET_PRICE_FAILED] "
+            f"{target_stock.get('name')}({code}) error={exc}"
+        )
+        return False
+    if target_price <= buy_fill_price:
+        with _active_state_lock():
+            target_stock.update(
+                {
+                    "opening_rotation_profit_target_submit_pending": False,
+                    "opening_rotation_profit_order_protection_failed": True,
+                    "opening_rotation_new_episode_blocked": True,
+                    "opening_rotation_episode_phase": "TARGET_PRICE_INVALID",
+                    "scale_in_locked": True,
+                }
+            )
+        return False
+
+    target_stock.update(
+        {
+            "opening_rotation_episode_phase": "TARGET_SUBMITTING",
+            "opening_rotation_profit_target_price": target_price,
+            "opening_rotation_profit_target_qty": 1,
+            "opening_rotation_profit_target_submit_pending": True,
+            "opening_rotation_profit_target_submitted_at": time.time(),
+            "opening_rotation_trade_cost_rate": trade_cost_rate,
+            "opening_rotation_slippage_budget_rate": 0.001,
+            "opening_rotation_net_profit_floor_pct": 0.30,
+            "opening_rotation_ratchet_shadow_price": (
+                opening_rotation_shadow_ratchet_price(target_price, tick_size=tick_size)
+            ),
+            "opening_rotation_ratchet_shadow_recorded": False,
+            "opening_rotation_ratchet_real_order_enabled": False,
+            "scale_in_locked": True,
+        }
+    )
+    try:
+        response = kiwoom_orders.send_sell_order_market(
+            code=code,
+            qty=1,
+            token=KIWOOM_TOKEN,
+            order_type="00",
+            price=target_price,
+            reason_type="PROFIT",
+            strategy="SCALPING",
+            dmst_stex_tp="KRX",
+        )
+    except Exception as exc:
+        response = None
+        log_error(
+            f"[OPENING_ROTATION_TARGET_SUBMIT_EXCEPTION] "
+            f"{target_stock.get('name')}({code}) error={exc}"
+        )
+
+    response_order_no = _extract_order_no(response)
+    with _active_state_lock():
+        notice_order_no = str(
+            target_stock.get("opening_rotation_profit_target_order_no") or ""
+        ).strip()
+        order_no = response_order_no or notice_order_no
+        submit_succeeded = bool(
+            order_no and (_is_ok_response(response) or notice_order_no)
+        )
+        if submit_succeeded:
+            target_stock.update(
+                {
+                    "exit_mode": "OPENING_ROTATION_PROTECTED_TP",
+                    "opening_rotation_profit_target_submit_pending": False,
+                    "opening_rotation_profit_order_protection_failed": False,
+                    "opening_rotation_profit_target_order_no": order_no,
+                    "opening_rotation_profit_target_broker_route": "KRX",
+                    "opening_rotation_episode_phase": "TARGET_ORDERED",
+                    # Reuse the established cancel/reload path for any timeout
+                    # or holding-AI early exit. Opening never uses legacy TP.
+                    "preset_tp_ord_no": order_no,
+                    "preset_tp_qty": 1,
+                    "preset_tp_price": target_price,
+                    "preset_tp_broker_route": "KRX",
+                }
+            )
+        else:
+            target_stock.update(
+                {
+                    "opening_rotation_profit_target_submit_pending": False,
+                    "opening_rotation_profit_order_protection_failed": True,
+                    "opening_rotation_new_episode_blocked": True,
+                    "opening_rotation_episode_phase": "TARGET_SUBMIT_FAILED",
+                    "opening_rotation_profit_target_submit_error": str(
+                        (response or {}).get("return_msg")
+                        if isinstance(response, dict)
+                        else response
+                    )[:240],
+                    "scale_in_locked": True,
+                }
+            )
+    if not submit_succeeded:
+        log_error(
+            f"[OPENING_ROTATION_TARGET_SUBMIT_FAILED] "
+            f"{target_stock.get('name')}({code}) target={target_price}"
+        )
+        return False
+    _log_holding_pipeline(
+        target_stock.get("name"),
+        code,
+        target_stock.get("id"),
+        "opening_rotation_profit_target_ordered",
+        opening_rotation_episode_id=(
+            target_stock.get("opening_rotation_episode_id") or "-"
+        ),
+        opening_rotation_episode_promotion_id=target_stock.get(
+            "opening_rotation_episode_promotion_id", "-"
+        ),
+        opening_rotation_profile_id=target_stock.get(
+            "opening_rotation_profile_id", "-"
+        ),
+        opening_rotation_policy_hash=target_stock.get(
+            "opening_rotation_policy_hash", "-"
+        ),
+        opening_rotation_policy_schema_version=target_stock.get(
+            "opening_rotation_policy_schema_version", "-"
+        ),
+        opening_rotation_margin_one_share_authorized=bool(
+            target_stock.get("opening_rotation_margin_one_share_authorized", False)
+        ),
+        opening_rotation_margin_authority_reason=target_stock.get(
+            "opening_rotation_margin_authority_reason", "not_evaluated"
+        ),
+        opening_rotation_margin_rate=target_stock.get(
+            "opening_rotation_margin_rate", 0
+        ),
+        opening_rotation_margin_orderable_amount=target_stock.get(
+            "opening_rotation_margin_orderable_amount", 0
+        ),
+        opening_rotation_margin_orderable_qty_cap=target_stock.get(
+            "opening_rotation_margin_orderable_qty_cap", 0
+        ),
+        opening_rotation_margin_requested_unit_price=target_stock.get(
+            "opening_rotation_margin_requested_unit_price", 0
+        ),
+        opening_rotation_margin_cash_guard_bypassed=bool(
+            target_stock.get("opening_rotation_margin_cash_guard_bypassed", False)
+        ),
+        opening_rotation_margin_order_api=target_stock.get(
+            "opening_rotation_margin_order_api"
+        ),
+        opening_rotation_margin_credit_order_api_used=target_stock.get(
+            "opening_rotation_margin_credit_order_api_used"
+        ),
+        buy_fill_price=buy_fill_price,
+        target_price=target_price,
+        qty=1,
+        ord_no=order_no,
+        trade_cost_rate=trade_cost_rate,
+        slippage_budget_rate=0.001,
+        net_profit_floor_pct=0.30,
+        gross_target_pct=round((target_price / buy_fill_price - 1.0) * 100.0, 6),
+        actual_order_submitted=True,
+        broker_order_forbidden=False,
+        runtime_effect=True,
+    )
+    return True
 
 
 def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
@@ -2679,7 +3049,11 @@ def _update_db_for_sell(
                 f"실매도가: {exec_price:,}원 / 수익률: {profit_rate}%"
             )
 
-            if strategy == "SCALPING" and callable(_scalp_exit_completed_callback):
+            if (
+                strategy == "SCALPING"
+                and completed_position_tag != OPENING_ROTATION_POSITION_TAG
+                and callable(_scalp_exit_completed_callback)
+            ):
                 try:
                     callback_result = _scalp_exit_completed_callback(
                         str(receipt_snapshot.get("code", "")).strip()[:6],
@@ -2687,6 +3061,7 @@ def _update_db_for_sell(
                         exit_price=exec_price,
                         exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
                         completed_at=now.timestamp(),
+                        position_tag=completed_position_tag,
                     )
                     if (
                         isinstance(callback_result, dict)
@@ -2786,6 +3161,54 @@ def _update_db_for_sell(
                 opening_rotation_window_version=receipt_snapshot.get(
                     "opening_rotation_window_version", "-"
                 ),
+                opening_rotation_episode_id=receipt_snapshot.get(
+                    "opening_rotation_episode_id", "-"
+                ),
+                opening_rotation_episode_promotion_id=receipt_snapshot.get(
+                    "opening_rotation_episode_promotion_id", "-"
+                ),
+                opening_rotation_profile_id=receipt_snapshot.get(
+                    "opening_rotation_profile_id", "-"
+                ),
+                opening_rotation_policy_hash=receipt_snapshot.get(
+                    "opening_rotation_policy_hash", "-"
+                ),
+                opening_rotation_policy_schema_version=receipt_snapshot.get(
+                    "opening_rotation_policy_schema_version", "-"
+                ),
+                opening_rotation_margin_one_share_authorized=bool(
+                    receipt_snapshot.get(
+                        "opening_rotation_margin_one_share_authorized", False
+                    )
+                ),
+                opening_rotation_margin_authority_reason=receipt_snapshot.get(
+                    "opening_rotation_margin_authority_reason", "not_evaluated"
+                ),
+                opening_rotation_margin_rate=receipt_snapshot.get(
+                    "opening_rotation_margin_rate", 0
+                ),
+                opening_rotation_margin_orderable_amount=receipt_snapshot.get(
+                    "opening_rotation_margin_orderable_amount", 0
+                ),
+                opening_rotation_margin_orderable_qty_cap=receipt_snapshot.get(
+                    "opening_rotation_margin_orderable_qty_cap", 0
+                ),
+                opening_rotation_margin_requested_unit_price=receipt_snapshot.get(
+                    "opening_rotation_margin_requested_unit_price", 0
+                ),
+                opening_rotation_margin_cash_guard_bypassed=bool(
+                    receipt_snapshot.get(
+                        "opening_rotation_margin_cash_guard_bypassed", False
+                    )
+                ),
+                opening_rotation_margin_order_api=receipt_snapshot.get(
+                    "opening_rotation_margin_order_api"
+                ),
+                opening_rotation_margin_credit_order_api_used=receipt_snapshot.get(
+                    "opening_rotation_margin_credit_order_api_used"
+                ),
+                mae_pct=receipt_snapshot.get("mae_pct", "-"),
+                mfe_pct=receipt_snapshot.get("mfe_pct", "-"),
                 **_trailing_continuation_receipt_fields(receipt_snapshot),
                 **_sell_completion_contract_fields(completed_position_tag),
             )
@@ -2821,6 +3244,29 @@ def _update_db_for_sell(
             except Exception as exc:
                 log_error(
                     f"[POST_SELL] candidate record failed (id={target_id}): {exc}"
+                )
+        # Opening same-symbol re-entry is released only after the DB session
+        # has committed the completed receipt.  The broker receipt itself is
+        # the reconciliation truth; common cooldowns remain untouched.
+        if (
+            strategy == "SCALPING"
+            and completed_position_tag == OPENING_ROTATION_POSITION_TAG
+            and callable(_scalp_exit_completed_callback)
+        ):
+            callback_result = _scalp_exit_completed_callback(
+                str(receipt_snapshot.get("code", "")).strip()[:6],
+                profit_rate=profit_rate,
+                exit_price=exec_price,
+                exit_rule=receipt_snapshot.get("last_exit_rule") or "-",
+                completed_at=now.timestamp(),
+                position_tag=completed_position_tag,
+            )
+            if not isinstance(callback_result, dict) or not callback_result.get(
+                "reconciled"
+            ):
+                log_error(
+                    "[OPENING_ROTATION_REENTRY] completed receipt did not release "
+                    f"the symbol (id={target_id}, result={callback_result})"
                 )
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
@@ -3417,6 +3863,47 @@ def _handle_entry_buy_execution(
             "opening_rotation_window_version",
             opening_rotation_entry_window_version(),
         )
+        target_stock.update(
+            {
+                "opening_rotation_episode_phase": "BUY_FILLED",
+                "opening_rotation_buy_fill_price": int(new_avg or exec_price or 0),
+                "opening_rotation_buy_filled_at": now.isoformat(),
+                "opening_rotation_buy_order_no": order_no or "-",
+                "opening_rotation_buy_submit_to_fill_ms": round(
+                    max(
+                        0.0,
+                        time.time()
+                        - _safe_float(target_stock.get("order_time"), time.time()),
+                    )
+                    * 1000.0,
+                    3,
+                ),
+                # Opening removes only the strategy soft stop.  These values
+                # keep the common hard/protect emergency surfaces visible to
+                # both the fast monitor and the regular holding loop.
+                "hard_stop_pct": float(
+                    getattr(TRADING_RULES, "SCALP_HARD_STOP", -2.5) or -2.5
+                ),
+                "hard_stop_emergency_pct": float(
+                    getattr(
+                        TRADING_RULES,
+                        "SCALP_PROTECT_TRAILING_EMERGENCY_PCT",
+                        -2.0,
+                    )
+                    or -2.0
+                ),
+                "hard_stop_grace_sec": 0,
+                "protect_profit_pct": None,
+                "scale_in_locked": True,
+            }
+        )
+        if requested_entry_qty > 0 and cum_filled_qty >= requested_entry_qty:
+            _submit_opening_rotation_profit_order(
+                target_stock,
+                code=code,
+                buy_fill_price=int(new_avg or exec_price or 0),
+                filled_qty=int(new_qty or 0),
+            )
 
     if strategy == "SCALPING" and is_default_position_tag(strategy, pos_tag):
         target_stock["exit_mode"] = "SCALP_PRESET_TP"
@@ -3553,8 +4040,53 @@ def _handle_entry_buy_execution(
         opening_rotation_entry_time_bucket=target_stock.get(
             "opening_rotation_entry_time_bucket", "-"
         ),
+        opening_rotation_entry_best_bid=target_stock.get(
+            "opening_rotation_entry_best_bid", "-"
+        ),
         opening_rotation_window_version=target_stock.get(
             "opening_rotation_window_version", "-"
+        ),
+        opening_rotation_episode_id=target_stock.get(
+            "opening_rotation_episode_id", "-"
+        ),
+        opening_rotation_episode_promotion_id=target_stock.get(
+            "opening_rotation_episode_promotion_id", "-"
+        ),
+        opening_rotation_profile_id=target_stock.get(
+            "opening_rotation_profile_id", "-"
+        ),
+        opening_rotation_policy_hash=target_stock.get(
+            "opening_rotation_policy_hash", "-"
+        ),
+        opening_rotation_policy_schema_version=target_stock.get(
+            "opening_rotation_policy_schema_version", "-"
+        ),
+        opening_rotation_margin_one_share_authorized=bool(
+            target_stock.get("opening_rotation_margin_one_share_authorized", False)
+        ),
+        opening_rotation_margin_authority_reason=target_stock.get(
+            "opening_rotation_margin_authority_reason", "not_evaluated"
+        ),
+        opening_rotation_margin_rate=target_stock.get(
+            "opening_rotation_margin_rate", 0
+        ),
+        opening_rotation_margin_orderable_amount=target_stock.get(
+            "opening_rotation_margin_orderable_amount", 0
+        ),
+        opening_rotation_margin_orderable_qty_cap=target_stock.get(
+            "opening_rotation_margin_orderable_qty_cap", 0
+        ),
+        opening_rotation_margin_requested_unit_price=target_stock.get(
+            "opening_rotation_margin_requested_unit_price", 0
+        ),
+        opening_rotation_margin_cash_guard_bypassed=bool(
+            target_stock.get("opening_rotation_margin_cash_guard_bypassed", False)
+        ),
+        opening_rotation_margin_order_api=target_stock.get(
+            "opening_rotation_margin_order_api"
+        ),
+        opening_rotation_margin_credit_order_api_used=target_stock.get(
+            "opening_rotation_margin_credit_order_api_used"
         ),
         buy_price=f"{float(new_avg or 0):.2f}",
         buy_qty=int(new_qty or 0),

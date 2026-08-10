@@ -322,9 +322,7 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
         == 5
     )
     assert breakdown["axes"]["BROKER_RECEIPT"]["status"] == "no_current_signal"
-    assert breakdown["axes"]["PRICE_REVALIDATION"]["status"] == (
-        "no_current_signal"
-    )
+    assert breakdown["axes"]["PRICE_REVALIDATION"]["status"] == ("no_current_signal")
     assert breakdown["axes"]["ENTRY_AI_AUTHORITY_REVALIDATION"]["status"] == (
         "no_current_signal"
     )
@@ -384,9 +382,7 @@ def test_budget_census_gap_is_observation_only_without_explicit_ai_lineage(
     assert "BUDGET_PASS_COLLAPSE" in breakdown["observation_only_axes"]
 
 
-def test_budget_block_is_causal_only_when_parent_ai_trace_joins(
-    monkeypatch, tmp_path
-):
+def test_budget_block_is_causal_only_when_parent_ai_trace_joins(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     target_date = "2026-05-12"
     rows = []
@@ -438,9 +434,7 @@ def test_budget_block_is_causal_only_when_parent_ai_trace_joins(
     assert "BUDGET_PASS_COLLAPSE" in breakdown["causal_bottleneck_axes"]
 
 
-def test_budget_block_rejects_untrusted_or_stale_parent_ai_trace(
-    monkeypatch, tmp_path
-):
+def test_budget_block_rejects_untrusted_or_stale_parent_ai_trace(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     target_date = "2026-05-13"
     rows = []

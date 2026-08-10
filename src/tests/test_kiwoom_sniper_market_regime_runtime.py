@@ -11034,6 +11034,15 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     emitted = []
     published = []
     targets = []
+    # DB recovery may restore an explicit Opening owner only while the
+    # PREOPEN-approved Opening watch window is active.  The strategy baseline
+    # is intentionally disabled when the target-date policy artifact is
+    # absent, so make the successful recovery contract explicit in this test.
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_scalping_watch_budget_opening_window_active",
+        lambda _now_ts: True,
+    )
     monkeypatch.setattr(
         kiwoom_sniper_v2,
         "emit_pipeline_event",

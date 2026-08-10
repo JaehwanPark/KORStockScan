@@ -775,6 +775,7 @@ def extract_scalping_feature_packet(
         "tick_aggressor_unknown_count": tick_aggressor_unknown_count,
         "tick_aggressor_trusted_count": tick_aggressor_trusted_count,
         "tick_aggressor_pressure_usable": tick_aggressor_pressure_usable,
+        "trusted_tick_prices": list(snapshot.get("trusted_tick_prices") or []),
         "tick_latest_time": tick_latest_time or "-",
         "tick_latest_age_ms": (
             tick_latest_age_ms if tick_latest_age_ms is not None else "-"

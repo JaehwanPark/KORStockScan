@@ -1,5 +1,6 @@
 from datetime import datetime
 import inspect
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -7,20 +8,60 @@ import pytest
 from src.engine.scalping.opening_rotation import (
     EntryConfig,
     ExitConfig,
+    OpeningRotationRuntimePolicy,
     POSITION_TAG,
     WINDOW_VERSION,
     entry_time_bucket,
     entry_time_bucket_labels,
     entry_window_version,
-    evaluate_entry,
+    evaluate_entry as _evaluate_entry_impl,
     evaluate_exit,
+    is_krx_regular_scope,
     is_watch_candidate,
     is_watch_source_scope,
+    load_active_runtime_policy,
 )
 from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_execution_receipts
 from src.engine import sniper_sync
 from src.engine.scalping import opening_rotation_backtest as rotation_backtest
+from src.utils import kiwoom_utils
+
+_ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS = (
+    handlers._scanner_runtime_event_venue_fields
+)
+
+
+@pytest.fixture(autouse=True)
+def _active_krx_opening_policy_for_runtime_unit_tests(monkeypatch):
+    """Keep legacy unit fixtures explicit about the reviewed PREOPEN state."""
+
+    monkeypatch.setattr(
+        handlers,
+        "load_active_opening_rotation_runtime_policy",
+        lambda: OpeningRotationRuntimePolicy(),
+    )
+    original = _ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS
+
+    def _runtime_venue_fields(stock):
+        fields = original(stock)
+        if fields.get("effective_venue") != "UNKNOWN":
+            return fields
+        return {
+            **fields,
+            "venue": "KRX",
+            "effective_venue": "KRX",
+            "venue_resolution": "unit_test_explicit_krx_regular_fixture",
+            "venue_source_quality_status": "pass",
+            "venue_unknown_reviewed_reason": "not_applicable",
+            "market_session_bucket": "krx_regular",
+        }
+
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_runtime_event_venue_fields",
+        _runtime_venue_fields,
+    )
 
 
 def _packet(price: int) -> dict:
@@ -29,12 +70,16 @@ def _packet(price: int) -> dict:
         "quote_stale": False,
         "quote_age_ms": 120.0,
         "quote_stale_threshold_ms": 3000.0,
+        "tick_latest_age_ms": 120.0,
         "tick_context_stale": False,
         "tick_context_quality": "fresh_computed",
         "tick_aggressor_pressure_usable": True,
         "spread_bp": 8.0,
+        "spread_ticks": 1,
         "buy_pressure_10t": 64.0,
         "tick_aggressor_trusted_count": 8,
+        # Newest first, matching the live reaction-context packet.
+        "trusted_tick_prices": [price, price, price - 1, price - 1, price - 2],
         "tick_acceleration_ratio": 1.35,
         "price_change_10t_pct": 0.12,
         "volume_ratio_pct": 125.0,
@@ -48,7 +93,257 @@ def _packet(price: int) -> dict:
     }
 
 
-def test_watch_source_scope_does_not_promote_missing_day_change():
+def test_kt00011_parser_exposes_applied_margin_orderable_capacity(monkeypatch):
+    captured = {}
+
+    def _fetch(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "return_code": 0,
+                "stk_profa_rt": "20%",
+                "profa_rt": "40%",
+                "aplc_rt": "40%",
+                "profa_40ord_alow_amt": "000001200000",
+                "profa_40ord_alowq": "000000000120",
+                "min_ord_alow_amt": "000000000000",
+                "min_ord_alowq": "000000000000",
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", _fetch)
+
+    snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
+        "token",
+        "A005930_AL",
+        unit_price=10_000,
+    )
+
+    assert captured["api_id"] == "kt00011"
+    assert captured["payload"] == {"stk_cd": "005930", "uv": "10000"}
+    assert snapshot["applied_margin_rate"] == 40
+    assert snapshot["applied_margin_tier_recognized"] is True
+    assert snapshot["applied_orderable_amount"] == 1_200_000
+    assert snapshot["applied_orderable_qty"] == 120
+    assert snapshot["requested_unit_price"] == 10_000
+
+
+def test_kt00011_parser_does_not_round_fractional_applied_margin_rate(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [
+            {
+                "return_code": 0,
+                "aplc_rt": "39.6%",
+                "profa_40ord_alow_amt": "000001200000",
+                "profa_40ord_alowq": "000000000120",
+            }
+        ],
+    )
+
+    snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
+        "token", "005930", unit_price=10_000
+    )
+
+    assert snapshot["applied_margin_rate"] == 0
+    assert snapshot["applied_margin_tier_recognized"] is False
+    assert snapshot["applied_orderable_qty"] == 0
+
+
+@pytest.mark.parametrize("raw_return_code", [None, "invalid"])
+def test_kt00011_parser_rejects_missing_or_invalid_return_code(
+    monkeypatch,
+    raw_return_code,
+):
+    response = {
+        "aplc_rt": "40%",
+        "profa_40ord_alow_amt": "000001200000",
+        "profa_40ord_alowq": "000000000120",
+    }
+    if raw_return_code is not None:
+        response["return_code"] = raw_return_code
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [response],
+    )
+
+    snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
+        "token", "005930", unit_price=10_000
+    )
+
+    assert snapshot["error"].startswith("kt00011 return_code")
+    assert "applied_orderable_qty" not in snapshot
+
+
+def test_opening_margin_budget_uses_broker_tier_when_cash_guard_is_zero():
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "budget_source": "kt00011_min_account_deposit_cash_orderable",
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 10_000,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is True
+    assert context["opening_rotation_margin_cash_guard_bypassed"] is True
+    assert context["budget_base"] == 1_200_000
+    assert context["budget_source"] == "kt00011_applied_margin_orderable"
+    assert context["opening_rotation_margin_orderable_qty_cap"] == 120
+
+
+def test_generic_scalp_budget_keeps_cash_only_capacity_when_margin_exists(monkeypatch):
+    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_orderable_by_margin_kt00011",
+        lambda *_args, **_kwargs: {
+            "error": "",
+            "deposit": 20_000,
+            "cash_only_orderable_amount": 20_000,
+            "cash_only_orderable_qty": 2,
+            "stock_margin_rate": 20,
+            "applied_margin_rate": 40,
+            "applied_margin_tier_recognized": True,
+            "applied_orderable_amount": 1_200_000,
+            "applied_orderable_qty": 120,
+            "requested_unit_price": 10_000,
+        },
+    )
+
+    context = handlers._resolve_scalp_cash_budget_context(
+        "005930",
+        10_000,
+        20_000,
+    )
+
+    assert context["budget_base"] == 20_000
+    assert context["budget_source"] == "kt00011_min_account_deposit_cash_orderable"
+    assert context["cash_orderable_qty_cap"] == 2
+    assert context["kt00011_applied_orderable_qty"] == 120
+    assert "opening_rotation_margin_one_share_authorized" not in context
+
+
+@pytest.mark.parametrize(
+    ("rate", "amount", "qty", "reason"),
+    [
+        (100, 1_200_000, 120, "applied_margin_rate_not_margin_eligible"),
+        (40, 9_999, 120, "applied_margin_orderable_amount_below_one_share"),
+        (40, 1_200_000, 0, "applied_margin_orderable_qty_below_one"),
+    ],
+)
+def test_opening_margin_budget_fails_closed_on_ineligible_broker_capacity(
+    rate,
+    amount,
+    qty,
+    reason,
+):
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 75_000,
+            "budget_source": "kt00011_min_account_deposit_cash_orderable",
+            "cash_orderable_amount": 75_000,
+            "cash_orderable_qty_cap": 7,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": rate,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": amount,
+            "kt00011_applied_orderable_qty": qty,
+            "kt00011_requested_unit_price": 10_000,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is False
+    assert context["opening_rotation_margin_authority_reason"] == reason
+    assert context["budget_base"] == 75_000
+    assert context["cash_orderable_qty_cap"] == 7
+
+
+def test_opening_margin_budget_fails_closed_on_broker_lookup_error():
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "transport_timeout",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 10_000,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is False
+    assert context["opening_rotation_margin_authority_reason"] == "kt00011_error"
+    assert context["budget_base"] == 0
+
+
+def test_opening_margin_budget_rejects_different_kt00011_checked_price():
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 9_990,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is False
+    assert context["opening_rotation_margin_authority_reason"] == (
+        "kt00011_requested_unit_price_mismatch"
+    )
+    assert context["opening_rotation_margin_requested_unit_price"] == 9_990
+    assert context["budget_base"] == 0
+
+
+def evaluate_entry(
+    *,
+    previous_state,
+    feature_packet,
+    source_signature,
+    day_change_pct,
+    intraday_high_price,
+    now_dt,
+    promotion_id="PROMO-TEST",
+    config=None,
+):
+    """Keep unit fixtures explicit about promotion-owned state."""
+    state = dict(previous_state or {})
+    if state:
+        state.setdefault("promotion_id", promotion_id)
+        state.setdefault("promotion_started_epoch", now_dt.timestamp() - 1.0)
+    return _evaluate_entry_impl(
+        previous_state=state,
+        feature_packet=feature_packet,
+        source_signature=source_signature,
+        day_change_pct=day_change_pct,
+        intraday_high_price=intraday_high_price,
+        now_dt=now_dt,
+        promotion_id=promotion_id,
+        config=config,
+    )
+
+
+def test_watch_source_scope_accepts_every_scanner_lineage():
     config = EntryConfig()
     now_dt = datetime(2026, 7, 21, 9, 20)
 
@@ -58,12 +353,81 @@ def test_watch_source_scope_does_not_promote_missing_day_change():
         now_dt=now_dt,
         config=config,
     )
-    assert not is_watch_source_scope(
+    assert is_watch_source_scope(
         position_tag="SCANNER",
         source_signature="LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
         now_dt=now_dt,
         config=config,
     )
+
+
+def test_opening_rotation_requires_explicit_krx_regular_scope():
+    assert is_krx_regular_scope(
+        effective_venue="KRX", market_session_bucket="krx_regular"
+    )
+    assert not is_krx_regular_scope(effective_venue="NXT", market_session_bucket="nxt")
+    assert not is_krx_regular_scope(effective_venue="", market_session_bucket="")
+
+
+def test_missing_target_date_runtime_policy_is_disabled(tmp_path):
+    policy = load_active_runtime_policy(
+        now_dt=datetime(2026, 8, 11, 8, 45),
+        path=tmp_path / "missing-opening-policy.json",
+    )
+
+    assert policy.entry.enabled is False
+    assert policy.target_date == "2026-08-11"
+    assert policy.source_quality_status == "runtime_default"
+
+
+def test_runtime_skips_opening_when_krx_regular_provenance_is_missing(monkeypatch):
+    now_dt = datetime(2026, 8, 11, 9, 20)
+    stock = {
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-UNKNOWN-VENUE",
+        "source_signature": "PRICE_JUMP_START",
+    }
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": now_dt.timestamp(),
+        "now_dt": now_dt,
+        "fluctuation": 3.0,
+        "curr_price": 10_000,
+        "is_trigger": False,
+    }
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_runtime_event_venue_fields",
+        lambda _stock: {
+            "venue": "UNKNOWN",
+            "effective_venue": "UNKNOWN",
+            "venue_resolution": "explicit_target_venue_missing",
+            "venue_source_quality_status": "reviewed_fail_closed",
+            "venue_unknown_reviewed_reason": "explicit_target_venue_missing",
+            "market_session_bucket": "market_session_bucket_missing",
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 10_000, "fluctuation": 3.0},
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is False
+    assert runtime["is_trigger"] is False
+    assert emitted[-1][0] == "opening_rotation_krx_regular_scope_skipped"
+    assert emitted[-1][1]["broker_order_forbidden"] is True
 
 
 def test_opening_rotation_upstream_block_records_unknown_day_change(monkeypatch):
@@ -125,42 +489,42 @@ def test_opening_rotation_upstream_block_dedupes_same_state_but_logs_change(
         "005930",
         skip_reason="scanner_scheduler_generation_warm_parked",
         now_ts=started_at,
-        ws_data={"fluctuation": 7.98},
+        ws_data={"fluctuation": 4.98},
     )
     assert not handlers._maybe_log_opening_rotation_upstream_blocked(
         stock,
         "005930",
         skip_reason="scanner_scheduler_generation_warm_parked",
         now_ts=started_at + 30.0,
-        ws_data={"fluctuation": 7.95},
+        ws_data={"fluctuation": 4.95},
     )
     assert handlers._maybe_log_opening_rotation_upstream_blocked(
         stock,
         "005930",
         skip_reason="scanner_queue_rank_deferred",
         now_ts=started_at + 60.0,
-        ws_data={"fluctuation": 7.95},
+        ws_data={"fluctuation": 4.95},
     )
     assert handlers._maybe_log_opening_rotation_upstream_blocked(
         stock,
         "005930",
         skip_reason="scanner_queue_rank_deferred",
         now_ts=started_at + 361.0,
-        ws_data={"fluctuation": 7.95},
+        ws_data={"fluctuation": 4.95},
     )
     assert not handlers._maybe_log_opening_rotation_upstream_blocked(
         stock,
         "005930",
         skip_reason="ws_snapshot_missing_or_zero_recovered",
         now_ts=started_at + 370.0,
-        ws_data={"fluctuation": 7.95},
+        ws_data={"fluctuation": 4.95},
     )
     assert handlers._maybe_log_opening_rotation_upstream_blocked(
         stock,
         "005930",
         skip_reason="scanner_queue_rank_deferred",
         now_ts=started_at + 371.0,
-        ws_data={"fluctuation": 7.95},
+        ws_data={"fluctuation": 4.95},
     )
 
     assert [stage for stage, _fields in emitted] == [
@@ -331,7 +695,7 @@ def test_opening_rotation_bounded_handoff_can_pass_scanner_stale_backoff(
     assert fields["opening_rotation_upstream_handoff_allowed"] is True
 
 
-def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
+def test_opening_rotation_does_not_restore_pullback_across_scanner_repromotion(
     monkeypatch,
 ):
     handlers._OPENING_ROTATION_CONTEXT_CACHE.clear()
@@ -355,7 +719,7 @@ def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
         "_opening_rotation_feature_packet",
         lambda *args, **kwargs: next(packets),
     )
-    first_now = datetime(2026, 7, 21, 12, 40)
+    first_now = datetime(2026, 7, 21, 10, 40)
     first_stock = {
         "id": 42,
         "status": "WATCHING",
@@ -382,7 +746,7 @@ def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
         {"MIN_SCALP_LIQUIDITY": 500_000_000},
     )
     assert first_runtime["is_trigger"] is False
-    assert first_stock["opening_rotation_1pct_state"]["pullback_seen"] is True
+    assert first_stock["opening_rotation_1pct_state"]["pullback_seen"] is False
     first_observed_fields = next(
         fields
         for args, fields in emitted
@@ -393,7 +757,7 @@ def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
         first_observed_fields["opening_rotation_downstream_preview_evaluated"] is False
     )
 
-    second_now = datetime(2026, 7, 21, 12, 41)
+    second_now = datetime(2026, 7, 21, 10, 41)
     second_stock = {
         "id": 42,
         "status": "WATCHING",
@@ -419,18 +783,17 @@ def test_opening_rotation_restores_pullback_state_across_scanner_repromotion(
         second_runtime,
         {"MIN_SCALP_LIQUIDITY": 500_000_000},
     )
-    assert second_runtime["is_trigger"] is True
-    qualified_fields = next(
+    assert second_runtime["is_trigger"] is False
+    observed_fields = next(
         fields
         for args, fields in emitted
-        if args[2] == "opening_rotation_1pct_qualified"
+        if args[2] == "opening_rotation_1pct_observed"
+        and fields.get("opening_rotation_state_current_promotion_id")
+        == "SCANPROM-005930-2"
     )
-    assert qualified_fields["opening_rotation_state_source"] == "symbol_cache"
-    assert qualified_fields["opening_rotation_state_restored_across_promotion"] is True
-    assert (
-        qualified_fields["opening_rotation_state_cached_promotion_id"]
-        == "SCANPROM-005930-1"
-    )
+    assert observed_fields["reason"] == "pullback_not_observed"
+    assert observed_fields["opening_rotation_state_source"] == "empty"
+    assert observed_fields["opening_rotation_state_restored_across_promotion"] is False
     handlers._OPENING_ROTATION_CONTEXT_CACHE.clear()
 
 
@@ -438,24 +801,37 @@ def test_entry_collects_then_qualifies_on_pullback_reacceleration():
     config = EntryConfig()
     collecting = evaluate_entry(
         previous_state=None,
-        feature_packet=_packet(10_000),
+        feature_packet=_packet(10_100),
         source_signature="PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
         day_change_pct=3.2,
-        intraday_high_price=10_100,
-        now_dt=datetime(2026, 7, 20, 9, 9, 0),
+        intraday_high_price=12_000,
+        now_dt=datetime(2026, 7, 20, 9, 2, 30),
         config=config,
     )
     assert collecting["qualified"] is False
     assert collecting["reason"] == "collecting_before_entry_window"
-    assert collecting["state"]["pullback_seen"] is True
+    assert collecting["state"]["pullback_seen"] is False
+
+    pulled_back = evaluate_entry(
+        previous_state=collecting["state"],
+        feature_packet=_packet(10_040),
+        source_signature="PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        day_change_pct=3.3,
+        intraday_high_price=12_000,
+        now_dt=datetime(2026, 7, 20, 9, 2, 45),
+        config=config,
+    )
+    assert pulled_back["qualified"] is False
+    assert pulled_back["reason"] == "collecting_before_entry_window"
+    assert pulled_back["state"]["pullback_seen"] is True
 
     qualified = evaluate_entry(
-        previous_state=collecting["state"],
-        feature_packet=_packet(10_020),
+        previous_state=pulled_back["state"],
+        feature_packet=_packet(10_050),
         source_signature="PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
         day_change_pct=3.4,
-        intraday_high_price=10_100,
-        now_dt=datetime(2026, 7, 20, 9, 10, 1),
+        intraday_high_price=12_000,
+        now_dt=datetime(2026, 7, 20, 9, 3, 1),
         config=config,
     )
     assert qualified["qualified"] is True
@@ -471,7 +847,7 @@ def test_pullback_wait_exposes_downstream_gate_preview_without_bypass():
         source_signature="PRICE_JUMP_START",
         day_change_pct=3.0,
         intraday_high_price=10_000,
-        now_dt=datetime(2026, 7, 21, 12, 40),
+        now_dt=datetime(2026, 7, 21, 10, 40),
     )
 
     assert decision["qualified"] is False
@@ -526,6 +902,11 @@ def test_no_pullback_continuation_is_source_only_and_venue_scoped(monkeypatch):
         is True
     )
 
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_runtime_event_venue_fields",
+        _ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS,
+    )
     missing_venue = handlers._opening_rotation_no_pullback_continuation_fields(
         {"scanner_generation_id": "GEN-058610-1"},
         reason="pullback_not_observed",
@@ -600,13 +981,9 @@ def test_runtime_observed_event_carries_no_pullback_continuation_provenance(
         {"MIN_SCALP_LIQUIDITY": 500_000_000},
     )
 
-    assert handled is False
+    assert handled is True
     assert runtime["is_trigger"] is False
-    assert runtime["opening_rotation_entry_owner_handoff"] is True
-    assert (
-        runtime["opening_rotation_entry_owner_handoff_target"]
-        == "general_scalping_ai_entry"
-    )
+    assert "opening_rotation_entry_owner_handoff" not in runtime
     observed = next(
         fields
         for args, fields in emitted
@@ -624,17 +1001,9 @@ def test_runtime_observed_event_carries_no_pullback_continuation_provenance(
     assert observed["allowed_runtime_apply"] is False
     assert observed["actual_order_submitted"] is False
     assert observed["broker_order_forbidden"] is True
-    handoff = next(
-        fields
-        for args, fields in emitted
-        if args[2] == "opening_rotation_entry_owner_handoff"
+    assert not any(
+        args[2] == "opening_rotation_entry_owner_handoff" for args, _fields in emitted
     )
-    assert handoff["opening_rotation_entry_owner_handoff_reason"] == (
-        "pullback_not_observed"
-    )
-    assert handoff["runtime_effect"] is True
-    assert handoff["actual_order_submitted"] is False
-    assert handoff["broker_order_forbidden"] is True
     assert stock.get("rising_missed_buy") is None
 
 
@@ -716,8 +1085,8 @@ def test_runtime_does_not_handoff_opening_rotation_source_quality_failure(monkey
         }
     ),
 )
-def test_opening_rotation_strategy_miss_reasons_can_handoff_to_general_owner(reason):
-    assert handlers._opening_rotation_general_entry_handoff_allowed(
+def test_opening_rotation_strategy_miss_reasons_never_handoff_to_entry_ai(reason):
+    assert not handlers._opening_rotation_general_entry_handoff_allowed(
         {
             "qualified": False,
             "reason": reason,
@@ -763,7 +1132,7 @@ def test_opening_rotation_source_quality_miss_reasons_remain_fail_closed(reason)
 def test_runtime_blocks_opening_rotation_before_async_on_promotion_price_conflict(
     monkeypatch,
 ):
-    now_dt = datetime(2026, 7, 29, 13, 36, 59)
+    now_dt = datetime(2026, 7, 29, 10, 36, 59)
     stock = {
         "id": 475040,
         "name": "스트라드비전",
@@ -857,6 +1226,15 @@ def test_runtime_blocks_opening_rotation_before_async_on_promotion_price_conflic
 
 
 def test_fresh_quote_without_trusted_tape_preserves_pullback_for_repromotion():
+    peak = evaluate_entry(
+        previous_state=None,
+        feature_packet=_packet(10_100),
+        source_signature="PRICE_JUMP_START",
+        day_change_pct=3.0,
+        intraday_high_price=15_000,
+        now_dt=datetime(2026, 7, 21, 10, 39, 59),
+    )
+    assert peak["reason"] == "pullback_not_observed"
     source_gap_packet = _packet(10_000)
     source_gap_packet.update(
         {
@@ -866,12 +1244,12 @@ def test_fresh_quote_without_trusted_tape_preserves_pullback_for_repromotion():
         }
     )
     source_gap = evaluate_entry(
-        previous_state=None,
+        previous_state=peak["state"],
         feature_packet=source_gap_packet,
         source_signature="PRICE_JUMP_START",
         day_change_pct=3.0,
-        intraday_high_price=10_100,
-        now_dt=datetime(2026, 7, 21, 13, 40, 0),
+        intraday_high_price=15_000,
+        now_dt=datetime(2026, 7, 21, 10, 40, 0),
     )
 
     assert source_gap["reason"] == "trusted_tick_context_unavailable"
@@ -899,7 +1277,7 @@ def test_fresh_quote_without_trusted_tape_preserves_pullback_for_repromotion():
         source_signature="PRICE_JUMP_START",
         day_change_pct=3.0,
         intraday_high_price=10_100,
-        now_dt=datetime(2026, 7, 21, 13, 40, 1),
+        now_dt=datetime(2026, 7, 21, 10, 40, 1),
     )
 
     assert recovered["qualified"] is True
@@ -911,9 +1289,8 @@ def test_fresh_quote_without_trusted_tape_preserves_pullback_for_repromotion():
     [
         ("quote_age_ms", "-", "quote_freshness_unavailable"),
         ("quote_stale", True, "stale_market_context"),
-        ("spread_bp", 16.0, "spread_too_wide"),
+        ("spread_bp", 51.0, "spread_too_wide"),
         ("buy_pressure_10t", 57.9, "buy_pressure_below_min"),
-        ("tick_acceleration_ratio", 1.14, "tick_acceleration_below_min"),
         (
             "microstructure_reaction_wall_replenishment_risk_score",
             70,
@@ -958,7 +1335,8 @@ def test_stale_packet_does_not_mutate_pullback_state_or_enable_next_entry():
         now_dt=datetime(2026, 7, 20, 9, 10, 0),
     )
     assert stale["reason"] == "stale_market_context"
-    assert stale["state"] == {}
+    assert stale["state"]["promotion_id"] == "PROMO-TEST"
+    assert set(stale["state"]) == {"promotion_id", "promotion_started_epoch"}
 
     fresh = evaluate_entry(
         previous_state=stale["state"],
@@ -969,7 +1347,7 @@ def test_stale_packet_does_not_mutate_pullback_state_or_enable_next_entry():
         now_dt=datetime(2026, 7, 20, 9, 10, 1),
     )
     assert fresh["qualified"] is False
-    assert fresh["reason"] == "reacceleration_not_observed"
+    assert fresh["reason"] == "pullback_not_observed"
 
 
 def test_qualified_entry_exposes_freshness_contract_fields():
@@ -993,29 +1371,29 @@ def test_qualified_entry_exposes_freshness_contract_fields():
     assert decision["micro_vwap_available"] is True
 
 
-def test_entry_window_remains_open_until_1500_but_not_after():
+def test_entry_window_remains_open_until_1140_but_not_after():
     config = EntryConfig()
     assert is_watch_candidate(
         position_tag="SCANNER",
         source_signature="PRICE_JUMP_START",
         day_change_pct=2.0,
-        now_dt=datetime(2026, 7, 20, 14, 59, 59),
+        now_dt=datetime(2026, 7, 20, 11, 40, 0),
         config=config,
     )
     assert not is_watch_candidate(
         position_tag="SCANNER",
         source_signature="PRICE_JUMP_START",
         day_change_pct=2.0,
-        now_dt=datetime(2026, 7, 20, 15, 0, 1),
+        now_dt=datetime(2026, 7, 20, 11, 40, 1),
         config=config,
     )
 
 
-def test_rising_missed_source_overlap_is_not_an_opening_rotation_candidate():
+def test_rising_missed_source_overlap_is_an_opening_rotation_candidate():
     source_signature = (
         "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
     )
-    assert not is_watch_candidate(
+    assert is_watch_candidate(
         position_tag="SCANNER",
         source_signature=source_signature,
         day_change_pct=3.0,
@@ -1023,15 +1401,19 @@ def test_rising_missed_source_overlap_is_not_an_opening_rotation_candidate():
         config=EntryConfig(),
     )
     decision = evaluate_entry(
-        previous_state=None,
+        previous_state={
+            "peak_price": 10_100,
+            "last_price": 10_000,
+            "pullback_seen": True,
+        },
         feature_packet=_packet(10_020),
         source_signature=source_signature,
         day_change_pct=3.0,
         intraday_high_price=10_100,
         now_dt=datetime(2026, 7, 20, 9, 20),
     )
-    assert decision["qualified"] is False
-    assert decision["reason"] == "entry_owner_rising_missed_scout"
+    assert decision["qualified"] is True
+    assert decision["reason"] == "pullback_reacceleration_confirmed"
 
 
 def test_negative_rising_missed_source_token_does_not_take_entry_ownership():
@@ -1101,20 +1483,17 @@ def test_rising_recheck_hints_do_not_take_opening_ownership():
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "expected_reason"),
+    ("field", "value"),
     [
         (
             "source_signature",
             "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START",
-            "low_rebound_rising_missed_source",
         ),
-        ("rising_missed_buy", True, "rising_missed_buy"),
-        ("rising_missed_lineage", "normal_buy_bridge", "rising_missed_lineage"),
+        ("rising_missed_buy", True),
+        ("rising_missed_lineage", "normal_buy_bridge"),
     ],
 )
-def test_affirmative_rising_missed_marker_keeps_entry_ownership(
-    field, value, expected_reason
-):
+def test_rising_missed_lineage_alone_does_not_exclude_opening(field, value):
     stock = {
         "position_tag": "SCANNER",
         "source_signature": "PRICE_JUMP_START",
@@ -1125,38 +1504,40 @@ def test_affirmative_rising_missed_marker_keeps_entry_ownership(
         handlers._opening_rotation_rising_missed_owner_reason(
             stock, {"pos_tag": "SCANNER"}
         )
-        == expected_reason
+        == ""
     )
-    assert handlers._opening_rotation_yields_to_rising_missed_owner(
+    assert not handlers._opening_rotation_yields_to_rising_missed_owner(
         stock, {"pos_tag": "SCANNER"}
     )
 
 
-def test_runtime_entry_cutoff_defaults_to_1500(monkeypatch):
+def test_runtime_entry_cutoff_defaults_to_1140(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END", raising=False)
-    assert handlers._opening_rotation_entry_config().entry_end.hour == 15
-    assert handlers._opening_rotation_entry_config().entry_end.minute == 0
+    assert handlers._opening_rotation_entry_config().entry_end.hour == 11
+    assert handlers._opening_rotation_entry_config().entry_end.minute == 40
 
 
-def test_entry_time_cohorts_are_clock_aligned_and_include_1500_boundary():
+def test_entry_time_cohorts_are_clock_aligned_and_include_1140_boundary():
     assert entry_window_version() == WINDOW_VERSION
     assert entry_time_bucket(datetime(2026, 7, 20, 9, 10)) == "09:00-09:30"
     assert entry_time_bucket(datetime(2026, 7, 20, 9, 30)) == "09:30-10:00"
-    assert entry_time_bucket(datetime(2026, 7, 20, 14, 59, 59)) == "14:30-15:00"
-    assert entry_time_bucket(datetime(2026, 7, 20, 15, 0)) == "14:30-15:00"
-    assert entry_time_bucket(datetime(2026, 7, 20, 15, 0, 1)) == "outside_entry_window"
+    assert entry_time_bucket(datetime(2026, 7, 20, 11, 39, 59)) == "11:30-12:00"
+    assert entry_time_bucket(datetime(2026, 7, 20, 11, 40)) == "11:30-12:00"
+    assert entry_time_bucket(datetime(2026, 7, 20, 11, 40, 1)) == "outside_entry_window"
     labels = entry_time_bucket_labels()
     assert labels[0] == "09:00-09:30"
-    assert labels[-1] == "14:30-15:00"
-    assert len(labels) == 12
+    assert labels[-1] == "11:30-12:00"
+    assert len(labels) == 6
 
 
-def test_runtime_entry_cutoff_is_preopen_configurable(monkeypatch):
+def test_runtime_entry_cutoff_ignores_intraday_env_mutation(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END", "10:45")
+    monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_MIN_DAY_CHANGE_PCT", "4.5")
     config = handlers._opening_rotation_entry_config()
-    assert config.entry_end.hour == 10
-    assert config.entry_end.minute == 45
-    assert entry_window_version(config) == "opening_rotation_0910_1045_custom"
+    assert config.entry_end.hour == 11
+    assert config.entry_end.minute == 40
+    assert config.min_day_change_pct == 1.5
+    assert entry_window_version(config) == WINDOW_VERSION
 
 
 def _fresh_ws_envelope(now_ts=1000.0):
@@ -1472,8 +1853,6 @@ def test_entry_contract_has_no_ai_score_input():
 @pytest.mark.parametrize(
     ("profit_rate", "held_sec", "exit_rule"),
     [
-        (1.0, 40, "opening_rotation_1pct_take_profit"),
-        (-0.5, 20, "opening_rotation_tight_stop"),
         (0.1, 300, "opening_rotation_stagnation_exit"),
         (0.4, 600, "opening_rotation_max_hold_exit"),
     ],
@@ -1489,6 +1868,13 @@ def test_exit_policy_is_cost_aware_and_deterministic(profit_rate, held_sec, exit
     assert decision["ai_score_hard_gate"] is False
 
 
+def test_exit_policy_hands_drawdown_to_holding_ai_without_strategy_stop():
+    decision = evaluate_exit(profit_rate=-0.5, held_sec=20, config=ExitConfig())
+    assert decision["should_exit"] is False
+    assert decision["holding_ai_handoff_required"] is True
+    assert decision["reason"] == "holding_ai_drawdown_trigger"
+
+
 def test_exit_policy_holds_active_position_after_entry_cutoff():
     decision = evaluate_exit(profit_rate=0.45, held_sec=240)
     assert decision["should_exit"] is False
@@ -1502,9 +1888,12 @@ def test_runtime_branch_uses_mechanical_authority_without_pre_submit_retag(
         "id": 7,
         "name": "테스트",
         "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-RUNTIME-7",
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
         "intraday_high_price": 10_100,
         "opening_rotation_1pct_state": {
+            "promotion_id": "PROMO-RUNTIME-7",
+            "promotion_started_epoch": datetime(2026, 7, 20, 9, 19, 59).timestamp(),
             "peak_price": 10_100,
             "last_price": 10_000,
             "pullback_seen": True,
@@ -1572,9 +1961,12 @@ def test_full_watching_branch_never_calls_ai_for_rotation_candidate(monkeypatch)
         "id": 8,
         "name": "테스트",
         "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-RUNTIME-8",
         "source_signature": "REALTIME_RANK_START,BID_IMBALANCE_SURGE",
         "intraday_high_price": 10_100,
         "opening_rotation_1pct_state": {
+            "promotion_id": "PROMO-RUNTIME-8",
+            "promotion_started_epoch": datetime(2026, 7, 20, 9, 19, 59).timestamp(),
             "peak_price": 10_100,
             "last_price": 10_000,
             "pullback_seen": True,
@@ -1655,11 +2047,19 @@ def test_opening_rotation_first_buy_fill_persists_entry_time_cohort(monkeypatch)
         def start(self):
             return None
 
+        def join(self):
+            return None
+
     monkeypatch.setattr(sniper_execution_receipts.threading, "Thread", _NoopThread)
     monkeypatch.setattr(
         sniper_execution_receipts,
         "_log_holding_pipeline",
         lambda name, code, target_id, stage, **fields: events.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "_submit_opening_rotation_profit_order",
+        lambda *args, **kwargs: True,
     )
     sniper_execution_receipts.highest_prices = {}
     stock = {
@@ -1672,14 +2072,14 @@ def test_opening_rotation_first_buy_fill_persists_entry_time_cohort(monkeypatch)
         "pending_entry_orders": [
             {
                 "ord_no": "ROT1",
-                "qty": 2,
+                "qty": 1,
                 "filled_qty": 0,
                 "price": 10_000,
                 "status": "OPEN",
             }
         ],
-        "entry_requested_qty": 2,
-        "requested_buy_qty": 2,
+        "entry_requested_qty": 1,
+        "requested_buy_qty": 1,
     }
 
     sniper_execution_receipts._handle_entry_buy_execution(
@@ -1689,24 +2089,12 @@ def test_opening_rotation_first_buy_fill_persists_entry_time_cohort(monkeypatch)
         order_no="ROT1",
         exec_price=10_000,
         exec_qty=1,
-        now=datetime(2026, 7, 20, 13, 29, 59),
+        now=datetime(2026, 7, 20, 10, 29, 59),
     )
 
-    assert stock["opening_rotation_entry_time_bucket"] == "13:00-13:30"
-
-    sniper_execution_receipts._handle_entry_buy_execution(
-        target_id=7,
-        target_stock=stock,
-        code="005930",
-        order_no="ROT1",
-        exec_price=10_010,
-        exec_qty=1,
-        now=datetime(2026, 7, 20, 13, 30, 1),
-    )
-
-    assert stock["opening_rotation_entry_time_bucket"] == "13:00-13:30"
+    assert stock["opening_rotation_entry_time_bucket"] == "10:00-10:30"
     holding_started = [fields for stage, fields in events if stage == "holding_started"]
-    assert holding_started[-1]["opening_rotation_entry_time_bucket"] == "13:00-13:30"
+    assert holding_started[-1]["opening_rotation_entry_time_bucket"] == "10:00-10:30"
     assert holding_started[-1]["opening_rotation_window_version"] == WINDOW_VERSION
 
 
@@ -1722,6 +2110,202 @@ def test_rotation_tag_activation_is_strictly_after_broker_acceptance():
     )
     stage_index = submit_source.index("_stage_buy_order_submission(", activate_index)
     assert send_index < reject_guard_index < activate_index < stage_index
+
+
+def test_margin_capacity_stays_inside_allocator_and_one_share_submit_contract():
+    submit_source = inspect.getsource(handlers._submit_watching_triggered_entry)
+
+    initial_margin_index = submit_source.index(
+        "_apply_opening_rotation_margin_budget_authority"
+    )
+    initial_allocator_index = submit_source.index(
+        "sizing_decision = resolve_scalping_allocation", initial_margin_index
+    )
+    one_share_stage_cap_index = submit_source.index(
+        "stage_qty_cap=1", initial_allocator_index
+    )
+    latency_index = submit_source.index("evaluate_live_buy_entry(")
+    final_margin_index = submit_source.index(
+        '"opening_rotation_margin_pre_submit_revalidated"'
+    )
+    final_allocator_index = submit_source.index(
+        "_revalidate_scalping_sizing_for_final_order_price", final_margin_index
+    )
+    one_share_plan_index = submit_source.index(
+        '"opening_rotation_best_bid_one_share"', final_allocator_index
+    )
+
+    assert initial_margin_index < initial_allocator_index
+    assert initial_allocator_index < one_share_stage_cap_index < latency_index
+    assert final_margin_index < final_allocator_index < one_share_plan_index
+    assert "kt10006" not in submit_source
+
+
+@pytest.mark.parametrize(
+    "guard_name",
+    sorted(handlers._OPENING_ROTATION_REDUNDANT_SUBMIT_GUARDS),
+)
+def test_opening_rotation_bypasses_only_declared_duplicate_submit_alpha_guards(
+    guard_name,
+):
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name=guard_name,
+        )
+        is False
+    )
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=False,
+            guard_name=guard_name,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "guard_name",
+    [
+        "exit_authority_conflict",
+        "same_symbol_loss_reentry_cooldown",
+        "latency_stale_conflict",
+        "observed_mark_gap",
+        "caution_stale_negative_micro",
+        "opening_quote_tick_1s_freshness",
+        "late_entry_price_drift",
+        "pre_submit_price",
+        "lower_upper_limit_live",
+        "account_order_quantity",
+        "margin_exact_price",
+        "scanner_generation",
+        "greenfield_authority",
+        "broker_submit",
+    ],
+)
+def test_opening_rotation_keeps_submit_and_hard_safety_guards(guard_name):
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name=guard_name,
+        )
+        is True
+    )
+
+
+def test_opening_rotation_duplicate_guard_bypass_has_episode_provenance(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: logs.append((args, fields)),
+    )
+    stock = {
+        "opening_rotation_episode_id": "OREP-1",
+        "opening_rotation_redundant_submit_guard_bypasses": [],
+    }
+
+    handlers._record_opening_rotation_redundant_submit_guard_bypass(
+        stock,
+        "005930",
+        guard_name="pre_submit_liquidity",
+        guard_fields={"pre_submit_liquidity_reason": "below_min_liquidity"},
+    )
+    handlers._record_opening_rotation_redundant_submit_guard_bypass(
+        stock,
+        "005930",
+        guard_name="pre_submit_liquidity",
+    )
+    handlers._record_opening_rotation_redundant_submit_guard_bypass(
+        stock,
+        "005930",
+        guard_name="weak_context_late_entry",
+    )
+
+    assert stock["opening_rotation_redundant_submit_guard_bypass_count"] == 2
+    assert stock["opening_rotation_redundant_submit_guard_bypasses"] == [
+        "pre_submit_liquidity",
+        "weak_context_late_entry",
+    ]
+    provenance = handlers._opening_rotation_provenance_fields(stock)
+    assert provenance["opening_rotation_redundant_submit_guard_bypass_count"] == 2
+    assert provenance["opening_rotation_redundant_submit_guard_bypasses"] == (
+        "pre_submit_liquidity,weak_context_late_entry"
+    )
+    assert logs[0][0][2] == "opening_rotation_redundant_submit_guard_bypassed"
+    assert len(logs) == 2
+    assert logs[0][1]["actual_order_submitted"] is False
+    assert logs[0][1]["broker_order_forbidden"] is False
+    assert "stale_or_conflict_bypass" in logs[0][1]["forbidden_uses"]
+
+
+def test_opening_rotation_duplicate_guard_bypass_is_wired_before_common_blocks():
+    submit_source = inspect.getsource(handlers._submit_watching_triggered_entry)
+
+    for guard_name in handlers._OPENING_ROTATION_REDUNDANT_SUBMIT_GUARDS:
+        assert f'guard_name="{guard_name}"' in submit_source
+    for hard_guard_call in (
+        "_is_standard_stale_submit_block",
+        "_evaluate_caution_stale_negative_micro_submit_block",
+        "_limit_down_live_pre_submit_guard",
+        "_upper_limit_live_pre_submit_guard",
+        "_stage_buy_order_submission",
+    ):
+        assert hard_guard_call in submit_source
+
+
+def test_opening_rotation_ignores_stale_generic_ai_wait_veto_without_weakening_latency(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_KRX_DIRECT_CANARY_LIVE_AI_WAIT_BLOCK_ENABLED", "true"
+    )
+    now_ts = datetime(2026, 7, 20, 9, 20).timestamp()
+    verdict = handlers._evaluate_krx_direct_canary_live_ai_wait_submit_block(
+        strategy="SCALPING",
+        stock={
+            "last_watching_ai_action": "WAIT",
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_confirmed_at": now_ts - 1.0,
+        },
+        runtime={"effective_venue": "KRX"},
+        latency_gate={
+            "latency_state": "DANGER",
+            "latency_true_ofi_direct_canary_applied": True,
+        },
+        entry_ai_submit_authority={},
+        retry_fields={},
+        now_ts=now_ts,
+    )
+
+    assert verdict["blocked"] is True
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name="krx_direct_canary_live_ai_wait",
+        )
+        is False
+    )
+    assert (
+        handlers._opening_rotation_submit_guard_enforced(
+            opening_rotation_active=True,
+            guard_name="latency_stale_conflict",
+        )
+        is True
+    )
+
+
+def test_holding_common_trailing_does_not_overwrite_an_existing_exit_owner():
+    holding_source = inspect.getsource(handlers.handle_holding_state)
+    normalized_holding_source = " ".join(holding_source.split())
+
+    assert (
+        "if not is_sell_signal and trailing_stop_price > 0 "
+        "and curr_p <= trailing_stop_price:"
+    ) in normalized_holding_source
+    assert holding_source.index(
+        'exit_rule = "opening_rotation_common_trailing_stop"'
+    ) < (holding_source.index('exit_rule = "protect_trailing_stop"'))
 
 
 def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
@@ -1789,7 +2373,7 @@ def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
     assert branch_calls
 
 
-def test_rising_missed_overlap_keeps_scout_hook_ownership(monkeypatch):
+def test_rising_missed_lineage_is_consumed_by_opening_before_scout_hook(monkeypatch):
     handlers.COOLDOWNS = {}
     handlers.ALERTED_STOCKS = set()
     handlers.EVENT_BUS = None
@@ -1816,12 +2400,11 @@ def test_rising_missed_overlap_keeps_scout_hook_ownership(monkeypatch):
         "_maybe_submit_rising_missed_one_share_entry",
         lambda *a, **k: scout_calls.append((a, k)) or True,
     )
+    branch_calls = []
     monkeypatch.setattr(
         handlers,
         "_handle_watching_strategy_branch",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("opening/generic branch must not preempt rising missed")
-        ),
+        lambda *a, **k: branch_calls.append((a, k)) or True,
     )
     stock = {
         "id": 10,
@@ -1845,10 +2428,11 @@ def test_rising_missed_overlap_keeps_scout_hook_ownership(monkeypatch):
         ai_engine=None,
     )
 
-    assert len(scout_calls) == 1
+    assert branch_calls
+    assert scout_calls == []
 
 
-def test_explicit_rising_missed_class_keeps_rising_missed_entry_ownership():
+def test_explicit_rising_missed_class_alone_does_not_exclude_opening():
     stock = {
         "position_tag": "SCANNER",
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
@@ -1859,7 +2443,7 @@ def test_explicit_rising_missed_class_keeps_rising_missed_entry_ownership():
         handlers._opening_rotation_yields_to_rising_missed_owner(
             stock, {"pos_tag": "SCANNER"}
         )
-        is True
+        is False
     )
 
 
@@ -1907,6 +2491,114 @@ def test_rising_missed_scout_upgrade_cannot_be_retagged_as_rotation(monkeypatch)
     assert "opening_rotation_1pct_state" not in stock
     assert "opening_rotation_mechanical_signal_strength" not in stock
     assert "005930" not in handlers._OPENING_ROTATION_CONTEXT_CACHE
+
+
+def test_cancel_ambiguity_consumes_new_promotion_until_reconciliation(monkeypatch):
+    emitted = []
+    stock = {
+        "id": 12,
+        "name": "테스트",
+        "status": "WATCHING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "scanner_promotion_id": "SCANPROM-005930-NEW",
+        "opening_rotation_episode_id": "OPENROT-OLD",
+        "opening_rotation_order_ambiguity": True,
+        "opening_rotation_new_episode_blocked": True,
+    }
+    now_dt = datetime(2026, 7, 20, 9, 20)
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": now_dt.timestamp(),
+        "now_dt": now_dt,
+        "fluctuation": 3.0,
+        "curr_price": 10_000,
+        "is_trigger": False,
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_opening_rotation_feature_packet",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("blocked episode must not evaluate a new promotion")
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 10_000, "fluctuation": 3.0},
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is True
+    assert runtime["is_trigger"] is False
+    assert emitted[-1][0][2] == "opening_rotation_new_episode_reconciliation_blocked"
+    assert (
+        emitted[-1][1]["reason"] == "broker_reconciliation_required_before_new_episode"
+    )
+    assert emitted[-1][1]["actual_order_submitted"] is False
+
+
+def test_broker_accepted_promotion_cannot_reenter_after_unfilled_cancel(monkeypatch):
+    emitted = []
+    stock = {
+        "id": 7,
+        "name": "테스트",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "source_signature": "PRICE_JUMP_START",
+        "scanner_promotion_id": "PROMO-CONSUMED",
+        "opening_rotation_episode_id": "OREP-CONSUMED",
+        "opening_rotation_episode_promotion_id": "PROMO-CONSUMED",
+    }
+    handlers._activate_opening_rotation_after_broker_submit(stock, "005930")
+    stock.update(
+        {
+            "status": "WATCHING",
+            "position_tag": "SCANNER",
+            "opening_rotation_1pct_live": False,
+        }
+    )
+    runtime = {
+        "pos_tag": "SCANNER",
+        "now_ts": datetime(2026, 7, 20, 9, 20).timestamp(),
+        "now_dt": datetime(2026, 7, 20, 9, 20),
+        "fluctuation": 3.0,
+        "curr_price": 10_000,
+        "is_trigger": False,
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_opening_rotation_feature_packet",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("a consumed promotion must not be evaluated again")
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **kwargs: emitted.append((args, kwargs)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 10_000, "fluctuation": 3.0},
+        runtime,
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is True
+    assert runtime["is_trigger"] is False
+    assert stock["opening_rotation_consumed_promotion_id"] == "PROMO-CONSUMED"
+    assert emitted[-1][0][2] == "opening_rotation_consumed_promotion_dropped"
 
 
 def test_runtime_branch_does_not_fall_back_to_ai_after_1500_entry_window():
@@ -1992,3 +2684,321 @@ def test_execution_receipt_does_not_seed_ai_score_for_rotation_tag():
     assert (
         sniper_execution_receipts._resolve_entry_submit_ai_score(stock, "123") is None
     )
+
+
+def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
+    submitted = []
+    logs = []
+    stock = {
+        "id": 7,
+        "name": "테스트",
+        "position_tag": POSITION_TAG,
+        "opening_rotation_episode_id": "OREP-1",
+        "opening_rotation_episode_promotion_id": "PROMO-1",
+        "opening_rotation_profile_id": "profile-1",
+        "opening_rotation_policy_hash": "hash-1",
+        "opening_rotation_policy_schema_version": "opening_rotation_runtime_policy_v2",
+        "opening_rotation_margin_one_share_authorized": True,
+        "opening_rotation_margin_authority_reason": (
+            "kt00011_applied_margin_tier_one_share_confirmed"
+        ),
+        "opening_rotation_margin_rate": 40,
+        "opening_rotation_margin_orderable_amount": 1_200_000,
+        "opening_rotation_margin_orderable_qty_cap": 120,
+        "opening_rotation_margin_requested_unit_price": 10_010,
+        "opening_rotation_margin_cash_guard_bypassed": True,
+        "opening_rotation_margin_order_api": "kt10000",
+        "opening_rotation_margin_credit_order_api_used": False,
+    }
+    monkeypatch.setattr(
+        sniper_execution_receipts.kiwoom_utils,
+        "get_tick_size",
+        lambda _price: 10,
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "get_trade_cost_rate",
+        lambda: 0.0023,
+    )
+    monkeypatch.setattr(
+        "src.engine.kiwoom_orders.send_sell_order_market",
+        lambda **kwargs: submitted.append(kwargs)
+        or {"return_code": "0", "ord_no": "SELL-1"},
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logs.append((args, kwargs)),
+    )
+
+    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
+        stock,
+        code="005930",
+        buy_fill_price=10_000,
+        filled_qty=1,
+    )
+    # A duplicated BUY receipt must reuse the confirmed target ownership.
+    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
+        stock,
+        code="005930",
+        buy_fill_price=10_000,
+        filled_qty=1,
+    )
+
+    assert len(submitted) == 1
+    assert submitted[0]["qty"] == 1
+    assert submitted[0]["price"] == 10_070
+    assert submitted[0]["order_type"] == "00"
+    assert submitted[0]["dmst_stex_tp"] == "KRX"
+    target_log = next(
+        fields
+        for args, fields in logs
+        if args[3] == "opening_rotation_profit_target_ordered"
+    )
+    assert target_log["opening_rotation_margin_one_share_authorized"] is True
+    assert target_log["opening_rotation_margin_rate"] == 40
+    assert target_log["opening_rotation_margin_cash_guard_bypassed"] is True
+    assert target_log["opening_rotation_margin_order_api"] == "kt10000"
+    assert target_log["opening_rotation_margin_credit_order_api_used"] is False
+    assert stock["opening_rotation_profit_target_order_no"] == "SELL-1"
+    assert stock["preset_tp_ord_no"] == "SELL-1"
+    assert logs[-1][0][3] == "opening_rotation_profit_target_ordered"
+
+
+def test_concurrent_buy_receipts_claim_one_target_submission(monkeypatch):
+    entered = Event()
+    release = Event()
+    submitted = []
+    results = []
+    stock = {
+        "name": "테스트",
+        "position_tag": POSITION_TAG,
+        "opening_rotation_episode_id": "OREP-CONCURRENT",
+    }
+    monkeypatch.setattr(
+        sniper_execution_receipts.kiwoom_utils,
+        "get_tick_size",
+        lambda _price: 10,
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts, "get_trade_cost_rate", lambda: 0.0023
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: None,
+    )
+
+    def _submit(**kwargs):
+        submitted.append(kwargs)
+        entered.set()
+        assert release.wait(timeout=2.0)
+        return {"return_code": "0", "ord_no": "SELL-CONCURRENT"}
+
+    monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", _submit)
+
+    first = Thread(
+        target=lambda: results.append(
+            sniper_execution_receipts._submit_opening_rotation_profit_order(
+                stock,
+                code="005930",
+                buy_fill_price=10_000,
+                filled_qty=1,
+            )
+        )
+    )
+    first.start()
+    assert entered.wait(timeout=2.0)
+    second_result = sniper_execution_receipts._submit_opening_rotation_profit_order(
+        stock,
+        code="005930",
+        buy_fill_price=10_000,
+        filled_qty=1,
+    )
+    release.set()
+    first.join(timeout=2.0)
+
+    assert not first.is_alive()
+    assert results == [True]
+    assert second_result is True
+    assert len(submitted) == 1
+    assert stock["opening_rotation_profit_target_order_no"] == "SELL-CONCURRENT"
+
+
+def test_target_order_notice_wins_response_race(monkeypatch):
+    stock = {
+        "name": "테스트",
+        "position_tag": POSITION_TAG,
+        "opening_rotation_episode_id": "OREP-NOTICE-RACE",
+    }
+    monkeypatch.setattr(
+        sniper_execution_receipts.kiwoom_utils,
+        "get_tick_size",
+        lambda _price: 10,
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts, "get_trade_cost_rate", lambda: 0.0023
+    )
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: None,
+    )
+
+    def _submit(**_kwargs):
+        stock["opening_rotation_profit_target_order_no"] = "SELL-NOTICE"
+        return {"return_code": "-1", "return_msg": "response_late_after_notice"}
+
+    monkeypatch.setattr("src.engine.kiwoom_orders.send_sell_order_market", _submit)
+
+    assert sniper_execution_receipts._submit_opening_rotation_profit_order(
+        stock,
+        code="005930",
+        buy_fill_price=10_000,
+        filled_qty=1,
+    )
+    assert stock["opening_rotation_profit_target_order_no"] == "SELL-NOTICE"
+    assert stock["opening_rotation_profit_order_protection_failed"] is False
+
+
+def test_failed_target_submit_blocks_reentry_and_arms_protection_exit(monkeypatch):
+    stock = {"name": "테스트", "position_tag": POSITION_TAG}
+    monkeypatch.setattr(
+        sniper_execution_receipts.kiwoom_utils,
+        "get_tick_size",
+        lambda _price: 10,
+    )
+    monkeypatch.setattr(
+        "src.engine.kiwoom_orders.send_sell_order_market",
+        lambda **kwargs: {"return_code": "-1", "return_msg": "rejected"},
+    )
+
+    assert not sniper_execution_receipts._submit_opening_rotation_profit_order(
+        stock,
+        code="005930",
+        buy_fill_price=10_000,
+        filled_qty=1,
+    )
+    assert stock["opening_rotation_profit_order_protection_failed"] is True
+    assert stock["opening_rotation_new_episode_blocked"] is True
+    holding_source = inspect.getsource(handlers.handle_holding_state)
+    assert "opening_rotation_target_protection_failure_exit" in holding_source
+
+
+def test_holding_ai_handoff_is_called_once_and_cannot_choose_buy(monkeypatch):
+    calls = []
+    stock = {
+        "id": 7,
+        "name": "테스트",
+        "buy_price": 10_000,
+        "opening_rotation_episode_id": "OREP-1",
+    }
+
+    class _HoldingAI:
+        def evaluate_scalping_holding_score(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return {"action": "BUY", "reason": "invalid scale-in suggestion"}
+
+    monkeypatch.setattr(
+        handlers, "_pre_submit_input_snapshot_has_usable_quote", lambda _ws: True
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"price": 9_950}],
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_get_holding_minute_candles_with_meta",
+        lambda *args, **kwargs: ([{"close": 9_950}], {}),
+    )
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *a, **k: None)
+
+    first = handlers._opening_rotation_holding_ai_once(
+        stock=stock,
+        code="005930",
+        ws_data={"curr": 9_950, "best_bid": 9_940, "best_ask": 9_950},
+        ai_engine=_HoldingAI(),
+        profit_rate=-0.5,
+        peak_profit=0.1,
+        held_sec=30,
+    )
+    second = handlers._opening_rotation_holding_ai_once(
+        stock=stock,
+        code="005930",
+        ws_data={"curr": 9_940, "best_bid": 9_930, "best_ask": 9_940},
+        ai_engine=_HoldingAI(),
+        profit_rate=-0.6,
+        peak_profit=0.1,
+        held_sec=40,
+    )
+
+    assert first == second == "HOLD"
+    assert len(calls) == 1
+    assert stock["opening_rotation_holding_ai_called"] is True
+
+
+def test_full_sell_reconciliation_releases_symbol_but_preserves_cooldown(monkeypatch):
+    monkeypatch.setattr(handlers, "ALERTED_STOCKS", {"005930"})
+    monkeypatch.setattr(handlers, "COOLDOWNS", {"005930": 12345.0})
+    handlers._OPENING_ROTATION_CONTEXT_CACHE["005930"] = {"cached_at": 1.0}
+
+    result = handlers.reconcile_scalp_reentry_after_sell_completed(
+        "005930",
+        profit_rate=0.4,
+        exit_price=10_070,
+        exit_rule="profit_target_filled",
+        completed_at=1.0,
+        position_tag=POSITION_TAG,
+    )
+
+    assert result["reconciled"] is True
+    assert "005930" not in handlers.ALERTED_STOCKS
+    assert handlers.COOLDOWNS["005930"] == 12345.0
+    assert "005930" not in handlers._OPENING_ROTATION_CONTEXT_CACHE
+
+
+def test_ratchet_is_shadow_only_and_recorded_once_on_fresh_trusted_trend(
+    monkeypatch,
+):
+    logs = []
+    stock = {
+        "opening_rotation_episode_id": "OREP-1",
+        "opening_rotation_profit_target_price": 10_070,
+        "opening_rotation_ratchet_shadow_price": 10_080,
+    }
+    ws_data = {
+        "best_bid": 10_020,
+        "best_ask": 10_030,
+        "recent_trade_ticks": [
+            {"price": 10_040},
+            {"price": 10_030},
+            {"price": 10_020},
+        ],
+    }
+    monkeypatch.setattr(handlers, "_get_ws_snapshot_age_sec", lambda _ws: 0.1)
+    monkeypatch.setattr(
+        handlers,
+        "infer_tick_aggressor_side",
+        lambda tick: {
+            "source": "declared_aggressor_side",
+            "trade_price": tick["price"],
+        },
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logs.append((args, kwargs)),
+    )
+
+    handlers._record_opening_rotation_ratchet_shadow_once(
+        stock, "005930", ws_data, curr_price=10_040
+    )
+    handlers._record_opening_rotation_ratchet_shadow_once(
+        stock, "005930", ws_data, curr_price=10_040
+    )
+
+    assert stock["opening_rotation_ratchet_shadow_recorded"] is True
+    assert stock["opening_rotation_ratchet_real_order_enabled"] is False
+    assert len(logs) == 1
+    assert logs[0][1]["real_order_changed"] is False

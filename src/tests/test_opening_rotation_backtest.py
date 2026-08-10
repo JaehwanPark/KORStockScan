@@ -1,10 +1,9 @@
 import json
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from src.engine.scalping.opening_rotation import POSITION_TAG
+from src.engine.scalping.opening_rotation import POSITION_TAG, WINDOW_VERSION
 from src.engine.scalping import opening_rotation_backtest as backtest
 from src.engine.scalping.opening_rotation_backtest import build_report, write_report
 
@@ -37,13 +36,16 @@ def _complete_fields(price: int) -> dict:
         "fluctuation": 3.2,
         "curr_price": price,
         "quote_age_ms": 100,
+        "tick_latest_age_ms": 100,
         "quote_stale": False,
         "tick_context_stale": False,
         "tick_context_quality": "fresh_computed",
         "tick_aggressor_pressure_usable": True,
         "spread_bp": 8,
+        "spread_ticks": 1,
         "buy_pressure_10t": 64,
         "tick_aggressor_trusted_count": 8,
+        "trusted_tick_prices": [price, price, price - 1, price - 1, price - 2],
         "tick_acceleration_ratio": 1.35,
         "price_change_10t_pct": 0.12,
         "volume_ratio_pct": 125,
@@ -145,8 +147,20 @@ def test_strict_legacy_replay_qualifies_only_complete_sequence(tmp_path):
         post_sell_dir=post_sell_dir,
     )
 
-    assert report["summary"]["legacy_complete_packet_count"] == 3
+    assert report["summary"]["legacy_complete_packet_count"] == 2
     assert report["summary"]["legacy_replay_qualified_count"] == 1
+    profile_replay = report["day_change_profile_replay"]
+    assert (
+        profile_replay["status"]
+        == "complete_packet_replay_available_outcome_labels_missing"
+    )
+    assert (
+        profile_replay["profiles"]["day_change_1.5_5"]["qualified_promotion_count"] == 1
+    )
+    assert (
+        profile_replay["profiles"]["day_change_1.5_8"]["eligible_for_preopen_apply"]
+        is False
+    )
     assert (
         report["legacy_replay_qualified_rows"][0]["outcome_status"]
         == "forward_price_path_unavailable"
@@ -602,12 +616,12 @@ def test_completed_trades_are_measured_by_first_fill_30minute_cohort(tmp_path):
     )
 
     buckets = report["entry_time_bucket_performance"]
-    assert len(buckets) == 12
+    assert len(buckets) == 7
     assert buckets["09:00-09:30"]["completed_trade_count"] == 1
     assert buckets["09:00-09:30"]["notional_weighted_ev_pct"] == 1.0
-    assert buckets["13:00-13:30"]["completed_trade_count"] == 1
-    assert buckets["13:00-13:30"]["notional_weighted_ev_pct"] == -0.5
-    assert buckets["14:30-15:00"]["completed_trade_count"] == 0
+    assert buckets["outside_entry_window"]["completed_trade_count"] == 1
+    assert buckets["outside_entry_window"]["notional_weighted_ev_pct"] == -0.5
+    assert buckets["11:30-12:00"]["completed_trade_count"] == 0
     assert report["entry_time_bucket_performance_contract"]["runtime_effect"] is False
 
 
@@ -795,10 +809,8 @@ def test_report_identity_pins_config_and_versioned_filename(tmp_path):
 
     identity = report["report_identity"]
     assert identity["schema_version"] == 3
-    assert identity["entry_config"]["entry_end"] == "15:00:00"
-    assert identity["opening_rotation_window_version"] == (
-        "opening_rotation_0910_1500_v1"
-    )
+    assert identity["entry_config"]["entry_end"] == "11:40:00"
+    assert identity["opening_rotation_window_version"] == WINDOW_VERSION
     assert len(identity["config_fingerprint"]) == 12
 
     json_path, _ = write_report(report, tmp_path / "report")

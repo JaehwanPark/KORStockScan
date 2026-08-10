@@ -1708,6 +1708,14 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
         "print(json.dumps({'target_date': date, 'status': 'inactive_fallback_v2_13'}))\n",
         encoding="utf-8",
     )
+    (scalping_dir / "opening_rotation_tuning.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "date = sys.argv[sys.argv.index('--target-date') + 1]\n"
+        "mode = sys.argv[sys.argv.index('--mode') + 1]\n"
+        "print(json.dumps({'target_date': date, 'mode': mode, 'status': 'pass'}))\n",
+        encoding="utf-8",
+    )
     (engine_dir / "threshold_cycle_preopen_apply.py").write_text(
         "import json\n"
         "import sys\n"
@@ -2149,3 +2157,18 @@ def test_gcp_preopen_push_wrapper_fails_on_missing_ssh_config_before_transport(
 
     assert result.returncode != 0
     assert "missing_env:GCP_PUSH_HOST" in result.stdout
+
+
+def test_opening_rotation_tuning_is_postclose_then_preopen_verified():
+    postclose = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+    preopen = Path("deploy/run_threshold_cycle_preopen.sh").read_text(encoding="utf-8")
+
+    assert "THRESHOLD_CYCLE_RUN_OPENING_ROTATION_PROFILE_TUNING" in postclose
+    assert "-m src.engine.scalping.opening_rotation_tuning" in postclose
+    assert "--mode postclose" in postclose
+    assert "--phase postclose" in postclose
+    assert "--mode preopen" in preopen
+    assert "--phase preopen" in preopen
+    assert preopen.index("--mode preopen") < preopen.index("--phase preopen")
