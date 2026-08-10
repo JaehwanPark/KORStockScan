@@ -107,6 +107,21 @@ def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_l
     assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off" in script
 
 
+def test_threshold_cycle_postclose_recovers_late_scalp_sim_positions_with_openai():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    report_only = 'src.engine.scalp_sim_overnight --date "$TARGET_DATE" --report-only'
+    late_recovery = 'src.engine.scalp_sim_overnight --date "$TARGET_DATE" --live-openai'
+    assert report_only in script
+    assert late_recovery in script
+    assert script.index(report_only) < script.index(late_recovery)
+    assert '"active_undecided_count"' in script
+    assert "provider=openai runtime_effect=false" in script
+    assert "KORSTOCKSCAN_OPENAI_TRANSPORT_MODE" in script
+    assert "KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED" in script
+    assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off" in script
+
+
 def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():
     script = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
 
@@ -422,7 +437,10 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     post_conversion_workorder_idx = script.index(
         "code_improvement_workorder_post_conversion_lane"
     )
-    next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
+    checklist_command = (
+        'src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"'
+    )
+    next_checklist_idx = script.index(checklist_command)
     pending_verify_idx = script.index(
         "src.engine.verify_threshold_cycle_postclose_chain"
     )
@@ -430,6 +448,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "src.engine.verify_threshold_cycle_postclose_chain",
         pending_verify_idx + 1,
     )
+    final_next_checklist_idx = script.rindex(checklist_command)
     tuning_control_idx = script.index(
         "src.engine.automation.tuning_performance_control_tower"
     )
@@ -472,6 +491,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < post_conversion_workorder_idx
         < next_checklist_idx
         < pending_verify_idx
+        < final_next_checklist_idx
         < final_verify_idx
         < tuning_control_idx
     )

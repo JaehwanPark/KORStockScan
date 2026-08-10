@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-08-07 21:45:45
-분석 기간: 2026-06-05 ~ 2026-08-07
+생성일: 2026-08-10 21:51:35
+분석 기간: 2026-06-05 ~ 2026-08-10
 
 ---
 
@@ -11,15 +11,15 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 193 | 65.8% | +0.470% | +11.750% | ✓ |
+| full_fill | 194 | 65.5% | +0.460% | +11.750% | ✓ |
 | split-entry | 32 | 43.8% | -0.180% | -31.370% | ✓ |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=35`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=20.0%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=0.0%`
+- `WAIT65~79 total_candidates=30`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=40.0%`, `gatekeeper_eval_ms_p95=0ms`, `budget_pass_to_submitted_rate=0.0%`
 
-- `Budget pass without submit`: 경고 — `budget_pass=198`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
+- `Budget pass without submit`: 경고 — `budget_pass=70`인데 `submitted=0`라 제출 전 병목이 기대값 회복을 끊고 있다.
 
 ### 1-2. 손실 패턴 Top 5
 
@@ -68,16 +68,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 37444건 | 차단 비율: 99.1% | 관찰 일수: 30일
+- 차단 건수 합계: 40509건 | 차단 비율: 99.1% | 관찰 일수: 31일
 
-**#2** — `latency guard miss`
-- 차단 건수 합계: 4894건 | 차단 비율: 93.3% | 관찰 일수: 30일
+**#2** — `overbought gate miss`
+- 차단 건수 합계: 5261건 | 차단 비율: 93.7% | 관찰 일수: 31일
 
-**#3** — `overbought gate miss`
-- 차단 건수 합계: 4508건 | 차단 비율: 92.7% | 관찰 일수: 30일
+**#3** — `latency guard miss`
+- 차단 건수 합계: 4943건 | 차단 비율: 93.3% | 관찰 일수: 31일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 30일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 31일
 
 ---
 

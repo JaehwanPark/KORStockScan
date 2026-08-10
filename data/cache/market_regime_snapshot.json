@@ -1,38 +1,38 @@
 {
-  "timestamp": "2026-08-07T14:54:45.531274",
-  "vix_close": 15.149999618530273,
-  "vix_ma3": 15.820000012715658,
+  "timestamp": "2026-08-10T12:24:56.827315",
+  "vix_close": 14.899999618530273,
+  "vix_ma3": 15.286666552225748,
   "vix_peak_passed": false,
   "vix_two_day_down": true,
   "vix_extreme": false,
-  "wti_close": 78.25,
-  "wti_rsi": 46.878995120700694,
-  "wti_macd": -0.43019783807679346,
-  "wti_macd_signal": 0.2936820722453888,
+  "wti_close": 78.69000244140625,
+  "wti_rsi": 48.37060399357507,
+  "wti_macd": -0.5192855553437141,
+  "wti_macd_signal": 0.09846146728225151,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -15.120948120449595,
+  "wti_from_recent_high_pct": -14.6436702923186,
   "oil_reversal": true,
   "oil_pullback_relief": true,
-  "fng_value": 59.6285714285714,
-  "fng_prev": 59.6285714285714,
+  "fng_value": 63.6857142857143,
+  "fng_prev": 63.6857142857143,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
   "allow_swing_entry": true,
-  "swing_score": 70,
-  "swing_entry_recovery_gate_score": 70,
+  "swing_score": 80,
+  "swing_entry_recovery_gate_score": 80,
   "recovery_gate_state": "READY",
   "swing_recovery_gate_label": "READY",
   "recovery_gate_reason": "recovery_signal_ready",
   "oil_only_recovery_prior": false,
-  "market_regime_continuous_score": 87.0143,
+  "market_regime_continuous_score": 89.3929,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
-    "vix_level": 24.85,
-    "fear_greed_level": 14.8143,
-    "domestic_breadth": 34.95,
+    "vix_level": 25.0,
+    "fear_greed_level": 16.8429,
+    "domestic_breadth": 35.0,
     "oil_relief": 10.0,
-    "local_model": 2.4
+    "local_model": 2.55
   },
   "market_regime_score_version": "market_regime_continuous_v1",
   "market_regime_source_quality": "valid",
@@ -40,23 +40,23 @@
   "risk_state": "RISK_ON",
   "reasons": [
     "원유 반전 시그널",
-    "국내 breadth 상승장(20일선 위 69.9%)"
+    "국내 breadth 상승장(20일선 위 75.3%)"
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 59.6285714285714,
-    "fng_prev": 59.6285714285714,
+    "fng_curr": 63.6857142857143,
+    "fng_prev": 63.6857142857143,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
       "oil": 35,
       "fng": 0,
-      "local_breadth": 35
+      "local_breadth": 45
     },
     "vix_signal": "none",
     "oil_signal": "reversal",
     "fng_signal": "none",
-    "legacy_recovery_gate_score": 70,
+    "legacy_recovery_gate_score": 80,
     "legacy_recovery_gate_threshold": 70,
     "legacy_recovery_gate_label": "READY",
     "legacy_recovery_gate_reason": "recovery_signal_ready",
@@ -69,11 +69,11 @@
         "neutral_min_score": 45.0
       },
       "component_scores": {
-        "vix_level": 24.85,
-        "fear_greed_level": 14.8143,
-        "domestic_breadth": 34.95,
+        "vix_level": 25.0,
+        "fear_greed_level": 16.8429,
+        "domestic_breadth": 35.0,
         "oil_relief": 10.0,
-        "local_model": 2.4
+        "local_model": 2.55
       },
       "source_quality": "valid",
       "primary_market_condition_label": "RISK_ON",
@@ -81,21 +81,21 @@
       "runtime_effect": false
     },
     "local_market_context": {
-      "ma20_ratio": 69.9,
+      "ma20_ratio": 75.3,
       "daily_status_text": "상승장",
-      "quote_date": "2026-08-06",
-      "report_source": "/home/ubuntu/KORStockScan/data/report/report_2026-08-07.json",
-      "avg_bull": 49.8,
+      "quote_date": "2026-08-07",
+      "report_source": "/home/ubuntu/KORStockScan/data/report/report_2026-08-10.json",
+      "avg_bull": 50.1,
       "qualified_count": 0,
       "total_valid": 146,
       "bull_regime": 0,
-      "safe_pool_count": 33,
+      "safe_pool_count": 13,
       "candidate_count": 296,
       "selection_mode": "SELECTED",
-      "diagnostics_date": "2026-08-06 00:00:00"
+      "diagnostics_date": "2026-08-07 00:00:00"
     },
     "local_breadth_signal": "bullish"
   },
-  "cached_session_date": "2026-08-07",
-  "cached_at": "2026-08-07T14:54:45.547360+09:00"
+  "cached_session_date": "2026-08-10",
+  "cached_at": "2026-08-10T12:24:56.840341+09:00"
 }

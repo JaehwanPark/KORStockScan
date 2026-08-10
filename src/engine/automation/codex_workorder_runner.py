@@ -1855,6 +1855,13 @@ def _regeneration_commands(target_date: str, max_orders: int) -> list[list[str]]
         [
             _python_bin(),
             "-m",
+            "src.engine.build_next_stage2_checklist",
+            "--source-date",
+            target_date,
+        ],
+        [
+            _python_bin(),
+            "-m",
             "src.engine.verify_threshold_cycle_postclose_chain",
             "--date",
             target_date,

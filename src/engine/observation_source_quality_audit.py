@@ -3168,6 +3168,35 @@ def _reviewed_unknown_reason_for_stage_field(
                 )
             )
         )
+        if (
+            not explicit_reviewed_fail_closed
+            and _field_text("venue_source_quality_status") == "reviewed_fail_closed"
+            and bool(_field_text("venue_unknown_reviewed_reason"))
+        ):
+            reviewed_reason = _field_text("venue_unknown_reviewed_reason")
+            resolution_class_matches = (
+                (
+                    venue_resolution.startswith("conflicting_explicit_venue:")
+                    and reviewed_reason.startswith(
+                        "scanner_runtime_event:conflicting_explicit_target_venue:"
+                    )
+                )
+                or (
+                    venue_resolution.startswith("market_session_bucket_venue_mismatch:")
+                    and reviewed_reason.startswith(
+                        "scanner_runtime_event:market_session_bucket_venue_mismatch:"
+                    )
+                )
+                or (
+                    venue_resolution.startswith(
+                        "conflicting_explicit_market_session_bucket:"
+                    )
+                    and reviewed_reason.startswith(
+                        "scanner_runtime_event:conflicting_explicit_target_venue:"
+                    )
+                )
+            )
+            explicit_reviewed_fail_closed = resolution_class_matches
         if not explicit_reviewed_fail_closed and (
             not _is_falseish("actual_order_submitted")
             or not _is_trueish("broker_order_forbidden")
@@ -3235,6 +3264,40 @@ def _reviewed_unknown_reason_for_stage_field(
         return venue_resolution == "missing_tradable_explicit_venue" or (
             stage == "scalping_scanner_scheduler_generation_rejected"
             and venue_resolution.startswith("scanner_scheduler_boot_")
+        )
+
+    def _is_reviewed_pre_submit_ai_not_evaluated() -> bool:
+        return (
+            str(key or "") == "pre_submit_parent_ai_result_source"
+            and str(value or "").strip().lower() in {"unknown", "not_available"}
+            and _field_text("pre_submit_parent_ai_action") == "NOT_EVALUATED"
+            and _field_text("pre_submit_parent_ai_decision_trace_id") in {"", "-"}
+            and _field_text("pre_submit_parent_ai_lineage_status") == "missing_ai_trace"
+            and not _is_trueish("pre_submit_parent_ai_attempt_trusted")
+            and not _is_trueish("pre_submit_parent_ai_source_fresh")
+            and _is_falseish("pre_submit_parent_ai_lineage_runtime_effect")
+        )
+
+    def _is_reviewed_rising_missed_venue_conflict() -> bool:
+        return (
+            str(key or "") in {"venue", "effective_venue"}
+            and str(value or "").strip().upper() == "UNKNOWN"
+            and _field_text("venue_resolution")
+            == "conflicting_explicit:venue,rising_missed_effective_venue"
+            and _field_text("rising_missed_effective_venue")
+            in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            and _is_falseish("actual_order_submitted")
+        )
+
+    def _is_reviewed_scanner_budget_venue_not_available() -> bool:
+        return (
+            stage == "scalping_scanner_watch_budget_reallocated"
+            and str(key or "") in {"venue", "effective_venue"}
+            and str(value or "").strip().upper() == "UNKNOWN"
+            and _field_text("venue_resolution") == "missing_tradable_explicit_venue"
+            and _field_text("decision_authority") == "scanner_observation_budget_only"
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
         )
 
     def _is_reviewed_holding_preflight_unknown_provenance() -> bool:
@@ -3595,6 +3658,12 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_nxt_post_block_source_gap_provenance"
     if _is_reviewed_post_probe_direction_source_gap():
         return "reviewed_post_probe_direction_source_gap"
+    if _is_reviewed_pre_submit_ai_not_evaluated():
+        return "reviewed_pre_submit_ai_not_evaluated"
+    if _is_reviewed_rising_missed_venue_conflict():
+        return "reviewed_rising_missed_explicit_venue_conflict"
+    if _is_reviewed_scanner_budget_venue_not_available():
+        return "reviewed_scanner_budget_venue_not_available"
     if _is_reviewed_scanner_venue_not_available():
         return "reviewed_scanner_venue_fail_closed_provenance"
     if _is_reviewed_holding_preflight_unknown_provenance():

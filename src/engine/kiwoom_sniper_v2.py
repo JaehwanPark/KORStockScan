@@ -2170,6 +2170,20 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
                 "market_session_bucket": "UNKNOWN",
             }
         )
+    if venue_fields["venue"] == "UNKNOWN":
+        venue_fields.update(
+            {
+                "venue_source_quality_status": "reviewed_fail_closed",
+                "venue_unknown_reviewed_reason": venue_fields["venue_resolution"],
+            }
+        )
+    else:
+        venue_fields.update(
+            {
+                "venue_source_quality_status": "pass",
+                "venue_unknown_reviewed_reason": "not_applicable",
+            }
+        )
     return venue_fields
 
 

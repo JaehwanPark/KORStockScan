@@ -181,6 +181,16 @@ def test_smoothing_source_only_path_journal_contract_requires_rollout_artifacts(
     assert status["issues"] == ["smoothing_source_only_path_journal_missing"]
 
 
+def test_artifact_paths_separate_daily_report_from_calibration_payload():
+    paths = mod._artifact_paths("2026-08-10")
+
+    assert paths["threshold_cycle_daily"].name == "threshold_cycle_2026-08-10.json"
+    assert paths["threshold_cycle_calibration"].name == (
+        "threshold_cycle_calibration_2026-08-10_postclose.json"
+    )
+    assert paths["threshold_cycle_daily"] != paths["threshold_cycle_calibration"]
+
+
 def test_source_quality_hard_block_status_fails_runtime_candidate_without_handoff():
     preflight = {
         "summary": {

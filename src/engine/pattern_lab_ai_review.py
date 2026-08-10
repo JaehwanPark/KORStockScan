@@ -908,6 +908,138 @@ def _resolved_source_context_conclusion(
     }
 
 
+def _lifecycle_bucket_source_only_resolution(
+    item: dict[str, Any], context: dict[str, Any]
+) -> tuple[str, str, dict[str, Any]] | None:
+    """Resolve rollup diagnostics that already have an explicit source-only owner.
+
+    These states describe evidence maturity or a rejected AI proposal.  They are
+    not missing instrumentation when the producer contract passes, no actionable
+    unknown/code-patch/handoff gap exists, and runtime authority remains false.
+    """
+
+    if str(item.get("final_state") or "") != "source_quality_gap":
+        return None
+    review_id = str(item.get("review_id") or "").strip().lower()
+    prefixes = (
+        (
+            "lifecycle_bucket_discovery_rolling5d_",
+            "lifecycle_bucket_discovery_rolling5d",
+        ),
+        (
+            "lifecycle_bucket_discovery_rolling10d_",
+            "lifecycle_bucket_discovery_rolling10d",
+        ),
+        ("lifecycle_bucket_discovery_mtd_", "lifecycle_bucket_discovery_mtd"),
+        ("lifecycle_bucket_discovery_", "lifecycle_bucket_discovery"),
+    )
+    source_key = ""
+    diagnostic_id = ""
+    for prefix, candidate_key in prefixes:
+        if review_id.startswith(prefix):
+            source_key = candidate_key
+            diagnostic_id = review_id[len(prefix) :]
+            break
+    if not source_key:
+        return None
+    source = _source_summary(context, source_key)
+    summary = _nested_report_summary(source)
+    if not (
+        source.get("runtime_effect") is False
+        and source.get("allowed_runtime_apply") is not True
+        and summary.get("source_contract_status") == "pass"
+        and _safe_int(summary.get("source_quality_blocker_count")) == 0
+        and _safe_int(summary.get("code_patch_required_count")) == 0
+        and _safe_int(summary.get("automation_handoff_gap_count")) == 0
+    ):
+        return None
+
+    details: dict[str, Any]
+    if diagnostic_id == "source_dimension_gap" and (
+        _safe_int(summary.get("source_dimension_gap_count")) > 0
+        and _safe_int(summary.get("source_dimension_gap_count"))
+        == _safe_int(summary.get("rollup_only_source_dimension_gap_count"))
+        and _safe_int(summary.get("actionable_unknown_gap_count")) == 0
+    ):
+        details = {
+            "source_dimension_gap_count": _safe_int(
+                summary.get("source_dimension_gap_count")
+            ),
+            "classification": "rollup_only_source_dimension",
+        }
+    elif diagnostic_id == "taxonomy_provenance_gap" and (
+        _safe_int(
+            (summary.get("source_bucket_kind_counts") or {}).get(
+                "taxonomy_provenance_gap"
+            )
+        )
+        > 0
+        and _safe_int(summary.get("actionable_unknown_gap_count")) == 0
+    ):
+        details = {
+            "taxonomy_provenance_gap_count": _safe_int(
+                (summary.get("source_bucket_kind_counts") or {}).get(
+                    "taxonomy_provenance_gap"
+                )
+            ),
+            "classification": "source_only_taxonomy_provenance",
+        }
+    elif diagnostic_id == "quiet_gap" and (
+        _safe_int(summary.get("quiet_gap_count")) > 0
+        and _safe_int(summary.get("quiet_gap_count"))
+        == _safe_int(summary.get("quiet_gap_rollup_required_count"))
+    ):
+        details = {
+            "quiet_gap_count": _safe_int(summary.get("quiet_gap_count")),
+            "classification": "positive_source_only_rollup_required",
+        }
+    elif diagnostic_id == "parent_conflict" and (
+        _safe_int(summary.get("parent_conflict_resolution_count")) > 0
+        and _safe_int(summary.get("parent_conflict_sim_eligible_after_resolution")) == 0
+    ):
+        details = {
+            "parent_conflict_resolution_count": _safe_int(
+                summary.get("parent_conflict_resolution_count")
+            ),
+            "classification": "resolved_conflict_not_sim_eligible",
+        }
+    elif diagnostic_id == "taxonomy_gap":
+        rolling10d = _nested_report_summary(
+            _source_summary(context, "lifecycle_bucket_discovery_rolling10d")
+        )
+        mtd = _nested_report_summary(
+            _source_summary(context, "lifecycle_bucket_discovery_mtd")
+        )
+        if not (
+            summary.get("parent_granularity_status") == "too_broad"
+            and rolling10d.get("parent_granularity_status") == "target_pass"
+            and mtd.get("parent_granularity_status") == "target_pass"
+        ):
+            return None
+        details = {
+            "daily_status": "too_broad",
+            "rolling10d_status": "target_pass",
+            "mtd_status": "target_pass",
+        }
+    elif diagnostic_id == "ai_review_evidence_violation" and (
+        bool(source.get("warnings"))
+        and _safe_int(summary.get("sim_auto_approved_count")) == 0
+        and _safe_int(summary.get("live_auto_apply_ready_count")) == 0
+        and _safe_int(summary.get("reviewer_selected_ai_count")) == 0
+    ):
+        details = {
+            "warning_count": len(source.get("warnings") or []),
+            "classification": "ai_proposal_rejected_deterministic_owner_retained",
+        }
+    else:
+        return None
+    return (
+        "resolved_by_existing_lifecycle_bucket_source_only_contract",
+        f"{source_key}_{diagnostic_id}_source_only",
+        details,
+    )
+
+
 def _source_maturity_resolution(
     item: dict[str, Any], context: dict[str, Any]
 ) -> tuple[str, str, dict[str, Any]] | None:
@@ -927,6 +1059,76 @@ def _source_maturity_resolution(
         return None
     if str(item.get("final_decision") or "") == "keep":
         return None
+
+    lifecycle_bucket_resolution = _lifecycle_bucket_source_only_resolution(
+        item, context
+    )
+    if lifecycle_bucket_resolution:
+        return lifecycle_bucket_resolution
+
+    if review_id == "lifecycle_decision_matrix_scale_in_guard_block":
+        source = _source_summary(context, "lifecycle_decision_matrix")
+        summary = _nested_report_summary(source)
+        if (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is not True
+            and summary.get("scale_in_counterfactual_observation_state")
+            == "evaluated_no_runtime_eligible_sample"
+            and _safe_int(
+                summary.get(
+                    "scale_in_counterfactual_unresolved_eligible_candidate_count"
+                )
+            )
+            == 0
+            and _safe_int(
+                summary.get("scale_in_counterfactual_eligible_candidate_count")
+            )
+            > 0
+        ):
+            return (
+                "resolved_by_terminal_scale_in_counterfactual_attribution",
+                "lifecycle_decision_matrix_scale_in_terminal_attribution",
+                {
+                    "eligible_candidate_count": _safe_int(
+                        summary.get("scale_in_counterfactual_eligible_candidate_count")
+                    ),
+                    "guard_blocked_count": _safe_int(
+                        summary.get(
+                            "scale_in_counterfactual_guard_blocked_before_execution_count"
+                        )
+                    ),
+                    "legacy_terminal_count": _safe_int(
+                        summary.get(
+                            "scale_in_counterfactual_legacy_execution_terminal_from_eligible_count"
+                        )
+                    ),
+                },
+            )
+
+    if review_id == "threshold_cycle_ev_warning":
+        source = _source_summary(context, "threshold_cycle_ev")
+        summary = _nested_report_summary(source)
+        preflight = (
+            source.get("source_quality_preflight_gate")
+            if isinstance(source.get("source_quality_preflight_gate"), dict)
+            else {}
+        )
+        if (
+            source.get("runtime_effect") is not True
+            and source.get("allowed_runtime_apply") is not True
+            and summary.get("status") == "warning"
+            and preflight.get("tuning_input_allowed") is True
+            and _safe_int(preflight.get("hard_blocking_contract_gap_count")) == 0
+        ):
+            return (
+                "resolved_as_ev_diagnostic_warning_not_source_hard_block",
+                "threshold_cycle_ev_warning_preflight_classification",
+                {
+                    "warning_count": _safe_int(summary.get("warning_count")),
+                    "source_quality_status": summary.get("source_quality_status"),
+                    "tuning_input_allowed": True,
+                },
+            )
 
     if review_id in {
         "lifecycle_bucket_discovery_parent_granularity_too_broad",

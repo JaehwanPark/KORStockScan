@@ -2399,6 +2399,73 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
     )
 
 
+def test_observation_source_quality_audit_reviews_new_provenance_unknown_contracts():
+    cases = [
+        (
+            "budget_pass",
+            "pre_submit_parent_ai_result_source",
+            "unknown",
+            {
+                "pre_submit_parent_ai_action": "NOT_EVALUATED",
+                "pre_submit_parent_ai_decision_trace_id": "-",
+                "pre_submit_parent_ai_attempt_trace_id": "-",
+                "pre_submit_parent_ai_lineage_status": "missing_ai_trace",
+                "pre_submit_parent_ai_lineage_runtime_effect": False,
+            },
+            "reviewed_pre_submit_ai_not_evaluated",
+        ),
+        (
+            "budget_pass",
+            "pre_submit_parent_ai_result_source",
+            "unknown",
+            {
+                "pre_submit_parent_ai_action": "NOT_EVALUATED",
+                "pre_submit_parent_ai_decision_trace_id": "-",
+                "pre_submit_parent_ai_attempt_trace_id": "attempt-1",
+                "pre_submit_parent_ai_attempt_trusted": False,
+                "pre_submit_parent_ai_source_fresh": False,
+                "pre_submit_parent_ai_lineage_status": "missing_ai_trace",
+                "pre_submit_parent_ai_lineage_runtime_effect": False,
+            },
+            "reviewed_pre_submit_ai_not_evaluated",
+        ),
+        (
+            "rising_missed_tp1_candidate_blocked",
+            "venue",
+            "UNKNOWN",
+            {
+                "effective_venue": "UNKNOWN",
+                "venue_resolution": (
+                    "conflicting_explicit:venue,rising_missed_effective_venue"
+                ),
+                "rising_missed_effective_venue": "KRX",
+                "actual_order_submitted": False,
+            },
+            "reviewed_rising_missed_explicit_venue_conflict",
+        ),
+        (
+            "scalping_scanner_watch_budget_reallocated",
+            "venue",
+            "UNKNOWN",
+            {
+                "effective_venue": "UNKNOWN",
+                "venue_resolution": "missing_tradable_explicit_venue",
+                "decision_authority": "scanner_observation_budget_only",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "reviewed_scanner_budget_venue_not_available",
+        ),
+    ]
+    for stage, key, value, normalized, expected in cases:
+        assert (
+            audit._reviewed_unknown_reason_for_stage_field(
+                stage, key, value, normalized
+            )
+            == expected
+        )
+
+
 def test_observation_source_quality_audit_reviews_legacy_observation_only_unknowns(
     monkeypatch,
     tmp_path,

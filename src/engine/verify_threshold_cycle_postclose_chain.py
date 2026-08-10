@@ -1418,6 +1418,7 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "threshold_cycle_ev": REPORT_DIR
         / "threshold_cycle_ev"
         / f"threshold_cycle_ev_{target_date}.json",
+        "threshold_cycle_daily": REPORT_DIR / f"threshold_cycle_{target_date}.json",
         "threshold_cycle_calibration": REPORT_DIR
         / "threshold_cycle_calibration"
         / f"threshold_cycle_calibration_{target_date}_postclose.json",
@@ -5675,10 +5676,11 @@ def build_threshold_cycle_postclose_verification(
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
     threshold_cycle_calibration = _load_json(paths["threshold_cycle_calibration"])
+    threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
     threshold_cycle_cumulative = _load_json(paths["threshold_cycle_cumulative"])
     smoothing_source_only_path_journal = (
         _smoothing_source_only_path_journal_contract_status(
-            threshold_cycle_calibration,
+            threshold_cycle_daily,
             threshold_cycle_cumulative,
         )
     )
@@ -6566,7 +6568,11 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("stage_hook_runtime_scaffold")
     if target_date < "2026-08-10":
         disabled_artifact_labels.update(
-            {"threshold_cycle_calibration", "threshold_cycle_cumulative"}
+            {
+                "threshold_cycle_daily",
+                "threshold_cycle_calibration",
+                "threshold_cycle_cumulative",
+            }
         )
     disabled_artifact_labels.discard("")
     missing_required_artifacts = [

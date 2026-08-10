@@ -14014,6 +14014,8 @@ def test_rising_missed_pipeline_canonicalizes_strategy_venue_and_conflicts():
     assert conflict["venue_resolution"] == (
         "conflicting_explicit:venue,rising_missed_effective_venue"
     )
+    assert conflict["venue_source_quality_status"] == "reviewed_fail_closed"
+    assert conflict["venue_unknown_reviewed_reason"] == conflict["venue_resolution"]
 
 
 def test_rising_missed_initial_block_venue_preserves_explicit_conflict():
@@ -27665,6 +27667,9 @@ def test_weak_context_late_entry_guard_skips_when_entry_live_tuning_selected(
 def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
     monkeypatch,
 ):
+    # Opening Rotation now owns its complete one-share lifecycle and no longer
+    # hands off to the general Entry-AI path.  This test covers only the general
+    # soft-context route; dedicated owner behavior lives in test_opening_rotation.
     soft_gate_enabled = True
     opening_rotation_handoff = False
 

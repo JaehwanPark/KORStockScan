@@ -339,6 +339,7 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
         "refresh_code_improvement_workorder",
         "refresh_threshold_cycle_ev",
         "refresh_runtime_approval_summary",
+        "refresh_next_stage2_checklist",
         "refresh_next_preopen_apply",
         "refresh_runtime_apply_gap_audit",
         "verify_postclose_chain",
