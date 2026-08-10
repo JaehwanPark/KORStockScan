@@ -83,6 +83,7 @@ def arm_source_only_path(
     now_ts: float,
     effective_price: int,
     effective_profit_rate: float,
+    reference_buy_price: int,
     effective_price_source: str = "unknown",
     effective_price_quality: str = "unknown",
     runtime_family_enabled: bool,
@@ -95,7 +96,7 @@ def arm_source_only_path(
     arms = normalized.get("arms") if isinstance(normalized.get("arms"), dict) else {}
     arms = dict(arms)
     position = str(position_key or "").strip()
-    if not _present(position) or effective_price <= 0:
+    if not _present(position) or effective_price <= 0 or reference_buy_price <= 0:
         return {"schema_version": SCHEMA_VERSION, "arms": arms}, None
 
     alternative = str(alternative_action).upper()
@@ -151,6 +152,7 @@ def arm_source_only_path(
         "started_at": float(now_ts),
         "anchor_effective_price": int(effective_price),
         "anchor_effective_profit_rate": float(effective_profit_rate),
+        "reference_buy_price": int(reference_buy_price or 0),
         "anchor_effective_price_source": str(effective_price_source or "unknown"),
         "anchor_effective_price_quality": str(effective_price_quality or "unknown"),
         "runtime_family_enabled": bool(runtime_family_enabled),
@@ -178,6 +180,7 @@ def arm_source_only_path(
         arm,
         anchor_effective_price=int(effective_price),
         anchor_effective_profit_rate=round(float(effective_profit_rate), 6),
+        reference_buy_price=int(reference_buy_price or 0),
         anchor_effective_price_source=arm["anchor_effective_price_source"],
         anchor_effective_price_quality=arm["anchor_effective_price_quality"],
         runtime_family_enabled=bool(runtime_family_enabled),
@@ -198,6 +201,7 @@ def observe_source_only_paths(
     effective_price_quality: str = "unknown",
     hard_breach: bool,
     emergency_breach: bool,
+    observation_phase: str = "holding",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Advance active arms and emit each exact horizon at most once."""
 
@@ -215,6 +219,19 @@ def observe_source_only_paths(
                     "smoothing_source_only_path_closed",
                     arm,
                     close_reason="position_lineage_changed",
+                    observation_phase=str(observation_phase or "unknown"),
+                    terminal_effective_price=0,
+                    terminal_effective_profit_rate=None,
+                    terminal_effective_price_source="not_applicable",
+                    terminal_effective_price_quality="not_applicable",
+                    path_mfe_profit_rate=arm.get("path_mfe_profit_rate"),
+                    path_mae_profit_rate=arm.get("path_mae_profit_rate"),
+                    path_price_quality_valid_sample_count=int(
+                        arm.get("path_price_quality_valid_sample_count") or 0
+                    ),
+                    path_price_quality_invalid_sample_count=int(
+                        arm.get("path_price_quality_invalid_sample_count") or 0
+                    ),
                     hard_breach=False,
                     emergency_breach=False,
                 )
@@ -262,6 +279,7 @@ def observe_source_only_paths(
                     observation_elapsed_sec=round(elapsed, 3),
                     observation_lag_sec=round(lag, 3),
                     horizon_status=status,
+                    observation_phase=str(observation_phase or "unknown"),
                     effective_price=(
                         int(effective_price) if effective_price > 0 else 0
                     ),
@@ -305,6 +323,35 @@ def observe_source_only_paths(
                     "smoothing_source_only_path_closed",
                     arm,
                     close_reason=close_reason,
+                    observation_phase=str(observation_phase or "unknown"),
+                    terminal_effective_price=(
+                        int(effective_price) if effective_price > 0 else 0
+                    ),
+                    terminal_effective_profit_rate=(
+                        round(float(effective_profit_rate), 6)
+                        if effective_price > 0
+                        else None
+                    ),
+                    terminal_effective_price_source=str(
+                        effective_price_source or "unknown"
+                    ),
+                    terminal_effective_price_quality=str(
+                        effective_price_quality or "unknown"
+                    ),
+                    path_mfe_profit_rate=(
+                        round(_safe_float(arm.get("path_mfe_profit_rate")), 6)
+                        if valid_price_sample_count
+                        else None
+                    ),
+                    path_mae_profit_rate=(
+                        round(_safe_float(arm.get("path_mae_profit_rate")), 6)
+                        if valid_price_sample_count
+                        else None
+                    ),
+                    path_price_quality_valid_sample_count=valid_price_sample_count,
+                    path_price_quality_invalid_sample_count=(
+                        invalid_price_sample_count
+                    ),
                     hard_breach=bool(hard_breach),
                     emergency_breach=bool(emergency_breach),
                 )

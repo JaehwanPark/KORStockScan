@@ -9105,6 +9105,7 @@ def _build_smoothing_source_only_path_journal(
     completed_by_record = _completed_valid_profit_index(events)
     rows: list[dict[str, Any]] = []
     exclusion_reasons: Counter = Counter()
+    guarded_terminal_reasons: Counter = Counter()
     for arm in arms:
         fields = _event_fields(arm)
         arm_id = str(fields.get("journal_arm_id") or "").strip()
@@ -9147,12 +9148,20 @@ def _build_smoothing_source_only_path_journal(
             completed.get("emitted_at") if completed is not None else None
         )
         completed_epoch = completed_dt.timestamp() if completed_dt else None
+        completed_fields = _event_fields(completed) if completed is not None else {}
+        completed_revive = _truthy(completed_fields.get("revive"))
+        post_sell_registration_status = str(
+            completed_fields.get("smoothing_non_revive_post_sell_registration_status")
+            or "-"
+        )
         close_reason = ""
+        close_fields: dict[str, Any] = {}
         matching_closes = close_events.get(arm_id, [])
         if matching_closes:
-            close_reason = str(
-                _event_fields(matching_closes[-1]).get("close_reason") or ""
-            )
+            close_fields = _event_fields(matching_closes[-1])
+            close_reason = str(close_fields.get("close_reason") or "")
+            if close_reason in {"hard_breach", "emergency_breach"}:
+                guarded_terminal_reasons[close_reason] += 1
         by_horizon: dict[int, list[dict]] = defaultdict(list)
         for event in horizon_events.get(arm_id, []):
             event_fields = _event_fields(event)
@@ -9166,7 +9175,6 @@ def _build_smoothing_source_only_path_journal(
             selected_fields: dict[str, Any] = {}
             if len(candidates) > 1:
                 status = "duplicate_horizon_event"
-                exclusion_reasons[status] += 1
             elif selected is not None:
                 selected_fields = _event_fields(selected)
                 lineage_matches = all(
@@ -9180,53 +9188,87 @@ def _build_smoothing_source_only_path_journal(
                 status = str(selected_fields.get("horizon_status") or "missing")
                 if not lineage_matches:
                     status = "horizon_lineage_mismatch"
+                if status == "observed" and _truthy(
+                    selected_fields.get("emergency_breach")
+                ):
+                    status = "guarded_terminal_emergency_breach"
+                elif status == "observed" and _truthy(
+                    selected_fields.get("hard_breach")
+                ):
+                    status = "guarded_terminal_hard_breach"
+            elif close_reason in {"hard_breach", "emergency_breach"}:
+                close_lineage_matches = all(
+                    str(close_fields.get(key) or "").strip() == expected
+                    for key, expected in (
+                        ("journal_position_key", position_key),
+                        ("journal_trace_id", trace_id),
+                        ("journal_snapshot_id", snapshot_id),
+                    )
+                )
+                if not close_lineage_matches:
+                    status = "guarded_terminal_lineage_mismatch"
+                else:
+                    status = f"guarded_terminal_{close_reason}"
+                    selected_fields = {
+                        **close_fields,
+                        "effective_price": close_fields.get("terminal_effective_price"),
+                        "effective_profit_rate": close_fields.get(
+                            "terminal_effective_profit_rate"
+                        ),
+                        "effective_price_source": close_fields.get(
+                            "terminal_effective_price_source"
+                        ),
+                        "effective_price_quality": close_fields.get(
+                            "terminal_effective_price_quality"
+                        ),
+                    }
+            elif (
+                completed_epoch is not None
+                and started_at is not None
+                and completed_epoch <= started_at + horizon
+            ):
+                status = (
+                    "revive_post_sell_observer_missing"
+                    if completed_revive
+                    else "non_revive_post_sell_observer_missing"
+                )
+            else:
+                status = "pending_or_missing_horizon"
+            ev_eligible_status = status in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
+            if ev_eligible_status:
                 selected_price_quality = (
                     str(selected_fields.get("effective_price_quality") or "")
                     .strip()
                     .lower()
                 )
-                if status == "observed" and selected_price_quality not in {
+                if selected_price_quality not in {
                     "ok",
                     "warning",
                     "single_source",
                 }:
-                    status = "effective_price_quality_invalid"
-                if (
-                    status == "observed"
-                    and (
-                        _safe_int(
-                            selected_fields.get(
-                                "path_price_quality_invalid_sample_count"
-                            ),
-                            0,
-                        )
-                        or 0
+                    status = (
+                        "guarded_terminal_price_quality_invalid"
+                        if status.startswith("guarded_terminal_")
+                        else "effective_price_quality_invalid"
                     )
-                    > 0
-                ):
+                elif (
+                    _safe_int(
+                        selected_fields.get("path_price_quality_invalid_sample_count"),
+                        0,
+                    )
+                    or 0
+                ) > 0:
                     status = "path_price_quality_gap"
-                if status == "observed" and _truthy(
-                    selected_fields.get("emergency_breach")
-                ):
-                    status = "emergency_breach_at_horizon"
-                elif status == "observed" and _truthy(
-                    selected_fields.get("hard_breach")
-                ):
-                    status = "hard_breach_at_horizon"
-                if status != "observed":
-                    exclusion_reasons[status] += 1
-            elif close_reason in {"hard_breach", "emergency_breach"}:
-                status = f"{close_reason}_before_horizon"
-                exclusion_reasons[status] += 1
-            elif (
-                completed_epoch is not None
-                and started_at is not None
-                and completed_epoch < started_at + horizon
-            ):
-                status = "position_completed_before_horizon"
-                exclusion_reasons[status] += 1
-            else:
-                status = "pending_or_missing_horizon"
+            ev_eligible_status = status in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
+            if not ev_eligible_status:
                 exclusion_reasons[status] += 1
             anchor_profit = _safe_float(
                 fields.get("anchor_effective_profit_rate"), None
@@ -9237,8 +9279,20 @@ def _build_smoothing_source_only_path_journal(
             alternative_action = str(
                 fields.get("journal_alternative_action") or ""
             ).upper()
+            observation_phase = str(
+                selected_fields.get("observation_phase") or ""
+            ).strip()
+            if not observation_phase:
+                if completed is not None:
+                    observation_phase = (
+                        "post_sell_watching"
+                        if completed_revive
+                        else "post_sell_non_revive"
+                    )
+                else:
+                    observation_phase = "holding"
             if (
-                status == "observed"
+                ev_eligible_status
                 and exact_lineage
                 and anchor_price_usable
                 and anchor_profit is not None
@@ -9268,6 +9322,9 @@ def _build_smoothing_source_only_path_journal(
                     "horizon_sec": horizon,
                     "status": status,
                     "anchor_effective_profit_rate": anchor_profit,
+                    "reference_buy_price": _safe_int(
+                        fields.get("reference_buy_price"), None
+                    ),
                     "anchor_effective_price_source": fields.get(
                         "anchor_effective_price_source"
                     )
@@ -9285,6 +9342,12 @@ def _build_smoothing_source_only_path_journal(
                         "effective_price_quality"
                     )
                     or "-",
+                    "observation_phase": observation_phase,
+                    "post_sell_registration_status": (
+                        post_sell_registration_status
+                        if observation_phase == "post_sell_non_revive"
+                        else "-"
+                    ),
                     "path_mfe_profit_rate": _safe_float(
                         selected_fields.get("path_mfe_profit_rate"), None
                     ),
@@ -9316,13 +9379,24 @@ def _build_smoothing_source_only_path_journal(
         valid = [
             row
             for row in horizon_rows
-            if row["status"] == "observed"
+            if row["status"]
+            in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
             and row["opportunity_ev_delta_pct"] is not None
+        ]
+        exact_observed = [row for row in valid if row["status"] == "observed"]
+        guarded_terminal = [
+            row for row in valid if row["status"].startswith("guarded_terminal_")
         ]
         deltas = [float(row["opportunity_ev_delta_pct"]) for row in valid]
         horizon_summary[str(horizon)] = {
             "arm_count": len(horizon_rows),
-            "exact_observed_count": len(valid),
+            "exact_observed_count": len(exact_observed),
+            "guarded_terminal_count": len(guarded_terminal),
+            "ev_eligible_count": len(valid),
             "source_quality_adjusted_ev_pct": (
                 round(_avg(deltas) or 0.0, 6) if deltas else None
             ),
@@ -9334,7 +9408,12 @@ def _build_smoothing_source_only_path_journal(
             any(
                 row["journal_arm_id"] == arm_id
                 and row["horizon_sec"] == horizon
-                and row["status"] == "observed"
+                and row["status"]
+                in {
+                    "observed",
+                    "guarded_terminal_hard_breach",
+                    "guarded_terminal_emergency_breach",
+                }
                 and row["opportunity_ev_delta_pct"] is not None
                 for row in rows
             )
@@ -9342,8 +9421,38 @@ def _build_smoothing_source_only_path_journal(
         )
         for arm_id in {row["journal_arm_id"] for row in rows}
     )
+    observation_phase_summary: dict[str, Any] = {}
+    for phase in ("holding", "post_sell_watching", "post_sell_non_revive"):
+        phase_rows = [row for row in rows if row["observation_phase"] == phase]
+        registration_status_arms: dict[str, set[str]] = defaultdict(set)
+        for row in phase_rows:
+            registration_status = row["post_sell_registration_status"]
+            if registration_status != "-":
+                registration_status_arms[registration_status].add(row["journal_arm_id"])
+        phase_eligible = [
+            row
+            for row in phase_rows
+            if row["status"]
+            in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
+            and row["opportunity_ev_delta_pct"] is not None
+        ]
+        observation_phase_summary[phase] = {
+            "arm_count": len({row["journal_arm_id"] for row in phase_rows}),
+            "horizon_count": len(phase_rows),
+            "ev_eligible_horizon_count": len(phase_eligible),
+            "excluded_horizon_count": len(phase_rows) - len(phase_eligible),
+            "status_counts": dict(Counter(row["status"] for row in phase_rows)),
+            "registration_status_counts": {
+                status: len(arm_ids)
+                for status, arm_ids in sorted(registration_status_arms.items())
+            },
+        }
     return {
-        "schema": "smoothing_source_only_path_journal_v1",
+        "schema": "smoothing_source_only_path_journal_v3",
         "metric_role": "sim_probe_ev",
         "decision_authority": "source_only_counterfactual_no_runtime_change",
         "window_policy": "same_exact_position_trace_snapshot_10_20_40_60_90s",
@@ -9365,6 +9474,10 @@ def _build_smoothing_source_only_path_journal(
         "sample_floor_met": exact_path_count >= sample_floor,
         "eligible_for_live_review": False,
         "exclusion_reason_counts": dict(sorted(exclusion_reasons.items())),
+        "guarded_terminal_reason_counts": dict(
+            sorted(guarded_terminal_reasons.items())
+        ),
+        "observation_phase_summary": observation_phase_summary,
         "horizons": horizon_summary,
         "rows": rows,
     }

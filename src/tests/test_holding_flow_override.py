@@ -550,8 +550,428 @@ def test_ofi_runtime_off_arms_exact_source_only_exit_without_changing_hold(
     assert armed["runtime_family_enabled"] is False
     assert armed["alternative_executed"] is False
     assert armed["exact_lineage_status"] == "source_exact"
+    assert armed["reference_buy_price"] == 10110
     assert armed["runtime_effect"] is False
     assert armed["allowed_runtime_apply"] is False
+
+
+def test_post_sell_watching_continues_exact_smoothing_path(monkeypatch):
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:7",
+        trace_id="trace-7",
+        snapshot_id="snapshot-7",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=1000.0,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    stock = {
+        "name": "테스트",
+        handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_reason": "ws_only_fresh",
+            },
+            10_050,
+            10_060,
+            10_040,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    handlers._observe_post_sell_smoothing_source_only_paths(
+        stock,
+        "005930",
+        {"curr": 10_050},
+        now_ts=1010.0,
+    )
+
+    horizon = next(
+        fields
+        for stage, fields in logs
+        if stage == "smoothing_source_only_path_horizon"
+    )
+    assert horizon["horizon_sec"] == 10
+    assert horizon["observation_phase"] == "post_sell_watching"
+    assert horizon["effective_price"] == 10_040
+    assert horizon["runtime_effect"] is False
+    assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"]
+
+
+def test_post_sell_watching_stale_price_cannot_close_guarded_path(monkeypatch):
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:7",
+        trace_id="trace-7",
+        snapshot_id="snapshot-7",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=1000.0,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    stock = {
+        "name": "테스트",
+        handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {
+                "quote_consistency_state": "stale",
+                "quote_consistency_reason": "ws_quote_stale",
+            },
+            9_000,
+            9_010,
+            8_990,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    handlers._observe_post_sell_smoothing_source_only_paths(
+        stock,
+        "005930",
+        {"curr": 9_000},
+        now_ts=1010.0,
+    )
+
+    horizon = next(
+        fields
+        for stage, fields in logs
+        if stage == "smoothing_source_only_path_horizon"
+    )
+    assert horizon["effective_price_quality"] == "stale"
+    assert horizon["hard_breach"] is False
+    assert horizon["emergency_breach"] is False
+    assert not any(
+        stage == "smoothing_source_only_path_closed" for stage, _fields in logs
+    )
+    assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"]
+
+
+def test_reentry_closes_previous_post_sell_path_without_new_position_data(monkeypatch):
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:7",
+        trace_id="trace-7",
+        snapshot_id="snapshot-7",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=1000.0,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    stock = {
+        "id": 8,
+        "name": "테스트",
+        handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    handlers._observe_smoothing_source_only_paths(
+        stock,
+        "005930",
+        now_ts=1011.0,
+        effective_price=10_200,
+        effective_profit_rate=0.5,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        hard_breach=False,
+        emergency_breach=False,
+    )
+
+    assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"] == {}
+    assert logs[0][0] == "smoothing_source_only_path_closed"
+    assert logs[0][1]["close_reason"] == "position_lineage_changed"
+    assert not any(
+        stage == "smoothing_source_only_path_horizon" for stage, _fields in logs
+    )
+
+
+def test_non_revive_registry_observes_exact_paths_with_bounded_ws_retention(
+    monkeypatch,
+):
+    started_at = 10_000.0
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:7",
+        trace_id="trace-7",
+        snapshot_id="snapshot-7",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=started_at,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    stock = {
+        "id": 7,
+        "name": "테스트",
+        "code": "005930",
+        "strategy": "SCALPING",
+        handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+    logs = []
+    retained = []
+    monkeypatch.setattr(
+        handlers,
+        "retain_ws_subscription_until",
+        lambda code, until_ts: retained.append((code, until_ts)) or True,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {"get_latest_data": lambda _self, _code: {"curr": 10_050}},
+        )(),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {
+                "quote_consistency_state": "single_source",
+                "quote_consistency_reason": "ws_only_fresh",
+            },
+            10_050,
+            10_060,
+            10_040,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: logs.append((stage, fields)),
+    )
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+
+    registration = handlers.register_non_revive_smoothing_post_sell_paths(
+        stock,
+        "005930",
+        now_ts=started_at + 5,
+    )
+    for horizon in handlers.SMOOTHING_SOURCE_ONLY_HORIZONS_SEC:
+        handlers.observe_non_revive_smoothing_post_sell_paths(
+            now_ts=started_at + horizon
+        )
+
+    horizons = [
+        fields
+        for stage, fields in logs
+        if stage == "smoothing_source_only_path_horizon"
+    ]
+    assert registration["status"] == "registered"
+    assert retained == [("005930", started_at + 92.0)]
+    assert [fields["horizon_sec"] for fields in horizons] == [10, 20, 40, 60, 90]
+    assert all(
+        fields["observation_phase"] == "post_sell_non_revive" for fields in horizons
+    )
+    assert handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY == {}
+
+
+def test_non_revive_registry_rejects_arm_count_above_bounded_cap(monkeypatch):
+    started_at = 10_000.0
+    monkeypatch.setattr(
+        handlers, "retain_ws_subscription_until", lambda _code, _until_ts: True
+    )
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+
+    registrations = []
+    for index in range(handlers._SMOOTHING_NON_REVIVE_POST_SELL_MAX_ACTIVE_ARMS + 1):
+        state, _armed = handlers.arm_source_only_path(
+            None,
+            family="soft_stop_whipsaw_confirmation",
+            position_key=f"record:{index}",
+            trace_id=f"trace-{index}",
+            snapshot_id=f"snapshot-{index}",
+            alternative_action="HOLD",
+            control_action="EXIT",
+            now_ts=started_at,
+            effective_price=10_000,
+            effective_profit_rate=-1.5,
+            reference_buy_price=10_100,
+            effective_price_source="ws",
+            effective_price_quality="single_source",
+            runtime_family_enabled=False,
+            alternative_executed=False,
+            source_reason="soft_stop_runtime_disabled",
+        )
+        registrations.append(
+            handlers.register_non_revive_smoothing_post_sell_paths(
+                {
+                    "id": index,
+                    handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+                },
+                f"{index:06d}",
+                now_ts=started_at + 5,
+            )
+        )
+
+    assert all(item["registered"] for item in registrations[:-1])
+    assert registrations[-1]["status"] == "capacity_rejected"
+    assert (
+        len(handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY)
+        == handlers._SMOOTHING_NON_REVIVE_POST_SELL_MAX_ACTIVE_ARMS
+    )
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+
+
+def test_non_revive_registry_does_not_terminally_close_on_stale_breach_price(
+    monkeypatch,
+):
+    started_at = 10_000.0
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:7",
+        trace_id="trace-7",
+        snapshot_id="snapshot-7",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=started_at,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    monkeypatch.setattr(
+        handlers, "retain_ws_subscription_until", lambda _code, _until_ts: True
+    )
+    monkeypatch.setattr(
+        handlers,
+        "WS_MANAGER",
+        type(
+            "Manager",
+            (),
+            {"get_latest_data": lambda _self, _code: {"curr": 9_500}},
+        )(),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {"quote_consistency_state": "stale", "price_source": "stale_cached"},
+            9_500,
+            9_510,
+            9_490,
+        ),
+    )
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: logs.append((stage, fields)),
+    )
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+    registration = handlers.register_non_revive_smoothing_post_sell_paths(
+        {
+            "id": 7,
+            handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+        },
+        "005930",
+        now_ts=started_at + 5,
+    )
+
+    handlers.observe_non_revive_smoothing_post_sell_paths(now_ts=started_at + 10)
+
+    assert registration["registered"] is True
+    assert handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY
+    assert not any(
+        stage == "smoothing_source_only_path_closed" for stage, _fields in logs
+    )
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+
+
+def test_non_revive_registry_isolates_failed_row_and_cleans_it_after_ttl(monkeypatch):
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
+    handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.update(
+        {
+            "bad": {
+                "registration_id": "bad",
+                "code": "000001",
+                "expires_at_epoch": 99.0,
+            },
+            "good": {
+                "registration_id": "good",
+                "code": "000002",
+                "expires_at_epoch": 192.0,
+                "log_context": {},
+            },
+        }
+    )
+
+    def _advance(registration, *, observed_at):
+        if registration["registration_id"] == "bad":
+            raise ValueError("broken_row")
+        return "good", "000002", {"arms": {}}, []
+
+    monkeypatch.setattr(
+        handlers,
+        "_advance_non_revive_smoothing_post_sell_registration",
+        _advance,
+    )
+
+    summary = handlers.observe_non_revive_smoothing_post_sell_paths(now_ts=100.0)
+
+    assert summary["failed_operation_count"] == 1
+    assert summary["closed_registration_count"] == 2
+    assert summary["active_registration_count"] == 0
 
 
 def test_flow_exit_bullish_ofi_debounce_count_limit_allows_sell(monkeypatch):

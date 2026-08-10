@@ -695,6 +695,18 @@ def test_post_sell_ws_retain_window(monkeypatch, tmp_path):
     )
 
 
+def test_source_only_observer_can_request_bounded_ws_retention(monkeypatch):
+    base_ts = 1_775_636_400.0
+    feedback_mod._WS_RETAIN_UNTIL.clear()
+    monkeypatch.setattr(feedback_mod.time, "time", lambda: base_ts)
+
+    assert feedback_mod.retain_ws_subscription_until("444444", base_ts + 92.0) is True
+    assert feedback_mod.should_retain_ws_subscription("444444", now_ts=base_ts + 91.0)
+    assert not feedback_mod.should_retain_ws_subscription(
+        "444444", now_ts=base_ts + 93.0
+    )
+
+
 def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
     monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(

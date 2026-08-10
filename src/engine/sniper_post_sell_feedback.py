@@ -434,6 +434,23 @@ def should_retain_ws_subscription(code: str, now_ts: float | None = None) -> boo
         return True
 
 
+def retain_ws_subscription_until(code: str, until_ts: float) -> bool:
+    """Keep an already-subscribed symbol only through one bounded deadline."""
+
+    normalized = str(code or "").strip()[:6]
+    try:
+        deadline = float(until_ts)
+    except (TypeError, ValueError):
+        return False
+    if not normalized or deadline <= time.time():
+        return False
+    with _WRITE_LOCK:
+        current_until = float(_WS_RETAIN_UNTIL.get(normalized, 0.0) or 0.0)
+        if deadline > current_until:
+            _WS_RETAIN_UNTIL[normalized] = deadline
+    return True
+
+
 def record_post_sell_candidate(
     *,
     recommendation_id=None,

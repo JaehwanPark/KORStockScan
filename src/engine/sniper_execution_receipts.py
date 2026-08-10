@@ -56,6 +56,7 @@ _weighted_avg = None
 _now_ts = None
 _probe_fill_continuation_callback = None
 _scalp_exit_completed_callback = None
+_smoothing_non_revive_post_sell_register_callback = None
 _broker_snapshot_refresh_callback = None
 
 # Receipt module의 임시/DB 작업은 독립 락으로 직렬화하고,
@@ -376,7 +377,6 @@ _POSITION_PEAK_RESET_KEYS = (
 )
 _SELL_REVIVE_RESET_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
-    "smoothing_source_only_path_journals",
     "odno",
     "order_time",
     "order_price",
@@ -636,6 +636,7 @@ def bind_execution_dependencies(
     state_lock=None,
     probe_fill_continuation_callback=None,
     scalp_exit_completed_callback=None,
+    smoothing_non_revive_post_sell_register_callback=None,
     broker_snapshot_refresh_callback=None,
     state_machine=None,
     **_unused_kwargs,
@@ -649,6 +650,7 @@ def bind_execution_dependencies(
     global KIWOOM_TOKEN, DB, event_bus, ACTIVE_TARGETS, highest_prices
     global _get_fast_state, _weighted_avg, _now_ts, _STATE_LOCK
     global _probe_fill_continuation_callback, _scalp_exit_completed_callback
+    global _smoothing_non_revive_post_sell_register_callback
     global _broker_snapshot_refresh_callback
 
     if kiwoom_token is not None:
@@ -673,6 +675,10 @@ def bind_execution_dependencies(
         _probe_fill_continuation_callback = probe_fill_continuation_callback
     if scalp_exit_completed_callback is not None:
         _scalp_exit_completed_callback = scalp_exit_completed_callback
+    if smoothing_non_revive_post_sell_register_callback is not None:
+        _smoothing_non_revive_post_sell_register_callback = (
+            smoothing_non_revive_post_sell_register_callback
+        )
     if broker_snapshot_refresh_callback is not None:
         _broker_snapshot_refresh_callback = broker_snapshot_refresh_callback
 
@@ -1405,7 +1411,48 @@ def _finalize_standard_sell_execution(
         )
     move_orders_to_terminal(target_stock, reason="sell_completed_cleanup")
     target_stock["sell_execution_order_no"] = str(order_no or "").strip() or "-"
+    smoothing_registration = {
+        "registered": False,
+        "status": "not_applicable",
+        "active_arm_count": 0,
+        "expires_at_epoch": None,
+    }
+    if (
+        strategy == "SCALPING"
+        and not is_scalp_revive
+        and callable(_smoothing_non_revive_post_sell_register_callback)
+    ):
+        try:
+            callback_result = _smoothing_non_revive_post_sell_register_callback(
+                target_stock,
+                code,
+                now_ts=now.timestamp(),
+            )
+            if isinstance(callback_result, dict):
+                smoothing_registration.update(callback_result)
+        except Exception as exc:
+            smoothing_registration["status"] = "registration_callback_error"
+            log_error(
+                "[SMOOTHING_POST_SELL] non-revive registration failed "
+                f"code={code}: {exc}"
+            )
     sell_receipt_snapshot = _receipt_snapshot(target_stock, _SELL_RECEIPT_SNAPSHOT_KEYS)
+    sell_receipt_snapshot.update(
+        {
+            "smoothing_non_revive_post_sell_registered": bool(
+                smoothing_registration.get("registered")
+            ),
+            "smoothing_non_revive_post_sell_registration_status": str(
+                smoothing_registration.get("status") or "unknown"
+            ),
+            "smoothing_non_revive_post_sell_active_arm_count": _safe_int(
+                smoothing_registration.get("active_arm_count"), 0
+            ),
+            "smoothing_non_revive_post_sell_expires_at_epoch": (
+                smoothing_registration.get("expires_at_epoch")
+            ),
+        }
+    )
     _clear_runtime_keys(target_stock, _SELL_COMPLETE_RESET_KEYS)
     target_stock.pop("pending_sell_msg", None)
     threading.Thread(
@@ -2678,6 +2725,28 @@ def _update_db_for_sell(
                 exit_decision_source=receipt_snapshot.get("last_exit_decision_source")
                 or "MANUAL",
                 revive=bool(is_scalp_revive),
+                smoothing_non_revive_post_sell_registered=bool(
+                    receipt_snapshot.get(
+                        "smoothing_non_revive_post_sell_registered", False
+                    )
+                ),
+                smoothing_non_revive_post_sell_registration_status=(
+                    receipt_snapshot.get(
+                        "smoothing_non_revive_post_sell_registration_status"
+                    )
+                    or "not_applicable"
+                ),
+                smoothing_non_revive_post_sell_active_arm_count=_safe_int(
+                    receipt_snapshot.get(
+                        "smoothing_non_revive_post_sell_active_arm_count"
+                    ),
+                    0,
+                ),
+                smoothing_non_revive_post_sell_expires_at_epoch=(
+                    receipt_snapshot.get(
+                        "smoothing_non_revive_post_sell_expires_at_epoch"
+                    )
+                ),
                 strategy=strategy,
                 position_tag=completed_position_tag,
                 buy_price=f"{safe_buy_price:.2f}",

@@ -10441,6 +10441,22 @@ def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution
         kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
 
 
+def test_execution_dependencies_bind_non_revive_smoothing_registration(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(kiwoom_sniper_v2, "_EXECUTION_DEPS", {})
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "bind_execution_dependencies",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    kiwoom_sniper_v2._ensure_execution_deps()
+
+    assert captured["smoothing_non_revive_post_sell_register_callback"] is (
+        kiwoom_sniper_v2.sniper_state_handlers.register_non_revive_smoothing_post_sell_paths
+    )
+
+
 def test_scanner_promotion_pending_attach_skips_already_attached_target(monkeypatch):
     kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
     monkeypatch.setattr(
