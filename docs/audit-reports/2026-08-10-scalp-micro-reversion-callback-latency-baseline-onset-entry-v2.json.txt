@@ -1,0 +1,156 @@
+{
+  "baseline_id": "main_server_synthetic_0b_20260810T143628+0900",
+  "benchmark_module_sha256": "e96a845da02643b595abe74590410586962a5b7cc69b5d336d787fc5c08234a5",
+  "canary_guard_config_sha256": "fbf12b835d18d3004e5abafbdb9f3d97a0e749c4c45c5de767e5133c2f8a0790",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ],
+  "forward_collector_sha256": "bf0e144c276deb8df7e402d9279e7d08157c0b3c7de155db953182759fe8c4b6",
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "generated_at": "2026-08-10T14:36:28+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "platform": "Linux-7.0.0-1010-aws-aarch64-with-glibc2.39",
+    "python": "3.13.12"
+  },
+  "interpretation": "Source-only onset diagnostics and P2 conditional-entry replay changed no producer callback, collector, path writer, WebSocket, trading, or broker authority. Frozen latency limits remain unchanged.",
+  "kiwoom_websocket_sha256": "eefd802cac9678740f0da297144f38cb291f22d9f85d2a0023d8d9ef469e5a97",
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "observer_off_runs": [
+    {
+      "max_ms": 0.013781,
+      "mean_ms": 0.000125924,
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000167
+    },
+    {
+      "max_ms": 0.006109,
+      "mean_ms": 0.0001235424,
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000141
+    },
+    {
+      "max_ms": 0.010179,
+      "mean_ms": 0.00012454920000000002,
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000144
+    },
+    {
+      "max_ms": 0.00034,
+      "mean_ms": 0.0001225432,
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000143
+    },
+    {
+      "max_ms": 0.015796,
+      "mean_ms": 0.0001258322,
+      "p50_ms": 0.000122,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000142
+    }
+  ],
+  "observer_on_runs": [
+    {
+      "collector_internal_p95_ms": 0.024776,
+      "collector_internal_p99_ms": 0.04364,
+      "max_ms": 22.044287,
+      "mean_ms": 0.0422562402,
+      "p50_ms": 0.021033,
+      "p95_ms": 0.026226,
+      "p99_ms": 0.044959,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "collector_internal_p95_ms": 0.022267,
+      "collector_internal_p99_ms": 0.03241,
+      "max_ms": 10.42372,
+      "mean_ms": 0.038420855,
+      "p50_ms": 0.021341,
+      "p95_ms": 0.024019,
+      "p99_ms": 0.035697,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "collector_internal_p95_ms": 0.021428,
+      "collector_internal_p99_ms": 0.029732,
+      "max_ms": 17.40341,
+      "mean_ms": 0.0451056584,
+      "p50_ms": 0.021388,
+      "p95_ms": 0.022895,
+      "p99_ms": 0.030973,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "collector_internal_p95_ms": 0.02173,
+      "collector_internal_p99_ms": 0.030499,
+      "max_ms": 10.336324,
+      "mean_ms": 0.0413889668,
+      "p50_ms": 0.021577,
+      "p95_ms": 0.023349,
+      "p99_ms": 0.034585,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "collector_internal_p95_ms": 0.021812,
+      "collector_internal_p99_ms": 0.032314,
+      "max_ms": 10.231757,
+      "mean_ms": 0.0436651022,
+      "p50_ms": 0.021578,
+      "p95_ms": 0.023346,
+      "p99_ms": 0.034206,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    }
+  ],
+  "onset_quality_sha256": "595658610c7ba829f8f274c8ff56b64e0c1209c395724b1845c78d99640e8974",
+  "p2_replay_sha256": "f364463d927ac0704aeb0eab222b4243e46ac84f10eda81db80df3eb05af57ab",
+  "path_capture_sha256": "5688253327561080077dfbecfda5e4dc7e8e14120ff77fc5c89255fc501ccda6",
+  "path_journal_sha256": "726b6c537e1a9f8362d918eebc607b5c91e0b821895929b70439a40c13776716",
+  "primary_decision_metric": "stop_required",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "source_base_commit": "f28d02d0ade159eef2046cecc182bec3038f38fc",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config_and_zero_drop_error_gap_or_storage_degradation",
+  "storage_maintenance_sha256": "aa7ec72ffbdb6b6d402138cf667c7bd669b10cf867c21af518acda4d3080bc27",
+  "summary": {
+    "observer_off_p95_ms_max": 0.000128,
+    "observer_off_p99_ms_max": 0.000167,
+    "observer_on_external_p95_ms_max": 0.026226,
+    "observer_on_external_p99_ms_max": 0.044959,
+    "observer_on_internal_p95_ms_max": 0.024776,
+    "observer_on_internal_p99_ms_max": 0.04364,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "workload": {
+    "discovery_enabled_on": false,
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "iterations_per_repeat": 5000,
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "repeat_count": 5,
+    "warmup_per_repeat": 500
+  }
+}

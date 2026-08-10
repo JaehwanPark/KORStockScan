@@ -374,7 +374,9 @@ complete-case EV는 진단값으로만 남긴다. 경제성 headline은 모든 �
 
 ### P2-A — path-only joint replay
 
-Phase B data-readiness가 닫힌 뒤 실제 경로 discovery를 실행한다. 지금은 policy schema, exchange/local/sequence decision watermark, deterministic first-touch, touch upper/trade-through lower bound, partial fill, 분리된 entry/holding TTL, same-point `STOP_FIRST|AMBIGUOUS`, frozen partial-runner 규칙과 synthetic/golden test까지만 구현했다. 실제 V0/forward data run과 policy ranking은 하지 않았다.
+Phase B data-readiness가 닫힌 뒤 실제 경로 discovery를 실행한다. 현재 source-only P2 schema는 exchange/local/sequence decision watermark, deterministic first-touch, touch upper/trade-through lower bound, partial fill, 분리된 entry/holding TTL, same-point `STOP_FIRST|AMBIGUOUS`, frozen partial-runner에 더해 `RECLAIM_ENTRY`와 `HYBRID_ENTRY`를 구현한다. Reclaim은 event 이후 running low에서 사전 고정 bp 회복을 실제 체결로 확인하고 같은 관측의 ask를 사용하지 않은 채 다음 fresh ask에서만 체결을 가정하며, 체결 전 신저가가 나오면 confirmation을 취소한다. Hybrid는 사전 고정 passive TTL 안의 bid fill을 먼저 평가하고 no-fill일 때만 reclaim 단계로 전환한다. 이 replay는 passive 취소 receipt나 실제 fill을 추정하지 않으며 실제 V0/forward data discovery와 policy ranking은 하지 않는다.
+
+`onset_quality.py`는 V2 event reference와 canonical path에서 detector clock, reference/shock 가격, trigger 수량·aggressor, additional MAE, 저점 도달 지연, 저점 이후 reclaim을 재구성한다. 저장자료만으로 robust/warm-up trigger basis를 확정할 수 없으면 `UNKNOWN_RECONSTRUCTED`를 유지하고 보간하지 않는다. 이 결과는 shock onset이 바닥이나 진입점이라는 뜻이 아니며 Gate B 전에는 source-quality/pattern-timing 진단으로만 사용한다.
 
 ### P2-B — discovery policy selection
 
@@ -411,4 +413,4 @@ P2-C confirmation이 닫힌 뒤 별도 사용자 작업과 재감리로만 연�
 
 구현 가치는 있다. 다만 가치는 “즉시 매매기계”가 아니라, 평균회귀형 종목과 실제 shock-reversion event가 존재하는지 빠르게 기각하거나 확인하는 독립 검증기에서 시작한다.
 
-Phase A V0 replay와 P0 tax/common-maturity/journal 계약, producer-safe adapter/ring/coalescer/metric, P2-A synthetic skeleton, source-only clean integration commit/manifest는 완료됐다. 일반 과세주권 aggregate fixed-horizon gate는 실패했으므로 전체 이벤트 실행정책은 종료한다. 다음 실행은 verified tax metadata 원천과 감리 재승인을 닫은 뒤 기존 구독 범위 안에서 forward collector canary를 별도 change set으로 연결하는 것이다. 수집기 건강성 gate가 닫히기 전에는 실제 경로 P2 discovery를 실행하거나 정책을 ranking하지 않는다. 관측·P2 경로에는 주문권한을 부여하지 않는다.
+Phase A V0 replay와 P0 tax/common-maturity/journal 계약, producer-safe adapter/ring/coalescer/metric, P2-A source-only joint replay와 onset 품질 진단, source-only clean integration commit/manifest는 완료됐다. 일반 과세주권 aggregate fixed-horizon gate는 실패했으므로 전체 이벤트 실행정책은 종료한다. 다음 실행은 forward collector Gate B를 닫고 실제 경로 discovery policy/cohort/cost를 별도로 동결하는 것이다. 수집기 건강성 gate가 닫히기 전에는 실제 경로 P2 discovery를 실행하거나 정책을 ranking하지 않는다. 관측·P2 경로에는 주문권한을 부여하지 않는다.

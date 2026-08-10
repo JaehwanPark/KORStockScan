@@ -273,6 +273,9 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
         "p2_replay_sha256": (
             repository_root / "src/engine/scalping/micro_reversion/p2_replay.py"
         ),
+        "onset_quality_sha256": (
+            repository_root / "src/engine/scalping/micro_reversion/onset_quality.py"
+        ),
         "storage_maintenance_sha256": (
             repository_root
             / "src/engine/scalping/micro_reversion/storage_maintenance.py"

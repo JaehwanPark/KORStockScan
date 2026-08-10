@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.engine.scalping.micro_reversion.p2_replay import (
+    EntryExecutionMode,
     EntryPolicy,
     ExitPolicy,
     FillBound,
@@ -39,6 +40,7 @@ def test_canonical_stream_loader_reconstructs_only_referenced_window(
                 "best_bid": 9_990,
                 "best_ask": 10_010,
                 "quote_age_ms": 10,
+                "aggressor_side": "SELL",
                 "metric_contract_id": (
                     "scalp_micro_reversion_market_stream_contract_v1"
                 ),
@@ -67,6 +69,7 @@ def test_canonical_stream_loader_reconstructs_only_referenced_window(
 
     assert [point.source_sequence for point in points] == [2, 3]
     assert [point.trade_price for point in points] == [10_002, 10_003]
+    assert [point.aggressor_side for point in points] == ["SELL", "SELL"]
 
 
 def test_canonical_stream_loader_reads_post_session_gzip(tmp_path: Path) -> None:
@@ -486,3 +489,191 @@ def test_marketable_entry_skips_stale_ask() -> None:
 
     assert result.entry_filled_at_ms == 1_000_200
     assert result.average_entry_price == 100.1
+
+
+def test_reclaim_entry_confirms_then_uses_next_observation_ask() -> None:
+    result = replay_path(
+        (
+            _point(100, 2, trade_price=99.0, best_ask=99.1),
+            _point(200, 3, trade_price=99.3, best_ask=99.4),
+            _point(300, 4, trade_price=99.35, best_ask=99.4),
+            _point(
+                400,
+                5,
+                trade_price=99.7,
+                trade_qty=10,
+                low_price=99.6,
+                high_price=99.7,
+            ),
+        ),
+        policy=_policy(
+            entry_policy=EntryPolicy.RECLAIM_ENTRY,
+            exit_policy=ExitPolicy.SINGLE_TP,
+            reclaim_trigger_bps=25,
+            partial_take_profit_fraction=1.0,
+            runner_max_ttl_ms=None,
+            runner_trailing_bps=None,
+            runner_exit_trigger=None,
+        ),
+        decision_watermark_timestamp_ms=1_000_000,
+        decision_watermark_local_receive_timestamp_ms=1_000_010,
+        decision_watermark_source_sequence=1,
+        event_trade_price=100.0,
+    )
+
+    assert result.entry_confirmation_at_ms == 1_000_200
+    assert result.entry_confirmation_source_sequence == 3
+    assert result.entry_filled_at_ms == 1_000_300
+    assert result.average_entry_price == 99.4
+    assert result.entry_execution_mode is EntryExecutionMode.RECLAIM_MARKETABLE_NEXT_ASK
+    assert result.terminal_reason is ReplayTerminalReason.TAKE_PROFIT
+
+
+def test_reclaim_entry_resets_confirmation_when_a_new_low_arrives() -> None:
+    result = replay_path(
+        (
+            _point(100, 2, trade_price=99.0, best_ask=99.1),
+            _point(200, 3, trade_price=99.3, best_ask=99.4),
+            _point(300, 4, trade_price=98.8, best_ask=98.9),
+            _point(400, 5, trade_price=99.1, best_ask=99.2),
+            _point(500, 6, trade_price=99.15, best_ask=99.2),
+        ),
+        policy=_policy(
+            entry_policy=EntryPolicy.RECLAIM_ENTRY,
+            reclaim_trigger_bps=25,
+        ),
+        decision_watermark_timestamp_ms=1_000_000,
+        decision_watermark_local_receive_timestamp_ms=1_000_010,
+        decision_watermark_source_sequence=1,
+        event_trade_price=100.0,
+    )
+
+    assert result.entry_confirmation_at_ms == 1_000_400
+    assert result.entry_filled_at_ms == 1_000_500
+    assert result.average_entry_price == 99.2
+
+
+def test_reclaim_entry_preserves_first_confirmation_while_waiting_for_fresh_ask() -> (
+    None
+):
+    result = replay_path(
+        (
+            _point(100, 2, trade_price=99.0, quote_age_ms=3_000),
+            _point(200, 3, trade_price=99.3, quote_age_ms=3_000),
+            _point(300, 4, trade_price=99.4, quote_age_ms=3_000),
+            _point(400, 5, trade_price=99.4, best_ask=99.5, quote_age_ms=10),
+        ),
+        policy=_policy(
+            entry_policy=EntryPolicy.RECLAIM_ENTRY,
+            reclaim_trigger_bps=25,
+        ),
+        decision_watermark_timestamp_ms=1_000_000,
+        decision_watermark_local_receive_timestamp_ms=1_000_010,
+        decision_watermark_source_sequence=1,
+        event_trade_price=100.0,
+    )
+
+    assert result.entry_confirmation_at_ms == 1_000_200
+    assert result.entry_confirmation_source_sequence == 3
+    assert result.entry_filled_at_ms == 1_000_400
+
+
+def test_hybrid_entry_keeps_passive_fill_when_touched_first() -> None:
+    result = replay_path(
+        (
+            _point(100, 2, trade_price=99.9, trade_qty=4),
+            _point(500, 3, trade_price=100.4, high_price=100.4),
+        ),
+        policy=_policy(
+            entry_policy=EntryPolicy.HYBRID_ENTRY,
+            hybrid_passive_ttl_ms=300,
+            reclaim_trigger_bps=25,
+            entry_ttl_ms=1_000,
+        ),
+        decision_watermark_timestamp_ms=1_000_000,
+        decision_watermark_local_receive_timestamp_ms=1_000_010,
+        decision_watermark_source_sequence=1,
+        event_trade_price=100.0,
+        event_bid_price=100.0,
+        event_bid_quote_age_ms=10,
+    )
+
+    assert result.filled_quantity == 4
+    assert result.entry_filled_at_ms == 1_000_100
+    assert result.entry_execution_mode is EntryExecutionMode.HYBRID_PASSIVE_EVENT_BID
+
+
+def test_hybrid_entry_transitions_to_reclaim_only_after_passive_window() -> None:
+    result = replay_path(
+        (
+            _point(100, 2, trade_price=99.5, best_ask=99.6),
+            _point(200, 3, trade_price=99.8, best_ask=99.9),
+            _point(400, 4, trade_price=99.8, best_ask=99.9),
+            _point(500, 5, trade_price=99.85, best_ask=99.9),
+        ),
+        policy=_policy(
+            entry_policy=EntryPolicy.HYBRID_ENTRY,
+            hybrid_passive_ttl_ms=300,
+            reclaim_trigger_bps=25,
+            entry_ttl_ms=1_000,
+        ),
+        decision_watermark_timestamp_ms=1_000_000,
+        decision_watermark_local_receive_timestamp_ms=1_000_010,
+        decision_watermark_source_sequence=1,
+        event_trade_price=100.0,
+        event_bid_price=99.0,
+        event_bid_quote_age_ms=10,
+    )
+
+    assert result.entry_confirmation_at_ms == 1_000_400
+    assert result.entry_filled_at_ms == 1_000_500
+    assert (
+        result.entry_execution_mode
+        is EntryExecutionMode.HYBRID_RECLAIM_MARKETABLE_NEXT_ASK
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    (
+        (
+            {"entry_policy": EntryPolicy.RECLAIM_ENTRY},
+            "positive reclaim_trigger_bps",
+        ),
+        (
+            {
+                "entry_policy": EntryPolicy.HYBRID_ENTRY,
+                "reclaim_trigger_bps": 25,
+                "hybrid_passive_ttl_ms": 2_000,
+            },
+            "passive TTL below the entry TTL",
+        ),
+        (
+            {
+                "entry_policy": EntryPolicy.PASSIVE_EVENT_BID,
+                "reclaim_trigger_bps": 25,
+            },
+            "valid only for reclaim or hybrid entry",
+        ),
+        (
+            {
+                "entry_policy": EntryPolicy.RECLAIM_ENTRY,
+                "reclaim_trigger_bps": float("nan"),
+            },
+            "positive reclaim_trigger_bps",
+        ),
+        (
+            {
+                "entry_policy": EntryPolicy.HYBRID_ENTRY,
+                "reclaim_trigger_bps": 25,
+                "hybrid_passive_ttl_ms": 100.5,
+            },
+            "passive TTL below the entry TTL",
+        ),
+    ),
+)
+def test_entry_policy_rejects_incomplete_or_cross_policy_contract(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _policy(**overrides)

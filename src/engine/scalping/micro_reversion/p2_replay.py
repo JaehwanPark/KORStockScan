@@ -1,14 +1,15 @@
 """Deterministic source-only entry x exit path replay contract.
 
-This is the P2-A engine skeleton.  It is intentionally callable only with an
-explicit in-memory path and frozen policy.  It has no data-discovery CLI, no
-ranking output, and no sim/live consumer.
+This is the P2-A engine.  It is intentionally callable only with an explicit
+in-memory path and frozen policy.  It has no data-discovery CLI, no ranking
+output, and no sim/live consumer.
 """
 
 from __future__ import annotations
 
 import gzip
 import json
+import math
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -17,7 +18,7 @@ from typing import Any, Iterable
 
 from .path_journal import validate_market_stream_path_provenance
 
-P2_REPLAY_SCHEMA = "scalp_micro_reversion_p2_path_replay_v1"
+P2_REPLAY_SCHEMA = "scalp_micro_reversion_p2_path_replay_v2"
 P2_REPLAY_AUTHORITY = "p2_path_research_only_selection_authority_false"
 P2_REPLAY_METRIC_CONTRACT = {
     "metric_role": "primary_ev_research_candidate",
@@ -27,12 +28,14 @@ P2_REPLAY_METRIC_CONTRACT = {
     "primary_decision_metric": "net_ev_per_all_detected_signal",
     "source_quality_gate": (
         "continuous_parent_wave_path_and_decision_watermark_and_"
-        "declared_fill_bound_and_same_timestamp_policy"
+        "declared_fill_bound_and_same_timestamp_policy_and_"
+        "next_observation_reclaim_execution"
     ),
     "forbidden_uses": (
         "real_data_policy_ranking_before_gate_b",
         "sim_or_live_policy_selection",
         "touch_as_real_fill",
+        "hybrid_passive_cancel_receipt_or_real_fill_inference",
         "broker_order_submission",
         "threshold_or_provider_or_bot_mutation",
     ),
@@ -67,6 +70,14 @@ class EntryPolicy(StrEnum):
     ONE_TICK_DEEPER = "ONE_TICK_DEEPER"
     HYBRID_ENTRY = "HYBRID_ENTRY"
     RECLAIM_ENTRY = "RECLAIM_ENTRY"
+
+
+class EntryExecutionMode(StrEnum):
+    MARKETABLE_NEXT_ASK = "MARKETABLE_NEXT_ASK"
+    PASSIVE_EVENT_BID = "PASSIVE_EVENT_BID"
+    RECLAIM_MARKETABLE_NEXT_ASK = "RECLAIM_MARKETABLE_NEXT_ASK"
+    HYBRID_PASSIVE_EVENT_BID = "HYBRID_PASSIVE_EVENT_BID"
+    HYBRID_RECLAIM_MARKETABLE_NEXT_ASK = "HYBRID_RECLAIM_MARKETABLE_NEXT_ASK"
 
 
 class ExitPolicy(StrEnum):
@@ -117,6 +128,8 @@ class P2ReplayPolicy:
     runner_trailing_bps: float | None = None
     runner_exit_trigger: str | None = None
     max_quote_age_ms: float = 2_500.0
+    reclaim_trigger_bps: float | None = None
+    hybrid_passive_ttl_ms: int | None = None
 
     def __post_init__(self) -> None:
         if not all(
@@ -149,13 +162,38 @@ class P2ReplayPolicy:
             "same_timestamp_policy",
             SameTimestampPolicy(self.same_timestamp_policy),
         )
-        if self.entry_policy not in {
-            EntryPolicy.MARKETABLE_NEXT_ASK,
-            EntryPolicy.PASSIVE_EVENT_BID,
-        }:
+        if self.entry_policy is EntryPolicy.ONE_TICK_DEEPER:
             raise ValueError(
                 "entry policy is declared but not implemented in P2-A skeleton"
             )
+        reclaim_entry = self.entry_policy in {
+            EntryPolicy.RECLAIM_ENTRY,
+            EntryPolicy.HYBRID_ENTRY,
+        }
+        if reclaim_entry:
+            if (
+                self.reclaim_trigger_bps is None
+                or not math.isfinite(self.reclaim_trigger_bps)
+                or self.reclaim_trigger_bps <= 0
+            ):
+                raise ValueError("reclaim entry requires positive reclaim_trigger_bps")
+        elif self.reclaim_trigger_bps is not None:
+            raise ValueError(
+                "reclaim_trigger_bps is valid only for reclaim or hybrid entry"
+            )
+        if self.entry_policy is EntryPolicy.HYBRID_ENTRY:
+            if (
+                self.hybrid_passive_ttl_ms is None
+                or isinstance(self.hybrid_passive_ttl_ms, bool)
+                or not isinstance(self.hybrid_passive_ttl_ms, int)
+                or self.hybrid_passive_ttl_ms <= 0
+                or self.hybrid_passive_ttl_ms >= self.entry_ttl_ms
+            ):
+                raise ValueError(
+                    "hybrid entry requires passive TTL below the entry TTL"
+                )
+        elif self.hybrid_passive_ttl_ms is not None:
+            raise ValueError("hybrid_passive_ttl_ms is valid only for hybrid entry")
         if self.exit_policy is ExitPolicy.TP_LADDER:
             raise ValueError(
                 "TP_LADDER is declared but not implemented in P2-A skeleton"
@@ -188,6 +226,7 @@ class P2ReplayPoint:
     low_price: float | None = None
     high_price: float | None = None
     quote_age_ms: float | None = None
+    aggressor_side: str | None = None
 
     def __post_init__(self) -> None:
         if self.exchange_timestamp_ms <= 0 or self.local_receive_timestamp_ms <= 0:
@@ -227,6 +266,8 @@ class P2ReplayPoint:
             )
         ):
             raise ValueError("point requires price evidence")
+        if self.aggressor_side not in {None, "BUY", "SELL", "UNKNOWN"}:
+            raise ValueError("aggressor_side must be BUY, SELL, UNKNOWN, or null")
 
     @property
     def low(self) -> float | None:
@@ -348,6 +389,11 @@ def load_p2_points_from_canonical_stream(
                         best_bid=_optional_float(row.get("best_bid")),
                         best_ask=_optional_float(row.get("best_ask")),
                         quote_age_ms=_optional_float(row.get("quote_age_ms")),
+                        aggressor_side=(
+                            None
+                            if row.get("aggressor_side") is None
+                            else str(row.get("aggressor_side"))
+                        ),
                     )
                 )
     points.sort(key=lambda row: (row.exchange_timestamp_ms, row.source_sequence))
@@ -376,6 +422,8 @@ class P2PolicySnapshot:
     runner_exit_trigger: str | None
     same_timestamp_policy: SameTimestampPolicy
     max_quote_age_ms: float
+    reclaim_trigger_bps: float | None
+    hybrid_passive_ttl_ms: int | None
 
     @classmethod
     def from_policy(cls, policy: P2ReplayPolicy) -> "P2PolicySnapshot":
@@ -400,6 +448,8 @@ class P2PolicySnapshot:
             runner_exit_trigger=policy.runner_exit_trigger,
             same_timestamp_policy=policy.same_timestamp_policy,
             max_quote_age_ms=policy.max_quote_age_ms,
+            reclaim_trigger_bps=policy.reclaim_trigger_bps,
+            hybrid_passive_ttl_ms=policy.hybrid_passive_ttl_ms,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -423,6 +473,10 @@ class P2ReplayResult:
     average_entry_price: float | None
     average_exit_price: float | None
     entry_filled_at_ms: int | None
+    entry_execution_mode: EntryExecutionMode | None
+    entry_confirmation_at_ms: int | None
+    entry_confirmation_local_receive_at_ms: int | None
+    entry_confirmation_source_sequence: int | None
     exited_at_ms: int | None
     gross_return_bps: float | None
     net_return_bps: float | None
@@ -441,6 +495,11 @@ class P2ReplayResult:
         payload = asdict(self)
         payload["fill_bound"] = self.fill_bound.value
         payload["terminal_reason"] = self.terminal_reason.value
+        payload["entry_execution_mode"] = (
+            None
+            if self.entry_execution_mode is None
+            else self.entry_execution_mode.value
+        )
         payload["policy_contract"] = self.policy_contract.as_dict()
         payload.update(
             {
@@ -457,6 +516,19 @@ class P2ReplayResult:
         return payload
 
 
+@dataclass(frozen=True, slots=True)
+class _EntryResolution:
+    price: float
+    exchange_timestamp_ms: int
+    local_receive_timestamp_ms: int
+    source_sequence: int
+    filled_quantity: int
+    execution_mode: EntryExecutionMode
+    confirmation_exchange_timestamp_ms: int
+    confirmation_local_receive_timestamp_ms: int
+    confirmation_source_sequence: int
+
+
 def replay_path(
     points: Iterable[P2ReplayPoint],
     *,
@@ -464,6 +536,7 @@ def replay_path(
     decision_watermark_timestamp_ms: int,
     decision_watermark_local_receive_timestamp_ms: int,
     decision_watermark_source_sequence: int,
+    event_trade_price: float | None = None,
     event_bid_price: float | None = None,
     event_bid_quote_age_ms: float | None = None,
 ) -> P2ReplayResult:
@@ -490,50 +563,19 @@ def replay_path(
             decision_watermark_source_sequence,
         )
     )
-    entry_deadline = decision_watermark_timestamp_ms + policy.entry_ttl_ms
-    entry_price: float | None = None
-    entry_time: int | None = None
-    entry_resolution_time: int | None = None
-    entry_resolution_sequence = -1
-    filled_quantity = 0
-
-    if policy.entry_policy is EntryPolicy.MARKETABLE_NEXT_ASK:
-        for point in eligible:
-            if point.exchange_timestamp_ms > entry_deadline:
-                break
-            if point.best_ask is not None and _fresh_quote(point, policy):
-                entry_price = point.best_ask
-                entry_time = point.exchange_timestamp_ms
-                entry_resolution_time = point.exchange_timestamp_ms
-                entry_resolution_sequence = point.source_sequence
-                filled_quantity = policy.target_quantity
-                break
-    else:
-        if event_bid_price is None or event_bid_price <= 0:
-            raise ValueError("PASSIVE_EVENT_BID requires positive event_bid_price")
-        if (
-            event_bid_quote_age_ms is None
-            or event_bid_quote_age_ms < 0
-            or event_bid_quote_age_ms > policy.max_quote_age_ms
-        ):
-            raise ValueError("PASSIVE_EVENT_BID requires a fresh event bid quote")
-        entry_price = event_bid_price
-        for point in eligible:
-            if point.exchange_timestamp_ms > entry_deadline:
-                break
-            if not _passive_entry_touched(point, entry_price, policy.fill_bound):
-                continue
-            entry_time = point.exchange_timestamp_ms
-            entry_resolution_time = point.exchange_timestamp_ms
-            entry_resolution_sequence = point.source_sequence
-            if policy.fill_bound is FillBound.UPPER_TOUCH:
-                filled_quantity = policy.target_quantity
-                break
-            available = max(0, int(point.trade_qty or 0))
-            filled_quantity = min(policy.target_quantity, available)
-            break
-
-    if entry_time is None or entry_price is None or filled_quantity == 0:
+    entry = _resolve_entry(
+        eligible,
+        policy=policy,
+        decision_watermark_timestamp_ms=decision_watermark_timestamp_ms,
+        decision_watermark_local_receive_timestamp_ms=(
+            decision_watermark_local_receive_timestamp_ms
+        ),
+        decision_watermark_source_sequence=decision_watermark_source_sequence,
+        event_trade_price=event_trade_price,
+        event_bid_price=event_bid_price,
+        event_bid_quote_age_ms=event_bid_quote_age_ms,
+    )
+    if entry is None:
         return _empty_result(
             policy,
             decision_watermark_timestamp_ms,
@@ -542,7 +584,11 @@ def replay_path(
             len(path),
         )
 
-    assert entry_resolution_time is not None
+    entry_price = entry.price
+    entry_time = entry.exchange_timestamp_ms
+    entry_resolution_time = entry.exchange_timestamp_ms
+    entry_resolution_sequence = entry.source_sequence
+    filled_quantity = entry.filled_quantity
 
     remaining = filled_quantity
     take_profit_quantity = max(
@@ -658,6 +704,12 @@ def replay_path(
             average_entry_price=round(entry_price, 6),
             average_exit_price=None,
             entry_filled_at_ms=entry_time,
+            entry_execution_mode=entry.execution_mode,
+            entry_confirmation_at_ms=(entry.confirmation_exchange_timestamp_ms),
+            entry_confirmation_local_receive_at_ms=(
+                entry.confirmation_local_receive_timestamp_ms
+            ),
+            entry_confirmation_source_sequence=(entry.confirmation_source_sequence),
             exited_at_ms=exit_time,
             gross_return_bps=None,
             net_return_bps=None,
@@ -713,6 +765,12 @@ def replay_path(
                 None if realized_exit is None else round(realized_exit, 6)
             ),
             entry_filled_at_ms=entry_time,
+            entry_execution_mode=entry.execution_mode,
+            entry_confirmation_at_ms=(entry.confirmation_exchange_timestamp_ms),
+            entry_confirmation_local_receive_at_ms=(
+                entry.confirmation_local_receive_timestamp_ms
+            ),
+            entry_confirmation_source_sequence=(entry.confirmation_source_sequence),
             exited_at_ms=exit_time,
             gross_return_bps=None,
             net_return_bps=None,
@@ -742,6 +800,12 @@ def replay_path(
         average_entry_price=round(entry_price, 6),
         average_exit_price=round(average_exit, 6),
         entry_filled_at_ms=entry_time,
+        entry_execution_mode=entry.execution_mode,
+        entry_confirmation_at_ms=entry.confirmation_exchange_timestamp_ms,
+        entry_confirmation_local_receive_at_ms=(
+            entry.confirmation_local_receive_timestamp_ms
+        ),
+        entry_confirmation_source_sequence=entry.confirmation_source_sequence,
         exited_at_ms=exit_time,
         gross_return_bps=round(gross_bps, 6),
         net_return_bps=round(gross_bps - policy.all_in_cost_bps, 6),
@@ -761,6 +825,224 @@ def replay_path(
         decision_watermark_source_sequence=decision_watermark_source_sequence,
         source_point_count=len(path),
     )
+
+
+def _resolve_entry(
+    eligible: tuple[P2ReplayPoint, ...],
+    *,
+    policy: P2ReplayPolicy,
+    decision_watermark_timestamp_ms: int,
+    decision_watermark_local_receive_timestamp_ms: int,
+    decision_watermark_source_sequence: int,
+    event_trade_price: float | None,
+    event_bid_price: float | None,
+    event_bid_quote_age_ms: float | None,
+) -> _EntryResolution | None:
+    entry_deadline = decision_watermark_timestamp_ms + policy.entry_ttl_ms
+    watermark_confirmation = (
+        decision_watermark_timestamp_ms,
+        decision_watermark_local_receive_timestamp_ms,
+        decision_watermark_source_sequence,
+    )
+    if policy.entry_policy is EntryPolicy.MARKETABLE_NEXT_ASK:
+        return _first_marketable_ask(
+            eligible,
+            policy=policy,
+            deadline_ms=entry_deadline,
+            execution_mode=EntryExecutionMode.MARKETABLE_NEXT_ASK,
+            confirmation=watermark_confirmation,
+        )
+
+    if policy.entry_policy is EntryPolicy.PASSIVE_EVENT_BID:
+        bid_price = _validated_event_bid(
+            event_bid_price,
+            event_bid_quote_age_ms,
+            policy=policy,
+            entry_policy=policy.entry_policy,
+        )
+        return _first_passive_fill(
+            eligible,
+            policy=policy,
+            entry_price=bid_price,
+            deadline_ms=entry_deadline,
+            execution_mode=EntryExecutionMode.PASSIVE_EVENT_BID,
+            confirmation=watermark_confirmation,
+        )
+
+    if (
+        event_trade_price is None
+        or not math.isfinite(event_trade_price)
+        or event_trade_price <= 0
+    ):
+        raise ValueError("reclaim or hybrid entry requires event_trade_price")
+
+    reclaim_not_before_ms = decision_watermark_timestamp_ms
+    execution_mode = EntryExecutionMode.RECLAIM_MARKETABLE_NEXT_ASK
+    if policy.entry_policy is EntryPolicy.HYBRID_ENTRY:
+        bid_price = _validated_event_bid(
+            event_bid_price,
+            event_bid_quote_age_ms,
+            policy=policy,
+            entry_policy=policy.entry_policy,
+        )
+        passive_deadline = decision_watermark_timestamp_ms + int(
+            policy.hybrid_passive_ttl_ms or 0
+        )
+        passive_fill = _first_passive_fill(
+            eligible,
+            policy=policy,
+            entry_price=bid_price,
+            deadline_ms=passive_deadline,
+            execution_mode=EntryExecutionMode.HYBRID_PASSIVE_EVENT_BID,
+            confirmation=watermark_confirmation,
+        )
+        if passive_fill is not None:
+            return passive_fill
+        reclaim_not_before_ms = passive_deadline
+        execution_mode = EntryExecutionMode.HYBRID_RECLAIM_MARKETABLE_NEXT_ASK
+
+    return _first_reclaim_marketable_ask(
+        eligible,
+        policy=policy,
+        event_trade_price=event_trade_price,
+        reclaim_not_before_ms=reclaim_not_before_ms,
+        entry_deadline_ms=entry_deadline,
+        execution_mode=execution_mode,
+    )
+
+
+def _validated_event_bid(
+    event_bid_price: float | None,
+    event_bid_quote_age_ms: float | None,
+    *,
+    policy: P2ReplayPolicy,
+    entry_policy: EntryPolicy,
+) -> float:
+    label = entry_policy.value
+    if (
+        event_bid_price is None
+        or not math.isfinite(event_bid_price)
+        or event_bid_price <= 0
+    ):
+        raise ValueError(f"{label} requires positive event_bid_price")
+    if (
+        event_bid_quote_age_ms is None
+        or not math.isfinite(event_bid_quote_age_ms)
+        or event_bid_quote_age_ms < 0
+        or event_bid_quote_age_ms > policy.max_quote_age_ms
+    ):
+        raise ValueError(f"{label} requires a fresh event bid quote")
+    return event_bid_price
+
+
+def _first_passive_fill(
+    points: tuple[P2ReplayPoint, ...],
+    *,
+    policy: P2ReplayPolicy,
+    entry_price: float,
+    deadline_ms: int,
+    execution_mode: EntryExecutionMode,
+    confirmation: tuple[int, int, int],
+) -> _EntryResolution | None:
+    for point in points:
+        if point.exchange_timestamp_ms > deadline_ms:
+            break
+        if not _passive_entry_touched(point, entry_price, policy.fill_bound):
+            continue
+        filled_quantity = policy.target_quantity
+        if policy.fill_bound is FillBound.LOWER_TRADE_THROUGH:
+            filled_quantity = min(
+                policy.target_quantity, max(0, int(point.trade_qty or 0))
+            )
+        if filled_quantity <= 0:
+            continue
+        return _EntryResolution(
+            price=entry_price,
+            exchange_timestamp_ms=point.exchange_timestamp_ms,
+            local_receive_timestamp_ms=point.local_receive_timestamp_ms,
+            source_sequence=point.source_sequence,
+            filled_quantity=filled_quantity,
+            execution_mode=execution_mode,
+            confirmation_exchange_timestamp_ms=confirmation[0],
+            confirmation_local_receive_timestamp_ms=confirmation[1],
+            confirmation_source_sequence=confirmation[2],
+        )
+    return None
+
+
+def _first_marketable_ask(
+    points: tuple[P2ReplayPoint, ...],
+    *,
+    policy: P2ReplayPolicy,
+    deadline_ms: int,
+    execution_mode: EntryExecutionMode,
+    confirmation: tuple[int, int, int],
+) -> _EntryResolution | None:
+    confirmation_key = (confirmation[0], confirmation[2])
+    for point in points:
+        if point.exchange_timestamp_ms > deadline_ms:
+            break
+        if (point.exchange_timestamp_ms, point.source_sequence) <= confirmation_key:
+            continue
+        if point.best_ask is None or not _fresh_quote(point, policy):
+            continue
+        return _EntryResolution(
+            price=point.best_ask,
+            exchange_timestamp_ms=point.exchange_timestamp_ms,
+            local_receive_timestamp_ms=point.local_receive_timestamp_ms,
+            source_sequence=point.source_sequence,
+            filled_quantity=policy.target_quantity,
+            execution_mode=execution_mode,
+            confirmation_exchange_timestamp_ms=confirmation[0],
+            confirmation_local_receive_timestamp_ms=confirmation[1],
+            confirmation_source_sequence=confirmation[2],
+        )
+    return None
+
+
+def _first_reclaim_marketable_ask(
+    points: tuple[P2ReplayPoint, ...],
+    *,
+    policy: P2ReplayPolicy,
+    event_trade_price: float,
+    reclaim_not_before_ms: int,
+    entry_deadline_ms: int,
+    execution_mode: EntryExecutionMode,
+) -> _EntryResolution | None:
+    running_low = event_trade_price
+    confirmation: P2ReplayPoint | None = None
+    reclaim_multiplier = 1 + float(policy.reclaim_trigger_bps or 0) / 10_000.0
+    for point in points:
+        if point.exchange_timestamp_ms > entry_deadline_ms:
+            break
+        point_low = point.low
+        made_new_low = point_low is not None and point_low < running_low
+        if made_new_low:
+            running_low = float(point_low)
+            confirmation = None
+        if confirmation is not None:
+            fill = _first_marketable_ask(
+                (point,),
+                policy=policy,
+                deadline_ms=entry_deadline_ms,
+                execution_mode=execution_mode,
+                confirmation=(
+                    confirmation.exchange_timestamp_ms,
+                    confirmation.local_receive_timestamp_ms,
+                    confirmation.source_sequence,
+                ),
+            )
+            if fill is not None:
+                return fill
+        if made_new_low or point.exchange_timestamp_ms < reclaim_not_before_ms:
+            continue
+        if confirmation is None and (
+            point.trade_price is not None
+            and (point.trade_qty or 0) > 0
+            and point.trade_price >= running_low * reclaim_multiplier
+        ):
+            confirmation = point
+    return None
 
 
 def _passive_entry_touched(
@@ -882,6 +1164,10 @@ def _empty_result(
         average_entry_price=None,
         average_exit_price=None,
         entry_filled_at_ms=None,
+        entry_execution_mode=None,
+        entry_confirmation_at_ms=None,
+        entry_confirmation_local_receive_at_ms=None,
+        entry_confirmation_source_sequence=None,
         exited_at_ms=None,
         gross_return_bps=None,
         net_return_bps=None,
