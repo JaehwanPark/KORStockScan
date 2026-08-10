@@ -28,6 +28,7 @@ from src.engine.trade_profit import (
     calculate_net_realized_pnl,
 )
 from src.engine.risk.manual_control_exclusion import (
+    manual_control_operator_exclusion_source,
     remove_manual_control_exclusion_code,
 )
 from src.utils import kiwoom_utils
@@ -672,6 +673,15 @@ def _recover_missing_broker_holdings(session, real_codes):
 
     for code, real_data in real_codes.items():
         if code in tracked_codes:
+            continue
+        if manual_control_operator_exclusion_source(code):
+            # Operator-owned inventory (including widget auto-trade fills) must
+            # never be converted into a main-bot HOLDING target.  Doing so can
+            # create a second sell owner and reserve the operator-owned shares.
+            log_info(
+                "[BROKER_RECOVER_SKIPPED] "
+                f"operator manual-control inventory remains external code={code}"
+            )
             continue
 
         real_qty = _to_int(real_data.get("qty", 0))

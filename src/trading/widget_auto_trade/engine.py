@@ -20,6 +20,7 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.engine.trade_pause_control import is_buy_side_paused
+from src.trading.order.tick_utils import get_tick_size
 from src.trading.widget_auto_trade.gateway import (
     ExecutionSnapshot,
     KiwoomSharedTokenOrderGateway,
@@ -37,6 +38,7 @@ ACTIVE_ORDER_STATUSES = frozenset(
     {
         "SUBMITTING",
         "SUBMITTED",
+        "AMBIGUOUS",
         "CANCEL_REQUESTED",
         "CANCEL_AMBIGUOUS",
         "CANCEL_FAILED_TERMINAL",
@@ -46,7 +48,13 @@ MAX_ENTRY_QTY = 100
 MAX_CANCEL_ATTEMPTS = 3
 MAX_SELL_ATTEMPTS = 3
 SELL_RETRY_SEC = 5
+TAKE_PROFIT_BPS = 100
+MAX_TAKE_PROFIT_FAILURES = 3
 OBSERVABILITY_PERSIST_INTERVAL_SEC = 60
+
+ORDER_ROLE_ENTRY_BUY = "ENTRY_BUY"
+ORDER_ROLE_TAKE_PROFIT = "TAKE_PROFIT_SELL"
+ORDER_ROLE_FINAL_EXIT = "FINAL_EXIT_SELL"
 
 EXECUTION_CONTRACT = {
     "metric_role": "execution_quality_real_only",
@@ -63,7 +71,7 @@ EXECUTION_CONTRACT = {
         "sell_manual_or_other_strategy_quantity",
         "token_issue_or_refresh",
         "orderable_cash_precheck",
-        "non_final_exit_submission",
+        "non_take_profit_non_final_exit_submission",
         "source_signal_threshold_mutation",
         "main_bot_process_control",
     ],
@@ -74,6 +82,10 @@ class OrderGateway(Protocol):
     def submit_buy(self, *, code: str, qty: int, route: str) -> SubmitResult: ...
 
     def submit_sell(self, *, code: str, qty: int, route: str) -> SubmitResult: ...
+
+    def submit_limit_sell(
+        self, *, code: str, qty: int, route: str, price: int
+    ) -> SubmitResult: ...
 
     def cancel(
         self, *, code: str, order_no: str, qty: int, route: str
@@ -146,6 +158,17 @@ def _positive_int(value: object) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _take_profit_price(fill_price: int, *, profit_bps: int = TAKE_PROFIT_BPS) -> int:
+    """Return the first valid tick at or above the requested gross return."""
+    clean_fill = _positive_int(fill_price)
+    clean_bps = _positive_int(profit_bps)
+    if clean_fill <= 0 or clean_bps <= 0:
+        raise ValueError("invalid_take_profit_basis")
+    raw_target = (clean_fill * (10_000 + clean_bps) + 9_999) // 10_000
+    tick = get_tick_size(raw_target)
+    return ((raw_target + tick - 1) // tick) * tick
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -240,6 +263,8 @@ class WidgetSignalAutoTrader:
             "orders": [],
             "sell_attempt_count": 0,
             "last_sell_attempt_at": None,
+            "take_profit_failure_count": 0,
+            "last_take_profit_attempt_at": None,
             "last_source_state": None,
         }
 
@@ -493,6 +518,9 @@ class WidgetSignalAutoTrader:
         route: str,
         signal_id: str,
         now: datetime,
+        order_role: str,
+        limit_price: int | None = None,
+        parent_entry_signal_id: str | None = None,
     ) -> dict[str, Any]:
         return {
             "side": side,
@@ -501,6 +529,9 @@ class WidgetSignalAutoTrader:
             "remaining_qty": qty,
             "route": route,
             "signal_id": signal_id,
+            "order_role": order_role,
+            "limit_price": limit_price,
+            "parent_entry_signal_id": parent_entry_signal_id,
             "order_date": now.date().isoformat(),
             "intent_created_at": now.isoformat(),
             "status": "SUBMITTING",
@@ -521,22 +552,34 @@ class WidgetSignalAutoTrader:
         route: str,
         signal_id: str,
         now: datetime,
-    ) -> None:
+        order_role: str,
+        limit_price: int | None = None,
+        parent_entry_signal_id: str | None = None,
+    ) -> dict[str, Any]:
         order = self._order_record(
             side=side,
             qty=qty,
             route=route,
             signal_id=signal_id,
             now=now,
+            order_role=order_role,
+            limit_price=limit_price,
+            parent_entry_signal_id=parent_entry_signal_id,
         )
         symbol_state.setdefault("orders", []).append(order)
         self._save()  # crash-before/after-submit ambiguity guard
         try:
-            result = (
-                self.gateway.submit_buy(code=spec.code, qty=qty, route=route)
-                if side == "BUY"
-                else self.gateway.submit_sell(code=spec.code, qty=qty, route=route)
-            )
+            if side == "BUY":
+                result = self.gateway.submit_buy(code=spec.code, qty=qty, route=route)
+            elif order_role == ORDER_ROLE_TAKE_PROFIT and limit_price is not None:
+                result = self.gateway.submit_limit_sell(
+                    code=spec.code,
+                    qty=qty,
+                    route=route,
+                    price=limit_price,
+                )
+            else:
+                result = self.gateway.submit_sell(code=spec.code, qty=qty, route=route)
         except Exception as exc:
             order.update(
                 {
@@ -555,7 +598,7 @@ class WidgetSignalAutoTrader:
                 signal_id=signal_id,
                 error=type(exc).__name__,
             )
-            return
+            return order
         order.update(
             {
                 "order_no": result.order_no,
@@ -583,7 +626,10 @@ class WidgetSignalAutoTrader:
             return_code=result.return_code,
             ambiguous=result.ambiguous,
             actual_order_submitted=result.accepted,
+            order_role=order_role,
+            limit_price=limit_price,
         )
+        return order
 
     def _reconcile(
         self, spec: WidgetSpec, symbol_state: dict[str, Any], now: datetime
@@ -643,7 +689,8 @@ class WidgetSignalAutoTrader:
             remaining = min(max(0, requested - filled), snapshot.remaining_qty)
             order["filled_qty"] = filled
             order["remaining_qty"] = remaining
-            order["fill_price"] = snapshot.fill_price
+            if snapshot.fill_price is not None:
+                order["fill_price"] = snapshot.fill_price
             order["last_reconciled_at"] = now.isoformat()
             if remaining == 0:
                 order["status"] = (
@@ -663,6 +710,9 @@ class WidgetSignalAutoTrader:
                     filled_qty=filled,
                     remaining_qty=remaining,
                     order_status=order.get("status"),
+                    order_role=order.get("order_role"),
+                    limit_price=order.get("limit_price"),
+                    parent_entry_signal_id=order.get("parent_entry_signal_id"),
                     actual_order_submitted=True,
                 )
         if changed:
@@ -744,6 +794,209 @@ class WidgetSignalAutoTrader:
             for order in symbol_state.get("orders") or []
         )
 
+    @staticmethod
+    def _take_profit_pending_qty(
+        symbol_state: dict[str, Any], parent_entry_signal_id: str
+    ) -> int:
+        return sum(
+            _positive_int(order.get("remaining_qty"))
+            for order in symbol_state.get("orders") or []
+            if order.get("order_role") == ORDER_ROLE_TAKE_PROFIT
+            and order.get("parent_entry_signal_id") == parent_entry_signal_id
+            and order.get("status") in ACTIVE_ORDER_STATUSES
+        )
+
+    @staticmethod
+    def _entry_fill_basis(
+        symbol_state: dict[str, Any], entry_signal_id: str
+    ) -> tuple[int, int]:
+        rows = [
+            order
+            for order in symbol_state.get("orders") or []
+            if order.get("order_role") in {None, "", ORDER_ROLE_ENTRY_BUY}
+            and order.get("side") == "BUY"
+            and order.get("signal_id") == entry_signal_id
+            and order.get("broker_accepted") is True
+            and _positive_int(order.get("filled_qty")) > 0
+            and _positive_int(order.get("fill_price")) > 0
+        ]
+        total_qty = sum(_positive_int(order.get("filled_qty")) for order in rows)
+        if total_qty <= 0:
+            return 0, 0
+        total_notional = sum(
+            _positive_int(order.get("filled_qty"))
+            * _positive_int(order.get("fill_price"))
+            for order in rows
+        )
+        return total_qty, total_notional // total_qty
+
+    def _maybe_submit_take_profit(
+        self,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        if symbol_state.get("exit_requested"):
+            return
+        entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
+        if not entry_signal_id or not symbol_state.get("entry_episode_open"):
+            return
+        if any(
+            order.get("order_role") == ORDER_ROLE_TAKE_PROFIT
+            and order.get("parent_entry_signal_id") == entry_signal_id
+            and order.get("status") in {"SUBMITTING", "AMBIGUOUS"}
+            for order in symbol_state.get("orders") or []
+        ):
+            # A crash/transport ambiguity may already have reached the broker.
+            # Never create a second sell until an operator resolves that intent.
+            return
+        open_qty = self._open_qty(symbol_state)
+        pending_qty = self._take_profit_pending_qty(symbol_state, entry_signal_id)
+        uncovered_qty = max(0, open_qty - pending_qty)
+        if uncovered_qty <= 0:
+            return
+        filled_qty, average_fill_price = self._entry_fill_basis(
+            symbol_state, entry_signal_id
+        )
+        if filled_qty <= 0 or average_fill_price <= 0:
+            if symbol_state.get("take_profit_basis_block_signal_id") != entry_signal_id:
+                symbol_state["take_profit_basis_block_signal_id"] = entry_signal_id
+                symbol_state["take_profit_basis_blocked_at"] = now.isoformat()
+                self._save()
+                self._event(
+                    "take_profit_blocked_missing_fill_price",
+                    spec,
+                    now,
+                    signal_id=entry_signal_id,
+                    current_day_open_qty=open_qty,
+                )
+            return
+        failure_count = _positive_int(symbol_state.get("take_profit_failure_count"))
+        if failure_count >= MAX_TAKE_PROFIT_FAILURES:
+            if not symbol_state.get("take_profit_terminal_failure_at"):
+                symbol_state["take_profit_terminal_failure_at"] = now.isoformat()
+                self._save()
+                self._event(
+                    "take_profit_terminal_failure",
+                    spec,
+                    now,
+                    signal_id=entry_signal_id,
+                    current_day_open_qty=open_qty,
+                    failure_count=failure_count,
+                )
+            return
+        last_attempt = _timestamp(symbol_state.get("last_take_profit_attempt_at"))
+        if (
+            last_attempt is not None
+            and (now - last_attempt).total_seconds() < SELL_RETRY_SEC
+        ):
+            return
+        # Bind the protective order to the broker-accepted entry route. A later
+        # stale/session-transition snapshot must not rewrite order provenance.
+        route = str(symbol_state.get("entry_route") or "").upper()
+        if route not in {"KRX", "NXT"}:
+            return
+        target_price = _take_profit_price(average_fill_price)
+        symbol_state["take_profit_target_price"] = target_price
+        symbol_state["take_profit_basis_fill_price"] = average_fill_price
+        symbol_state["take_profit_bps"] = TAKE_PROFIT_BPS
+        self._save()
+        order = self._submit(
+            spec=spec,
+            symbol_state=symbol_state,
+            side="SELL",
+            qty=uncovered_qty,
+            route=route,
+            signal_id=f"{entry_signal_id}:TP:{target_price}",
+            now=now,
+            order_role=ORDER_ROLE_TAKE_PROFIT,
+            limit_price=target_price,
+            parent_entry_signal_id=entry_signal_id,
+        )
+        if order.get("status") == "FAILED":
+            symbol_state["take_profit_failure_count"] = failure_count + 1
+            symbol_state["last_take_profit_attempt_at"] = now.isoformat()
+            self._save()
+        elif order.get("broker_accepted") is True:
+            symbol_state["take_profit_last_submitted_at"] = now.isoformat()
+            symbol_state["last_take_profit_attempt_at"] = None
+            self._save()
+
+    def _cancel_pending_take_profit_sells(
+        self, spec: WidgetSpec, symbol_state: dict[str, Any], now: datetime
+    ) -> None:
+        for order in symbol_state.get("orders") or []:
+            if order.get("order_role") != ORDER_ROLE_TAKE_PROFIT or order.get(
+                "status"
+            ) not in {"SUBMITTED", "CANCEL_AMBIGUOUS"}:
+                continue
+            remaining = _positive_int(order.get("remaining_qty"))
+            if remaining <= 0:
+                continue
+            attempts = _positive_int(order.get("cancel_attempt_count"))
+            if attempts >= MAX_CANCEL_ATTEMPTS:
+                if order.get("status") != "CANCEL_FAILED_TERMINAL":
+                    order["status"] = "CANCEL_FAILED_TERMINAL"
+                    order["cancel_terminal_at"] = now.isoformat()
+                    self._save()
+                    self._event(
+                        "take_profit_cancel_terminal_failure",
+                        spec,
+                        now,
+                        order_no=order.get("order_no"),
+                        remaining_qty=remaining,
+                        cancel_attempt_count=attempts,
+                    )
+                continue
+            last_attempt = _timestamp(order.get("cancel_attempted_at"))
+            if (
+                last_attempt is not None
+                and (now - last_attempt).total_seconds() < SELL_RETRY_SEC
+            ):
+                continue
+            order["cancel_attempt_count"] = attempts + 1
+            try:
+                result = self.gateway.cancel(
+                    code=spec.code,
+                    order_no=str(order.get("order_no") or ""),
+                    qty=remaining,
+                    route=str(order.get("route") or ""),
+                )
+            except Exception as exc:
+                order["cancel_error"] = type(exc).__name__
+                order["cancel_attempted_at"] = now.isoformat()
+                order["status"] = "CANCEL_AMBIGUOUS"
+                self._save()
+                self._event(
+                    "take_profit_cancel_ambiguous",
+                    spec,
+                    now,
+                    order_no=order.get("order_no"),
+                    remaining_qty=remaining,
+                    error=type(exc).__name__,
+                )
+                continue
+            order["cancel_attempted_at"] = now.isoformat()
+            order["cancel_return_code"] = result.return_code
+            order["cancel_order_no"] = result.order_no
+            if result.accepted:
+                order["status"] = "CANCEL_REQUESTED"
+            elif result.ambiguous:
+                order["status"] = "CANCEL_AMBIGUOUS"
+            self._save()
+            self._event(
+                (
+                    "take_profit_cancel_requested"
+                    if result.accepted
+                    else "take_profit_cancel_failed"
+                ),
+                spec,
+                now,
+                order_no=order.get("order_no"),
+                remaining_qty=remaining,
+                return_code=result.return_code,
+            )
+
     def _maybe_submit_exit(
         self,
         spec: WidgetSpec,
@@ -754,6 +1007,7 @@ class WidgetSignalAutoTrader:
         if not symbol_state.get("exit_requested"):
             return
         self._cancel_pending_buys(spec, symbol_state, now)
+        self._cancel_pending_take_profit_sells(spec, symbol_state, now)
         if self._has_pending(symbol_state, "BUY") or self._has_pending(
             symbol_state, "SELL"
         ):
@@ -801,6 +1055,7 @@ class WidgetSignalAutoTrader:
             route=route,
             signal_id=str(symbol_state.get("exit_signal_id") or ""),
             now=now,
+            order_role=ORDER_ROLE_FINAL_EXIT,
         )
 
     def process_payload(
@@ -835,6 +1090,8 @@ class WidgetSignalAutoTrader:
         if symbol_state.get("exit_requested") or exit_signal_id:
             return
 
+        self._maybe_submit_take_profit(spec, symbol_state, now)
+
         entry_signal = self._entry_signal(spec, payload, now)
         if entry_signal is None or symbol_state.get("entry_episode_open"):
             return
@@ -867,6 +1124,15 @@ class WidgetSignalAutoTrader:
                 now=now,
             )
             return
+        for key in (
+            "take_profit_basis_block_signal_id",
+            "take_profit_basis_blocked_at",
+            "take_profit_terminal_failure_at",
+            "take_profit_target_price",
+            "take_profit_basis_fill_price",
+            "take_profit_bps",
+        ):
+            symbol_state.pop(key, None)
         symbol_state.update(
             {
                 "entry_episode_open": True,
@@ -874,6 +1140,8 @@ class WidgetSignalAutoTrader:
                 "entry_source_state": source_state,
                 "entry_route": route,
                 "entry_consumed_at": now.isoformat(),
+                "take_profit_failure_count": 0,
+                "last_take_profit_attempt_at": None,
             }
         )
         self._save()
@@ -885,6 +1153,7 @@ class WidgetSignalAutoTrader:
             route=route,
             signal_id=signal_id,
             now=now,
+            order_role=ORDER_ROLE_ENTRY_BUY,
         )
 
     def run_once(self, observed_at: datetime | None = None) -> dict[str, Any]:

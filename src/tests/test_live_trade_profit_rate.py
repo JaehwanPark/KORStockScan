@@ -1245,6 +1245,67 @@ def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record
     assert any("잔고조회 확인" in event["message"] for event in telegram_events)
 
 
+def test_periodic_account_sync_does_not_recover_operator_excluded_inventory(
+    monkeypatch,
+):
+    watch_record = type(
+        "Record",
+        (),
+        {
+            "id": 2206,
+            "rec_date": datetime.now().date(),
+            "stock_code": "042660",
+            "stock_name": "한화오션",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCALP_BASE",
+            "prob": 0.8,
+            "buy_qty": 0,
+            "buy_price": 0.0,
+            "buy_time": None,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.DB = _SyncDB([], [], [watch_record])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.HIGHEST_PRICES = {}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    sniper_sync.EVENT_BUS = _Bus()
+    sniper_sync.KIWOOM_TOKEN = "token"
+    monkeypatch.setattr(
+        sniper_sync,
+        "manual_control_operator_exclusion_source",
+        lambda code: "manual_control_excluded_codes.txt" if code == "042660" else None,
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [],
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: (
+            [{"code": "042660", "name": "한화오션", "qty": 1, "buy_price": 91_400}],
+            {"KRX"},
+        ),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert watch_record.status == "WATCHING"
+    assert watch_record.buy_qty == 0
+    assert sniper_sync.ACTIVE_TARGETS == []
+    assert sniper_sync.HIGHEST_PRICES == {}
+    assert not any(
+        topic == "TELEGRAM_BROADCAST"
+        and "매수 체결 확인 (브로커 복구)" in payload["message"]
+        for topic, payload in sniper_sync.EVENT_BUS.events
+    )
+
+
 def test_periodic_account_sync_marks_legacy_broker_recovered_holding(monkeypatch):
     legacy_watch = type(
         "Record",

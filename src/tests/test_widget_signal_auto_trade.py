@@ -58,6 +58,7 @@ class FakeGateway:
     def __init__(self):
         self.buy_calls = []
         self.sell_calls = []
+        self.limit_sell_calls = []
         self.cancel_calls = []
         self.snapshots = {}
         self.sequence = 0
@@ -73,6 +74,10 @@ class FakeGateway:
     def submit_sell(self, *, code, qty, route):
         self.sell_calls.append((code, qty, route))
         return self._accepted("S")
+
+    def submit_limit_sell(self, *, code, qty, route, price):
+        self.limit_sell_calls.append((code, qty, route, price))
+        return self._accepted("L")
 
     def cancel(self, *, code, order_no, qty, route):
         self.cancel_calls.append((code, order_no, qty, route))
@@ -166,11 +171,16 @@ def test_one_order_per_entry_episode_and_rearms_only_after_final_exit(
     assert len(gateway.buy_calls) == 1
     _fill(gateway, "B1")
     trader.run_once(now)
+    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 1_010)]
 
     box["payload"] = _payload(now, exit_id="EXIT-1")
     trader.run_once(now)
+    assert gateway.cancel_calls == [("999999", "L2", 1, "KRX")]
+    assert gateway.sell_calls == []
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 1)
+    trader.run_once(now)
     assert gateway.sell_calls == [("999999", 1, "KRX")]
-    _fill(gateway, "S2")
+    _fill(gateway, "S4")
     closed = trader.run_once(now)
     assert closed["symbols"]["999999"]["exit_requested"] is False
     assert closed["symbols"]["999999"]["entry_episode_open"] is False
@@ -194,9 +204,17 @@ def test_daily_reset_archives_but_never_sells_prior_day_quantity(tmp_path, monke
     assert rolled["history"][-1]["symbols"]["999999"]["unmanaged_overnight_qty"] == 1
     assert len(gateway.buy_calls) == 2
 
-    _fill(gateway, "B2")
+    _fill(gateway, "B3")
     trader.run_once(day_two)
+    assert gateway.limit_sell_calls[-1] == ("999999", 1, "KRX", 1_010)
     box["payload"] = _payload(day_two, exit_id="DAY2-EXIT")
+    trader.run_once(day_two)
+    take_profit_order_no = next(
+        order["order_no"]
+        for order in trader._state["symbols"]["999999"]["orders"]
+        if order.get("order_role") == engine.ORDER_ROLE_TAKE_PROFIT
+    )
+    gateway.snapshots[take_profit_order_no] = ExecutionSnapshot(True, True, 0, 0, 1)
     trader.run_once(day_two)
     assert gateway.sell_calls == [("999999", 1, "KRX")]
 
@@ -213,6 +231,179 @@ def test_configurable_quantity_and_non_final_states_do_not_submit(
     box["payload"] = _payload(now, entry_id="READY", entry_state="ENTRY_READY")
     trader.run_once(now)
     assert gateway.buy_calls == [("999999", 3, "KRX")]
+
+
+@pytest.mark.parametrize(
+    ("fill_price", "expected"),
+    [
+        (1_000, 1_010),
+        (199_900, 202_000),
+        (234_000, 236_500),
+    ],
+)
+def test_take_profit_price_rounds_up_to_at_least_one_percent(fill_price, expected):
+    target = engine._take_profit_price(fill_price)
+
+    assert target == expected
+    assert target * 10_000 >= fill_price * 10_100
+
+
+def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == []
+    _fill(gateway, "B1", price=234_000)
+    state = trader.run_once(now)
+
+    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 236_500)]
+    take_profit = state["symbols"]["999999"]["orders"][-1]
+    assert take_profit["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
+    assert take_profit["parent_entry_signal_id"] == "ENTRY-1"
+    assert take_profit["limit_price"] == 236_500
+    assert recorder.events[-1]["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
+
+    restarted = WidgetSignalAutoTrader(
+        gateway=gateway,
+        specs=trader.specs,
+        state_path=trader.state_path,
+        event_recorder=trader.event_recorder,
+        snapshot_loader=trader.snapshot_loader,
+        entry_qty=1,
+        enabled=True,
+    )
+    restarted.run_once(now)
+    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 236_500)]
+
+
+def test_partial_buy_fills_receive_only_incremental_take_profit_coverage(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box, qty=3)
+    trader.run_once(now)
+
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 2, 3, fill_price=100_000)
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 101_000)]
+
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 3, 0, 3, fill_price=100_000)
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == [
+        ("999999", 1, "KRX", 101_000),
+        ("999999", 2, "KRX", 101_000),
+    ]
+
+
+def test_filled_take_profit_never_sells_more_than_widget_owned_quantity(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=234_000)
+    trader.run_once(now)
+    _fill(gateway, "L2", price=236_500)
+    state = trader.run_once(now)
+
+    assert trader._open_qty(state["symbols"]["999999"]) == 0
+    assert state["symbols"]["999999"]["entry_episode_open"] is True
+
+    box["payload"] = _payload(now, exit_id="EXIT-1")
+    closed = trader.run_once(now)
+    assert gateway.sell_calls == []
+    assert closed["symbols"]["999999"]["entry_episode_open"] is False
+
+
+def test_ambiguous_take_profit_blocks_duplicate_and_final_exit_oversell(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=234_000)
+
+    def ambiguous_limit_sell(**kwargs):
+        gateway.limit_sell_calls.append(
+            (kwargs["code"], kwargs["qty"], kwargs["route"], kwargs["price"])
+        )
+        raise TimeoutError("broker response lost")
+
+    gateway.submit_limit_sell = ambiguous_limit_sell
+    trader.run_once(now)
+    trader.run_once(now)
+    assert len(gateway.limit_sell_calls) == 1
+
+    box["payload"] = _payload(now, exit_id="EXIT-1")
+    state = trader.run_once(now)
+    assert gateway.sell_calls == []
+    assert state["symbols"]["999999"]["exit_requested"] is True
+    assert any(
+        order["status"] == "AMBIGUOUS"
+        and order["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
+        for order in state["symbols"]["999999"]["orders"]
+    )
+
+
+def test_final_exit_cancels_partial_take_profit_then_sells_only_remainder(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box, qty=3)
+    trader.run_once(now)
+    _fill(gateway, "B1", qty=3, price=100_000)
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == [("999999", 3, "KRX", 101_000)]
+
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 1, 2, 3, fill_price=101_000)
+    box["payload"] = _payload(now, exit_id="EXIT-1")
+    trader.run_once(now)
+    assert gateway.cancel_calls == [("999999", "L2", 2, "KRX")]
+    assert gateway.sell_calls == []
+
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 1, 0, 3, fill_price=101_000)
+    trader.run_once(now)
+    assert gateway.sell_calls == [("999999", 2, "KRX")]
+
+
+def test_definite_take_profit_rejection_retries_bounded_and_keeps_final_exit(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+
+    def reject_limit_sell(**kwargs):
+        gateway.limit_sell_calls.append(
+            (kwargs["code"], kwargs["qty"], kwargs["route"], kwargs["price"])
+        )
+        return SubmitResult(False, "", "BROKER_REJECT", "rejected")
+
+    gateway.submit_limit_sell = reject_limit_sell
+    trader.run_once(now)
+    trader.run_once(now.replace(second=4))
+    trader.run_once(now.replace(second=5))
+    trader.run_once(now.replace(second=10))
+    terminal = trader.run_once(now.replace(second=15))
+
+    assert len(gateway.limit_sell_calls) == engine.MAX_TAKE_PROFIT_FAILURES
+    symbol_state = terminal["symbols"]["999999"]
+    assert symbol_state["take_profit_failure_count"] == 3
+    assert symbol_state["take_profit_terminal_failure_at"]
+
+    box["payload"] = _payload(now.replace(second=16), exit_id="EXIT-1")
+    trader.run_once(now.replace(second=16))
+    assert gateway.sell_calls == [("999999", 1, "KRX")]
 
 
 def test_automatic_exclusion_does_not_transfer_real_order_ownership(
@@ -348,6 +539,43 @@ def test_gateway_uses_documented_order_contract_without_cash_or_token_issue(
     assert all(call[1]["headers"]["api-id"] != "kt00001" for call in session.calls)
 
 
+def test_gateway_uses_documented_normal_limit_sell_for_take_profit(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {"return_code": 0, "return_msg": "OK", "ord_no": "0001235"}
+
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response()
+
+    session = RecordingSession()
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=session, token_loader=lambda: "cached-token"
+    )
+
+    result = gateway.submit_limit_sell(code="005930", qty=1, route="KRX", price=236_500)
+
+    assert result.accepted is True
+    _, request = session.calls[0]
+    assert request["headers"]["api-id"] == "kt10001"
+    assert request["json"] == {
+        "dmst_stex_tp": "KRX",
+        "stk_cd": "005930",
+        "ord_qty": "1",
+        "ord_uv": "236500",
+        "trde_tp": "0",
+        "cond_uv": "",
+    }
+
+
 def test_gateway_rejects_invalid_route_and_quantity_before_broker_call(monkeypatch):
     class FailIfCalledSession:
         def post(self, *args, **kwargs):
@@ -362,6 +590,10 @@ def test_gateway_rejects_invalid_route_and_quantity_before_broker_call(monkeypat
         gateway.submit_buy(code="005930", qty=1, route="SOR")
     with pytest.raises(ValueError, match="invalid_order_quantity"):
         gateway.submit_sell(code="005930", qty=0, route="KRX")
+    with pytest.raises(ValueError, match="invalid_order_price"):
+        gateway.submit_limit_sell(code="005930", qty=1, route="KRX", price=0)
+    with pytest.raises(ValueError, match="invalid_order_price"):
+        gateway.submit_limit_sell(code="005930", qty=1, route="KRX", price=236_300)
 
 
 def test_gateway_reconciles_only_exact_documented_order_row():

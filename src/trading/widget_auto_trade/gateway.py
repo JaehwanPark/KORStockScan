@@ -15,12 +15,13 @@ import requests
 
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
+from src.trading.order.tick_utils import get_tick_size
 from src.utils import kiwoom_utils
 
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-08T13:11:22+09:00",
+    "retrieved_at_kst": "2026-08-10T09:49:53+09:00",
     "inspected_paths": [
         "kiwoom_docs/주문.md",
         "kiwoom_docs/계좌.md",
@@ -216,6 +217,34 @@ class KiwoomSharedTokenOrderGateway:
                 "ord_qty": str(clean_qty),
                 "ord_uv": "",
                 "trde_tp": order_type,
+                "cond_uv": "",
+            },
+        )
+        return self._submit_result(response, body)
+
+    def submit_limit_sell(
+        self, *, code: str, qty: int, route: str, price: int
+    ) -> SubmitResult:
+        clean_code, clean_qty, clean_route = _validated_order_inputs(
+            code=code, qty=qty, route=route
+        )
+        if isinstance(price, bool):
+            raise ValueError("invalid_order_price")
+        try:
+            clean_price = int(price)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_order_price") from exc
+        if clean_price <= 0 or clean_price % get_tick_size(clean_price) != 0:
+            raise ValueError("invalid_order_price")
+        response, body = self._post(
+            endpoint="/api/dostk/ordr",
+            api_id="kt10001",
+            payload={
+                "dmst_stex_tp": clean_route,
+                "stk_cd": clean_code,
+                "ord_qty": str(clean_qty),
+                "ord_uv": str(clean_price),
+                "trde_tp": "0",
                 "cond_uv": "",
             },
         )
