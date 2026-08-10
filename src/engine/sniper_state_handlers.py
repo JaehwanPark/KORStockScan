@@ -2640,6 +2640,23 @@ def _apply_opening_rotation_margin_budget_authority(
     return resolved
 
 
+def _opening_rotation_cash_one_share_authorized(
+    budget_context: dict[str, Any], *, unit_price: int
+) -> bool:
+    """Require exact-price broker cash capacity before Opening submission."""
+
+    context = budget_context or {}
+    price = max(0, _safe_int(unit_price, 0))
+    checked_price = max(0, _safe_int(context.get("kt00011_requested_unit_price"), 0))
+    return bool(
+        price > 0
+        and not str(context.get("kt00011_error") or "").strip()
+        and checked_price == price
+        and _safe_int(context.get("cash_orderable_amount"), 0) >= price
+        and _safe_int(context.get("cash_orderable_qty_cap"), 0) >= 1
+    )
+
+
 def _opening_rotation_margin_budget_log_fields(
     budget_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -62378,6 +62395,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "opening_rotation_margin_one_share_authorized", False
             )
         )
+        refreshed_cash_authorized = _opening_rotation_cash_one_share_authorized(
+            opening_margin_pre_submit_context,
+            unit_price=opening_margin_pre_submit_price,
+        )
         if refreshed_margin_authorized and sizing_context is not None:
             budget_context = opening_margin_pre_submit_context
             budget_base = max(0, _safe_int(budget_context.get("budget_base"), 0))
@@ -62399,9 +62420,31 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 stage_qty_cap=1,
             )
-        elif prior_margin_authorized and sizing_context is not None:
-            # A prior margin snapshot cannot authorize submission after the
-            # exact-price broker recheck becomes missing or ineligible.
+        elif refreshed_cash_authorized and sizing_context is not None:
+            # A recognized margin tier may become cash-only at the final
+            # price. Preserve the valid opportunity only when the same
+            # exact-price broker response still proves one-share cash capacity.
+            budget_context = opening_margin_pre_submit_context
+            budget_base = max(0, _safe_int(budget_context.get("budget_base"), 0))
+            sizing_context = dataclass_replace(
+                sizing_context,
+                budget_base_krw=budget_base,
+                cash_orderable_qty_cap=max(
+                    0,
+                    _safe_int(budget_context.get("cash_orderable_qty_cap"), 0),
+                ),
+                broker_qty_cap=None,
+                max_position_qty_cap=max_position_qty_cap_from_budget(
+                    budget_base,
+                    opening_margin_pre_submit_price,
+                    _rule_float("MAX_POSITION_PCT", 0.20),
+                ),
+                stage_qty_cap=1,
+            )
+        elif sizing_context is not None:
+            # Neither a prior margin snapshot nor a prior cash snapshot may
+            # authorize submission after the exact-price broker recheck loses
+            # both capacity paths.
             budget_context = opening_margin_pre_submit_context
             sizing_context = dataclass_replace(
                 sizing_context,
@@ -62417,10 +62460,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             "opening_rotation_margin_pre_submit_revalidated",
             prior_margin_authorized=prior_margin_authorized,
             refreshed_margin_authorized=refreshed_margin_authorized,
+            refreshed_cash_authorized=refreshed_cash_authorized,
             exact_price_recheck=True,
             actual_order_submitted=False,
             broker_order_forbidden=bool(
-                prior_margin_authorized and not refreshed_margin_authorized
+                not refreshed_margin_authorized and not refreshed_cash_authorized
             ),
             **_opening_rotation_margin_budget_log_fields(
                 opening_margin_pre_submit_context

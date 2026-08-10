@@ -315,6 +315,50 @@ def test_opening_margin_budget_rejects_different_kt00011_checked_price():
     assert context["budget_base"] == 0
 
 
+def test_opening_exact_price_cash_capacity_survives_margin_tier_loss():
+    context = {
+        "kt00011_error": "",
+        "kt00011_requested_unit_price": 10_010,
+        "cash_orderable_amount": 10_010,
+        "cash_orderable_qty_cap": 1,
+        "opening_rotation_margin_one_share_authorized": False,
+        "opening_rotation_margin_rate": 100,
+    }
+
+    assert handlers._opening_rotation_cash_one_share_authorized(
+        context, unit_price=10_010
+    )
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        {
+            "kt00011_error": "transport_timeout",
+            "kt00011_requested_unit_price": 10_010,
+            "cash_orderable_amount": 20_000,
+            "cash_orderable_qty_cap": 1,
+        },
+        {
+            "kt00011_error": "",
+            "kt00011_requested_unit_price": 10_000,
+            "cash_orderable_amount": 20_000,
+            "cash_orderable_qty_cap": 1,
+        },
+        {
+            "kt00011_error": "",
+            "kt00011_requested_unit_price": 10_010,
+            "cash_orderable_amount": 10_009,
+            "cash_orderable_qty_cap": 1,
+        },
+    ],
+)
+def test_opening_exact_price_cash_capacity_fails_closed(context):
+    assert not handlers._opening_rotation_cash_one_share_authorized(
+        context, unit_price=10_010
+    )
+
+
 def evaluate_entry(
     *,
     previous_state,
