@@ -33,7 +33,7 @@ def _healthy_snapshot(**overrides):
     snapshot.update({field: False for field in _FORBIDDEN_TRUE_FIELDS})
     snapshot.update(
         {
-            "schema": "scalp_micro_reversion_forward_collector_v3",
+            "schema": "scalp_micro_reversion_forward_collector_v4",
             "collector_lifecycle": "running",
             "observer_runtime_loaded": True,
             "producer_observation_connected": True,
@@ -135,6 +135,19 @@ def test_writer_liveness_mismatch_is_an_immediate_stop() -> None:
     assert "writer_liveness_mismatch:alive=1,expected=2" in evaluation["stop_reasons"]
 
 
+def test_manifest_failure_is_an_immediate_stop() -> None:
+    evaluation = evaluate_canary_snapshot(
+        _healthy_snapshot(writer_manifest_error_count=1),
+        _guard(),
+    )
+
+    assert evaluation["stop_required"] is True
+    assert (
+        "nonzero_stop_metric:writer_manifest_error_count=1"
+        in evaluation["stop_reasons"]
+    )
+
+
 def test_closed_snapshot_requires_completed_reconciliation() -> None:
     clean = evaluate_canary_snapshot(
         _healthy_snapshot(
@@ -221,6 +234,19 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
         ),
         "forward_collector_sha256": (
             repository_root / "src/engine/scalping/micro_reversion/forward_collector.py"
+        ),
+        "path_journal_sha256": (
+            repository_root / "src/engine/scalping/micro_reversion/path_journal.py"
+        ),
+        "path_capture_sha256": (
+            repository_root / "src/engine/scalping/micro_reversion/path_capture.py"
+        ),
+        "p2_replay_sha256": (
+            repository_root / "src/engine/scalping/micro_reversion/p2_replay.py"
+        ),
+        "storage_maintenance_sha256": (
+            repository_root
+            / "src/engine/scalping/micro_reversion/storage_maintenance.py"
         ),
         "kiwoom_websocket_sha256": (repository_root / "src/engine/kiwoom_websocket.py"),
         "canary_guard_config_sha256": guard_path,

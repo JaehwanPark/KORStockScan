@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import gzip
 import json
 import os
 import threading
@@ -20,9 +21,9 @@ from typing import Any, Iterable
 
 from .multi_horizon import MultiHorizonShockEvent
 from .observation_adapter import RawMarketObservation
-from .path_journal import AggressorSide, MarketPathPoint
+from .path_journal import AggressorSide, MarketPathPoint, MarketStreamPoint
 
-PATH_REFERENCE_SCHEMA = "scalp_micro_reversion_path_event_reference_v1"
+PATH_REFERENCE_SCHEMA = "scalp_micro_reversion_path_event_reference_v2"
 PATH_CAPTURE_AUTHORITY = "forward_path_observation_only_no_policy_selection"
 PATH_CAPTURE_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_path_coverage",
@@ -58,6 +59,13 @@ class PathEventReference:
     shock_horizon_ms: int
     event_sequence_in_wave: int
     event_detected_at_ms: int
+    symbol: str
+    venue: str
+    session_bucket: str
+    sequence_epoch: int
+    capture_started_at: str
+    segment_event_detected_at_ms: int
+    capture_ended_at: str
     schema: str = PATH_REFERENCE_SCHEMA
 
     def __post_init__(self) -> None:
@@ -69,6 +77,20 @@ class PathEventReference:
             raise ValueError("parent wave, path segment, and shock event are required")
         if self.shock_horizon_ms <= 0 or self.event_sequence_in_wave <= 0:
             raise ValueError("horizon and event sequence must be positive")
+        if not self.symbol or not self.venue or not self.session_bucket:
+            raise ValueError("reference stream scope is required")
+        if (
+            self.sequence_epoch <= 0
+            or self.event_detected_at_ms <= 0
+            or self.segment_event_detected_at_ms <= 0
+        ):
+            raise ValueError(
+                "reference sequence epoch and event/segment times are required"
+            )
+        started = _timestamp_ms(self.capture_started_at)
+        ended = _timestamp_ms(self.capture_ended_at)
+        if not started <= self.segment_event_detected_at_ms <= ended:
+            raise ValueError("reference capture window is invalid")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -248,13 +270,22 @@ class ParentWavePathCoalescer:
         self._coalesced = 0
         self._phase_counts = {phase: 0 for phase in PathPhase}
 
-    def register_event(self, event: MultiHorizonShockEvent) -> PathSegmentRegistration:
+    def register_event(
+        self,
+        event: MultiHorizonShockEvent,
+        *,
+        sequence_epoch: int,
+        event_exchange_timestamp: str,
+    ) -> PathSegmentRegistration:
+        if sequence_epoch <= 0:
+            raise ValueError("event reference sequence_epoch must be positive")
+        event_exchange_ms = _timestamp_ms(event_exchange_timestamp)
         shock = event.event
         with self._lock:
             state = self._segments.get(event.parent_wave_id)
             created = state is None
             if state is None:
-                self._expire_before(shock.detected_at_ms)
+                self._expire_before(event_exchange_ms)
                 if len(self._segments) >= self._max_open_segments:
                     raise RuntimeError("max open parent-wave segments reached")
                 digest = hashlib.sha256(
@@ -264,12 +295,12 @@ class ParentWavePathCoalescer:
                     symbol=shock.symbol,
                     venue=shock.venue,
                     session_bucket=shock.session_bucket,
-                    event_detected_at_ms=shock.detected_at_ms,
+                    event_detected_at_ms=event_exchange_ms,
                 )
                 capture_started_at = (
                     pre_event[0].exchange_timestamp
                     if pre_event
-                    else _timestamp_iso(shock.detected_at_ms)
+                    else event_exchange_timestamp
                 )
                 state = _SegmentState(
                     path_segment_id=f"SMRPS-{digest}",
@@ -278,9 +309,9 @@ class ParentWavePathCoalescer:
                     symbol=shock.symbol,
                     venue=shock.venue,
                     session_bucket=shock.session_bucket,
-                    event_detected_at_ms=shock.detected_at_ms,
+                    event_detected_at_ms=event_exchange_ms,
                     capture_started_at=capture_started_at,
-                    active_until_ms=shock.detected_at_ms + self._post_event_ms,
+                    active_until_ms=event_exchange_ms + self._post_event_ms,
                 )
                 self._segments[event.parent_wave_id] = state
                 self._created += 1
@@ -294,6 +325,17 @@ class ParentWavePathCoalescer:
                 shock_horizon_ms=event.shock_horizon_ms,
                 event_sequence_in_wave=event.event_sequence_in_wave,
                 event_detected_at_ms=shock.detected_at_ms,
+                symbol=state.symbol,
+                venue=state.venue,
+                session_bucket=state.session_bucket,
+                sequence_epoch=(
+                    pre_event[0].sequence_epoch
+                    if created and pre_event
+                    else sequence_epoch
+                ),
+                capture_started_at=state.capture_started_at,
+                segment_event_detected_at_ms=state.event_detected_at_ms,
+                capture_ended_at=_timestamp_iso(state.active_until_ms),
             )
             self._references.append(reference)
             if not created:
@@ -371,6 +413,13 @@ class ParentWavePathCoalescer:
                     shock_horizon_ms=1,
                     event_sequence_in_wave=1,
                     event_detected_at_ms=state.event_detected_at_ms,
+                    symbol=state.symbol,
+                    venue=state.venue,
+                    session_bucket=state.session_bucket,
+                    sequence_epoch=envelope.sequence_epoch,
+                    capture_started_at=state.capture_started_at,
+                    segment_event_detected_at_ms=state.event_detected_at_ms,
+                    capture_ended_at=_timestamp_iso(state.active_until_ms),
                 ),
                 segment_created=False,
                 pre_event_envelopes=(),
@@ -468,6 +517,34 @@ def _to_market_path_point(
     )
 
 
+def to_market_stream_point(envelope: RawMarketObservation) -> MarketStreamPoint:
+    return MarketStreamPoint(
+        symbol=envelope.symbol,
+        exchange_timestamp=envelope.exchange_timestamp,
+        local_receive_timestamp=envelope.local_receive_timestamp,
+        source_sequence=envelope.source_sequence,
+        sequence_epoch=envelope.sequence_epoch,
+        series_sequence=envelope.series_sequence,
+        venue=envelope.venue,
+        session_bucket=envelope.session_bucket,
+        realtime_type=envelope.realtime_type,
+        trade_price=envelope.trade_price,
+        trade_qty=envelope.trade_qty,
+        best_bid=envelope.best_bid,
+        best_ask=envelope.best_ask,
+        bid_depth=envelope.bid_depth,
+        ask_depth=envelope.ask_depth,
+        quote_age_ms=envelope.quote_age_ms,
+        aggressor_side=AggressorSide(envelope.aggressor_side.value),
+        manual_control_exclusion_checked=envelope.manual_control_exclusion_checked,
+        manual_control_excluded=envelope.manual_control_excluded,
+        manual_control_exclusion_version=envelope.manual_control_exclusion_version,
+        manual_control_exclusion_checked_at=(
+            envelope.manual_control_exclusion_checked_at
+        ),
+    )
+
+
 def _timestamp_ms(value: str) -> int:
     text = value[:-1] + "+00:00" if value.endswith("Z") else value
     parsed = datetime.fromisoformat(text)
@@ -507,3 +584,26 @@ def append_path_event_references(
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
+
+
+def load_path_event_references(path: Path) -> tuple[dict[str, Any], ...]:
+    """Load current plain or post-session compressed event-window references."""
+
+    plain = Path(path)
+    compressed = plain.with_suffix(f"{plain.suffix}.gz")
+    if plain.exists() and compressed.exists():
+        raise ValueError("plain and compressed reference files overlap")
+    selected = plain if plain.exists() else compressed
+    if not selected.exists():
+        return ()
+    opener = gzip.open if selected.suffix == ".gz" else open
+    rows: list[dict[str, Any]] = []
+    with opener(selected, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError("path event reference row must be an object")
+            rows.append(row)
+    return tuple(rows)

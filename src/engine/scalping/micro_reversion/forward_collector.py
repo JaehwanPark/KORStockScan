@@ -18,6 +18,7 @@ import os
 import queue
 import threading
 import time
+from bisect import bisect_left, bisect_right
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time as datetime_time, timedelta
@@ -27,10 +28,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .contracts import PriceObservation, normalize_symbol
-from .multi_horizon import (
-    MULTI_HORIZON_POLICY_VERSION,
-    MultiHorizonShockDetector,
-)
+from .multi_horizon import MultiHorizonShockDetector
 from .observation_adapter import (
     AdapterResult,
     AggressorSide,
@@ -44,12 +42,15 @@ from .path_capture import (
     PathEventReference,
     PreEventRingBuffer,
     append_path_event_references,
+    to_market_stream_point,
 )
 from .path_journal import (
     MarketPathPoint,
+    MarketStreamPoint,
     NonBlockingPathJournalWriter,
     PathStoragePolicy,
     PathWriterMetrics,
+    partition_path_files,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -57,7 +58,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OUTPUT_ROOT = (
     REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
 )
-FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v3"
+FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v4"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
@@ -226,6 +227,19 @@ class ForwardCollectorSnapshot:
     writer_last_persisted_sequence: int | None
     writer_last_persisted_sequence_by_series: dict[str, dict[str, int]]
     writer_storage_self_disabled_count: int
+    writer_rotation_count: int
+    writer_shard_count: int
+    writer_manifest_error_count: int
+    writer_partition_bytes: int
+    writer_projected_partition_bytes_max: int | None
+    writer_projection_breach_count: int
+    canonical_stream_point_count: int
+    canonical_stream_duplicate_count: int
+    canonical_stream_pre_window_point_count: int
+    canonical_stream_active_window_point_count: int
+    canonical_stream_post_window_point_count: int
+    canonical_stream_complete_segment_count: int
+    canonical_stream_incomplete_segment_count: int
     collector_lifecycle: str
     collector_active_callback_count: int
     collector_close_attempt_count: int
@@ -341,6 +355,13 @@ class ForwardObservationCollector:
         self._duplicate_event_references = 0
         self._duplicate_event_ids = 0
         self._duplicate_path_reference_pairs = 0
+        self._canonical_stream_points = 0
+        self._canonical_stream_duplicates = 0
+        self._canonical_stream_pre_points = 0
+        self._canonical_stream_active_points = 0
+        self._canonical_stream_post_points = 0
+        self._canonical_stream_complete_segments = 0
+        self._canonical_stream_incomplete_segments = 0
         self._queue_drop_explained_gaps = 0
         self._invalid_envelope_explained_gaps = 0
         self._other_explained_gaps = 0
@@ -404,7 +425,6 @@ class ForwardObservationCollector:
             if callback_timeout_error is not None:
                 self._lifecycle = CollectorLifecycle.CLOSE_FAILED
             else:
-                self._writers_closing = True
                 self._stop_requested.set()
         if callback_timeout_error is not None:
             with self._state_lock:
@@ -433,6 +453,7 @@ class ForwardObservationCollector:
                     TimeoutError("forward collector did not drain in time")
                 )
         with self._state_lock:
+            self._writers_closing = True
             writers = tuple(self._writers.values())
         for writer in writers:
             try:
@@ -775,6 +796,31 @@ class ForwardObservationCollector:
                     "last_sequence_by_series"
                 ],
                 writer_storage_self_disabled_count=aggregate["self_disabled"],
+                writer_rotation_count=aggregate["rotations"],
+                writer_shard_count=aggregate["shard_count"],
+                writer_manifest_error_count=aggregate["manifest_errors"],
+                writer_partition_bytes=aggregate["partition_bytes"],
+                writer_projected_partition_bytes_max=aggregate[
+                    "projected_partition_bytes_max"
+                ],
+                writer_projection_breach_count=aggregate["projection_breaches"],
+                canonical_stream_point_count=self._canonical_stream_points,
+                canonical_stream_duplicate_count=self._canonical_stream_duplicates,
+                canonical_stream_pre_window_point_count=(
+                    self._canonical_stream_pre_points
+                ),
+                canonical_stream_active_window_point_count=(
+                    self._canonical_stream_active_points
+                ),
+                canonical_stream_post_window_point_count=(
+                    self._canonical_stream_post_points
+                ),
+                canonical_stream_complete_segment_count=(
+                    self._canonical_stream_complete_segments
+                ),
+                canonical_stream_incomplete_segment_count=(
+                    self._canonical_stream_incomplete_segments
+                ),
                 collector_lifecycle=lifecycle,
                 collector_active_callback_count=active_callbacks,
                 collector_close_attempt_count=self._close_attempts,
@@ -904,23 +950,16 @@ class ForwardObservationCollector:
         for event in events:
             if not self._event_registration_allowed(envelope, event):
                 continue
-            registration = self._coalescer.register_event(event)
+            registration = self._coalescer.register_event(
+                event,
+                sequence_epoch=envelope.sequence_epoch,
+                event_exchange_timestamp=envelope.exchange_timestamp,
+            )
             registrations.append(registration)
-            pre_event_points = self._coalescer.points_from_registration(
-                registration,
-                detector_version=MULTI_HORIZON_POLICY_VERSION,
-            )
-            self._submit_points(envelope, pre_event_points)
             self._append_reference(envelope, registration.event_reference)
+        self._submit_points(envelope, (to_market_stream_point(envelope),))
         self._ring.add(envelope)
-        for parent_wave_id, state in self._coalescer.active_segments_for(envelope):
-            point = self._coalescer.point_for_active_envelope(
-                envelope,
-                parent_wave_id=parent_wave_id,
-                state=state,
-                detector_version=MULTI_HORIZON_POLICY_VERSION,
-            )
-            self._submit_points(envelope, (point,))
+        self._coalescer.active_segments_for(envelope)
         self._increment("_worker_processed")
         if registrations:
             self._add("_shock_events", len(registrations))
@@ -1053,6 +1092,13 @@ class ForwardObservationCollector:
         duplicate_references = 0
         duplicate_event_ids = 0
         duplicate_pairs = 0
+        canonical_stream_points = 0
+        canonical_stream_duplicates = 0
+        canonical_stream_pre_points = 0
+        canonical_stream_active_points = 0
+        canonical_stream_post_points = 0
+        canonical_stream_complete_segments = 0
+        canonical_stream_incomplete_segments = 0
         errors = 0
         for trade_date, venue, session_bucket in partitions:
             path = self.config.storage_policy.partition_path(
@@ -1061,19 +1107,53 @@ class ForwardObservationCollector:
                 venue=venue,
                 session_bucket=session_bucket,
             )
+            stream_path = self.config.storage_policy.stream_partition_path(
+                self.config.output_root,
+                trade_date=trade_date,
+                venue=venue,
+                session_bucket=session_bucket,
+            )
             try:
-                path_rows = _jsonl_rows(path)
-                reference_rows = _jsonl_rows(path.with_name("event_references.jsonl"))
+                stream_files = partition_path_files(stream_path)
+                stream_reference_path = stream_path.with_name(
+                    "market_stream_event_references.jsonl"
+                )
+                if stream_files or stream_reference_path.exists():
+                    reference_rows = _jsonl_rows(stream_reference_path)
+                    (
+                        path_segments,
+                        partition_path_rows_scanned,
+                        stream_duplicate_count,
+                        stream_phase_counts,
+                    ) = _reconcile_canonical_stream(stream_files, reference_rows)
+                    canonical_stream_points += partition_path_rows_scanned
+                    canonical_stream_duplicates += stream_duplicate_count
+                    canonical_stream_pre_points += stream_phase_counts["pre"]
+                    canonical_stream_active_points += stream_phase_counts["active"]
+                    canonical_stream_post_points += stream_phase_counts["post"]
+                    canonical_stream_complete_segments += stream_phase_counts[
+                        "complete_segments"
+                    ]
+                    canonical_stream_incomplete_segments += stream_phase_counts[
+                        "incomplete_segments"
+                    ]
+                else:
+                    reference_rows = _jsonl_rows(
+                        path.with_name("event_references.jsonl")
+                    )
+                    path_segments = set()
+                    partition_path_rows_scanned = 0
+                    for shard in partition_path_files(path):
+                        for row in _iter_jsonl_rows(shard):
+                            partition_path_rows_scanned += 1
+                            segment_id = str(row.get("path_segment_id") or "").strip()
+                            if segment_id:
+                                path_segments.add(segment_id)
             except (OSError, ValueError, json.JSONDecodeError):
                 errors += 1
                 continue
-            path_rows_scanned += len(path_rows)
+            path_rows_scanned += partition_path_rows_scanned
             reference_rows_scanned += len(reference_rows)
-            path_segments = {
-                str(row.get("path_segment_id") or "").strip()
-                for row in path_rows
-                if str(row.get("path_segment_id") or "").strip()
-            }
             references = [
                 str(row.get("path_segment_id") or "").strip() for row in reference_rows
             ]
@@ -1135,11 +1215,22 @@ class ForwardObservationCollector:
             self._duplicate_event_references = duplicate_references
             self._duplicate_event_ids = duplicate_event_ids
             self._duplicate_path_reference_pairs = duplicate_pairs
+            self._canonical_stream_points = canonical_stream_points
+            self._canonical_stream_duplicates = canonical_stream_duplicates
+            self._canonical_stream_pre_points = canonical_stream_pre_points
+            self._canonical_stream_active_points = canonical_stream_active_points
+            self._canonical_stream_post_points = canonical_stream_post_points
+            self._canonical_stream_complete_segments = (
+                canonical_stream_complete_segments
+            )
+            self._canonical_stream_incomplete_segments = (
+                canonical_stream_incomplete_segments
+            )
 
     def _submit_points(
         self,
         envelope: RawMarketObservation,
-        points: tuple[MarketPathPoint, ...],
+        points: tuple[MarketPathPoint | MarketStreamPoint, ...],
     ) -> None:
         if not points:
             return
@@ -1163,7 +1254,7 @@ class ForwardObservationCollector:
             writer = self._writers.get(key)
             if writer is not None:
                 return writer
-            path = self.config.storage_policy.partition_path(
+            path = self.config.storage_policy.stream_partition_path(
                 self.config.output_root,
                 trade_date=trade_date,
                 venue=envelope.venue,
@@ -1187,12 +1278,12 @@ class ForwardObservationCollector:
         trade_date = (
             datetime.fromisoformat(envelope.exchange_timestamp).date().isoformat()
         )
-        path = self.config.storage_policy.partition_path(
+        path = self.config.storage_policy.stream_partition_path(
             self.config.output_root,
             trade_date=trade_date,
             venue=envelope.venue,
             session_bucket=envelope.session_bucket,
-        ).with_name("event_references.jsonl")
+        ).with_name("market_stream_event_references.jsonl")
         with self._state_lock:
             self._reference_partitions.add(
                 (trade_date, envelope.venue, envelope.session_bucket)
@@ -1406,6 +1497,19 @@ def _aggregate_writer_metrics(
         "last_sequence": max(sequences) if sequences else None,
         "last_sequence_by_series": dict(sorted(last_sequence_by_series.items())),
         "self_disabled": sum(1 for row in rows if row.storage_self_disabled),
+        "rotations": sum(row.journal_rotation_count for row in rows),
+        "shard_count": sum(row.journal_shard_count for row in rows),
+        "manifest_errors": sum(row.journal_manifest_error_count for row in rows),
+        "partition_bytes": sum(row.journal_partition_bytes for row in rows),
+        "projected_partition_bytes_max": max(
+            (
+                row.journal_projected_partition_bytes
+                for row in rows
+                if row.journal_projected_partition_bytes is not None
+            ),
+            default=None,
+        ),
+        "projection_breaches": sum(row.journal_projection_breach_count for row in rows),
     }
 
 
@@ -1472,9 +1576,12 @@ def _rate(numerator: int, denominator: int) -> float:
 
 
 def _jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    return list(_iter_jsonl_rows(path))
+
+
+def _iter_jsonl_rows(path: Path):
     if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
+        return
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -1482,5 +1589,102 @@ def _jsonl_rows(path: Path) -> list[dict[str, Any]]:
             payload = json.loads(line)
             if not isinstance(payload, dict):
                 raise ValueError("JSONL row must be an object")
-            rows.append(payload)
-    return rows
+            yield payload
+
+
+def _reconcile_canonical_stream(
+    stream_files: tuple[Path, ...], reference_rows: list[dict[str, Any]]
+) -> tuple[set[str], int, int, dict[str, int]]:
+    series_times: dict[tuple[str, str, str, int], list[int]] = {}
+    seen_sequences: set[tuple[str, str, str, int, int]] = set()
+    duplicate_count = 0
+    row_count = 0
+    for stream_file in stream_files:
+        for row in _iter_jsonl_rows(stream_file):
+            if row.get("schema") != "scalp_micro_reversion_market_stream_point_v1":
+                raise ValueError("unexpected canonical stream schema")
+            if (
+                row.get("metric_contract_id")
+                != "scalp_micro_reversion_market_stream_contract_v1"
+                or row.get("actual_order_submitted") is not False
+                or row.get("broker_order_forbidden") is not True
+                or row.get("trading_runtime_effect") is not False
+            ):
+                raise ValueError("canonical stream authority contract is invalid")
+            key = (
+                str(row.get("symbol") or "").strip(),
+                str(row.get("venue") or "").strip(),
+                str(row.get("session_bucket") or "").strip(),
+                int(row.get("sequence_epoch") or 0),
+            )
+            sequence = int(row.get("series_sequence") or 0)
+            source_sequence = int(row.get("source_sequence") or 0)
+            if (
+                not all(key[:3])
+                or key[3] <= 0
+                or sequence <= 0
+                or source_sequence != sequence
+            ):
+                raise ValueError("canonical stream scope or sequence is invalid")
+            sequence_key = (*key, sequence)
+            if sequence_key in seen_sequences:
+                duplicate_count += 1
+            else:
+                seen_sequences.add(sequence_key)
+            series_times.setdefault(key, []).append(
+                _iso_timestamp_ms(str(row.get("exchange_timestamp") or ""))
+            )
+            row_count += 1
+    for values in series_times.values():
+        values.sort()
+    covered_segments: set[str] = set()
+    phase_counts = {
+        "pre": 0,
+        "active": 0,
+        "post": 0,
+        "complete_segments": 0,
+        "incomplete_segments": 0,
+    }
+    measured_segments: set[str] = set()
+    for reference in reference_rows:
+        if reference.get("schema") != "scalp_micro_reversion_path_event_reference_v2":
+            raise ValueError("canonical stream requires v2 event references")
+        if (
+            reference.get("actual_order_submitted") is not False
+            or reference.get("broker_order_forbidden") is not True
+            or reference.get("trading_runtime_effect") is not False
+        ):
+            raise ValueError("canonical stream reference authority is invalid")
+        segment_id = str(reference.get("path_segment_id") or "").strip()
+        key = (
+            str(reference.get("symbol") or "").strip(),
+            str(reference.get("venue") or "").strip(),
+            str(reference.get("session_bucket") or "").strip(),
+            int(reference.get("sequence_epoch") or 0),
+        )
+        start_ms = _iso_timestamp_ms(str(reference.get("capture_started_at") or ""))
+        end_ms = _iso_timestamp_ms(str(reference.get("capture_ended_at") or ""))
+        values = series_times.get(key, ())
+        index = bisect_left(values, start_ms)
+        if segment_id and index < len(values) and values[index] <= end_ms:
+            covered_segments.add(segment_id)
+        if not segment_id or segment_id in measured_segments:
+            continue
+        measured_segments.add(segment_id)
+        event_ms = int(reference.get("segment_event_detected_at_ms") or 0)
+        if event_ms <= 0:
+            raise ValueError("canonical stream reference event time is invalid")
+        active_end_ms = min(event_ms + 20_000, end_ms)
+        pre_count = bisect_left(values, event_ms) - bisect_left(values, start_ms)
+        active_count = bisect_right(values, active_end_ms) - bisect_left(
+            values, event_ms
+        )
+        post_count = bisect_right(values, end_ms) - bisect_right(values, active_end_ms)
+        phase_counts["pre"] += pre_count
+        phase_counts["active"] += active_count
+        phase_counts["post"] += post_count
+        if pre_count > 0 and active_count > 0 and post_count > 0:
+            phase_counts["complete_segments"] += 1
+        else:
+            phase_counts["incomplete_segments"] += 1
+    return covered_segments, row_count, duplicate_count, phase_counts

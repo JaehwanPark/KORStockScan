@@ -7,8 +7,12 @@ ranking output, and no sim/live consumer.
 
 from __future__ import annotations
 
+import gzip
+import json
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Iterable
 
 P2_REPLAY_SCHEMA = "scalp_micro_reversion_p2_path_replay_v1"
@@ -31,6 +35,28 @@ P2_REPLAY_METRIC_CONTRACT = {
         "threshold_or_provider_or_bot_mutation",
     ),
 }
+
+
+def _parse_iso_timestamp_ms(value: object) -> int:
+    text = str(value or "").strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise ValueError("canonical stream timestamp must include timezone")
+    return int(parsed.timestamp() * 1_000)
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 class EntryPolicy(StrEnum):
@@ -213,6 +239,92 @@ class P2ReplayPoint:
             value for value in (self.high_price, self.trade_price) if value is not None
         )
         return max(values) if values else None
+
+
+def load_p2_points_from_canonical_stream(
+    stream_files: Iterable[Path], *, reference: dict[str, Any]
+) -> tuple[P2ReplayPoint, ...]:
+    """Reconstruct one event window without granting discovery authority."""
+
+    if reference.get("schema") != "scalp_micro_reversion_path_event_reference_v2":
+        raise ValueError("P2 canonical reconstruction requires a v2 reference")
+    if (
+        reference.get("actual_order_submitted") is not False
+        or reference.get("broker_order_forbidden") is not True
+        or reference.get("trading_runtime_effect") is not False
+    ):
+        raise ValueError("P2 reference authority contract is invalid")
+    scope = (
+        str(reference.get("symbol") or "").strip(),
+        str(reference.get("venue") or "").strip(),
+        str(reference.get("session_bucket") or "").strip(),
+        int(reference.get("sequence_epoch") or 0),
+    )
+    if not all(scope[:3]) or scope[3] <= 0:
+        raise ValueError("P2 reference stream scope is invalid")
+    start_ms = _parse_iso_timestamp_ms(reference.get("capture_started_at"))
+    end_ms = _parse_iso_timestamp_ms(reference.get("capture_ended_at"))
+    if end_ms < start_ms:
+        raise ValueError("P2 reference capture window is invalid")
+    points: list[P2ReplayPoint] = []
+    seen_sequences: set[int] = set()
+    for path in stream_files:
+        opener = gzip.open if Path(path).suffix == ".gz" else open
+        with opener(path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError("canonical stream row must be an object")
+                if row.get("schema") != "scalp_micro_reversion_market_stream_point_v1":
+                    raise ValueError("unexpected canonical stream schema")
+                if (
+                    row.get("metric_contract_id")
+                    != "scalp_micro_reversion_market_stream_contract_v1"
+                    or row.get("actual_order_submitted") is not False
+                    or row.get("broker_order_forbidden") is not True
+                    or row.get("trading_runtime_effect") is not False
+                ):
+                    raise ValueError("canonical stream authority contract is invalid")
+                row_scope = (
+                    str(row.get("symbol") or "").strip(),
+                    str(row.get("venue") or "").strip(),
+                    str(row.get("session_bucket") or "").strip(),
+                    int(row.get("sequence_epoch") or 0),
+                )
+                if row_scope != scope:
+                    continue
+                exchange_ms = _parse_iso_timestamp_ms(row.get("exchange_timestamp"))
+                if exchange_ms < start_ms or exchange_ms > end_ms:
+                    continue
+                sequence = int(row.get("series_sequence") or 0)
+                source_sequence = int(row.get("source_sequence") or 0)
+                if (
+                    sequence <= 0
+                    or source_sequence != sequence
+                    or sequence in seen_sequences
+                ):
+                    raise ValueError(
+                        "canonical stream sequence is invalid or duplicate"
+                    )
+                seen_sequences.add(sequence)
+                points.append(
+                    P2ReplayPoint(
+                        exchange_timestamp_ms=exchange_ms,
+                        local_receive_timestamp_ms=_parse_iso_timestamp_ms(
+                            row.get("local_receive_timestamp")
+                        ),
+                        source_sequence=sequence,
+                        trade_price=_optional_float(row.get("trade_price")),
+                        trade_qty=_optional_int(row.get("trade_qty")),
+                        best_bid=_optional_float(row.get("best_bid")),
+                        best_ask=_optional_float(row.get("best_ask")),
+                        quote_age_ms=_optional_float(row.get("quote_age_ms")),
+                    )
+                )
+    points.sort(key=lambda row: (row.exchange_timestamp_ms, row.source_sequence))
+    return tuple(points)
 
 
 @dataclass(frozen=True, slots=True)

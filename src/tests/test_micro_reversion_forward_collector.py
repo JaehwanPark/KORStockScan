@@ -762,13 +762,29 @@ def test_forward_path_capture_persists_event_and_separates_authority(
     collector.close()
     snapshot = collector.runtime_snapshot()
 
-    path_files = list(tmp_path.rglob("market_path.jsonl"))
-    reference_files = list(tmp_path.rglob("event_references.jsonl"))
+    path_files = list(tmp_path.rglob("market_stream.jsonl"))
+    reference_files = list(tmp_path.rglob("market_stream_event_references.jsonl"))
     assert len(path_files) == 1
     assert len(reference_files) == 1
     assert path_files[0].read_text(encoding="utf-8").strip()
     assert reference_files[0].read_text(encoding="utf-8").strip()
     assert snapshot.shock_event_count == 1
+    stream_rows = [
+        json.loads(line)
+        for line in path_files[0].read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(stream_rows) == snapshot.enqueued_count == 2
+    assert all(
+        row["schema"] == "scalp_micro_reversion_market_stream_point_v1"
+        for row in stream_rows
+    )
+    assert snapshot.canonical_stream_point_count == 2
+    assert snapshot.canonical_stream_duplicate_count == 0
+    assert snapshot.canonical_stream_pre_window_point_count == 1
+    assert snapshot.canonical_stream_active_window_point_count == 1
+    assert snapshot.canonical_stream_post_window_point_count == 0
+    assert snapshot.canonical_stream_complete_segment_count == 0
+    assert snapshot.canonical_stream_incomplete_segment_count == 1
     assert snapshot.writer_persisted_envelope_count >= 1
     assert snapshot.writer_bytes_per_persisted_envelope > 0
     assert snapshot.writer_bytes_by_trade_date["2026-08-08"] > 0
@@ -892,6 +908,140 @@ def test_shutdown_reconciliation_counts_duplicate_references(tmp_path) -> None:
     assert runtime.duplicate_event_reference_count == 1
     assert runtime.duplicate_event_id_count == 1
     assert runtime.duplicate_path_reference_pair_count == 1
+
+
+def test_shutdown_reconciliation_reads_all_rotated_path_shards(tmp_path) -> None:
+    collector = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(observer_enabled=True),
+        config=ForwardCollectorConfig(output_root=tmp_path),
+        manual_excluded_symbols=(),
+    )
+    key = ("2026-08-08", "KRX", "KRX_REGULAR")
+    path = collector.config.storage_policy.partition_path(
+        tmp_path,
+        trade_date=key[0],
+        venue=key[1],
+        session_bucket=key[2],
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"path_segment_id": "segment-1"}) + "\n")
+    rotated = collector.config.storage_policy.shard_path(path, 1)
+    rotated.write_text(json.dumps({"path_segment_id": "segment-2"}) + "\n")
+    path.with_name("event_references.jsonl").write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {"path_segment_id": "segment-1", "shock_event_id": "event-1"}
+                ),
+                json.dumps(
+                    {"path_segment_id": "segment-2", "shock_event_id": "event-2"}
+                ),
+            )
+        )
+        + "\n"
+    )
+    collector._reference_partitions.add(key)
+
+    collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert runtime.reference_reconciliation_completed is True
+    assert runtime.reference_reconciliation_path_rows_scanned == 2
+    assert runtime.reference_reconciliation_reference_rows_scanned == 2
+    assert runtime.event_reference_coverage_pct == 100.0
+    assert runtime.orphan_reference_count == 0
+    assert runtime.unreferenced_segment_count == 0
+
+
+def test_canonical_reference_without_stream_is_reported_as_orphan(tmp_path) -> None:
+    collector = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(observer_enabled=True),
+        config=ForwardCollectorConfig(output_root=tmp_path),
+        manual_excluded_symbols=(),
+    )
+    key = ("2026-08-08", "KRX", "KRX_REGULAR")
+    stream = collector.config.storage_policy.stream_partition_path(
+        tmp_path,
+        trade_date=key[0],
+        venue=key[1],
+        session_bucket=key[2],
+    )
+    stream.parent.mkdir(parents=True)
+    reference = {
+        "schema": "scalp_micro_reversion_path_event_reference_v2",
+        "path_segment_id": "segment-1",
+        "shock_event_id": "event-1",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "capture_started_at": "2026-08-08T09:00:00+09:00",
+        "segment_event_detected_at_ms": int(
+            datetime.fromisoformat("2026-08-08T09:00:01+09:00").timestamp() * 1_000
+        ),
+        "capture_ended_at": "2026-08-08T09:03:01+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+    stream.with_name("market_stream_event_references.jsonl").write_text(
+        json.dumps(reference) + "\n", encoding="utf-8"
+    )
+    collector._reference_partitions.add(key)
+
+    collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert runtime.reference_reconciliation_completed is True
+    assert runtime.reference_reconciliation_reference_rows_scanned == 1
+    assert runtime.event_reference_coverage_pct == 0.0
+    assert runtime.orphan_reference_count == 1
+
+
+def test_canonical_reconciliation_fails_closed_on_authority_drift(tmp_path) -> None:
+    collector = ForwardObservationCollector(
+        flags=ObserverFeatureFlags(observer_enabled=True),
+        config=ForwardCollectorConfig(output_root=tmp_path),
+        manual_excluded_symbols=(),
+    )
+    key = ("2026-08-08", "KRX", "KRX_REGULAR")
+    stream = collector.config.storage_policy.stream_partition_path(
+        tmp_path,
+        trade_date=key[0],
+        venue=key[1],
+        session_bucket=key[2],
+    )
+    stream.parent.mkdir(parents=True)
+    stream.write_text(
+        json.dumps(
+            {
+                "schema": "scalp_micro_reversion_market_stream_point_v1",
+                "metric_contract_id": (
+                    "scalp_micro_reversion_market_stream_contract_v1"
+                ),
+                "symbol": "000001",
+                "venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "sequence_epoch": 7,
+                "source_sequence": 1,
+                "series_sequence": 1,
+                "exchange_timestamp": "2026-08-08T09:00:00+09:00",
+                "actual_order_submitted": True,
+                "broker_order_forbidden": True,
+                "trading_runtime_effect": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    collector._reference_partitions.add(key)
+
+    with pytest.raises(RuntimeError, match="shutdown had 1 error"):
+        collector.close()
+
+    runtime = collector.runtime_snapshot()
+    assert runtime.reference_reconciliation_completed is False
+    assert runtime.reference_reconciliation_error_count == 1
 
 
 def test_ws_producer_hook_isolates_collector_failure(monkeypatch) -> None:

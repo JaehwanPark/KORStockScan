@@ -13,9 +13,12 @@ from src.engine.scalping.micro_reversion.observation_gate import (
 )
 from src.engine.scalping.micro_reversion.path_journal import (
     MarketPathPoint,
+    MarketStreamPoint,
     NonBlockingPathJournalWriter,
     PathStoragePolicy,
     append_market_path_points,
+    partition_path_files,
+    readable_partition_path_files,
 )
 from src.engine.scalping.micro_reversion.tax import (
     InstrumentType,
@@ -55,6 +58,25 @@ def _point(sequence: int = 1, **overrides) -> MarketPathPoint:
     }
     values.update(overrides)
     return MarketPathPoint(**values)
+
+
+def _stream_point(sequence: int, *, exchange_second: int) -> MarketStreamPoint:
+    return MarketStreamPoint(
+        symbol="000001",
+        exchange_timestamp=f"2026-08-08T09:00:{exchange_second:02d}+09:00",
+        local_receive_timestamp=f"2026-08-08T09:01:{sequence:02d}+09:00",
+        source_sequence=sequence,
+        sequence_epoch=1,
+        series_sequence=sequence,
+        venue="KRX",
+        session_bucket="KRX_REGULAR",
+        realtime_type="0B",
+        manual_control_exclusion_checked=True,
+        manual_control_excluded=False,
+        manual_control_exclusion_version=1,
+        manual_control_exclusion_checked_at="2026-08-08T09:00:00+09:00",
+        trade_price=10_000,
+    )
 
 
 def test_observation_gate_is_broad_but_economic_gate_is_narrow() -> None:
@@ -251,6 +273,207 @@ def test_writer_self_disables_only_capture_at_critical_disk(
     assert metrics.journal_writer_error_count == 1
     assert metrics.last_writer_error_type == "OSError"
     assert metrics.persisted_envelope_count == 0
+
+
+def test_writer_rotates_full_path_shard_and_publishes_manifest(tmp_path: Path) -> None:
+    base = tmp_path / "market_path.jsonl"
+    first = _point(1)
+    second = _point(2)
+    first_size = len(
+        (json.dumps(first.as_dict(), ensure_ascii=False, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
+    )
+    writer = NonBlockingPathJournalWriter(
+        base,
+        max_batch_size=1,
+        flush_interval_sec=0.01,
+        storage_policy=PathStoragePolicy(max_partition_bytes=first_size + 8),
+    )
+    writer.start()
+    assert writer.submit(first) is True
+    deadline = time.monotonic() + 1
+    while writer.metrics().persisted_envelope_count < 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert writer.submit(second) is True
+    writer.close()
+
+    shards = partition_path_files(base)
+    manifest = json.loads(
+        (tmp_path / "market_path.manifest.json").read_text(encoding="utf-8")
+    )
+    metrics = writer.metrics()
+    assert [path.name for path in shards] == [
+        "market_path.jsonl",
+        "market_path.part-000001.jsonl",
+    ]
+    assert [
+        json.loads(path.read_text(encoding="utf-8"))["source_sequence"]
+        for path in shards
+    ] == [1, 2]
+    assert manifest["active_shard_index"] == 1
+    assert [row["file"] for row in manifest["shards"]] == [path.name for path in shards]
+    assert manifest["actual_order_submitted"] is False
+    assert manifest["broker_order_forbidden"] is True
+    assert metrics.journal_rotation_count == 1
+    assert metrics.journal_shard_count == 2
+    assert metrics.journal_manifest_error_count == 0
+    assert metrics.journal_dropped_envelopes == 0
+    assert metrics.journal_writer_error_count == 0
+
+
+def test_writer_restart_continues_from_latest_path_shard(tmp_path: Path) -> None:
+    base = tmp_path / "market_path.jsonl"
+    point_size = len(
+        (
+            json.dumps(_point(1).as_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+        ).encode("utf-8")
+    )
+    policy = PathStoragePolicy(max_partition_bytes=point_size + 8)
+    first_writer = NonBlockingPathJournalWriter(
+        base, max_batch_size=1, flush_interval_sec=0.01, storage_policy=policy
+    )
+    first_writer.start()
+    assert first_writer.submit(_point(1)) is True
+    deadline = time.monotonic() + 1
+    while (
+        first_writer.metrics().persisted_envelope_count < 1
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.005)
+    assert first_writer.submit(_point(2)) is True
+    first_writer.close()
+
+    restarted = NonBlockingPathJournalWriter(
+        base, max_batch_size=1, flush_interval_sec=0.01, storage_policy=policy
+    )
+    restarted.start()
+    assert restarted.submit(_point(3)) is True
+    restarted.close()
+
+    shards = partition_path_files(base)
+    assert [path.name for path in shards] == [
+        "market_path.jsonl",
+        "market_path.part-000001.jsonl",
+        "market_path.part-000002.jsonl",
+    ]
+    assert restarted.metrics().journal_active_shard_index == 2
+    assert restarted.metrics().journal_shard_count == 3
+
+
+def test_writer_self_disables_before_overwriting_shard_bound(tmp_path: Path) -> None:
+    base = tmp_path / "market_path.jsonl"
+    point_size = len(
+        (
+            json.dumps(_point(1).as_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+        ).encode("utf-8")
+    )
+    writer = NonBlockingPathJournalWriter(
+        base,
+        max_batch_size=1,
+        flush_interval_sec=0.01,
+        storage_policy=PathStoragePolicy(
+            max_partition_bytes=point_size + 8,
+            max_partition_shards=2,
+        ),
+    )
+    writer.start()
+    for sequence in (1, 2):
+        assert writer.submit(_point(sequence)) is True
+        deadline = time.monotonic() + 1
+        while (
+            writer.metrics().persisted_envelope_count < sequence
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+    assert writer.submit(_point(3)) is True
+    writer.close()
+
+    metrics = writer.metrics()
+    assert [path.name for path in partition_path_files(base)] == [
+        "market_path.jsonl",
+        "market_path.part-000001.jsonl",
+    ]
+    assert metrics.storage_self_disabled is True
+    assert metrics.journal_writer_error_count == 1
+    assert metrics.journal_dropped_envelopes == 1
+    assert metrics.persisted_envelope_count == 2
+
+
+def test_writer_projection_guard_stops_unsustainable_daily_rate(
+    tmp_path: Path,
+) -> None:
+    writer = NonBlockingPathJournalWriter(
+        tmp_path / "market_path.jsonl",
+        max_batch_size=1,
+        flush_interval_sec=0.01,
+        storage_policy=PathStoragePolicy(
+            max_projected_partition_bytes=1,
+            projection_horizon_sec=10,
+            projection_min_elapsed_sec=1,
+        ),
+    )
+    writer.start()
+    assert writer.submit(_point(1)) is True
+    deadline = time.monotonic() + 1
+    while writer.metrics().persisted_envelope_count < 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    writer._first_write_monotonic = time.monotonic() - 2
+    assert writer.submit(_point(2)) is True
+    writer.close()
+
+    metrics = writer.metrics()
+    assert metrics.journal_projection_breach_count == 1
+    assert metrics.storage_self_disabled is True
+    assert metrics.capture_degraded is True
+    assert metrics.journal_projected_partition_bytes is not None
+    assert metrics.journal_projected_partition_bytes > 1
+
+
+def test_canonical_stream_retains_sequence_when_exchange_clock_regresses(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "market_stream.jsonl"
+    writer = NonBlockingPathJournalWriter(
+        base,
+        max_batch_size=2,
+        flush_interval_sec=0.01,
+    )
+    writer.start()
+
+    assert writer.submit(_stream_point(1, exchange_second=2)) is True
+    assert writer.submit(_stream_point(2, exchange_second=1)) is True
+    writer.close()
+
+    rows = [json.loads(line) for line in base.read_text(encoding="utf-8").splitlines()]
+    assert [row["series_sequence"] for row in rows] == [1, 2]
+    assert writer.metrics().journal_writer_error_count == 0
+
+
+def test_partition_reader_rejects_malformed_or_gapped_shards(tmp_path: Path) -> None:
+    base = tmp_path / "market_path.jsonl"
+    base.write_text("{}\n", encoding="utf-8")
+    malformed = tmp_path / "market_path.part-bad.jsonl"
+    malformed.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="six decimal digits"):
+        partition_path_files(base)
+
+    malformed.unlink()
+    (tmp_path / "market_path.part-000002.jsonl").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not contiguous"):
+        partition_path_files(base)
+
+
+def test_readable_partition_discovers_post_session_gzip_shards(tmp_path: Path) -> None:
+    base = tmp_path / "market_stream.jsonl"
+    base.with_suffix(".jsonl.gz").write_bytes(b"gzip-placeholder")
+    (tmp_path / "market_stream.part-000001.jsonl.gz").write_bytes(b"gzip-placeholder")
+
+    assert [path.name for path in readable_partition_path_files(base)] == [
+        "market_stream.jsonl.gz",
+        "market_stream.part-000001.jsonl.gz",
+    ]
 
 
 def test_writer_rejects_cross_batch_sequence_regression(tmp_path: Path) -> None:

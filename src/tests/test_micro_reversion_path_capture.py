@@ -1,3 +1,4 @@
+import gzip
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ from src.engine.scalping.micro_reversion.path_capture import (
     PathPhase,
     PreEventRingBuffer,
     append_path_event_references,
+    load_path_event_references,
 )
 
 BASE_MS = 1_775_779_200_000
@@ -90,8 +92,16 @@ def test_parent_wave_creates_one_segment_with_many_event_references() -> None:
         assert ring.add(_envelope(sequence, second))
     coalescer = ParentWavePathCoalescer(ring)
 
-    first = coalescer.register_event(_event("evt-1", 1, 1_000))
-    second = coalescer.register_event(_event("evt-2", 2, 3_000))
+    first = coalescer.register_event(
+        _event("evt-1", 1, 1_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
+    second = coalescer.register_event(
+        _event("evt-2", 2, 3_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
 
     assert first.segment_created is True
     assert second.segment_created is False
@@ -115,7 +125,11 @@ def test_parent_wave_creates_one_segment_with_many_event_references() -> None:
 def test_active_segment_matching_is_symbol_scoped_and_splits_post_phase() -> None:
     ring = PreEventRingBuffer(max_age_ms=30_000)
     coalescer = ParentWavePathCoalescer(ring, active_event_ms=20_000)
-    registration = coalescer.register_event(_event("evt-1", 1, 1_000))
+    registration = coalescer.register_event(
+        _event("evt-1", 1, 1_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
 
     active_envelope = _envelope(1, 30)
     matches = coalescer.active_segments_for(active_envelope)
@@ -146,8 +160,16 @@ def test_event_references_append_with_observation_only_authority(
     tmp_path: Path,
 ) -> None:
     coalescer = ParentWavePathCoalescer(PreEventRingBuffer(max_age_ms=30_000))
-    coalescer.register_event(_event("evt-1", 1, 1_000))
-    coalescer.register_event(_event("evt-2", 2, 3_000))
+    coalescer.register_event(
+        _event("evt-1", 1, 1_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
+    coalescer.register_event(
+        _event("evt-2", 2, 3_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
 
     target = tmp_path / "references.jsonl"
     append_path_event_references(target, coalescer.references())
@@ -162,8 +184,21 @@ def test_manual_exclusion_drop_removes_ring_and_open_segment_state() -> None:
     envelope = _envelope(1, 1)
     assert ring.add(envelope) is True
     coalescer = ParentWavePathCoalescer(ring)
-    coalescer.register_event(_event("evt-drop", 1, 1_000))
+    coalescer.register_event(
+        _event("evt-drop", 1, 1_000),
+        sequence_epoch=1,
+        event_exchange_timestamp="2026-04-10T09:00:25+09:00",
+    )
 
     assert ring.drop_symbol("000001") == 1
     assert coalescer.drop_symbol("000001") == 1
     assert coalescer.active_segments_for(_envelope(2, 2)) == ()
+
+
+def test_reference_loader_supports_post_session_gzip(tmp_path: Path) -> None:
+    target = tmp_path / "market_stream_event_references.jsonl"
+    compressed = target.with_suffix(".jsonl.gz")
+    with gzip.open(compressed, "wt", encoding="utf-8") as handle:
+        handle.write('{"schema":"reference-test"}\n')
+
+    assert load_path_event_references(target) == ({"schema": "reference-test"},)

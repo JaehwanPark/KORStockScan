@@ -1,3 +1,7 @@
+import gzip
+import json
+from pathlib import Path
+
 from src.engine.scalping.micro_reversion.p2_replay import (
     EntryPolicy,
     ExitPolicy,
@@ -6,8 +10,99 @@ from src.engine.scalping.micro_reversion.p2_replay import (
     P2ReplayPolicy,
     ReplayTerminalReason,
     SameTimestampPolicy,
+    load_p2_points_from_canonical_stream,
     replay_path,
 )
+
+
+def test_canonical_stream_loader_reconstructs_only_referenced_window(
+    tmp_path: Path,
+) -> None:
+    stream = tmp_path / "market_stream.jsonl"
+    rows = []
+    for sequence, second in enumerate((0, 1, 2, 4), start=1):
+        rows.append(
+            {
+                "schema": "scalp_micro_reversion_market_stream_point_v1",
+                "symbol": "000001",
+                "venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "sequence_epoch": 7,
+                "source_sequence": sequence,
+                "series_sequence": sequence,
+                "exchange_timestamp": f"2026-08-10T09:00:0{second}+09:00",
+                "local_receive_timestamp": f"2026-08-10T09:00:0{second}.010+09:00",
+                "trade_price": 10_000 + sequence,
+                "trade_qty": 10,
+                "best_bid": 9_990,
+                "best_ask": 10_010,
+                "quote_age_ms": 10,
+                "metric_contract_id": (
+                    "scalp_micro_reversion_market_stream_contract_v1"
+                ),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "trading_runtime_effect": False,
+            }
+        )
+    stream.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    reference = {
+        "schema": "scalp_micro_reversion_path_event_reference_v2",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "capture_started_at": "2026-08-10T09:00:01+09:00",
+        "capture_ended_at": "2026-08-10T09:00:02+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+
+    points = load_p2_points_from_canonical_stream((stream,), reference=reference)
+
+    assert [point.source_sequence for point in points] == [2, 3]
+    assert [point.trade_price for point in points] == [10_002, 10_003]
+
+
+def test_canonical_stream_loader_reads_post_session_gzip(tmp_path: Path) -> None:
+    stream = tmp_path / "market_stream.jsonl.gz"
+    row = {
+        "schema": "scalp_micro_reversion_market_stream_point_v1",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "source_sequence": 1,
+        "series_sequence": 1,
+        "exchange_timestamp": "2026-08-10T09:00:01+09:00",
+        "local_receive_timestamp": "2026-08-10T09:00:01.010+09:00",
+        "trade_price": 10_001,
+        "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v1",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+    with gzip.open(stream, "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+    reference = {
+        "schema": "scalp_micro_reversion_path_event_reference_v2",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "capture_started_at": "2026-08-10T09:00:00+09:00",
+        "capture_ended_at": "2026-08-10T09:00:02+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+
+    points = load_p2_points_from_canonical_stream((stream,), reference=reference)
+
+    assert [point.source_sequence for point in points] == [1]
 
 
 def _policy(**overrides) -> P2ReplayPolicy:
