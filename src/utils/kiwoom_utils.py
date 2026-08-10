@@ -878,7 +878,23 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
         return {}
 
     data = results[0] or {}
-    rt_code = int(data.get("return_code", data.get("rt_cd", 0)) or 0)
+    raw_return_code = data.get("return_code")
+    if raw_return_code in (None, ""):
+        raw_return_code = data.get("rt_cd")
+    if raw_return_code in (None, ""):
+        return {
+            "error": "kt00011 return_code missing",
+            "return_code": None,
+            "raw": data,
+        }
+    try:
+        rt_code = int(raw_return_code)
+    except (TypeError, ValueError):
+        return {
+            "error": "kt00011 return_code invalid",
+            "return_code": raw_return_code,
+            "raw": data,
+        }
     if rt_code != 0:
         return {
             "error": str(
@@ -902,7 +918,11 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
             return 0
         try:
             clean = str(v).replace(",", "").replace("+", "").replace("%", "").strip()
-            return int(round(float(clean)))
+            parsed = float(clean)
+            # Official kt00011 margin tiers are discrete integer percentages.
+            # Never round a malformed/unknown fractional rate into an eligible
+            # tier because aplc_rt selects which orderable bucket is trusted.
+            return int(parsed) if parsed.is_integer() else 0
         except (ValueError, TypeError):
             return 0
 
@@ -917,11 +937,22 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
             "today_reuse_amount": to_i(data.get(f"{prefix}tdy_reu_amt")),
         }
 
+    applied_margin_rate = to_pct(data.get("aplc_rt"))
+    applied_tier = tiers.get(applied_margin_rate)
+
     return {
         "error": "",
         "stock_margin_rate": to_pct(data.get("stk_profa_rt")),
         "account_margin_rate": to_pct(data.get("profa_rt")),
-        "applied_margin_rate": to_pct(data.get("aplc_rt")),
+        "applied_margin_rate": applied_margin_rate,
+        "applied_margin_tier_recognized": applied_tier is not None,
+        "applied_orderable_amount": (
+            int(applied_tier.get("orderable_amount", 0)) if applied_tier else 0
+        ),
+        "applied_orderable_qty": (
+            int(applied_tier.get("orderable_qty", 0)) if applied_tier else 0
+        ),
+        "requested_unit_price": to_i(unit_price),
         "deposit": to_i(data.get("entr")),
         "substitute_amount": to_i(data.get("repl_amt")),
         "unpaid_amount": to_i(data.get("uncla")),

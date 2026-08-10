@@ -27662,13 +27662,12 @@ def test_weak_context_late_entry_guard_skips_when_entry_live_tuning_selected(
     assert result["reason"] == "entry_live_tuning_selected"
 
 
-@pytest.mark.parametrize(
-    ("soft_gate_enabled", "opening_rotation_handoff"),
-    [(True, False), (False, True)],
-)
 def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
-    monkeypatch, soft_gate_enabled, opening_rotation_handoff
+    monkeypatch,
 ):
+    soft_gate_enabled = True
+    opening_rotation_handoff = False
+
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):

@@ -11035,6 +11035,11 @@ def test_db_poll_scanner_target_attach_logs_recovery(monkeypatch):
     published = []
     targets = []
     monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_opening_rotation_entry_config",
+        lambda: kiwoom_sniper_v2.sniper_state_handlers.OpeningRotationEntryConfig(),
+    )
+    monkeypatch.setattr(
         kiwoom_sniper_v2,
         "emit_pipeline_event",
         lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(

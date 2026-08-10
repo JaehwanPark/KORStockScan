@@ -2339,9 +2339,7 @@ def _implementation_marker_for_conclusion(
         },
         "threshold_cycle_ev_warning_state": {
             "source_report_type": "threshold_cycle_ev",
-            "implementation_type": (
-                "pattern_lab_ev_warning_classification_provenance"
-            ),
+            "implementation_type": ("pattern_lab_ev_warning_classification_provenance"),
             "interpretation_class": (
                 "ev_warning_split_sample_floor_vs_source_hard_block"
             ),
@@ -2385,8 +2383,7 @@ def _implementation_marker_for_conclusion(
         elif normalized_review_id == "threshold_cycle_ev_warning_state":
             report_state_contract_applies = bool(
                 preflight.get("tuning_input_allowed") is True
-                and _safe_int(preflight.get("hard_blocking_contract_gap_count"), 0)
-                == 0
+                and _safe_int(preflight.get("hard_blocking_contract_gap_count"), 0) == 0
             )
         if not report_state_contract_applies:
             return None, None
@@ -2430,12 +2427,8 @@ def _implementation_marker_for_conclusion(
             )
             diagnostic = {
                 "join_contract_blocked": source_summary.get("join_contract_blocked"),
-                "entry_row_count": _safe_int(
-                    stage_counts.get("entry"), 0
-                ),
-                "submit_row_count": _safe_int(
-                    stage_counts.get("submit"), 0
-                ),
+                "entry_row_count": _safe_int(stage_counts.get("entry"), 0),
+                "submit_row_count": _safe_int(stage_counts.get("submit"), 0),
                 "missing_submit_count": _safe_int(
                     blocker_counts.get("missing_submit"), 0
                 ),
@@ -2450,12 +2443,8 @@ def _implementation_marker_for_conclusion(
                 "warning_count": _safe_int(source_summary.get("warning_count"), 0),
                 "warnings": source_wrapper.get("warnings") or [],
                 "preflight_status": preflight.get("status"),
-                "preflight_tuning_input_allowed": preflight.get(
-                    "tuning_input_allowed"
-                ),
-                "preflight_source_quality_gate": preflight.get(
-                    "source_quality_gate"
-                ),
+                "preflight_tuning_input_allowed": preflight.get("tuning_input_allowed"),
+                "preflight_source_quality_gate": preflight.get("source_quality_gate"),
                 "hard_blocking_contract_gap_count": _safe_int(
                     preflight.get("hard_blocking_contract_gap_count"), 0
                 ),
@@ -2465,9 +2454,7 @@ def _implementation_marker_for_conclusion(
             {
                 "implementation_type": report_state_contract["implementation_type"],
                 "implemented_scope": report_state_contract["implemented_scope"],
-                "interpretation_class": report_state_contract[
-                    "interpretation_class"
-                ],
+                "interpretation_class": report_state_contract["interpretation_class"],
                 "source_report_type": source_report_type,
                 "review_id": review_id,
                 "normalized_review_id": normalized_review_id,
@@ -2490,9 +2477,7 @@ def _implementation_marker_for_conclusion(
                 "forbidden_uses": FORBIDDEN_USES,
                 "source_paths": source_paths,
                 "diagnostic": diagnostic,
-                "root_cause_closure_status_hint": (
-                    "handoff_closed_root_cause_open"
-                ),
+                "root_cause_closure_status_hint": ("handoff_closed_root_cause_open"),
             },
         )
     source_quality_review_ids = {

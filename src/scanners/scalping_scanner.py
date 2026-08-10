@@ -40,7 +40,10 @@ from src.engine.scalping.upper_limit_watch import (  # noqa: E402
     UPPER_LIMIT_LIVE_RECLAIM_SOURCE,
     UpperLimitWatchManager,
 )
-from src.engine.scalping.opening_rotation import EntryConfig as OpeningRotationConfig
+from src.engine.scalping.opening_rotation import (
+    EntryConfig as OpeningRotationConfig,
+    load_active_runtime_policy as load_active_opening_rotation_runtime_policy,
+)
 from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     describe_scalping_buy_windows,
@@ -406,65 +409,12 @@ def _scanner_watch_budget_reallocation_enabled():
 
 
 def _scanner_watch_budget_opening_config():
-    def _rule_value(name, default):
-        return getattr(TRADING_RULES, name, default)
-
-    def _opening_time(env_name, default, hard_default):
-        raw = str(os.getenv(env_name, default) or "").strip()
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                return datetime.strptime(raw, fmt).time()
-            except (TypeError, ValueError):
-                continue
-        log_error(
-            f"⚠️ {env_name} 값이 잘못되어 기본값을 사용합니다: {raw} -> {default}"
-        )
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                return datetime.strptime(str(default), fmt).time()
-            except (TypeError, ValueError):
-                continue
-        return datetime.strptime(hard_default, "%H:%M:%S").time()
-
-    enabled_raw = os.getenv(
-        "KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENABLED",
-        str(_rule_value("OPENING_ROTATION_1PCT_ENABLED", True)),
-    )
-    enabled = (
-        enabled_raw
-        if isinstance(enabled_raw, bool)
-        else str(enabled_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-    )
-
-    observe_default = str(_rule_value("OPENING_ROTATION_1PCT_OBSERVE_START", "09:01"))
-    entry_end_default = str(_rule_value("OPENING_ROTATION_1PCT_ENTRY_END", "15:00"))
-    return OpeningRotationConfig(
-        enabled=enabled,
-        observe_start=_opening_time(
-            "KORSTOCKSCAN_OPENING_ROTATION_1PCT_OBSERVE_START",
-            observe_default,
-            "09:01:00",
-        ),
-        entry_end=_opening_time(
-            "KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END",
-            entry_end_default,
-            "15:00:00",
-        ),
-        min_day_change_pct=_safe_float(
-            os.getenv(
-                "KORSTOCKSCAN_OPENING_ROTATION_1PCT_MIN_DAY_CHANGE_PCT",
-                _rule_value("OPENING_ROTATION_1PCT_MIN_DAY_CHANGE_PCT", 1.5),
-            ),
-            1.5,
-        ),
-        max_day_change_pct=_safe_float(
-            os.getenv(
-                "KORSTOCKSCAN_OPENING_ROTATION_1PCT_MAX_DAY_CHANGE_PCT",
-                _rule_value("OPENING_ROTATION_1PCT_MAX_DAY_CHANGE_PCT", 8.0),
-            ),
-            8.0,
-        ),
-    )
+    try:
+        runtime_policy = load_active_opening_rotation_runtime_policy()
+    except (OSError, ValueError, TypeError) as exc:
+        log_error(f"[OPENING_ROTATION] invalid PREOPEN scanner policy: {exc}")
+        return OpeningRotationConfig(enabled=False)
+    return runtime_policy.entry
 
 
 def _low_rebound_reserve_slots():
@@ -4194,6 +4144,8 @@ def promote_candidates(
             now_dt=now_dt,
             explicit_owner=target.get("ScannerWatchBudgetOwner"),
             opening_config=opening_config,
+            effective_venue=candidate_venue_fields.get("effective_venue"),
+            market_session_bucket=candidate_venue_fields.get("market_session_bucket"),
         )
         target["ScannerWatchBudgetOwner"] = owner
     owner_priority = {

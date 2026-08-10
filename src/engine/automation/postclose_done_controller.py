@@ -1254,9 +1254,7 @@ def _recovery_actions(
         )
         return actions
     if "runtime_apply_gap" in issue_text:
-        actions.append(
-            _build_runtime_apply_gap_audit_action(target_date, verification)
-        )
+        actions.append(_build_runtime_apply_gap_audit_action(target_date, verification))
     if (
         "code_improvement_workorder" in issue_text
         or not _workorder_path(target_date).exists()

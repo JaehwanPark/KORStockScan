@@ -11,7 +11,11 @@ from datetime import datetime
 import os
 from typing import Any
 
-from src.engine.scalping.opening_rotation import EntryConfig, is_watch_candidate
+from src.engine.scalping.opening_rotation import (
+    EntryConfig,
+    is_krx_regular_scope,
+    is_watch_candidate,
+)
 
 GENERAL_SCALPING = "general_scalping"
 OPENING_ROTATION = "opening_rotation"
@@ -214,6 +218,8 @@ def classify_owner(
     explicit_owner: Any = "",
     missing_default: str = GENERAL_SCALPING,
     opening_config: EntryConfig | None = None,
+    effective_venue: Any = "",
+    market_session_bucket: Any = "",
 ) -> str:
     """Classify a scanner candidate without granting trading authority."""
 
@@ -222,12 +228,12 @@ def classify_owner(
         return explicit
 
     tokens = _source_tokens(source_signature)
-    if rising_missed_lineage or tokens & RISING_LINEAGE_SOURCES:
-        return RISING_MISSED
-
     now_dt = now_dt or datetime.now()
     config = opening_config or EntryConfig()
-    if is_watch_candidate(
+    if is_krx_regular_scope(
+        effective_venue=effective_venue,
+        market_session_bucket=market_session_bucket,
+    ) and is_watch_candidate(
         position_tag=position_tag,
         source_signature=tokens,
         day_change_pct=float(day_change_pct or 0.0),
@@ -260,9 +266,9 @@ def _limit_down_enabled(value: bool | None = None) -> bool:
 
 def policy_version(limit_down_enabled: bool | None = None) -> str:
     return (
-        "general1_opening2_limitdown1_rising_residual_v1"
+        "general1_opening2_limitdown1_rising_residual_v2"
         if _limit_down_enabled(limit_down_enabled)
-        else "general1_opening3_rising_residual_v1"
+        else "general1_opening2_rising_residual_v2"
     )
 
 
@@ -286,7 +292,7 @@ def limits(
             rising_max_with_borrow=total,
         )
     general_max = min(1, total)
-    opening_target = 2 if limit_enabled else 3
+    opening_target = 2
     opening_protected = (
         min(opening_target, max(0, total - general_max)) if opening_window_active else 0
     )

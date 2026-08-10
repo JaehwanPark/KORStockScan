@@ -162,9 +162,7 @@ def test_controller_verify_actions_inherit_disabled_stage_profile():
         }
     }
 
-    verify_command = mod._build_verify_action(
-        "2026-06-03", verification
-    ).command
+    verify_command = mod._build_verify_action("2026-06-03", verification).command
     pending_command = mod._build_pending_verify_action(
         "2026-06-03", verification
     ).command

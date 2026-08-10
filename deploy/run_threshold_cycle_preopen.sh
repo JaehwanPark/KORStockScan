@@ -180,6 +180,14 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
   --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env" \
   --dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env" \
   --write
+PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.opening_rotation_tuning \
+  --mode preopen \
+  --target-date "$TARGET_DATE" \
+  --write
+PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.opening_rotation_tuning \
+  --mode verify \
+  --phase preopen \
+  --target-date "$TARGET_DATE"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 preopen_reason="completed"
 if "$VENV_PY" - "$MANIFEST_CAPTURE_FILE" <<'PY'

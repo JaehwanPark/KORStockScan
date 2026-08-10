@@ -1,6 +1,9 @@
 from datetime import datetime
 
+import pytest
+
 from src.engine import kiwoom_sniper_v2
+from src.engine.scalping.opening_rotation import EntryConfig
 from src.engine.scalping.limit_down_watch import LIMIT_DOWN_OBSERVATION_REGISTRY
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
@@ -15,6 +18,15 @@ from src.engine.scalping.watch_budget import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _active_opening_watch_policy(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_opening_rotation_entry_config",
+        lambda: EntryConfig(),
+    )
+
+
 def _watch_target(code, owner, armed_epoch):
     return {
         "id": code,
@@ -25,6 +37,8 @@ def _watch_target(code, owner, armed_epoch):
         "position_tag": "SCANNER",
         "entry_armed_at_epoch": armed_epoch,
         "scanner_watch_budget_owner": owner,
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
     }
 
 
@@ -36,6 +50,8 @@ def test_watch_budget_classifies_opening_rising_and_general():
             source_signature="PRICE_JUMP_START",
             day_change_pct=3.0,
             now_dt=opening_now,
+            effective_venue="KRX",
+            market_session_bucket="krx_regular",
         )
         == OPENING_ROTATION
     )
@@ -44,26 +60,38 @@ def test_watch_budget_classifies_opening_rising_and_general():
             source_signature="LOW_REBOUND_RISING_MISSED",
             day_change_pct=3.0,
             now_dt=opening_now,
+            effective_venue="KRX",
+            market_session_bucket="krx_regular",
         )
-        == RISING_MISSED
+        == OPENING_ROTATION
     )
     assert (
         classify_owner(
             source_signature="SUPERNOVA",
-            day_change_pct=3.0,
+            day_change_pct=0.0,
             now_dt=opening_now,
         )
         == GENERAL_SCALPING
     )
+    assert (
+        classify_owner(
+            source_signature="PRICE_JUMP_START",
+            day_change_pct=3.0,
+            now_dt=opening_now,
+            effective_venue="NXT",
+            market_session_bucket="nxt",
+        )
+        == RISING_MISSED
+    )
 
 
-def test_watch_budget_limits_are_general1_opening3_rising12_with_borrow_to15():
+def test_watch_budget_limits_are_general1_opening2_rising13_with_borrow_to15():
     policy = limits(16, opening_window_active=True)
 
     assert policy.general_max == 1
-    assert policy.opening_protected == 3
+    assert policy.opening_protected == 2
     assert policy.limit_down_protected == 0
-    assert policy.rising_guaranteed == 12
+    assert policy.rising_guaranteed == 13
     assert policy.rising_max_with_borrow == 15
     assert (
         owner_allowances(
@@ -76,7 +104,7 @@ def test_watch_budget_limits_are_general1_opening3_rising12_with_borrow_to15():
     assert (
         slot_type(
             RISING_MISSED,
-            13,
+            14,
             total=16,
             opening_window_active=True,
         )
@@ -170,7 +198,7 @@ def test_runtime_budget_counts_external_limit_down_observation_slot(monkeypatch)
         LIMIT_DOWN_OBSERVATION_REGISTRY.release("900001")
 
 
-def test_runtime_budget_reclaims_borrowed_rising_slot_for_opening(monkeypatch):
+def test_runtime_budget_caps_opening_at_two_concurrent_slots(monkeypatch):
     monkeypatch.setattr(kiwoom_sniper_v2, "_scalping_fifo_max_active", lambda: 16)
     monkeypatch.setattr(
         kiwoom_sniper_v2,
@@ -199,7 +227,7 @@ def test_runtime_budget_reclaims_borrowed_rising_slot_for_opening(monkeypatch):
     )
 
     assert len(overflow) == 1
-    assert overflow[0]["scanner_watch_budget_owner"] == RISING_MISSED
+    assert overflow[0]["scanner_watch_budget_owner"] == OPENING_ROTATION
 
 
 def test_runtime_budget_limits_general_even_below_total_cap(monkeypatch):
