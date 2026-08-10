@@ -268,6 +268,92 @@ def test_trailing_continuation_lineage_is_snapshotted_then_reset():
         "scalp_trailing_continuation_runtime_position_token"
         in receipts._SELL_COMPLETE_RESET_KEYS
     )
+    assert "smoothing_source_only_path_journals" in receipts._SELL_COMPLETE_RESET_KEYS
+    assert "smoothing_source_only_path_journals" not in receipts._SELL_REVIVE_RESET_KEYS
+
+
+def test_scalp_revive_preserves_active_post_sell_smoothing_journal(monkeypatch):
+    journal_state = {
+        "schema_version": "smoothing_source_only_path_journal_v1",
+        "arms": {"sj-1": {"arm_id": "sj-1"}},
+    }
+    stock = {
+        "name": "TEST",
+        "smoothing_source_only_path_journals": journal_state,
+    }
+
+    monkeypatch.setattr(
+        receipts.POSITION_PEAK_LEDGER, "remove_for_stock", lambda _stock: None
+    )
+    monkeypatch.setattr(receipts, "highest_prices", {})
+    monkeypatch.setattr(
+        receipts, "move_orders_to_terminal", lambda *_args, **_kwargs: None
+    )
+    receipts._apply_scalp_revive_memory_state(
+        target_stock=stock,
+        code="123456",
+        new_watch_id=8,
+        revived_position_tag="SCANNER",
+        revived_at_ts=1000.0,
+    )
+
+    assert stock["status"] == "WATCHING"
+    assert stock["smoothing_source_only_path_journals"] is journal_state
+
+
+def test_non_revive_sell_registers_smoothing_journal_before_runtime_reset(monkeypatch):
+    journal_state = {
+        "schema_version": "smoothing_source_only_path_journal_v1",
+        "arms": {"sj-1": {"arm_id": "sj-1"}},
+    }
+    stock = {
+        "id": 7,
+        "name": "TEST",
+        "code": "123456",
+        "smoothing_source_only_path_journals": journal_state,
+    }
+    registered = []
+    monkeypatch.setattr(
+        receipts.POSITION_PEAK_LEDGER, "remove_for_stock", lambda _stock: None
+    )
+    monkeypatch.setattr(receipts, "highest_prices", {})
+    monkeypatch.setattr(
+        receipts, "move_orders_to_terminal", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        receipts,
+        "_smoothing_non_revive_post_sell_register_callback",
+        lambda target, code, *, now_ts: registered.append(
+            (target["smoothing_source_only_path_journals"], code, now_ts)
+        )
+        or {
+            "registered": True,
+            "status": "registered",
+            "active_arm_count": 1,
+            "expires_at_epoch": now_ts + 90,
+        },
+    )
+    monkeypatch.setattr(
+        receipts.threading,
+        "Thread",
+        lambda **_kwargs: type("DeferredThread", (), {"start": lambda _self: None})(),
+    )
+
+    receipts._finalize_standard_sell_execution(
+        target_id=7,
+        exec_price=10_000,
+        now=datetime(2026, 8, 10, 15, 31, 0),
+        target_stock=stock,
+        strategy="SCALPING",
+        is_scalp_revive=False,
+        code="123456",
+        order_no="sell-1",
+    )
+
+    assert registered[0][0] is journal_state
+    assert registered[0][1] == "123456"
+    assert stock["status"] == "COMPLETED"
+    assert "smoothing_source_only_path_journals" not in stock
 
 
 def test_sell_receipt_persists_net_profit_rate(monkeypatch):

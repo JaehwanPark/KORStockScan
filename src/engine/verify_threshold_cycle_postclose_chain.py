@@ -579,6 +579,285 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _smoothing_source_only_path_journal_contract_status(
+    daily_report: dict[str, Any],
+    cumulative_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Verify daily/rolling smoothing journals without runtime authority."""
+
+    families = {
+        "soft_stop_whipsaw_confirmation": 10,
+        "holding_flow_ofi_smoothing": 20,
+    }
+    expected_horizons = {10, 20, 40, 60, 90}
+    daily_snapshot = (
+        daily_report.get("threshold_snapshot")
+        if isinstance(daily_report.get("threshold_snapshot"), dict)
+        else {}
+    )
+    window_snapshots = (
+        cumulative_report.get("threshold_snapshot_by_window")
+        if isinstance(cumulative_report.get("threshold_snapshot_by_window"), dict)
+        else {}
+    )
+    declared_windows = (
+        cumulative_report.get("windows")
+        if isinstance(cumulative_report.get("windows"), dict)
+        else {}
+    )
+    issues: list[str] = []
+    family_status: dict[str, Any] = {}
+    feature_present = False
+    feature_required = any(
+        str(report.get("date") or "") >= "2026-08-10"
+        for report in (daily_report, cumulative_report)
+    )
+
+    def journal_from(snapshot: dict[str, Any], family: str) -> Any:
+        family_payload = snapshot.get(family)
+        if not isinstance(family_payload, dict):
+            return None
+        return family_payload.get("source_only_path_journal")
+
+    def validate_journal(journal: Any, *, label: str, sample_floor: int) -> list[str]:
+        local: list[str] = []
+        if not isinstance(journal, dict):
+            return [f"{label}_journal_missing"]
+        if journal.get("schema") != "smoothing_source_only_path_journal_v3":
+            local.append(f"{label}_schema_invalid")
+        if _safe_int(journal.get("sample_floor"), 0) != sample_floor:
+            local.append(f"{label}_sample_floor_invalid")
+        for key, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+            ("broker_order_forbidden", True),
+            ("eligible_for_live_review", False),
+        ):
+            if journal.get(key) is not expected:
+                local.append(f"{label}_{key}_invalid")
+        if journal.get("primary_decision_metric") != ("source_quality_adjusted_ev_pct"):
+            local.append(f"{label}_primary_metric_invalid")
+        if not isinstance(journal.get("exclusion_reason_counts"), dict):
+            local.append(f"{label}_exclusion_reason_counts_missing")
+        if not isinstance(journal.get("guarded_terminal_reason_counts"), dict):
+            local.append(f"{label}_guarded_terminal_reason_counts_missing")
+        phase_summary = journal.get("observation_phase_summary")
+        if not isinstance(phase_summary, dict) or not all(
+            isinstance(phase_summary.get(phase), dict)
+            for phase in (
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            )
+        ):
+            local.append(f"{label}_observation_phase_summary_invalid")
+        elif any(
+            not all(
+                key in phase_summary[phase]
+                for key in (
+                    "arm_count",
+                    "horizon_count",
+                    "ev_eligible_horizon_count",
+                    "excluded_horizon_count",
+                    "status_counts",
+                    "registration_status_counts",
+                )
+            )
+            for phase in (
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            )
+        ):
+            local.append(f"{label}_observation_phase_counts_missing")
+        horizons = (
+            journal.get("horizons") if isinstance(journal.get("horizons"), dict) else {}
+        )
+        normalized_horizons = {
+            _safe_int(key, -1): value for key, value in horizons.items()
+        }
+        if set(normalized_horizons) != expected_horizons:
+            local.append(f"{label}_exact_horizons_invalid")
+        for horizon in expected_horizons:
+            summary = normalized_horizons.get(horizon)
+            if not isinstance(summary, dict) or (
+                "source_quality_adjusted_ev_pct" not in summary
+            ):
+                local.append(f"{label}_{horizon}s_ev_missing")
+            elif not all(
+                key in summary
+                for key in (
+                    "exact_observed_count",
+                    "guarded_terminal_count",
+                    "ev_eligible_count",
+                )
+            ):
+                local.append(f"{label}_{horizon}s_guarded_ev_counts_missing")
+        rows = journal.get("rows") if isinstance(journal.get("rows"), list) else []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                local.append(f"{label}_row_{index}_invalid")
+                continue
+            if _safe_int(row.get("horizon_sec"), -1) not in expected_horizons:
+                local.append(f"{label}_row_{index}_horizon_invalid")
+            for key in ("journal_arm_id", "position_key", "trace_id", "snapshot_id"):
+                if str(row.get(key) or "").strip() in {"", "-"}:
+                    local.append(f"{label}_row_{index}_{key}_missing")
+            if (_safe_int(row.get("reference_buy_price"), 0) or 0) <= 0:
+                local.append(f"{label}_row_{index}_reference_buy_price_invalid")
+            if row.get("observation_phase") not in {
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            }:
+                local.append(f"{label}_row_{index}_observation_phase_invalid")
+            if "post_sell_registration_status" not in row:
+                local.append(
+                    f"{label}_row_{index}_post_sell_registration_status_missing"
+                )
+        if isinstance(phase_summary, dict):
+            for phase in (
+                "holding",
+                "post_sell_watching",
+                "post_sell_non_revive",
+            ):
+                summary = phase_summary.get(phase)
+                if not isinstance(summary, dict):
+                    continue
+                phase_rows = [
+                    row
+                    for row in rows
+                    if isinstance(row, dict) and row.get("observation_phase") == phase
+                ]
+                phase_eligible = [
+                    row
+                    for row in phase_rows
+                    if row.get("status")
+                    in {
+                        "observed",
+                        "guarded_terminal_hard_breach",
+                        "guarded_terminal_emergency_breach",
+                    }
+                    and row.get("opportunity_ev_delta_pct") is not None
+                ]
+                registration_status_arms: dict[str, set[str]] = {}
+                for row in phase_rows:
+                    status = str(row.get("post_sell_registration_status") or "-")
+                    if status != "-":
+                        registration_status_arms.setdefault(status, set()).add(
+                            str(row.get("journal_arm_id") or "-")
+                        )
+                expected = {
+                    "arm_count": len(
+                        {str(row.get("journal_arm_id") or "-") for row in phase_rows}
+                    ),
+                    "horizon_count": len(phase_rows),
+                    "ev_eligible_horizon_count": len(phase_eligible),
+                    "excluded_horizon_count": len(phase_rows) - len(phase_eligible),
+                    "status_counts": dict(
+                        Counter(str(row.get("status") or "-") for row in phase_rows)
+                    ),
+                    "registration_status_counts": {
+                        status: len(arm_ids)
+                        for status, arm_ids in sorted(registration_status_arms.items())
+                    },
+                }
+                if any(summary.get(key) != value for key, value in expected.items()):
+                    local.append(f"{label}_{phase}_phase_counts_inconsistent")
+        return local
+
+    def row_signatures(journal: dict[str, Any]) -> set[tuple[Any, ...]]:
+        rows = journal.get("rows") if isinstance(journal.get("rows"), list) else []
+        return {
+            (
+                row.get("journal_arm_id"),
+                row.get("position_key"),
+                row.get("trace_id"),
+                row.get("snapshot_id"),
+                _safe_int(row.get("horizon_sec"), -1),
+                row.get("status"),
+                row.get("opportunity_ev_delta_pct"),
+                row.get("observation_phase"),
+                row.get("post_sell_registration_status"),
+            )
+            for row in rows
+            if isinstance(row, dict)
+        }
+
+    for family, sample_floor in families.items():
+        daily_journal = journal_from(daily_snapshot, family)
+        window_journals = {
+            str(window): journal_from(snapshot, family)
+            for window, snapshot in window_snapshots.items()
+            if isinstance(snapshot, dict)
+        }
+        if isinstance(daily_journal, dict) or any(
+            isinstance(item, dict) for item in window_journals.values()
+        ):
+            feature_present = True
+        family_issues = validate_journal(
+            daily_journal,
+            label=f"{family}_daily",
+            sample_floor=sample_floor,
+        )
+        required_windows = [
+            str(window)
+            for window in declared_windows
+            if str(window) == "cumulative" or str(window).startswith("rolling_")
+        ]
+        if not required_windows:
+            family_issues.append(f"{family}_rolling_windows_missing")
+        daily_signatures = (
+            row_signatures(daily_journal) if isinstance(daily_journal, dict) else set()
+        )
+        for window in required_windows:
+            window_journal = window_journals.get(window)
+            family_issues.extend(
+                validate_journal(
+                    window_journal,
+                    label=f"{family}_{window}",
+                    sample_floor=sample_floor,
+                )
+            )
+            if isinstance(window_journal, dict) and not daily_signatures.issubset(
+                row_signatures(window_journal)
+            ):
+                family_issues.append(f"{family}_{window}_daily_lineage_mismatch")
+        family_status[family] = {
+            "status": "fail" if family_issues else "pass",
+            "daily_row_count": (
+                len(daily_journal.get("rows") or [])
+                if isinstance(daily_journal, dict)
+                else 0
+            ),
+            "verified_windows": required_windows,
+            "issues": sorted(set(family_issues)),
+        }
+        issues.extend(family_issues)
+
+    if not feature_present:
+        if feature_required:
+            return {
+                "status": "fail",
+                "runtime_effect": False,
+                "issues": ["smoothing_source_only_path_journal_missing"],
+                "families": {},
+            }
+        return {
+            "status": "not_applicable",
+            "runtime_effect": False,
+            "issues": [],
+            "families": {},
+        }
+    return {
+        "status": "fail" if issues else "pass",
+        "runtime_effect": False,
+        "issues": sorted(set(issues)),
+        "families": family_status,
+    }
+
+
 def _is_real_primary_sample_book(value: Any) -> bool:
     text = str(value or "").strip()
     return text == "real" or text.startswith("real_")
@@ -1139,6 +1418,12 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "threshold_cycle_ev": REPORT_DIR
         / "threshold_cycle_ev"
         / f"threshold_cycle_ev_{target_date}.json",
+        "threshold_cycle_calibration": REPORT_DIR
+        / "threshold_cycle_calibration"
+        / f"threshold_cycle_calibration_{target_date}_postclose.json",
+        "threshold_cycle_cumulative": REPORT_DIR
+        / "threshold_cycle_cumulative"
+        / f"threshold_cycle_cumulative_{target_date}.json",
         "scalp_entry_action_decision_matrix": REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json",
@@ -5389,6 +5674,16 @@ def build_threshold_cycle_postclose_verification(
 
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
+    threshold_cycle_calibration = _load_json(paths["threshold_cycle_calibration"])
+    threshold_cycle_cumulative = _load_json(paths["threshold_cycle_cumulative"])
+    smoothing_source_only_path_journal = (
+        _smoothing_source_only_path_journal_contract_status(
+            threshold_cycle_calibration,
+            threshold_cycle_cumulative,
+        )
+    )
+    if smoothing_source_only_path_journal["status"] == "fail":
+        log_issues.extend(smoothing_source_only_path_journal["issues"])
     workorder = _load_json(paths["code_improvement_workorder"])
     workorder_contract = _code_improvement_workorder_contract_status(
         workorder, target_date=target_date
@@ -6269,6 +6564,10 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("stage_hook_workorder_discovery")
     if execution_flags.get("stage_hook_runtime_scaffold") is not True:
         disabled_artifact_labels.add("stage_hook_runtime_scaffold")
+    if target_date < "2026-08-10":
+        disabled_artifact_labels.update(
+            {"threshold_cycle_calibration", "threshold_cycle_cumulative"}
+        )
     disabled_artifact_labels.discard("")
     missing_required_artifacts = [
         item["label"]
@@ -7029,6 +7328,7 @@ def build_threshold_cycle_postclose_verification(
         },
         "artifact_status": artifact_status,
         "missing_required_artifacts": missing_required_artifacts,
+        "smoothing_source_only_path_journal": smoothing_source_only_path_journal,
         "limit_down_watch": limit_down_watch_status,
         "upper_limit_watch": upper_limit_watch_status,
         "workorder_snapshot": {
@@ -7240,6 +7540,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         )
         else {}
     )
+    smoothing_journal = (
+        report.get("smoothing_source_only_path_journal")
+        if isinstance(report.get("smoothing_source_only_path_journal"), dict)
+        else {}
+    )
     lines = [
         f"# Threshold Cycle Postclose Verification - {report.get('date')}",
         "",
@@ -7260,6 +7565,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- missing_downstream_links: `{report.get('missing_downstream_links') or []}`",
         f"- stale_downstream_links: `{report.get('stale_downstream_links') or []}`",
         f"- runtime_apply_gap_issues: `{runtime_gap.get('issues') or []}`",
+        f"- smoothing_source_only_path_journal: `{smoothing_journal.get('status') or '-'}`",
+        f"- smoothing_source_only_path_journal_issues: `{smoothing_journal.get('issues') or []}`",
         "",
         "## Warning Follow-Up Summary",
         f"- status: `{warning_followup.get('status') or '-'}`",

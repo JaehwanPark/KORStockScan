@@ -922,6 +922,9 @@ bind_execution_dependencies(
     scalp_exit_completed_callback=(
         sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
     ),
+    smoothing_non_revive_post_sell_register_callback=(
+        sniper_state_handlers.register_non_revive_smoothing_post_sell_paths
+    ),
     broker_snapshot_refresh_callback=(_request_broker_snapshot_refresh_after_execution),
 )
 
@@ -1047,6 +1050,9 @@ def _ensure_execution_deps():
         ),
         "scalp_exit_completed_callback": (
             sniper_state_handlers.reconcile_rising_missed_reentry_after_sell_completed
+        ),
+        "smoothing_non_revive_post_sell_register_callback": (
+            sniper_state_handlers.register_non_revive_smoothing_post_sell_paths
         ),
         "broker_snapshot_refresh_callback": (
             _request_broker_snapshot_refresh_after_execution
@@ -14512,6 +14518,15 @@ def run_sniper(is_test_mode=False):
             _flush_deferred_scanner_skip_events()
             sniper_state_handlers.observe_rising_missed_nxt_post_block_samplers()
             sniper_state_handlers.observe_rising_missed_adverse_micro_recovery_observations()
+            try:
+                sniper_state_handlers.observe_non_revive_smoothing_post_sell_paths(
+                    now_ts=time.time()
+                )
+            except Exception as exc:
+                log_error(
+                    "[SMOOTHING_POST_SELL] detached observer failed without "
+                    f"runtime effect: {exc}"
+                )
 
             targets[:] = [
                 t for t in targets if t.get("status") not in ["COMPLETED", "EXPIRED"]

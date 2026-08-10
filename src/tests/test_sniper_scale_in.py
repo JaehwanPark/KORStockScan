@@ -40299,6 +40299,9 @@ def test_soft_stop_expert_emergency_keeps_immediate_exit(monkeypatch):
     assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
     assert probe_logs and probe_logs[-1]["exclusion_reason"] == "emergency_pct"
     assert exit_calls
+    assert not any(
+        stage == "smoothing_source_only_path_armed" for stage, _fields in pipeline_logs
+    )
 
 
 def test_open_reclaim_never_green_exit_rule(monkeypatch):
@@ -43464,9 +43467,9 @@ def test_handle_holding_state_cancels_soft_stop_when_fresh_quote_recovers(
                     "quote_consistency_entry_blocked": False,
                     "price_source": "ws",
                 },
-                9_820,
-                9_830,
-                9_810,
+                9_850,
+                9_860,
+                9_840,
             )
 
         monkeypatch.setattr(
@@ -43553,6 +43556,16 @@ def test_handle_holding_state_cancels_soft_stop_when_fresh_quote_recovers(
     assert rest_request_codes == ["123456_NX"]
     assert recovered[-1]["actual_order_submitted"] is False
     assert recovered[-1]["broker_order_forbidden"] is True
+    source_only_arms = [
+        fields
+        for stage, fields in pipeline_events
+        if stage == "smoothing_source_only_path_armed"
+    ]
+    assert source_only_arms
+    assert source_only_arms[-1]["journal_family"] == "soft_stop_whipsaw_confirmation"
+    assert source_only_arms[-1]["runtime_family_enabled"] is False
+    assert source_only_arms[-1]["alternative_executed"] is False
+    assert source_only_arms[-1]["runtime_effect"] is False
 
 
 def test_handle_holding_state_defers_trailing_sell_on_executable_recovery(

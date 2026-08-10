@@ -131,6 +131,37 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "holding_flow_ofi_micro_score_smooth",
     "holding_flow_ofi_regime",
     "holding_flow_ofi_usable",
+    "horizon_sec",
+    "horizon_seconds",
+    "horizon_status",
+    "hard_breach",
+    "emergency_breach",
+    "effective_price",
+    "effective_profit_rate",
+    "effective_price_source",
+    "effective_price_quality",
+    "exact_lineage_status",
+    "journal_alternative_action",
+    "journal_arm_id",
+    "journal_control_action",
+    "journal_family",
+    "journal_position_key",
+    "journal_snapshot_id",
+    "journal_started_at_epoch",
+    "journal_trace_id",
+    "observation_elapsed_sec",
+    "observation_lag_sec",
+    "path_mae_profit_rate",
+    "path_mfe_profit_rate",
+    "path_price_quality_valid_sample_count",
+    "path_price_quality_invalid_sample_count",
+    "runtime_family_enabled",
+    "alternative_executed",
+    "anchor_effective_price",
+    "anchor_effective_profit_rate",
+    "anchor_effective_price_source",
+    "anchor_effective_price_quality",
+    "close_reason",
     "last_add_type",
     "latest_strength",
     "latest_price",
@@ -9049,6 +9080,409 @@ def _build_soft_stop_family(events: list[dict]) -> dict:
     }
 
 
+def _build_smoothing_source_only_path_journal(
+    events: list[dict], *, family: str
+) -> dict[str, Any]:
+    expected_horizons = (10, 20, 40, 60, 90)
+    arms = [
+        event
+        for event in _events_for_stage(events, "smoothing_source_only_path_armed")
+        if str(_event_fields(event).get("journal_family") or "") == family
+    ]
+    horizon_events: dict[str, list[dict]] = defaultdict(list)
+    close_events: dict[str, list[dict]] = defaultdict(list)
+    for stage, target in (
+        ("smoothing_source_only_path_horizon", horizon_events),
+        ("smoothing_source_only_path_closed", close_events),
+    ):
+        for event in _events_for_stage(events, stage):
+            fields = _event_fields(event)
+            if str(fields.get("journal_family") or "") != family:
+                continue
+            arm_id = str(fields.get("journal_arm_id") or "").strip()
+            if arm_id:
+                target[arm_id].append(event)
+    completed_by_record = _completed_valid_profit_index(events)
+    rows: list[dict[str, Any]] = []
+    exclusion_reasons: Counter = Counter()
+    guarded_terminal_reasons: Counter = Counter()
+    for arm in arms:
+        fields = _event_fields(arm)
+        arm_id = str(fields.get("journal_arm_id") or "").strip()
+        position_key = str(fields.get("journal_position_key") or "").strip()
+        trace_id = str(fields.get("journal_trace_id") or "").strip()
+        snapshot_id = str(fields.get("journal_snapshot_id") or "").strip()
+        exact_lineage_status = str(fields.get("exact_lineage_status") or "").strip()
+        anchor_price_quality = (
+            str(fields.get("anchor_effective_price_quality") or "").strip().lower()
+        )
+        record_id = str(arm.get("record_id") or "").strip()
+        arm_at = str(arm.get("emitted_at") or "")
+        started_at = _safe_float(fields.get("journal_started_at_epoch"), None)
+        exact_lineage = all(
+            value not in {"", "-"}
+            for value in (arm_id, position_key, trace_id, snapshot_id)
+        )
+        if family == "holding_flow_ofi_smoothing":
+            exact_lineage = exact_lineage and exact_lineage_status == "source_exact"
+        else:
+            exact_lineage = exact_lineage and exact_lineage_status in {
+                "source_exact",
+                "journal_native_only",
+            }
+        if not exact_lineage:
+            exclusion_reasons["exact_lineage_missing"] += 1
+        anchor_price_usable = anchor_price_quality in {
+            "ok",
+            "warning",
+            "single_source",
+        }
+        if not anchor_price_usable:
+            exclusion_reasons["anchor_effective_price_quality_invalid"] += 1
+        completed = _next_completed_valid_outcome(
+            completed_by_record,
+            record_id=record_id,
+            after_at=arm_at,
+        )
+        completed_dt = _parse_datetime(
+            completed.get("emitted_at") if completed is not None else None
+        )
+        completed_epoch = completed_dt.timestamp() if completed_dt else None
+        completed_fields = _event_fields(completed) if completed is not None else {}
+        completed_revive = _truthy(completed_fields.get("revive"))
+        post_sell_registration_status = str(
+            completed_fields.get("smoothing_non_revive_post_sell_registration_status")
+            or "-"
+        )
+        close_reason = ""
+        close_fields: dict[str, Any] = {}
+        matching_closes = close_events.get(arm_id, [])
+        if matching_closes:
+            close_fields = _event_fields(matching_closes[-1])
+            close_reason = str(close_fields.get("close_reason") or "")
+            if close_reason in {"hard_breach", "emergency_breach"}:
+                guarded_terminal_reasons[close_reason] += 1
+        by_horizon: dict[int, list[dict]] = defaultdict(list)
+        for event in horizon_events.get(arm_id, []):
+            event_fields = _event_fields(event)
+            horizon = _safe_int(event_fields.get("horizon_sec"), 0) or 0
+            if horizon in expected_horizons:
+                by_horizon[horizon].append(event)
+        for horizon in expected_horizons:
+            candidates = by_horizon.get(horizon, [])
+            selected = candidates[0] if len(candidates) == 1 else None
+            status = ""
+            selected_fields: dict[str, Any] = {}
+            if len(candidates) > 1:
+                status = "duplicate_horizon_event"
+            elif selected is not None:
+                selected_fields = _event_fields(selected)
+                lineage_matches = all(
+                    str(selected_fields.get(key) or "").strip() == expected
+                    for key, expected in (
+                        ("journal_position_key", position_key),
+                        ("journal_trace_id", trace_id),
+                        ("journal_snapshot_id", snapshot_id),
+                    )
+                )
+                status = str(selected_fields.get("horizon_status") or "missing")
+                if not lineage_matches:
+                    status = "horizon_lineage_mismatch"
+                if status == "observed" and _truthy(
+                    selected_fields.get("emergency_breach")
+                ):
+                    status = "guarded_terminal_emergency_breach"
+                elif status == "observed" and _truthy(
+                    selected_fields.get("hard_breach")
+                ):
+                    status = "guarded_terminal_hard_breach"
+            elif close_reason in {"hard_breach", "emergency_breach"}:
+                close_lineage_matches = all(
+                    str(close_fields.get(key) or "").strip() == expected
+                    for key, expected in (
+                        ("journal_position_key", position_key),
+                        ("journal_trace_id", trace_id),
+                        ("journal_snapshot_id", snapshot_id),
+                    )
+                )
+                if not close_lineage_matches:
+                    status = "guarded_terminal_lineage_mismatch"
+                else:
+                    status = f"guarded_terminal_{close_reason}"
+                    selected_fields = {
+                        **close_fields,
+                        "effective_price": close_fields.get("terminal_effective_price"),
+                        "effective_profit_rate": close_fields.get(
+                            "terminal_effective_profit_rate"
+                        ),
+                        "effective_price_source": close_fields.get(
+                            "terminal_effective_price_source"
+                        ),
+                        "effective_price_quality": close_fields.get(
+                            "terminal_effective_price_quality"
+                        ),
+                    }
+            elif (
+                completed_epoch is not None
+                and started_at is not None
+                and completed_epoch <= started_at + horizon
+            ):
+                status = (
+                    "revive_post_sell_observer_missing"
+                    if completed_revive
+                    else "non_revive_post_sell_observer_missing"
+                )
+            else:
+                status = "pending_or_missing_horizon"
+            ev_eligible_status = status in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
+            if ev_eligible_status:
+                selected_price_quality = (
+                    str(selected_fields.get("effective_price_quality") or "")
+                    .strip()
+                    .lower()
+                )
+                if selected_price_quality not in {
+                    "ok",
+                    "warning",
+                    "single_source",
+                }:
+                    status = (
+                        "guarded_terminal_price_quality_invalid"
+                        if status.startswith("guarded_terminal_")
+                        else "effective_price_quality_invalid"
+                    )
+                elif (
+                    _safe_int(
+                        selected_fields.get("path_price_quality_invalid_sample_count"),
+                        0,
+                    )
+                    or 0
+                ) > 0:
+                    status = "path_price_quality_gap"
+            ev_eligible_status = status in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
+            if not ev_eligible_status:
+                exclusion_reasons[status] += 1
+            anchor_profit = _safe_float(
+                fields.get("anchor_effective_profit_rate"), None
+            )
+            horizon_profit = _safe_float(
+                selected_fields.get("effective_profit_rate"), None
+            )
+            alternative_action = str(
+                fields.get("journal_alternative_action") or ""
+            ).upper()
+            observation_phase = str(
+                selected_fields.get("observation_phase") or ""
+            ).strip()
+            if not observation_phase:
+                if completed is not None:
+                    observation_phase = (
+                        "post_sell_watching"
+                        if completed_revive
+                        else "post_sell_non_revive"
+                    )
+                else:
+                    observation_phase = "holding"
+            if (
+                ev_eligible_status
+                and exact_lineage
+                and anchor_price_usable
+                and anchor_profit is not None
+                and horizon_profit is not None
+            ):
+                opportunity_delta = (
+                    horizon_profit - anchor_profit
+                    if alternative_action == "HOLD"
+                    else anchor_profit - horizon_profit
+                )
+            else:
+                opportunity_delta = None
+            rows.append(
+                {
+                    "journal_arm_id": arm_id or "-",
+                    "record_id": record_id or "-",
+                    "position_key": position_key or "-",
+                    "trace_id": trace_id or "-",
+                    "snapshot_id": snapshot_id or "-",
+                    "exact_lineage_status": exact_lineage_status or "-",
+                    "alternative_action": alternative_action or "-",
+                    "control_action": fields.get("journal_control_action") or "-",
+                    "runtime_family_enabled": _truthy(
+                        fields.get("runtime_family_enabled")
+                    ),
+                    "alternative_executed": _truthy(fields.get("alternative_executed")),
+                    "horizon_sec": horizon,
+                    "status": status,
+                    "anchor_effective_profit_rate": anchor_profit,
+                    "reference_buy_price": _safe_int(
+                        fields.get("reference_buy_price"), None
+                    ),
+                    "anchor_effective_price_source": fields.get(
+                        "anchor_effective_price_source"
+                    )
+                    or "-",
+                    "anchor_effective_price_quality": anchor_price_quality or "-",
+                    "effective_profit_rate": horizon_profit,
+                    "effective_price": _safe_int(
+                        selected_fields.get("effective_price"), None
+                    ),
+                    "effective_price_source": selected_fields.get(
+                        "effective_price_source"
+                    )
+                    or "-",
+                    "effective_price_quality": selected_fields.get(
+                        "effective_price_quality"
+                    )
+                    or "-",
+                    "observation_phase": observation_phase,
+                    "post_sell_registration_status": (
+                        post_sell_registration_status
+                        if observation_phase == "post_sell_non_revive"
+                        else "-"
+                    ),
+                    "path_mfe_profit_rate": _safe_float(
+                        selected_fields.get("path_mfe_profit_rate"), None
+                    ),
+                    "path_mae_profit_rate": _safe_float(
+                        selected_fields.get("path_mae_profit_rate"), None
+                    ),
+                    "path_price_quality_valid_sample_count": _safe_int(
+                        selected_fields.get("path_price_quality_valid_sample_count"),
+                        0,
+                    ),
+                    "path_price_quality_invalid_sample_count": _safe_int(
+                        selected_fields.get("path_price_quality_invalid_sample_count"),
+                        0,
+                    ),
+                    "opportunity_ev_delta_pct": (
+                        round(opportunity_delta, 6)
+                        if opportunity_delta is not None
+                        else None
+                    ),
+                    "hard_breach": _truthy(selected_fields.get("hard_breach")),
+                    "emergency_breach": _truthy(
+                        selected_fields.get("emergency_breach")
+                    ),
+                }
+            )
+    horizon_summary: dict[str, Any] = {}
+    for horizon in expected_horizons:
+        horizon_rows = [row for row in rows if row["horizon_sec"] == horizon]
+        valid = [
+            row
+            for row in horizon_rows
+            if row["status"]
+            in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
+            and row["opportunity_ev_delta_pct"] is not None
+        ]
+        exact_observed = [row for row in valid if row["status"] == "observed"]
+        guarded_terminal = [
+            row for row in valid if row["status"].startswith("guarded_terminal_")
+        ]
+        deltas = [float(row["opportunity_ev_delta_pct"]) for row in valid]
+        horizon_summary[str(horizon)] = {
+            "arm_count": len(horizon_rows),
+            "exact_observed_count": len(exact_observed),
+            "guarded_terminal_count": len(guarded_terminal),
+            "ev_eligible_count": len(valid),
+            "source_quality_adjusted_ev_pct": (
+                round(_avg(deltas) or 0.0, 6) if deltas else None
+            ),
+            "status_counts": dict(Counter(row["status"] for row in horizon_rows)),
+        }
+    sample_floor = 10 if family == "soft_stop_whipsaw_confirmation" else 20
+    exact_path_count = sum(
+        all(
+            any(
+                row["journal_arm_id"] == arm_id
+                and row["horizon_sec"] == horizon
+                and row["status"]
+                in {
+                    "observed",
+                    "guarded_terminal_hard_breach",
+                    "guarded_terminal_emergency_breach",
+                }
+                and row["opportunity_ev_delta_pct"] is not None
+                for row in rows
+            )
+            for horizon in expected_horizons
+        )
+        for arm_id in {row["journal_arm_id"] for row in rows}
+    )
+    observation_phase_summary: dict[str, Any] = {}
+    for phase in ("holding", "post_sell_watching", "post_sell_non_revive"):
+        phase_rows = [row for row in rows if row["observation_phase"] == phase]
+        registration_status_arms: dict[str, set[str]] = defaultdict(set)
+        for row in phase_rows:
+            registration_status = row["post_sell_registration_status"]
+            if registration_status != "-":
+                registration_status_arms[registration_status].add(row["journal_arm_id"])
+        phase_eligible = [
+            row
+            for row in phase_rows
+            if row["status"]
+            in {
+                "observed",
+                "guarded_terminal_hard_breach",
+                "guarded_terminal_emergency_breach",
+            }
+            and row["opportunity_ev_delta_pct"] is not None
+        ]
+        observation_phase_summary[phase] = {
+            "arm_count": len({row["journal_arm_id"] for row in phase_rows}),
+            "horizon_count": len(phase_rows),
+            "ev_eligible_horizon_count": len(phase_eligible),
+            "excluded_horizon_count": len(phase_rows) - len(phase_eligible),
+            "status_counts": dict(Counter(row["status"] for row in phase_rows)),
+            "registration_status_counts": {
+                status: len(arm_ids)
+                for status, arm_ids in sorted(registration_status_arms.items())
+            },
+        }
+    return {
+        "schema": "smoothing_source_only_path_journal_v3",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "source_only_counterfactual_no_runtime_change",
+        "window_policy": "same_exact_position_trace_snapshot_10_20_40_60_90s",
+        "sample_floor": sample_floor,
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": (
+            "exact_position_trace_snapshot_fresh_effective_price_and_horizon"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": (
+            "live_action_change|stop_or_trailing_delay|hard_or_emergency_bypass|"
+            "threshold_apply|provider_route_change|quantity_or_cap_change|bot_restart"
+        ),
+        "arm_count": len(arms),
+        "exact_complete_path_count": exact_path_count,
+        "sample_floor_met": exact_path_count >= sample_floor,
+        "eligible_for_live_review": False,
+        "exclusion_reason_counts": dict(sorted(exclusion_reasons.items())),
+        "guarded_terminal_reason_counts": dict(
+            sorted(guarded_terminal_reasons.items())
+        ),
+        "observation_phase_summary": observation_phase_summary,
+        "horizons": horizon_summary,
+        "rows": rows,
+    }
+
+
 def _build_soft_stop_confirmation_counterfactual_grid(
     confirmation_events: list[dict],
     events: list[dict],
@@ -9300,6 +9734,9 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
         confirmations,
         events,
     )
+    source_only_path_journal = _build_smoothing_source_only_path_journal(
+        events, family="soft_stop_whipsaw_confirmation"
+    )
     manifest_candidate_ready = bool(counterfactual_grid.get("ev_edge_ready"))
     recommended_confirm_sec = int(
         round(_clamp(_percentile(confirmation_elapsed_values, 75, 60.0), 20.0, 120.0))
@@ -9344,6 +9781,7 @@ def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
             "max_worsen_pct": recommended_max_worsen,
         },
         "counterfactual_exploration": counterfactual_grid,
+        "source_only_path_journal": source_only_path_journal,
         "apply_mode": (
             "manifest_only" if manifest_candidate_ready else "report_only_calibration"
         ),
@@ -10008,6 +10446,9 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
     }
     recommended = dict(current)
     counterfactual_grid = _build_ofi_action_counterfactual_grid(applied, events)
+    source_only_path_journal = _build_smoothing_source_only_path_journal(
+        events, family="holding_flow_ofi_smoothing"
+    )
     manifest_candidate_ready = bool(counterfactual_grid.get("ev_edge_ready"))
     return {
         "family": "holding_flow_ofi_smoothing",
@@ -10058,6 +10499,7 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
         "current": current,
         "recommended": recommended,
         "counterfactual_exploration": counterfactual_grid,
+        "source_only_path_journal": source_only_path_journal,
         "apply_mode": (
             "manifest_only" if manifest_candidate_ready else "report_only_calibration"
         ),
@@ -15626,6 +16068,7 @@ def _threshold_snapshot_from_families(
                     "candidate_readiness",
                     "counterfactual_exploration",
                     "continuation_recheck_attribution",
+                    "source_only_path_journal",
                 )
                 if key in family
             },
@@ -16122,6 +16565,7 @@ def build_daily_threshold_cycle_report(
                 for key in (
                     "counterfactual_exploration",
                     "continuation_recheck_attribution",
+                    "source_only_path_journal",
                 )
                 if key in family
             },
