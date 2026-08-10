@@ -23,7 +23,8 @@
   - 판정/변경: 3·5분 `flat`이 15~30분 lower-high/lower-low 하락 구조를 가리던 결함을 분리했다. 삼성전자 판정기는 하락 레짐에서 저항 회복과 고점·저점 상승이 함께 확인되기 전까지 WATCH를 유지하고, VWAP 단독 회복은 higher-high-and-low가 없으면 진입으로 승격하지 않는다. 삼성전자 자동매매기는 저항 회복 후 직전 두 확정봉 종가가 저항을 엄격히 상회한 경우만 `ENTRY_CAUTION|ENTRY_READY`를 소비한다.
   - 범위/안전: 신호와 자동매매 실행자격을 분리해 차단 이유를 저빈도 이벤트로 남긴다. 두산·한화 이벤트형 다회 진입, 수량 1주, +1% 익절, final EXIT, source-quality·BBO·토큰·계좌·주문 guard는 변경하지 않는다. 신규 AI·점수 하드게이트·Kiwoom 요청 변경은 없다.
   - 당일 counterfactual: 기존 KRX actionable 관측 12개를 확정 1분봉으로 재구성했을 때 기존 손실 진입군의 신규 자동실행 적격은 `0`이다. 이는 당일 결함 차단 증거이며 누적 EV나 자동 calibration 승격 근거로 확대하지 않는다.
-  - 적용/롤백: collector와 auto-trader는 재기동하지 않아 현재 PID에는 미반영이다. 롤백은 15~30분 레짐, VWAP-only 구조 확인, 삼성 전용 저항 회복 2확정봉 실행자격을 제거하되 기존 원장·주문·에피소드 state는 삭제하지 않는다.
+  - 적용/롤백: 구현 시점에는 collector와 auto-trader를 재기동하지 않아 당시 PID에는 미반영이었다. 롤백은 15~30분 레짐, VWAP-only 구조 확인, 삼성 전용 저항 회복 2확정봉 실행자격을 제거하되 기존 원장·주문·에피소드 state는 삭제하지 않는다.
+  - 적용 결과 (`2026-08-10 13:37~13:38 KST`): commit `d5dc26e7`을 `origin/main`에 push한 뒤 삼성 collector PID `158222 -> 267136`, widget auto-trader PID `215521 -> 267381`로 순차 재기동했다. 새 삼성 snapshot은 `status=ok`, `source_quality=PASS`, advisory=`WATCH`, intraday regime=`down`, exit=`EXIT_CAUTION`이다. 삼성은 활성 보유·미체결이 없고, 두산의 기존 +1% 익절 주문 `0042231`과 한화의 기존 `exit_requested=true`, `sell_attempt_count=3` 상태를 원장 그대로 복원했으며 재기동으로 신규 주문·취소를 만들지 않았다.
 
 - [x] `[DoosanWidgetLossReentryGuard0810] 두산 고점부 경계·손실 직후 동일 박스 재진입 보완` (`Due: 2026-08-10`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:25`, `Track: RuntimeStability`)
   - Source: [두산 판정기](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_advisory.py), [두산 계약](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_contract.py), [당일 관측](/home/ubuntu/KORStockScan/data/report/doosan_widget_advisory_observation/doosan_widget_advisory_20260810.jsonl), [자동매매 원장](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
