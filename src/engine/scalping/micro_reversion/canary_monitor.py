@@ -85,6 +85,8 @@ _ZERO_STOP_COUNTERS = (
     "duplicate_path_reference_pair_count",
     "path_duplicate_sequence_count",
     "path_out_of_order_sequence_count",
+    "path_exchange_timestamp_regression_exceeded_count",
+    "path_local_receive_timestamp_regression_count",
     "unexplained_sequence_gap_count",
     "writer_queue_full_count",
     "writer_dropped_envelope_count",

@@ -637,7 +637,7 @@ def test_forward_path_capture_persists_event_and_separates_authority(
     ]
     assert len(stream_rows) == snapshot.enqueued_count == 2
     assert all(
-        row["schema"] == "scalp_micro_reversion_market_stream_point_v2"
+        row["schema"] == "scalp_micro_reversion_market_stream_point_v3"
         for row in stream_rows
     )
     assert snapshot.canonical_stream_point_count == 2
@@ -697,6 +697,110 @@ def test_detector_clock_adjustment_is_measured(tmp_path) -> None:
 
     assert runtime.detector_clock_adjustment_count == 1
     assert runtime.detector_clock_adjustment_max_ms == 1
+
+
+def test_bounded_exchange_timestamp_regression_is_raw_persisted_and_quarantined(
+    tmp_path,
+) -> None:
+    collector = _collector(tmp_path, path_capture_enabled=True)
+    received_ms = int(
+        datetime.fromisoformat("2026-08-08T09:00:54.121+09:00").timestamp() * 1_000
+    )
+    payloads = (
+        _snapshot(
+            exchange_time="090054000",
+            received_at_ms=received_ms,
+            price=10_000,
+        ),
+        _snapshot(
+            exchange_time="090053000",
+            received_at_ms=received_ms + 4,
+            price=9_990,
+        ),
+        _snapshot(
+            exchange_time="090054000",
+            received_at_ms=received_ms + 9,
+            price=9_995,
+        ),
+    )
+    try:
+        for payload in payloads:
+            assert (
+                collector.observe_kiwoom_0b("000001", payload, realtime_type="0B")
+                is ProducerCanaryResult.ENQUEUED
+            )
+        deadline = time.monotonic() + 2
+        while (
+            collector.runtime_snapshot().worker_processed_count < len(payloads)
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+    finally:
+        collector.close()
+    runtime = collector.runtime_snapshot()
+    stream_path = next(tmp_path.rglob("market_stream.jsonl"))
+    stream_rows = [json.loads(line) for line in stream_path.read_text().splitlines()]
+
+    assert [row["source_sequence"] for row in stream_rows] == [1, 2, 3]
+    assert [row["path_order_status"] for row in stream_rows] == [
+        "accept",
+        "exchange_timestamp_regression_quarantined",
+        "accept",
+    ]
+    assert [row["path_consumer_eligible"] for row in stream_rows] == [
+        True,
+        False,
+        True,
+    ]
+    assert [row["exchange_timestamp_regression_ms"] for row in stream_rows] == [
+        0,
+        1_000,
+        0,
+    ]
+    assert runtime.worker_processed_count == 3
+    assert runtime.path_accepted_envelope_count == 2
+    assert runtime.path_sequence_gap_count == 0
+    assert runtime.path_out_of_order_sequence_count == 0
+    assert runtime.path_exchange_timestamp_regression_count == 1
+    assert runtime.path_exchange_timestamp_regression_quarantined_count == 1
+    assert runtime.path_exchange_timestamp_regression_exceeded_count == 0
+    assert runtime.path_exchange_timestamp_regression_max_ms == 1_000
+    assert runtime.path_exchange_timestamp_regression_tolerance_ms == 1_000
+    assert runtime.path_local_receive_timestamp_regression_count == 0
+    assert runtime.actual_order_submitted is False
+    assert runtime.broker_order_forbidden is True
+
+
+def test_exchange_timestamp_regression_over_bound_remains_hard_stop_metric(
+    tmp_path,
+) -> None:
+    collector = _collector(tmp_path, path_capture_enabled=True)
+    received_ms = int(
+        datetime.fromisoformat("2026-08-08T09:00:54.121+09:00").timestamp() * 1_000
+    )
+    try:
+        for payload in (
+            _snapshot(exchange_time="090054000", received_at_ms=received_ms),
+            _snapshot(exchange_time="090052000", received_at_ms=received_ms + 4),
+        ):
+            assert (
+                collector.observe_kiwoom_0b("000001", payload, realtime_type="0B")
+                is ProducerCanaryResult.ENQUEUED
+            )
+        deadline = time.monotonic() + 2
+        while (
+            collector.runtime_snapshot().worker_processed_count < 2
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+    finally:
+        collector.close()
+    runtime = collector.runtime_snapshot()
+
+    assert runtime.path_exchange_timestamp_regression_count == 1
+    assert runtime.path_exchange_timestamp_regression_quarantined_count == 0
+    assert runtime.path_exchange_timestamp_regression_exceeded_count == 1
+    assert runtime.path_exchange_timestamp_regression_max_ms == 2_000
 
 
 def test_shutdown_reconciliation_detects_orphan_and_unreferenced_segments(

@@ -154,6 +154,29 @@ are confirmed and the local producer-to-consumer contract is reviewed.
 - This change adds no REG/REMOVE request, subscription item, order, threshold,
   provider, quantity, cap, broker-guard, or bot-state authority.
 
+### 2026-08-10 Micro-Reversion 0B Timestamp-Regression Gate
+
+- Retrieved at `2026-08-10T12:13:31+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/실시간시세.md`, `kiwoom/realtime/packets.py`,
+  `kiwoom/realtime/events.py`, `kiwoom/realtime/decoders.py`,
+  `kiwoom/specs.py`, and the Postman collection. The official 0B contract
+  defines FID `20` only as optional String `체결시간`; it does not declare
+  monotonic arrival ordering or authorize the client to rewrite the value.
+- The observed incident kept source sequence `27580 -> 27581` and local receive
+  time `11:33:54.121 -> 11:33:54.125` monotonic while FID `20` moved
+  `11:33:54 -> 11:33:53`. Runtime therefore preserves the immutable row in
+  canonical stream V3, marks it `path_consumer_eligible=false`, and quarantines
+  it from detector, path, and P2 consumers when the exchange-time regression is
+  at most `1,000ms`.
+- Source-sequence regression, local-receive-time regression, or exchange-time
+  regression above `1,000ms` remains an observer canary hard stop. Runtime does
+  not reorder, impute, clamp, or relabel the official exchange timestamp. A
+  quarantined row cannot fill Gate B path coverage or support economic, sim, or
+  live promotion.
+- This source-quality handling adds no subscription, REG/REMOVE, order,
+  threshold, provider, quantity, cap, broker-guard, or bot-state authority.
+
 ### 2026-07-27 ka10017 Previous-Limit-Down Observation Gate
 
 - Retrieved at `2026-07-27T16:01:10+09:00` from upstream commit

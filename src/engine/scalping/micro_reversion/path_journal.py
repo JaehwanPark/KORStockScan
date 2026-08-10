@@ -26,9 +26,19 @@ from .contracts import normalize_symbol, normalize_venue
 MARKET_PATH_SCHEMA = "scalp_micro_reversion_market_path_point_v6"
 MARKET_PATH_MANIFEST_SCHEMA = "scalp_micro_reversion_market_path_manifest_v1"
 MARKET_PATH_AUTHORITY = "continuous_market_path_observation_only"
-MARKET_STREAM_SCHEMA = "scalp_micro_reversion_market_stream_point_v2"
-MARKET_STREAM_CONTRACT_ID = "scalp_micro_reversion_market_stream_contract_v2"
+MARKET_STREAM_SCHEMA = "scalp_micro_reversion_market_stream_point_v3"
+MARKET_STREAM_CONTRACT_ID = "scalp_micro_reversion_market_stream_contract_v3"
 MARKET_STREAM_AUTHORITY = "canonical_market_stream_observation_only"
+MARKET_STREAM_PATH_ORDER_STATUSES = frozenset(
+    {
+        "accept",
+        "duplicate_source_sequence",
+        "source_sequence_regression",
+        "local_receive_timestamp_regression",
+        "exchange_timestamp_regression_quarantined",
+        "exchange_timestamp_regression_exceeded",
+    }
+)
 MARKET_PATH_METRIC_CONTRACT = {
     "metric_role": "source_quality_gate",
     "decision_authority": MARKET_PATH_AUTHORITY,
@@ -56,7 +66,7 @@ MARKET_STREAM_METRIC_CONTRACT = {
     "primary_decision_metric": "canonical_stream_sequence_coverage_pct",
     "source_quality_gate": (
         "monotonic_series_sequence_and_timezone_aware_exchange_and_receive_"
-        "timestamps"
+        "timestamps_with_explicit_path_consumer_eligibility"
     ),
     "forbidden_uses": (
         "broker_order_submission",
@@ -67,6 +77,37 @@ MARKET_STREAM_METRIC_CONTRACT = {
         "sim_or_runtime_promotion_without_economic_gate",
     ),
 }
+
+
+def validate_market_stream_path_provenance(
+    *,
+    path_order_status: object,
+    path_consumer_eligible: object,
+    exchange_timestamp_regression_ms: object,
+) -> tuple[str, bool, int]:
+    """Validate V3 ordering provenance before any path consumer uses a row."""
+
+    if (
+        not isinstance(path_order_status, str)
+        or path_order_status not in MARKET_STREAM_PATH_ORDER_STATUSES
+    ):
+        raise ValueError("canonical stream path_order_status is invalid")
+    status = path_order_status
+    if not isinstance(path_consumer_eligible, bool):
+        raise ValueError("canonical stream path_consumer_eligible must be boolean")
+    if not isinstance(exchange_timestamp_regression_ms, int) or isinstance(
+        exchange_timestamp_regression_ms, bool
+    ):
+        raise ValueError("exchange timestamp regression must be an integer")
+    regression_ms = exchange_timestamp_regression_ms
+    if regression_ms < 0:
+        raise ValueError("exchange timestamp regression must not be negative")
+    is_exchange_regression = status.startswith("exchange_timestamp_regression_")
+    if is_exchange_regression != (regression_ms > 0):
+        raise ValueError("exchange timestamp regression provenance is inconsistent")
+    if path_consumer_eligible != (status == "accept"):
+        raise ValueError("path eligibility conflicts with ordering status")
+    return status, path_consumer_eligible, regression_ms
 
 
 class AggressorSide(StrEnum):
@@ -220,6 +261,9 @@ class MarketStreamPoint:
     ask_depth: int | None = None
     quote_age_ms: float | None = None
     aggressor_side: AggressorSide = AggressorSide.UNKNOWN
+    path_order_status: str = "accept"
+    path_consumer_eligible: bool = True
+    exchange_timestamp_regression_ms: int = 0
     schema: str = MARKET_STREAM_SCHEMA
 
     def __post_init__(self) -> None:
@@ -250,6 +294,11 @@ class MarketStreamPoint:
                 raise ValueError(f"{name} must not be negative")
         if self.quote_age_ms is not None and self.quote_age_ms < 0:
             raise ValueError("quote_age_ms must not be negative")
+        validate_market_stream_path_provenance(
+            path_order_status=self.path_order_status,
+            path_consumer_eligible=self.path_consumer_eligible,
+            exchange_timestamp_regression_ms=(self.exchange_timestamp_regression_ms),
+        )
         if (
             self.best_bid is not None
             and self.best_ask is not None

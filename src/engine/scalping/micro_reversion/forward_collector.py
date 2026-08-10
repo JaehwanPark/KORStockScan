@@ -38,6 +38,7 @@ from .observation_adapter import (
 )
 from .path_capture import (
     ParentWavePathCoalescer,
+    PathEnvelopeOrderStatus,
     PathEventReference,
     PreEventRingBuffer,
     append_path_event_references,
@@ -50,6 +51,7 @@ from .path_journal import (
     PathStoragePolicy,
     PathWriterMetrics,
     partition_path_files,
+    validate_market_stream_path_provenance,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -57,7 +59,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OUTPUT_ROOT = (
     REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
 )
-FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v5"
+FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v6"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
@@ -66,8 +68,9 @@ FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "sample_floor": "five_trading_days_and_200_mature_events_gate_b_only",
     "primary_decision_metric": "required_path_fields_coverage_pct",
     "source_quality_gate": (
-        "official_0b_trade_time_and_explicit_item_venue_and_bounded_"
-        "nonblocking_transport"
+        "official_0b_trade_time_and_explicit_item_venue_and_monotonic_"
+        "source_sequence_and_local_receive_time_with_bounded_raw_only_"
+        "exchange_timestamp_regression_quarantine"
     ),
     "forbidden_uses": (
         "new_market_data_subscription",
@@ -97,6 +100,25 @@ CROSSED_BBO_SANITIZATION_METRIC_CONTRACT = {
         "gate_b_quote_coverage_imputation",
     ),
 }
+EXCHANGE_TIMESTAMP_REGRESSION_METRIC_CONTRACT = {
+    "metric_role": "source_quality_quarantine",
+    "decision_authority": "observer_path_row_quarantine_only",
+    "window_policy": "current_process_cumulative_per_symbol_venue_session",
+    "sample_floor": "not_applicable_per_observation_contract",
+    "primary_decision_metric": "path_exchange_timestamp_regression_exceeded_count",
+    "source_quality_gate": (
+        "monotonic_source_sequence_and_local_receive_time_with_at_most_"
+        "one_second_exchange_timestamp_regression_quarantined"
+    ),
+    "forbidden_uses": (
+        "exchange_timestamp_imputation_or_reordering",
+        "detector_or_path_consumption_of_quarantined_row",
+        "gate_b_coverage_imputation",
+        "sim_or_live_policy_selection",
+        "broker_order_submission",
+        "threshold_provider_bot_quantity_or_cap_mutation",
+    ),
+}
 
 
 class ProducerCanaryResult(StrEnum):
@@ -122,6 +144,7 @@ class ForwardCollectorConfig:
     worker_poll_interval_sec: float = 0.1
     exchange_future_skew_tolerance_ms: int = 1_000
     maximum_exchange_to_receive_lag_ms: int = 10_000
+    exchange_timestamp_regression_tolerance_ms: int = 1_000
     storage_policy: PathStoragePolicy = field(default_factory=PathStoragePolicy)
 
     def __post_init__(self) -> None:
@@ -135,6 +158,10 @@ class ForwardCollectorConfig:
             raise ValueError("future skew tolerance must not be negative")
         if self.maximum_exchange_to_receive_lag_ms <= 0:
             raise ValueError("maximum exchange lag must be positive")
+        if not 0 <= self.exchange_timestamp_regression_tolerance_ms <= 1_000:
+            raise ValueError(
+                "exchange timestamp regression tolerance must be between 0 and 1s"
+            )
 
 
 class CollectorLifecycle(StrEnum):
@@ -208,6 +235,13 @@ class ForwardCollectorSnapshot:
     path_accepted_envelope_count: int
     path_duplicate_sequence_count: int
     path_out_of_order_sequence_count: int
+    path_exchange_timestamp_regression_count: int
+    path_exchange_timestamp_regression_quarantined_count: int
+    path_exchange_timestamp_regression_exceeded_count: int
+    path_exchange_timestamp_regression_max_ms: int
+    path_exchange_timestamp_regression_tolerance_ms: int
+    path_local_receive_timestamp_regression_count: int
+    path_local_receive_timestamp_regression_max_ms: int
     path_sequence_gap_count: int
     series_with_gap_count: int
     queue_drop_explained_gap_count: int
@@ -281,7 +315,10 @@ class ForwardCollectorSnapshot:
             **asdict(self),
             **FORWARD_COLLECTOR_METRIC_CONTRACT,
             "metric_contracts": {
-                "crossed_bbo_sanitization": (CROSSED_BBO_SANITIZATION_METRIC_CONTRACT)
+                "crossed_bbo_sanitization": (CROSSED_BBO_SANITIZATION_METRIC_CONTRACT),
+                "exchange_timestamp_regression": (
+                    EXCHANGE_TIMESTAMP_REGRESSION_METRIC_CONTRACT
+                ),
             },
         }
 
@@ -306,7 +343,11 @@ class ForwardObservationCollector:
             flags=flags,
             queue_depth=self._sink.qsize,
         )
-        self._ring = PreEventRingBuffer()
+        self._ring = PreEventRingBuffer(
+            max_exchange_timestamp_regression_ms=(
+                self.config.exchange_timestamp_regression_tolerance_ms
+            )
+        )
         self._coalescer = ParentWavePathCoalescer(
             self._ring,
             max_open_segments=self.config.storage_policy.max_open_segments,
@@ -751,6 +792,27 @@ class ForwardObservationCollector:
                 path_out_of_order_sequence_count=(
                     path_quality.out_of_order_sequence_count
                 ),
+                path_exchange_timestamp_regression_count=(
+                    path_quality.exchange_timestamp_regression_count
+                ),
+                path_exchange_timestamp_regression_quarantined_count=(
+                    path_quality.exchange_timestamp_regression_quarantined_count
+                ),
+                path_exchange_timestamp_regression_exceeded_count=(
+                    path_quality.exchange_timestamp_regression_exceeded_count
+                ),
+                path_exchange_timestamp_regression_max_ms=(
+                    path_quality.exchange_timestamp_regression_max_ms
+                ),
+                path_exchange_timestamp_regression_tolerance_ms=(
+                    self.config.exchange_timestamp_regression_tolerance_ms
+                ),
+                path_local_receive_timestamp_regression_count=(
+                    path_quality.local_receive_timestamp_regression_count
+                ),
+                path_local_receive_timestamp_regression_max_ms=(
+                    path_quality.local_receive_timestamp_regression_max_ms
+                ),
                 path_sequence_gap_count=path_quality.sequence_gap_count,
                 series_with_gap_count=len(self._series_with_gap),
                 queue_drop_explained_gap_count=self._queue_drop_explained_gaps,
@@ -892,6 +954,27 @@ class ForwardObservationCollector:
             self._ring.add(envelope)
             self._increment("_worker_processed")
             return
+        order_assessment = self._ring.order_assessment(envelope)
+        order_status = order_assessment.status
+        self._submit_points(
+            envelope,
+            (
+                to_market_stream_point(
+                    envelope,
+                    path_order_status=order_status,
+                    exchange_timestamp_regression_ms=(
+                        order_assessment.exchange_timestamp_regression_ms
+                    ),
+                ),
+            ),
+        )
+        if order_status is not PathEnvelopeOrderStatus.ACCEPT:
+            # Persist the immutable raw stream row, then quarantine it from
+            # detector/path consumers. The ring records whether the bounded
+            # one-second tolerance or the hard-stop boundary was crossed.
+            self._ring.add(envelope)
+            self._increment("_worker_processed")
+            return
         receive_ms = _iso_timestamp_ms(envelope.local_receive_timestamp)
         series_key = (envelope.symbol, envelope.venue, envelope.session_bucket)
         with self._state_lock:
@@ -921,7 +1004,6 @@ class ForwardObservationCollector:
             )
             registrations.append(registration)
             self._append_reference(envelope, registration.event_reference)
-        self._submit_points(envelope, (to_market_stream_point(envelope),))
         self._ring.add(envelope)
         self._coalescer.active_segments_for(envelope)
         self._increment("_worker_processed")
@@ -1521,6 +1603,10 @@ def _reconcile_canonical_stream(
                     "scalp_micro_reversion_market_stream_point_v2",
                     "scalp_micro_reversion_market_stream_contract_v2",
                 ),
+                (
+                    "scalp_micro_reversion_market_stream_point_v3",
+                    "scalp_micro_reversion_market_stream_contract_v3",
+                ),
             }:
                 raise ValueError("unexpected canonical stream schema or contract")
             if (
@@ -1529,6 +1615,14 @@ def _reconcile_canonical_stream(
                 or row.get("trading_runtime_effect") is not False
             ):
                 raise ValueError("canonical stream authority contract is invalid")
+            if stream_contract[0].endswith("_v3"):
+                _, eligible, _ = validate_market_stream_path_provenance(
+                    path_order_status=row.get("path_order_status"),
+                    path_consumer_eligible=row.get("path_consumer_eligible"),
+                    exchange_timestamp_regression_ms=row.get(
+                        "exchange_timestamp_regression_ms"
+                    ),
+                )
             key = (
                 str(row.get("symbol") or "").strip(),
                 str(row.get("venue") or "").strip(),
@@ -1549,6 +1643,9 @@ def _reconcile_canonical_stream(
                 duplicate_count += 1
             else:
                 seen_sequences.add(sequence_key)
+            if stream_contract[0].endswith("_v3") and not eligible:
+                row_count += 1
+                continue
             series_times.setdefault(key, []).append(
                 _iso_timestamp_ms(str(row.get("exchange_timestamp") or ""))
             )

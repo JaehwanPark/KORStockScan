@@ -2,6 +2,8 @@ import gzip
 import json
 from pathlib import Path
 
+import pytest
+
 from src.engine.scalping.micro_reversion.p2_replay import (
     EntryPolicy,
     ExitPolicy,
@@ -103,6 +105,159 @@ def test_canonical_stream_loader_reads_post_session_gzip(tmp_path: Path) -> None
     points = load_p2_points_from_canonical_stream((stream,), reference=reference)
 
     assert [point.source_sequence for point in points] == [1]
+
+
+def test_canonical_stream_loader_excludes_v3_path_quarantine_row(
+    tmp_path: Path,
+) -> None:
+    stream = tmp_path / "market_stream.jsonl"
+    rows = []
+    for sequence, second, status, eligible, regression_ms in (
+        (1, 54, "accept", True, 0),
+        (2, 53, "exchange_timestamp_regression_quarantined", False, 1_000),
+        (3, 54, "accept", True, 0),
+    ):
+        rows.append(
+            {
+                "schema": "scalp_micro_reversion_market_stream_point_v3",
+                "symbol": "000001",
+                "venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "sequence_epoch": 7,
+                "source_sequence": sequence,
+                "series_sequence": sequence,
+                "exchange_timestamp": f"2026-08-10T09:00:{second:02d}+09:00",
+                "local_receive_timestamp": (
+                    f"2026-08-10T09:00:54.{120 + sequence:03d}+09:00"
+                ),
+                "trade_price": 10_000 + sequence,
+                "metric_contract_id": (
+                    "scalp_micro_reversion_market_stream_contract_v3"
+                ),
+                "path_order_status": status,
+                "path_consumer_eligible": eligible,
+                "exchange_timestamp_regression_ms": regression_ms,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "trading_runtime_effect": False,
+            }
+        )
+    stream.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    reference = {
+        "schema": "scalp_micro_reversion_path_event_reference_v2",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "capture_started_at": "2026-08-10T09:00:52+09:00",
+        "capture_ended_at": "2026-08-10T09:00:55+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+
+    points = load_p2_points_from_canonical_stream((stream,), reference=reference)
+
+    assert [point.source_sequence for point in points] == [1, 3]
+
+
+@pytest.mark.parametrize(
+    ("status", "eligible", "regression_ms"),
+    (
+        ("unknown", False, 0),
+        (" accept ", True, 0),
+        ("accept", False, 0),
+        ("accept", True, -1),
+        ("accept", True, 1_000),
+        ("exchange_timestamp_regression_quarantined", False, 0),
+    ),
+)
+def test_canonical_stream_loader_rejects_invalid_v3_path_provenance(
+    tmp_path: Path,
+    status: str,
+    eligible: bool,
+    regression_ms: object,
+) -> None:
+    stream = tmp_path / "market_stream.jsonl"
+    row = {
+        "schema": "scalp_micro_reversion_market_stream_point_v3",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "source_sequence": 1,
+        "series_sequence": 1,
+        "exchange_timestamp": "2026-08-10T09:00:01+09:00",
+        "local_receive_timestamp": "2026-08-10T09:00:01.010+09:00",
+        "trade_price": 10_000,
+        "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v3",
+        "path_order_status": status,
+        "path_consumer_eligible": eligible,
+        "exchange_timestamp_regression_ms": regression_ms,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+    stream.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    reference = {
+        "schema": "scalp_micro_reversion_path_event_reference_v2",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "capture_started_at": "2026-08-10T09:00:00+09:00",
+        "capture_ended_at": "2026-08-10T09:00:02+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+
+    with pytest.raises(ValueError):
+        load_p2_points_from_canonical_stream((stream,), reference=reference)
+
+
+@pytest.mark.parametrize("regression_ms", (1.5, "1000", True))
+def test_canonical_stream_loader_rejects_non_integer_v3_regression(
+    tmp_path: Path, regression_ms: object
+) -> None:
+    stream = tmp_path / "market_stream.jsonl"
+    row = {
+        "schema": "scalp_micro_reversion_market_stream_point_v3",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "source_sequence": 1,
+        "series_sequence": 1,
+        "exchange_timestamp": "2026-08-10T09:00:01+09:00",
+        "local_receive_timestamp": "2026-08-10T09:00:01.010+09:00",
+        "trade_price": 10_000,
+        "metric_contract_id": "scalp_micro_reversion_market_stream_contract_v3",
+        "path_order_status": "exchange_timestamp_regression_quarantined",
+        "path_consumer_eligible": False,
+        "exchange_timestamp_regression_ms": regression_ms,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+    stream.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    reference = {
+        "schema": "scalp_micro_reversion_path_event_reference_v2",
+        "symbol": "000001",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "sequence_epoch": 7,
+        "capture_started_at": "2026-08-10T09:00:00+09:00",
+        "capture_ended_at": "2026-08-10T09:00:02+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+
+    with pytest.raises(ValueError):
+        load_p2_points_from_canonical_stream((stream,), reference=reference)
 
 
 def _policy(**overrides) -> P2ReplayPolicy:

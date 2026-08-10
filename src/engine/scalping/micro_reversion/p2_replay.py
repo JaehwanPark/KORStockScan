@@ -15,6 +15,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterable
 
+from .path_journal import validate_market_stream_path_provenance
+
 P2_REPLAY_SCHEMA = "scalp_micro_reversion_p2_path_replay_v1"
 P2_REPLAY_AUTHORITY = "p2_path_research_only_selection_authority_false"
 P2_REPLAY_METRIC_CONTRACT = {
@@ -290,6 +292,10 @@ def load_p2_points_from_canonical_stream(
                         "scalp_micro_reversion_market_stream_point_v2",
                         "scalp_micro_reversion_market_stream_contract_v2",
                     ),
+                    (
+                        "scalp_micro_reversion_market_stream_point_v3",
+                        "scalp_micro_reversion_market_stream_contract_v3",
+                    ),
                 }:
                     raise ValueError("unexpected canonical stream schema or contract")
                 if (
@@ -320,6 +326,16 @@ def load_p2_points_from_canonical_stream(
                         "canonical stream sequence is invalid or duplicate"
                     )
                 seen_sequences.add(sequence)
+                if stream_contract[0].endswith("_v3"):
+                    _, eligible, _ = validate_market_stream_path_provenance(
+                        path_order_status=row.get("path_order_status"),
+                        path_consumer_eligible=row.get("path_consumer_eligible"),
+                        exchange_timestamp_regression_ms=row.get(
+                            "exchange_timestamp_regression_ms"
+                        ),
+                    )
+                    if not eligible:
+                        continue
                 points.append(
                     P2ReplayPoint(
                         exchange_timestamp_ms=exchange_ms,

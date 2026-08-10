@@ -33,7 +33,7 @@ def _healthy_snapshot(**overrides):
     snapshot.update({field: False for field in _FORBIDDEN_TRUE_FIELDS})
     snapshot.update(
         {
-            "schema": "scalp_micro_reversion_forward_collector_v5",
+            "schema": "scalp_micro_reversion_forward_collector_v6",
             "collector_lifecycle": "running",
             "observer_runtime_loaded": True,
             "producer_observation_connected": True,
@@ -102,6 +102,37 @@ def test_guard_stops_on_drop_leak_authority_and_latency() -> None:
     assert "forbidden_authority_field:actual_order_submitted" in reasons
     assert "producer_callback_latency_p95_exceeded" in reasons
     assert "producer_callback_latency_p99_exceeded" in reasons
+
+
+def test_guard_allows_bounded_timestamp_quarantine_but_stops_on_exceeded() -> None:
+    quarantined = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            path_exchange_timestamp_regression_count=1,
+            path_exchange_timestamp_regression_quarantined_count=1,
+            path_exchange_timestamp_regression_exceeded_count=0,
+            path_exchange_timestamp_regression_max_ms=1_000,
+            path_exchange_timestamp_regression_tolerance_ms=1_000,
+        ),
+        _guard(),
+    )
+    exceeded = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            path_exchange_timestamp_regression_count=1,
+            path_exchange_timestamp_regression_quarantined_count=0,
+            path_exchange_timestamp_regression_exceeded_count=1,
+            path_exchange_timestamp_regression_max_ms=2_000,
+            path_exchange_timestamp_regression_tolerance_ms=1_000,
+        ),
+        _guard(),
+    )
+
+    assert quarantined["status"] == "healthy_observer_canary"
+    assert quarantined["stop_required"] is False
+    assert exceeded["status"] == "stop_required"
+    assert (
+        "nonzero_stop_metric:path_exchange_timestamp_regression_exceeded_count=1"
+        in exceeded["stop_reasons"]
+    )
 
 
 def test_latency_guard_warms_up_without_hiding_hard_stop() -> None:

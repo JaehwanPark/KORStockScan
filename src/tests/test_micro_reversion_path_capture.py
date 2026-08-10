@@ -13,6 +13,7 @@ from src.engine.scalping.micro_reversion.observation_adapter import (
 )
 from src.engine.scalping.micro_reversion.path_capture import (
     ParentWavePathCoalescer,
+    PathEnvelopeOrderStatus,
     PathPhase,
     PreEventRingBuffer,
     append_path_event_references,
@@ -78,8 +79,105 @@ def test_ring_tracks_gaps_duplicates_and_out_of_order() -> None:
     assert ring.add(_envelope(3, 4)) is False
     assert ring.add(_envelope(2, 5)) is False
 
-    accepted, duplicates, out_of_order, gaps, _evicted = ring.counters()
+    (
+        accepted,
+        duplicates,
+        out_of_order,
+        timestamp_regressions,
+        timestamp_regressions_quarantined,
+        timestamp_regressions_exceeded,
+        timestamp_regression_max_ms,
+        local_receive_timestamp_regressions,
+        local_receive_timestamp_regression_max_ms,
+        gaps,
+        _evicted,
+    ) = ring.counters()
     assert (accepted, duplicates, out_of_order, gaps) == (2, 1, 1, 1)
+    assert (
+        timestamp_regressions,
+        timestamp_regressions_quarantined,
+        timestamp_regressions_exceeded,
+        timestamp_regression_max_ms,
+        local_receive_timestamp_regressions,
+        local_receive_timestamp_regression_max_ms,
+    ) == (0, 0, 0, 0, 0, 0)
+
+
+def test_ring_quarantines_bounded_exchange_timestamp_regression() -> None:
+    ring = PreEventRingBuffer(max_age_ms=30_000, max_points_per_series=10)
+    first = _envelope(1, 54)
+    regressed = replace(
+        _envelope(2, 53),
+        local_receive_timestamp="2026-04-10T09:00:54.125+09:00",
+    )
+    recovered = replace(
+        _envelope(3, 54),
+        local_receive_timestamp="2026-04-10T09:00:54.130+09:00",
+    )
+
+    assert ring.add(first) is True
+    assert (
+        ring.order_status(regressed)
+        is PathEnvelopeOrderStatus.EXCHANGE_TIMESTAMP_REGRESSION_QUARANTINED
+    )
+    assert ring.add(regressed) is False
+    assert ring.add(recovered) is True
+
+    quality = ParentWavePathCoalescer(ring).quality_snapshot()
+    assert quality.accepted_envelope_count == 2
+    assert quality.out_of_order_sequence_count == 0
+    assert quality.sequence_gap_count == 0
+    assert quality.exchange_timestamp_regression_count == 1
+    assert quality.exchange_timestamp_regression_quarantined_count == 1
+    assert quality.exchange_timestamp_regression_exceeded_count == 0
+    assert quality.exchange_timestamp_regression_max_ms == 1_000
+
+
+def test_ring_escalates_exchange_timestamp_regression_beyond_one_second() -> None:
+    ring = PreEventRingBuffer(max_age_ms=30_000, max_points_per_series=10)
+    first = _envelope(1, 54)
+    regressed = replace(
+        _envelope(2, 52),
+        local_receive_timestamp="2026-04-10T09:00:54.125+09:00",
+    )
+
+    assert ring.add(first) is True
+    assert (
+        ring.order_status(regressed)
+        is PathEnvelopeOrderStatus.EXCHANGE_TIMESTAMP_REGRESSION_EXCEEDED
+    )
+    assert ring.add(regressed) is False
+
+    quality = ParentWavePathCoalescer(ring).quality_snapshot()
+    assert quality.accepted_envelope_count == 1
+    assert quality.exchange_timestamp_regression_count == 1
+    assert quality.exchange_timestamp_regression_quarantined_count == 0
+    assert quality.exchange_timestamp_regression_exceeded_count == 1
+    assert quality.exchange_timestamp_regression_max_ms == 2_000
+
+
+def test_ring_keeps_local_receive_timestamp_regression_as_hard_failure() -> None:
+    ring = PreEventRingBuffer(max_age_ms=30_000, max_points_per_series=10)
+    first = replace(
+        _envelope(1, 54),
+        local_receive_timestamp="2026-04-10T09:00:54.125+09:00",
+    )
+    regressed = replace(
+        _envelope(2, 53),
+        local_receive_timestamp="2026-04-10T09:00:54.120+09:00",
+    )
+
+    assert ring.add(first) is True
+    assert (
+        ring.order_status(regressed)
+        is PathEnvelopeOrderStatus.LOCAL_RECEIVE_TIMESTAMP_REGRESSION
+    )
+    assert ring.add(regressed) is False
+
+    quality = ParentWavePathCoalescer(ring).quality_snapshot()
+    assert quality.local_receive_timestamp_regression_count == 1
+    assert quality.local_receive_timestamp_regression_max_ms == 5
+    assert quality.exchange_timestamp_regression_count == 0
 
 
 def test_parent_wave_creates_one_segment_with_many_event_references() -> None:
