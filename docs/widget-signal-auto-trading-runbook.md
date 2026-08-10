@@ -14,9 +14,13 @@
 
 ## 신호와 주문 계약
 
-- `ENTRY_CAUTION`, `ENTRY_READY`의 새 진입 에피소드마다 1회 매수한다.
-  동일 에피소드의 10초 스냅샷 반복이나 CAUTION에서 READY로의 지속 상태는
-  중복 주문으로 보지 않는다.
+- source-qualified `ENTRY_CAUTION`, `ENTRY_READY`의 새 진입 에피소드마다 1회
+  매수한다. 단, 삼성전자는 15~30분 하락 레짐을 벗어났거나 고점·저점 상승으로
+  구조 회복을 확인하고, 직전 저항을 회복한 뒤 직전 두 확정 1분봉 종가가 그
+  저항을 엄격히 상회해야 실행기가 신호를 소비한다. 이 조건은 진입을 새로
+  만들지 않는 negative execution qualification이며 두산·한화 이벤트형 신호에는
+  적용하지 않는다. 동일 에피소드의 10초 스냅샷 반복이나 CAUTION에서 READY로의
+  지속 상태는 중복 주문으로 보지 않는다.
 - 기본 수량은 1주이며 `KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY`로 변경한다.
   코드상 허용 범위는 1~100주다.
 - 두산에너빌리티·한화오션은 immutable `entry_event`/`exit_event`를 사용한다.

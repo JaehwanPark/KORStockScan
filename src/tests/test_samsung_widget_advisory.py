@@ -619,6 +619,31 @@ def test_trend_assessment_keeps_setup_state_distinct_and_prioritizes_downside():
     assert partial_down["state"] == "TREND_DOWN"
 
 
+def test_intraday_regime_detects_persistent_lower_high_and_lower_low():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(start, [240_000 - index * 250 for index in range(30)])
+
+    regime = advisory.analyze_intraday_regime(bars)
+
+    assert regime["state"] == "down"
+    assert regime["lower_high"] is True
+    assert regime["lower_low"] is True
+    assert regime["future_prediction"] is False
+
+
+def test_intraday_regime_requires_contiguous_completed_bars():
+    start = datetime(2026, 8, 3, 9, 0, tzinfo=KST)
+    bars = _bars(start, [100_000 + index * 100 for index in range(15)])
+    bars[-1] = advisory.MinuteBar(
+        "20260803091600", 101_300, 101_500, 101_200, 101_400, 1_000
+    )
+
+    regime = advisory.analyze_intraday_regime(bars)
+
+    assert regime["state"] == "unavailable"
+    assert regime["reason"] == "non_contiguous_completed_bars"
+
+
 def test_session_vwap_uses_hlc3_volume_weighting_and_hlc3_fallback():
     bars = [
         advisory.MinuteBar("20260803090000", 100, 130, 90, 110, 1),
@@ -909,7 +934,7 @@ def test_resistance_only_breakout_waits_for_pullback_above_one_tick(monkeypatch)
     assert result["entry_price_high"] is None
 
 
-def test_nxt_aftermarket_caution_without_reclaim_or_higher_structure_is_bid_only(
+def test_nxt_aftermarket_vwap_only_without_higher_structure_stays_watch(
     monkeypatch,
 ):
     inputs = _ready_input(current_price=100_400)
@@ -952,28 +977,16 @@ def test_nxt_aftermarket_caution_without_reclaim_or_higher_structure_is_bid_only
 
     result = advisory.evaluate_advisory(**inputs)
 
-    assert result["state"] == "ENTRY_CAUTION"
+    assert result["state"] == "WATCH"
     assert result["external_risk"]["level"] == "DATA_LIMITED"
     assert result["derived"]["recent_resistance_reclaimed"] is False
     assert result["derived"]["higher_high_and_low"] is False
-    assert result["entry_price_low"] == 100_300
-    assert result["entry_price_high"] == 100_300
-    assert "nxt_aftermarket_reclaim_structure_unconfirmed" in result["unmet_conditions"]
-    assert result["derived"]["entry_price_scope"] == {
-        "policy": "nxt_aftermarket_caution_support_bid_only_v1",
-        "applied": True,
-        "reason": "resistance_not_reclaimed_and_higher_high_low_unconfirmed",
-        "unconstrained_entry_price_low": 100_300,
-        "unconstrained_entry_price_high": 100_400,
-        "constrained_price": 100_300,
-        "authority": "widget_advisory_only",
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "metric_contract": advisory.METRIC_CONTRACT,
-    }
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+    assert result["derived"]["vwap_only_structure_confirmed"] is False
 
 
-def test_krx_caution_without_reclaim_keeps_normal_entry_range(monkeypatch):
+def test_krx_vwap_only_without_higher_structure_stays_watch(monkeypatch):
     inputs = _ready_input(current_price=100_400)
     inputs["bbo"] = {"best_bid": 100_300, "best_ask": 100_400, "age_sec": 0}
     inputs["external_points"] = _external(quality="STALE")
@@ -997,14 +1010,14 @@ def test_krx_caution_without_reclaim_keeps_normal_entry_range(monkeypatch):
 
     result = advisory.evaluate_advisory(**inputs)
 
-    assert result["state"] == "ENTRY_CAUTION"
-    assert result["entry_price_low"] == 100_300
-    assert result["entry_price_high"] == 100_400
+    assert result["state"] == "WATCH"
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
     assert (
         "nxt_aftermarket_reclaim_structure_unconfirmed"
         not in result["unmet_conditions"]
     )
-    assert "entry_price_scope" not in result["derived"]
+    assert result["derived"]["vwap_only_structure_confirmed"] is False
 
 
 def _recovery_episode_advisory(
@@ -2134,6 +2147,99 @@ def test_confirmed_retest_with_rebound_volume_can_emit_early_reversal_caution(
     assert "vwap_or_resistance_reclaimed" in result["unmet_conditions"]
 
 
+def test_confirmed_retest_in_intraday_down_regime_stays_watch(monkeypatch):
+    inputs = _ready_input(current_price=101_100)
+    inputs["bars"] = _bars(
+        datetime(2026, 8, 3, 9, 0, tzinfo=KST),
+        [104_000 - index * 100 for index in range(30)],
+    )
+    inputs["observed_at"] = datetime(2026, 8, 3, 9, 30, 5, tzinfo=KST)
+    inputs["context"] = advisory.session_context(inputs["observed_at"])
+    inputs["current_price"] = inputs["bars"][-1].close
+    inputs["bbo"] = {
+        "best_bid": inputs["current_price"] - 100,
+        "best_ask": inputs["current_price"],
+        "age_sec": 0,
+    }
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 105_000)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": inputs["current_price"] - 100,
+            "candidate_support": inputs["current_price"] - 100,
+            "recent_resistance": inputs["current_price"] + 500,
+            "higher_high": True,
+            "higher_low": True,
+            "higher_high_and_low": True,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "support_confirmation": "retest_held",
+        },
+    )
+    monkeypatch.setattr(
+        advisory,
+        "_volume_confirmation",
+        lambda _bars: (
+            True,
+            {
+                "rebound_avg_volume": 2_000.0,
+                "decline_avg_volume": 1_000.0,
+                "rebound_to_decline_volume_ratio": 2.0,
+                "first_test_volume": 1_500,
+                "retest_volume": 1_000,
+                "retest_volume_contracted": True,
+                "rising_volume_sample_count": 3,
+                "falling_volume_sample_count": 2,
+                "zero_volume_count": 0,
+                "zero_volume_ratio": 0.0,
+                "volume_minimum_composition_met": True,
+            },
+        ),
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["intraday_regime"]["state"] == "down"
+    assert result["state"] == "WATCH"
+    assert result["entry_price_low"] is None
+    assert (
+        "intraday_down_regime_resistance_reclaim_pending" in result["unmet_conditions"]
+    )
+
+
+def test_vwap_only_recovery_without_higher_high_stays_watch(monkeypatch):
+    inputs = _ready_input(current_price=100_400)
+    structure = advisory._structure_features(inputs["bars"])
+    monkeypatch.setattr(advisory, "_session_vwap", lambda _bars: 100_200)
+    monkeypatch.setattr(
+        advisory,
+        "_structure_features",
+        lambda _bars: {
+            **structure,
+            "confirmed_support": 100_100,
+            "candidate_support": 100_100,
+            "recent_resistance": 100_800,
+            "higher_high": False,
+            "higher_low": True,
+            "higher_high_and_low": False,
+            "retest_held": True,
+            "retest_rebound_confirmed": True,
+            "support_confirmation": "retest_held",
+        },
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["derived"]["vwap_reclaimed"] is True
+    assert result["derived"]["recent_resistance_reclaimed"] is False
+    assert result["derived"]["vwap_only_structure_confirmed"] is False
+    assert result["state"] == "WATCH"
+    assert result["entry_price_low"] is None
+
+
 def test_recent_runup_guard_blocks_shifted_support_entry_near_rolling_high(
     monkeypatch,
 ):
@@ -2996,6 +3102,19 @@ def test_snapshot_contract_rejects_invalid_trend_prediction_authority():
     context = contract.session_context(now)
     raw = advisory.evaluate_advisory(**_ready_input())
     raw["trend_assessment"]["future_prediction"] = True
+
+    assert not contract.advisory_contract_is_valid(
+        raw,
+        snapshot_observed_at=now,
+        context=context,
+    )
+
+
+def test_snapshot_contract_rejects_invalid_intraday_regime_label():
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST)
+    context = contract.session_context(now)
+    raw = advisory.evaluate_advisory(**_ready_input())
+    raw["intraday_regime"]["state"] = "FUTURE_UP"
 
     assert not contract.advisory_contract_is_valid(
         raw,

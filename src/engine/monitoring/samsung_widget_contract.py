@@ -37,6 +37,7 @@ TREND_ASSESSMENT_STATES = frozenset(
         "TREND_DOWN",
     }
 )
+INTRADAY_REGIME_STATES = frozenset({"unavailable", "not_down", "down"})
 DEFAULT_SNAPSHOT_PATH = Path("data/runtime/samsung_widget_advisory_snapshot.json")
 DEFAULT_OBSERVATION_DIR = Path("data/report/samsung_widget_advisory_observation")
 
@@ -61,6 +62,22 @@ METRIC_CONTRACT = {
         "real_order_submission",
         "account_or_quantity_decision",
         "trading_runtime_threshold",
+        "provider_route_change",
+        "bot_process_control",
+        "automatic_live_promotion",
+    ],
+}
+
+INTRADAY_REGIME_METRIC_CONTRACT = {
+    "metric_role": "diagnostic_signal_observation",
+    "decision_authority": ADVISORY_AUTHORITY,
+    "window_policy": "current_session_completed_contiguous_15_to_30m",
+    "sample_floor": "15_completed_contiguous_1m_bars",
+    "primary_decision_metric": "none_operator_advisory",
+    "source_quality_gate": "completed_contiguous_current_session_1m_ohlcv",
+    "forbidden_uses": [
+        "standalone_positive_order_authority",
+        "account_or_quantity_decision",
         "provider_route_change",
         "bot_process_control",
         "automatic_live_promotion",
@@ -229,6 +246,13 @@ def advisory_contract_is_valid(
         not isinstance(trend_assessment, dict)
         or trend_assessment.get("state") not in TREND_ASSESSMENT_STATES
         or trend_assessment.get("future_prediction") is not False
+    ):
+        return False
+    intraday_regime = advisory.get("intraday_regime")
+    if intraday_regime is not None and (
+        not isinstance(intraday_regime, dict)
+        or intraday_regime.get("state") not in INTRADAY_REGIME_STATES
+        or intraday_regime.get("future_prediction") is not False
     ):
         return False
     outer_observed_at = as_kst(snapshot_observed_at)

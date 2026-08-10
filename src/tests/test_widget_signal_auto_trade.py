@@ -45,6 +45,12 @@ class FakeSamsungContractWithoutTopLevelProfile:
     def snapshot_is_fresh(payload, *, now):
         return True
 
+    @staticmethod
+    def advisory_contract_is_valid(
+        advisory, *, snapshot_observed_at, context, evaluated_at
+    ):
+        return isinstance(advisory, dict) and advisory.get("valid") is True
+
 
 @dataclass
 class FakeRecorder:
@@ -460,6 +466,150 @@ def test_samsung_style_contract_does_not_require_top_level_strategy_profile(
 
     assert context is not None
     assert snapshot_at == now
+
+
+def test_samsung_execution_blocks_entry_without_recent_resistance_reclaim(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": {}}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeSamsungContractWithoutTopLevelProfile,
+        event_based=False,
+        structural_execution_qualification=True,
+    )
+    payload = {
+        "status": "ok",
+        "symbol": "005930",
+        "market_venue": "KRX",
+        "observed_at_kst": now.isoformat(),
+        "advisory": {
+            "valid": True,
+            "state": "ENTRY_CAUTION",
+            "session": "KRX_REGULAR",
+            "observed_at": now.isoformat(),
+            "trigger": "confirmed_retest_early_reversal",
+            "intraday_regime": {"state": "not_down"},
+            "derived": {
+                "confirmed_support": 231_000,
+                "recent_resistance": 232_000,
+                "recent_resistance_reclaimed": False,
+                "higher_high_and_low": True,
+            },
+        },
+    }
+
+    signal = trader._entry_signal(spec, payload, now)
+
+    assert signal is not None
+    assert signal[2] == "entry_blocked_recent_resistance_not_reclaimed"
+
+
+def test_samsung_execution_allows_completed_structural_recovery(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": {}}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeSamsungContractWithoutTopLevelProfile,
+        event_based=False,
+        structural_execution_qualification=True,
+    )
+    payload = {
+        "status": "ok",
+        "symbol": "005930",
+        "market_venue": "KRX",
+        "observed_at_kst": now.isoformat(),
+        "advisory": {
+            "valid": True,
+            "state": "ENTRY_CAUTION",
+            "session": "KRX_REGULAR",
+            "observed_at": now.isoformat(),
+            "trigger": "dynamic_support_and_vwap_reclaim",
+            "intraday_regime": {"state": "down"},
+            "derived": {
+                "confirmed_support": 231_000,
+                "recent_resistance": 232_000,
+                "recent_resistance_reclaimed": True,
+                "resistance_reclaim_hold_confirmed": True,
+                "higher_high_and_low": True,
+            },
+        },
+    }
+
+    signal = trader._entry_signal(spec, payload, now)
+
+    assert signal is not None
+    assert signal[2] is None
+
+
+def test_samsung_structural_block_is_observable_and_does_not_consume_episode(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeSamsungContractWithoutTopLevelProfile,
+        event_based=False,
+        structural_execution_qualification=True,
+    )
+    payload = {
+        "status": "ok",
+        "symbol": "005930",
+        "market_venue": "KRX",
+        "observed_at_kst": now.isoformat(),
+        "advisory": {
+            "valid": True,
+            "state": "ENTRY_CAUTION",
+            "session": "KRX_REGULAR",
+            "observed_at": now.isoformat(),
+            "trigger": "confirmed_retest_early_reversal",
+            "intraday_regime": {"state": "not_down"},
+            "derived": {
+                "confirmed_support": 231_000,
+                "recent_resistance": 232_000,
+                "recent_resistance_reclaimed": False,
+                "resistance_reclaim_hold_confirmed": False,
+                "higher_high_and_low": True,
+            },
+        },
+    }
+    gateway = FakeGateway()
+    recorder = FakeRecorder([])
+    monkeypatch.setattr(
+        engine,
+        "evaluate_manual_control_exclusion",
+        lambda code: SimpleNamespace(excluded=True, source="test"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "manual_control_operator_exclusion_source",
+        lambda code: "manual_operator",
+    )
+    trader = WidgetSignalAutoTrader(
+        gateway=gateway,
+        specs=(spec,),
+        state_path=tmp_path / "state.json",
+        event_recorder=recorder,
+        snapshot_loader=lambda path: payload,
+        enabled=True,
+    )
+
+    state = trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert state["symbols"]["005930"]["entry_episode_open"] is False
+    assert recorder.events[-1]["event_type"] == (
+        "entry_blocked_recent_resistance_not_reclaimed"
+    )
 
 
 def test_global_buy_pause_does_not_consume_entry_episode(tmp_path, monkeypatch):

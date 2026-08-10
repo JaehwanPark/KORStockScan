@@ -108,6 +108,7 @@ class WidgetSpec:
     snapshot_path: Path
     contract: Any
     event_based: bool
+    structural_execution_qualification: bool = False
 
 
 DEFAULT_WIDGET_SPECS = (
@@ -117,6 +118,7 @@ DEFAULT_WIDGET_SPECS = (
         samsung_contract.DEFAULT_SNAPSHOT_PATH,
         samsung_contract,
         False,
+        True,
     ),
     WidgetSpec(
         doosan_contract.DOOSAN_CODE,
@@ -425,7 +427,7 @@ class WidgetSignalAutoTrader:
         spec: WidgetSpec,
         payload: dict[str, Any],
         now: datetime,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str, str | None] | None:
         context, snapshot_at = self._validated_context(spec, payload, now)
         if context is None or snapshot_at is None:
             return None
@@ -443,7 +445,7 @@ class WidgetSignalAutoTrader:
             state = str(event.get("state") or "")
             event_id = str(event.get("event_id") or "")
             return (
-                (event_id, state)
+                (event_id, state, None)
                 if event_id and state in ACTIONABLE_ENTRY_STATES
                 else None
             )
@@ -457,10 +459,29 @@ class WidgetSignalAutoTrader:
         state = str(advisory.get("state") or "")
         if state not in ACTIONABLE_ENTRY_STATES:
             return None
+        block_reason = None
+        if spec.structural_execution_qualification:
+            derived = advisory.get("derived")
+            derived = derived if isinstance(derived, dict) else {}
+            regime = advisory.get("intraday_regime")
+            regime = regime if isinstance(regime, dict) else {}
+            structural_recovery = bool(
+                derived.get("recent_resistance_reclaimed") is True
+                and derived.get("higher_high_and_low") is True
+            )
+            if regime.get("state") not in {"unavailable", "not_down", "down"}:
+                block_reason = "entry_blocked_intraday_regime_missing"
+            elif regime.get("state") == "down" and not structural_recovery:
+                block_reason = "entry_blocked_intraday_down_regime"
+            elif derived.get("recent_resistance_reclaimed") is not True:
+                block_reason = "entry_blocked_recent_resistance_not_reclaimed"
+            elif derived.get("resistance_reclaim_hold_confirmed") is not True:
+                block_reason = "entry_blocked_resistance_reclaim_hold_pending"
         return (
             f"{spec.code}:{now.date().isoformat()}:ENTRY:{context.name}:"
             f"{advisory.get('observed_at')}",
             state,
+            block_reason,
         )
 
     def _exit_signal(
@@ -1095,7 +1116,38 @@ class WidgetSignalAutoTrader:
         entry_signal = self._entry_signal(spec, payload, now)
         if entry_signal is None or symbol_state.get("entry_episode_open"):
             return
-        signal_id, source_state = entry_signal
+        signal_id, source_state, structural_block_reason = entry_signal
+        if structural_block_reason:
+            advisory = payload.get("advisory")
+            advisory = advisory if isinstance(advisory, dict) else {}
+            derived = advisory.get("derived")
+            derived = derived if isinstance(derived, dict) else {}
+            stable_block_id = ":".join(
+                [
+                    spec.code,
+                    now.date().isoformat(),
+                    "STRUCTURAL_EXECUTION_BLOCK",
+                    structural_block_reason,
+                    str(advisory.get("session") or "UNKNOWN"),
+                    source_state,
+                    str(advisory.get("trigger") or "none"),
+                    str(derived.get("confirmed_support") or "none"),
+                    str(derived.get("recent_resistance") or "none"),
+                ]
+            )
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=stable_block_id,
+                reason=structural_block_reason,
+                now=now,
+                source_signal_id=signal_id,
+                source_state=source_state,
+                trigger=advisory.get("trigger"),
+                intraday_regime=advisory.get("intraday_regime"),
+                recent_resistance_reclaimed=derived.get("recent_resistance_reclaimed"),
+            )
+            return
         if signal_id == symbol_state.get("entry_signal_id"):
             return
         route = self._route(payload)

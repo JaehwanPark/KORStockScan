@@ -34,6 +34,7 @@ from src.engine.monitoring.samsung_widget_contract import (
     KRX_END,
     KRX_START,
     KST,
+    INTRADAY_REGIME_METRIC_CONTRACT,
     METRIC_CONTRACT,
     NXT_AFTERMARKET_END,
     NXT_PREMARKET_END,
@@ -103,6 +104,9 @@ EXIT_NO_NEW_LOW_CANCEL_BARS = 5
 EXIT_PENDING_MAX_BARS = 3
 EXIT_LOCAL_PEAK_PENDING_MAX_BARS = 8
 EXIT_REARM_MAX_BARS = 20
+INTRADAY_REGIME_MIN_BARS = 15
+INTRADAY_REGIME_LOOKBACK_BARS = 30
+INTRADAY_REGIME_MIN_DECLINE_TICKS = 3
 
 EXTERNAL_THRESHOLDS = {
     "NQ": -0.40,
@@ -378,6 +382,83 @@ def _trend_assessment(trends: dict[str, str]) -> dict[str, Any]:
         "basis": "confirmed_completed_3m_5m_direction",
         "future_prediction": False,
         "setup_ready_is_distinct": True,
+    }
+
+
+def analyze_intraday_regime(bars: list[MinuteBar]) -> dict[str, Any]:
+    """Classify the completed-bar 15-30 minute structure.
+
+    The short 3/5-minute trend intentionally remains responsive.  This
+    companion view prevents a locally flat pause inside a persistent lower-
+    high/lower-low move from being interpreted as a completed reversal.
+    """
+    if len(bars) < INTRADAY_REGIME_MIN_BARS:
+        return {
+            "state": "unavailable",
+            "basis": "completed_contiguous_15_to_30m_structure",
+            "completed_bar_count": len(bars),
+            "minimum_bar_count": INTRADAY_REGIME_MIN_BARS,
+            "future_prediction": False,
+            "authority": ADVISORY_AUTHORITY,
+            "runtime_effect": False,
+            "metric_contract": INTRADAY_REGIME_METRIC_CONTRACT,
+        }
+    count = min(len(bars), INTRADAY_REGIME_LOOKBACK_BARS)
+    window = _contiguous_window(bars, count)
+    if not window:
+        return {
+            "state": "unavailable",
+            "basis": "completed_contiguous_15_to_30m_structure",
+            "completed_bar_count": count,
+            "minimum_bar_count": INTRADAY_REGIME_MIN_BARS,
+            "reason": "non_contiguous_completed_bars",
+            "future_prediction": False,
+            "authority": ADVISORY_AUTHORITY,
+            "runtime_effect": False,
+            "metric_contract": INTRADAY_REGIME_METRIC_CONTRACT,
+        }
+    segment_size = max(5, len(window) // 3)
+    earlier = window[:segment_size]
+    recent = window[-segment_size:]
+    earlier_high = max(bar.high for bar in earlier)
+    earlier_low = min(bar.low for bar in earlier)
+    recent_high = max(bar.high for bar in recent)
+    recent_low = min(bar.low for bar in recent)
+    tick_size = get_tick_size(window[-1].close)
+    lower_high = recent_high <= move_price_by_ticks(earlier_high, -1)
+    lower_low = recent_low <= move_price_by_ticks(earlier_low, -1)
+    closes = [bar.close for bar in window]
+    slope, regression_r2 = _linear_trend_metrics(closes)
+    net_change = closes[-1] - closes[0]
+    decline_floor = tick_size * INTRADAY_REGIME_MIN_DECLINE_TICKS
+    persistent_lower_structure = lower_high and lower_low
+    broad_decline = bool(
+        net_change <= -decline_floor and slope < 0 and (lower_high or lower_low)
+    )
+    down = bool((persistent_lower_structure and slope < 0) or broad_decline)
+    return {
+        "state": "down" if down else "not_down",
+        "basis": "completed_contiguous_15_to_30m_structure",
+        "completed_bar_count": len(window),
+        "segment_bar_count": segment_size,
+        "earlier_high": earlier_high,
+        "earlier_low": earlier_low,
+        "recent_high": recent_high,
+        "recent_low": recent_low,
+        "lower_high": lower_high,
+        "lower_low": lower_low,
+        "persistent_lower_structure": persistent_lower_structure,
+        "broad_decline": broad_decline,
+        "net_change": net_change,
+        "net_change_bps": round((net_change / closes[0]) * 10_000, 4),
+        "slope_price_per_minute": round(slope, 4),
+        "regression_r2": round(regression_r2, 4),
+        "decline_floor_price": decline_floor,
+        "tick_size": tick_size,
+        "future_prediction": False,
+        "authority": ADVISORY_AUTHORITY,
+        "runtime_effect": False,
+        "metric_contract": INTRADAY_REGIME_METRIC_CONTRACT,
     }
 
 
@@ -1322,6 +1403,7 @@ def evaluate_advisory(
         for key, detail in trend_details.items()
     }
     trend_assessment = _trend_assessment(trends)
+    intraday_regime = analyze_intraday_regime(bars)
     live_reversal_veto, live_reversal = _live_reversal_veto(
         current_price=current_price,
         bars=bars,
@@ -1372,6 +1454,7 @@ def evaluate_advisory(
         },
         "trend_assessment": trend_assessment,
         "trend_details": trend_details,
+        "intraday_regime": intraday_regime,
         "live_reversal": live_reversal,
         "relative_strength": relative,
         "provenance": {
@@ -1428,7 +1511,21 @@ def evaluate_advisory(
         and current_price >= recent_resistance
         and structure_ok
     )
-    reclaim_ok = vwap_reclaimed or resistance_reclaimed
+    resistance_reclaim_hold_confirmed = bool(
+        resistance_reclaimed
+        and isinstance(recent_resistance, int)
+        and len(bars) >= 2
+        and bars[-2].close > recent_resistance
+        and bars[-1].close > recent_resistance
+    )
+    intraday_regime_down = intraday_regime.get("state") == "down"
+    vwap_only_structure_confirmed = bool(
+        vwap_reclaimed
+        and not resistance_reclaimed
+        and structure["higher_high_and_low"]
+        and not intraday_regime_down
+    )
+    reclaim_ok = resistance_reclaimed or vwap_only_structure_confirmed
     tactical_candidates = [
         value
         for value in (
@@ -1471,6 +1568,10 @@ def evaluate_advisory(
         "vwap_or_resistance_reclaimed": reclaim_ok,
         "rebound_volume_confirmed": volume_ok,
         "three_five_minute_not_down": trends_ok,
+        "intraday_regime_recovery_confirmed": bool(
+            not intraday_regime_down
+            or (resistance_reclaimed and structure["higher_high_and_low"])
+        ),
         "relative_strength_not_weak": relative_ok,
         "spread_within_two_ticks": spread_ok,
     }
@@ -1585,6 +1686,7 @@ def evaluate_advisory(
             and relative_ok
             and spread_ok
             and candidate_volume_composition
+            and not intraday_regime_down
             and not flow_negative
             and external_risk["level"] != "HOLD"
             and not candidate_safety_blockers
@@ -1616,6 +1718,8 @@ def evaluate_advisory(
                 else None
             ),
             "volume_composition_met": candidate_volume_composition,
+            "intraday_regime_state": intraday_regime.get("state"),
+            "intraday_regime_not_down_required": True,
             "safety_blockers": candidate_safety_blockers,
             "ready_promotion_forbidden": True,
             "authority": ADVISORY_AUTHORITY,
@@ -1846,6 +1950,19 @@ def evaluate_advisory(
                 "tactical_chase_pct": round(tactical_chase_pct, 4),
                 "vwap_reclaimed": vwap_reclaimed,
                 "recent_resistance_reclaimed": resistance_reclaimed,
+                "resistance_reclaim_hold_confirmed": (
+                    resistance_reclaim_hold_confirmed
+                ),
+                "resistance_reclaim_confirmation": {
+                    "policy": "two_completed_closes_strictly_above_recent_resistance",
+                    "recent_resistance": recent_resistance,
+                    "previous_completed_close": (
+                        bars[-2].close if len(bars) >= 2 else None
+                    ),
+                    "latest_completed_close": bars[-1].close if bars else None,
+                    "hold_confirmed": resistance_reclaim_hold_confirmed,
+                    "future_prediction": False,
+                },
                 "reclaim_mode": (
                     "vwap_and_resistance"
                     if vwap_reclaimed and resistance_reclaimed
@@ -1855,6 +1972,7 @@ def evaluate_advisory(
                         else "recent_resistance" if resistance_reclaimed else "none"
                     )
                 ),
+                "vwap_only_structure_confirmed": vwap_only_structure_confirmed,
                 "minute_trends": trends,
                 "minute_trend_details": trend_details,
                 "trend_assessment": trend_assessment,
@@ -1923,6 +2041,8 @@ def evaluate_advisory(
         and not flow_negative
         and not premarket_aux_weak
         and external_risk["level"] != "HOLD"
+        and not intraday_regime_down
+        and not vwap_reclaimed
         and not reclaim_ok
         and "vwap_or_resistance_reclaimed" in base["unmet_conditions"]
         and set(base["unmet_conditions"]).issubset(early_reversal_allowed_unmet)
@@ -1934,6 +2054,8 @@ def evaluate_advisory(
         "pre_volume_structure_eligible": early_reversal_pre_volume_eligible,
         "rebound_volume_required": True,
         "rebound_volume_confirmed": volume_ok,
+        "intraday_regime_not_down_required": True,
+        "intraday_regime_state": intraday_regime.get("state"),
         "authority": "negative_veto_only",
         "runtime_effect": False,
         "metric_contract": METRIC_CONTRACT,
@@ -1944,6 +2066,15 @@ def evaluate_advisory(
                 [
                     *base["unmet_conditions"],
                     "early_reversal_rebound_volume_required",
+                ]
+            )
+        )
+    if intraday_regime_down and not resistance_reclaimed:
+        base["unmet_conditions"] = list(
+            dict.fromkeys(
+                [
+                    *base["unmet_conditions"],
+                    "intraday_down_regime_resistance_reclaim_pending",
                 ]
             )
         )
