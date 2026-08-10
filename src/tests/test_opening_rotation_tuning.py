@@ -105,6 +105,15 @@ def _episode_rows(
         "confirmation_pass_count": 3,
         "effective_venue": "KRX",
         "market_session_bucket": "krx_regular",
+        "opening_rotation_margin_one_share_authorized": True,
+        "opening_rotation_margin_authority_reason": (
+            "kt00011_applied_margin_tier_one_share_confirmed"
+        ),
+        "opening_rotation_margin_rate": 40,
+        "opening_rotation_margin_orderable_amount": 1_200_000,
+        "opening_rotation_margin_orderable_qty_cap": 120,
+        "opening_rotation_margin_requested_unit_price": 10_000,
+        "opening_rotation_margin_cash_guard_bypassed": True,
     }
     return [
         _event(
@@ -190,6 +199,9 @@ def test_postclose_selects_only_one_predeclared_axis_with_strict_sample_floors(
 
     assert report["source_quality"]["status"] == "pass"
     assert report["performance"]["complete_episode_count"] == 36
+    assert report["funnel"]["margin_authorized_episode_count"] == 36
+    assert report["funnel"]["margin_cash_guard_bypassed_episode_count"] == 36
+    assert report["funnel"]["margin_applied_rate_counts"] == {"40": 36}
     assert report["selected_candidate"]["axis"] == "day_change_lower"
     assert report["selected_candidate"]["value"] == 2.0
     assert candidate["status"] == "eligible"

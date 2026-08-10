@@ -25,6 +25,7 @@ from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_execution_receipts
 from src.engine import sniper_sync
 from src.engine.scalping import opening_rotation_backtest as rotation_backtest
+from src.utils import kiwoom_utils
 
 _ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS = (
     handlers._scanner_runtime_event_venue_fields
@@ -90,6 +91,178 @@ def _packet(price: int) -> dict:
         "microstructure_reaction_wall_replenishment_risk_score": 42,
         "microstructure_reaction_vi_proximity_risk": 18,
     }
+
+
+def test_kt00011_parser_exposes_applied_margin_orderable_capacity(monkeypatch):
+    captured = {}
+
+    def _fetch(**kwargs):
+        captured.update(kwargs)
+        return [
+            {
+                "return_code": 0,
+                "stk_profa_rt": "20%",
+                "profa_rt": "40%",
+                "aplc_rt": "40%",
+                "profa_40ord_alow_amt": "000001200000",
+                "profa_40ord_alowq": "000000000120",
+                "min_ord_alow_amt": "000000000000",
+                "min_ord_alowq": "000000000000",
+            }
+        ]
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", _fetch)
+
+    snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
+        "token",
+        "A005930_AL",
+        unit_price=10_000,
+    )
+
+    assert captured["api_id"] == "kt00011"
+    assert captured["payload"] == {"stk_cd": "005930", "uv": "10000"}
+    assert snapshot["applied_margin_rate"] == 40
+    assert snapshot["applied_margin_tier_recognized"] is True
+    assert snapshot["applied_orderable_amount"] == 1_200_000
+    assert snapshot["applied_orderable_qty"] == 120
+    assert snapshot["requested_unit_price"] == 10_000
+
+
+@pytest.mark.parametrize("raw_return_code", [None, "invalid"])
+def test_kt00011_parser_rejects_missing_or_invalid_return_code(
+    monkeypatch,
+    raw_return_code,
+):
+    response = {
+        "aplc_rt": "40%",
+        "profa_40ord_alow_amt": "000001200000",
+        "profa_40ord_alowq": "000000000120",
+    }
+    if raw_return_code is not None:
+        response["return_code"] = raw_return_code
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: [response],
+    )
+
+    snapshot = kiwoom_utils.get_orderable_by_margin_kt00011(
+        "token", "005930", unit_price=10_000
+    )
+
+    assert snapshot["error"].startswith("kt00011 return_code")
+    assert "applied_orderable_qty" not in snapshot
+
+
+def test_opening_margin_budget_uses_broker_tier_when_cash_guard_is_zero():
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "budget_source": "kt00011_min_account_deposit_cash_orderable",
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is True
+    assert context["opening_rotation_margin_cash_guard_bypassed"] is True
+    assert context["budget_base"] == 1_200_000
+    assert context["budget_source"] == "kt00011_applied_margin_orderable"
+    assert context["opening_rotation_margin_orderable_qty_cap"] == 120
+
+
+def test_generic_scalp_budget_keeps_cash_only_capacity_when_margin_exists(monkeypatch):
+    monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_orderable_by_margin_kt00011",
+        lambda *_args, **_kwargs: {
+            "error": "",
+            "deposit": 20_000,
+            "cash_only_orderable_amount": 20_000,
+            "cash_only_orderable_qty": 2,
+            "stock_margin_rate": 20,
+            "applied_margin_rate": 40,
+            "applied_margin_tier_recognized": True,
+            "applied_orderable_amount": 1_200_000,
+            "applied_orderable_qty": 120,
+            "requested_unit_price": 10_000,
+        },
+    )
+
+    context = handlers._resolve_scalp_cash_budget_context(
+        "005930",
+        10_000,
+        20_000,
+    )
+
+    assert context["budget_base"] == 20_000
+    assert context["budget_source"] == "kt00011_min_account_deposit_cash_orderable"
+    assert context["cash_orderable_qty_cap"] == 2
+    assert context["kt00011_applied_orderable_qty"] == 120
+    assert "opening_rotation_margin_one_share_authorized" not in context
+
+
+@pytest.mark.parametrize(
+    ("rate", "amount", "qty", "reason"),
+    [
+        (100, 1_200_000, 120, "applied_margin_rate_not_margin_eligible"),
+        (40, 9_999, 120, "applied_margin_orderable_amount_below_one_share"),
+        (40, 1_200_000, 0, "applied_margin_orderable_qty_below_one"),
+    ],
+)
+def test_opening_margin_budget_fails_closed_on_ineligible_broker_capacity(
+    rate,
+    amount,
+    qty,
+    reason,
+):
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 75_000,
+            "budget_source": "kt00011_min_account_deposit_cash_orderable",
+            "cash_orderable_amount": 75_000,
+            "cash_orderable_qty_cap": 7,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": rate,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": amount,
+            "kt00011_applied_orderable_qty": qty,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is False
+    assert context["opening_rotation_margin_authority_reason"] == reason
+    assert context["budget_base"] == 75_000
+    assert context["cash_orderable_qty_cap"] == 7
+
+
+def test_opening_margin_budget_fails_closed_on_broker_lookup_error():
+    context = handlers._apply_opening_rotation_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "transport_timeout",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["opening_rotation_margin_one_share_authorized"] is False
+    assert context["opening_rotation_margin_authority_reason"] == "kt00011_error"
+    assert context["budget_base"] == 0
 
 
 def evaluate_entry(
@@ -1889,6 +2062,35 @@ def test_rotation_tag_activation_is_strictly_after_broker_acceptance():
     assert send_index < reject_guard_index < activate_index < stage_index
 
 
+def test_margin_capacity_stays_inside_allocator_and_one_share_submit_contract():
+    submit_source = inspect.getsource(handlers._submit_watching_triggered_entry)
+
+    initial_margin_index = submit_source.index(
+        "_apply_opening_rotation_margin_budget_authority"
+    )
+    initial_allocator_index = submit_source.index(
+        "sizing_decision = resolve_scalping_allocation", initial_margin_index
+    )
+    one_share_stage_cap_index = submit_source.index(
+        "stage_qty_cap=1", initial_allocator_index
+    )
+    latency_index = submit_source.index("evaluate_live_buy_entry(")
+    final_margin_index = submit_source.index(
+        '"opening_rotation_margin_pre_submit_revalidated"'
+    )
+    final_allocator_index = submit_source.index(
+        "_revalidate_scalping_sizing_for_final_order_price", final_margin_index
+    )
+    one_share_plan_index = submit_source.index(
+        '"opening_rotation_best_bid_one_share"', final_allocator_index
+    )
+
+    assert initial_margin_index < initial_allocator_index
+    assert initial_allocator_index < one_share_stage_cap_index < latency_index
+    assert final_margin_index < final_allocator_index < one_share_plan_index
+    assert "kt10006" not in submit_source
+
+
 def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
     handlers.COOLDOWNS = {}
     handlers.ALERTED_STOCKS = set()
@@ -2279,6 +2481,15 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
         "opening_rotation_profile_id": "profile-1",
         "opening_rotation_policy_hash": "hash-1",
         "opening_rotation_policy_schema_version": "opening_rotation_runtime_policy_v2",
+        "opening_rotation_margin_one_share_authorized": True,
+        "opening_rotation_margin_authority_reason": (
+            "kt00011_applied_margin_tier_one_share_confirmed"
+        ),
+        "opening_rotation_margin_rate": 40,
+        "opening_rotation_margin_orderable_amount": 1_200_000,
+        "opening_rotation_margin_orderable_qty_cap": 120,
+        "opening_rotation_margin_requested_unit_price": 10_010,
+        "opening_rotation_margin_cash_guard_bypassed": True,
     }
     monkeypatch.setattr(
         sniper_execution_receipts.kiwoom_utils,
@@ -2320,6 +2531,14 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
     assert submitted[0]["price"] == 10_070
     assert submitted[0]["order_type"] == "00"
     assert submitted[0]["dmst_stex_tp"] == "KRX"
+    target_log = next(
+        fields
+        for args, fields in logs
+        if args[3] == "opening_rotation_profit_target_ordered"
+    )
+    assert target_log["opening_rotation_margin_one_share_authorized"] is True
+    assert target_log["opening_rotation_margin_rate"] == 40
+    assert target_log["opening_rotation_margin_cash_guard_bypassed"] is True
     assert stock["opening_rotation_profit_target_order_no"] == "SELL-1"
     assert stock["preset_tp_ord_no"] == "SELL-1"
     assert logs[-1][0][3] == "opening_rotation_profit_target_ordered"

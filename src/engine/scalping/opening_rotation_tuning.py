@@ -30,7 +30,7 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 
 KST = timezone(timedelta(hours=9))
-REPORT_SCHEMA_VERSION = "opening_rotation_profile_tuning_v1"
+REPORT_SCHEMA_VERSION = "opening_rotation_profile_tuning_v2"
 REPORT_TYPE = "opening_rotation_profile_tuning"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 CANDIDATE_DIR = RUNTIME_POLICY_DIR / "candidates"
@@ -279,6 +279,31 @@ def _merge_episode(
         ("opening_rotation_confirmation_count", "confirmation_pass_count"),
         ("opening_rotation_buy_submit_to_fill_ms", "buy_submit_to_fill_ms"),
         ("opening_rotation_entry_best_bid", "entry_best_bid"),
+        (
+            "opening_rotation_margin_one_share_authorized",
+            "margin_one_share_authorized",
+        ),
+        (
+            "opening_rotation_margin_authority_reason",
+            "margin_authority_reason",
+        ),
+        ("opening_rotation_margin_rate", "margin_rate"),
+        (
+            "opening_rotation_margin_orderable_amount",
+            "margin_orderable_amount",
+        ),
+        (
+            "opening_rotation_margin_orderable_qty_cap",
+            "margin_orderable_qty_cap",
+        ),
+        (
+            "opening_rotation_margin_requested_unit_price",
+            "margin_requested_unit_price",
+        ),
+        (
+            "opening_rotation_margin_cash_guard_bypassed",
+            "margin_cash_guard_bypassed",
+        ),
         ("opening_rotation_profit_target_price", "target_price"),
         ("buy_price", "buy_price"),
         ("fill_price", "fill_price"),
@@ -939,6 +964,21 @@ def build_postclose_report(
             "buy_filled_episode_count": sum(
                 bool(row.get("buy_filled")) for row in strict_episodes
             ),
+            "margin_authorized_episode_count": sum(
+                _truthy(row.get("margin_one_share_authorized"))
+                for row in strict_episodes
+            ),
+            "margin_cash_guard_bypassed_episode_count": sum(
+                _truthy(row.get("margin_cash_guard_bypassed"))
+                for row in strict_episodes
+            ),
+            "margin_applied_rate_counts": dict(
+                Counter(
+                    str(row.get("margin_rate"))
+                    for row in strict_episodes
+                    if row.get("margin_rate") not in (None, "", "-", 0, "0")
+                ).most_common()
+            ),
             "best_bid_fill_within_10s_count": sum(
                 (_safe_float(row.get("buy_submit_to_fill_ms"), 10001.0) or 10001.0)
                 <= 10000.0
@@ -1131,6 +1171,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
             f"- Decision: `{report['decision']}`",
             f"- Source quality: `{report['source_quality']['status']}`",
             f"- Promotions / strict episodes / complete: {funnel['unique_scanner_promotion_count']} / {funnel['strict_episode_count']} / {funnel['complete_episode_count']}",
+            f"- Margin authorized / cash-guard bypassed episodes: {funnel['margin_authorized_episode_count']} / {funnel['margin_cash_guard_bypassed_episode_count']}",
             f"- Source-quality-adjusted EV: `{performance['source_quality_adjusted_ev_pct']}`",
             f"- Selected axis: `{selected.get('axis', '-')}` → `{selected.get('value', '-')}`",
             f"- Rollback: `{report['rollback']['triggered']}`",

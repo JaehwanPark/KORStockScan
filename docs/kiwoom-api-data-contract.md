@@ -68,6 +68,35 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-10 Opening Rotation Margin Orderability Gate
+
+- Retrieved at `2026-08-10T18:06:07+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/계좌.md`, `kiwoom_docs/주문.md`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
+  `postman/kiwoom-openapi.postman_collection.json`, and the official
+  `get_domestic_orderable_quantity_by_margin_rate.py` example for `kt00011`
+  and `kt10000`.
+- `kt00011` remains `POST /api/dostk/acnt` with raw six-digit `stk_cd` and an
+  optional KRW `uv`. Its `aplc_rt` selects the applied margin-rate bucket and
+  the matching `profa_{20|30|40|50|60|100}ord_alow_amt/q` fields provide KRW
+  orderable amount and one-share quantity. `min_ord_alow_amt/q` remains the
+  explicitly non-margin orderable capacity.
+- Opening Rotation may replace its cash-only sizing input with the applied
+  `20/30/40/50/60%` bucket only when the exact symbol/price response has
+  `return_code=0`, a recognized bucket, orderable quantity at least one, and
+  orderable amount at least the checked unit price. It rechecks the most
+  expensive executable pre-submit price. A missing/error response, an unknown
+  or `100%` applied rate, zero quantity, inconsistent amount, or a failed
+  exact-price recheck cannot grant margin authority.
+- The resulting capacity enters the existing central sizing allocator as a
+  broker quantity cap; Opening then reduces an allocator-approved positive
+  quantity to exactly one share. The actual order remains ordinary KRX
+  `kt10000` DAY limit BUY. It does not use the credit-order API `kt10006`,
+  increase quantity, enable scale-in, or bypass time, stale/conflict,
+  specialist-owner, account/order/cooldown, absolute-budget, position,
+  broker-response, or hard/protect/emergency safety vetoes.
+
 ### 2026-08-08 Widget Signal Auto-Trade Order Gate
 
 - Retrieved at `2026-08-08T13:11:22+09:00` from upstream commit
