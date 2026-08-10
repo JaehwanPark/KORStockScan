@@ -65,6 +65,7 @@ from src.trading.order.tick_utils import (
     clamp_price_to_tick,
     get_tick_size,
     move_price_by_ticks,
+    move_price_up_by_bps,
 )
 from src.utils import kiwoom_utils
 
@@ -107,6 +108,8 @@ EXIT_REARM_MAX_BARS = 20
 INTRADAY_REGIME_MIN_BARS = 15
 INTRADAY_REGIME_LOOKBACK_BARS = 30
 INTRADAY_REGIME_MIN_DECLINE_TICKS = 3
+ENTRY_TARGET_BPS = 100
+ENTRY_MIN_REWARD_RISK_RATIO = 1.0
 
 EXTERNAL_THRESHOLDS = {
     "NQ": -0.40,
@@ -1769,6 +1772,13 @@ def evaluate_advisory(
                 best_ask, move_price_by_ticks(candidate_tactical_support, 2)
             )
             if entry_low <= entry_high:
+                candidate_invalidation = move_price_by_ticks(candidate_support, -2)
+                if not _apply_entry_reward_risk_guard(
+                    base,
+                    entry_price_high=entry_high,
+                    invalidation_price=candidate_invalidation,
+                ):
+                    return base
                 base.update(
                     {
                         "state": "ENTRY_CAUTION",
@@ -1778,9 +1788,7 @@ def evaluate_advisory(
                         "trigger": "candidate_support_vwap_recovery_caution",
                         "trigger_price": candidate_tactical_support,
                         "invalidation": "candidate_support_break",
-                        "invalidation_price": move_price_by_ticks(
-                            candidate_support, -2
-                        ),
+                        "invalidation_price": candidate_invalidation,
                         "reasons": list(
                             dict.fromkeys(
                                 [
@@ -2202,6 +2210,13 @@ def evaluate_advisory(
                 resistance_reclaimed=resistance_reclaimed,
                 higher_high_and_low=bool(structure["higher_high_and_low"]),
             )
+            narrowed_entry_high = _positive_int(base.get("entry_price_high"))
+            if narrowed_entry_high is not None:
+                _apply_entry_reward_risk_guard(
+                    base,
+                    entry_price_high=narrowed_entry_high,
+                    invalidation_price=hard_invalidation,
+                )
             return base
 
     non_relative_core_passed = all(
@@ -2267,6 +2282,16 @@ def evaluate_advisory(
         resistance_reclaimed=resistance_reclaimed,
         higher_high_and_low=bool(structure["higher_high_and_low"]),
     )
+    narrowed_entry_high = _positive_int(base.get("entry_price_high"))
+    if (
+        base.get("state") in {"ENTRY_CAUTION", "ENTRY_READY"}
+        and narrowed_entry_high is not None
+    ):
+        _apply_entry_reward_risk_guard(
+            base,
+            entry_price_high=narrowed_entry_high,
+            invalidation_price=hard_invalidation,
+        )
     return base
 
 
@@ -2700,45 +2725,51 @@ class AdvisoryRecoveryEpisodeFilter:
             entry_low = max(anchor, best_bid)
             entry_high = min(best_ask, upper_bound)
             if entry_low <= entry_high:
-                result["state"] = result["raw_state"] = "ENTRY_CAUTION"
-                result["entry_price_low"] = entry_low
-                result["entry_price_high"] = entry_high
-                result["trigger"] = "recovery_episode_resistance_reclaim_pullback"
-                result["trigger_price"] = anchor
-                result["invalidation"] = "confirmed_support_break"
-                result["invalidation_price"] = move_price_by_ticks(self._support, -2)
-                result["reasons"] = list(
-                    dict.fromkeys(
-                        [
-                            *(result.get("reasons") or []),
-                            "recovery_episode_armed",
-                            "recent_resistance_reclaimed",
-                            "pullback_within_two_ticks",
-                            "recent_rebound_volume_grace",
-                        ]
+                invalidation_price = move_price_by_ticks(self._support, -2)
+                if _apply_entry_reward_risk_guard(
+                    result,
+                    entry_price_high=entry_high,
+                    invalidation_price=invalidation_price,
+                ):
+                    result["state"] = result["raw_state"] = "ENTRY_CAUTION"
+                    result["entry_price_low"] = entry_low
+                    result["entry_price_high"] = entry_high
+                    result["trigger"] = "recovery_episode_resistance_reclaim_pullback"
+                    result["trigger_price"] = anchor
+                    result["invalidation"] = "confirmed_support_break"
+                    result["invalidation_price"] = invalidation_price
+                    result["reasons"] = list(
+                        dict.fromkeys(
+                            [
+                                *(result.get("reasons") or []),
+                                "recovery_episode_armed",
+                                "recent_resistance_reclaimed",
+                                "pullback_within_two_ticks",
+                                "recent_rebound_volume_grace",
+                            ]
+                        )
                     )
-                )
-                result["unmet_conditions"] = [
-                    value
-                    for value in result.get("unmet_conditions") or []
-                    if value
-                    not in {
-                        "vwap_or_resistance_reclaimed",
-                        "rebound_volume_confirmed",
-                        "early_reversal_rebound_volume_required",
-                        "resistance_reclaim_pullback_pending",
+                    result["unmet_conditions"] = [
+                        value
+                        for value in result.get("unmet_conditions") or []
+                        if value
+                        not in {
+                            "vwap_or_resistance_reclaimed",
+                            "rebound_volume_confirmed",
+                            "early_reversal_rebound_volume_required",
+                            "resistance_reclaim_pullback_pending",
+                        }
+                    ]
+                    result.setdefault("derived", {})["recovery_episode"] = {
+                        "support": self._support,
+                        "reclaimed_resistance": anchor,
+                        "volume_evidence_age_bars": volume_age,
+                        "reclaim_age_bars": reclaim_age,
+                        "entry_anchor": anchor,
+                        "entry_upper_bound": upper_bound,
+                        "authority": ADVISORY_AUTHORITY,
+                        "runtime_effect": False,
                     }
-                ]
-                result.setdefault("derived", {})["recovery_episode"] = {
-                    "support": self._support,
-                    "reclaimed_resistance": anchor,
-                    "volume_evidence_age_bars": volume_age,
-                    "reclaim_age_bars": reclaim_age,
-                    "entry_anchor": anchor,
-                    "entry_upper_bound": upper_bound,
-                    "authority": ADVISORY_AUTHORITY,
-                    "runtime_effect": False,
-                }
         result["recovery_continuity"] = self.snapshot()
         return result
 
@@ -2893,6 +2924,59 @@ def _exit_downtrend_confirmed(bars: list[MinuteBar], horizon: int) -> bool:
         closes[-1] < closes[0] - get_tick_size(closes[-1])
         and sum(delta < 0 for delta in deltas) >= max(2, (horizon + 1) // 2)
     )
+
+
+def _entry_reward_risk_assessment(
+    *, entry_price_high: int, invalidation_price: int
+) -> dict[str, Any]:
+    """Assess the worst recommended fill against the fixed +1% objective."""
+
+    target_price = move_price_up_by_bps(entry_price_high, ENTRY_TARGET_BPS)
+    reward_price = target_price - entry_price_high
+    risk_price = entry_price_high - invalidation_price
+    ratio = reward_price / risk_price if risk_price > 0 else 0.0
+    return {
+        "basis": "worst_recommended_entry_to_hard_invalidation",
+        "entry_price": entry_price_high,
+        "target_bps": ENTRY_TARGET_BPS,
+        "target_price": target_price,
+        "reward_price": reward_price,
+        "invalidation_price": invalidation_price,
+        "risk_price": risk_price,
+        "reward_risk_ratio": round(ratio, 4),
+        "minimum_reward_risk_ratio": ENTRY_MIN_REWARD_RISK_RATIO,
+        "passed": bool(risk_price > 0 and ratio >= ENTRY_MIN_REWARD_RISK_RATIO),
+        "authority": "negative_veto_only",
+        "runtime_effect": False,
+        "metric_contract": METRIC_CONTRACT,
+    }
+
+
+def _apply_entry_reward_risk_guard(
+    advisory: dict[str, Any], *, entry_price_high: int, invalidation_price: int
+) -> bool:
+    """Keep a setup observable but non-actionable when gross reward is too small."""
+
+    derived = advisory.setdefault("derived", {})
+    assessment = _entry_reward_risk_assessment(
+        entry_price_high=entry_price_high,
+        invalidation_price=invalidation_price,
+    )
+    derived["entry_reward_risk_guard"] = assessment
+    if assessment["passed"]:
+        return True
+    advisory["state"] = advisory["raw_state"] = "WATCH"
+    advisory["entry_price_low"] = None
+    advisory["entry_price_high"] = None
+    advisory["unmet_conditions"] = list(
+        dict.fromkeys(
+            [
+                *advisory.get("unmet_conditions", []),
+                "entry_reward_risk_below_floor",
+            ]
+        )
+    )
+    return False
 
 
 class ExitAdvisoryStateMachine:
@@ -3209,9 +3293,7 @@ class ExitAdvisoryStateMachine:
                 else:
                     self._bars_without_new_low += 1
                 self._reclaim_bars = (
-                    self._reclaim_bars + 1
-                    if latest.close >= self._broken_support
-                    else 0
+                    self._reclaim_bars + 1 if latest.close > self._broken_support else 0
                 )
                 if self._reclaim_bars >= 2:
                     self._state = "EXIT_CANCELLED"

@@ -20,7 +20,7 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.engine.trade_pause_control import is_buy_side_paused
-from src.trading.order.tick_utils import get_tick_size
+from src.trading.order.tick_utils import move_price_up_by_bps
 from src.trading.widget_auto_trade.gateway import (
     ExecutionSnapshot,
     KiwoomSharedTokenOrderGateway,
@@ -168,9 +168,7 @@ def _take_profit_price(fill_price: int, *, profit_bps: int = TAKE_PROFIT_BPS) ->
     clean_bps = _positive_int(profit_bps)
     if clean_fill <= 0 or clean_bps <= 0:
         raise ValueError("invalid_take_profit_basis")
-    raw_target = (clean_fill * (10_000 + clean_bps) + 9_999) // 10_000
-    tick = get_tick_size(raw_target)
-    return ((raw_target + tick - 1) // tick) * tick
+    return move_price_up_by_bps(clean_fill, clean_bps)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -469,6 +467,8 @@ class WidgetSignalAutoTrader:
                 derived.get("recent_resistance_reclaimed") is True
                 and derived.get("higher_high_and_low") is True
             )
+            reward_risk = derived.get("entry_reward_risk_guard")
+            reward_risk = reward_risk if isinstance(reward_risk, dict) else {}
             if regime.get("state") not in {"unavailable", "not_down", "down"}:
                 block_reason = "entry_blocked_intraday_regime_missing"
             elif regime.get("state") == "down" and not structural_recovery:
@@ -477,6 +477,8 @@ class WidgetSignalAutoTrader:
                 block_reason = "entry_blocked_recent_resistance_not_reclaimed"
             elif derived.get("resistance_reclaim_hold_confirmed") is not True:
                 block_reason = "entry_blocked_resistance_reclaim_hold_pending"
+            elif reward_risk.get("passed") is not True:
+                block_reason = "entry_blocked_reward_risk_not_qualified"
         return (
             f"{spec.code}:{now.date().isoformat()}:ENTRY:{context.name}:"
             f"{advisory.get('observed_at')}",

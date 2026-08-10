@@ -194,23 +194,40 @@ def test_exit_advisory_cancels_after_two_completed_support_reclaims():
                 support + 100,
                 1_000,
             ),
+            advisory.MinuteBar(
+                "20260803091000",
+                support + 100,
+                support + 200,
+                support,
+                support + 100,
+                1_000,
+            ),
         ]
     )
-    first_reclaim = machine.apply(
+    support_hold = machine.apply(
         observed_at=start + timedelta(minutes=9, seconds=5),
+        context=context,
+        bars=bars[:-2],
+        bbo={"best_bid": support, "best_ask": support + 100},
+        source_quality=quality,
+    )
+    first_reclaim = machine.apply(
+        observed_at=start + timedelta(minutes=10, seconds=5),
         context=context,
         bars=bars[:-1],
         bbo={"best_bid": support, "best_ask": support + 100},
         source_quality=quality,
     )
     cancelled = machine.apply(
-        observed_at=start + timedelta(minutes=10, seconds=5),
+        observed_at=start + timedelta(minutes=11, seconds=5),
         context=context,
         bars=bars,
         bbo={"best_bid": support, "best_ask": support + 100},
         source_quality=quality,
     )
 
+    assert support_hold["state"] == "EXIT_READY"
+    assert support_hold["continuity"]["reclaim_bars"] == 0
     assert first_reclaim["state"] == "EXIT_READY"
     assert first_reclaim["continuity"]["reclaim_bars"] == 1
     assert cancelled["state"] == "EXIT_CANCELLED"
@@ -1025,6 +1042,7 @@ def _recovery_episode_advisory(
     *,
     volume_confirmed: bool,
     current_price: int,
+    structural_support: int = 244_000,
 ) -> dict:
     reasons = [
         "low_structure_confirmed",
@@ -1050,7 +1068,7 @@ def _recovery_episode_advisory(
         "source_quality": {"status": "PASS", "issues": []},
         "external_risk": {"level": "DATA_LIMITED"},
         "derived": {
-            "structural_support": 244_000,
+            "structural_support": structural_support,
             "recent_resistance": 246_000,
         },
         "current_price": current_price,
@@ -1065,7 +1083,12 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
     start = datetime(2026, 8, 5, 10, 31, 6, tzinfo=KST)
     filter_ = advisory.AdvisoryRecoveryEpisodeFilter()
     armed = filter_.apply(
-        _recovery_episode_advisory(start, volume_confirmed=True, current_price=245_500),
+        _recovery_episode_advisory(
+            start,
+            volume_confirmed=True,
+            current_price=245_500,
+            structural_support=245_000,
+        ),
         current_price=245_500,
         bbo={"best_bid": 245_500, "best_ask": 246_000},
         latest_bar=advisory.MinuteBar(
@@ -1077,6 +1100,7 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
             start + timedelta(minutes=2),
             volume_confirmed=True,
             current_price=247_000,
+            structural_support=245_000,
         ),
         current_price=247_000,
         bbo={"best_bid": 246_500, "best_ask": 247_000},
@@ -1088,6 +1112,7 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
         start + timedelta(minutes=3),
         volume_confirmed=False,
         current_price=246_000,
+        structural_support=245_000,
     )
     pullback_input["unmet_conditions"].append("early_reversal_rebound_volume_required")
     pullback = filter_.apply(
@@ -1108,6 +1133,7 @@ def test_recovery_episode_carries_volume_evidence_into_confirmed_pullback():
         start + timedelta(minutes=3),
         volume_confirmed=False,
         current_price=246_000,
+        structural_support=245_000,
     )
     restored_pullback_input["unmet_conditions"].append(
         "early_reversal_rebound_volume_required"
@@ -1762,8 +1788,8 @@ def test_tactical_support_owns_chase_while_structural_support_owns_invalidation(
             "higher_high_and_low": True,
             "retest_held": True,
             "retest_rebound_confirmed": True,
-            "confirmed_support": 100_000,
-            "candidate_support": 100_000,
+            "confirmed_support": 100_800,
+            "candidate_support": 100_800,
             "support_confirmation": "retest_held",
             "recent_resistance": 101_000,
         },
@@ -1796,6 +1822,24 @@ def test_tactical_support_owns_chase_while_structural_support_owns_invalidation(
     assert result["derived"]["tactical_chase_pct"] < 0.3
     assert result["derived"]["chase_pct"] == result["derived"]["tactical_chase_pct"]
     assert result["derived"]["chase_basis"] == "tactical_support"
+
+
+def test_entry_reward_risk_uses_one_percent_tick_target_and_worst_entry_price():
+    rejected = advisory._entry_reward_risk_assessment(
+        entry_price_high=231_000,
+        invalidation_price=228_000,
+    )
+    accepted = advisory._entry_reward_risk_assessment(
+        entry_price_high=231_500,
+        invalidation_price=230_000,
+    )
+
+    assert rejected["target_price"] == 233_500
+    assert rejected["reward_risk_ratio"] == 0.8333
+    assert rejected["passed"] is False
+    assert accepted["target_price"] == 234_000
+    assert accepted["reward_risk_ratio"] == 1.6667
+    assert accepted["passed"] is True
 
 
 def test_absorption_recovery_can_confirm_expanded_retest_volume(monkeypatch):
@@ -2638,7 +2682,7 @@ def test_non_opening_volume_keeps_full_rebound_ratio_requirement():
     assert metadata["required_rebound_to_decline_volume_ratio"] == 1.0
 
 
-def test_candidate_support_vwap_recovery_emits_bounded_krx_caution():
+def test_candidate_support_vwap_recovery_requires_favorable_reward_risk():
     start = datetime(2026, 8, 10, 9, 0, tzinfo=KST)
     rows = [
         (236_000, 236_500, 233_000, 233_000, 626_341),
@@ -2693,17 +2737,23 @@ def test_candidate_support_vwap_recovery_emits_bounded_krx_caution():
 
     result = advisory.evaluate_advisory(**inputs)
 
-    assert result["state"] == "ENTRY_CAUTION"
-    assert result["trigger"] == "candidate_support_vwap_recovery_caution"
-    assert result["entry_price_low"] == 233_500
-    assert result["entry_price_high"] == 234_000
+    assert result["state"] == "WATCH"
+    assert result["trigger"] is None
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
     assert result["derived"]["candidate_support"] == 231_000
     assert result["derived"]["candidate_support_age_bars"] == 3
     assert (
         result["derived"]["candidate_support_caution"]["ready_promotion_forbidden"]
         is True
     )
-    assert result["invalidation_price"] == 230_000
+    reward_risk = result["derived"]["entry_reward_risk_guard"]
+    assert reward_risk["entry_price"] == 234_000
+    assert reward_risk["target_price"] == 236_500
+    assert reward_risk["invalidation_price"] == 230_000
+    assert reward_risk["reward_risk_ratio"] == 0.625
+    assert reward_risk["passed"] is False
+    assert "entry_reward_risk_below_floor" in result["unmet_conditions"]
     assert "premarket_vwap_not_recovered" in result["unmet_conditions"]
     assert contract.advisory_contract_is_valid(
         result,
@@ -2714,7 +2764,7 @@ def test_candidate_support_vwap_recovery_emits_bounded_krx_caution():
 
     promotion = advisory.AdvisoryPromotionFilter()
     assert promotion.apply(result)["state"] == "WATCH"
-    assert promotion.apply(result)["state"] == "ENTRY_CAUTION"
+    assert promotion.apply(result)["state"] == "WATCH"
 
 
 def test_candidate_support_recovery_keeps_two_tick_no_chase_guard(monkeypatch):

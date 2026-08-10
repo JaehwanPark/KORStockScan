@@ -539,6 +539,7 @@ def test_samsung_execution_allows_completed_structural_recovery(tmp_path, monkey
                 "recent_resistance_reclaimed": True,
                 "resistance_reclaim_hold_confirmed": True,
                 "higher_high_and_low": True,
+                "entry_reward_risk_guard": {"passed": True},
             },
         },
     }
@@ -547,6 +548,51 @@ def test_samsung_execution_allows_completed_structural_recovery(tmp_path, monkey
 
     assert signal is not None
     assert signal[2] is None
+
+
+def test_samsung_execution_blocks_entry_below_reward_risk_floor(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": {}}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeSamsungContractWithoutTopLevelProfile,
+        event_based=False,
+        structural_execution_qualification=True,
+    )
+    payload = {
+        "status": "ok",
+        "symbol": "005930",
+        "market_venue": "KRX",
+        "observed_at_kst": now.isoformat(),
+        "advisory": {
+            "valid": True,
+            "state": "ENTRY_CAUTION",
+            "session": "KRX_REGULAR",
+            "observed_at": now.isoformat(),
+            "trigger": "dynamic_support_and_vwap_reclaim",
+            "intraday_regime": {"state": "not_down"},
+            "derived": {
+                "confirmed_support": 228_000,
+                "recent_resistance": 230_000,
+                "recent_resistance_reclaimed": True,
+                "resistance_reclaim_hold_confirmed": True,
+                "higher_high_and_low": True,
+                "entry_reward_risk_guard": {"passed": False},
+            },
+        },
+    }
+
+    signal = trader._entry_signal(spec, payload, now)
+
+    assert signal is not None
+    assert signal[2] == "entry_blocked_reward_risk_not_qualified"
+    payload["advisory"]["derived"].pop("entry_reward_risk_guard")
+    missing_signal = trader._entry_signal(spec, payload, now)
+    assert missing_signal is not None
+    assert missing_signal[2] == "entry_blocked_reward_risk_not_qualified"
 
 
 def test_samsung_structural_block_is_observable_and_does_not_consume_episode(

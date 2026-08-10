@@ -67,3 +67,14 @@ def move_price_down_by_bps(
     if target_clamped > tick_below:
         return max(tick_below, clamp_price_to_tick(target_clamped))
     return target_clamped
+
+
+def move_price_up_by_bps(price: int | float, bps: int) -> int:
+    """Move price up by bps and round up to the first valid market tick."""
+
+    p = int(price)
+    if p <= 0 or int(bps) <= 0:
+        raise ValueError("price_and_bps_must_be_positive")
+    raw_target = (p * (10_000 + int(bps)) + 9_999) // 10_000
+    tick = get_tick_size(raw_target)
+    return ((raw_target + tick - 1) // tick) * tick
