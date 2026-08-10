@@ -2590,18 +2590,12 @@ def _apply_opening_rotation_margin_budget_authority(
 
     resolved = dict(budget_context or {})
     price = max(0, _safe_int(unit_price, 0))
-    margin_rate = max(
-        0, _safe_int(resolved.get("kt00011_applied_margin_rate"), 0)
-    )
+    margin_rate = max(0, _safe_int(resolved.get("kt00011_applied_margin_rate"), 0))
     margin_amount = max(
         0, _safe_int(resolved.get("kt00011_applied_orderable_amount"), 0)
     )
-    margin_qty = max(
-        0, _safe_int(resolved.get("kt00011_applied_orderable_qty"), 0)
-    )
-    recognized = bool(
-        resolved.get("kt00011_applied_margin_tier_recognized", False)
-    )
+    margin_qty = max(0, _safe_int(resolved.get("kt00011_applied_orderable_qty"), 0))
+    recognized = bool(resolved.get("kt00011_applied_margin_tier_recognized", False))
     error = str(resolved.get("kt00011_error") or "").strip()
 
     authorized = False
@@ -62158,9 +62152,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 broker_qty_cap=max(
                     0,
                     _safe_int(
-                        budget_context.get(
-                            "opening_rotation_margin_orderable_qty_cap"
-                        ),
+                        budget_context.get("opening_rotation_margin_orderable_qty_cap"),
                         0,
                     ),
                 ),
