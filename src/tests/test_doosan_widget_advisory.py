@@ -162,7 +162,7 @@ def test_doosan_policy_blocks_shallow_pullback_after_extended_runup():
     assert result["doosan_policy"]["extended_runup_pullback_guard"] == {
         "applied": True,
         "runup_pct": 0.9,
-        "trigger_pct": 0.8,
+        "trigger_pct": 0.7,
         "recent_high": 99_200,
         "minimum_pullback_ticks": 3,
         "maximum_entry_price": 98_900,
@@ -193,6 +193,37 @@ def test_doosan_policy_allows_three_tick_pullback_after_extended_runup():
     assert result["entry_price_low"] == 98_900
     assert result["entry_price_high"] == 98_900
     assert result["doosan_policy"]["extended_runup_pullback_guard"]["applied"] is False
+
+
+def test_doosan_policy_blocks_borderline_runup_near_recent_high():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    source = _base_advisory(now)
+    source["derived"]["recent_runup_chase_guard"] = {
+        "runup_pct": 0.7682,
+        "recent_high": 78_800,
+        "recent_low": 78_100,
+    }
+
+    result = doosan.apply_doosan_entry_policy(
+        source,
+        current_price=78_700,
+        bars=_bars([79_500, 78_100, 78_700]),
+        context=contract.session_context(now),
+    )
+
+    assert result["state"] == "NO_CHASE"
+    assert result["entry_price_low"] is None
+    assert result["entry_price_high"] is None
+    assert result["doosan_policy"]["extended_runup_pullback_guard"] == {
+        "applied": True,
+        "runup_pct": 0.7682,
+        "trigger_pct": 0.7,
+        "recent_high": 78_800,
+        "minimum_pullback_ticks": 3,
+        "maximum_entry_price": 78_500,
+        "authority": "widget_advisory_only",
+        "runtime_effect": False,
+    }
 
 
 def test_high_tier_does_not_override_portable_recovery_caution():
@@ -643,6 +674,122 @@ def test_completed_episode_rearms_and_allows_second_entry_same_day():
     assert tracker.entry_event["episode_sequence"] == 2
     assert ":ENTRY:02:" in tracker.entry_event["event_id"]
     assert tracker.entry_event["event_id"] != first_event_id
+
+
+def test_recent_support_loss_reentry_requires_reclaim_and_support_floor():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    bars = _bars([100_000, 99_000, 98_500])
+    tracker = doosan.DoosanDailyEpisodeTracker()
+    tracker.apply(
+        _base_advisory(now),
+        observed_at=now,
+        current_price=99_100,
+        bars=bars,
+        bbo={"best_bid": 99_000},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    close_break = doosan.MinuteBar(
+        source_time="20260805090300",
+        open=98_600,
+        high=98_650,
+        low=98_300,
+        close=98_400,
+        volume=2_000,
+    )
+    tracker.apply(
+        _base_advisory(now + timedelta(seconds=10)),
+        observed_at=now + timedelta(seconds=10),
+        current_price=98_400,
+        bars=[*bars, close_break],
+        bbo={"best_bid": 98_300},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    closed_snapshot = tracker.snapshot()
+    restarted = doosan.DoosanDailyEpisodeTracker()
+    assert restarted.restore(closed_snapshot, observed_at=now + timedelta(seconds=20))
+    tracker = restarted
+    later_bar = doosan.MinuteBar(
+        source_time="20260805090400",
+        open=98_500,
+        high=99_100,
+        low=98_500,
+        close=99_000,
+        volume=2_500,
+    )
+    later_bars = [*bars, close_break, later_bar]
+
+    non_actionable = _base_advisory(now + timedelta(seconds=80), state="WATCH")
+    pending, _ = tracker.apply(
+        non_actionable,
+        observed_at=now + timedelta(seconds=80),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert tracker.rearm_required is True
+    assert "doosan_loss_reentry_structure_pending" in pending["unmet_conditions"]
+
+    no_reclaim = _base_advisory(now + timedelta(seconds=90))
+    no_reclaim["derived"]["recent_resistance_reclaimed"] = False
+    blocked, _ = tracker.apply(
+        no_reclaim,
+        observed_at=now + timedelta(seconds=90),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert blocked["state"] == "WATCH"
+    assert blocked["entry_price_low"] is None
+    assert (
+        blocked["derived"]["doosan_loss_reentry_guard"]["recent_resistance_reclaimed"]
+        is False
+    )
+    assert tracker.daily_entry_count == 1
+
+    reclaimed = _base_advisory(now + timedelta(seconds=100))
+    reclaimed["derived"]["recent_resistance_reclaimed"] = True
+    second_entry, _ = tracker.apply(
+        reclaimed,
+        observed_at=now + timedelta(seconds=100),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert second_entry["state"] == "ENTRY_CAUTION"
+    assert "doosan_entry_episode_rearmed" in second_entry["reasons"]
+    assert second_entry["derived"]["doosan_loss_reentry_guard"]["ready"] is True
+    assert tracker.active is True
+    assert tracker.daily_entry_count == 2
+
+    expired_tracker = doosan.DoosanDailyEpisodeTracker()
+    assert expired_tracker.restore(
+        closed_snapshot, observed_at=now + timedelta(minutes=16)
+    )
+    expired_watch = _base_advisory(now + timedelta(minutes=16), state="WATCH")
+    expired_tracker.apply(
+        expired_watch,
+        observed_at=now + timedelta(minutes=16),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert expired_tracker.entry_issued is False
+    unrestricted = _base_advisory(now + timedelta(minutes=16, seconds=10))
+    unrestricted["derived"]["recent_resistance_reclaimed"] = False
+    after_window, _ = expired_tracker.apply(
+        unrestricted,
+        observed_at=now + timedelta(minutes=16, seconds=10),
+        current_price=99_000,
+        bars=later_bars,
+        bbo={"best_bid": 98_900},
+        source_quality={"status": "PASS", "issues": []},
+    )
+    assert after_window["state"] == "ENTRY_CAUTION"
+    assert expired_tracker.daily_entry_count == 2
 
 
 def test_completed_legacy_snapshot_migrates_to_rearm_pending():

@@ -557,23 +557,83 @@ class DoosanDailyEpisodeTracker:
             and isinstance(self.exit_event, dict)
             and source_quality.get("status") == "PASS"
             and advisory_source_quality.get("status") == "PASS"
-            and advisory.get("state") not in ACTIONABLE_ENTRY_STATES
-            and advisory.get("raw_state", advisory.get("state"))
-            not in ACTIONABLE_ENTRY_STATES
         ):
             return False
         try:
             exit_valid_until = datetime.fromisoformat(
                 str(self.exit_event.get("valid_until") or "")
             )
+            exit_observed_at = datetime.fromisoformat(
+                str(self.exit_event.get("observed_at") or "")
+            )
         except (TypeError, ValueError):
             return False
         latest_bar = bars[-1] if bars else None
         if (
             exit_valid_until.tzinfo is None
+            or exit_observed_at.tzinfo is None
             or exit_valid_until > _as_kst(observed_at)
             or latest_bar is None
             or latest_bar.source_time <= self.rearm_after_bar
+        ):
+            return False
+        now = _as_kst(observed_at)
+        exit_age_sec = (now - _as_kst(exit_observed_at)).total_seconds()
+        loss_reentry_window = bool(
+            self.exit_event.get("reason")
+            == "doosan_completed_close_below_entry_support"
+            and 0 <= exit_age_sec <= contract.LOSS_REENTRY_CONFIRMATION_WINDOW_SEC
+        )
+        if loss_reentry_window:
+            derived = advisory.get("derived")
+            if not isinstance(derived, dict):
+                derived = {}
+                advisory["derived"] = derived
+            new_support = _positive_int(
+                derived.get("structural_support") or derived.get("confirmed_support")
+            )
+            resistance_reclaimed = derived.get("recent_resistance_reclaimed") is True
+            support_floor_met = bool(
+                new_support is not None
+                and self.structural_support is not None
+                and new_support >= self.structural_support
+            )
+            actionable = bool(
+                advisory.get("state") in ACTIONABLE_ENTRY_STATES
+                and advisory.get("raw_state", advisory.get("state"))
+                in ACTIONABLE_ENTRY_STATES
+            )
+            reentry_ready = bool(
+                actionable and resistance_reclaimed and support_floor_met
+            )
+            derived["doosan_loss_reentry_guard"] = {
+                "applied": True,
+                "ready": reentry_ready,
+                "exit_age_sec": round(exit_age_sec, 3),
+                "confirmation_window_sec": (
+                    contract.LOSS_REENTRY_CONFIRMATION_WINDOW_SEC
+                ),
+                "prior_broken_support": self.structural_support,
+                "new_structural_support": new_support,
+                "support_floor_met": support_floor_met,
+                "recent_resistance_reclaimed": resistance_reclaimed,
+                "policy": "bounded_post_loss_structural_rearm",
+                "authority": ADVISORY_AUTHORITY,
+                "runtime_effect": False,
+                "metric_contract": contract.METRIC_CONTRACT,
+            }
+            if not reentry_ready:
+                advisory["unmet_conditions"] = _append_unique(
+                    advisory.get("unmet_conditions"),
+                    "doosan_loss_reentry_structure_pending",
+                )
+                return False
+            self._clear_current_episode()
+            return True
+        if (
+            advisory.get("state") in ACTIONABLE_ENTRY_STATES
+            or advisory.get("raw_state", advisory.get("state"))
+            in ACTIONABLE_ENTRY_STATES
         ):
             return False
         self._clear_current_episode()
