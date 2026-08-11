@@ -1,0 +1,18 @@
+[Unit]
+Description=KORStockScan Lower-Price Two-Leg Same-Day Preflight (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+ExecStart=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_preflight.sh %i
+TimeoutStartSec=180
+UMask=0077
+Nice=5
+CPUQuota=10%
+MemoryMax=256M
+TasksMax=32
+NoNewPrivileges=true
