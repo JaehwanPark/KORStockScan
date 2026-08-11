@@ -80,6 +80,8 @@ class StepSpec:
     source_paths: tuple[str, ...]
     force_env: str
     description: str
+    enable_env: str | None = None
+    enabled_default: bool = True
 
 
 def _report_paths(target_date: str) -> tuple[Path, Path]:
@@ -129,6 +131,7 @@ def _step_specs(target_date: str) -> list[StepSpec]:
                 source_paths=lifecycle_sources,
                 force_env="THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS",
                 description=f"rolling/MTD lifecycle bucket window refresh: {window}",
+                enable_env="THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS",
             )
         )
 
@@ -255,7 +258,50 @@ def _step_specs(target_date: str) -> list[StepSpec]:
             ),
         ),
     }
+    deep_enable_policy: dict[str, tuple[str | None, bool]] = {
+        "pattern_lab_currentness_audit": (
+            "THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT",
+            True,
+        ),
+        "pattern_lab_ai_review": (
+            "THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW",
+            True,
+        ),
+        "observation_source_quality_audit": (
+            "THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT",
+            True,
+        ),
+        # There is no standard wrapper invocation for this forensic audit.
+        # Keep it visible in inventory, but do not report a missing artifact as
+        # an actionable trigger unless an operator explicitly enables it.
+        "observation_source_quality_backfill_audit": (
+            "THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_BACKFILL_AUDIT",
+            False,
+        ),
+        "codebase_performance_workorder": (
+            "THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT",
+            False,
+        ),
+        "producer_gap_discovery": (
+            "THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY",
+            False,
+        ),
+        "stage_hook_workorder_discovery": (
+            "THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY",
+            False,
+        ),
+        "stage_hook_runtime_scaffold": (
+            "THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD",
+            False,
+        ),
+        "pattern_lab_propagation_audit": (
+            "THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT",
+            True,
+        ),
+        "runtime_apply_gap_audit": (None, True),
+    }
     for step_id, (outputs, sources) in deep_steps.items():
+        enable_env, enabled_default = deep_enable_policy[step_id]
         specs.append(
             StepSpec(
                 step_id=step_id,
@@ -264,6 +310,8 @@ def _step_specs(target_date: str) -> list[StepSpec]:
                 source_paths=tuple(sources),
                 force_env="THRESHOLD_CYCLE_FORCE_DEEP_AUDITS",
                 description=f"triggered deep/report-heavy audit: {step_id}",
+                enable_env=enable_env,
+                enabled_default=enabled_default,
             )
         )
 
@@ -295,6 +343,7 @@ def _step_specs(target_date: str) -> list[StepSpec]:
             ),
             force_env="THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH",
             description="code-improvement workorder side branch",
+            enable_env="THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER",
         )
     )
     return specs
@@ -441,7 +490,32 @@ def _source_has_drift_signal(source_paths: tuple[str, ...]) -> bool:
 
 def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str, Any]:
     env = env or os.environ
+    enabled = spec.enabled_default
+    if spec.enable_env and spec.enable_env in env:
+        enabled = str(env.get(spec.enable_env, "")).lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
     force = str(env.get(spec.force_env, "false")).lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return {
+            "step_id": spec.step_id,
+            "scope": spec.scope,
+            "decision": "disabled_success",
+            "trigger_reasons": ["disabled_by_runtime_policy"],
+            "source_missing": False,
+            "force_override": force,
+            "enabled": False,
+            "enable_env": spec.enable_env,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": list(FORBIDDEN_USES),
+            "description": spec.description,
+            "outputs": [],
+            "sources": [],
+        }
     output_statuses = [_path_status(path) for path in spec.output_paths]
     source_statuses = [_path_status(path) for path in spec.source_paths]
     output_missing = any(
@@ -488,6 +562,8 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
         "trigger_reasons": reasons,
         "source_missing": source_missing,
         "force_override": force,
+        "enabled": True,
+        "enable_env": spec.enable_env,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "forbidden_uses": list(FORBIDDEN_USES),
@@ -520,6 +596,9 @@ def build_report(
             "total_steps": len(decisions),
             "run_count": sum(1 for item in decisions if item["decision"] == "run"),
             "skip_count": sum(1 for item in decisions if item["decision"] == "skip"),
+            "disabled_count": sum(
+                1 for item in decisions if item["decision"] == "disabled_success"
+            ),
             "source_missing_count": sum(
                 1 for item in decisions if item["source_missing"]
             ),
@@ -551,6 +630,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- scope: `{report.get('scope')}`",
         f"- run_count: `{summary.get('run_count')}`",
         f"- skip_count: `{summary.get('skip_count')}`",
+        f"- disabled_count: `{summary.get('disabled_count')}`",
         f"- runtime_effect: `{report.get('runtime_effect')}`",
         f"- allowed_runtime_apply: `{report.get('allowed_runtime_apply')}`",
         "",

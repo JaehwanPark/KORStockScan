@@ -41,6 +41,46 @@ def test_postclose_large_reports_use_compact_stdout_and_verified_refresh():
     )
 
 
+def test_postclose_trigger_decision_respects_disabled_runtime_policy():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert (
+        'THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-false}"'
+        in script
+    )
+    assert (
+        'THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY="${RUN_PRODUCER_GAP_DISCOVERY:-false}"'
+        in script
+    )
+    assert (
+        'THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-false}"'
+        in script
+    )
+    assert '[ "$decision" = "skip" ] || [ "$decision" = "disabled_success" ]' in script
+
+
+def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert (
+        'REUSE_COMPLETED_REPORT_STEPS="${THRESHOLD_CYCLE_REUSE_COMPLETED_REPORT_STEPS:-true}"'
+        in script
+    )
+    assert 'str(payload.get("status") or "").lower() == "failed"' in script
+    assert 'str(payload.get("target_date") or "") == target_date' in script
+    assert "reusable_completed_artifact()" in script
+    assert "source_mtime > artifact_mtime" in script
+    assert "completed_artifact_checkpoint" in script
+    assert 'expected_report_type != "-"' in script
+    assert "source_quality_blocked" in script
+    assert "opening_rotation_profile_tuning" in script
+    assert "scalping_avg_down_recovery_calibration" in script
+    assert "one_share_threshold_opportunity" in script
+    assert "one_share_ai_review_reusable" in script
+    assert 'review.get("status") == "parsed"' in script
+    assert 'review.get("provider") == expected_provider' in script
+
+
 def test_claude_pattern_lab_wrapper_requires_explicit_target_date():
     env = dict(os.environ)
     env.pop("ANALYSIS_START_DATE", None)

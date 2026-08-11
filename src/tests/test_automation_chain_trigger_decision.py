@@ -125,6 +125,54 @@ def test_force_env_overrides_fresh_skip(tmp_path, monkeypatch):
     assert "force_override" in decision["trigger_reasons"]
 
 
+def test_disabled_step_is_success_without_scanning_sources(tmp_path, monkeypatch):
+    _patch_roots(tmp_path, monkeypatch)
+    spec = mod.StepSpec(
+        step_id="expensive_optional_report",
+        scope="deep_audits",
+        output_paths=("missing.json", "missing.md"),
+        source_paths=("src",),
+        force_env="THRESHOLD_CYCLE_FORCE_DEEP_AUDITS",
+        description="test",
+        enable_env="THRESHOLD_CYCLE_RUN_EXPENSIVE_OPTIONAL_REPORT",
+        enabled_default=False,
+    )
+
+    decision = mod.evaluate_step(
+        spec, env={"THRESHOLD_CYCLE_FORCE_DEEP_AUDITS": "true"}
+    )
+
+    assert decision["decision"] == "disabled_success"
+    assert decision["trigger_reasons"] == ["disabled_by_runtime_policy"]
+    assert decision["source_missing"] is False
+    assert decision["force_override"] is True
+    assert decision["outputs"] == []
+    assert decision["sources"] == []
+
+
+def test_disabled_default_can_be_explicitly_enabled(tmp_path, monkeypatch):
+    _patch_roots(tmp_path, monkeypatch)
+    spec = mod.StepSpec(
+        step_id="expensive_optional_report",
+        scope="deep_audits",
+        output_paths=("missing.json", "missing.md"),
+        source_paths=("missing-source.json",),
+        force_env="THRESHOLD_CYCLE_FORCE_DEEP_AUDITS",
+        description="test",
+        enable_env="THRESHOLD_CYCLE_RUN_EXPENSIVE_OPTIONAL_REPORT",
+        enabled_default=False,
+    )
+
+    decision = mod.evaluate_step(
+        spec,
+        env={"THRESHOLD_CYCLE_RUN_EXPENSIVE_OPTIONAL_REPORT": "true"},
+    )
+
+    assert decision["decision"] == "run"
+    assert decision["enabled"] is True
+    assert decision["source_missing"] is True
+
+
 def test_directory_source_uses_recursive_file_mtime(tmp_path, monkeypatch):
     _patch_roots(tmp_path, monkeypatch)
     spec = mod.StepSpec(
@@ -247,12 +295,39 @@ def test_deep_audit_specs_include_observation_source_quality_backfill():
         "data/report/observation_source_quality_audit/observation_source_quality_backfill_audit_2026-06-02.json"
         in spec.output_paths
     )
+    assert spec.enabled_default is False
+    assert (
+        spec.enable_env
+        == "THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_BACKFILL_AUDIT"
+    )
     assert "data/pipeline_events" in spec.source_paths
     assert "data/threshold_cycle" in spec.source_paths
     assert (
         "data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-02.json"
         in spec.source_paths
     )
+
+
+def test_deep_audit_summary_separates_disabled_steps(tmp_path, monkeypatch):
+    _patch_roots(tmp_path, monkeypatch)
+
+    report = mod.build_report("2026-06-02", scope="deep_audits", env={})
+
+    assert report["summary"]["total_steps"] == 10
+    assert report["summary"]["disabled_count"] == 5
+    assert report["summary"]["source_missing_count"] == 5
+    disabled = {
+        item["step_id"]
+        for item in report["decisions"]
+        if item["decision"] == "disabled_success"
+    }
+    assert disabled == {
+        "observation_source_quality_backfill_audit",
+        "codebase_performance_workorder",
+        "producer_gap_discovery",
+        "stage_hook_workorder_discovery",
+        "stage_hook_runtime_scaffold",
+    }
 
 
 def test_cli_step_prints_decision_and_writes_contract(tmp_path, monkeypatch, capsys):

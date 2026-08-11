@@ -204,6 +204,34 @@ def _producer_coverage(
     return first_event_at, last_event_at
 
 
+def _common_completed_minute_watermark(*coverage_ends: str) -> str:
+    parsed: list[datetime] = []
+    for value in coverage_ends:
+        if not value:
+            continue
+        try:
+            parsed.append(datetime.fromisoformat(value))
+        except ValueError:
+            return ""
+    if len(parsed) != len(coverage_ends):
+        return ""
+    watermark = min(parsed).replace(second=0, microsecond=0)
+    return watermark.isoformat(timespec="seconds")
+
+
+def _rows_through_watermark(
+    rows: list[dict[str, Any]], watermark: str
+) -> list[dict[str, Any]]:
+    if not watermark:
+        return []
+    return [
+        row
+        for row in rows
+        if _safe_str(row.get("bucket_end"))
+        and _safe_str(row.get("bucket_end")) <= watermark
+    ]
+
+
 def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
@@ -248,6 +276,39 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
         and producer_coverage_end
         and raw_coverage_end > producer_coverage_end
         and (not producer_updated_at or raw_coverage_end > producer_updated_at)
+    )
+    comparison_watermark = _common_completed_minute_watermark(
+        raw_coverage_end, producer_coverage_end
+    )
+    comparison_raw_rows = _rows_through_watermark(
+        raw_summary_rows, comparison_watermark
+    )
+    comparison_producer_rows = _rows_through_watermark(
+        producer_rows, comparison_watermark
+    )
+    (
+        comparison_raw_stage,
+        comparison_raw_blocker,
+        comparison_raw_total,
+    ) = _summary_counts(comparison_raw_rows)
+    (
+        comparison_producer_stage,
+        comparison_producer_blocker,
+        comparison_producer_total,
+    ) = _summary_counts(comparison_producer_rows)
+    comparison_stage_diff = _diff_counter(
+        comparison_raw_stage, comparison_producer_stage
+    )
+    comparison_blocker_diff = _diff_counter(
+        comparison_raw_blocker, comparison_producer_blocker
+    )
+    common_watermark_ok = bool(
+        producer_exists
+        and producer_start_complete
+        and comparison_raw_total > 0
+        and not comparison_stage_diff
+        and not comparison_blocker_diff
+        and comparison_raw_total == comparison_producer_total
     )
     no_eligible_events = raw_total == 0
     parity_ok = bool(
@@ -347,6 +408,17 @@ def build_pipeline_event_verbosity_report(target_date: str) -> dict[str, Any]:
             "no_eligible_events": no_eligible_events,
             "producer_updated_at": producer_updated_at or None,
             "latest_pipeline_event_at": raw_stats.get("latest_pipeline_event_at"),
+            "comparison_scope": "completed_common_minute",
+            "comparison_watermark": comparison_watermark or None,
+            "common_watermark_ok": common_watermark_ok,
+            "comparison_stage_diff": comparison_stage_diff,
+            "comparison_blocker_diff": comparison_blocker_diff,
+            "comparison_raw_derived_event_count": comparison_raw_total,
+            "comparison_producer_event_count": comparison_producer_total,
+            "raw_tail_excluded_event_count": raw_total - comparison_raw_total,
+            "producer_tail_excluded_event_count": (
+                producer_total - comparison_producer_total
+            ),
         },
     }
     json_path, md_path = report_paths(target_date)
@@ -391,6 +463,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- producer_event_count: `{parity.get('producer_event_count')}`",
             f"- producer_start_complete: `{parity.get('producer_start_complete')}`",
             f"- producer_pending_flush: `{parity.get('producer_pending_flush')}`",
+            f"- common_watermark_ok: `{parity.get('common_watermark_ok')}`",
+            f"- comparison_watermark: `{parity.get('comparison_watermark')}`",
+            f"- raw_tail_excluded_event_count: `{parity.get('raw_tail_excluded_event_count')}`",
             f"- coverage raw/producer: `{parity.get('raw_coverage_start')}` / `{parity.get('producer_coverage_start')}`",
             f"- previous_parity_pass_count: `{parity.get('previous_parity_pass_count')}`",
             "",

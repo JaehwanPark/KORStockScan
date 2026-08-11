@@ -151,6 +151,8 @@ FORCE_DUPLICATE_REFRESH="${THRESHOLD_CYCLE_FORCE_DUPLICATE_REFRESH:-false}"
 FORCE_LIFECYCLE_BUCKET_WINDOWS="${THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS:-false}"
 FORCE_DEEP_AUDITS="${THRESHOLD_CYCLE_FORCE_DEEP_AUDITS:-false}"
 FORCE_WORKORDER_BRANCH="${THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH:-false}"
+REUSE_COMPLETED_REPORT_STEPS="${THRESHOLD_CYCLE_REUSE_COMPLETED_REPORT_STEPS:-true}"
+POSTCLOSE_RECOVERY_REUSE_MODE=false
 SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"
 SNAPSHOT_TEMP_PATH=""
 ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
@@ -213,6 +215,35 @@ else:
 path.parent.mkdir(parents=True, exist_ok=True)
 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
+}
+
+detect_postclose_recovery_reuse_mode() {
+  if [ "$REUSE_COMPLETED_REPORT_STEPS" != "true" ] && [ "$REUSE_COMPLETED_REPORT_STEPS" != "1" ]; then
+    return 0
+  fi
+  if [ ! -s "$STATUS_FILE" ]; then
+    return 0
+  fi
+  if "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target_date = sys.argv[2]
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+is_recovery = (
+    str(payload.get("target_date") or "") == target_date
+    and str(payload.get("status") or "").lower() == "failed"
+)
+raise SystemExit(0 if is_recovery else 1)
+PY
+  then
+    POSTCLOSE_RECOVERY_REUSE_MODE=true
+  fi
 }
 
 postclose_marker_log_enabled() {
@@ -343,9 +374,10 @@ trap 'mark_postclose_failed interrupted 130; restart_postclose_bot_if_requested;
 trap 'mark_postclose_failed terminated 143; restart_postclose_bot_if_requested; exit 143' TERM
 trap 'cleanup_threshold_cycle_snapshot_temp' EXIT
 
+detect_postclose_recovery_reuse_mode
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status running started 0 0
-emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS started_at=$started_at"
+emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
 stop_postclose_bot_if_requested
 
 run_postclose_cmd() {
@@ -357,6 +389,92 @@ run_postclose_cmd() {
     cmd=(ionice -c "$POSTCLOSE_IONICE_CLASS" -n "$POSTCLOSE_IONICE_LEVEL" -t "${cmd[@]}")
   fi
   korstockscan_apply_taskset "$POSTCLOSE_CPU_AFFINITY" "${cmd[@]}"
+}
+
+reusable_completed_artifact() {
+  local json_path="$1"
+  local markdown_path="$2"
+  local expected_report_type="$3"
+  shift 3
+  [ "$POSTCLOSE_RECOVERY_REUSE_MODE" = "true" ] || return 1
+  "$VENV_PY" - "$json_path" "$markdown_path" "$TARGET_DATE" "$expected_report_type" "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+json_path = Path(sys.argv[1])
+markdown_text = sys.argv[2]
+target_date = sys.argv[3]
+expected_report_type = sys.argv[4]
+source_paths = [Path(value) for value in sys.argv[5:]]
+if not json_path.is_file() or json_path.stat().st_size <= 0:
+    raise SystemExit(1)
+if markdown_text != "-":
+    markdown_path = Path(markdown_text)
+    if not markdown_path.is_file() or markdown_path.stat().st_size <= 0:
+        raise SystemExit(1)
+try:
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+if str(payload.get("target_date") or "") != target_date:
+    raise SystemExit(1)
+if expected_report_type != "-" and payload.get("report_type") != expected_report_type:
+    raise SystemExit(1)
+
+artifact_mtime = json_path.stat().st_mtime
+if markdown_text != "-":
+    artifact_mtime = min(artifact_mtime, markdown_path.stat().st_mtime)
+for source_path in source_paths:
+    if not source_path.exists():
+        raise SystemExit(1)
+    if source_path.is_dir():
+        source_mtime = max(
+            (child.stat().st_mtime for child in source_path.rglob("*") if child.is_file()),
+            default=source_path.stat().st_mtime,
+        )
+    else:
+        source_mtime = source_path.stat().st_mtime
+    if source_mtime > artifact_mtime:
+        raise SystemExit(1)
+
+blocked_tokens = ("fail", "error", "retry", "source_blocked", "source_quality_blocked")
+status_keys = {"status", "state", "report_status", "ai_status", "final_status"}
+
+def has_blocked_status(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key) in status_keys and isinstance(item, str):
+                normalized = item.strip().lower()
+                if any(token in normalized for token in blocked_tokens):
+                    return True
+            if has_blocked_status(item):
+                return True
+    elif isinstance(value, list):
+        return any(has_blocked_status(item) for item in value)
+    return False
+
+raise SystemExit(1 if has_blocked_status(payload) else 0)
+PY
+}
+
+one_share_ai_review_reusable() {
+  local json_path="$1"
+  "$VENV_PY" - "$json_path" "$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_provider = sys.argv[2]
+review = payload.get("ai_review") if isinstance(payload.get("ai_review"), dict) else {}
+valid = (
+    expected_provider != "none"
+    and review.get("provider") == expected_provider
+    and review.get("status") == "parsed"
+)
+raise SystemExit(0 if valid else 1)
+PY
 }
 
 resource_guard_enabled() {
@@ -703,6 +821,16 @@ automation_trigger_decision() {
     if THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
       THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
       THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
+      THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS="${RUN_LIFECYCLE_BUCKET_WINDOWS:-true}" \
+      THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}" \
+      THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW="${RUN_PATTERN_LAB_AI_REVIEW:-true}" \
+      THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}" \
+      THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-false}" \
+      THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY="${RUN_PRODUCER_GAP_DISCOVERY:-false}" \
+      THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-false}" \
+      THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-false}" \
+      THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT="${RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}" \
+      THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER="${BUILD_CODE_IMPROVEMENT_WORKORDER:-true}" \
       PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
         --date "$TARGET_DATE" \
         --scope all \
@@ -728,7 +856,7 @@ for item in payload.get("decisions", []):
 print(decision)
 PY
     )"; then
-      if [ "$decision" = "skip" ]; then
+      if [ "$decision" = "skip" ] || [ "$decision" = "disabled_success" ]; then
         printf 'skip\n'
         return 0
       fi
@@ -741,11 +869,21 @@ PY
   if decision="$(THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
     THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
     THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
+    THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS="${RUN_LIFECYCLE_BUCKET_WINDOWS:-true}" \
+    THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}" \
+    THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW="${RUN_PATTERN_LAB_AI_REVIEW:-true}" \
+    THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}" \
+    THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-false}" \
+    THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY="${RUN_PRODUCER_GAP_DISCOVERY:-false}" \
+    THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-false}" \
+    THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-false}" \
+    THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT="${RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}" \
+    THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER="${BUILD_CODE_IMPROVEMENT_WORKORDER:-true}" \
     PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
       --date "$TARGET_DATE" \
       --scope all \
       --step "$step_id" 2>/dev/null)"; then
-    if [ "$decision" = "skip" ]; then
+    if [ "$decision" = "skip" ] || [ "$decision" = "disabled_success" ]; then
       printf 'skip\n'
       return 0
     fi
@@ -999,18 +1137,35 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
     "observation_source_quality_preflight"
 fi
 if [ "$RUN_OPENING_ROTATION_PROFILE_TUNING" = "true" ] || [ "$RUN_OPENING_ROTATION_PROFILE_TUNING" = "1" ]; then
-  wait_for_postclose_resources "opening_rotation_profile_tuning"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.opening_rotation_tuning \
-    --mode postclose \
-    --target-date "$TARGET_DATE" \
-    --write \
-    --print-summary
+  opening_rotation_report_json="$PROJECT_DIR/data/report/opening_rotation_profile_tuning/opening_rotation_profile_tuning_${TARGET_DATE}.json"
+  opening_rotation_report_md="$PROJECT_DIR/data/report/opening_rotation_profile_tuning/opening_rotation_profile_tuning_${TARGET_DATE}.md"
+  opening_rotation_candidate_json="$PROJECT_DIR/data/runtime/opening_rotation/candidates/opening_rotation_runtime_policy_candidate_${TARGET_DATE}.json"
+  if reusable_completed_artifact \
+    "$opening_rotation_report_json" \
+    "$opening_rotation_report_md" \
+    "opening_rotation_profile_tuning" \
+    "$PROJECT_DIR/data/pipeline_events" \
+    "$PROJECT_DIR/src/engine/observation_source_quality_audit.py" \
+    "$PROJECT_DIR/src/engine/scalping/opening_rotation_tuning.py" && \
+    reusable_completed_artifact \
+      "$opening_rotation_candidate_json" \
+      - \
+      -; then
+    emit_postclose_marker "[REUSE] opening_rotation_profile_tuning target_date=$TARGET_DATE reason=completed_artifact_checkpoint"
+  else
+    wait_for_postclose_resources "opening_rotation_profile_tuning"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.opening_rotation_tuning \
+      --mode postclose \
+      --target-date "$TARGET_DATE" \
+      --write \
+      --print-summary
+  fi
   wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/opening_rotation_profile_tuning/opening_rotation_profile_tuning_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/opening_rotation_profile_tuning/opening_rotation_profile_tuning_${TARGET_DATE}.md" \
+    "$opening_rotation_report_json" \
+    "$opening_rotation_report_md" \
     "opening_rotation_profile_tuning"
   wait_for_json_artifact \
-    "$PROJECT_DIR/data/runtime/opening_rotation/candidates/opening_rotation_runtime_policy_candidate_${TARGET_DATE}.json" \
+    "$opening_rotation_candidate_json" \
     "opening_rotation_runtime_policy_candidate"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.opening_rotation_tuning \
     --mode verify \
@@ -1028,23 +1183,48 @@ if [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "true" ] || [ "$RUN_SCALPING_
     "scalping_pyramid_quality_calibration"
 fi
 if [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION" = "true" ] || [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION" = "1" ]; then
-  wait_for_postclose_resources "scalping_avg_down_recovery_calibration"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_avg_down_recovery_calibration \
-    --target-date "$TARGET_DATE" \
-    --print-summary
+  avg_down_report_json="$PROJECT_DIR/data/report/scalping_avg_down_recovery_calibration/scalping_avg_down_recovery_calibration_${TARGET_DATE}.json"
+  avg_down_report_md="$PROJECT_DIR/data/report/scalping_avg_down_recovery_calibration/scalping_avg_down_recovery_calibration_${TARGET_DATE}.md"
+  if reusable_completed_artifact \
+    "$avg_down_report_json" \
+    "$avg_down_report_md" \
+    "scalping_avg_down_recovery_calibration" \
+    "$PROJECT_DIR/data/pipeline_events" \
+    "$PROJECT_DIR/src/engine/automation/source_quality_hard_gate.py" \
+    "$PROJECT_DIR/src/engine/monitoring/scalping_avg_down_recovery_calibration.py"; then
+    emit_postclose_marker "[REUSE] scalping_avg_down_recovery_calibration target_date=$TARGET_DATE reason=completed_artifact_checkpoint"
+  else
+    wait_for_postclose_resources "scalping_avg_down_recovery_calibration"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_avg_down_recovery_calibration \
+      --target-date "$TARGET_DATE" \
+      --print-summary
+  fi
   wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/scalping_avg_down_recovery_calibration/scalping_avg_down_recovery_calibration_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/scalping_avg_down_recovery_calibration/scalping_avg_down_recovery_calibration_${TARGET_DATE}.md" \
+    "$avg_down_report_json" \
+    "$avg_down_report_md" \
     "scalping_avg_down_recovery_calibration"
 fi
 if [ "$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" = "true" ] || [ "$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" = "1" ]; then
-  wait_for_postclose_resources "one_share_threshold_opportunity"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.one_share_threshold_opportunity \
-    --target-date "$TARGET_DATE" \
-    --ai-provider "$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER"
+  one_share_report_json="$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.json"
+  one_share_report_md="$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.md"
+  if reusable_completed_artifact \
+    "$one_share_report_json" \
+    "$one_share_report_md" \
+    "one_share_threshold_opportunity" \
+    "$PROJECT_DIR/data/pipeline_events" \
+    "$PROJECT_DIR/data/post_sell" \
+    "$PROJECT_DIR/src/engine/monitoring/one_share_threshold_opportunity.py" && \
+    one_share_ai_review_reusable "$one_share_report_json"; then
+    emit_postclose_marker "[REUSE] one_share_threshold_opportunity target_date=$TARGET_DATE reason=completed_artifact_checkpoint"
+  else
+    wait_for_postclose_resources "one_share_threshold_opportunity"
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.one_share_threshold_opportunity \
+      --target-date "$TARGET_DATE" \
+      --ai-provider "$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER"
+  fi
   wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.md" \
+    "$one_share_report_json" \
+    "$one_share_report_md" \
     "one_share_threshold_opportunity"
 fi
 if [ "$RUN_SCALP_ENTRY_ADM" = "true" ] || [ "$RUN_SCALP_ENTRY_ADM" = "1" ]; then

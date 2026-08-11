@@ -289,6 +289,55 @@ def test_pipeline_event_verbosity_report_marks_pending_flush_when_raw_tail_is_ne
     assert report["parity"]["producer_pending_flush"] is True
 
 
+def test_pipeline_event_verbosity_compares_only_completed_common_minutes(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    shared_row = _event(
+        "2026-05-06",
+        "09:59:30",
+        "blocked_strength_momentum",
+        record_id=1,
+        fields={"reason": "below_strength_base"},
+    )
+    producer_current_minute = _event(
+        "2026-05-06",
+        "10:00:10",
+        "blocked_strength_momentum",
+        record_id=2,
+        fields={"reason": "below_strength_base"},
+    )
+    raw_tail = _event(
+        "2026-05-06",
+        "10:05:00",
+        "blocked_strength_momentum",
+        record_id=3,
+        fields={"reason": "below_window_buy_value"},
+    )
+    _write_raw(tmp_path, "2026-05-06", [shared_row, producer_current_minute, raw_tail])
+    _write_producer_summary(
+        tmp_path, "2026-05-06", [shared_row, producer_current_minute]
+    )
+    manifest_path = (
+        tmp_path
+        / "pipeline_event_summaries"
+        / "pipeline_event_producer_summary_manifest_2026-05-06.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["updated_at"] = "2026-05-06T10:00:20"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = report_mod.build_pipeline_event_verbosity_report("2026-05-06")
+
+    assert report["state"] == "v2_shadow_pending_flush"
+    assert report["parity"]["ok"] is False
+    assert report["parity"]["common_watermark_ok"] is True
+    assert report["parity"]["comparison_watermark"] == "2026-05-06T10:00:00"
+    assert report["parity"]["comparison_raw_derived_event_count"] == 1
+    assert report["parity"]["comparison_producer_event_count"] == 1
+    assert report["parity"]["raw_tail_excluded_event_count"] == 2
+
+
 def test_pipeline_event_verbosity_report_separates_partial_day_coverage(
     monkeypatch, tmp_path
 ):
