@@ -121,6 +121,10 @@ def test_nxt_cancel_must_reconcile_before_sor_regular_fallback(tmp_path):
     sor = machine.run_once(_at(11, 9, 0))
     assert {leg["route"] for leg in sor["legs"]} == {"SOR"}
     assert gateway.buy_calls[-2:] == [("SOR", 298_000), ("SOR", 297_500)]
+    assert sor["signal_features"]["opening_prices"] == {"SOR": 300_000}
+    assert sor["signal_features"]["entry_windows"] == {
+        "SOR": {"start": "09:00:00", "deadline": "09:30:00"}
+    }
 
 
 def test_late_start_arms_sor_fallback_without_attempting_nxt(tmp_path):
@@ -135,6 +139,10 @@ def test_late_start_arms_sor_fallback_without_attempting_nxt(tmp_path):
     submitted = machine.run_once(_at(11, 9, 0))
     assert submitted["status"] == "BUY_OPEN"
     assert gateway.buy_calls == [("SOR", 298_000), ("SOR", 297_500)]
+    assert submitted["signal_features"]["opening_price"] == 300_000
+    assert [
+        leg["entry_price"] for leg in submitted["signal_features"]["entry_legs"]
+    ] == [298_000, 297_500]
 
 
 def test_start_during_sor_window_uses_sor_open_directly(tmp_path):
@@ -158,9 +166,22 @@ def test_filled_nxt_leg_keeps_target_while_only_unfilled_leg_falls_back(tmp_path
     assert gateway.cancel_calls == [("NXT", "B2")]
     gateway.snapshots["B2"] = ExecutionSnapshot(True, True, 0, 0, 1)
     machine.run_once(_at(11, 8, 12))
-    machine.run_once(_at(11, 9, 0))
+    mixed = machine.run_once(_at(11, 9, 0))
     assert gateway.buy_calls[-1] == ("SOR", 297_500)
     assert gateway.limit_sell_calls == [("NXT", 292_500)]
+    assert mixed["signal_features"]["route"] == "MIXED"
+    assert mixed["signal_features"]["opening_prices"] == {
+        "NXT": 300_000,
+        "SOR": 300_000,
+    }
+    assert mixed["signal_features"]["entry_windows"] == {
+        "NXT": {"start": "08:00:00", "deadline": "08:10:00"},
+        "SOR": {"start": "09:00:00", "deadline": "09:30:00"},
+    }
+    assert {leg["route"] for leg in mixed["signal_features"]["entry_legs"]} == {
+        "NXT",
+        "SOR",
+    }
 
 
 def test_target_has_no_timeout_cancel_or_forced_exit(tmp_path):
@@ -530,6 +551,22 @@ def test_live_service_fails_closed_without_daily_authority(monkeypatch):
         ["--live", "--confirm", service_module.LIVE_CONFIRMATION]
     )
     assert result == 4
+
+
+def test_live_service_fails_closed_without_exact_date_applied_policy(monkeypatch):
+    monkeypatch.setenv(service_module.ENABLE_ENV, "true")
+    monkeypatch.setattr(
+        service_module, "validate_authority", lambda path: (True, "ready")
+    )
+    monkeypatch.setattr(
+        service_module,
+        "load_applied_machine_policy",
+        lambda machine, target_date: (None, "", "applied_policy_unreadable"),
+    )
+    result = service_module.main(
+        ["--live", "--confirm", service_module.LIVE_CONFIRMATION]
+    )
+    assert result == 5
 
 
 def test_systemd_live_unit_uses_exact_two_leg_confirmation():

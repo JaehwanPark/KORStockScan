@@ -64,6 +64,7 @@ def _fresh_state(now: datetime, schema: str) -> dict:
         "last_evaluated_bar": "",
         "signal_bar": "",
         "signal_close": 0,
+        "signal_features": {},
         "legs": [],
         "position_qty": 0,
         "blocked_reason": "",
@@ -140,6 +141,7 @@ class SamsungRegularTwoLegMachine:
             "trade_date": str(payload.get("trade_date") or ""),
             "status": "BLOCKED",
             "attempt_consumed": True,
+            "signal_features": {},
             "legs": [],
             "position_qty": position_qty,
             "blocked_reason": "legacy_active_state_manual_reconciliation_required",
@@ -159,6 +161,7 @@ class SamsungRegularTwoLegMachine:
                 "trade_date": "",
                 "status": "BLOCKED",
                 "attempt_consumed": True,
+                "signal_features": {},
                 "legs": [],
                 "position_qty": 0,
                 "blocked_reason": f"state_unreadable:{type(exc).__name__}",
@@ -172,6 +175,10 @@ class SamsungRegularTwoLegMachine:
             return self._legacy_state(payload)
         if payload.get("schema") != self.schema:
             return self._invalid_loaded_state("state_schema_invalid")
+        # V2 states created before entry-feature instrumentation remain valid.
+        # They are reported as a source-quality gap, rather than blocking an
+        # already-owned order or position during an in-place deployment.
+        payload.setdefault("signal_features", {})
         return payload
 
     def _invalid_loaded_state(self, reason: str) -> dict:
@@ -180,6 +187,7 @@ class SamsungRegularTwoLegMachine:
             "trade_date": "",
             "status": "BLOCKED",
             "attempt_consumed": True,
+            "signal_features": {},
             "legs": [],
             "position_qty": 0,
             "blocked_reason": reason,
@@ -304,6 +312,9 @@ class SamsungRegularTwoLegMachine:
             self._state.get("attempt_consumed"), bool
         ):
             self._block(now, "state_quantity_or_attempt_invalid")
+            return False
+        if not isinstance(self._state.get("signal_features"), dict):
+            self._block(now, "state_signal_features_invalid")
             return False
         owned = self._state.get("owned_order_nos")
         if not isinstance(owned, list) or any(
@@ -714,6 +725,38 @@ class SamsungRegularTwoLegMachine:
                 "attempt_consumed": True,
                 "signal_bar": latest_iso,
                 "signal_close": latest.close_price,
+                "signal_features": {
+                    "schema": "samsung_regular_entry_signal_features_v1",
+                    "strategy": self.strategy_name,
+                    "source": "kiwoom_ka10080_005930_AL_completed_1m",
+                    "signal_bar": latest_iso,
+                    "signal_close": int(latest.close_price),
+                    "rolling_high": int(signal.rolling_high),
+                    "rolling_low": int(signal.rolling_low),
+                    "observed_drawdown_pct": float(signal.drawdown_pct),
+                    "observed_near_low_pct": float(signal.near_low_pct),
+                    "lookback_bars": int(self.policy.lookback_bars),
+                    "required_drawdown_pct": float(
+                        self.policy.rolling_high_drawdown_pct
+                    ),
+                    "max_near_low_pct": float(self.policy.rolling_low_proximity_pct),
+                    "entry_valid_completed_bars": int(
+                        self.policy.entry_valid_completed_bars
+                    ),
+                    "scan_start": self.policy.scan_start.isoformat(),
+                    "scan_last_bar": self.policy.scan_last_bar.isoformat(),
+                    "target_ticks": int(self.policy.target_ticks),
+                    "runtime_policy_source": str(self.policy.runtime_policy_source),
+                    "runtime_policy_hash": str(self.policy.runtime_policy_hash),
+                    "entry_legs": [
+                        {
+                            "leg_id": str(plan["leg_id"]),
+                            "price_role": str(plan["price_role"]),
+                            "entry_price": int(plan["entry_price"]),
+                        }
+                        for plan in plans
+                    ],
+                },
                 "legs": [_new_leg(**plan) for plan in plans],
                 "blocked_reason": "",
             }

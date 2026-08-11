@@ -17,7 +17,7 @@ from src.trading.samsung_afternoon_one_share.machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "samsung_afternoon_two_leg_authority_v2"
+AUTHORITY_SCHEMA = "samsung_afternoon_two_leg_authority_v3"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_afternoon_one_share_authority.json"
 )
@@ -89,6 +89,8 @@ def build_authority_artifact(
             "target": "fill_plus_2_ticks",
             "stop_loss": "none",
             "unfilled_target": "hold_position_without_forced_exit",
+            "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
+            "entry_tuning_bounds": "drawdown_1.25_to_1.50_near_low_0.20_to_0.10_tightening_only",
             "morning_relationship": "parallel_independent_strategy",
             "widget_relationship": "parallel_independent_strategy",
         },
@@ -178,6 +180,8 @@ def validate_authority(
         "unfilled_target": "hold_position_without_forced_exit",
         "morning_relationship": "parallel_independent_strategy",
         "widget_relationship": "parallel_independent_strategy",
+        "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
+        "entry_tuning_bounds": "drawdown_1.25_to_1.50_near_low_0.20_to_0.10_tightening_only",
     }
     if not isinstance(policy, dict) or any(
         policy.get(key) != value for key, value in expected.items()

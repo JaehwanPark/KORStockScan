@@ -41,6 +41,8 @@ class AfternoonOneSharePolicy:
     entry_valid_completed_bars: int = 5
     target_ticks: int = 2
     max_source_lag_minutes: int = 2
+    runtime_policy_source: str = "baseline_default"
+    runtime_policy_hash: str = ""
 
     def __post_init__(self) -> None:
         if self.symbol != "005930" or self.route != "SOR" or self.quantity != 2:

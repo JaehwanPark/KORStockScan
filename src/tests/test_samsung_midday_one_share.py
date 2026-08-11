@@ -643,6 +643,22 @@ def test_service_live_fails_closed_without_same_day_authority(monkeypatch):
     )
 
 
+def test_service_live_fails_closed_without_exact_date_applied_policy(monkeypatch):
+    monkeypatch.setenv(service_module.ENABLE_ENV, "true")
+    monkeypatch.setattr(
+        service_module, "validate_authority", lambda path: (True, "ready")
+    )
+    monkeypatch.setattr(
+        service_module,
+        "load_applied_machine_policy",
+        lambda machine, target_date: (None, "", "applied_policy_unreadable"),
+    )
+    assert (
+        service_module.main(["--live", "--confirm", service_module.LIVE_CONFIRMATION])
+        == 5
+    )
+
+
 def test_preflight_systemd_can_observe_existing_tmux_socket():
     project_root = Path(__file__).resolve().parents[2]
     preflight_unit = (

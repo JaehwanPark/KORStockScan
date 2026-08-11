@@ -23,6 +23,8 @@ class MorningOneSharePolicy:
     nxt: EntryWindow = EntryWindow("NXT", time(8, 0), time(8, 10), 3.0)
     sor: EntryWindow = EntryWindow("SOR", time(9, 0), time(9, 30), 0.75)
     target_ticks: int = 2
+    runtime_policy_source: str = "baseline_default"
+    runtime_policy_hash: str = ""
 
     def __post_init__(self) -> None:
         if self.symbol != "005930" or self.quantity != 2:

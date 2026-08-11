@@ -75,6 +75,14 @@
 
 이번 변경은 source와 배포 unit 정의만 갱신했다. 기존 설치 unit은 새 confirmation 계약과 다르므로 자동으로 재기동하지 않으며, 코드리뷰 종료 후 별도 명시적 설치·기동 단계가 필요하다.
 
+## 장후 진입 기준 누적 관찰
+
+라이브 episode가 arm될 때 state의 `signal_features`에 NXT/SOR route, 실제 opening price, 적용 drawdown, 진입창, 두 leg 지정가와 +2호가 정책을 고정한다. 20:10 `samsung_machine_entry_tuning` report는 당일 state와 자기 이전 일별 report만 읽으며 시세나 과거 원천을 재조회하지 않는다. 실제 주문·체결·목표 결과만 leg별로 누적하고 주문번호와 audit는 복사하지 않는다. 오전은 route별 현재 drawdown 정책의 실제 결과만 관찰하며, 신호가 없던 날의 미관측 가격을 이용한 완화 threshold 반사실은 만들지 않는다.
+
+report 자체는 `runtime_effect=false`, `allowed_runtime_apply=false`이고, clean v2 complete episode/leg 표본, source-quality preflight, rolling/cumulative EV, `HELD`·열린 주문 guard를 통과한 결과만 다음 PREOPEN candidate로 넘긴다. 오전은 관찰된 대안 정책이 없으므로 현재 NXT 3.0%·SOR 0.75% baseline만 carry-forward한다.
+
+preflight wrapper는 정확일자 applied artifact를 먼저 생성하고 service는 schema/hash가 검증된 오전 policy만 읽는다. 후보 없음/기간 만료는 baseline으로 닫고, 최신 후보 또는 이미 생성된 당일 artifact가 손상되면 broker gateway 생성 전에 기동을 차단한다. 당일 유효 artifact는 덮어쓰지 않고 재사용한다. 무손절·미청산 보유, leg별 1주 두 개, +2호가, 독립 주문원장, provider/bot/cap/broker guard는 튜닝 축이 아니다.
+
 ```bash
 sudo systemctl disable --now korstockscan-samsung-morning-one-share.timer korstockscan-samsung-one-share-preflight.timer
 sudo systemctl stop korstockscan-samsung-morning-one-share.service korstockscan-samsung-one-share-preflight.service
