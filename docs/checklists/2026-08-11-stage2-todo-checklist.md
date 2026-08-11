@@ -139,6 +139,7 @@
 
 - [ ] `[SamsungAfternoonOneShareLiveStart0811] 삼성전자 오후 1주 독립 기계 최초 실운용·귀속 확인` (`Due: 2026-08-11`, `Slot: INTRADAY`, `TimeWindow: 12:15~15:20`, `Track: ScalpingLogic`)
   - Source: [samsung-afternoon-one-share-machine.md](/home/ubuntu/KORStockScan/docs/samsung-afternoon-one-share-machine.md), [preflight.py](/home/ubuntu/KORStockScan/src/trading/samsung_afternoon_one_share/preflight.py), [service.py](/home/ubuntu/KORStockScan/src/trading/samsung_afternoon_one_share/service.py)
+  - 기동 상태 (`2026-08-11 12:29 KST`): PR `#33/#34` main 병합 후 오후 전용 systemd unit을 설치·enable했다. 당일 authority=`ready`, service PID=`223895`, state=`READY`, attempt_consumed=`false`, position_qty=`0`, buy/target order number=`empty`, last_action=`waiting_for_afternoon_scan_window`다. 14:00~14:40 최초 episode attribution은 계속 OPEN이다.
   - 판정 기준: 13:57 당일 authority가 메인 봇·공유토큰·manual-operator exclusion, SOR 통합 정규장, 1주, 5개 완성봉 매수 유효기간, +2호가 무손절 보유 정책을 PASS하고 13:59 오후 전용 서비스가 시작되는지 확인한다. 오전·widget·오후가 각자 주문번호와 체결수량만 소유하는지 최초 episode attribution으로 확인한다.
   - 금지: 오후 정규장을 KRX/NXT 별도 시장으로 분리하거나, 목표 매도를 시간 취소·최우선 지정가 강제매도·손절하지 않는다. 오전·widget 주문 또는 계좌 총보유량을 오후 장부로 간주하지 않으며, 1주 상한·hard safety·provider·bot·cap을 변경하지 않는다.
   - 다음 액션: `parallel_independent_episode_pass`, `target_open_continues`, `target_closed_unfilled_position_held`, `no_signal`, `source_stale_or_gap`, `preflight_authority_blocked`, `independent_ledger_breach_disable_afternoon_only`, `state_or_lock_failure` 중 하나로 닫는다.
