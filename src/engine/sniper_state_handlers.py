@@ -53021,6 +53021,9 @@ def _expire_opening_rotation_ttl_promotion(
 
     normalized_code = str(code or stock.get("code") or "").strip()[:6]
     normalized_promotion_id = str(promotion_id or "").strip()
+    runtime_position_tag = normalize_position_tag(
+        "SCALPING", stock.get("position_tag")
+    )
     record_id = stock.get("id")
     if not normalized_code or not normalized_promotion_id or not record_id:
         return False
@@ -53030,8 +53033,7 @@ def _expire_opening_rotation_ttl_promotion(
         if (
             str(stock.get("status") or "").strip().upper() != "WATCHING"
             or normalize_strategy(stock.get("strategy")) != "SCALPING"
-            or normalize_position_tag("SCALPING", stock.get("position_tag"))
-            != "SCANNER"
+            or runtime_position_tag not in {"SCANNER", OPENING_ROTATION_POSITION_TAG}
             or str(stock.get("scanner_promotion_id") or "").strip()
             != normalized_promotion_id
             or stock.get("buy_time") not in (None, "", 0)

@@ -478,7 +478,9 @@ def test_opening_rotation_ttl_drop_expires_watch_and_releases_slot(monkeypatch):
         "name": "삼성전자",
         "status": "WATCHING",
         "strategy": "SCALPING",
-        "position_tag": "SCANNER",
+        # A boot-restored Opening watch can carry the runtime owner tag while
+        # its DB row intentionally remains the scanner WATCHING row.
+        "position_tag": POSITION_TAG,
         "scanner_promotion_id": promotion_id,
         "source_signature": "PRICE_JUMP_START",
         "buy_qty": 0,
