@@ -144,6 +144,18 @@
   - 금지: 오후 정규장을 KRX/NXT 별도 시장으로 분리하거나, 목표 매도를 시간 취소·최우선 지정가 강제매도·손절하지 않는다. 오전·widget 주문 또는 계좌 총보유량을 오후 장부로 간주하지 않으며, 1주 상한·hard safety·provider·bot·cap을 변경하지 않는다.
   - 다음 액션: `parallel_independent_episode_pass`, `target_open_continues`, `target_closed_unfilled_position_held`, `no_signal`, `source_stale_or_gap`, `preflight_authority_blocked`, `independent_ledger_breach_disable_afternoon_only`, `state_or_lock_failure` 중 하나로 닫는다.
 
+- [x] `[SamsungMiddayOneShareMachineImplementation0811] 삼성전자 13:15~13:55 SOR 1주 독립 기계 구현·리뷰` (`Due: 2026-08-11`, `Slot: INTRADAY`, `TimeWindow: 12:40~14:10`, `Track: ScalpingLogic`)
+  - Source: [samsung-midday-one-share-machine.md](/home/ubuntu/KORStockScan/docs/samsung-midday-one-share-machine.md), [policy.py](/home/ubuntu/KORStockScan/src/trading/samsung_midday_one_share/policy.py), [machine.py](/home/ubuntu/KORStockScan/src/trading/samsung_midday_one_share/machine.py), [gateway.py](/home/ubuntu/KORStockScan/src/trading/samsung_midday_one_share/gateway.py), [preflight.py](/home/ubuntu/KORStockScan/src/trading/samsung_midday_one_share/preflight.py)
+  - 완료 결과 (`2026-08-11`): clean baseline 46거래일 탐색에서 선택한 반개구간 `[13:15, 13:55)`를 runtime 13:15~13:54 완성봉으로 고정했다. 최근 연속 30봉 고점 대비 -1.25% 이하·저점 대비 +0.20% 이내이면 신호 종가 -1호가에 SOR 1주를 하루 1회 주문한다. 신호 뒤 5개 완성봉 동안 미체결인 자기 매수 주문만 취소하고, 체결 뒤 실제 체결가 +2호가 목표 매도는 손절·시간취소·강제청산 없이 유지하며 브로커 미체결 종료 시 `HELD`로 보유한다.
+  - 독립성/권한: 오전·기존 오후·widget과 process/state/lock/당일 authority/정확 주문번호 원장을 모두 분리했고 계좌 총보유량을 청산 수량으로 사용하지 않는다. 기본 OFF이며 env+CLI 확인문구+production endpoint+manual-operator exclusion+당일 authority를 모두 통과해야 broker write가 가능하다. 키움 공식 upstream commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 차트·주문·계좌·spec/core/Postman 계약을 12:44:57 KST에 재확인했다.
+  - 리뷰/검증: 1차 리뷰에서 공식 참조 경로 provenance와 기존 오후 서비스 비변경 안내 누락을 보완하고 SOR 1주 매도·정확 매수취소·연속 체결조회·수량 위반 fail-closed 테스트를 추가했다. midday 전용 pytest=`39 passed`, 오전·오후·manual-exclusion·widget 독립성 회귀 포함 pytest=`158 passed`, checklist/Project·Calendar parser pytest=`84 passed`, checklist print-backlog parser, Ruff/Black/compile/systemd/shell/`git diff --check`=`pass`다. 최종 재리뷰 미해결 finding=`0`이며 기계는 설치·enable·start하지 않았고 runtime/order 상태를 변경하지 않았다.
+
+- [ ] `[SamsungMiddayOneShareLiveStart0811] 삼성전자 midday 1주 독립 기계 최초 실운용·귀속 확인` (`Due: 2026-08-11`, `Slot: INTRADAY`, `TimeWindow: 13:10~14:05`, `Track: ScalpingLogic`)
+  - Source: [samsung-midday-one-share-machine.md](/home/ubuntu/KORStockScan/docs/samsung-midday-one-share-machine.md), [preflight.py](/home/ubuntu/KORStockScan/src/trading/samsung_midday_one_share/preflight.py), [service.py](/home/ubuntu/KORStockScan/src/trading/samsung_midday_one_share/service.py)
+  - 판정 기준: 13:12 당일 authority가 메인 봇·공유토큰·manual-operator exclusion, SOR 통합 정규장, `[13:15,13:55)` 신호창, 1주, 5개 완성봉 매수 유효기간, +2호가 무손절 보유 정책을 PASS하고 13:14 전용 서비스가 시작되는지 확인한다. 오전·기존 오후·widget·midday가 각자 주문번호와 체결수량만 소유하는지 state와 최초 episode attribution으로 확인한다.
+  - 금지: 설치·기동을 이유로 기존 오전·오후·widget·main bot을 중지·재기동하거나, 다른 기계 주문·계좌 총보유량을 midday 장부로 간주하지 않는다. midday 자체 재기동이 필요하면 미해결 write intent·owned order·position을 먼저 확인하고 상태 파일을 보존한 채 systemd graceful stop/start만 허용한다.
+  - 다음 액션: `parallel_independent_episode_pass`, `target_open_continues`, `target_closed_unfilled_position_held`, `no_signal`, `source_stale_or_gap`, `preflight_authority_blocked`, `independent_ledger_breach_disable_midday_only`, `state_or_lock_failure` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 
