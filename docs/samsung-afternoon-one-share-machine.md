@@ -29,7 +29,7 @@ Official Kiwoom contract gate: upstream commit `69642586f7d84ba9fd8a6faf1f1537c7
 - Daily authority: `data/runtime/samsung_afternoon_one_share_authority.json`
 - Live enable env: `KORSTOCKSCAN_SAMSUNG_AFTERNOON_ONE_SHARE_ENABLED=true`
 - Explicit confirmation: `005930_AFTERNOON_ONE_SHARE_LIVE`
-- Preflight timer: 13:57 KST weekdays; the wrapper verifies the main `bot` tmux session and retries for up to 90 seconds before failing closed.
+- Preflight timer: 13:57 KST weekdays; the wrapper verifies the main `bot` tmux session and retries for up to 90 seconds before failing closed. The preflight unit intentionally does not use systemd `PrivateTmp`, because it must read the existing user tmux socket; the live trading service retains `PrivateTmp`.
 - Service timer: 13:59 KST weekdays
 
 Live mode forbids `--once` and custom state or lock paths. Any interrupted or ambiguous broker write fails closed for manual reconciliation. The global buy pause remains a hard veto.

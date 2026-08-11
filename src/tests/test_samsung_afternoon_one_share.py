@@ -359,3 +359,16 @@ def test_service_live_fails_closed_without_same_day_authority(monkeypatch):
         service_module.main(["--live", "--confirm", service_module.LIVE_CONFIRMATION])
         == 4
     )
+
+
+def test_preflight_systemd_can_observe_existing_tmux_socket():
+    project_root = Path(__file__).resolve().parents[2]
+    preflight_unit = (
+        project_root
+        / "deploy/systemd/korstockscan-samsung-afternoon-one-share-preflight.service"
+    ).read_text(encoding="utf-8")
+    live_unit = (
+        project_root / "deploy/systemd/korstockscan-samsung-afternoon-one-share.service"
+    ).read_text(encoding="utf-8")
+    assert "PrivateTmp=true" not in preflight_unit
+    assert "PrivateTmp=true" in live_unit

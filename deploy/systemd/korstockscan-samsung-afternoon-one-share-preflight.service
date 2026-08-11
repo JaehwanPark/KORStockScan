@@ -16,4 +16,3 @@ CPUQuota=10%
 MemoryMax=256M
 TasksMax=32
 NoNewPrivileges=true
-PrivateTmp=true
