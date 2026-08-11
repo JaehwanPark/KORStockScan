@@ -2980,3 +2980,1111 @@ def test_wait_budget_contract_forbids_same_date_selection_and_owner_drift():
     assert (
         "different_trigger_calibration_or_exit_owner_between_budget_arms" in forbidden
     )
+
+
+def _execution_bar(
+    minute: int,
+    *,
+    open_: int,
+    high: int,
+    low: int,
+    close: int,
+    day: int = 10,
+) -> base.Bar:
+    return base.Bar(
+        symbol="005930",
+        venue="KRX",
+        session="KRX_REGULAR",
+        timestamp=datetime(2026, 8, day, 9, 0) + timedelta(minutes=minute),
+        open=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=100,
+        source="test",
+    )
+
+
+def _fixed_entry(*, day: int = 10) -> dict:
+    return {
+        "trade_date": f"2026-08-{day:02d}",
+        "venue": "KRX",
+        "session": "KRX_REGULAR",
+        "entry_at": f"2026-08-{day:02d}T09:00:00",
+        "entry_price": 100.0,
+        "economic_first_passage_event": "adverse_first_passage",
+        "pairability_lane": "weak_reversal",
+    }
+
+
+def test_fixed_tp_split_reprices_target_and_forbids_same_fill_bar_exit():
+    bars = [
+        _execution_bar(0, open_=100, high=100, low=100, close=100),
+        _execution_bar(1, open_=100, high=102, low=99, close=100),
+        _execution_bar(2, open_=100, high=101, low=100, close=100),
+    ]
+
+    trade = adaptive._simulate_fixed_tp_split_trade(
+        _fixed_entry(),
+        bars,
+        arm="two_40_60_add0p5_tp0p5",
+        cost_pct=0.2,
+    )
+
+    assert trade["filled_leg_count"] == 2
+    assert trade["weighted_average_price"] < 100.0
+    assert trade["exit_reason"] == "fixed_average_take_profit"
+    assert trade["exit_at"] == "2026-08-10T09:02:00"
+    assert trade["same_bar_target_after_fill_allowed"] is False
+
+
+def test_fixed_tp_split_same_bar_adds_precede_catastrophic_stop():
+    bars = [
+        _execution_bar(0, open_=100, high=101, low=97, close=98),
+    ]
+
+    trade = adaptive._simulate_fixed_tp_split_trade(
+        _fixed_entry(),
+        bars,
+        arm="three_20_30_50_add0p4_0p8_tp0p5",
+        cost_pct=0.2,
+    )
+
+    assert trade["exit_reason"] == "catastrophic_stop"
+    assert trade["filled_leg_count"] == 3
+    assert trade["exit_price"] == 98.0
+    assert trade["exit_at"] == "2026-08-10T09:00:00"
+    assert trade["planned_budget_mae_pct"] < -1.0
+
+
+def test_fixed_tp_split_policy_uses_only_complete_prior_arm_history():
+    history = []
+    for index, arm in enumerate(adaptive.FIXED_TP_SPLIT_ARMS):
+        history.append(
+            {
+                **_fixed_entry(),
+                "fixed_tp_split_arm": arm,
+                "fixed_tp_split_oos": True,
+                "net_profit_pct": float(index),
+                "planned_budget_mae_pct": -0.1,
+                "filled_leg_count": 1,
+            }
+        )
+
+    policy = adaptive._select_fixed_tp_split_policy(history)
+
+    assert policy is not None
+    assert policy["selected_arm"] == list(adaptive.FIXED_TP_SPLIT_ARMS)[-1]
+    assert policy["fit_max_date"] == "2026-08-10"
+    assert "current_date_arm_outcome_as_same_date_arm_selection" in (
+        adaptive.FIXED_TP_SPLIT_CONTRACT["forbidden_uses"]
+    )
+
+
+def test_equal_share_carry_can_complete_next_day_without_next_day_add():
+    bars = [
+        _execution_bar(0, open_=100, high=100, low=100, close=100),
+        _execution_bar(1, open_=100, high=100, low=100, close=100),
+        _execution_bar(0, open_=99, high=101, low=99, close=100, day=11),
+    ]
+
+    trade = adaptive._simulate_equal_share_carry_trade(
+        _fixed_entry(),
+        bars,
+        arm="two_equal_add0p5_tp0p4",
+        cost_pct=0.2,
+    )
+
+    assert trade["completed"] is True
+    assert trade["exit_at"] == "2026-08-11T09:00:00"
+    assert trade["filled_leg_count"] == 1
+    assert trade["calendar_days_to_target"] == 1
+    assert trade["net_return_pct"] > 0
+
+
+def test_equal_share_carry_reprices_after_same_day_add_and_blocks_same_bar_target():
+    bars = [
+        _execution_bar(0, open_=100, high=101, low=99, close=100),
+        _execution_bar(1, open_=100, high=101, low=100, close=100),
+    ]
+
+    trade = adaptive._simulate_equal_share_carry_trade(
+        _fixed_entry(),
+        bars,
+        arm="two_equal_add0p5_tp0p4",
+        cost_pct=0.2,
+    )
+
+    assert trade["filled_leg_count"] == 2
+    assert trade["weighted_average_price"] == pytest.approx(99.5)
+    assert trade["exit_at"] == "2026-08-10T09:01:00"
+    assert trade["same_bar_target_after_fill_allowed"] is False
+
+
+def test_equal_share_carry_right_censor_is_not_completed_profit():
+    trade = adaptive._simulate_equal_share_carry_trade(
+        _fixed_entry(),
+        [_execution_bar(0, open_=100, high=100, low=98, close=98)],
+        arm="two_equal_add0p5_tp0p4",
+        cost_pct=0.2,
+    )
+    summary = adaptive._equal_share_carry_path_diagnostics([trade])
+
+    assert trade["completed"] is False
+    assert trade["net_return_pct"] is None
+    assert summary["completed_trade_count"] == 0
+    assert summary["right_censored_count"] == 1
+    assert summary["ending_open_share_units"] == 2
+    assert "right_censored_position_as_zero_return_or_completed_profit" in (
+        adaptive.FIXED_TP_EQUAL_SHARE_CARRY_CONTRACT["forbidden_uses"]
+    )
+
+
+def test_equal_share_daily_reset_capacity_skips_overlap_and_reopens_next_date():
+    bars = [
+        _execution_bar(0, open_=100, high=100, low=99, close=99),
+        _execution_bar(1, open_=99, high=99, low=99, close=99),
+        _execution_bar(0, open_=100, high=101, low=100, close=101, day=11),
+        _execution_bar(1, open_=101, high=101, low=101, close=101, day=11),
+    ]
+    entries = [
+        _fixed_entry(),
+        {**_fixed_entry(), "entry_at": "2026-08-10T09:01:00"},
+        _fixed_entry(day=11),
+    ]
+
+    selected, skipped = adaptive._simulate_daily_reset_single_bundle_arm(
+        entries,
+        bars,
+        arm="single_1_tp0p4",
+        cost_pct=0.2,
+    )
+
+    assert len(selected) == 2
+    assert len(skipped) == 1
+    assert selected[0]["completed"] is False
+    assert selected[1]["completed"] is True
+    assert selected[1]["calendar_days_to_target"] == 0
+    assert skipped[0]["reason"] == "single_active_bundle_capacity"
+
+
+def _entry_quality_trade(
+    *,
+    day: int,
+    minute: int,
+    feature_seed: float,
+    net_profit_pct: float,
+    catastrophic: bool,
+) -> dict:
+    return {
+        **_fixed_entry(day=day),
+        "entry_at": f"2026-08-{day:02d}T09:{minute:02d}:00",
+        "fixed_tp_split_arm": adaptive.FIXED_TP_ENTRY_QUALITY_EXECUTION_ARM,
+        "fixed_tp_split_oos": True,
+        "economic_features": [
+            feature_seed + index * 0.001
+            for index in range(len(adaptive.ECONOMIC_FEATURE_NAMES))
+        ],
+        "predicted_cost_adjusted_ev_pct": feature_seed,
+        "predicted_event_probabilities": {
+            "favorable_first_passage": 0.3,
+            "adverse_first_passage": 0.6,
+            "session_end_censored": 0.1,
+        },
+        "volatility_scale_pct": 0.5,
+        "exit_at": f"2026-08-{day:02d}T09:{minute + 1:02d}:00",
+        "exit_price": 98.0 if catastrophic else 100.5,
+        "exit_reason": (
+            "catastrophic_stop" if catastrophic else "fixed_average_take_profit"
+        ),
+        "gross_profit_pct": net_profit_pct + 0.2,
+        "net_profit_pct": net_profit_pct,
+        "planned_budget_return_pct": net_profit_pct,
+        "deployed_notional_return_pct": net_profit_pct,
+        "planned_budget_mae_pct": -2.0 if catastrophic else -0.1,
+        "planned_budget_mfe_pct": 0.1 if catastrophic else 0.5,
+        "deployed_fraction": 1.0,
+        "filled_leg_count": 2,
+        "average_price_improvement_vs_initial_pct": 0.4,
+        "exit_below_initial_entry": catastrophic,
+    }
+
+
+def test_fixed_tp_entry_quality_uses_prior_failures_and_retains_current_floor():
+    prior = [
+        _entry_quality_trade(
+            day=10,
+            minute=0,
+            feature_seed=-1.0,
+            net_profit_pct=-2.2,
+            catastrophic=True,
+        ),
+        _entry_quality_trade(
+            day=10,
+            minute=2,
+            feature_seed=1.0,
+            net_profit_pct=-0.1,
+            catastrophic=False,
+        ),
+    ]
+    current = [
+        _entry_quality_trade(
+            day=11,
+            minute=minute,
+            feature_seed=float(minute),
+            net_profit_pct=-0.1,
+            catastrophic=False,
+        )
+        for minute in (0, 2, 4, 6)
+    ]
+    evaluations = [
+        {
+            "evaluation_date": "2026-08-10",
+            "arm_trades": {
+                adaptive.FIXED_TP_ENTRY_QUALITY_EXECUTION_ARM: prior,
+            },
+        },
+        {
+            "evaluation_date": "2026-08-11",
+            "arm_trades": {
+                adaptive.FIXED_TP_ENTRY_QUALITY_EXECUTION_ARM: current,
+            },
+        },
+    ]
+    fitted = adaptive._fit_fixed_tp_entry_quality_model(prior)
+    assert fitted is not None
+    fitted_model, _ = fitted
+    assert fitted_model.named_steps["logisticregression"].class_weight is None
+
+    result = adaptive._fixed_tp_split_entry_quality_walk_forward(
+        evaluations,
+        sample_floor_passed=True,
+        source_quality_passed=True,
+    )
+
+    evaluated = result["evaluations"][1]
+    assert evaluated["model"]["fit_max_date"] == "2026-08-10"
+    assert evaluated["capacity"]["selected_count"] == 3
+    assert evaluated["capacity"]["opportunity_floor_count"] == 3
+    assert evaluated["capacity"]["current_retention"] == 0.75
+    assert result["capacity_diagnostics"]["skipped_count"] == 1
+    assert [row["action"] for row in evaluated["decisions"]] == [
+        "enter_bounded_exploration",
+        "enter_bounded_exploration",
+        "enter_bounded_exploration",
+        "skip_negative_expected_ev",
+    ]
+    assert "catastrophic_probability_as_hard_gate" in (
+        adaptive.FIXED_TP_ENTRY_QUALITY_CONTRACT["forbidden_uses"]
+    )
+
+
+def test_recoverable_basin_uses_prior_date_and_replays_broader_candidates():
+    first_candidates = [
+        _entry_quality_trade(
+            day=10,
+            minute=minute,
+            feature_seed=float(minute),
+            net_profit_pct=0.1,
+            catastrophic=False,
+        )
+        for minute in (0, 2, 4, 6)
+    ]
+    second_candidates = [
+        _entry_quality_trade(
+            day=11,
+            minute=minute,
+            feature_seed=float(minute),
+            net_profit_pct=0.1,
+            catastrophic=False,
+        )
+        for minute in (0, 2, 4, 6)
+    ]
+    series_by_key = {
+        (date(2026, 8, day), "KRX", "KRX_REGULAR"): [
+            _execution_bar(
+                minute,
+                open_=100,
+                high=101,
+                low=100,
+                close=100,
+                day=day,
+            )
+            for minute in range(9)
+        ]
+        for day in (10, 11)
+    }
+    candidate_evaluations = [
+        {
+            "evaluation_date": "2026-08-10",
+            "candidate_trades": first_candidates,
+        },
+        {
+            "evaluation_date": "2026-08-11",
+            "candidate_trades": second_candidates,
+        },
+    ]
+    fixed_split_evaluations = [
+        {
+            "evaluation_date": "2026-08-10",
+            "arm_trades": {
+                adaptive.RECOVERABLE_BASIN_EXECUTION_ARM: first_candidates[:2],
+            },
+        },
+        {
+            "evaluation_date": "2026-08-11",
+            "arm_trades": {
+                adaptive.RECOVERABLE_BASIN_EXECUTION_ARM: second_candidates[:2],
+            },
+        },
+    ]
+
+    result = adaptive._recoverable_basin_walk_forward(
+        candidate_evaluations,
+        fixed_split_evaluations,
+        series_by_key,
+        venue="KRX",
+        cost_pct=0.2,
+        sample_floor_passed=True,
+        source_quality_passed=True,
+    )
+
+    evaluated = result["evaluations"][1]
+    assert evaluated["model"]["fit_max_date"] == "2026-08-10"
+    assert evaluated["raw_candidate_count"] == 4
+    assert evaluated["capacity"]["broader_control_count"] == 4
+    assert evaluated["capacity"]["selected_count"] == 4
+    assert evaluated["capacity"]["selected_vs_broader_control_retention"] == 1.0
+    assert evaluated["trade_detail_storage"] == ("omitted_replayable_from_source_bars")
+    assert "broader_control_trades" not in evaluated
+    assert "selected_trades" not in evaluated
+    assert "future_candidate_count_as_skip_budget_input" in (
+        adaptive.RECOVERABLE_BASIN_CONTRACT["forbidden_uses"]
+    )
+
+
+def test_fixed_execution_report_payload_omits_replayable_trade_arrays():
+    trade = {"entry_at": "2026-08-11T09:00:00"}
+    compact_split = adaptive._compact_fixed_execution_report_payload(
+        {
+            "evaluations": [
+                {
+                    "evaluation_date": "2026-08-11",
+                    "arm_trades": {"arm_a": [trade, trade]},
+                    "selected_policy_trades": [trade],
+                    "selected_control_trades": [trade, trade],
+                }
+            ]
+        },
+        split_execution=True,
+    )["evaluations"][0]
+    assert compact_split["arm_trade_counts"] == {"arm_a": 2}
+    assert compact_split["selected_policy_trade_count"] == 1
+    assert compact_split["selected_control_trade_count"] == 2
+    assert "arm_trades" not in compact_split
+
+    compact_quality = adaptive._compact_fixed_execution_report_payload(
+        {
+            "evaluations": [
+                {
+                    "evaluation_date": "2026-08-11",
+                    "control_trades": [trade, trade],
+                    "selected_trades": [trade],
+                }
+            ]
+        },
+        split_execution=False,
+    )["evaluations"][0]
+    assert compact_quality["control_trade_count"] == 2
+    assert compact_quality["selected_trade_count"] == 1
+    assert "control_trades" not in compact_quality
+    assert "selected_trades" not in compact_quality
+
+
+def test_parent_bucket_uses_prior_boundaries_and_prior_axis_choice():
+    candidate_evaluations = []
+    fixed_split_evaluations = []
+    series_by_key = {}
+    for day in (9, 10, 11):
+        candidates = [
+            _entry_quality_trade(
+                day=day,
+                minute=minute,
+                feature_seed=float(minute),
+                net_profit_pct=0.1,
+                catastrophic=False,
+            )
+            for minute in (0, 2, 4, 6)
+        ]
+        candidate_evaluations.append(
+            {
+                "evaluation_date": f"2026-08-{day:02d}",
+                "candidate_trades": candidates,
+            }
+        )
+        fixed_split_evaluations.append(
+            {
+                "evaluation_date": f"2026-08-{day:02d}",
+                "arm_trades": {
+                    adaptive.PARENT_BUCKET_EXECUTION_ARM: candidates[:2],
+                },
+            }
+        )
+        series_by_key[(date(2026, 8, day), "KRX", "KRX_REGULAR")] = [
+            _execution_bar(
+                minute,
+                open_=100,
+                high=101,
+                low=100,
+                close=100,
+                day=day,
+            )
+            for minute in range(9)
+        ]
+
+    result = adaptive._parent_bucket_walk_forward(
+        candidate_evaluations,
+        fixed_split_evaluations,
+        series_by_key,
+        venue="KRX",
+        cost_pct=0.2,
+        sample_floor_passed=True,
+        source_quality_passed=True,
+    )
+
+    assert result["evaluation_count"] == 1
+    evaluated = result["evaluations"][2]
+    assert evaluated["status"] == "evaluated_prior_only_parent_axis"
+    assert evaluated["prior_selected_axis"]["fit_max_date"] == "2026-08-10"
+    assert evaluated["prior_selected_axis"]["selected_axis"] == "lane_parent"
+    assert all(
+        model["fit_max_date"] == "2026-08-10"
+        for model in evaluated["axis_models"].values()
+    )
+    assert all(
+        model["capacity"]["selected_vs_broader_control_retention"] >= 0.75
+        for model in evaluated["axis_models"].values()
+    )
+    assert evaluated["trade_detail_storage"] == ("omitted_replayable_from_source_bars")
+    assert result["conflict_diagnostics"]["selected_axis_bucket_attribution"]
+    assert "multi_axis_child_combo_as_parent_bucket_authority" in (
+        adaptive.PARENT_BUCKET_CONTRACT["forbidden_uses"]
+    )
+
+
+def test_parent_bucket_negative_ev_skip_quota_is_prefix_safe():
+    scored = []
+    for minute in (0, 2, 4, 6):
+        trade = _entry_quality_trade(
+            day=11,
+            minute=minute,
+            feature_seed=float(minute),
+            net_profit_pct=0.1,
+            catastrophic=False,
+        )
+        scored.append(
+            {
+                **trade,
+                "parent_bucket_axis": "volatility_parent",
+                "parent_bucket_label": "low",
+                "parent_bucket_source_value": 0.1,
+                "parent_bucket_prior_sample_count": 12,
+                "predicted_parent_bucket_ev_pct": -0.1,
+                "parent_bucket_fit_max_date": "2026-08-10",
+            }
+        )
+
+    selected, decisions, capacity = adaptive._apply_parent_bucket_state_machine(scored)
+
+    assert len(selected) == 3
+    assert [row["action"] for row in decisions] == [
+        "enter_bounded_exploration",
+        "enter_bounded_exploration",
+        "enter_bounded_exploration",
+        "skip_negative_parent_ev",
+    ]
+    assert capacity["selected_vs_broader_control_retention"] == 0.75
+
+
+def test_parent_bucket_stability_uses_fixed_oos_decisions_without_reselection():
+    evaluations = []
+    for day, value in ((9, 0.1), (10, 0.2), (11, -0.1)):
+        evaluations.append(
+            {
+                "evaluation_date": f"2026-08-{day:02d}",
+                "status": "evaluated_prior_only_parent_axis",
+                "selected_axis_decisions": [
+                    {
+                        "trade_date": f"2026-08-{day:02d}",
+                        "axis": "volatility_parent",
+                        "bucket": "middle",
+                        "action": "enter_bounded_exploration",
+                        "post_oos_outcome_attribution": {
+                            "planned_budget_return_pct": value,
+                            "catastrophic": value < 0.0,
+                        },
+                    }
+                ],
+            }
+        )
+    parent_result = {
+        "decision": "parent_bucket_conflict_only",
+        "evaluation_count": 3,
+        "evaluations": evaluations,
+    }
+
+    result = adaptive._parent_bucket_conflict_stability(
+        parent_result,
+        source_quality_passed=True,
+    )
+
+    focus = result["focus_summary"]
+    assert result["input_decisions_unchanged"] is True
+    assert result["decision"] == "parent_edge_concentrated_not_reproducible"
+    assert focus["sample_count"] == 3
+    assert focus["observed_date_count"] == 3
+    assert focus["equal_weight_avg_profit_pct"] == pytest.approx(0.066667)
+    assert focus["positive_date_ratio"] == pytest.approx(0.666667)
+    assert focus["leave_one_date_all_positive"] is False
+    assert focus["catastrophic_negative_magnitude_share"] == 1.0
+
+    blocked = adaptive._parent_bucket_conflict_stability(
+        parent_result,
+        source_quality_passed=False,
+    )
+    assert blocked["decision"] == "source_quality_blocked"
+    assert blocked["focus_summary"]["source_quality_adjusted_ev_pct"] is None
+
+
+def test_parent_bucket_stability_distinguishes_stable_catastrophic_and_empty():
+    def parent_result(values: tuple[float, ...]) -> dict[str, object]:
+        return {
+            "decision": "parent_bucket_conflict_only",
+            "evaluation_count": len(values),
+            "evaluations": [
+                {
+                    "evaluation_date": f"2026-08-{index + 1:02d}",
+                    "status": "evaluated_prior_only_parent_axis",
+                    "selected_axis_decisions": [
+                        {
+                            "trade_date": f"2026-08-{index + 1:02d}",
+                            "axis": "volatility_parent",
+                            "bucket": "middle",
+                            "action": "enter_positive_parent_ev",
+                            "post_oos_outcome_attribution": {
+                                "planned_budget_return_pct": value,
+                                "catastrophic": value <= -1.0,
+                            },
+                        }
+                    ],
+                }
+                for index, value in enumerate(values)
+            ],
+        }
+
+    stable = adaptive._parent_bucket_conflict_stability(
+        parent_result((0.1, 0.2, 0.1, 0.2)),
+        source_quality_passed=True,
+    )
+    catastrophic = adaptive._parent_bucket_conflict_stability(
+        parent_result((-1.5, -1.6, -1.7)),
+        source_quality_passed=True,
+    )
+    empty = adaptive._parent_bucket_conflict_stability(
+        parent_result(()),
+        source_quality_passed=True,
+    )
+
+    assert stable["decision"] == "stable_parent_edge_needs_next_date_confirmation"
+    assert stable["focus_summary"]["leave_one_date_all_positive"] is True
+    assert catastrophic["decision"] == "catastrophic_loss_cluster_identified"
+    assert catastrophic["focus_summary"]["catastrophic_negative_magnitude_share"] == 1.0
+    assert empty["decision"] == "no_stable_parent_edge"
+    assert empty["focus_summary"] is None
+
+
+def test_parent_catastrophic_episode_audit_uses_only_joined_pre_entry_context():
+    feature_index = {
+        name: index for index, name in enumerate(adaptive.ECONOMIC_FEATURE_NAMES)
+    }
+    decisions = []
+    candidates = []
+    series_by_key = {}
+    start_date = date(2026, 6, 5)
+    for index in range(24):
+        trade_date = start_date + timedelta(days=index)
+        entry_at = datetime.combine(trade_date, datetime.min.time()).replace(
+            hour=9, minute=30
+        )
+        catastrophic = index < 4
+        prices = [
+            10_000 - minute * 5 if catastrophic else 10_000 + minute * 5
+            for minute in range(31)
+        ]
+        bars = [
+            base.Bar(
+                symbol="005930",
+                venue="KRX",
+                session="KRX_REGULAR",
+                timestamp=datetime.combine(trade_date, datetime.min.time()).replace(
+                    hour=9
+                )
+                + timedelta(minutes=minute),
+                open=price,
+                high=price + 1,
+                low=price - 1,
+                close=price,
+                volume=100 + minute,
+                source="test",
+            )
+            for minute, price in enumerate(prices)
+        ]
+        series_by_key[(trade_date, "KRX", "KRX_REGULAR")] = bars
+        economic_features = [0.0] * len(adaptive.ECONOMIC_FEATURE_NAMES)
+        economic_features[feature_index["confirmation_return_1m_vol_units"]] = (
+            -2.0 if catastrophic else 1.0
+        )
+        economic_features[feature_index["confirmation_market_context_available"]] = 1.0
+        economic_features[feature_index["causal_volatility_scale_pct"]] = 0.1
+        candidate = {
+            "trade_date": trade_date.isoformat(),
+            "venue": "KRX",
+            "session": "KRX_REGULAR",
+            "entry_at": entry_at.isoformat(),
+            "entry_price": float(prices[-1]),
+            "pairability_lane": (
+                "weak_reversal" if catastrophic else "bullish_transition"
+            ),
+            "economic_features": economic_features,
+        }
+        candidates.append(candidate)
+        decisions.append(
+            {
+                "trade_date": trade_date.isoformat(),
+                "venue": "KRX",
+                "session": "KRX_REGULAR",
+                "entry_at": entry_at.isoformat(),
+                "entry_price": float(prices[-1]),
+                "axis": "volatility_parent",
+                "bucket": "middle",
+                "action": "enter_positive_parent_ev",
+                "post_oos_outcome_attribution": {
+                    "exit_reason": (
+                        "catastrophic_stop"
+                        if catastrophic
+                        else "fixed_average_take_profit"
+                    ),
+                    "planned_budget_return_pct": -1.8 if catastrophic else 0.3,
+                    "catastrophic": catastrophic,
+                },
+            }
+        )
+    parent_result = {
+        "decision": "parent_bucket_conflict_only",
+        "evaluations": [
+            {
+                "status": "evaluated_prior_only_parent_axis",
+                "selected_axis_decisions": decisions,
+            }
+        ],
+    }
+
+    result = adaptive._parent_catastrophic_episode_audit(
+        parent_result,
+        [{"candidate_trades": candidates}],
+        series_by_key,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+
+    assert result["decision"] == "repeatable_pre_entry_loss_signature_identified"
+    assert result["input_decisions_unchanged"] is True
+    assert result["source_gap_count"] == 0
+    assert result["episode_counts"] == {
+        "total": 24,
+        "catastrophic_stop": 4,
+        "target_recovery": 20,
+        "session_close_other": 0,
+    }
+    assert "confirmation_return_1m_vol_units" in result["numeric_signature_candidates"]
+    assert (
+        "confirmation_market_context_available"
+        not in result["numeric_feature_summaries"]
+    )
+    assert result["focus_source_quality_adjusted_ev_pct"] == pytest.approx(-0.05)
+    assert result["lane_summary"]["signature_candidate"] is True
+    assert all(
+        episode["provenance"]["future_path_used_as_feature"] is False
+        for episode in result["episodes"]
+    )
+
+    blocked = adaptive._parent_catastrophic_episode_audit(
+        parent_result,
+        [{"candidate_trades": candidates}],
+        series_by_key,
+        venue="KRX",
+        source_quality_passed=False,
+    )
+    assert blocked["decision"] == "source_quality_blocked"
+
+    gap = adaptive._parent_catastrophic_episode_audit(
+        parent_result,
+        [{"candidate_trades": candidates[1:]}],
+        series_by_key,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert gap["decision"] == "source_contract_gap"
+    assert gap["source_gap_count"] == 1
+
+    context_gap_candidates = copy.deepcopy(candidates)
+    context_gap_candidates[0]["economic_features"][
+        feature_index["confirmation_market_context_available"]
+    ] = 0.0
+    context_gap = adaptive._parent_catastrophic_episode_audit(
+        parent_result,
+        [{"candidate_trades": context_gap_candidates}],
+        series_by_key,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert context_gap["decision"] == "source_contract_gap"
+    assert context_gap["source_gaps"][0]["reason"] == (
+        "exact_market_context_unavailable"
+    )
+
+
+def test_parent_catastrophic_stop_recovery_separates_control_and_continuation():
+    start_date = date(2026, 7, 1)
+    candidates = []
+    decisions = []
+    series_by_key = {}
+    for index in range(4):
+        trade_date = start_date + timedelta(days=index)
+        entry_at = datetime.combine(trade_date, datetime.min.time()).replace(
+            hour=9, minute=30
+        )
+        recovers = index < 3
+        bars = []
+        for minute in range(61):
+            if minute <= 30:
+                price = 10_000
+                high = 10_010
+                low = 9_990
+            elif minute == 31:
+                price = 9_820
+                high = 10_010
+                low = 9_790
+            elif recovers:
+                price = {32: 9_850, 33: 9_950}.get(minute, 10_050)
+                high = price + 20
+                low = price - 20
+            else:
+                price = max(9_750, 9_810 - (minute - 32) * 10)
+                high = price + 10
+                low = price - 10
+            bars.append(
+                base.Bar(
+                    symbol="005930",
+                    venue="KRX",
+                    session="KRX_REGULAR",
+                    timestamp=datetime.combine(trade_date, datetime.min.time()).replace(
+                        hour=9
+                    )
+                    + timedelta(minutes=minute),
+                    open=price,
+                    high=high,
+                    low=low,
+                    close=price,
+                    volume=100,
+                    source="test",
+                )
+            )
+        terminal_price = 10_050 if recovers else 9_750
+        bars.append(
+            base.Bar(
+                symbol="005930",
+                venue="KRX",
+                session="KRX_REGULAR",
+                timestamp=datetime.combine(trade_date, datetime.min.time()).replace(
+                    hour=15, minute=30
+                ),
+                open=terminal_price,
+                high=terminal_price + 10,
+                low=terminal_price - 10,
+                close=terminal_price,
+                volume=100,
+                source="test",
+            )
+        )
+        candidate = {
+            "trade_date": trade_date.isoformat(),
+            "venue": "KRX",
+            "session": "KRX_REGULAR",
+            "entry_at": entry_at.isoformat(),
+            "entry_price": 10_000.0,
+        }
+        fixed = adaptive._simulate_fixed_tp_split_trade(
+            candidate,
+            bars,
+            arm=adaptive.PARENT_BUCKET_EXECUTION_ARM,
+            cost_pct=0.2,
+        )
+        assert fixed["exit_reason"] == "catastrophic_stop"
+        candidates.append(candidate)
+        decisions.append(
+            {
+                **candidate,
+                "axis": "volatility_parent",
+                "bucket": "middle",
+                "action": "enter_positive_parent_ev",
+                "post_oos_outcome_attribution": {
+                    "exit_reason": fixed["exit_reason"],
+                    "planned_budget_return_pct": fixed["net_profit_pct"],
+                    "catastrophic": True,
+                },
+            }
+        )
+        series_by_key[(trade_date, "KRX", "KRX_REGULAR")] = bars
+    parent_result = {
+        "decision": "parent_bucket_conflict_only",
+        "evaluations": [
+            {
+                "status": "evaluated_prior_only_parent_axis",
+                "selected_axis_decisions": decisions,
+            }
+        ],
+    }
+
+    result = adaptive._parent_catastrophic_stop_recovery_path(
+        parent_result,
+        [{"candidate_trades": candidates}],
+        series_by_key,
+        venue="KRX",
+        cost_pct=0.2,
+        source_quality_passed=True,
+    )
+
+    assert result["decision"] == "recoverable_adverse_first_dominates"
+    assert result["episode_count"] == 4
+    assert result["target_recovery_count"] == 3
+    assert result["target_recovery_ratio"] == 0.75
+    assert result["continuation_better_count"] == 3
+    assert result["hard_stop_protected_count"] == 1
+    assert result["recovery_by_horizon_count"]["3"] == 3
+    assert (
+        result["continue_target_or_terminal_mark_equal_weight_avg_profit_pct"]
+        > result["hard_stop_control_equal_weight_avg_profit_pct"]
+    )
+    assert result["terminal_mark_limited_count"] == 0
+    assert result["decision_evidence_complete"] is True
+    assert all(
+        episode["provenance"]["stop_bar_excluded_from_counterfactual_path"]
+        and not episode["provenance"]["control_and_counterfactual_summed"]
+        for episode in result["episodes"]
+    )
+
+    grace = adaptive._parent_post_stop_bounded_grace_arms(
+        result,
+        series_by_key,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert grace["decision"] == "bounded_grace_candidate_for_prospective_only"
+    assert grace["input_episode_count"] == 4
+    assert grace["prospective_candidate_horizons_minutes"] == [5, 10, 20]
+    assert grace["same_sample_best_arm_selected"] is False
+    assert grace["runtime_effect"] is False
+    assert grace["allowed_runtime_apply"] is False
+    assert grace["actual_order_submitted"] is False
+    assert grace["broker_order_forbidden"] is True
+    for minutes in (5, 10, 20):
+        arm = grace["arms"][str(minutes)]
+        assert arm["episode_count"] == 4
+        assert arm["target_recovery_count"] == 3
+        assert arm["improves_both_control_ev_and_compounded_return"] is True
+        assert arm["prospective_candidate_only"] is True
+        assert arm["average_additional_mae_from_stop_pct_conservative"] <= 0.0
+        assert arm["worst_additional_mae_from_stop_pct_conservative"] <= 0.0
+        assert all(
+            row["provenance"]["stop_bar_excluded"]
+            and row["provenance"]["existing_target_unchanged"]
+            and row["provenance"]["filled_quantity_unchanged"]
+            and not row["provenance"]["same_sample_best_arm_selected"]
+            and not row["provenance"]["runtime_effect"]
+            for row in arm["episodes"]
+        )
+
+    missing_horizon_series = {key: list(value) for key, value in series_by_key.items()}
+    non_recovery_date = start_date + timedelta(days=3)
+    first_key = (non_recovery_date, "KRX", "KRX_REGULAR")
+    missing_at = datetime.combine(non_recovery_date, datetime.min.time()).replace(
+        hour=9, minute=36
+    )
+    missing_horizon_series[first_key] = [
+        bar for bar in missing_horizon_series[first_key] if bar.timestamp != missing_at
+    ]
+    grace_gap = adaptive._parent_post_stop_bounded_grace_arms(
+        result,
+        missing_horizon_series,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert grace_gap["decision"] == "source_contract_gap"
+    assert grace_gap["source_gap_count"] == 1
+    assert grace_gap["source_gaps"][0]["reason"] == (
+        "exact_horizon_completed_bar_missing"
+    )
+    assert all(
+        arm["source_quality_adjusted_ev_pct"] is None
+        for arm in grace_gap["arms"].values()
+    )
+
+    grace_blocked = adaptive._parent_post_stop_bounded_grace_arms(
+        result,
+        series_by_key,
+        venue="KRX",
+        source_quality_passed=False,
+    )
+    assert grace_blocked["decision"] == "source_quality_blocked"
+    assert grace_blocked["venue"] == "KRX"
+
+    empty_blocked = adaptive._parent_post_stop_bounded_grace_arms(
+        {
+            "decision": "source_quality_blocked",
+            "episodes": [],
+            "hard_stop_control_source_quality_adjusted_ev_pct": None,
+            "hard_stop_control_compounded_return_pct": 0.0,
+        },
+        {},
+        venue="NXT",
+        source_quality_passed=False,
+    )
+    assert empty_blocked["decision"] == "source_quality_blocked"
+    assert empty_blocked["hard_stop_control_compounded_return_pct"] is None
+    assert all(
+        arm["compounded_return_pct"] is None for arm in empty_blocked["arms"].values()
+    )
+
+    prospective_empty = adaptive._parent_post_stop_grace_prospective_oos(
+        grace,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert prospective_empty["decision"] == ("no_new_catastrophic_episode_observe")
+    assert prospective_empty["calibration_episode_count_excluded"] == 4
+    assert prospective_empty["prospective_episode_count"] == 0
+    assert prospective_empty["candidate_horizons_minutes_frozen"] == [5, 10, 20]
+    assert prospective_empty["same_sample_best_arm_selected"] is False
+    assert prospective_empty["calibration_and_prospective_returns_mixed"] is False
+    assert prospective_empty["hard_stop_control_equal_weight_avg_profit_pct"] is None
+    assert all(
+        arm["source_quality_adjusted_ev_pct"] is None
+        and arm["compounded_return_pct"] is None
+        for arm in prospective_empty["arms"].values()
+    )
+
+    future_grace = copy.deepcopy(grace)
+    future_trade_date = date(2026, 8, 11)
+    original_trade_date = date.fromisoformat(
+        future_grace["arms"]["5"]["episodes"][0]["trade_date"]
+    )
+    future_delta = future_trade_date - original_trade_date
+    for arm in future_grace["arms"].values():
+        future_episode = copy.deepcopy(arm["episodes"][0])
+        future_episode["trade_date"] = future_trade_date.isoformat()
+        for field in ("entry_at", "stop_at", "exit_at"):
+            future_episode[field] = (
+                datetime.fromisoformat(future_episode[field]) + future_delta
+            ).isoformat()
+        arm["episodes"].append(future_episode)
+    prospective_one = adaptive._parent_post_stop_grace_prospective_oos(
+        future_grace,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert prospective_one["decision"] == ("prospective_grace_evidence_accumulating")
+    assert prospective_one["calibration_episode_count_excluded"] == 4
+    assert prospective_one["prospective_episode_count"] == 1
+    assert prospective_one["source_gap_count"] == 0
+    assert all(
+        arm["prospective_episode_count"] == 1
+        and arm["improves_both_prospective_control_ev_and_compounded_return"]
+        for arm in prospective_one["arms"].values()
+    )
+
+    changed_grace = copy.deepcopy(future_grace)
+    changed_episode = changed_grace["arms"]["20"]["episodes"][-1]
+    changed_episode["grace_planned_budget_return_pct"] = (
+        changed_episode["hard_stop_control_return_pct"] - 0.5
+    )
+    changed_episode["incremental_return_vs_hard_stop_pct"] = -0.5
+    prospective_changed = adaptive._parent_post_stop_grace_prospective_oos(
+        changed_grace,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert prospective_changed["decision"] == "prospective_grace_tradeoff_changed"
+    assert (
+        prospective_changed["arms"]["20"][
+            "improves_both_prospective_control_ev_and_compounded_return"
+        ]
+        is False
+    )
+
+    candidate_gap = copy.deepcopy(grace)
+    candidate_gap["arms"].pop("20")
+    prospective_gap = adaptive._parent_post_stop_grace_prospective_oos(
+        candidate_gap,
+        venue="KRX",
+        source_quality_passed=True,
+    )
+    assert prospective_gap["decision"] == "source_contract_gap"
+    assert prospective_gap["source_gaps"][0]["reason"] == (
+        "frozen_candidate_horizon_set_mismatch"
+    )
+
+    prospective_blocked = adaptive._parent_post_stop_grace_prospective_oos(
+        empty_blocked,
+        venue="NXT",
+        source_quality_passed=False,
+    )
+    assert prospective_blocked["decision"] == "source_quality_blocked"
+
+    limited_series_by_key = {key: bars[:-1] for key, bars in series_by_key.items()}
+    limited = adaptive._parent_catastrophic_stop_recovery_path(
+        parent_result,
+        [{"candidate_trades": candidates}],
+        limited_series_by_key,
+        venue="KRX",
+        cost_pct=0.2,
+        source_quality_passed=True,
+    )
+    assert limited["decision"] == "mixed_post_stop_paths_no_owner_change"
+    assert limited["terminal_mark_limited_count"] == 1
+    assert limited["decision_evidence_complete"] is False
+    assert (
+        limited["continue_target_or_terminal_mark_source_quality_adjusted_ev_pct"]
+        is None
+    )
+
+    blocked = adaptive._parent_catastrophic_stop_recovery_path(
+        parent_result,
+        [{"candidate_trades": candidates}],
+        series_by_key,
+        venue="KRX",
+        cost_pct=0.2,
+        source_quality_passed=False,
+    )
+    assert blocked["decision"] == "source_quality_blocked"
+
+    gap = adaptive._parent_catastrophic_stop_recovery_path(
+        parent_result,
+        [{"candidate_trades": candidates[1:]}],
+        series_by_key,
+        venue="KRX",
+        cost_pct=0.2,
+        source_quality_passed=True,
+    )
+    assert gap["decision"] == "source_contract_gap"
+    assert gap["source_gap_count"] == 1

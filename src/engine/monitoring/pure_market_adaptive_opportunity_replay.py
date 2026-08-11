@@ -27,10 +27,14 @@ from sklearn.ensemble import (
     HistGradientBoostingClassifier,
     HistGradientBoostingRegressor,
 )
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import average_precision_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from src.engine.monitoring import pure_market_regime_replay as regime
 from src.engine.monitoring import pure_market_reversal_replay as base
+from src.trading.order.tick_utils import clamp_price_to_tick, move_price_up_by_bps
 
 KST = ZoneInfo("Asia/Seoul")
 DEFAULT_OUTPUT_DIR = Path("data/report/pure_market_adaptive_opportunity_replay")
@@ -553,6 +557,559 @@ WAIT_BUDGET_CONTRACT = {
         "nxt_partial_context_as_krx_authority",
         "automatic_runtime_or_widget_policy_apply",
         "real_order_submission",
+    ],
+}
+FIXED_TP_SPLIT_ARMS: dict[str, dict[str, Any]] = {
+    "single_tp0p5": {
+        "legs": ((0.0, 1.0),),
+        "target_pct": 0.5,
+    },
+    "two_40_60_add0p5_tp0p4": {
+        "legs": ((0.0, 0.4), (-0.5, 0.6)),
+        "target_pct": 0.4,
+    },
+    "two_40_60_add0p5_tp0p5": {
+        "legs": ((0.0, 0.4), (-0.5, 0.6)),
+        "target_pct": 0.5,
+    },
+    "two_40_60_add0p8_tp0p5": {
+        "legs": ((0.0, 0.4), (-0.8, 0.6)),
+        "target_pct": 0.5,
+    },
+    "three_20_30_50_add0p4_0p8_tp0p5": {
+        "legs": ((0.0, 0.2), (-0.4, 0.3), (-0.8, 0.5)),
+        "target_pct": 0.5,
+    },
+    "three_20_30_50_add0p5_1p0_tp0p5": {
+        "legs": ((0.0, 0.2), (-0.5, 0.3), (-1.0, 0.5)),
+        "target_pct": 0.5,
+    },
+}
+FIXED_TP_SPLIT_CONTROL_ARM = "single_tp0p5"
+FIXED_TP_SPLIT_CATASTROPHIC_STOP_PCT = 2.0
+FIXED_TP_EQUAL_SHARE_CARRY_ARMS: dict[str, dict[str, Any]] = {
+    "single_1_tp0p4": {"add_offsets_pct": (0.0,), "target_pct": 0.4},
+    "single_1_tp0p5": {"add_offsets_pct": (0.0,), "target_pct": 0.5},
+    "two_equal_add0p5_tp0p4": {
+        "add_offsets_pct": (0.0, -0.5),
+        "target_pct": 0.4,
+    },
+    "two_equal_add0p5_tp0p5": {
+        "add_offsets_pct": (0.0, -0.5),
+        "target_pct": 0.5,
+    },
+    "two_equal_add0p8_tp0p5": {
+        "add_offsets_pct": (0.0, -0.8),
+        "target_pct": 0.5,
+    },
+    "three_equal_add0p4_0p8_tp0p5": {
+        "add_offsets_pct": (0.0, -0.4, -0.8),
+        "target_pct": 0.5,
+    },
+    "three_equal_add0p5_1p0_tp0p5": {
+        "add_offsets_pct": (0.0, -0.5, -1.0),
+        "target_pct": 0.5,
+    },
+}
+FIXED_TP_CARRY_HOLDOUT_DATES = 6
+FIXED_TP_CARRY_MIN_CALIBRATION_ENTRIES = 20
+FIXED_TP_CARRY_MIN_HOLDOUT_COMPLETIONS = 10
+FIXED_TP_EQUAL_SHARE_CARRY_CONTRACT = {
+    "metric_role": "one_share_leg_carry_to_fixed_average_target_research",
+    "decision_authority": "offline_widget_auto_trade_policy_candidate_only",
+    "window_policy": (
+        "economic_oos_entries_only;first_evaluation_dates_calibrate_with_prices_"
+        "strictly_before_holdout_start;last_6_evaluation_dates_are_untouched_"
+        "holdout;runtime_candidate_target_observation_ends_at_trade_date_reset"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_days;"
+        f"{FIXED_TP_CARRY_MIN_CALIBRATION_ENTRIES}_calibration_entries;"
+        f"{FIXED_TP_CARRY_MIN_HOLDOUT_COMPLETIONS}_completed_holdout_entries"
+    ),
+    "primary_decision_metric": "holdout_completed_trade_count_then_time_and_mae",
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "execution_contract": (
+        "each_leg_is_one_share;additional_legs_may_fill_only_in_the_original_"
+        "entry_session;target_is_tick_rounded_from_equal_share_weighted_average;"
+        "target_activates_on_the_bar_after_a_fill;no_ordinary_or_catastrophic_"
+        "stop;runtime_candidate_allows_one_active_bundle_per_symbol_and_resets_"
+        "at_each_trade_date;unhit_positions_are_right_censored_not_forced_losses"
+    ),
+    "forbidden_uses": [
+        "holdout_outcome_as_calibration_arm_selection",
+        "future_bar_as_entry_or_add_trigger_input",
+        "same_bar_target_after_initial_or_add_fill",
+        "right_censored_position_as_zero_return_or_completed_profit",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_or_widget_policy_apply",
+        "real_order_submission",
+        "provider_or_main_bot_control",
+    ],
+}
+FIXED_TP_SPLIT_CONTRACT = {
+    "metric_role": "fixed_entry_cohort_split_buy_fixed_take_profit_comparison",
+    "decision_authority": "offline_pure_market_execution_replay_only",
+    "window_policy": (
+        "economic_first_passage_selected_entries_are_held_fixed;each_evaluation_"
+        "date_arm_is_selected_only_from_complete_arm_outcomes_on_earlier_dates"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "prior_arm_selection_starts_after_one_complete_evaluation_date"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct_on_planned_budget",
+    "execution_contract": (
+        "capital_fraction_legs_fill_at_limit_or_better;target_is_repriced_from_"
+        "weighted_average_and_rounded_up_to_a_valid_tick_after_each_fill_then_"
+        "activates_on_the_next_bar;ordinary_adverse_first_has_no_stop;all_arms_"
+        "share_initial_entry_minus_2pct_tick_clamped_catastrophic_stop_and_"
+        "session_close_liquidation"
+    ),
+    "same_bar_path_policy": (
+        "crossed_add_limits_fill_before_catastrophic_stop_on_the_same_down_bar;"
+        "any_add_fill_suppresses_target_on_that_bar;target_fill_uses_valid_tick_"
+        "limit_price_without_favorable_gap_improvement"
+    ),
+    "capital_contract": (
+        "primary_return_uses_full_planned_budget;deployed_notional_return_is_"
+        "diagnostic_so_unfilled_reserve_cash_is_not_mistaken_for_free_leverage"
+    ),
+    "artifact_storage_contract": (
+        "evaluation_rows_keep_policy_and_trade_counts;full_arm_trade_arrays_are_"
+        "omitted_from_the_written_report_because_source_bars_can_replay_them"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "current_date_arm_outcome_as_same_date_arm_selection",
+        "future_bar_as_entry_or_scale_in_feature",
+        "historic_widget_signal_or_ai_decision_input",
+        "different_entry_cohort_between_arms",
+        "same_bar_target_after_initial_or_scale_in_fill",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_or_widget_policy_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+    ],
+}
+FIXED_TP_ENTRY_QUALITY_EXECUTION_ARM = "two_40_60_add0p8_tp0p5"
+FIXED_TP_ENTRY_QUALITY_OPPORTUNITY_RETENTION = 0.75
+FIXED_TP_ENTRY_QUALITY_SHRINKAGE_PRIOR = 8.0
+FIXED_TP_ENTRY_QUALITY_FEATURE_NAMES = (
+    *ECONOMIC_FEATURE_NAMES,
+    "economic_predicted_cost_adjusted_ev_pct",
+    "economic_predicted_favorable_probability",
+    "economic_predicted_adverse_probability",
+    "economic_predicted_censor_probability",
+)
+FIXED_TP_ENTRY_QUALITY_CONTRACT = {
+    "metric_role": "fixed_execution_entry_catastrophic_loss_quality_research",
+    "decision_authority": "offline_pure_market_entry_quality_replay_only",
+    "window_policy": (
+        "the_40_60_add0p8_average_tp0p5_execution_arm_is_fixed;each_entry_"
+        "quality_model_uses_all_fixed_arm_counterfactual_outcomes_from_earlier_"
+        "evaluation_dates_only"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "no_additional_date_floor;model_starts_after_both_catastrophic_and_"
+        "noncatastrophic_prior_outcomes_exist"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct_on_planned_budget",
+    "selection_contract": (
+        "reliability_shrunk_catastrophic_probability_is_combined_with_prior_"
+        "catastrophic_and_noncatastrophic_planned_budget_returns_to_estimate_"
+        "net_ev;there_is_no_probability_threshold_or_hard_gate"
+    ),
+    "bounded_exploration_contract": (
+        "three_prior_entries_on_the_same_evaluation_date_earn_at_most_one_"
+        f"subsequent_negative_ev_skip_so_every_observed_prefix_and_cumulative_"
+        f"entry_retention_remain_at_least_"
+        f"{FIXED_TP_ENTRY_QUALITY_OPPORTUNITY_RETENTION:.2f};otherwise_the_entry_"
+        "is_observed_as_bounded_exploration_without_future_candidate_count"
+    ),
+    "artifact_storage_contract": (
+        "evaluation_rows_keep_model_capacity_and_compact_decision_provenance;"
+        "full_control_and_selected_trade_arrays_are_omitted_from_the_written_"
+        "report_because_source_bars_can_replay_them"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "current_date_outcome_as_same_date_entry_quality_input",
+        "future_mfe_mae_low_high_or_exit_as_entry_feature",
+        "catastrophic_probability_as_hard_gate",
+        "opportunity_retention_below_0_75",
+        "split_take_profit_or_catastrophic_stop_owner_change",
+        "historic_widget_signal_or_ai_decision_input",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_or_widget_policy_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+    ],
+}
+RECOVERABLE_BASIN_EXECUTION_ARM = FIXED_TP_ENTRY_QUALITY_EXECUTION_ARM
+RECOVERABLE_BASIN_OPPORTUNITY_RETENTION = 0.75
+RECOVERABLE_BASIN_SHRINKAGE_PRIOR = 16.0
+RECOVERABLE_BASIN_FEATURE_NAMES = (
+    *FIXED_TP_ENTRY_QUALITY_FEATURE_NAMES,
+    "fixed_add_distance_vol_units",
+    "fixed_target_distance_vol_units",
+    "fixed_catastrophic_distance_vol_units",
+)
+RECOVERABLE_BASIN_CONTRACT = {
+    "metric_role": "broader_causal_candidate_recoverable_basin_direct_ev_research",
+    "decision_authority": "offline_pure_market_recoverable_basin_replay_only",
+    "window_policy": (
+        "all_causal_armed_candidates_from_model_ready_economic_lanes_are_replayed_"
+        "with_one_fixed_execution_owner;each_date_direct_ev_model_uses_only_"
+        "independent_fixed_arm_counterfactuals_from_earlier_dates"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "no_additional_date_or_trade_floor;direct_ev_fit_starts_after_one_prior_"
+        "candidate_date"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct_on_planned_budget",
+    "selection_contract": (
+        "regularized_direct_fixed_execution_net_ev_with_prior_mean_shrinkage;"
+        "positive_ev_enters_and_negative_ev_remains_bounded_exploration_without_"
+        "a_probability_or_score_hard_gate"
+    ),
+    "state_machine_contract": (
+        "candidate_timestamps_are_evaluated_in_order;an_entered_candidate_owns_"
+        "the_position_until_its_fixed_execution_exit;skipped_candidates_do_not_"
+        "occupy_the_slot_and_the_next_candidate_is_reconsidered"
+    ),
+    "bounded_exploration_contract": (
+        "three_prior_entries_in_the_same_date_and_session_earn_at_most_one_"
+        f"subsequent_negative_ev_skip;every_prefix_retains_at_least_"
+        f"{RECOVERABLE_BASIN_OPPORTUNITY_RETENTION:.2f}_without_using_future_"
+        "candidate_count"
+    ),
+    "artifact_storage_contract": (
+        "evaluation_rows_keep_model_capacity_and_compact_decision_provenance;"
+        "full_counterfactual_trade_arrays_are_omitted_because_they_duplicate_"
+        "the_replayable_source_bars_and_aggregate_path_summaries"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "current_date_outcome_as_same_date_model_or_policy_input",
+        "future_mfe_mae_session_low_high_or_exit_as_entry_feature",
+        "future_candidate_count_as_skip_budget_input",
+        "fixed_drawdown_or_rebound_entry_label",
+        "opportunity_retention_below_0_75",
+        "split_take_profit_or_catastrophic_stop_owner_change",
+        "same_report_prediction_diagnostic_as_threshold_selection",
+        "historic_widget_signal_or_ai_decision_input",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_or_widget_policy_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+    ],
+}
+PARENT_BUCKET_EXECUTION_ARM = RECOVERABLE_BASIN_EXECUTION_ARM
+PARENT_BUCKET_OPPORTUNITY_RETENTION = 0.75
+PARENT_BUCKET_SHRINKAGE_PRIOR = 12.0
+PARENT_BUCKET_AXIS_SPECS: dict[str, dict[str, str]] = {
+    "lane_parent": {
+        "kind": "categorical",
+        "source": "pairability_lane",
+    },
+    "session_time_parent": {
+        "kind": "numeric_tercile",
+        "source": "confirmation_session_progress",
+    },
+    "volatility_parent": {
+        "kind": "numeric_tercile",
+        "source": "causal_volatility_scale_pct",
+    },
+    "relative_strength_parent": {
+        "kind": "numeric_tercile",
+        "source": "confirmation_relative_3m_vol_units",
+    },
+    "vwap_position_parent": {
+        "kind": "numeric_tercile",
+        "source": "confirmation_vwap_distance_vol_units",
+    },
+    "range_position_parent": {
+        "kind": "numeric_tercile",
+        "source": "confirmation_position_in_20m_range",
+    },
+}
+PARENT_BUCKET_CONTRACT = {
+    "metric_role": "coarse_parent_archetype_fixed_execution_attribution_research",
+    "decision_authority": "offline_pure_market_parent_bucket_replay_only",
+    "window_policy": (
+        "each_numeric_parent_uses_tercile_boundaries_from_earlier_candidate_"
+        "dates_only;each_bucket_ev_and_each_date_axis_choice_use_only_prior_"
+        "fixed_execution_outcomes"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "no_additional_date_floor;parent_bucket_fit_starts_after_one_prior_"
+        "candidate_date_and_axis_choice_starts_after_one_prior_oos_axis_date"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct_on_planned_budget",
+    "bucket_contract": (
+        "lane_session_time_volatility_relative_strength_vwap_position_and_"
+        "range_position_are_evaluated_one_axis_at_a_time;no_child_feature_combo_"
+        "owns_a_decision"
+    ),
+    "selection_contract": (
+        "bucket_mean_fixed_execution_ev_is_shrunk_to_the_prior_global_mean;"
+        "the_axis_used_on_an_evaluation_date_is_selected_by_prior_axis_ev_then_"
+        "prior_compounded_return_then_less_adverse_mae"
+    ),
+    "bounded_exploration_contract": (
+        "three_prior_entries_in_the_same_date_and_session_earn_at_most_one_"
+        f"subsequent_negative_parent_ev_skip;every_prefix_retains_at_least_"
+        f"{PARENT_BUCKET_OPPORTUNITY_RETENTION:.2f}_without_future_candidate_count"
+    ),
+    "artifact_storage_contract": (
+        "evaluation_rows_keep_prior_boundaries_bucket_statistics_capacity_and_"
+        "the_prior_selected_axis_decisions;full_counterfactual_trade_arrays_are_"
+        "omitted_as_replayable_source_bar_detail"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "current_date_outcome_as_same_date_boundary_bucket_or_axis_input",
+        "future_mfe_mae_session_low_high_or_exit_as_entry_feature",
+        "multi_axis_child_combo_as_parent_bucket_authority",
+        "same_report_axis_summary_as_same_date_axis_selection",
+        "future_candidate_count_as_skip_budget_input",
+        "opportunity_retention_below_0_75",
+        "split_take_profit_or_catastrophic_stop_owner_change",
+        "historic_widget_signal_or_ai_decision_input",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_or_widget_policy_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+    ],
+}
+PARENT_BUCKET_STABILITY_FOCUS_AXIS = "volatility_parent"
+PARENT_BUCKET_STABILITY_FOCUS_BUCKET = "middle"
+PARENT_BUCKET_STABILITY_ROLLING_DATES = 3
+PARENT_BUCKET_STABILITY_CONTRACT = {
+    "metric_role": "fixed_parent_oos_date_stability_and_loss_concentration_research",
+    "decision_authority": "offline_post_oos_parent_attribution_only",
+    "window_policy": (
+        "consume_the_unchanged_prior_selected_parent_axis_decisions_from_the_"
+        "same_report;group_by_observed_trade_date_without_refitting_boundaries_"
+        "buckets_axes_or_entry_actions"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "no_new_floor;stability_is_reported_for_every_observed_parent_bucket_"
+        "and_the_predeclared_volatility_middle_focus"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "stability_contract": (
+        "report_date_level_ev_three_observed_date_rolling_sign_persistence_"
+        "leave_one_date_ev_sensitivity_and_catastrophic_loss_concentration"
+    ),
+    "focus_contract": (
+        "volatility_parent_middle_is_a_predeclared_diagnostic_focus_from_v16_"
+        "and_cannot_be_promoted_or_reselected_on_the_same_46_date_sample"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "same_sample_parent_bucket_or_threshold_reselection",
+        "volatility_middle_as_a_same_sample_hard_entry_gate",
+        "multi_axis_child_combo_creation",
+        "current_date_outcome_as_same_date_entry_input",
+        "post_oos_leave_one_date_or_rolling_metric_as_runtime_authority",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_or_widget_policy_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+    ],
+}
+PARENT_CATASTROPHIC_AUDIT_MIN_TARGET_COMPARATOR = 20
+PARENT_CATASTROPHIC_AUDIT_PAIRWISE_FLOOR = 0.75
+PARENT_CATASTROPHIC_AUDIT_LEAVE_ONE_FLOOR = 0.70
+PARENT_CATASTROPHIC_AUDIT_TARGET_RETENTION_FLOOR = 0.75
+PARENT_CATASTROPHIC_AUDIT_FEATURE_NAMES = (
+    "confirmation_return_1m_vol_units",
+    "confirmation_return_3m_vol_units",
+    "confirmation_return_5m_vol_units",
+    "confirmation_short_long_acceleration_vol_units",
+    "confirmation_drawdown_from_20m_high_range_units",
+    "confirmation_position_in_20m_range",
+    "confirmation_vwap_distance_vol_units",
+    "confirmation_volume_vs_20m_median_log",
+    "confirmation_bar_range_vol_units",
+    "confirmation_kospi_return_3m_vol_units",
+    "confirmation_relative_3m_vol_units",
+    "confirmation_market_context_available",
+    "confirmation_session_progress",
+    "candidate_age_minutes",
+    "causal_volatility_scale_pct",
+    "pre_entry_return_1m_pct",
+    "pre_entry_return_3m_pct",
+    "pre_entry_return_5m_pct",
+    "pre_entry_return_10m_pct",
+    "pre_entry_negative_step_count_5",
+    "pre_entry_down_volume_share_5",
+)
+PARENT_CATASTROPHIC_AUDIT_COMPARISON_FEATURE_NAMES = tuple(
+    name
+    for name in PARENT_CATASTROPHIC_AUDIT_FEATURE_NAMES
+    if name != "confirmation_market_context_available"
+)
+PARENT_CATASTROPHIC_AUDIT_CONTRACT = {
+    "metric_role": "fixed_parent_catastrophic_pre_entry_episode_audit",
+    "decision_authority": "offline_post_oos_loss_signature_research_only",
+    "window_policy": (
+        "consume_the_unchanged_volatility_middle_enter_decisions_and_join_each_"
+        "identity_to_its_original_causal_candidate_and_completed_pre_entry_bars"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        f"all_observed_catastrophic_episodes_and_at_least_"
+        f"{PARENT_CATASTROPHIC_AUDIT_MIN_TARGET_COMPARATOR}_fixed_target_comparators"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "comparison_contract": (
+        "catastrophic_stop_vs_fixed_average_take_profit_outcomes_are_compared_"
+        "one_pre_entry_dimension_at_a_time;session_close_is_reported_but_is_not_"
+        "a_primary_comparator"
+    ),
+    "signature_candidate_contract": (
+        "diagnostic_only_candidate_requires_all_catastrophic_episodes_on_the_"
+        "same_side_of_the_target_median_pairwise_direction_probability_at_least_"
+        f"{PARENT_CATASTROPHIC_AUDIT_PAIRWISE_FLOOR:.2f}_and_leave_one_"
+        f"catastrophic_direction_probability_at_least_"
+        f"{PARENT_CATASTROPHIC_AUDIT_LEAVE_ONE_FLOOR:.2f}_while_hypothetical_"
+        f"one_dimension_exclusion_retains_at_least_"
+        f"{PARENT_CATASTROPHIC_AUDIT_TARGET_RETENTION_FLOOR:.2f}_of_target_"
+        "recoveries;any_candidate_requires_"
+        "future_complete_date_validation_before_policy_consideration"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "post_entry_mfe_mae_low_high_or_exit_as_entry_feature",
+        "four_catastrophic_outcomes_as_same_sample_threshold_optimization",
+        "multi_axis_child_combo_or_classifier_creation",
+        "signature_candidate_as_same_sample_hard_entry_gate",
+        "fixed_split_take_profit_or_catastrophic_stop_owner_change",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_widget_sim_policy_or_preopen_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+        "provider_route_or_bot_control",
+    ],
+}
+PARENT_POST_STOP_HORIZONS_MINUTES = (1, 3, 5, 10, 20, 30, 60)
+PARENT_POST_STOP_RECOVERY_DOMINANCE_FLOOR = 0.75
+PARENT_POST_STOP_RECOVERY_CONTRACT = {
+    "metric_role": "fixed_parent_catastrophic_stop_recovery_path_counterfactual",
+    "decision_authority": "offline_post_stop_execution_research_only",
+    "window_policy": (
+        "consume_only_unchanged_volatility_middle_catastrophic_entries;replay_"
+        "the_fixed_40_60_add0p8_average_tp0p5_owner_and_observe_bars_strictly_"
+        "after_the_catastrophic_stop_bar_through_session_end"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "all_observed_fixed_parent_catastrophic_stop_episodes"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "counterfactual_contract": (
+        "hard_stop_control_and_continue_with_the_same_filled_quantity_until_"
+        "the_existing_average_target_or_last_observed_regular_mark_are_separate_"
+        "paths;an_exact_krx_close_requires_a_1530_bar_and_an_earlier_terminal_"
+        "mark_is_diagnostic_only;"
+        "intrastop_bar_recovery_and_additional_drawdown_are_not_inferred"
+    ),
+    "dominance_contract": (
+        f"recoverable_adverse_first_requires_target_recovery_in_at_least_"
+        f"{PARENT_POST_STOP_RECOVERY_DOMINANCE_FLOOR:.2f}_of_catastrophic_"
+        "episodes_and_both_higher_equal_weight_ev_and_compounded_return_than_"
+        "the_hard_stop_control"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "post_stop_path_as_entry_feature_or_same_sample_entry_threshold",
+        "hard_stop_control_plus_counterfactual_profit_summation",
+        "intrastop_bar_high_low_order_inference",
+        "new_scale_in_leg_quantity_target_or_stop_joint_optimization",
+        "automatic_stop_removal_or_runtime_policy_apply",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_widget_sim_policy_or_preopen_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+        "provider_route_or_bot_control",
+    ],
+}
+PARENT_POST_STOP_GRACE_HORIZONS_MINUTES = (5, 10, 20)
+PARENT_POST_STOP_GRACE_CONTRACT = {
+    "metric_role": "fixed_parent_catastrophic_stop_bounded_grace_counterfactual",
+    "decision_authority": "offline_prospective_candidate_attribution_only",
+    "window_policy": (
+        "consume_only_the_unchanged_catastrophic_stop_recovery_episodes;start_each_"
+        "fixed_5_10_20_minute_grace_arm_after_the_stop_bar;exit_at_the_existing_"
+        "average_target_if_hit_first_otherwise_at_the_exact_horizon_bar_close"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "all_observed_fixed_parent_catastrophic_stop_episodes;thin_episode_results_"
+        "remain_prospective_only"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "comparison_contract": (
+        "each_horizon_is_compared_independently_with_the_same_immediate_stop_"
+        "control;all_horizons_that_improve_both_equal_weight_ev_and_compounded_"
+        "return_are_listed_without_same_sample_ranking_or_best_arm_selection"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "sum_returns_across_grace_arms_or_with_the_immediate_stop_control",
+        "same_sample_best_horizon_selection_or_runtime_promotion",
+        "post_stop_path_as_entry_feature_or_same_sample_entry_threshold",
+        "new_scale_in_leg_quantity_target_or_emergency_floor_joint_change",
+        "intrastop_bar_high_low_order_inference",
+        "pre_1530_terminal_mark_as_exact_krx_close",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_widget_sim_policy_or_preopen_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+        "provider_route_or_bot_control",
+    ],
+}
+PARENT_POST_STOP_GRACE_PROSPECTIVE_CUTOFF_DATE = date(2026, 8, 10)
+PARENT_POST_STOP_GRACE_PROSPECTIVE_START_DATE = date(2026, 8, 11)
+PARENT_POST_STOP_GRACE_CALIBRATION_EPISODE_COUNT = 4
+PARENT_POST_STOP_GRACE_PROSPECTIVE_HORIZONS_MINUTES = (5, 10, 20)
+PARENT_POST_STOP_GRACE_PROSPECTIVE_CONTRACT = {
+    "metric_role": "fixed_parent_post_stop_grace_prospective_oos_attribution",
+    "decision_authority": "offline_future_episode_observation_only",
+    "window_policy": (
+        "freeze_candidate_horizons_5_10_20_at_2026_08_10;exclude_all_episodes_"
+        "through_2026_08_10_from_prospective_metrics;attribute_only_new_"
+        "catastrophic_episodes_from_2026_08_11"
+    ),
+    "sample_floor": (
+        f"{base.MIN_QUALIFIED_TRADING_DAYS}_coverage_qualified_trading_days_per_venue;"
+        "zero_new_episode_is_a_valid_observe_state;new_episode_counts_are_reported_"
+        "without_single_episode_promotion"
+    ),
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "candidate_contract": (
+        "candidate_horizons_are_the_frozen_5_10_20_minute_set_from_the_2026_08_10_"
+        "calibration_report_and_are_never_reselected_from_prospective_outcomes"
+    ),
+    "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+    "forbidden_uses": [
+        "calibration_episode_reuse_as_prospective_oos_evidence",
+        "prospective_and_calibration_return_mixing",
+        "single_new_episode_best_horizon_selection_or_runtime_promotion",
+        "sum_returns_across_grace_arms_or_with_the_immediate_stop_control",
+        "new_scale_in_leg_quantity_target_emergency_floor_or_entry_threshold_change",
+        "nxt_partial_context_as_krx_authority",
+        "automatic_runtime_widget_sim_policy_or_preopen_apply",
+        "real_order_submission",
+        "account_or_quantity_decision",
+        "provider_route_or_bot_control",
     ],
 }
 
@@ -4994,6 +5551,3947 @@ def _wait_budget_decision(
     return "no_incremental_predictive_value"
 
 
+def _timestamp_without_timezone(value: datetime | str) -> datetime:
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    return parsed.replace(tzinfo=None)
+
+
+def _simulate_fixed_tp_split_trade(
+    entry: dict[str, Any],
+    series: Sequence[base.Bar],
+    *,
+    arm: str,
+    cost_pct: float,
+) -> dict[str, Any]:
+    """Replay one fixed entry with capital-fraction adds and a fixed average TP.
+
+    The first entry is inherited from the already-causal economic selector.  No
+    future observation can alter it.  Intrabar ambiguity is deliberately
+    adverse: a catastrophic stop is checked before an add, and a bar that fills
+    an add cannot also fill the newly repriced target.
+    """
+    if arm not in FIXED_TP_SPLIT_ARMS:
+        raise ValueError(f"unknown fixed TP split arm: {arm}")
+    policy = FIXED_TP_SPLIT_ARMS[arm]
+    legs = tuple(policy["legs"])
+    if not legs or float(legs[0][0]) != 0.0:
+        raise ValueError(f"fixed TP split arm must start at the initial entry: {arm}")
+    if (
+        any(float(weight) <= 0.0 for _, weight in legs)
+        or abs(sum(float(weight) for _, weight in legs) - 1.0) > 1e-9
+    ):
+        raise ValueError(f"fixed TP split arm weights must sum to one: {arm}")
+    entry_at = _timestamp_without_timezone(str(entry["entry_at"]))
+    entry_price = float(entry["entry_price"])
+    if entry_price <= 0:
+        raise ValueError("entry price must be positive")
+    matching_series = [
+        bar for bar in series if _timestamp_without_timezone(bar.timestamp) >= entry_at
+    ]
+    if not matching_series:
+        raise ValueError(f"entry has no market bars: {entry['entry_at']}")
+
+    planned_budget = entry_price
+    fills: list[dict[str, Any]] = []
+
+    def add_fill(*, leg_index: int, price: float, filled_at: datetime) -> None:
+        allocation = float(legs[leg_index][1])
+        fills.append(
+            {
+                "leg_index": leg_index + 1,
+                "allocation": allocation,
+                "price": float(price),
+                "quantity_units": planned_budget * allocation / float(price),
+                "filled_at": _timestamp_without_timezone(filled_at).isoformat(),
+            }
+        )
+
+    add_fill(leg_index=0, price=entry_price, filled_at=entry_at)
+    next_leg_index = 1
+    target_eligible_after = entry_at
+    catastrophic_stop = float(
+        clamp_price_to_tick(
+            entry_price * (1.0 - FIXED_TP_SPLIT_CATASTROPHIC_STOP_PCT / 100.0)
+        )
+    )
+    exit_price: float | None = None
+    exit_at: datetime | None = None
+    exit_reason: str | None = None
+    planned_budget_mae_pct = 0.0
+    planned_budget_mfe_pct = 0.0
+
+    for bar in matching_series:
+        bar_at = _timestamp_without_timezone(bar.timestamp)
+        if bar_at < entry_at:
+            continue
+        total_quantity = sum(float(fill["quantity_units"]) for fill in fills)
+        deployed_capital = sum(
+            float(fill["quantity_units"]) * float(fill["price"]) for fill in fills
+        )
+        planned_budget_mae_pct = min(
+            planned_budget_mae_pct,
+            (float(bar.low) * total_quantity - deployed_capital)
+            / planned_budget
+            * 100.0,
+        )
+        planned_budget_mfe_pct = max(
+            planned_budget_mfe_pct,
+            (float(bar.high) * total_quantity - deployed_capital)
+            / planned_budget
+            * 100.0,
+        )
+
+        added_on_bar = False
+        while next_leg_index < len(legs):
+            offset_pct = float(legs[next_leg_index][0])
+            add_limit = float(
+                clamp_price_to_tick(entry_price * (1.0 + offset_pct / 100.0))
+            )
+            if float(bar.low) > add_limit:
+                break
+            fill_price = min(float(bar.open), add_limit)
+            add_fill(
+                leg_index=next_leg_index,
+                price=fill_price,
+                filled_at=bar_at,
+            )
+            next_leg_index += 1
+            added_on_bar = True
+        if added_on_bar:
+            total_quantity = sum(float(fill["quantity_units"]) for fill in fills)
+            deployed_capital = sum(
+                float(fill["quantity_units"]) * float(fill["price"]) for fill in fills
+            )
+            planned_budget_mae_pct = min(
+                planned_budget_mae_pct,
+                (float(bar.low) * total_quantity - deployed_capital)
+                / planned_budget
+                * 100.0,
+            )
+        if float(bar.open) <= catastrophic_stop:
+            exit_price = float(bar.open)
+            exit_at = bar_at
+            exit_reason = "catastrophic_gap_stop"
+            break
+        if float(bar.low) <= catastrophic_stop:
+            exit_price = catastrophic_stop
+            exit_at = bar_at
+            exit_reason = "catastrophic_stop"
+            break
+        if added_on_bar:
+            target_eligible_after = bar_at
+            continue
+
+        if bar_at <= target_eligible_after:
+            continue
+        total_quantity = sum(float(fill["quantity_units"]) for fill in fills)
+        deployed_capital = sum(
+            float(fill["quantity_units"]) * float(fill["price"]) for fill in fills
+        )
+        average_price = deployed_capital / total_quantity
+        target_price = float(
+            move_price_up_by_bps(
+                average_price,
+                int(round(float(policy["target_pct"]) * 100.0)),
+            )
+        )
+        if float(bar.high) >= target_price:
+            exit_price = target_price
+            exit_at = bar_at
+            exit_reason = "fixed_average_take_profit"
+            break
+
+    if exit_price is None:
+        final_bar = matching_series[-1]
+        exit_price = float(final_bar.close)
+        exit_at = _timestamp_without_timezone(final_bar.timestamp)
+        exit_reason = "session_close"
+
+    total_quantity = sum(float(fill["quantity_units"]) for fill in fills)
+    deployed_capital = sum(
+        float(fill["quantity_units"]) * float(fill["price"]) for fill in fills
+    )
+    average_price = deployed_capital / total_quantity
+    deployed_fraction = sum(float(fill["allocation"]) for fill in fills)
+    gross_planned_pct = (
+        (exit_price * total_quantity - deployed_capital) / planned_budget * 100.0
+    )
+    planned_cost_pct = float(cost_pct) * deployed_fraction
+    net_planned_pct = gross_planned_pct - planned_cost_pct
+    deployed_net_pct = (exit_price / average_price - 1.0) * 100.0 - float(cost_pct)
+    result = {
+        **entry,
+        "fixed_tp_split_arm": arm,
+        "fixed_tp_split_oos": True,
+        "entry_price": entry_price,
+        "exit_at": exit_at.isoformat(),
+        "exit_price": round(exit_price, 6),
+        "exit_reason": exit_reason,
+        "gross_profit_pct": round(gross_planned_pct, 6),
+        "net_profit_pct": round(net_planned_pct, 6),
+        "planned_budget_return_pct": round(net_planned_pct, 6),
+        "deployed_notional_return_pct": round(deployed_net_pct, 6),
+        "planned_budget_mae_pct": round(planned_budget_mae_pct, 6),
+        "planned_budget_mfe_pct": round(planned_budget_mfe_pct, 6),
+        "deployed_fraction": round(deployed_fraction, 6),
+        "filled_leg_count": len(fills),
+        "filled_legs": fills,
+        "weighted_average_price": round(average_price, 6),
+        "average_price_improvement_vs_initial_pct": round(
+            (1.0 - average_price / entry_price) * 100.0,
+            6,
+        ),
+        "target_pct_from_average": float(policy["target_pct"]),
+        "catastrophic_stop_price": round(catastrophic_stop, 6),
+        "exit_below_initial_entry": bool(exit_price < entry_price),
+        "same_bar_target_after_fill_allowed": False,
+    }
+    return result
+
+
+def _fixed_tp_split_path_diagnostics(
+    trades: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    if not trades:
+        return {
+            "sample_count": 0,
+            "compounded_planned_budget_return_pct": 0.0,
+            "avg_deployed_notional_return_pct": None,
+            "avg_planned_budget_mae_pct": None,
+            "avg_planned_budget_mfe_pct": None,
+            "avg_deployed_fraction": None,
+            "avg_filled_leg_count": None,
+            "avg_cost_basis_improvement_pct": None,
+            "target_exit_count": 0,
+            "catastrophic_stop_count": 0,
+            "session_close_count": 0,
+            "target_exit_below_initial_count": 0,
+        }
+    compounded = 1.0
+    for trade in trades:
+        compounded *= 1.0 + float(trade["planned_budget_return_pct"]) / 100.0
+    return {
+        "sample_count": len(trades),
+        "compounded_planned_budget_return_pct": round((compounded - 1.0) * 100.0, 6),
+        "avg_deployed_notional_return_pct": round(
+            statistics.fmean(
+                float(row["deployed_notional_return_pct"]) for row in trades
+            ),
+            6,
+        ),
+        "avg_planned_budget_mae_pct": round(
+            statistics.fmean(float(row["planned_budget_mae_pct"]) for row in trades),
+            6,
+        ),
+        "avg_planned_budget_mfe_pct": round(
+            statistics.fmean(float(row["planned_budget_mfe_pct"]) for row in trades),
+            6,
+        ),
+        "avg_deployed_fraction": round(
+            statistics.fmean(float(row["deployed_fraction"]) for row in trades), 6
+        ),
+        "avg_filled_leg_count": round(
+            statistics.fmean(float(row["filled_leg_count"]) for row in trades), 6
+        ),
+        "avg_cost_basis_improvement_pct": round(
+            statistics.fmean(
+                float(row["average_price_improvement_vs_initial_pct"]) for row in trades
+            ),
+            6,
+        ),
+        "target_exit_count": sum(
+            row["exit_reason"] == "fixed_average_take_profit" for row in trades
+        ),
+        "catastrophic_stop_count": sum(
+            str(row["exit_reason"]).startswith("catastrophic") for row in trades
+        ),
+        "session_close_count": sum(
+            row["exit_reason"] == "session_close" for row in trades
+        ),
+        "target_exit_below_initial_count": sum(
+            row["exit_reason"] == "fixed_average_take_profit"
+            and bool(row["exit_below_initial_entry"])
+            for row in trades
+        ),
+    }
+
+
+def _select_fixed_tp_split_policy(
+    prior_arm_trades: Sequence[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not prior_arm_trades:
+        return None
+    invalid = [
+        row
+        for row in prior_arm_trades
+        if not row.get("fixed_tp_split_oos")
+        or row.get("fixed_tp_split_arm") not in FIXED_TP_SPLIT_ARMS
+    ]
+    if invalid:
+        raise ValueError("fixed TP split policy history contains invalid rows")
+    grouped = {
+        arm: [row for row in prior_arm_trades if row["fixed_tp_split_arm"] == arm]
+        for arm in FIXED_TP_SPLIT_ARMS
+    }
+    if any(not rows for rows in grouped.values()):
+        return None
+    fit_max_date = max(
+        date.fromisoformat(str(row["trade_date"])) for row in prior_arm_trades
+    )
+
+    def rank(arm: str) -> tuple[float, float, float, int]:
+        rows = grouped[arm]
+        return (
+            statistics.fmean(float(row["net_profit_pct"]) for row in rows),
+            statistics.fmean(float(row["planned_budget_mae_pct"]) for row in rows),
+            -statistics.fmean(float(row["filled_leg_count"]) for row in rows),
+            -list(FIXED_TP_SPLIT_ARMS).index(arm),
+        )
+
+    selected_arm = max(FIXED_TP_SPLIT_ARMS, key=rank)
+    selected_rows = grouped[selected_arm]
+    return {
+        "selected_arm": selected_arm,
+        "fit_max_date": fit_max_date.isoformat(),
+        "prior_trade_count": len(selected_rows),
+        "prior_evaluation_date_count": len(
+            {str(row["trade_date"]) for row in selected_rows}
+        ),
+        "prior_planned_budget_ev_pct": round(rank(selected_arm)[0], 6),
+        "selection_policy": (
+            "max_prior_planned_budget_ev_then_less_adverse_mae_then_fewer_legs"
+        ),
+    }
+
+
+def _fixed_tp_split_walk_forward(
+    economic_evaluations: Sequence[dict[str, Any]],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    cost_pct: float,
+    sample_floor_passed: bool,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    history: list[dict[str, Any]] = []
+    arm_trades: dict[str, list[dict[str, Any]]] = {
+        arm: [] for arm in FIXED_TP_SPLIT_ARMS
+    }
+    selected_trades: list[dict[str, Any]] = []
+    selected_control_trades: list[dict[str, Any]] = []
+    evaluations: list[dict[str, Any]] = []
+    for evaluation in economic_evaluations:
+        evaluation_date = date.fromisoformat(str(evaluation["evaluation_date"]))
+        entries = list(evaluation.get("selected_trades") or [])
+        if not entries:
+            evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": "no_fixed_entry_cohort",
+                    "prior_selected_policy": None,
+                    "arm_trades": {arm: [] for arm in FIXED_TP_SPLIT_ARMS},
+                    "selected_policy_trades": [],
+                }
+            )
+            continue
+        policy = _select_fixed_tp_split_policy(history)
+        if (
+            policy is not None
+            and date.fromisoformat(policy["fit_max_date"]) >= evaluation_date
+        ):
+            raise ValueError("fixed TP split policy uses current or future outcomes")
+        current_arms: dict[str, list[dict[str, Any]]] = {
+            arm: [] for arm in FIXED_TP_SPLIT_ARMS
+        }
+        for entry in entries:
+            key = (
+                evaluation_date,
+                venue,
+                str(entry["session"]),
+            )
+            series = series_by_key.get(key)
+            if not series:
+                raise ValueError(f"fixed TP split entry has no session series: {key}")
+            for arm in FIXED_TP_SPLIT_ARMS:
+                current_arms[arm].append(
+                    _simulate_fixed_tp_split_trade(
+                        entry,
+                        series,
+                        arm=arm,
+                        cost_pct=cost_pct,
+                    )
+                )
+        for arm, trades in current_arms.items():
+            arm_trades[arm].extend(trades)
+        if policy is None:
+            selected = []
+            selected_control = []
+            status = "insufficient_prior_arm_history"
+        else:
+            selected = current_arms[str(policy["selected_arm"])]
+            selected_control = current_arms[FIXED_TP_SPLIT_CONTROL_ARM]
+            selected_trades.extend(selected)
+            selected_control_trades.extend(selected_control)
+            status = "evaluated_prior_selected_arm"
+        evaluations.append(
+            {
+                "evaluation_date": evaluation_date.isoformat(),
+                "status": status,
+                "entry_count": len(entries),
+                "prior_selected_policy": policy,
+                "arm_trades": current_arms,
+                "selected_policy_trades": selected,
+                "selected_control_trades": selected_control,
+            }
+        )
+        history.extend(row for trades in current_arms.values() for row in trades)
+
+    arm_summaries = {
+        arm: _summary(trades, source_quality_passed=source_quality_passed)
+        for arm, trades in arm_trades.items()
+    }
+    arm_paths = {
+        arm: _fixed_tp_split_path_diagnostics(trades)
+        for arm, trades in arm_trades.items()
+    }
+    selected_summary = _summary(
+        selected_trades, source_quality_passed=source_quality_passed
+    )
+    control_summary = _summary(
+        selected_control_trades, source_quality_passed=source_quality_passed
+    )
+    selected_path = _fixed_tp_split_path_diagnostics(selected_trades)
+    control_path = _fixed_tp_split_path_diagnostics(selected_control_trades)
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif not sample_floor_passed:
+        decision = "insufficient_coverage_dates"
+    elif not selected_trades:
+        decision = "insufficient_prior_arm_history"
+    else:
+        selected_ev = float(selected_summary["source_quality_adjusted_ev_pct"])
+        control_ev = float(control_summary["source_quality_adjusted_ev_pct"])
+        selected_compounded = float(
+            selected_path["compounded_planned_budget_return_pct"]
+        )
+        control_compounded = float(control_path["compounded_planned_budget_return_pct"])
+        selected_mae = float(selected_path["avg_planned_budget_mae_pct"])
+        control_mae = float(control_path["avg_planned_budget_mae_pct"])
+        if (
+            selected_ev > 0.0
+            and selected_ev >= control_ev
+            and selected_compounded >= control_compounded
+        ):
+            decision = "fixed_tp_split_oos_positive"
+        elif (
+            selected_ev >= control_ev
+            and selected_compounded >= control_compounded
+            and selected_mae >= control_mae
+        ):
+            decision = "fixed_tp_split_pareto_improved"
+        else:
+            decision = "no_incremental_predictive_value"
+    return {
+        "contract": FIXED_TP_SPLIT_CONTRACT,
+        "control_arm": FIXED_TP_SPLIT_CONTROL_ARM,
+        "catastrophic_stop_pct_from_initial": FIXED_TP_SPLIT_CATASTROPHIC_STOP_PCT,
+        "arm_evaluation_count": sum(
+            row["status"]
+            in {"insufficient_prior_arm_history", "evaluated_prior_selected_arm"}
+            for row in evaluations
+        ),
+        "selected_policy_evaluation_count": sum(
+            row["status"] == "evaluated_prior_selected_arm" for row in evaluations
+        ),
+        "arm_summaries": arm_summaries,
+        "arm_path_diagnostics": arm_paths,
+        "prior_selected_policy_summary_same_dates": selected_summary,
+        "single_entry_control_summary_same_dates": control_summary,
+        "prior_selected_policy_path": selected_path,
+        "single_entry_control_path_same_dates": control_path,
+        "evaluations": evaluations,
+        "decision": decision,
+    }
+
+
+def _simulate_equal_share_carry_trade(
+    entry: dict[str, Any],
+    chronological_venue_series: Sequence[base.Bar],
+    *,
+    arm: str,
+    cost_pct: float,
+    observation_end_exclusive: datetime | None = None,
+) -> dict[str, Any]:
+    """Replay one-share legs and a fixed average-price target across dates."""
+    if arm not in FIXED_TP_EQUAL_SHARE_CARRY_ARMS:
+        raise ValueError(f"unknown equal-share carry arm: {arm}")
+    policy = FIXED_TP_EQUAL_SHARE_CARRY_ARMS[arm]
+    offsets = tuple(float(value) for value in policy["add_offsets_pct"])
+    if not offsets or offsets[0] != 0.0 or any(value >= 0 for value in offsets[1:]):
+        raise ValueError(f"invalid equal-share carry offsets: {arm}")
+    if any(later >= earlier for earlier, later in zip(offsets, offsets[1:])):
+        raise ValueError(f"equal-share carry offsets must descend: {arm}")
+    entry_at = _timestamp_without_timezone(str(entry["entry_at"]))
+    entry_price = float(entry["entry_price"])
+    if entry_price <= 0:
+        raise ValueError("entry price must be positive")
+    path = [
+        bar
+        for bar in chronological_venue_series
+        if _timestamp_without_timezone(bar.timestamp) >= entry_at
+        and (
+            observation_end_exclusive is None
+            or _timestamp_without_timezone(bar.timestamp) < observation_end_exclusive
+        )
+    ]
+    if not path:
+        raise ValueError(f"carry entry has no market bars: {entry['entry_at']}")
+
+    fills: list[dict[str, Any]] = [
+        {
+            "leg_index": 1,
+            "quantity": 1,
+            "price": entry_price,
+            "filled_at": entry_at.isoformat(),
+        }
+    ]
+    next_leg_index = 1
+    target_eligible_after = entry_at
+    exit_at: datetime | None = None
+    exit_price: float | None = None
+    target_price: float | None = None
+    observed_mae_pct = 0.0
+    observed_mfe_pct = 0.0
+    observed_dates: set[date] = set()
+
+    for bar in path:
+        bar_at = _timestamp_without_timezone(bar.timestamp)
+        observed_dates.add(bar.trade_date)
+        added_on_bar = False
+        if bar.trade_date == entry_at.date() and bar.session == str(entry["session"]):
+            while next_leg_index < len(offsets):
+                add_limit = float(
+                    clamp_price_to_tick(
+                        entry_price * (1.0 + offsets[next_leg_index] / 100.0)
+                    )
+                )
+                if float(bar.low) > add_limit:
+                    break
+                fills.append(
+                    {
+                        "leg_index": next_leg_index + 1,
+                        "quantity": 1,
+                        "price": min(float(bar.open), add_limit),
+                        "filled_at": bar_at.isoformat(),
+                    }
+                )
+                next_leg_index += 1
+                added_on_bar = True
+        average_price = statistics.fmean(float(fill["price"]) for fill in fills)
+        observed_mae_pct = min(
+            observed_mae_pct,
+            (float(bar.low) / average_price - 1.0) * 100.0,
+        )
+        observed_mfe_pct = max(
+            observed_mfe_pct,
+            (float(bar.high) / average_price - 1.0) * 100.0,
+        )
+        if added_on_bar:
+            target_eligible_after = bar_at
+            continue
+        if bar_at <= target_eligible_after:
+            continue
+        target_price = float(
+            move_price_up_by_bps(
+                average_price,
+                int(round(float(policy["target_pct"]) * 100.0)),
+            )
+        )
+        if float(bar.high) >= target_price:
+            exit_at = bar_at
+            exit_price = target_price
+            break
+
+    average_price = statistics.fmean(float(fill["price"]) for fill in fills)
+    completed = exit_at is not None and exit_price is not None
+    observation_end_at = _timestamp_without_timezone(path[-1].timestamp)
+    terminal_price = float(path[-1].close)
+    gross_return_pct = (
+        (float(exit_price) / average_price - 1.0) * 100.0 if completed else None
+    )
+    net_return_pct = (
+        float(gross_return_pct) - float(cost_pct)
+        if gross_return_pct is not None
+        else None
+    )
+    return {
+        **entry,
+        "carry_arm": arm,
+        "carry_policy_oos": True,
+        "completed": completed,
+        "exit_reason": "fixed_average_take_profit" if completed else "right_censored",
+        "exit_at": exit_at.isoformat() if exit_at else None,
+        "exit_price": round(float(exit_price), 6) if exit_price else None,
+        "target_price": round(float(target_price), 6) if target_price else None,
+        "gross_return_pct": (
+            round(float(gross_return_pct), 6) if gross_return_pct is not None else None
+        ),
+        "net_return_pct": (
+            round(float(net_return_pct), 6) if net_return_pct is not None else None
+        ),
+        "round_trip_cost_pct": float(cost_pct),
+        "filled_leg_count": len(fills),
+        "filled_legs": fills,
+        "weighted_average_price": round(average_price, 6),
+        "target_pct_from_average": float(policy["target_pct"]),
+        "observed_mae_pct": round(observed_mae_pct, 6),
+        "observed_mfe_pct": round(observed_mfe_pct, 6),
+        "observation_end_at": observation_end_at.isoformat(),
+        "terminal_price": round(terminal_price, 6),
+        "right_censored_terminal_mark_pct": (
+            round((terminal_price / average_price - 1.0) * 100.0, 6)
+            if not completed
+            else None
+        ),
+        "calendar_days_to_target": (
+            (exit_at.date() - entry_at.date()).days if exit_at else None
+        ),
+        "observed_trading_day_count": len(observed_dates),
+        "same_bar_target_after_fill_allowed": False,
+        "additional_leg_window": "original_entry_session_only",
+    }
+
+
+def _equal_share_carry_path_diagnostics(
+    trades: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    completed = [row for row in trades if row.get("completed") is True]
+    censored = [row for row in trades if row.get("completed") is not True]
+    event_rows: list[tuple[datetime, int, int]] = []
+    daily_reset_runtime = any(
+        trade.get("runtime_position_policy") == "one_active_bundle_daily_reset"
+        for trade in trades
+    )
+    for trade in trades:
+        event_rows.extend(
+            (
+                _timestamp_without_timezone(str(fill["filled_at"])),
+                1,
+                0,
+            )
+            for fill in trade.get("filled_legs", [])
+        )
+        entry_at = _timestamp_without_timezone(str(trade["entry_at"]))
+        event_rows.append((entry_at, 0, 1))
+        if trade.get("completed") is True:
+            exit_at = _timestamp_without_timezone(str(trade["exit_at"]))
+            event_rows.append((exit_at, -int(trade["filled_leg_count"]), -1))
+        elif trade.get("runtime_position_policy") == "one_active_bundle_daily_reset":
+            reset_at = datetime.combine(entry_at.date() + timedelta(days=1), time.min)
+            event_rows.append((reset_at, -int(trade["filled_leg_count"]), -1))
+    open_shares = 0
+    open_bundles = 0
+    max_open_shares = 0
+    max_open_bundles = 0
+    for _, share_delta, bundle_delta in sorted(
+        event_rows,
+        key=lambda item: (item[0], item[1] > 0, item[2] > 0),
+    ):
+        open_shares += share_delta
+        open_bundles += bundle_delta
+        max_open_shares = max(max_open_shares, open_shares)
+        max_open_bundles = max(max_open_bundles, open_bundles)
+    net_values = [float(row["net_return_pct"]) for row in completed]
+    calendar_days = [int(row["calendar_days_to_target"]) for row in completed]
+    return {
+        "sample_count": len(trades),
+        "completed_trade_count": len(completed),
+        "right_censored_count": len(censored),
+        "target_completion_ratio": (
+            round(len(completed) / len(trades), 6) if trades else None
+        ),
+        "completed_equal_weight_avg_profit_pct": (
+            round(statistics.fmean(net_values), 6) if net_values else None
+        ),
+        "completed_simple_sum_profit_pct": (
+            round(sum(net_values), 6) if net_values else None
+        ),
+        "same_day_target_count": sum(value == 0 for value in calendar_days),
+        "cross_day_target_count": sum(value > 0 for value in calendar_days),
+        "median_calendar_days_to_target": (
+            statistics.median(calendar_days) if calendar_days else None
+        ),
+        "max_calendar_days_to_target": max(calendar_days) if calendar_days else None,
+        "avg_filled_leg_count": (
+            round(
+                statistics.fmean(float(row["filled_leg_count"]) for row in trades),
+                6,
+            )
+            if trades
+            else None
+        ),
+        "avg_observed_mae_pct": (
+            round(
+                statistics.fmean(float(row["observed_mae_pct"]) for row in trades),
+                6,
+            )
+            if trades
+            else None
+        ),
+        "worst_observed_mae_pct": (
+            min(float(row["observed_mae_pct"]) for row in trades) if trades else None
+        ),
+        "max_concurrent_bundle_count": max_open_bundles,
+        "max_concurrent_share_units": max_open_shares,
+        "ending_open_bundle_count": 0 if daily_reset_runtime else len(censored),
+        "ending_open_share_units": (
+            0
+            if daily_reset_runtime
+            else sum(int(row["filled_leg_count"]) for row in censored)
+        ),
+        "cumulative_unmanaged_inventory_bundle_count": (
+            len(censored) if daily_reset_runtime else None
+        ),
+        "cumulative_unmanaged_inventory_share_units": (
+            sum(int(row["filled_leg_count"]) for row in censored)
+            if daily_reset_runtime
+            else None
+        ),
+        "right_censored_terminal_marks_pct": [
+            row.get("right_censored_terminal_mark_pct") for row in censored
+        ],
+    }
+
+
+def _simulate_daily_reset_single_bundle_arm(
+    entries: Sequence[dict[str, Any]],
+    chronological_venue_series: Sequence[base.Bar],
+    *,
+    arm: str,
+    cost_pct: float,
+    observation_end_exclusive: datetime | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Replay the actual widget constraint: one active bundle per trade date.
+
+    An uncompleted bundle blocks later entries on that date, then becomes
+    unmanaged inventory at the daily state reset.  It does not block the next
+    date and a later-day target touch is not counted as an automated exit.
+    """
+    selected: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    blocked_until_by_date: dict[date, datetime | None] = {}
+    for entry in sorted(
+        entries, key=lambda row: _timestamp_without_timezone(str(row["entry_at"]))
+    ):
+        entry_at = _timestamp_without_timezone(str(entry["entry_at"]))
+        trade_date = entry_at.date()
+        blocked_until = blocked_until_by_date.get(trade_date)
+        if trade_date in blocked_until_by_date and (
+            blocked_until is None or entry_at <= blocked_until
+        ):
+            skipped.append(
+                {
+                    "entry_at": entry_at.isoformat(),
+                    "entry_price": entry.get("entry_price"),
+                    "session": entry.get("session"),
+                    "reason": "single_active_bundle_capacity",
+                }
+            )
+            continue
+        next_date = datetime.combine(trade_date + timedelta(days=1), time.min)
+        entry_observation_end = next_date
+        if (
+            observation_end_exclusive is not None
+            and observation_end_exclusive < entry_observation_end
+        ):
+            entry_observation_end = observation_end_exclusive
+        trade = _simulate_equal_share_carry_trade(
+            entry,
+            chronological_venue_series,
+            arm=arm,
+            cost_pct=cost_pct,
+            observation_end_exclusive=entry_observation_end,
+        )
+        trade["runtime_capacity_selected"] = True
+        trade["runtime_position_policy"] = "one_active_bundle_daily_reset"
+        selected.append(trade)
+        blocked_until_by_date[trade_date] = (
+            _timestamp_without_timezone(str(trade["exit_at"]))
+            if trade.get("completed") is True
+            else None
+        )
+    return selected, skipped
+
+
+def _fixed_tp_equal_share_carry_replay(
+    economic_evaluations: Sequence[dict[str, Any]],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    cost_pct: float,
+    sample_floor_passed: bool,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    evaluation_dates = sorted(
+        date.fromisoformat(str(row["evaluation_date"]))
+        for row in economic_evaluations
+        if row.get("selected_trades")
+    )
+    chronological_series = sorted(
+        (
+            bar
+            for (trade_date, key_venue, _), series in series_by_key.items()
+            if key_venue == venue
+            for bar in series
+        ),
+        key=lambda bar: bar.timestamp,
+    )
+    if len(evaluation_dates) <= FIXED_TP_CARRY_HOLDOUT_DATES:
+        return {
+            "contract": FIXED_TP_EQUAL_SHARE_CARRY_CONTRACT,
+            "decision": "insufficient_evaluation_dates",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+    holdout_dates = evaluation_dates[-FIXED_TP_CARRY_HOLDOUT_DATES:]
+    holdout_start = datetime.combine(holdout_dates[0], datetime.min.time())
+    calibration_entries = [
+        entry
+        for evaluation in economic_evaluations
+        if date.fromisoformat(str(evaluation["evaluation_date"])) < holdout_dates[0]
+        for entry in evaluation.get("selected_trades", [])
+    ]
+    holdout_entries = [
+        entry
+        for evaluation in economic_evaluations
+        if date.fromisoformat(str(evaluation["evaluation_date"])) >= holdout_dates[0]
+        for entry in evaluation.get("selected_trades", [])
+    ]
+    calibration_arm_results = {
+        arm: _simulate_daily_reset_single_bundle_arm(
+            calibration_entries,
+            chronological_series,
+            arm=arm,
+            cost_pct=cost_pct,
+            observation_end_exclusive=holdout_start,
+        )
+        for arm in FIXED_TP_EQUAL_SHARE_CARRY_ARMS
+    }
+    calibration_arm_trades = {
+        arm: result[0] for arm, result in calibration_arm_results.items()
+    }
+    calibration_arm_skipped = {
+        arm: result[1] for arm, result in calibration_arm_results.items()
+    }
+    calibration_summaries = {
+        arm: _equal_share_carry_path_diagnostics(trades)
+        for arm, trades in calibration_arm_trades.items()
+    }
+
+    def rank(arm: str) -> tuple[float, float, float, float, int]:
+        summary = calibration_summaries[arm]
+        return (
+            float(summary["completed_trade_count"]),
+            -float(summary["median_calendar_days_to_target"] or 0.0),
+            float(summary["avg_observed_mae_pct"] or -999.0),
+            -float(summary["avg_filled_leg_count"] or 999.0),
+            -list(FIXED_TP_EQUAL_SHARE_CARRY_ARMS).index(arm),
+        )
+
+    selected_arm = max(FIXED_TP_EQUAL_SHARE_CARRY_ARMS, key=rank)
+    selected_calibration_summary = calibration_summaries[selected_arm]
+    holdout_arm_results = {
+        arm: _simulate_daily_reset_single_bundle_arm(
+            holdout_entries,
+            chronological_series,
+            arm=arm,
+            cost_pct=cost_pct,
+        )
+        for arm in FIXED_TP_EQUAL_SHARE_CARRY_ARMS
+    }
+    holdout_arm_trades = {arm: result[0] for arm, result in holdout_arm_results.items()}
+    holdout_arm_skipped = {
+        arm: result[1] for arm, result in holdout_arm_results.items()
+    }
+    holdout_summaries = {
+        arm: _equal_share_carry_path_diagnostics(trades)
+        for arm, trades in holdout_arm_trades.items()
+    }
+    selected_summary = holdout_summaries[selected_arm]
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif not sample_floor_passed:
+        decision = "insufficient_coverage_dates"
+    elif (
+        int(selected_calibration_summary["sample_count"])
+        < FIXED_TP_CARRY_MIN_CALIBRATION_ENTRIES
+    ):
+        decision = "insufficient_calibration_entries"
+    elif (
+        int(selected_summary["completed_trade_count"])
+        < FIXED_TP_CARRY_MIN_HOLDOUT_COMPLETIONS
+    ):
+        decision = "insufficient_holdout_completions"
+    elif float(selected_summary["completed_equal_weight_avg_profit_pct"] or 0.0) <= 0:
+        decision = "holdout_completed_profit_not_positive"
+    else:
+        decision = "widget_auto_trade_policy_candidate_ready"
+    selected_policy = FIXED_TP_EQUAL_SHARE_CARRY_ARMS[selected_arm]
+    return {
+        "contract": FIXED_TP_EQUAL_SHARE_CARRY_CONTRACT,
+        "evaluation_date_count": len(evaluation_dates),
+        "calibration_date_count": len(evaluation_dates) - len(holdout_dates),
+        "holdout_date_count": len(holdout_dates),
+        "holdout_dates": [value.isoformat() for value in holdout_dates],
+        "holdout_start_exclusive_calibration_boundary": holdout_start.isoformat(),
+        "calibration_entry_count": len(calibration_entries),
+        "holdout_entry_count": len(holdout_entries),
+        "calibration_arm_summaries": calibration_summaries,
+        "selected_calibration_summary": selected_calibration_summary,
+        "calibration_capacity_skipped_counts": {
+            arm: len(rows) for arm, rows in calibration_arm_skipped.items()
+        },
+        "selected_arm": selected_arm,
+        "selected_policy": {
+            "leg_quantity_each": 1,
+            "add_offsets_pct": list(selected_policy["add_offsets_pct"]),
+            "target_pct_from_equal_share_average": selected_policy["target_pct"],
+            "ordinary_stop": None,
+            "catastrophic_stop": None,
+            "unhit_policy": "right_censored_hold_without_forced_exit",
+            "position_capacity": "one_active_bundle_per_symbol_per_trade_date",
+            "daily_reset": "unhit_inventory_unmanaged_next_trade_date",
+        },
+        "selection_policy": (
+            "calibration_completed_count_then_faster_target_then_less_adverse_"
+            "mae_then_fewer_equal_share_legs"
+        ),
+        "holdout_arm_summaries": holdout_summaries,
+        "holdout_capacity_skipped_counts": {
+            arm: len(rows) for arm, rows in holdout_arm_skipped.items()
+        },
+        "selected_holdout_summary": selected_summary,
+        "selected_holdout_trades": holdout_arm_trades[selected_arm],
+        "decision": decision,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _fixed_tp_entry_quality_features(trade: dict[str, Any]) -> list[float]:
+    event_probabilities = dict(trade.get("predicted_event_probabilities") or {})
+    values = [
+        *(float(value) for value in trade["economic_features"]),
+        float(trade["predicted_cost_adjusted_ev_pct"]),
+        float(event_probabilities.get("favorable_first_passage") or 0.0),
+        float(event_probabilities.get("adverse_first_passage") or 0.0),
+        float(event_probabilities.get("session_end_censored") or 0.0),
+    ]
+    if len(values) != len(FIXED_TP_ENTRY_QUALITY_FEATURE_NAMES) or not all(
+        math.isfinite(value) for value in values
+    ):
+        raise ValueError("fixed TP entry-quality features are invalid")
+    return values
+
+
+def _fit_fixed_tp_entry_quality_model(
+    prior_trades: Sequence[dict[str, Any]],
+) -> tuple[Any, dict[str, Any]] | None:
+    if not prior_trades:
+        return None
+    labels = np.asarray(
+        [
+            int(str(row["exit_reason"]).startswith("catastrophic"))
+            for row in prior_trades
+        ],
+        dtype=int,
+    )
+    if len(set(labels.tolist())) < 2:
+        return None
+    features = np.asarray(
+        [_fixed_tp_entry_quality_features(row) for row in prior_trades],
+        dtype=float,
+    )
+    model = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(
+            C=0.25,
+            max_iter=2_000,
+            random_state=17,
+            solver="liblinear",
+        ),
+    )
+    model.fit(features, labels)
+    catastrophic = [
+        row
+        for row, label in zip(prior_trades, labels.tolist(), strict=True)
+        if label == 1
+    ]
+    noncatastrophic = [
+        row
+        for row, label in zip(prior_trades, labels.tolist(), strict=True)
+        if label == 0
+    ]
+    fit_max_date = max(
+        date.fromisoformat(str(row["trade_date"])) for row in prior_trades
+    )
+    return model, {
+        "fit_max_date": fit_max_date.isoformat(),
+        "prior_trade_count": len(prior_trades),
+        "prior_evaluation_date_count": len(
+            {str(row["trade_date"]) for row in prior_trades}
+        ),
+        "prior_catastrophic_count": len(catastrophic),
+        "prior_noncatastrophic_count": len(noncatastrophic),
+        "prior_catastrophic_rate": round(len(catastrophic) / len(prior_trades), 6),
+        "prior_catastrophic_ev_pct": round(
+            statistics.fmean(float(row["net_profit_pct"]) for row in catastrophic),
+            6,
+        ),
+        "prior_noncatastrophic_ev_pct": round(
+            statistics.fmean(float(row["net_profit_pct"]) for row in noncatastrophic),
+            6,
+        ),
+        "probability_shrinkage_prior": FIXED_TP_ENTRY_QUALITY_SHRINKAGE_PRIOR,
+    }
+
+
+def _fixed_tp_split_entry_quality_walk_forward(
+    fixed_split_evaluations: Sequence[dict[str, Any]],
+    *,
+    sample_floor_passed: bool,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    history: list[dict[str, Any]] = []
+    selected_trades: list[dict[str, Any]] = []
+    control_trades: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    evaluations: list[dict[str, Any]] = []
+    cumulative_enter_count = 0
+    cumulative_skip_count = 0
+    for fixed_evaluation in fixed_split_evaluations:
+        evaluation_date = date.fromisoformat(str(fixed_evaluation["evaluation_date"]))
+        current = list(
+            (fixed_evaluation.get("arm_trades") or {}).get(
+                FIXED_TP_ENTRY_QUALITY_EXECUTION_ARM, []
+            )
+        )
+        if not current:
+            evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": "no_fixed_entry_cohort",
+                    "model": None,
+                    "control_trades": [],
+                    "selected_trades": [],
+                    "decisions": [],
+                }
+            )
+            continue
+        fitted = _fit_fixed_tp_entry_quality_model(history)
+        if fitted is None:
+            cumulative_enter_count += len(current)
+            evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": "insufficient_prior_failure_history",
+                    "model": None,
+                    "control_trades": [],
+                    "selected_trades": [],
+                    "decisions": [],
+                    "observed_fixed_arm_trade_count": len(current),
+                }
+            )
+            history.extend(current)
+            continue
+        model, model_meta = fitted
+        if date.fromisoformat(str(model_meta["fit_max_date"])) >= evaluation_date:
+            raise ValueError("fixed TP entry-quality model uses current outcomes")
+        ordered = sorted(current, key=lambda row: str(row["entry_at"]))
+        current_floor = max(
+            1,
+            math.ceil(len(ordered) * FIXED_TP_ENTRY_QUALITY_OPPORTUNITY_RETENTION),
+        )
+        current_selected: list[dict[str, Any]] = []
+        current_decisions: list[dict[str, Any]] = []
+        current_skip_count = 0
+        current_entries_since_skip = 0
+        for trade in ordered:
+            raw_probability = float(
+                model.predict_proba(
+                    np.asarray([_fixed_tp_entry_quality_features(trade)], dtype=float)
+                )[0][1]
+            )
+            reliability = len(history) / (
+                len(history) + FIXED_TP_ENTRY_QUALITY_SHRINKAGE_PRIOR
+            )
+            catastrophic_probability = reliability * raw_probability + (
+                1.0 - reliability
+            ) * float(model_meta["prior_catastrophic_rate"])
+            predicted_net_ev = catastrophic_probability * float(
+                model_meta["prior_catastrophic_ev_pct"]
+            ) + (1.0 - catastrophic_probability) * float(
+                model_meta["prior_noncatastrophic_ev_pct"]
+            )
+            skip_capacity = current_entries_since_skip >= 3
+            if predicted_net_ev < 0.0 and skip_capacity:
+                action = "skip_negative_expected_ev"
+                current_skip_count += 1
+                current_entries_since_skip = 0
+            else:
+                action = (
+                    "enter_positive_expected_ev"
+                    if predicted_net_ev >= 0.0
+                    else "enter_bounded_exploration"
+                )
+                selected = {
+                    **trade,
+                    "entry_quality_oos": True,
+                    "entry_quality_action": action,
+                    "entry_quality_model_fit_max_date": model_meta["fit_max_date"],
+                    "predicted_catastrophic_probability": round(
+                        catastrophic_probability, 6
+                    ),
+                    "predicted_fixed_execution_net_ev_pct": round(predicted_net_ev, 6),
+                }
+                current_selected.append(selected)
+                current_entries_since_skip += 1
+            decision = {
+                "trade_date": str(trade["trade_date"]),
+                "venue": str(trade["venue"]),
+                "session": str(trade["session"]),
+                "entry_at": str(trade["entry_at"]),
+                "entry_price": float(trade["entry_price"]),
+                "model_fit_max_date": model_meta["fit_max_date"],
+                "raw_catastrophic_probability": round(raw_probability, 6),
+                "predicted_catastrophic_probability": round(
+                    catastrophic_probability, 6
+                ),
+                "predicted_fixed_execution_net_ev_pct": round(predicted_net_ev, 6),
+                "action": action,
+                "skip_capacity_available": skip_capacity,
+                "post_oos_outcome_attribution": {
+                    "exit_reason": str(trade["exit_reason"]),
+                    "planned_budget_return_pct": float(trade["net_profit_pct"]),
+                    "catastrophic": bool(
+                        str(trade["exit_reason"]).startswith("catastrophic")
+                    ),
+                },
+            }
+            current_decisions.append(decision)
+            decisions.append(decision)
+        if len(current_selected) < current_floor:
+            raise ValueError("fixed TP entry-quality current-date retention breached")
+        cumulative_enter_count += len(current_selected)
+        cumulative_skip_count += current_skip_count
+        cumulative_retention = cumulative_enter_count / (
+            cumulative_enter_count + cumulative_skip_count
+        )
+        if cumulative_retention < FIXED_TP_ENTRY_QUALITY_OPPORTUNITY_RETENTION:
+            raise ValueError("fixed TP entry-quality cumulative retention breached")
+        selected_trades.extend(current_selected)
+        control_trades.extend(ordered)
+        evaluations.append(
+            {
+                "evaluation_date": evaluation_date.isoformat(),
+                "status": "evaluated_prior_only_entry_quality",
+                "model": model_meta,
+                "control_trades": ordered,
+                "selected_trades": current_selected,
+                "decisions": current_decisions,
+                "capacity": {
+                    "control_count": len(ordered),
+                    "opportunity_floor_count": current_floor,
+                    "selected_count": len(current_selected),
+                    "skip_count": current_skip_count,
+                    "current_retention": round(len(current_selected) / len(ordered), 6),
+                    "cumulative_enter_count": cumulative_enter_count,
+                    "cumulative_skip_count": cumulative_skip_count,
+                    "cumulative_retention": round(cumulative_retention, 6),
+                },
+            }
+        )
+        history.extend(current)
+
+    selected_summary = _summary(
+        selected_trades, source_quality_passed=source_quality_passed
+    )
+    control_summary = _summary(
+        control_trades, source_quality_passed=source_quality_passed
+    )
+    selected_path = _fixed_tp_split_path_diagnostics(selected_trades)
+    control_path = _fixed_tp_split_path_diagnostics(control_trades)
+    evaluated_count = sum(
+        row["status"] == "evaluated_prior_only_entry_quality" for row in evaluations
+    )
+    final_retention = (
+        len(selected_trades) / len(control_trades) if control_trades else None
+    )
+    skipped = [row for row in decisions if row["action"] == "skip_negative_expected_ev"]
+    prediction_labels = [
+        int(bool(row["post_oos_outcome_attribution"]["catastrophic"]))
+        for row in decisions
+    ]
+    prediction_probabilities = [
+        float(row["predicted_catastrophic_probability"]) for row in decisions
+    ]
+    prediction_diagnostics = {
+        "metric_role": "post_oos_catastrophic_risk_discrimination_diagnostic",
+        "decision_authority": "diagnostic_only_not_same_report_selection",
+        "sample_count": len(decisions),
+        "catastrophic_count": sum(prediction_labels),
+        "catastrophic_prevalence": (
+            round(statistics.fmean(prediction_labels), 6) if prediction_labels else None
+        ),
+        "catastrophic_average_precision": (
+            round(
+                float(
+                    average_precision_score(prediction_labels, prediction_probabilities)
+                ),
+                6,
+            )
+            if len(set(prediction_labels)) == 2
+            else None
+        ),
+        "brier_score": (
+            round(
+                statistics.fmean(
+                    (actual - predicted) ** 2
+                    for actual, predicted in zip(
+                        prediction_labels,
+                        prediction_probabilities,
+                        strict=True,
+                    )
+                ),
+                6,
+            )
+            if prediction_labels
+            else None
+        ),
+        "forbidden_uses": [
+            "same_report_threshold_or_feature_selection",
+            "runtime_or_order_authority",
+        ],
+    }
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif not sample_floor_passed:
+        decision = "insufficient_coverage_dates"
+    elif not selected_trades or not control_trades:
+        decision = "insufficient_prior_failure_history"
+    else:
+        selected_ev = float(selected_summary["source_quality_adjusted_ev_pct"])
+        control_ev = float(control_summary["source_quality_adjusted_ev_pct"])
+        selected_compounded = float(
+            selected_path["compounded_planned_budget_return_pct"]
+        )
+        control_compounded = float(control_path["compounded_planned_budget_return_pct"])
+        selected_catastrophic = int(selected_path["catastrophic_stop_count"])
+        control_catastrophic = int(control_path["catastrophic_stop_count"])
+        strict_improvement = bool(
+            selected_ev > control_ev
+            or selected_compounded > control_compounded
+            or selected_catastrophic < control_catastrophic
+        )
+        if (
+            final_retention is not None
+            and final_retention >= FIXED_TP_ENTRY_QUALITY_OPPORTUNITY_RETENTION
+            and selected_ev > 0.0
+            and selected_ev >= control_ev
+            and selected_compounded >= control_compounded
+        ):
+            decision = "entry_quality_oos_positive"
+        elif (
+            final_retention is not None
+            and final_retention >= FIXED_TP_ENTRY_QUALITY_OPPORTUNITY_RETENTION
+            and strict_improvement
+            and selected_ev >= control_ev
+            and selected_compounded >= control_compounded
+            and selected_catastrophic <= control_catastrophic
+        ):
+            decision = "entry_quality_pareto_improved"
+        else:
+            decision = "no_incremental_predictive_value"
+    return {
+        "contract": FIXED_TP_ENTRY_QUALITY_CONTRACT,
+        "feature_names": FIXED_TP_ENTRY_QUALITY_FEATURE_NAMES,
+        "fixed_execution_arm": FIXED_TP_ENTRY_QUALITY_EXECUTION_ARM,
+        "evaluation_count": evaluated_count,
+        "control_summary_same_dates": control_summary,
+        "selected_summary": selected_summary,
+        "control_path_same_dates": control_path,
+        "selected_path": selected_path,
+        "capacity_diagnostics": {
+            "required_opportunity_retention": (
+                FIXED_TP_ENTRY_QUALITY_OPPORTUNITY_RETENTION
+            ),
+            "control_count": len(control_trades),
+            "selected_count": len(selected_trades),
+            "skipped_count": len(skipped),
+            "selected_vs_control_retention": (
+                round(final_retention, 6) if final_retention is not None else None
+            ),
+            "bounded_exploration_enter_count": sum(
+                row["action"] == "enter_bounded_exploration" for row in decisions
+            ),
+            "positive_expected_ev_enter_count": sum(
+                row["action"] == "enter_positive_expected_ev" for row in decisions
+            ),
+            "skipped_catastrophic_count": sum(
+                bool(row["post_oos_outcome_attribution"]["catastrophic"])
+                for row in skipped
+            ),
+            "skipped_noncatastrophic_count": sum(
+                not bool(row["post_oos_outcome_attribution"]["catastrophic"])
+                for row in skipped
+            ),
+            "skipped_positive_return_count": sum(
+                float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+                > 0.0
+                for row in skipped
+            ),
+        },
+        "prediction_diagnostics": prediction_diagnostics,
+        "evaluations": evaluations,
+        "decision": decision,
+    }
+
+
+def _recoverable_basin_features(trade: dict[str, Any]) -> list[float]:
+    scale = max(float(trade["volatility_scale_pct"]), 1e-6)
+    values = [
+        *_fixed_tp_entry_quality_features(trade),
+        0.8 / scale,
+        0.5 / scale,
+        FIXED_TP_SPLIT_CATASTROPHIC_STOP_PCT / scale,
+    ]
+    if len(values) != len(RECOVERABLE_BASIN_FEATURE_NAMES) or not all(
+        math.isfinite(value) for value in values
+    ):
+        raise ValueError("recoverable-basin features are invalid")
+    return values
+
+
+def _fit_recoverable_basin_model(
+    prior_trades: Sequence[dict[str, Any]],
+) -> tuple[Any, dict[str, Any]] | None:
+    if not prior_trades:
+        return None
+    features = np.asarray(
+        [_recoverable_basin_features(row) for row in prior_trades], dtype=float
+    )
+    outcomes = np.asarray(
+        [float(row["net_profit_pct"]) for row in prior_trades], dtype=float
+    )
+    model = make_pipeline(StandardScaler(), Ridge(alpha=16.0))
+    model.fit(features, outcomes)
+    fit_max_date = max(
+        date.fromisoformat(str(row["trade_date"])) for row in prior_trades
+    )
+    return model, {
+        "fit_max_date": fit_max_date.isoformat(),
+        "prior_trade_count": len(prior_trades),
+        "prior_evaluation_date_count": len(
+            {str(row["trade_date"]) for row in prior_trades}
+        ),
+        "prior_mean_fixed_execution_net_ev_pct": round(
+            statistics.fmean(outcomes.tolist()), 6
+        ),
+        "prior_positive_return_count": int(sum(outcomes > 0.0)),
+        "prior_catastrophic_count": sum(
+            str(row["exit_reason"]).startswith("catastrophic") for row in prior_trades
+        ),
+        "prediction_shrinkage_prior": RECOVERABLE_BASIN_SHRINKAGE_PRIOR,
+        "model": "standardized_ridge_alpha16",
+    }
+
+
+def _simulate_recoverable_basin_candidates(
+    candidate_rows: Sequence[dict[str, Any]],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    cost_pct: float,
+) -> list[dict[str, Any]]:
+    simulated: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for candidate in sorted(candidate_rows, key=lambda row: str(row["entry_at"])):
+        identity = _entry_identity(candidate)
+        if identity in seen:
+            raise ValueError(f"duplicate recoverable-basin candidate: {identity!r}")
+        seen.add(identity)
+        trade_date = date.fromisoformat(str(candidate["trade_date"]))
+        key = (trade_date, venue, str(candidate["session"]))
+        series = series_by_key.get(key)
+        if not series:
+            raise ValueError(f"recoverable-basin candidate has no series: {key}")
+        simulated.append(
+            _simulate_fixed_tp_split_trade(
+                candidate,
+                series,
+                arm=RECOVERABLE_BASIN_EXECUTION_ARM,
+                cost_pct=cost_pct,
+            )
+        )
+    return simulated
+
+
+def _recoverable_basin_walk_forward(
+    candidate_evaluations: Sequence[dict[str, Any]],
+    fixed_split_evaluations: Sequence[dict[str, Any]],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    cost_pct: float,
+    sample_floor_passed: bool,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    economic_baseline_by_date = {
+        str(row["evaluation_date"]): list(
+            (row.get("arm_trades") or {}).get(RECOVERABLE_BASIN_EXECUTION_ARM, [])
+        )
+        for row in fixed_split_evaluations
+    }
+    history: list[dict[str, Any]] = []
+    broader_control_trades: list[dict[str, Any]] = []
+    economic_baseline_trades: list[dict[str, Any]] = []
+    selected_trades: list[dict[str, Any]] = []
+    evaluations: list[dict[str, Any]] = []
+    all_decisions: list[dict[str, Any]] = []
+    for candidate_evaluation in candidate_evaluations:
+        evaluation_date = date.fromisoformat(
+            str(candidate_evaluation["evaluation_date"])
+        )
+        candidates = list(candidate_evaluation.get("candidate_trades") or [])
+        if not candidates:
+            evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": "no_broader_candidate_universe",
+                    "model": None,
+                    "raw_candidate_count": 0,
+                    "decisions": [],
+                }
+            )
+            continue
+        current = _simulate_recoverable_basin_candidates(
+            candidates,
+            series_by_key,
+            venue=venue,
+            cost_pct=cost_pct,
+        )
+        fitted = _fit_recoverable_basin_model(history)
+        if fitted is None:
+            evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": "insufficient_prior_candidate_history",
+                    "model": None,
+                    "raw_candidate_count": len(current),
+                    "decisions": [],
+                }
+            )
+            history.extend(current)
+            continue
+        model, model_meta = fitted
+        if date.fromisoformat(str(model_meta["fit_max_date"])) >= evaluation_date:
+            raise ValueError("recoverable-basin model uses current outcomes")
+        reliability = len(history) / (len(history) + RECOVERABLE_BASIN_SHRINKAGE_PRIOR)
+        scored: list[dict[str, Any]] = []
+        for trade in current:
+            raw_prediction = float(
+                model.predict(
+                    np.asarray([_recoverable_basin_features(trade)], dtype=float)
+                )[0]
+            )
+            predicted_ev = reliability * raw_prediction + (1.0 - reliability) * float(
+                model_meta["prior_mean_fixed_execution_net_ev_pct"]
+            )
+            scored.append(
+                {
+                    **trade,
+                    "recoverable_basin_oos": True,
+                    "recoverable_basin_model_fit_max_date": model_meta["fit_max_date"],
+                    "raw_predicted_fixed_execution_net_ev_pct": round(
+                        raw_prediction, 6
+                    ),
+                    "predicted_fixed_execution_net_ev_pct": round(predicted_ev, 6),
+                }
+            )
+        broader_control = _non_overlapping_candidates(scored, selected_only=False)
+        current_selected: list[dict[str, Any]] = []
+        current_decisions: list[dict[str, Any]] = []
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for row in scored:
+            grouped[(str(row["venue"]), str(row["session"]))].append(row)
+        for session_rows in grouped.values():
+            next_available: datetime | None = None
+            entries_since_skip = 0
+            for trade in sorted(session_rows, key=lambda row: str(row["entry_at"])):
+                entry_at = datetime.fromisoformat(str(trade["entry_at"]))
+                predicted_ev = float(trade["predicted_fixed_execution_net_ev_pct"])
+                if next_available is not None and entry_at < next_available:
+                    action = "position_occupied"
+                else:
+                    skip_capacity = entries_since_skip >= 3
+                    if predicted_ev < 0.0 and skip_capacity:
+                        action = "skip_negative_expected_ev"
+                        entries_since_skip = 0
+                    else:
+                        action = (
+                            "enter_positive_expected_ev"
+                            if predicted_ev >= 0.0
+                            else "enter_bounded_exploration"
+                        )
+                        current_selected.append(trade)
+                        entries_since_skip += 1
+                        next_available = datetime.fromisoformat(str(trade["exit_at"]))
+                decision = {
+                    "trade_date": str(trade["trade_date"]),
+                    "venue": str(trade["venue"]),
+                    "session": str(trade["session"]),
+                    "entry_at": str(trade["entry_at"]),
+                    "entry_price": float(trade["entry_price"]),
+                    "model_fit_max_date": model_meta["fit_max_date"],
+                    "predicted_fixed_execution_net_ev_pct": predicted_ev,
+                    "action": action,
+                    "post_oos_outcome_attribution": {
+                        "exit_reason": str(trade["exit_reason"]),
+                        "planned_budget_return_pct": float(trade["net_profit_pct"]),
+                        "catastrophic": bool(
+                            str(trade["exit_reason"]).startswith("catastrophic")
+                        ),
+                    },
+                }
+                current_decisions.append(decision)
+                all_decisions.append(decision)
+        retention = (
+            len(current_selected) / len(broader_control) if broader_control else None
+        )
+        if (
+            retention is not None
+            and retention < RECOVERABLE_BASIN_OPPORTUNITY_RETENTION
+        ):
+            raise ValueError("recoverable-basin opportunity retention breached")
+        current_economic_baseline = economic_baseline_by_date.get(
+            evaluation_date.isoformat(), []
+        )
+        broader_control_trades.extend(broader_control)
+        economic_baseline_trades.extend(current_economic_baseline)
+        selected_trades.extend(current_selected)
+        evaluations.append(
+            {
+                "evaluation_date": evaluation_date.isoformat(),
+                "status": "evaluated_prior_only_recoverable_basin",
+                "model": model_meta,
+                "raw_candidate_count": len(current),
+                "decisions": current_decisions,
+                "trade_detail_storage": "omitted_replayable_from_source_bars",
+                "capacity": {
+                    "broader_control_count": len(broader_control),
+                    "economic_selected_baseline_count": len(current_economic_baseline),
+                    "selected_count": len(current_selected),
+                    "selected_vs_broader_control_retention": (
+                        round(retention, 6) if retention is not None else None
+                    ),
+                    "model_skip_count": sum(
+                        row["action"] == "skip_negative_expected_ev"
+                        for row in current_decisions
+                    ),
+                    "position_occupied_count": sum(
+                        row["action"] == "position_occupied"
+                        for row in current_decisions
+                    ),
+                },
+            }
+        )
+        history.extend(current)
+
+    broader_summary = _summary(
+        broader_control_trades, source_quality_passed=source_quality_passed
+    )
+    economic_summary = _summary(
+        economic_baseline_trades, source_quality_passed=source_quality_passed
+    )
+    selected_summary = _summary(
+        selected_trades, source_quality_passed=source_quality_passed
+    )
+    broader_path = _fixed_tp_split_path_diagnostics(broader_control_trades)
+    economic_path = _fixed_tp_split_path_diagnostics(economic_baseline_trades)
+    selected_path = _fixed_tp_split_path_diagnostics(selected_trades)
+    predictions = [
+        float(row["predicted_fixed_execution_net_ev_pct"])
+        for row in all_decisions
+        if row["action"] != "position_occupied"
+    ]
+    outcomes = [
+        float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+        for row in all_decisions
+        if row["action"] != "position_occupied"
+    ]
+    prediction_diagnostics = {
+        "metric_role": "post_oos_direct_ev_prediction_diagnostic",
+        "decision_authority": "diagnostic_only_not_same_report_selection",
+        "sample_count": len(predictions),
+        "mean_predicted_ev_pct": (
+            round(statistics.fmean(predictions), 6) if predictions else None
+        ),
+        "mean_realized_ev_pct": (
+            round(statistics.fmean(outcomes), 6) if outcomes else None
+        ),
+        "mean_absolute_error_pct": (
+            round(
+                statistics.fmean(
+                    abs(actual - predicted)
+                    for actual, predicted in zip(outcomes, predictions, strict=True)
+                ),
+                6,
+            )
+            if predictions
+            else None
+        ),
+        "pearson_correlation": (
+            round(float(np.corrcoef(predictions, outcomes)[0][1]), 6)
+            if len(predictions) > 1
+            and statistics.pstdev(predictions) > 0.0
+            and statistics.pstdev(outcomes) > 0.0
+            else None
+        ),
+        "predicted_positive_count": sum(value >= 0.0 for value in predictions),
+        "predicted_positive_realized_positive_count": sum(
+            predicted >= 0.0 and actual > 0.0
+            for predicted, actual in zip(predictions, outcomes, strict=True)
+        ),
+        "forbidden_uses": [
+            "same_report_threshold_or_feature_selection",
+            "runtime_or_order_authority",
+        ],
+    }
+    evaluated_count = sum(
+        row["status"] == "evaluated_prior_only_recoverable_basin" for row in evaluations
+    )
+    aggregate_retention = (
+        len(selected_trades) / len(broader_control_trades)
+        if broader_control_trades
+        else None
+    )
+    skipped = [
+        row for row in all_decisions if row["action"] == "skip_negative_expected_ev"
+    ]
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif not sample_floor_passed:
+        decision = "insufficient_coverage_dates"
+    elif not selected_trades or not broader_control_trades:
+        decision = "insufficient_prior_candidate_history"
+    else:
+        selected_ev = float(selected_summary["source_quality_adjusted_ev_pct"])
+        broader_ev = float(broader_summary["source_quality_adjusted_ev_pct"])
+        economic_ev = float(economic_summary["source_quality_adjusted_ev_pct"])
+        selected_compounded = float(
+            selected_path["compounded_planned_budget_return_pct"]
+        )
+        broader_compounded = float(broader_path["compounded_planned_budget_return_pct"])
+        economic_compounded = float(
+            economic_path["compounded_planned_budget_return_pct"]
+        )
+        if (
+            aggregate_retention is not None
+            and aggregate_retention >= RECOVERABLE_BASIN_OPPORTUNITY_RETENTION
+            and selected_ev > 0.0
+            and selected_compounded > 0.0
+        ):
+            decision = "recoverable_basin_oos_positive"
+        elif (
+            aggregate_retention is not None
+            and aggregate_retention >= RECOVERABLE_BASIN_OPPORTUNITY_RETENTION
+            and selected_ev >= broader_ev
+            and selected_ev >= economic_ev
+            and selected_compounded >= broader_compounded
+            and selected_compounded >= economic_compounded
+            and (selected_ev > broader_ev or selected_ev > economic_ev)
+        ):
+            decision = "recoverable_basin_pareto_improved"
+        else:
+            decision = "broader_universe_no_incremental_value"
+    return {
+        "contract": RECOVERABLE_BASIN_CONTRACT,
+        "feature_names": RECOVERABLE_BASIN_FEATURE_NAMES,
+        "fixed_execution_arm": RECOVERABLE_BASIN_EXECUTION_ARM,
+        "evaluation_count": evaluated_count,
+        "broader_control_summary_same_dates": broader_summary,
+        "economic_selected_baseline_summary_same_dates": economic_summary,
+        "selected_summary": selected_summary,
+        "path_diagnostics": {
+            "broader_control": broader_path,
+            "economic_selected_baseline": economic_path,
+            "recoverable_basin_selected": selected_path,
+        },
+        "capacity_diagnostics": {
+            "required_opportunity_retention": (RECOVERABLE_BASIN_OPPORTUNITY_RETENTION),
+            "raw_candidate_count": len(history),
+            "broader_control_count": len(broader_control_trades),
+            "economic_selected_baseline_count": len(economic_baseline_trades),
+            "selected_count": len(selected_trades),
+            "selected_vs_broader_control_retention": (
+                round(aggregate_retention, 6)
+                if aggregate_retention is not None
+                else None
+            ),
+            "model_skip_count": len(skipped),
+            "skipped_positive_return_count": sum(
+                float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+                > 0.0
+                for row in skipped
+            ),
+            "skipped_catastrophic_count": sum(
+                bool(row["post_oos_outcome_attribution"]["catastrophic"])
+                for row in skipped
+            ),
+            "bounded_exploration_enter_count": sum(
+                row["action"] == "enter_bounded_exploration" for row in all_decisions
+            ),
+        },
+        "prediction_diagnostics": prediction_diagnostics,
+        "evaluations": evaluations,
+        "decision": decision,
+    }
+
+
+def _parent_bucket_source_value(
+    trade: dict[str, Any],
+    source: str,
+) -> str | float:
+    if source == "pairability_lane":
+        return str(trade[source])
+    if source == "causal_volatility_scale_pct":
+        return float(trade["volatility_scale_pct"])
+    try:
+        feature_index = ECONOMIC_FEATURE_NAMES.index(source)
+    except ValueError as exc:
+        raise ValueError(f"unknown parent-bucket source: {source}") from exc
+    features = list(trade["economic_features"])
+    if feature_index >= len(features):
+        raise ValueError(f"parent-bucket source is missing: {source}")
+    value = float(features[feature_index])
+    if not math.isfinite(value):
+        raise ValueError(f"parent-bucket source is non-finite: {source}")
+    return value
+
+
+def _parent_bucket_label(
+    value: str | float,
+    policy: dict[str, Any],
+) -> str:
+    if policy["kind"] == "categorical":
+        label = str(value)
+        return label if label in policy["known_categories"] else "unseen"
+    lower, upper = (float(boundary) for boundary in policy["boundaries"])
+    numeric = float(value)
+    if numeric <= lower:
+        return "low"
+    if numeric <= upper:
+        return "middle"
+    return "high"
+
+
+def _fit_parent_bucket_axis(
+    prior_trades: Sequence[dict[str, Any]],
+    axis_name: str,
+) -> dict[str, Any] | None:
+    if not prior_trades:
+        return None
+    spec = PARENT_BUCKET_AXIS_SPECS[axis_name]
+    values = [_parent_bucket_source_value(row, spec["source"]) for row in prior_trades]
+    if spec["kind"] == "categorical":
+        boundaries: list[float] = []
+        known_categories = sorted({str(value) for value in values})
+    else:
+        numeric_values = np.asarray([float(value) for value in values], dtype=float)
+        quantiles = np.quantile(numeric_values, [1.0 / 3.0, 2.0 / 3.0])
+        boundaries = [round(float(value), 8) for value in quantiles]
+        known_categories = []
+    fit_max_date = max(
+        date.fromisoformat(str(row["trade_date"])) for row in prior_trades
+    )
+    policy: dict[str, Any] = {
+        "axis": axis_name,
+        "kind": spec["kind"],
+        "source": spec["source"],
+        "fit_max_date": fit_max_date.isoformat(),
+        "prior_trade_count": len(prior_trades),
+        "prior_evaluation_date_count": len(
+            {str(row["trade_date"]) for row in prior_trades}
+        ),
+        "boundaries": boundaries,
+        "known_categories": known_categories,
+    }
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for trade, value in zip(prior_trades, values, strict=True):
+        grouped[_parent_bucket_label(value, policy)].append(trade)
+    global_ev = statistics.fmean(float(row["net_profit_pct"]) for row in prior_trades)
+    bucket_statistics: dict[str, dict[str, Any]] = {}
+    for label, rows in sorted(grouped.items()):
+        bucket_ev = statistics.fmean(float(row["net_profit_pct"]) for row in rows)
+        reliability = len(rows) / (len(rows) + PARENT_BUCKET_SHRINKAGE_PRIOR)
+        shrunk_ev = reliability * bucket_ev + (1.0 - reliability) * global_ev
+        bucket_statistics[label] = {
+            "sample_count": len(rows),
+            "equal_weight_avg_profit_pct": round(bucket_ev, 6),
+            "shrunk_prior_ev_pct": round(shrunk_ev, 6),
+            "diagnostic_win_rate_pct": round(
+                sum(float(row["net_profit_pct"]) > 0.0 for row in rows)
+                / len(rows)
+                * 100.0,
+                3,
+            ),
+            "catastrophic_stop_count": sum(
+                str(row["exit_reason"]).startswith("catastrophic") for row in rows
+            ),
+        }
+    policy.update(
+        {
+            "prior_global_ev_pct": round(global_ev, 6),
+            "shrinkage_prior": PARENT_BUCKET_SHRINKAGE_PRIOR,
+            "bucket_statistics": bucket_statistics,
+        }
+    )
+    return policy
+
+
+def _score_parent_bucket_axis(
+    trades: Sequence[dict[str, Any]],
+    policy: dict[str, Any],
+) -> list[dict[str, Any]]:
+    scored: list[dict[str, Any]] = []
+    for trade in trades:
+        value = _parent_bucket_source_value(trade, str(policy["source"]))
+        label = _parent_bucket_label(value, policy)
+        bucket = policy["bucket_statistics"].get(label)
+        predicted_ev = (
+            float(bucket["shrunk_prior_ev_pct"])
+            if bucket is not None
+            else float(policy["prior_global_ev_pct"])
+        )
+        scored.append(
+            {
+                **trade,
+                "parent_bucket_axis": str(policy["axis"]),
+                "parent_bucket_label": label,
+                "parent_bucket_source_value": value,
+                "parent_bucket_prior_sample_count": (
+                    int(bucket["sample_count"]) if bucket is not None else 0
+                ),
+                "predicted_parent_bucket_ev_pct": predicted_ev,
+                "parent_bucket_fit_max_date": str(policy["fit_max_date"]),
+            }
+        )
+    return scored
+
+
+def _apply_parent_bucket_state_machine(
+    scored: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    control = _non_overlapping_candidates(scored, selected_only=False)
+    selected: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in scored:
+        grouped[(str(row["venue"]), str(row["session"]))].append(row)
+    for session_rows in grouped.values():
+        next_available: datetime | None = None
+        entries_since_skip = 0
+        for trade in sorted(session_rows, key=lambda row: str(row["entry_at"])):
+            entry_at = datetime.fromisoformat(str(trade["entry_at"]))
+            predicted_ev = float(trade["predicted_parent_bucket_ev_pct"])
+            if next_available is not None and entry_at < next_available:
+                action = "position_occupied"
+            elif predicted_ev < 0.0 and entries_since_skip >= 3:
+                action = "skip_negative_parent_ev"
+                entries_since_skip = 0
+            else:
+                action = (
+                    "enter_positive_parent_ev"
+                    if predicted_ev >= 0.0
+                    else "enter_bounded_exploration"
+                )
+                selected.append(trade)
+                entries_since_skip += 1
+                next_available = datetime.fromisoformat(str(trade["exit_at"]))
+            decisions.append(
+                {
+                    "trade_date": str(trade["trade_date"]),
+                    "venue": str(trade["venue"]),
+                    "session": str(trade["session"]),
+                    "entry_at": str(trade["entry_at"]),
+                    "entry_price": float(trade["entry_price"]),
+                    "axis": str(trade["parent_bucket_axis"]),
+                    "bucket": str(trade["parent_bucket_label"]),
+                    "bucket_source_value": trade["parent_bucket_source_value"],
+                    "prior_bucket_sample_count": int(
+                        trade["parent_bucket_prior_sample_count"]
+                    ),
+                    "model_fit_max_date": str(trade["parent_bucket_fit_max_date"]),
+                    "predicted_parent_bucket_ev_pct": predicted_ev,
+                    "action": action,
+                    "post_oos_outcome_attribution": {
+                        "exit_reason": str(trade["exit_reason"]),
+                        "planned_budget_return_pct": float(trade["net_profit_pct"]),
+                        "catastrophic": bool(
+                            str(trade["exit_reason"]).startswith("catastrophic")
+                        ),
+                    },
+                }
+            )
+    retention = len(selected) / len(control) if control else None
+    if retention is not None and retention < PARENT_BUCKET_OPPORTUNITY_RETENTION:
+        raise ValueError("parent-bucket opportunity retention breached")
+    return (
+        selected,
+        decisions,
+        {
+            "broader_control_count": len(control),
+            "selected_count": len(selected),
+            "selected_vs_broader_control_retention": (
+                round(retention, 6) if retention is not None else None
+            ),
+            "model_skip_count": sum(
+                row["action"] == "skip_negative_parent_ev" for row in decisions
+            ),
+            "position_occupied_count": sum(
+                row["action"] == "position_occupied" for row in decisions
+            ),
+            "bounded_exploration_enter_count": sum(
+                row["action"] == "enter_bounded_exploration" for row in decisions
+            ),
+            "positive_parent_ev_enter_count": sum(
+                row["action"] == "enter_positive_parent_ev" for row in decisions
+            ),
+        },
+    )
+
+
+def _select_prior_parent_axis(
+    axis_history: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any] | None:
+    ready = {axis: rows for axis, rows in axis_history.items() if rows}
+    if not ready:
+        return None
+
+    def rank(item: tuple[str, list[dict[str, Any]]]) -> tuple[float, float, float, int]:
+        axis, rows = item
+        path = _fixed_tp_split_path_diagnostics(rows)
+        return (
+            statistics.fmean(float(row["net_profit_pct"]) for row in rows),
+            float(path["compounded_planned_budget_return_pct"]),
+            float(path["avg_planned_budget_mae_pct"]),
+            -list(PARENT_BUCKET_AXIS_SPECS).index(axis),
+        )
+
+    selected_axis, selected_rows = max(ready.items(), key=rank)
+    selected_path = _fixed_tp_split_path_diagnostics(selected_rows)
+    return {
+        "selected_axis": selected_axis,
+        "fit_max_date": max(str(row["trade_date"]) for row in selected_rows),
+        "prior_trade_count": len(selected_rows),
+        "prior_evaluation_date_count": len(
+            {str(row["trade_date"]) for row in selected_rows}
+        ),
+        "prior_planned_budget_ev_pct": round(
+            rank((selected_axis, selected_rows))[0], 6
+        ),
+        "prior_compounded_planned_budget_return_pct": selected_path[
+            "compounded_planned_budget_return_pct"
+        ],
+        "prior_avg_planned_budget_mae_pct": selected_path["avg_planned_budget_mae_pct"],
+        "selection_policy": (
+            "max_prior_axis_ev_then_compounded_return_then_less_adverse_mae"
+        ),
+    }
+
+
+def _catastrophic_rate(path: dict[str, Any]) -> float | None:
+    sample_count = int(path["sample_count"])
+    if sample_count <= 0:
+        return None
+    return round(int(path["catastrophic_stop_count"]) / sample_count * 100.0, 6)
+
+
+def _parent_bucket_walk_forward(
+    candidate_evaluations: Sequence[dict[str, Any]],
+    fixed_split_evaluations: Sequence[dict[str, Any]],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    cost_pct: float,
+    sample_floor_passed: bool,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    economic_baseline_by_date = {
+        str(row["evaluation_date"]): list(
+            (row.get("arm_trades") or {}).get(PARENT_BUCKET_EXECUTION_ARM, [])
+        )
+        for row in fixed_split_evaluations
+    }
+    candidate_history: list[dict[str, Any]] = []
+    axis_history: dict[str, list[dict[str, Any]]] = {
+        axis: [] for axis in PARENT_BUCKET_AXIS_SPECS
+    }
+    axis_all_trades: dict[str, list[dict[str, Any]]] = {
+        axis: [] for axis in PARENT_BUCKET_AXIS_SPECS
+    }
+    policy_control_trades: list[dict[str, Any]] = []
+    policy_economic_trades: list[dict[str, Any]] = []
+    policy_selected_trades: list[dict[str, Any]] = []
+    policy_decisions: list[dict[str, Any]] = []
+    selected_axis_counts: Counter[str] = Counter()
+    evaluations: list[dict[str, Any]] = []
+    for candidate_evaluation in candidate_evaluations:
+        evaluation_date = date.fromisoformat(
+            str(candidate_evaluation["evaluation_date"])
+        )
+        candidates = list(candidate_evaluation.get("candidate_trades") or [])
+        if not candidates:
+            evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": "no_broader_candidate_universe",
+                    "raw_candidate_count": 0,
+                    "prior_selected_axis": None,
+                    "selected_axis_decisions": [],
+                }
+            )
+            continue
+        current = _simulate_recoverable_basin_candidates(
+            candidates,
+            series_by_key,
+            venue=venue,
+            cost_pct=cost_pct,
+        )
+        if not candidate_history:
+            evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": "insufficient_prior_parent_history",
+                    "raw_candidate_count": len(current),
+                    "prior_selected_axis": None,
+                    "selected_axis_decisions": [],
+                }
+            )
+            candidate_history.extend(current)
+            continue
+        axis_outputs: dict[str, dict[str, Any]] = {}
+        for axis in PARENT_BUCKET_AXIS_SPECS:
+            parent_policy = _fit_parent_bucket_axis(candidate_history, axis)
+            if parent_policy is None:
+                raise ValueError("parent-bucket prior policy is unexpectedly missing")
+            if (
+                date.fromisoformat(str(parent_policy["fit_max_date"]))
+                >= evaluation_date
+            ):
+                raise ValueError("parent-bucket policy uses current outcomes")
+            scored = _score_parent_bucket_axis(current, parent_policy)
+            selected, decisions, capacity = _apply_parent_bucket_state_machine(scored)
+            axis_outputs[axis] = {
+                "policy": parent_policy,
+                "selected": selected,
+                "decisions": decisions,
+                "capacity": capacity,
+            }
+            axis_all_trades[axis].extend(selected)
+        prior_axis = _select_prior_parent_axis(axis_history)
+        broader_control = _non_overlapping_candidates(current, selected_only=False)
+        if prior_axis is None:
+            status = "insufficient_prior_axis_history"
+            selected_axis_decisions: list[dict[str, Any]] = []
+        else:
+            if date.fromisoformat(str(prior_axis["fit_max_date"])) >= evaluation_date:
+                raise ValueError("parent-axis choice uses current outcomes")
+            selected_axis = str(prior_axis["selected_axis"])
+            selected_output = axis_outputs[selected_axis]
+            selected_axis_decisions = list(selected_output["decisions"])
+            selected_current = list(selected_output["selected"])
+            current_economic = economic_baseline_by_date.get(
+                evaluation_date.isoformat(), []
+            )
+            policy_control_trades.extend(broader_control)
+            policy_economic_trades.extend(current_economic)
+            policy_selected_trades.extend(selected_current)
+            policy_decisions.extend(selected_axis_decisions)
+            selected_axis_counts[selected_axis] += 1
+            status = "evaluated_prior_only_parent_axis"
+        evaluations.append(
+            {
+                "evaluation_date": evaluation_date.isoformat(),
+                "status": status,
+                "raw_candidate_count": len(current),
+                "prior_selected_axis": prior_axis,
+                "axis_models": {
+                    axis: {
+                        "axis": output["policy"]["axis"],
+                        "kind": output["policy"]["kind"],
+                        "source": output["policy"]["source"],
+                        "fit_max_date": output["policy"]["fit_max_date"],
+                        "prior_trade_count": output["policy"]["prior_trade_count"],
+                        "prior_evaluation_date_count": output["policy"][
+                            "prior_evaluation_date_count"
+                        ],
+                        "boundaries": output["policy"]["boundaries"],
+                        "known_categories": output["policy"]["known_categories"],
+                        "prior_global_ev_pct": output["policy"]["prior_global_ev_pct"],
+                        "bucket_statistics": output["policy"]["bucket_statistics"],
+                        "capacity": output["capacity"],
+                        "selected_summary": _summary(
+                            output["selected"],
+                            source_quality_passed=source_quality_passed,
+                        ),
+                        "selected_path": _fixed_tp_split_path_diagnostics(
+                            output["selected"]
+                        ),
+                    }
+                    for axis, output in axis_outputs.items()
+                },
+                "selected_axis_decisions": selected_axis_decisions,
+                "trade_detail_storage": "omitted_replayable_from_source_bars",
+            }
+        )
+        for axis, output in axis_outputs.items():
+            axis_history[axis].extend(output["selected"])
+        candidate_history.extend(current)
+
+    control_summary = _summary(
+        policy_control_trades, source_quality_passed=source_quality_passed
+    )
+    economic_summary = _summary(
+        policy_economic_trades, source_quality_passed=source_quality_passed
+    )
+    selected_summary = _summary(
+        policy_selected_trades, source_quality_passed=source_quality_passed
+    )
+    control_path = _fixed_tp_split_path_diagnostics(policy_control_trades)
+    economic_path = _fixed_tp_split_path_diagnostics(policy_economic_trades)
+    selected_path = _fixed_tp_split_path_diagnostics(policy_selected_trades)
+    axis_summaries = {
+        axis: {
+            "summary": _summary(rows, source_quality_passed=source_quality_passed),
+            "path": _fixed_tp_split_path_diagnostics(rows),
+            "decision_authority": "diagnostic_only_not_same_date_axis_selection",
+        }
+        for axis, rows in axis_all_trades.items()
+    }
+    conflict_evaluation_count = sum(
+        any(
+            any(
+                float(bucket["shrunk_prior_ev_pct"]) > 0.0
+                for bucket in model["bucket_statistics"].values()
+            )
+            and any(
+                float(bucket["shrunk_prior_ev_pct"]) < 0.0
+                for bucket in model["bucket_statistics"].values()
+            )
+            for model in evaluation.get("axis_models", {}).values()
+        )
+        for evaluation in evaluations
+    )
+    aggregate_retention = (
+        len(policy_selected_trades) / len(policy_control_trades)
+        if policy_control_trades
+        else None
+    )
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif not sample_floor_passed:
+        decision = "insufficient_coverage_dates"
+    elif not policy_selected_trades or not policy_control_trades:
+        decision = "insufficient_parent_history"
+    else:
+        selected_ev = float(selected_summary["source_quality_adjusted_ev_pct"])
+        control_ev = float(control_summary["source_quality_adjusted_ev_pct"])
+        economic_ev = float(economic_summary["source_quality_adjusted_ev_pct"])
+        selected_compounded = float(
+            selected_path["compounded_planned_budget_return_pct"]
+        )
+        control_compounded = float(control_path["compounded_planned_budget_return_pct"])
+        economic_compounded = float(
+            economic_path["compounded_planned_budget_return_pct"]
+        )
+        selected_mae = float(selected_path["avg_planned_budget_mae_pct"])
+        control_mae = float(control_path["avg_planned_budget_mae_pct"])
+        economic_mae = float(economic_path["avg_planned_budget_mae_pct"])
+        selected_catastrophic_rate = float(_catastrophic_rate(selected_path) or 0.0)
+        control_catastrophic_rate = float(_catastrophic_rate(control_path) or 0.0)
+        economic_catastrophic_rate = float(_catastrophic_rate(economic_path) or 0.0)
+        if (
+            aggregate_retention is not None
+            and aggregate_retention >= PARENT_BUCKET_OPPORTUNITY_RETENTION
+            and selected_ev > 0.0
+            and selected_compounded > 0.0
+        ):
+            decision = "parent_bucket_oos_positive"
+        elif (
+            aggregate_retention is not None
+            and aggregate_retention >= PARENT_BUCKET_OPPORTUNITY_RETENTION
+            and selected_ev >= control_ev
+            and selected_ev >= economic_ev
+            and selected_compounded >= control_compounded
+            and selected_compounded >= economic_compounded
+            and selected_mae >= control_mae
+            and selected_mae >= economic_mae
+            and selected_catastrophic_rate <= control_catastrophic_rate
+            and selected_catastrophic_rate <= economic_catastrophic_rate
+            and (selected_ev > control_ev or selected_ev > economic_ev)
+        ):
+            decision = "parent_bucket_pareto_improved"
+        elif conflict_evaluation_count > 0:
+            decision = "parent_bucket_conflict_only"
+        else:
+            decision = "parent_bucket_no_incremental_value"
+    skipped = [
+        row for row in policy_decisions if row["action"] == "skip_negative_parent_ev"
+    ]
+    entered_decisions = [
+        row for row in policy_decisions if str(row["action"]).startswith("enter_")
+    ]
+    selected_axis_bucket_attribution: dict[str, dict[str, Any]] = {}
+    grouped_decisions: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in entered_decisions:
+        grouped_decisions[(str(row["axis"]), str(row["bucket"]))].append(row)
+    for (axis, bucket), rows in sorted(grouped_decisions.items()):
+        returns = [
+            float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            for row in rows
+        ]
+        selected_axis_bucket_attribution[f"{axis}:{bucket}"] = {
+            "axis": axis,
+            "bucket": bucket,
+            "sample_count": len(rows),
+            "equal_weight_avg_profit_pct": round(statistics.fmean(returns), 6),
+            "diagnostic_win_rate_pct": round(
+                sum(value > 0.0 for value in returns) / len(returns) * 100.0,
+                3,
+            ),
+            "catastrophic_stop_count": sum(
+                bool(row["post_oos_outcome_attribution"]["catastrophic"])
+                for row in rows
+            ),
+        }
+    return {
+        "contract": PARENT_BUCKET_CONTRACT,
+        "fixed_execution_arm": PARENT_BUCKET_EXECUTION_ARM,
+        "axis_specs": PARENT_BUCKET_AXIS_SPECS,
+        "evaluation_count": sum(
+            row["status"] == "evaluated_prior_only_parent_axis" for row in evaluations
+        ),
+        "broader_control_summary_same_dates": control_summary,
+        "economic_selected_baseline_summary_same_dates": economic_summary,
+        "selected_summary": selected_summary,
+        "path_diagnostics": {
+            "broader_control": {
+                **control_path,
+                "catastrophic_stop_rate_pct": _catastrophic_rate(control_path),
+            },
+            "economic_selected_baseline": {
+                **economic_path,
+                "catastrophic_stop_rate_pct": _catastrophic_rate(economic_path),
+            },
+            "prior_selected_parent_axis": {
+                **selected_path,
+                "catastrophic_stop_rate_pct": _catastrophic_rate(selected_path),
+            },
+        },
+        "axis_summaries": axis_summaries,
+        "capacity_diagnostics": {
+            "required_opportunity_retention": PARENT_BUCKET_OPPORTUNITY_RETENTION,
+            "raw_candidate_count": len(candidate_history),
+            "broader_control_count": len(policy_control_trades),
+            "economic_selected_baseline_count": len(policy_economic_trades),
+            "selected_count": len(policy_selected_trades),
+            "selected_vs_broader_control_retention": (
+                round(aggregate_retention, 6)
+                if aggregate_retention is not None
+                else None
+            ),
+            "selected_axis_evaluation_counts": dict(
+                sorted(selected_axis_counts.items())
+            ),
+            "model_skip_count": len(skipped),
+            "skipped_positive_return_count": sum(
+                float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+                > 0.0
+                for row in skipped
+            ),
+            "skipped_catastrophic_count": sum(
+                bool(row["post_oos_outcome_attribution"]["catastrophic"])
+                for row in skipped
+            ),
+            "bounded_exploration_enter_count": sum(
+                row["action"] == "enter_bounded_exploration" for row in policy_decisions
+            ),
+        },
+        "conflict_diagnostics": {
+            "metric_role": "post_oos_parent_direction_conflict_diagnostic",
+            "decision_authority": "diagnostic_only_not_same_date_axis_selection",
+            "evaluation_with_mixed_parent_sign_count": conflict_evaluation_count,
+            "selected_axis_bucket_attribution": selected_axis_bucket_attribution,
+            "forbidden_uses": [
+                "same_date_bucket_or_axis_selection",
+                "runtime_or_order_authority",
+            ],
+        },
+        "evaluations": evaluations,
+        "decision": decision,
+    }
+
+
+def _parent_bucket_stability_summary(
+    decisions: Sequence[dict[str, Any]],
+    *,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in decisions:
+        by_date[str(row["trade_date"])].append(row)
+    ordered_dates = sorted(by_date)
+    returns = [
+        float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+        for row in decisions
+    ]
+    date_level: list[dict[str, Any]] = []
+    for trade_date in ordered_dates:
+        date_returns = [
+            float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            for row in by_date[trade_date]
+        ]
+        date_level.append(
+            {
+                "trade_date": trade_date,
+                "sample_count": len(date_returns),
+                "equal_weight_avg_profit_pct": round(statistics.fmean(date_returns), 6),
+                "simple_sum_profit_pct": round(sum(date_returns), 6),
+                "diagnostic_win_rate_pct": round(
+                    sum(value > 0.0 for value in date_returns)
+                    / len(date_returns)
+                    * 100.0,
+                    3,
+                ),
+                "catastrophic_stop_count": sum(
+                    bool(row["post_oos_outcome_attribution"]["catastrophic"])
+                    for row in by_date[trade_date]
+                ),
+            }
+        )
+    rolling_windows: list[dict[str, Any]] = []
+    for end_index in range(
+        PARENT_BUCKET_STABILITY_ROLLING_DATES - 1, len(ordered_dates)
+    ):
+        window_dates = ordered_dates[
+            end_index - PARENT_BUCKET_STABILITY_ROLLING_DATES + 1 : end_index + 1
+        ]
+        window_returns = [
+            float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            for trade_date in window_dates
+            for row in by_date[trade_date]
+        ]
+        rolling_windows.append(
+            {
+                "start_date": window_dates[0],
+                "end_date": window_dates[-1],
+                "observed_date_count": len(window_dates),
+                "sample_count": len(window_returns),
+                "equal_weight_avg_profit_pct": round(
+                    statistics.fmean(window_returns), 6
+                ),
+            }
+        )
+    leave_one_date: list[dict[str, Any]] = []
+    if len(ordered_dates) >= 2:
+        for omitted_date in ordered_dates:
+            retained = [
+                float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+                for trade_date in ordered_dates
+                if trade_date != omitted_date
+                for row in by_date[trade_date]
+            ]
+            leave_one_date.append(
+                {
+                    "omitted_date": omitted_date,
+                    "sample_count": len(retained),
+                    "equal_weight_avg_profit_pct": round(statistics.fmean(retained), 6),
+                }
+            )
+    total_negative_magnitude = sum(-value for value in returns if value < 0.0)
+    catastrophic_negative_magnitude = sum(
+        -min(
+            float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"]),
+            0.0,
+        )
+        for row in decisions
+        if bool(row["post_oos_outcome_attribution"]["catastrophic"])
+    )
+    date_negative_magnitudes = {
+        trade_date: sum(
+            -float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            for row in by_date[trade_date]
+            if float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            < 0.0
+        )
+        for trade_date in ordered_dates
+    }
+    date_positive_contributions = {
+        trade_date: sum(
+            float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            for row in by_date[trade_date]
+            if float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            > 0.0
+        )
+        for trade_date in ordered_dates
+    }
+    total_positive_contribution = sum(date_positive_contributions.values())
+    midpoint = len(ordered_dates) // 2
+
+    def period_ev(period_dates: Sequence[str]) -> float | None:
+        period_returns = [
+            float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+            for trade_date in period_dates
+            for row in by_date[trade_date]
+        ]
+        return round(statistics.fmean(period_returns), 6) if period_returns else None
+
+    overall_ev = round(statistics.fmean(returns), 6) if returns else None
+    return {
+        "sample_count": len(decisions),
+        "observed_date_count": len(ordered_dates),
+        "equal_weight_avg_profit_pct": overall_ev,
+        "source_quality_adjusted_ev_pct": (
+            overall_ev if source_quality_passed else None
+        ),
+        "diagnostic_win_rate_pct": (
+            round(sum(value > 0.0 for value in returns) / len(returns) * 100.0, 3)
+            if returns
+            else None
+        ),
+        "positive_date_count": sum(
+            float(row["equal_weight_avg_profit_pct"]) > 0.0 for row in date_level
+        ),
+        "positive_date_ratio": (
+            round(
+                sum(
+                    float(row["equal_weight_avg_profit_pct"]) > 0.0
+                    for row in date_level
+                )
+                / len(date_level),
+                6,
+            )
+            if date_level
+            else None
+        ),
+        "first_half_ev_pct": period_ev(ordered_dates[:midpoint]),
+        "second_half_ev_pct": period_ev(ordered_dates[midpoint:]),
+        "rolling_window_observed_dates": PARENT_BUCKET_STABILITY_ROLLING_DATES,
+        "rolling_positive_window_count": sum(
+            float(row["equal_weight_avg_profit_pct"]) > 0.0 for row in rolling_windows
+        ),
+        "rolling_positive_window_ratio": (
+            round(
+                sum(
+                    float(row["equal_weight_avg_profit_pct"]) > 0.0
+                    for row in rolling_windows
+                )
+                / len(rolling_windows),
+                6,
+            )
+            if rolling_windows
+            else None
+        ),
+        "leave_one_date_min_ev_pct": (
+            min(float(row["equal_weight_avg_profit_pct"]) for row in leave_one_date)
+            if leave_one_date
+            else None
+        ),
+        "leave_one_date_max_ev_pct": (
+            max(float(row["equal_weight_avg_profit_pct"]) for row in leave_one_date)
+            if leave_one_date
+            else None
+        ),
+        "leave_one_date_all_positive": bool(
+            leave_one_date
+            and all(
+                float(row["equal_weight_avg_profit_pct"]) > 0.0
+                for row in leave_one_date
+            )
+        ),
+        "catastrophic_stop_count": sum(
+            bool(row["post_oos_outcome_attribution"]["catastrophic"])
+            for row in decisions
+        ),
+        "catastrophic_negative_magnitude_share": (
+            round(catastrophic_negative_magnitude / total_negative_magnitude, 6)
+            if total_negative_magnitude > 0.0
+            else None
+        ),
+        "worst_date_negative_magnitude_share": (
+            round(max(date_negative_magnitudes.values()) / total_negative_magnitude, 6)
+            if total_negative_magnitude > 0.0 and date_negative_magnitudes
+            else None
+        ),
+        "best_date_positive_contribution_share": (
+            round(
+                max(date_positive_contributions.values()) / total_positive_contribution,
+                6,
+            )
+            if total_positive_contribution > 0.0 and date_positive_contributions
+            else None
+        ),
+        "date_level": date_level,
+        "rolling_windows": rolling_windows,
+        "leave_one_date": leave_one_date,
+    }
+
+
+def _parent_bucket_conflict_stability(
+    parent_result: dict[str, Any],
+    *,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    entered: list[dict[str, Any]] = []
+    for evaluation in parent_result.get("evaluations") or []:
+        if evaluation.get("status") != "evaluated_prior_only_parent_axis":
+            continue
+        entered.extend(
+            row
+            for row in evaluation.get("selected_axis_decisions") or []
+            if str(row.get("action", "")).startswith("enter_")
+        )
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in entered:
+        grouped[(str(row["axis"]), str(row["bucket"]))].append(row)
+    bucket_summaries = {
+        f"{axis}:{bucket}": {
+            "axis": axis,
+            "bucket": bucket,
+            **_parent_bucket_stability_summary(
+                rows,
+                source_quality_passed=source_quality_passed,
+            ),
+        }
+        for (axis, bucket), rows in sorted(grouped.items())
+    }
+    focus_key = (
+        f"{PARENT_BUCKET_STABILITY_FOCUS_AXIS}:"
+        f"{PARENT_BUCKET_STABILITY_FOCUS_BUCKET}"
+    )
+    focus = bucket_summaries.get(focus_key)
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif focus is None or not focus["sample_count"]:
+        decision = "no_stable_parent_edge"
+    else:
+        focus_ev = float(focus["source_quality_adjusted_ev_pct"])
+        positive_date_ratio = float(focus["positive_date_ratio"] or 0.0)
+        rolling_positive_ratio = float(focus["rolling_positive_window_ratio"] or 0.0)
+        second_half_ev = float(focus["second_half_ev_pct"] or 0.0)
+        if (
+            focus_ev > 0.0
+            and bool(focus["leave_one_date_all_positive"])
+            and positive_date_ratio >= 0.6
+            and rolling_positive_ratio >= 0.6
+            and second_half_ev > 0.0
+        ):
+            decision = "stable_parent_edge_needs_next_date_confirmation"
+        elif focus_ev > 0.0:
+            decision = "parent_edge_concentrated_not_reproducible"
+        elif (
+            float(focus["catastrophic_negative_magnitude_share"] or 0.0) >= 0.6
+            or float(focus["worst_date_negative_magnitude_share"] or 0.0) >= 0.5
+        ):
+            decision = "catastrophic_loss_cluster_identified"
+        else:
+            decision = "no_stable_parent_edge"
+    return {
+        "contract": PARENT_BUCKET_STABILITY_CONTRACT,
+        "focus_axis": PARENT_BUCKET_STABILITY_FOCUS_AXIS,
+        "focus_bucket": PARENT_BUCKET_STABILITY_FOCUS_BUCKET,
+        "focus_key": focus_key,
+        "focus_summary": focus,
+        "bucket_summaries": bucket_summaries,
+        "input_parent_decision": parent_result.get("decision"),
+        "input_evaluation_count": parent_result.get("evaluation_count"),
+        "input_decisions_unchanged": True,
+        "decision": decision,
+    }
+
+
+def _pre_entry_sequence_features(
+    series: Sequence[base.Bar],
+    *,
+    entry_at: str,
+) -> tuple[dict[str, float], dict[str, Any]]:
+    normalized = [(_timestamp_without_timezone(bar.timestamp), bar) for bar in series]
+    by_timestamp = {timestamp: bar for timestamp, bar in normalized}
+    parsed_entry_at = _timestamp_without_timezone(entry_at)
+    entry_indexes = [
+        index
+        for index, (timestamp, _) in enumerate(normalized)
+        if timestamp == parsed_entry_at
+    ]
+    if len(entry_indexes) != 1 or entry_indexes[0] <= 0:
+        return {}, {
+            "entry_bar_exact_match": False,
+            "completed_pre_entry_sequence": False,
+            "missing_horizons_minutes": [1, 3, 5, 10],
+        }
+    decision_index = entry_indexes[0] - 1
+    decision_at, decision_bar = normalized[decision_index]
+    horizon_returns: dict[int, float] = {}
+    missing_horizons: list[int] = []
+    for minutes in (1, 3, 5, 10):
+        prior = by_timestamp.get(decision_at - timedelta(minutes=minutes))
+        if prior is None or float(prior.close) <= 0.0:
+            missing_horizons.append(minutes)
+            continue
+        horizon_returns[minutes] = (
+            float(decision_bar.close) / float(prior.close) - 1.0
+        ) * 100.0
+    trailing_bars = [
+        by_timestamp.get(decision_at - timedelta(minutes=offset))
+        for offset in range(5, -1, -1)
+    ]
+    sequence_complete = all(bar is not None for bar in trailing_bars)
+    negative_step_count = 0
+    down_volume = 0.0
+    total_step_volume = 0.0
+    if sequence_complete:
+        complete_bars = [bar for bar in trailing_bars if bar is not None]
+        for previous, current in zip(complete_bars, complete_bars[1:]):
+            volume = max(0.0, float(current.volume))
+            total_step_volume += volume
+            if float(current.close) < float(previous.close):
+                negative_step_count += 1
+                down_volume += volume
+    features = {
+        f"pre_entry_return_{minutes}m_pct": round(value, 8)
+        for minutes, value in horizon_returns.items()
+    }
+    if sequence_complete:
+        features.update(
+            {
+                "pre_entry_negative_step_count_5": float(negative_step_count),
+                "pre_entry_down_volume_share_5": round(
+                    down_volume / total_step_volume if total_step_volume > 0.0 else 0.0,
+                    8,
+                ),
+            }
+        )
+    return features, {
+        "entry_bar_exact_match": True,
+        "decision_at": decision_at.isoformat(),
+        "completed_pre_entry_sequence": sequence_complete,
+        "missing_horizons_minutes": missing_horizons,
+    }
+
+
+def _catastrophic_numeric_feature_summary(
+    catastrophic_values: Sequence[float],
+    target_values: Sequence[float],
+) -> dict[str, Any]:
+    catastrophic = [float(value) for value in catastrophic_values]
+    target = [float(value) for value in target_values]
+    if not catastrophic or not target:
+        return {
+            "catastrophic_count": len(catastrophic),
+            "target_recovery_count": len(target),
+            "comparison_available": False,
+            "distribution_shift_candidate": False,
+            "signature_candidate": False,
+        }
+    target_median = statistics.median(target)
+    pair_count = len(catastrophic) * len(target)
+    higher_pair_score = (
+        sum(
+            (
+                1.0
+                if catastrophic_value > target_value
+                else 0.5 if catastrophic_value == target_value else 0.0
+            )
+            for catastrophic_value in catastrophic
+            for target_value in target
+        )
+        / pair_count
+    )
+    if higher_pair_score >= 0.5:
+        direction = "catastrophic_higher"
+        direction_probability = higher_pair_score
+        same_side_count = sum(value > target_median for value in catastrophic)
+        target_same_side_count = sum(value > target_median for value in target)
+    else:
+        direction = "catastrophic_lower"
+        direction_probability = 1.0 - higher_pair_score
+        same_side_count = sum(value < target_median for value in catastrophic)
+        target_same_side_count = sum(value < target_median for value in target)
+    leave_one_probabilities: list[float] = []
+    if len(catastrophic) >= 2:
+        for omitted_index in range(len(catastrophic)):
+            retained = [
+                value
+                for index, value in enumerate(catastrophic)
+                if index != omitted_index
+            ]
+            retained_higher_score = sum(
+                (
+                    1.0
+                    if catastrophic_value > target_value
+                    else 0.5 if catastrophic_value == target_value else 0.0
+                )
+                for catastrophic_value in retained
+                for target_value in target
+            ) / (len(retained) * len(target))
+            leave_one_probabilities.append(
+                retained_higher_score
+                if direction == "catastrophic_higher"
+                else 1.0 - retained_higher_score
+            )
+    leave_one_min = min(leave_one_probabilities) if leave_one_probabilities else None
+    target_recovery_retention = 1.0 - target_same_side_count / len(target)
+    distribution_shift_candidate = bool(
+        len(target) >= PARENT_CATASTROPHIC_AUDIT_MIN_TARGET_COMPARATOR
+        and same_side_count == len(catastrophic)
+        and direction_probability >= PARENT_CATASTROPHIC_AUDIT_PAIRWISE_FLOOR
+        and leave_one_min is not None
+        and leave_one_min >= PARENT_CATASTROPHIC_AUDIT_LEAVE_ONE_FLOOR
+    )
+    signature_candidate = bool(
+        distribution_shift_candidate
+        and target_recovery_retention
+        >= PARENT_CATASTROPHIC_AUDIT_TARGET_RETENTION_FLOOR
+    )
+    return {
+        "catastrophic_count": len(catastrophic),
+        "target_recovery_count": len(target),
+        "comparison_available": True,
+        "catastrophic_mean": round(statistics.fmean(catastrophic), 8),
+        "catastrophic_median": round(statistics.median(catastrophic), 8),
+        "catastrophic_min": round(min(catastrophic), 8),
+        "catastrophic_max": round(max(catastrophic), 8),
+        "target_recovery_mean": round(statistics.fmean(target), 8),
+        "target_recovery_median": round(target_median, 8),
+        "target_recovery_min": round(min(target), 8),
+        "target_recovery_max": round(max(target), 8),
+        "median_difference_catastrophic_minus_target": round(
+            statistics.median(catastrophic) - target_median,
+            8,
+        ),
+        "direction": direction,
+        "direction_pair_probability": round(direction_probability, 8),
+        "catastrophic_same_side_of_target_median_count": same_side_count,
+        "catastrophic_same_side_of_target_median_ratio": round(
+            same_side_count / len(catastrophic),
+            8,
+        ),
+        "target_recovery_same_side_of_target_median_count": target_same_side_count,
+        "target_recovery_same_side_of_target_median_ratio": round(
+            target_same_side_count / len(target),
+            8,
+        ),
+        "target_recovery_retention_if_signature_side_excluded": round(
+            target_recovery_retention,
+            8,
+        ),
+        "leave_one_catastrophic_min_direction_probability": (
+            round(leave_one_min, 8) if leave_one_min is not None else None
+        ),
+        "distribution_shift_candidate": distribution_shift_candidate,
+        "signature_candidate": signature_candidate,
+    }
+
+
+def _parent_catastrophic_episode_audit(
+    parent_result: dict[str, Any],
+    candidate_evaluations: Sequence[dict[str, Any]],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    focus_decisions = [
+        row
+        for evaluation in parent_result.get("evaluations") or []
+        if evaluation.get("status") == "evaluated_prior_only_parent_axis"
+        for row in evaluation.get("selected_axis_decisions") or []
+        if str(row.get("action", "")).startswith("enter_")
+        and str(row.get("venue")) == venue
+        and row.get("axis") == PARENT_BUCKET_STABILITY_FOCUS_AXIS
+        and row.get("bucket") == PARENT_BUCKET_STABILITY_FOCUS_BUCKET
+    ]
+    candidate_by_identity: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    duplicate_candidate_identities: list[tuple[str, str, str, str]] = []
+    for evaluation in candidate_evaluations:
+        for candidate in evaluation.get("candidate_trades") or []:
+            if str(candidate.get("venue")) != venue:
+                continue
+            identity = _entry_identity(candidate)
+            if identity in candidate_by_identity:
+                duplicate_candidate_identities.append(identity)
+                continue
+            candidate_by_identity[identity] = candidate
+
+    episodes: list[dict[str, Any]] = []
+    source_gaps: list[dict[str, Any]] = []
+    for decision in focus_decisions:
+        identity = _entry_identity(decision)
+        candidate = candidate_by_identity.get(identity)
+        if candidate is None:
+            source_gaps.append(
+                {"identity": list(identity), "reason": "causal_candidate_missing"}
+            )
+            continue
+        economic_features = list(candidate.get("economic_features") or [])
+        if len(economic_features) != len(ECONOMIC_FEATURE_NAMES):
+            source_gaps.append(
+                {
+                    "identity": list(identity),
+                    "reason": "economic_feature_contract_mismatch",
+                    "expected": len(ECONOMIC_FEATURE_NAMES),
+                    "observed": len(economic_features),
+                }
+            )
+            continue
+        feature_values = {
+            name: round(float(value), 8)
+            for name, value in zip(
+                ECONOMIC_FEATURE_NAMES,
+                economic_features,
+                strict=True,
+            )
+            if name in PARENT_CATASTROPHIC_AUDIT_FEATURE_NAMES
+        }
+        key = (
+            date.fromisoformat(str(decision["trade_date"])),
+            str(decision["venue"]),
+            str(decision["session"]),
+        )
+        series = series_by_key.get(key)
+        if not series:
+            source_gaps.append(
+                {"identity": list(identity), "reason": "market_series_missing"}
+            )
+            continue
+        sequence_features, sequence_provenance = _pre_entry_sequence_features(
+            series,
+            entry_at=str(decision["entry_at"]),
+        )
+        feature_values.update(sequence_features)
+        missing_features = [
+            name
+            for name in PARENT_CATASTROPHIC_AUDIT_FEATURE_NAMES
+            if name not in feature_values
+            or not math.isfinite(float(feature_values[name]))
+        ]
+        if missing_features:
+            source_gaps.append(
+                {
+                    "identity": list(identity),
+                    "reason": "required_pre_entry_feature_missing",
+                    "features": missing_features,
+                    "sequence_provenance": sequence_provenance,
+                }
+            )
+            continue
+        outcome = decision["post_oos_outcome_attribution"]
+        exit_reason = str(outcome["exit_reason"])
+        if bool(outcome["catastrophic"]):
+            outcome_class = "catastrophic_stop"
+        elif exit_reason == "fixed_average_take_profit":
+            outcome_class = "target_recovery"
+        else:
+            outcome_class = "session_close_other"
+        market_context_available = bool(
+            feature_values.get("confirmation_market_context_available", 0.0)
+        )
+        if source_quality_passed and not market_context_available:
+            source_gaps.append(
+                {
+                    "identity": list(identity),
+                    "reason": "exact_market_context_unavailable",
+                }
+            )
+            continue
+        episodes.append(
+            {
+                "trade_date": str(decision["trade_date"]),
+                "venue": str(decision["venue"]),
+                "session": str(decision["session"]),
+                "entry_at": str(decision["entry_at"]),
+                "decision_at": sequence_provenance.get("decision_at"),
+                "entry_price": float(decision["entry_price"]),
+                "pairability_lane": str(candidate["pairability_lane"]),
+                "outcome_class": outcome_class,
+                "exit_reason": exit_reason,
+                "planned_budget_return_pct": float(
+                    outcome["planned_budget_return_pct"]
+                ),
+                "feature_values": feature_values,
+                "provenance": {
+                    **sequence_provenance,
+                    "causal_candidate_joined": True,
+                    "economic_feature_contract_complete": True,
+                    "market_context_available": market_context_available,
+                    "future_path_used_as_feature": False,
+                },
+            }
+        )
+
+    focus_returns = [
+        float(row["post_oos_outcome_attribution"]["planned_budget_return_pct"])
+        for row in focus_decisions
+    ]
+    focus_ev = round(statistics.fmean(focus_returns), 6) if focus_returns else None
+    catastrophic = [
+        row for row in episodes if row["outcome_class"] == "catastrophic_stop"
+    ]
+    target_recovery = [
+        row for row in episodes if row["outcome_class"] == "target_recovery"
+    ]
+    session_close = [
+        row for row in episodes if row["outcome_class"] == "session_close_other"
+    ]
+    numeric_feature_summaries = {
+        feature_name: _catastrophic_numeric_feature_summary(
+            [row["feature_values"][feature_name] for row in catastrophic],
+            [row["feature_values"][feature_name] for row in target_recovery],
+        )
+        for feature_name in PARENT_CATASTROPHIC_AUDIT_COMPARISON_FEATURE_NAMES
+    }
+    numeric_signature_candidates = [
+        feature_name
+        for feature_name, summary in numeric_feature_summaries.items()
+        if summary["signature_candidate"]
+    ]
+    numeric_distribution_shift_candidates = [
+        feature_name
+        for feature_name, summary in numeric_feature_summaries.items()
+        if summary["distribution_shift_candidate"]
+    ]
+    catastrophic_lanes = Counter(row["pairability_lane"] for row in catastrophic)
+    target_lanes = Counter(row["pairability_lane"] for row in target_recovery)
+    dominant_lane = (
+        catastrophic_lanes.most_common(1)[0][0] if catastrophic_lanes else None
+    )
+    dominant_lane_catastrophic_count = (
+        int(catastrophic_lanes[dominant_lane]) if dominant_lane is not None else 0
+    )
+    dominant_lane_target_ratio = (
+        target_lanes[dominant_lane] / len(target_recovery)
+        if dominant_lane is not None and target_recovery
+        else None
+    )
+    lane_signature_candidate = bool(
+        catastrophic
+        and len(target_recovery) >= PARENT_CATASTROPHIC_AUDIT_MIN_TARGET_COMPARATOR
+        and dominant_lane_catastrophic_count == len(catastrophic)
+        and dominant_lane_target_ratio is not None
+        and dominant_lane_target_ratio
+        <= 1.0 - PARENT_CATASTROPHIC_AUDIT_TARGET_RETENTION_FLOOR
+    )
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif duplicate_candidate_identities or source_gaps:
+        decision = "source_contract_gap"
+    elif not catastrophic or (
+        len(target_recovery) < PARENT_CATASTROPHIC_AUDIT_MIN_TARGET_COMPARATOR
+    ):
+        decision = "loss_signature_not_separable"
+    elif numeric_signature_candidates or lane_signature_candidate:
+        decision = "repeatable_pre_entry_loss_signature_identified"
+    else:
+        decision = "loss_signature_not_separable"
+    return {
+        "contract": PARENT_CATASTROPHIC_AUDIT_CONTRACT,
+        "focus_axis": PARENT_BUCKET_STABILITY_FOCUS_AXIS,
+        "focus_bucket": PARENT_BUCKET_STABILITY_FOCUS_BUCKET,
+        "input_parent_decision": parent_result.get("decision"),
+        "input_focus_decision_count": len(focus_decisions),
+        "input_decisions_unchanged": True,
+        "focus_equal_weight_avg_profit_pct": focus_ev,
+        "focus_source_quality_adjusted_ev_pct": (
+            focus_ev if source_quality_passed else None
+        ),
+        "source_quality_passed": source_quality_passed,
+        "source_gap_count": len(source_gaps),
+        "source_gaps": source_gaps,
+        "duplicate_candidate_identity_count": len(duplicate_candidate_identities),
+        "duplicate_candidate_identities": [
+            list(identity) for identity in duplicate_candidate_identities
+        ],
+        "episode_counts": {
+            "total": len(episodes),
+            "catastrophic_stop": len(catastrophic),
+            "target_recovery": len(target_recovery),
+            "session_close_other": len(session_close),
+        },
+        "market_context_available_counts": dict(
+            sorted(
+                Counter(
+                    str(row["provenance"]["market_context_available"]).lower()
+                    for row in episodes
+                ).items()
+            )
+        ),
+        "lane_summary": {
+            "catastrophic_counts": dict(sorted(catastrophic_lanes.items())),
+            "target_recovery_counts": dict(sorted(target_lanes.items())),
+            "dominant_catastrophic_lane": dominant_lane,
+            "dominant_catastrophic_lane_count": dominant_lane_catastrophic_count,
+            "dominant_lane_target_recovery_ratio": (
+                round(dominant_lane_target_ratio, 8)
+                if dominant_lane_target_ratio is not None
+                else None
+            ),
+            "signature_candidate": lane_signature_candidate,
+        },
+        "numeric_feature_summaries": numeric_feature_summaries,
+        "numeric_distribution_shift_candidates": (
+            numeric_distribution_shift_candidates
+        ),
+        "numeric_signature_candidates": numeric_signature_candidates,
+        "episodes": episodes,
+        "decision": decision,
+    }
+
+
+def _planned_budget_mark_return_pct(
+    fixed_trade: dict[str, Any],
+    *,
+    mark_price: float,
+    cost_pct: float,
+) -> float:
+    fills = list(fixed_trade.get("filled_legs") or [])
+    if not fills:
+        raise ValueError("fixed trade has no filled legs")
+    planned_budget = float(fixed_trade["entry_price"])
+    if planned_budget <= 0.0 or mark_price <= 0.0:
+        raise ValueError("planned budget and mark price must be positive")
+    total_quantity = sum(float(fill["quantity_units"]) for fill in fills)
+    deployed_capital = sum(
+        float(fill["quantity_units"]) * float(fill["price"]) for fill in fills
+    )
+    deployed_fraction = sum(float(fill["allocation"]) for fill in fills)
+    gross_planned_pct = (
+        (float(mark_price) * total_quantity - deployed_capital) / planned_budget * 100.0
+    )
+    return round(gross_planned_pct - float(cost_pct) * deployed_fraction, 6)
+
+
+def _compounded_return_from_values(values: Sequence[float]) -> float:
+    compounded = 1.0
+    for value in values:
+        compounded *= 1.0 + float(value) / 100.0
+    return round((compounded - 1.0) * 100.0, 6)
+
+
+def _parent_catastrophic_stop_recovery_path(
+    parent_result: dict[str, Any],
+    candidate_evaluations: Sequence[dict[str, Any]],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    cost_pct: float,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    catastrophic_decisions = [
+        row
+        for evaluation in parent_result.get("evaluations") or []
+        if evaluation.get("status") == "evaluated_prior_only_parent_axis"
+        for row in evaluation.get("selected_axis_decisions") or []
+        if str(row.get("action", "")).startswith("enter_")
+        and str(row.get("venue")) == venue
+        and row.get("axis") == PARENT_BUCKET_STABILITY_FOCUS_AXIS
+        and row.get("bucket") == PARENT_BUCKET_STABILITY_FOCUS_BUCKET
+        and bool((row.get("post_oos_outcome_attribution") or {}).get("catastrophic"))
+    ]
+    candidate_by_identity: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    duplicate_candidate_identities: list[tuple[str, str, str, str]] = []
+    for evaluation in candidate_evaluations:
+        for candidate in evaluation.get("candidate_trades") or []:
+            if str(candidate.get("venue")) != venue:
+                continue
+            identity = _entry_identity(candidate)
+            if identity in candidate_by_identity:
+                duplicate_candidate_identities.append(identity)
+                continue
+            candidate_by_identity[identity] = candidate
+
+    episodes: list[dict[str, Any]] = []
+    source_gaps: list[dict[str, Any]] = []
+    for decision in catastrophic_decisions:
+        identity = _entry_identity(decision)
+        candidate = candidate_by_identity.get(identity)
+        if candidate is None:
+            source_gaps.append(
+                {"identity": list(identity), "reason": "causal_candidate_missing"}
+            )
+            continue
+        key = (
+            date.fromisoformat(str(decision["trade_date"])),
+            str(decision["venue"]),
+            str(decision["session"]),
+        )
+        series = series_by_key.get(key)
+        if not series:
+            source_gaps.append(
+                {"identity": list(identity), "reason": "market_series_missing"}
+            )
+            continue
+        fixed_trade = _simulate_fixed_tp_split_trade(
+            candidate,
+            series,
+            arm=PARENT_BUCKET_EXECUTION_ARM,
+            cost_pct=cost_pct,
+        )
+        attributed = decision["post_oos_outcome_attribution"]
+        if not str(fixed_trade["exit_reason"]).startswith("catastrophic"):
+            source_gaps.append(
+                {
+                    "identity": list(identity),
+                    "reason": "fixed_replay_no_longer_catastrophic",
+                    "observed_exit_reason": fixed_trade["exit_reason"],
+                }
+            )
+            continue
+        if (
+            abs(
+                float(fixed_trade["net_profit_pct"])
+                - float(attributed["planned_budget_return_pct"])
+            )
+            > 1e-6
+        ):
+            source_gaps.append(
+                {
+                    "identity": list(identity),
+                    "reason": "fixed_replay_return_mismatch",
+                    "replayed": fixed_trade["net_profit_pct"],
+                    "attributed": attributed["planned_budget_return_pct"],
+                }
+            )
+            continue
+        stop_at = _timestamp_without_timezone(str(fixed_trade["exit_at"]))
+        stop_price = float(fixed_trade["exit_price"])
+        post_stop_bars = [
+            bar
+            for bar in series
+            if _timestamp_without_timezone(bar.timestamp) > stop_at
+        ]
+        if not post_stop_bars:
+            source_gaps.append(
+                {"identity": list(identity), "reason": "post_stop_market_path_missing"}
+            )
+            continue
+        fixed_fills = list(fixed_trade.get("filled_legs") or [])
+        precise_total_quantity = sum(
+            float(fill["quantity_units"]) for fill in fixed_fills
+        )
+        precise_deployed_capital = sum(
+            float(fill["quantity_units"]) * float(fill["price"]) for fill in fixed_fills
+        )
+        if precise_total_quantity <= 0.0:
+            source_gaps.append(
+                {"identity": list(identity), "reason": "fixed_fill_quantity_invalid"}
+            )
+            continue
+        precise_weighted_average = precise_deployed_capital / precise_total_quantity
+        target_price = float(
+            move_price_up_by_bps(
+                precise_weighted_average,
+                int(round(float(fixed_trade["target_pct_from_average"]) * 100.0)),
+            )
+        )
+        target_hit_bar = next(
+            (bar for bar in post_stop_bars if float(bar.high) >= target_price),
+            None,
+        )
+        if target_hit_bar is not None:
+            continuation_exit_reason = "post_stop_average_target_recovery"
+            continuation_exit_at = _timestamp_without_timezone(target_hit_bar.timestamp)
+            continuation_exit_price = target_price
+            target_recovery_minutes = (
+                continuation_exit_at - stop_at
+            ).total_seconds() / 60.0
+        else:
+            continuation_exit_reason = "post_stop_last_observed_regular_mark"
+            continuation_exit_at = _timestamp_without_timezone(
+                post_stop_bars[-1].timestamp
+            )
+            continuation_exit_price = float(post_stop_bars[-1].close)
+            target_recovery_minutes = None
+        continuation_return = _planned_budget_mark_return_pct(
+            fixed_trade,
+            mark_price=continuation_exit_price,
+            cost_pct=cost_pct,
+        )
+        terminal_observation_at = _timestamp_without_timezone(
+            post_stop_bars[-1].timestamp
+        )
+        terminal_observation_exact_session_close = bool(
+            str(decision["session"]) == "KRX_REGULAR"
+            and terminal_observation_at.time() >= time(15, 30)
+        )
+        terminal_mark_return = _planned_budget_mark_return_pct(
+            fixed_trade,
+            mark_price=float(post_stop_bars[-1].close),
+            cost_pct=cost_pct,
+        )
+        horizon_marks: dict[str, dict[str, Any]] = {}
+        bars_by_timestamp = {
+            _timestamp_without_timezone(bar.timestamp): bar for bar in post_stop_bars
+        }
+        for minutes in PARENT_POST_STOP_HORIZONS_MINUTES:
+            bar = bars_by_timestamp.get(stop_at + timedelta(minutes=minutes))
+            horizon_marks[str(minutes)] = {
+                "available": bar is not None,
+                "observed_at": (
+                    _timestamp_without_timezone(bar.timestamp).isoformat()
+                    if bar is not None
+                    else None
+                ),
+                "close_price": float(bar.close) if bar is not None else None,
+                "planned_budget_mark_return_pct": (
+                    _planned_budget_mark_return_pct(
+                        fixed_trade,
+                        mark_price=float(bar.close),
+                        cost_pct=cost_pct,
+                    )
+                    if bar is not None
+                    else None
+                ),
+                "price_change_from_stop_pct": (
+                    round((float(bar.close) / stop_price - 1.0) * 100.0, 6)
+                    if bar is not None
+                    else None
+                ),
+                "target_recovered_by_horizon": bool(
+                    target_recovery_minutes is not None
+                    and target_recovery_minutes <= minutes
+                ),
+            }
+        minimum_post_stop_low = min(float(bar.low) for bar in post_stop_bars)
+        maximum_post_stop_high = max(float(bar.high) for bar in post_stop_bars)
+        control_return = float(fixed_trade["net_profit_pct"])
+        episodes.append(
+            {
+                "trade_date": str(decision["trade_date"]),
+                "venue": str(decision["venue"]),
+                "session": str(decision["session"]),
+                "entry_at": str(decision["entry_at"]),
+                "entry_price": float(decision["entry_price"]),
+                "stop_at": stop_at.isoformat(),
+                "stop_price": stop_price,
+                "stop_exit_reason": str(fixed_trade["exit_reason"]),
+                "hard_stop_control_return_pct": control_return,
+                "filled_leg_count": int(fixed_trade["filled_leg_count"]),
+                "deployed_fraction": float(fixed_trade["deployed_fraction"]),
+                "weighted_average_price": float(fixed_trade["weighted_average_price"]),
+                "target_basis_precise_weighted_average_price": round(
+                    precise_weighted_average,
+                    10,
+                ),
+                "existing_average_target_price": target_price,
+                "continuation_exit_reason": continuation_exit_reason,
+                "continuation_exit_at": continuation_exit_at.isoformat(),
+                "continuation_exit_price": continuation_exit_price,
+                "continue_target_or_terminal_mark_return_pct": continuation_return,
+                "incremental_return_vs_hard_stop_pct": round(
+                    continuation_return - control_return,
+                    6,
+                ),
+                "target_recovered_after_stop": target_hit_bar is not None,
+                "target_recovery_first_hit_minutes": (
+                    round(float(target_recovery_minutes), 3)
+                    if target_recovery_minutes is not None
+                    else None
+                ),
+                "terminal_observation_at": terminal_observation_at.isoformat(),
+                "terminal_observation_price": float(post_stop_bars[-1].close),
+                "terminal_observation_return_pct": terminal_mark_return,
+                "terminal_observation_exact_session_close": (
+                    terminal_observation_exact_session_close
+                ),
+                "continuation_endpoint_source_quality_complete": bool(
+                    target_hit_bar is not None
+                    or terminal_observation_exact_session_close
+                ),
+                "post_stop_min_low": minimum_post_stop_low,
+                "post_stop_max_high": maximum_post_stop_high,
+                "additional_drawdown_from_stop_price_pct": round(
+                    (minimum_post_stop_low / stop_price - 1.0) * 100.0,
+                    6,
+                ),
+                "maximum_rebound_from_stop_price_pct": round(
+                    (maximum_post_stop_high / stop_price - 1.0) * 100.0,
+                    6,
+                ),
+                "horizon_marks": horizon_marks,
+                "provenance": {
+                    "causal_candidate_joined": True,
+                    "fixed_execution_replayed": True,
+                    "stop_bar_excluded_from_counterfactual_path": True,
+                    "post_stop_path_used_as_entry_feature": False,
+                    "control_and_counterfactual_summed": False,
+                },
+            }
+        )
+
+    control_returns = [float(row["hard_stop_control_return_pct"]) for row in episodes]
+    continuation_returns = [
+        float(row["continue_target_or_terminal_mark_return_pct"]) for row in episodes
+    ]
+    control_ev = (
+        round(statistics.fmean(control_returns), 6) if control_returns else None
+    )
+    continuation_ev = (
+        round(statistics.fmean(continuation_returns), 6)
+        if continuation_returns
+        else None
+    )
+    target_recovery_count = sum(
+        bool(row["target_recovered_after_stop"]) for row in episodes
+    )
+    continuation_better_count = sum(
+        float(row["continue_target_or_terminal_mark_return_pct"])
+        > float(row["hard_stop_control_return_pct"])
+        for row in episodes
+    )
+    hard_stop_protected_count = sum(
+        float(row["continue_target_or_terminal_mark_return_pct"])
+        < float(row["hard_stop_control_return_pct"])
+        for row in episodes
+    )
+    recovery_ratio = target_recovery_count / len(episodes) if episodes else None
+    terminal_mark_limited_count = sum(
+        not bool(row["continuation_endpoint_source_quality_complete"])
+        for row in episodes
+    )
+    control_compounded = _compounded_return_from_values(control_returns)
+    continuation_compounded = _compounded_return_from_values(continuation_returns)
+    recovery_by_horizon = {
+        str(minutes): sum(
+            bool(row["horizon_marks"][str(minutes)]["target_recovered_by_horizon"])
+            for row in episodes
+        )
+        for minutes in PARENT_POST_STOP_HORIZONS_MINUTES
+    }
+    if not source_quality_passed:
+        decision = "source_quality_blocked"
+    elif duplicate_candidate_identities or source_gaps or not episodes:
+        decision = "source_contract_gap"
+    elif (
+        terminal_mark_limited_count == 0
+        and recovery_ratio is not None
+        and recovery_ratio >= PARENT_POST_STOP_RECOVERY_DOMINANCE_FLOOR
+        and continuation_ev is not None
+        and control_ev is not None
+        and continuation_ev > control_ev
+        and continuation_compounded > control_compounded
+    ):
+        decision = "recoverable_adverse_first_dominates"
+    elif (
+        terminal_mark_limited_count == 0
+        and recovery_ratio is not None
+        and recovery_ratio <= 1.0 - PARENT_POST_STOP_RECOVERY_DOMINANCE_FLOOR
+        and control_ev is not None
+        and continuation_ev is not None
+        and control_ev >= continuation_ev
+        and hard_stop_protected_count
+        >= math.ceil(len(episodes) * PARENT_POST_STOP_RECOVERY_DOMINANCE_FLOOR)
+    ):
+        decision = "catastrophic_stop_terminal_loss_protection_supported"
+    else:
+        decision = "mixed_post_stop_paths_no_owner_change"
+    return {
+        "contract": PARENT_POST_STOP_RECOVERY_CONTRACT,
+        "fixed_execution_arm": PARENT_BUCKET_EXECUTION_ARM,
+        "input_parent_decision": parent_result.get("decision"),
+        "input_catastrophic_decision_count": len(catastrophic_decisions),
+        "input_decisions_unchanged": True,
+        "source_quality_passed": source_quality_passed,
+        "source_gap_count": len(source_gaps),
+        "source_gaps": source_gaps,
+        "duplicate_candidate_identity_count": len(duplicate_candidate_identities),
+        "duplicate_candidate_identities": [
+            list(identity) for identity in duplicate_candidate_identities
+        ],
+        "episode_count": len(episodes),
+        "hard_stop_control_equal_weight_avg_profit_pct": control_ev,
+        "hard_stop_control_source_quality_adjusted_ev_pct": (
+            control_ev if source_quality_passed else None
+        ),
+        "continue_target_or_terminal_mark_equal_weight_avg_profit_pct": (
+            continuation_ev
+        ),
+        "continue_target_or_terminal_mark_source_quality_adjusted_ev_pct": (
+            continuation_ev
+            if source_quality_passed and terminal_mark_limited_count == 0
+            else None
+        ),
+        "hard_stop_control_compounded_return_pct": control_compounded,
+        "continue_target_or_terminal_mark_compounded_return_pct": (
+            continuation_compounded
+        ),
+        "target_recovery_count": target_recovery_count,
+        "target_recovery_ratio": (
+            round(recovery_ratio, 6) if recovery_ratio is not None else None
+        ),
+        "continuation_better_count": continuation_better_count,
+        "hard_stop_protected_count": hard_stop_protected_count,
+        "terminal_mark_limited_count": terminal_mark_limited_count,
+        "decision_evidence_complete": bool(
+            source_quality_passed
+            and not source_gaps
+            and not duplicate_candidate_identities
+            and terminal_mark_limited_count == 0
+        ),
+        "recovery_by_horizon_count": recovery_by_horizon,
+        "episodes": episodes,
+        "decision": decision,
+    }
+
+
+def _parent_post_stop_bounded_grace_arms(
+    recovery_result: dict[str, Any],
+    series_by_key: dict[tuple[date, str, str], Sequence[base.Bar]],
+    *,
+    venue: str,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    source_gaps: list[dict[str, Any]] = []
+    arm_episode_rows: dict[str, list[dict[str, Any]]] = {
+        str(minutes): [] for minutes in PARENT_POST_STOP_GRACE_HORIZONS_MINUTES
+    }
+    recovery_episodes = list(recovery_result.get("episodes") or [])
+    for episode in recovery_episodes:
+        key = (
+            date.fromisoformat(str(episode["trade_date"])),
+            str(episode["venue"]),
+            str(episode["session"]),
+        )
+        series = series_by_key.get(key)
+        if not series:
+            source_gaps.append(
+                {
+                    "trade_date": episode["trade_date"],
+                    "entry_at": episode["entry_at"],
+                    "reason": "market_series_missing",
+                }
+            )
+            continue
+        stop_at = _timestamp_without_timezone(str(episode["stop_at"]))
+        stop_price = float(episode["stop_price"])
+        target_recovery_minutes = episode.get("target_recovery_first_hit_minutes")
+        target_recovery_at = (
+            _timestamp_without_timezone(str(episode["continuation_exit_at"]))
+            if target_recovery_minutes is not None
+            else None
+        )
+        post_stop_bars_by_timestamp = {
+            _timestamp_without_timezone(bar.timestamp): bar
+            for bar in series
+            if _timestamp_without_timezone(bar.timestamp) > stop_at
+        }
+        for minutes in PARENT_POST_STOP_GRACE_HORIZONS_MINUTES:
+            arm_key = str(minutes)
+            horizon_at = stop_at + timedelta(minutes=minutes)
+            target_hit_within_grace = bool(
+                target_recovery_at is not None and target_recovery_at <= horizon_at
+            )
+            if target_hit_within_grace:
+                exit_at = target_recovery_at
+                exit_price = float(episode["existing_average_target_price"])
+                exit_reason = "existing_average_target_recovery"
+                arm_return = float(
+                    episode["continue_target_or_terminal_mark_return_pct"]
+                )
+            else:
+                horizon_mark = (episode.get("horizon_marks") or {}).get(arm_key) or {}
+                horizon_bar = post_stop_bars_by_timestamp.get(horizon_at)
+                if (
+                    horizon_bar is None
+                    or not bool(horizon_mark.get("available"))
+                    or horizon_mark.get("planned_budget_mark_return_pct") is None
+                ):
+                    source_gaps.append(
+                        {
+                            "trade_date": episode["trade_date"],
+                            "entry_at": episode["entry_at"],
+                            "arm_minutes": minutes,
+                            "reason": "exact_horizon_completed_bar_missing",
+                            "expected_at": horizon_at.isoformat(),
+                        }
+                    )
+                    continue
+                exit_at = horizon_at
+                exit_price = float(horizon_bar.close)
+                exit_reason = "exact_grace_horizon_completed_bar_mark"
+                arm_return = float(horizon_mark["planned_budget_mark_return_pct"])
+            bars_through_exit = [
+                bar
+                for timestamp, bar in post_stop_bars_by_timestamp.items()
+                if timestamp <= exit_at
+            ]
+            bars_known_before_target = [
+                bar
+                for timestamp, bar in post_stop_bars_by_timestamp.items()
+                if timestamp < exit_at
+            ]
+            if not bars_through_exit:
+                source_gaps.append(
+                    {
+                        "trade_date": episode["trade_date"],
+                        "entry_at": episode["entry_at"],
+                        "arm_minutes": minutes,
+                        "reason": "post_stop_bars_through_exit_missing",
+                    }
+                )
+                continue
+            conservative_min_low = min(float(bar.low) for bar in bars_through_exit)
+            known_pre_target_min_low = (
+                min(float(bar.low) for bar in bars_known_before_target)
+                if target_hit_within_grace and bars_known_before_target
+                else conservative_min_low
+            )
+            control_return = float(episode["hard_stop_control_return_pct"])
+            arm_episode_rows[arm_key].append(
+                {
+                    "trade_date": episode["trade_date"],
+                    "venue": episode["venue"],
+                    "session": episode["session"],
+                    "entry_at": episode["entry_at"],
+                    "stop_at": episode["stop_at"],
+                    "grace_minutes": minutes,
+                    "exit_at": exit_at.isoformat(),
+                    "exit_price": exit_price,
+                    "exit_reason": exit_reason,
+                    "target_recovered_within_grace": target_hit_within_grace,
+                    "hard_stop_control_return_pct": control_return,
+                    "grace_planned_budget_return_pct": arm_return,
+                    "incremental_return_vs_hard_stop_pct": round(
+                        arm_return - control_return,
+                        6,
+                    ),
+                    "additional_mae_from_stop_pct_conservative": round(
+                        min(
+                            0.0,
+                            (conservative_min_low / stop_price - 1.0) * 100.0,
+                        ),
+                        6,
+                    ),
+                    "additional_mae_known_before_target_bar_pct": round(
+                        min(
+                            0.0,
+                            (known_pre_target_min_low / stop_price - 1.0) * 100.0,
+                        ),
+                        6,
+                    ),
+                    "provenance": {
+                        "stop_bar_excluded": True,
+                        "existing_target_unchanged": True,
+                        "filled_quantity_unchanged": True,
+                        "target_hit_bar_mae_is_conservative_intrabar_envelope": (
+                            target_hit_within_grace
+                        ),
+                        "same_sample_best_arm_selected": False,
+                        "runtime_effect": False,
+                    },
+                }
+            )
+
+    control_ev = recovery_result.get("hard_stop_control_source_quality_adjusted_ev_pct")
+    control_compounded = recovery_result.get("hard_stop_control_compounded_return_pct")
+    if not recovery_episodes or control_ev is None:
+        control_compounded = None
+    arm_summaries: dict[str, dict[str, Any]] = {}
+    prospective_candidate_horizons: list[int] = []
+    expected_episode_count = len(recovery_episodes)
+    for minutes in PARENT_POST_STOP_GRACE_HORIZONS_MINUTES:
+        arm_key = str(minutes)
+        episode_rows = arm_episode_rows[arm_key]
+        returns = [
+            float(row["grace_planned_budget_return_pct"]) for row in episode_rows
+        ]
+        arm_ev = round(statistics.fmean(returns), 6) if returns else None
+        arm_compounded = _compounded_return_from_values(returns) if returns else None
+        arm_source_complete = bool(
+            source_quality_passed
+            and expected_episode_count > 0
+            and len(episode_rows) == expected_episode_count
+            and not source_gaps
+        )
+        source_adjusted_ev = arm_ev if arm_source_complete else None
+        improves_both_control_metrics = bool(
+            source_adjusted_ev is not None
+            and control_ev is not None
+            and arm_compounded is not None
+            and control_compounded is not None
+            and float(source_adjusted_ev) > float(control_ev)
+            and float(arm_compounded) > float(control_compounded)
+        )
+        if improves_both_control_metrics:
+            prospective_candidate_horizons.append(minutes)
+        conservative_mae_values = [
+            float(row["additional_mae_from_stop_pct_conservative"])
+            for row in episode_rows
+        ]
+        arm_summaries[arm_key] = {
+            "grace_minutes": minutes,
+            "episode_count": len(episode_rows),
+            "equal_weight_avg_profit_pct": arm_ev,
+            "source_quality_adjusted_ev_pct": source_adjusted_ev,
+            "compounded_return_pct": arm_compounded,
+            "target_recovery_count": sum(
+                bool(row["target_recovered_within_grace"]) for row in episode_rows
+            ),
+            "improved_episode_count": sum(
+                float(row["incremental_return_vs_hard_stop_pct"]) > 0.0
+                for row in episode_rows
+            ),
+            "worsened_episode_count": sum(
+                float(row["incremental_return_vs_hard_stop_pct"]) < 0.0
+                for row in episode_rows
+            ),
+            "equal_episode_count": sum(
+                float(row["incremental_return_vs_hard_stop_pct"]) == 0.0
+                for row in episode_rows
+            ),
+            "average_additional_mae_from_stop_pct_conservative": (
+                round(statistics.fmean(conservative_mae_values), 6)
+                if conservative_mae_values
+                else None
+            ),
+            "worst_additional_mae_from_stop_pct_conservative": (
+                min(conservative_mae_values) if conservative_mae_values else None
+            ),
+            "improves_both_control_ev_and_compounded_return": (
+                improves_both_control_metrics
+            ),
+            "prospective_candidate_only": improves_both_control_metrics,
+            "episodes": episode_rows,
+        }
+
+    if not source_quality_passed or recovery_result.get("decision") == (
+        "source_quality_blocked"
+    ):
+        decision = "source_quality_blocked"
+    elif (
+        recovery_result.get("source_gap_count")
+        or recovery_result.get("duplicate_candidate_identity_count")
+        or source_gaps
+        or not recovery_episodes
+    ):
+        decision = "source_contract_gap"
+    elif prospective_candidate_horizons:
+        decision = "bounded_grace_candidate_for_prospective_only"
+    elif all(
+        summary["source_quality_adjusted_ev_pct"] is not None
+        and control_ev is not None
+        and float(summary["source_quality_adjusted_ev_pct"]) <= float(control_ev)
+        and summary["compounded_return_pct"] is not None
+        and control_compounded is not None
+        and float(summary["compounded_return_pct"]) <= float(control_compounded)
+        for summary in arm_summaries.values()
+    ):
+        decision = "immediate_stop_retained"
+    else:
+        decision = "grace_tradeoff_mixed"
+    return {
+        "contract": PARENT_POST_STOP_GRACE_CONTRACT,
+        "venue": venue,
+        "input_recovery_decision": recovery_result.get("decision"),
+        "input_episode_count": expected_episode_count,
+        "input_episodes_unchanged": True,
+        "source_quality_passed": source_quality_passed,
+        "source_gap_count": len(source_gaps),
+        "source_gaps": source_gaps,
+        "hard_stop_control_equal_weight_avg_profit_pct": control_ev,
+        "hard_stop_control_compounded_return_pct": control_compounded,
+        "arms": arm_summaries,
+        "prospective_candidate_horizons_minutes": prospective_candidate_horizons,
+        "same_sample_best_arm_selected": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision": decision,
+    }
+
+
+def _parent_post_stop_grace_prospective_oos(
+    grace_result: dict[str, Any],
+    *,
+    venue: str,
+    source_quality_passed: bool,
+) -> dict[str, Any]:
+    candidate_horizons = list(PARENT_POST_STOP_GRACE_PROSPECTIVE_HORIZONS_MINUTES)
+    source_gaps: list[dict[str, Any]] = []
+    input_arms = grace_result.get("arms") or {}
+    expected_arm_keys = {str(minutes) for minutes in candidate_horizons}
+    if set(input_arms) != expected_arm_keys:
+        source_gaps.append(
+            {
+                "reason": "frozen_candidate_horizon_set_mismatch",
+                "expected": sorted(expected_arm_keys),
+                "observed": sorted(input_arms),
+            }
+        )
+
+    calibration_identities_by_arm: dict[str, set[tuple[str, str, str]]] = {}
+    prospective_rows_by_arm: dict[str, list[dict[str, Any]]] = {}
+    for minutes in candidate_horizons:
+        arm_key = str(minutes)
+        rows = list((input_arms.get(arm_key) or {}).get("episodes") or [])
+        calibration_identities_by_arm[arm_key] = {
+            (
+                str(row["trade_date"]),
+                str(row["entry_at"]),
+                str(row["stop_at"]),
+            )
+            for row in rows
+            if date.fromisoformat(str(row["trade_date"]))
+            <= PARENT_POST_STOP_GRACE_PROSPECTIVE_CUTOFF_DATE
+        }
+        prospective_rows_by_arm[arm_key] = [
+            row
+            for row in rows
+            if date.fromisoformat(str(row["trade_date"]))
+            >= PARENT_POST_STOP_GRACE_PROSPECTIVE_START_DATE
+        ]
+
+    calibration_identity_sets = list(calibration_identities_by_arm.values())
+    calibration_identities = (
+        calibration_identity_sets[0] if calibration_identity_sets else set()
+    )
+    if any(
+        identities != calibration_identities
+        for identities in calibration_identity_sets[1:]
+    ):
+        source_gaps.append(
+            {
+                "reason": "calibration_episode_identity_mismatch_across_arms",
+                "counts": {
+                    arm: len(identities)
+                    for arm, identities in calibration_identities_by_arm.items()
+                },
+            }
+        )
+    if (
+        source_quality_passed
+        and venue == "KRX"
+        and len(calibration_identities)
+        != PARENT_POST_STOP_GRACE_CALIBRATION_EPISODE_COUNT
+    ):
+        source_gaps.append(
+            {
+                "reason": "frozen_calibration_episode_count_mismatch",
+                "expected": PARENT_POST_STOP_GRACE_CALIBRATION_EPISODE_COUNT,
+                "observed": len(calibration_identities),
+            }
+        )
+
+    prospective_identities_by_arm = {
+        arm: {
+            (
+                str(row["trade_date"]),
+                str(row["entry_at"]),
+                str(row["stop_at"]),
+            )
+            for row in rows
+        }
+        for arm, rows in prospective_rows_by_arm.items()
+    }
+    prospective_identity_sets = list(prospective_identities_by_arm.values())
+    prospective_identities = (
+        prospective_identity_sets[0] if prospective_identity_sets else set()
+    )
+    if any(
+        identities != prospective_identities
+        for identities in prospective_identity_sets[1:]
+    ):
+        source_gaps.append(
+            {
+                "reason": "prospective_episode_identity_mismatch_across_arms",
+                "counts": {
+                    arm: len(identities)
+                    for arm, identities in prospective_identities_by_arm.items()
+                },
+            }
+        )
+
+    for gap in grace_result.get("source_gaps") or []:
+        trade_date_value = gap.get("trade_date")
+        if (
+            trade_date_value is None
+            or date.fromisoformat(str(trade_date_value))
+            >= PARENT_POST_STOP_GRACE_PROSPECTIVE_START_DATE
+        ):
+            source_gaps.append(
+                {
+                    **gap,
+                    "reason": f"prospective_input_{gap.get('reason', 'source_gap')}",
+                }
+            )
+
+    control_returns_by_identity: dict[tuple[str, str, str], float] = {}
+    for arm_key, rows in prospective_rows_by_arm.items():
+        for row in rows:
+            identity = (
+                str(row["trade_date"]),
+                str(row["entry_at"]),
+                str(row["stop_at"]),
+            )
+            control_return = float(row["hard_stop_control_return_pct"])
+            prior = control_returns_by_identity.setdefault(identity, control_return)
+            if abs(prior - control_return) > 1e-9:
+                source_gaps.append(
+                    {
+                        "reason": "prospective_control_return_mismatch_across_arms",
+                        "identity": list(identity),
+                        "arm": arm_key,
+                        "first": prior,
+                        "observed": control_return,
+                    }
+                )
+
+    control_returns = [
+        control_returns_by_identity[identity]
+        for identity in sorted(control_returns_by_identity)
+    ]
+    control_ev = (
+        round(statistics.fmean(control_returns), 6) if control_returns else None
+    )
+    control_compounded = (
+        _compounded_return_from_values(control_returns) if control_returns else None
+    )
+    arm_summaries: dict[str, dict[str, Any]] = {}
+    all_arms_improve_control = bool(prospective_identities)
+    for minutes in candidate_horizons:
+        arm_key = str(minutes)
+        rows = prospective_rows_by_arm[arm_key]
+        returns = [float(row["grace_planned_budget_return_pct"]) for row in rows]
+        arm_ev = round(statistics.fmean(returns), 6) if returns else None
+        arm_compounded = _compounded_return_from_values(returns) if returns else None
+        source_complete = bool(
+            source_quality_passed
+            and prospective_identities
+            and len(rows) == len(prospective_identities)
+            and not source_gaps
+        )
+        source_adjusted_ev = arm_ev if source_complete else None
+        improves_control = bool(
+            source_adjusted_ev is not None
+            and control_ev is not None
+            and arm_compounded is not None
+            and control_compounded is not None
+            and float(source_adjusted_ev) > float(control_ev)
+            and float(arm_compounded) > float(control_compounded)
+        )
+        all_arms_improve_control = all_arms_improve_control and improves_control
+        mae_values = [
+            float(row["additional_mae_from_stop_pct_conservative"]) for row in rows
+        ]
+        arm_summaries[arm_key] = {
+            "grace_minutes": minutes,
+            "prospective_episode_count": len(rows),
+            "equal_weight_avg_profit_pct": arm_ev,
+            "source_quality_adjusted_ev_pct": source_adjusted_ev,
+            "compounded_return_pct": arm_compounded,
+            "target_recovery_count": sum(
+                bool(row["target_recovered_within_grace"]) for row in rows
+            ),
+            "improved_episode_count": sum(
+                float(row["incremental_return_vs_hard_stop_pct"]) > 0.0 for row in rows
+            ),
+            "worsened_episode_count": sum(
+                float(row["incremental_return_vs_hard_stop_pct"]) < 0.0 for row in rows
+            ),
+            "average_additional_mae_from_stop_pct_conservative": (
+                round(statistics.fmean(mae_values), 6) if mae_values else None
+            ),
+            "worst_additional_mae_from_stop_pct_conservative": (
+                min(mae_values) if mae_values else None
+            ),
+            "improves_both_prospective_control_ev_and_compounded_return": (
+                improves_control
+            ),
+            "episodes": rows,
+        }
+
+    if not source_quality_passed or grace_result.get("decision") == (
+        "source_quality_blocked"
+    ):
+        decision = "source_quality_blocked"
+    elif source_gaps:
+        decision = "source_contract_gap"
+    elif not prospective_identities:
+        decision = "no_new_catastrophic_episode_observe"
+    elif all_arms_improve_control:
+        decision = "prospective_grace_evidence_accumulating"
+    else:
+        decision = "prospective_grace_tradeoff_changed"
+    return {
+        "contract": PARENT_POST_STOP_GRACE_PROSPECTIVE_CONTRACT,
+        "venue": venue,
+        "candidate_horizons_minutes_frozen": candidate_horizons,
+        "candidate_horizons_frozen_at": (
+            PARENT_POST_STOP_GRACE_PROSPECTIVE_CUTOFF_DATE.isoformat()
+        ),
+        "prospective_start_date": (
+            PARENT_POST_STOP_GRACE_PROSPECTIVE_START_DATE.isoformat()
+        ),
+        "calibration_episode_count_excluded": len(calibration_identities),
+        "prospective_episode_count": len(prospective_identities),
+        "source_quality_passed": source_quality_passed,
+        "source_gap_count": len(source_gaps),
+        "source_gaps": source_gaps,
+        "hard_stop_control_equal_weight_avg_profit_pct": control_ev,
+        "hard_stop_control_compounded_return_pct": control_compounded,
+        "arms": arm_summaries,
+        "same_sample_best_arm_selected": False,
+        "calibration_and_prospective_returns_mixed": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision": decision,
+    }
+
+
+def _compact_fixed_execution_report_payload(
+    result: dict[str, Any],
+    *,
+    split_execution: bool,
+) -> dict[str, Any]:
+    compact_evaluations: list[dict[str, Any]] = []
+    for evaluation in result.get("evaluations") or []:
+        compact = dict(evaluation)
+        if split_execution:
+            arm_trades = compact.pop("arm_trades", {}) or {}
+            selected_policy_trades = compact.pop("selected_policy_trades", []) or []
+            selected_control_trades = compact.pop("selected_control_trades", []) or []
+            compact["arm_trade_counts"] = {
+                str(arm): len(trades) for arm, trades in arm_trades.items()
+            }
+            compact["selected_policy_trade_count"] = len(selected_policy_trades)
+            compact["selected_control_trade_count"] = len(selected_control_trades)
+        else:
+            control_trades = compact.pop("control_trades", []) or []
+            selected_trades = compact.pop("selected_trades", []) or []
+            compact["control_trade_count"] = len(control_trades)
+            compact["selected_trade_count"] = len(selected_trades)
+        compact["trade_detail_storage"] = "omitted_replayable_from_source_bars"
+        compact_evaluations.append(compact)
+    return {**result, "evaluations": compact_evaluations}
+
+
 def _paired_axis_delta_summary(
     baseline: Sequence[dict[str, Any]],
     arm: Sequence[dict[str, Any]],
@@ -5211,6 +9709,7 @@ def build_report(
 ) -> dict[str, Any]:
     coverage = base.assess_date_coverage(stock_bars)
     qualified = base.filter_coverage_qualified_bars(stock_bars, coverage)
+    qualified_series_by_key = base._group_series(qualified)
     rows, oracle = build_feature_rows(qualified, kospi_bars, cost_pct=cost_pct)
     oracle_cost_sensitivity = _oracle_cost_sensitivity(qualified)
     cohorts: dict[str, Any] = {}
@@ -5245,6 +9744,7 @@ def build_report(
         economic_control_trades: list[dict[str, Any]] = []
         economic_selected_trades: list[dict[str, Any]] = []
         economic_evaluations: list[dict[str, Any]] = []
+        recoverable_basin_candidate_evaluations: list[dict[str, Any]] = []
         recovery_baseline_selected_trades: list[dict[str, Any]] = []
         recovery_selected_trades: list[dict[str, Any]] = []
         recovery_evaluations: list[dict[str, Any]] = []
@@ -6340,6 +10840,13 @@ def build_report(
                     "selected_trades": economic_selected,
                 }
             )
+            recoverable_basin_candidate_evaluations.append(
+                {
+                    "evaluation_date": evaluation_date.isoformat(),
+                    "status": economic_status,
+                    "candidate_trades": economic_scored_candidates,
+                }
+            )
             if any(
                 row["status"] == "evaluated_nested_out_of_sample"
                 for row in recovery_entry_lane_models.values()
@@ -7205,6 +11712,75 @@ def build_report(
             for row in wait_budget_evaluations
             if row["status"] == "evaluated_oos_arm_comparison"
         ]
+        fixed_tp_split = _fixed_tp_split_walk_forward(
+            economic_evaluations,
+            qualified_series_by_key,
+            venue=venue,
+            cost_pct=cost_pct,
+            sample_floor_passed=sample_floor_passed,
+            source_quality_passed=source_quality_passed,
+        )
+        fixed_tp_equal_share_carry = _fixed_tp_equal_share_carry_replay(
+            economic_evaluations,
+            qualified_series_by_key,
+            venue=venue,
+            cost_pct=cost_pct,
+            sample_floor_passed=sample_floor_passed,
+            source_quality_passed=source_quality_passed,
+        )
+        fixed_tp_entry_quality = _fixed_tp_split_entry_quality_walk_forward(
+            fixed_tp_split["evaluations"],
+            sample_floor_passed=sample_floor_passed,
+            source_quality_passed=source_quality_passed,
+        )
+        recoverable_basin = _recoverable_basin_walk_forward(
+            recoverable_basin_candidate_evaluations,
+            fixed_tp_split["evaluations"],
+            qualified_series_by_key,
+            venue=venue,
+            cost_pct=cost_pct,
+            sample_floor_passed=sample_floor_passed,
+            source_quality_passed=source_quality_passed,
+        )
+        parent_bucket = _parent_bucket_walk_forward(
+            recoverable_basin_candidate_evaluations,
+            fixed_tp_split["evaluations"],
+            qualified_series_by_key,
+            venue=venue,
+            cost_pct=cost_pct,
+            sample_floor_passed=sample_floor_passed,
+            source_quality_passed=source_quality_passed,
+        )
+        parent_bucket_stability = _parent_bucket_conflict_stability(
+            parent_bucket,
+            source_quality_passed=source_quality_passed,
+        )
+        parent_catastrophic_episode_audit = _parent_catastrophic_episode_audit(
+            parent_bucket,
+            recoverable_basin_candidate_evaluations,
+            qualified_series_by_key,
+            venue=venue,
+            source_quality_passed=source_quality_passed,
+        )
+        parent_catastrophic_stop_recovery = _parent_catastrophic_stop_recovery_path(
+            parent_bucket,
+            recoverable_basin_candidate_evaluations,
+            qualified_series_by_key,
+            venue=venue,
+            cost_pct=cost_pct,
+            source_quality_passed=source_quality_passed,
+        )
+        parent_post_stop_bounded_grace = _parent_post_stop_bounded_grace_arms(
+            parent_catastrophic_stop_recovery,
+            qualified_series_by_key,
+            venue=venue,
+            source_quality_passed=source_quality_passed,
+        )
+        parent_post_stop_grace_prospective = _parent_post_stop_grace_prospective_oos(
+            parent_post_stop_bounded_grace,
+            venue=venue,
+            source_quality_passed=source_quality_passed,
+        )
         predictive_structure_found = bool(
             buy_ap is not None
             and sell_ap is not None
@@ -7845,6 +12421,30 @@ def build_report(
                 "evaluations": wait_budget_evaluations,
                 "decision": wait_budget_decision,
             },
+            "fixed_tp_split_execution_walk_forward": (
+                _compact_fixed_execution_report_payload(
+                    fixed_tp_split,
+                    split_execution=True,
+                )
+            ),
+            "fixed_tp_equal_share_carry_replay": fixed_tp_equal_share_carry,
+            "fixed_tp_split_entry_quality_walk_forward": (
+                _compact_fixed_execution_report_payload(
+                    fixed_tp_entry_quality,
+                    split_execution=False,
+                )
+            ),
+            "recoverable_basin_entry_walk_forward": recoverable_basin,
+            "parent_bucket_entry_walk_forward": parent_bucket,
+            "parent_bucket_conflict_stability": parent_bucket_stability,
+            "parent_catastrophic_episode_audit": (parent_catastrophic_episode_audit),
+            "parent_catastrophic_stop_recovery_path": (
+                parent_catastrophic_stop_recovery
+            ),
+            "parent_post_stop_bounded_grace_arms": (parent_post_stop_bounded_grace),
+            "parent_post_stop_grace_prospective_oos": (
+                parent_post_stop_grace_prospective
+            ),
             "exploratory_feature_contrasts": {
                 "oracle_buy_top": _feature_contrasts(venue_rows, action=1)[:8],
                 "oracle_sell_top": _feature_contrasts(venue_rows, action=-1)[:8],
@@ -7910,7 +12510,158 @@ def build_report(
         .get("wait_budget_arm_comparison_walk_forward", {})
         .get("decision")
     )
-    if krx_wait_budget_decision == "wait_budget_oos_positive":
+    krx_fixed_tp_split_decision = (
+        cohorts.get("KRX", {})
+        .get("fixed_tp_split_execution_walk_forward", {})
+        .get("decision")
+    )
+    krx_fixed_tp_entry_quality_decision = (
+        cohorts.get("KRX", {})
+        .get("fixed_tp_split_entry_quality_walk_forward", {})
+        .get("decision")
+    )
+    krx_recoverable_basin_decision = (
+        cohorts.get("KRX", {})
+        .get("recoverable_basin_entry_walk_forward", {})
+        .get("decision")
+    )
+    krx_parent_bucket_decision = (
+        cohorts.get("KRX", {})
+        .get("parent_bucket_entry_walk_forward", {})
+        .get("decision")
+    )
+    krx_parent_stability_decision = (
+        cohorts.get("KRX", {})
+        .get("parent_bucket_conflict_stability", {})
+        .get("decision")
+    )
+    krx_parent_catastrophic_audit_decision = (
+        cohorts.get("KRX", {})
+        .get("parent_catastrophic_episode_audit", {})
+        .get("decision")
+    )
+    krx_parent_stop_recovery_decision = (
+        cohorts.get("KRX", {})
+        .get("parent_catastrophic_stop_recovery_path", {})
+        .get("decision")
+    )
+    krx_parent_bounded_grace_decision = (
+        cohorts.get("KRX", {})
+        .get("parent_post_stop_bounded_grace_arms", {})
+        .get("decision")
+    )
+    krx_parent_grace_prospective_decision = (
+        cohorts.get("KRX", {})
+        .get("parent_post_stop_grace_prospective_oos", {})
+        .get("decision")
+    )
+    if krx_parent_grace_prospective_decision in {
+        "prospective_grace_evidence_accumulating",
+        "no_new_catastrophic_episode_observe",
+        "prospective_grace_tradeoff_changed",
+    }:
+        overall_decision = str(krx_parent_grace_prospective_decision)
+    elif krx_parent_grace_prospective_decision == "source_contract_gap":
+        overall_decision = "parent_post_stop_grace_prospective_source_contract_gap"
+    elif krx_parent_grace_prospective_decision == "source_quality_blocked":
+        overall_decision = "parent_post_stop_grace_prospective_source_quality_blocked"
+    elif krx_parent_bounded_grace_decision in {
+        "bounded_grace_candidate_for_prospective_only",
+        "immediate_stop_retained",
+        "grace_tradeoff_mixed",
+    }:
+        overall_decision = str(krx_parent_bounded_grace_decision)
+    elif krx_parent_bounded_grace_decision == "source_contract_gap":
+        overall_decision = "parent_post_stop_bounded_grace_source_contract_gap"
+    elif krx_parent_bounded_grace_decision == "source_quality_blocked":
+        overall_decision = "parent_post_stop_bounded_grace_source_quality_blocked"
+    elif krx_parent_stop_recovery_decision in {
+        "catastrophic_stop_terminal_loss_protection_supported",
+        "recoverable_adverse_first_dominates",
+        "mixed_post_stop_paths_no_owner_change",
+    }:
+        overall_decision = str(krx_parent_stop_recovery_decision)
+    elif krx_parent_stop_recovery_decision == "source_contract_gap":
+        overall_decision = "parent_post_stop_recovery_source_contract_gap"
+    elif krx_parent_stop_recovery_decision == "source_quality_blocked":
+        overall_decision = "parent_post_stop_recovery_source_quality_blocked"
+    elif (
+        krx_parent_catastrophic_audit_decision
+        == "repeatable_pre_entry_loss_signature_identified"
+    ):
+        overall_decision = (
+            "repeatable_pre_entry_loss_signature_identified_research_only"
+        )
+    elif krx_parent_catastrophic_audit_decision == "loss_signature_not_separable":
+        overall_decision = "loss_signature_not_separable"
+    elif krx_parent_catastrophic_audit_decision == "source_contract_gap":
+        overall_decision = "parent_catastrophic_audit_source_contract_gap"
+    elif krx_parent_catastrophic_audit_decision == "source_quality_blocked":
+        overall_decision = "parent_catastrophic_audit_source_quality_blocked"
+    elif (
+        krx_parent_stability_decision
+        == "stable_parent_edge_needs_next_date_confirmation"
+    ):
+        overall_decision = "stable_parent_edge_needs_next_date_confirmation"
+    elif krx_parent_stability_decision == "parent_edge_concentrated_not_reproducible":
+        overall_decision = "parent_edge_concentrated_not_reproducible"
+    elif krx_parent_stability_decision == "catastrophic_loss_cluster_identified":
+        overall_decision = "catastrophic_loss_cluster_identified"
+    elif krx_parent_stability_decision == "no_stable_parent_edge":
+        overall_decision = "no_stable_parent_edge"
+    elif krx_parent_stability_decision == "source_quality_blocked":
+        overall_decision = "parent_stability_source_quality_blocked"
+    elif krx_parent_bucket_decision == "parent_bucket_oos_positive":
+        overall_decision = "parent_bucket_oos_positive_research_only"
+    elif krx_parent_bucket_decision == "parent_bucket_pareto_improved":
+        overall_decision = "parent_bucket_pareto_improved"
+    elif krx_parent_bucket_decision == "parent_bucket_conflict_only":
+        overall_decision = "parent_bucket_conflict_only"
+    elif krx_parent_bucket_decision == "parent_bucket_no_incremental_value":
+        overall_decision = "parent_bucket_no_incremental_value"
+    elif krx_parent_bucket_decision == "source_quality_blocked":
+        overall_decision = "parent_bucket_source_quality_blocked"
+    elif krx_parent_bucket_decision == "insufficient_parent_history":
+        overall_decision = "insufficient_parent_history"
+    elif krx_parent_bucket_decision == "insufficient_coverage_dates":
+        overall_decision = "parent_bucket_insufficient_coverage_dates"
+    elif krx_recoverable_basin_decision == "recoverable_basin_oos_positive":
+        overall_decision = "recoverable_basin_oos_positive_research_only"
+    elif krx_recoverable_basin_decision == "recoverable_basin_pareto_improved":
+        overall_decision = "recoverable_basin_pareto_improved"
+    elif krx_recoverable_basin_decision == "broader_universe_no_incremental_value":
+        overall_decision = "broader_universe_no_incremental_value"
+    elif krx_recoverable_basin_decision == "source_quality_blocked":
+        overall_decision = "recoverable_basin_source_quality_blocked"
+    elif krx_recoverable_basin_decision == "insufficient_prior_candidate_history":
+        overall_decision = "insufficient_prior_candidate_history"
+    elif krx_recoverable_basin_decision == "insufficient_coverage_dates":
+        overall_decision = "recoverable_basin_insufficient_coverage_dates"
+    elif krx_fixed_tp_entry_quality_decision == "entry_quality_oos_positive":
+        overall_decision = "entry_quality_oos_positive_research_only"
+    elif krx_fixed_tp_entry_quality_decision == "entry_quality_pareto_improved":
+        overall_decision = "entry_quality_pareto_improved"
+    elif krx_fixed_tp_entry_quality_decision == "no_incremental_predictive_value":
+        overall_decision = "entry_quality_no_incremental_predictive_value"
+    elif krx_fixed_tp_entry_quality_decision == "source_quality_blocked":
+        overall_decision = "entry_quality_source_quality_blocked"
+    elif krx_fixed_tp_entry_quality_decision == "insufficient_prior_failure_history":
+        overall_decision = "insufficient_prior_failure_history"
+    elif krx_fixed_tp_entry_quality_decision == "insufficient_coverage_dates":
+        overall_decision = "entry_quality_insufficient_coverage_dates"
+    elif krx_fixed_tp_split_decision == "fixed_tp_split_oos_positive":
+        overall_decision = "fixed_tp_split_oos_positive_research_only"
+    elif krx_fixed_tp_split_decision == "fixed_tp_split_pareto_improved":
+        overall_decision = "fixed_tp_split_pareto_improved"
+    elif krx_fixed_tp_split_decision == "no_incremental_predictive_value":
+        overall_decision = "fixed_tp_split_no_incremental_predictive_value"
+    elif krx_fixed_tp_split_decision == "source_quality_blocked":
+        overall_decision = "fixed_tp_split_source_quality_blocked"
+    elif krx_fixed_tp_split_decision == "insufficient_prior_arm_history":
+        overall_decision = "fixed_tp_split_insufficient_prior_arm_history"
+    elif krx_fixed_tp_split_decision == "insufficient_coverage_dates":
+        overall_decision = "fixed_tp_split_insufficient_coverage_dates"
+    elif krx_wait_budget_decision == "wait_budget_oos_positive":
         overall_decision = "wait_budget_oos_positive_research_only"
     elif krx_wait_budget_decision == "wait_budget_pareto_improved":
         overall_decision = "wait_budget_pareto_improved"
@@ -8014,7 +12765,7 @@ def build_report(
     else:
         overall_decision = "insufficient_for_strategy_or_runtime_judgment"
     return {
-        "schema": "pure_market_adaptive_opportunity_replay_v12",
+        "schema": "pure_market_adaptive_opportunity_replay_v21",
         "generated_at_kst": datetime.now(KST).isoformat(timespec="seconds"),
         "objective": "discover cost-bearing intraday opportunities without fixed drawdown_or_rebound labels and test causal common-state predictability",
         "symbol": base.SAMSUNG_CODE,
@@ -8038,6 +12789,22 @@ def build_report(
         ),
         "trigger_utility_calibration_contract": (TRIGGER_UTILITY_CALIBRATION_CONTRACT),
         "wait_budget_contract": WAIT_BUDGET_CONTRACT,
+        "fixed_tp_split_contract": FIXED_TP_SPLIT_CONTRACT,
+        "fixed_tp_equal_share_carry_contract": (FIXED_TP_EQUAL_SHARE_CARRY_CONTRACT),
+        "fixed_tp_entry_quality_contract": FIXED_TP_ENTRY_QUALITY_CONTRACT,
+        "recoverable_basin_contract": RECOVERABLE_BASIN_CONTRACT,
+        "parent_bucket_contract": PARENT_BUCKET_CONTRACT,
+        "parent_bucket_stability_contract": PARENT_BUCKET_STABILITY_CONTRACT,
+        "parent_catastrophic_episode_audit_contract": (
+            PARENT_CATASTROPHIC_AUDIT_CONTRACT
+        ),
+        "parent_catastrophic_stop_recovery_contract": (
+            PARENT_POST_STOP_RECOVERY_CONTRACT
+        ),
+        "parent_post_stop_bounded_grace_contract": (PARENT_POST_STOP_GRACE_CONTRACT),
+        "parent_post_stop_grace_prospective_contract": (
+            PARENT_POST_STOP_GRACE_PROSPECTIVE_CONTRACT
+        ),
         "stock_source_quality": stock_source_quality,
         "kospi_source_quality": kospi_source_quality,
         "coverage": coverage,
@@ -8693,6 +13460,826 @@ def render_markdown(report: dict[str, Any]) -> str:
         [
             "",
             "All three arms share the same prior-only trigger calibration, bounded trigger exploration, and recovery-only exit owner. The current evaluation date contributes arm outcomes only after all arm decisions are complete. A prior-selected executable arm is absent until at least one earlier complete arm-comparison date exists; same-date best-arm selection is forbidden.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Fixed-entry split-buy and fixed-take-profit causal replay",
+            "",
+            "| Venue | Arm | Trades | Planned-budget EV | Deployed EV | Compounded | Budget MAE | Avg deployed | Avg legs | Basis improvement | TP/Disaster/Close | TP below first entry |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |",
+        ]
+    )
+    for venue in base.COHORTS:
+        split = report["cohorts"][venue]["fixed_tp_split_execution_walk_forward"]
+        for arm in FIXED_TP_SPLIT_ARMS:
+            summary = split["arm_summaries"][arm]
+            path = split["arm_path_diagnostics"][arm]
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        arm,
+                        str(summary["sample_count"]),
+                        str(summary["equal_weight_avg_profit_pct"]),
+                        str(path["avg_deployed_notional_return_pct"]),
+                        str(path["compounded_planned_budget_return_pct"]),
+                        str(path["avg_planned_budget_mae_pct"]),
+                        str(path["avg_deployed_fraction"]),
+                        str(path["avg_filled_leg_count"]),
+                        str(path["avg_cost_basis_improvement_pct"]),
+                        (
+                            f"{path['target_exit_count']}/"
+                            f"{path['catastrophic_stop_count']}/"
+                            f"{path['session_close_count']}"
+                        ),
+                        str(path["target_exit_below_initial_count"]),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "| Venue | Arm dates | Prior-selected dates | Selected n/EV | Same-date single control n/EV | Selected/control compounded | Selected/control budget MAE | Decision |",
+            "| --- | ---: | ---: | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        split = report["cohorts"][venue]["fixed_tp_split_execution_walk_forward"]
+        selected = split["prior_selected_policy_summary_same_dates"]
+        control = split["single_entry_control_summary_same_dates"]
+        selected_path = split["prior_selected_policy_path"]
+        control_path = split["single_entry_control_path_same_dates"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    str(split["arm_evaluation_count"]),
+                    str(split["selected_policy_evaluation_count"]),
+                    f"{selected['sample_count']}/{selected['equal_weight_avg_profit_pct']}",
+                    f"{control['sample_count']}/{control['equal_weight_avg_profit_pct']}",
+                    (
+                        f"{selected_path['compounded_planned_budget_return_pct']}/"
+                        f"{control_path['compounded_planned_budget_return_pct']}"
+                    ),
+                    (
+                        f"{selected_path['avg_planned_budget_mae_pct']}/"
+                        f"{control_path['avg_planned_budget_mae_pct']}"
+                    ),
+                    split["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "The economic-selector entry cohort is identical across arms. Split legs use planned-capital fractions, a target repriced from the weighted average, no ordinary adverse-first stop, and one common 2% catastrophic stop from the initial entry. A fill bar cannot also hit the repriced target. Primary EV is measured against the full planned budget; deployed-notional EV is diagnostic only. Arm choice for a date uses complete outcomes from earlier dates only and has no runtime authority.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Equal-share carry-to-target widget execution replay",
+            "",
+            "| Venue | Selected arm | Calibration entries | Holdout dates/entries | Completed/censored | Completion ratio | Completed net avg | Same/cross-day | Median/max days | Avg/worst MAE | Max bundles/shares | Ending bundles/shares | Decision |",
+            "| --- | --- | ---: | --- | --- | ---: | ---: | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        carry = report["cohorts"][venue]["fixed_tp_equal_share_carry_replay"]
+        selected = carry.get("selected_holdout_summary") or {}
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    str(carry.get("selected_arm")),
+                    str(carry.get("calibration_entry_count")),
+                    (
+                        f"{carry.get('holdout_date_count')}/"
+                        f"{carry.get('holdout_entry_count')}"
+                    ),
+                    (
+                        f"{selected.get('completed_trade_count')}/"
+                        f"{selected.get('right_censored_count')}"
+                    ),
+                    str(selected.get("target_completion_ratio")),
+                    str(selected.get("completed_equal_weight_avg_profit_pct")),
+                    (
+                        f"{selected.get('same_day_target_count')}/"
+                        f"{selected.get('cross_day_target_count')}"
+                    ),
+                    (
+                        f"{selected.get('median_calendar_days_to_target')}/"
+                        f"{selected.get('max_calendar_days_to_target')}"
+                    ),
+                    (
+                        f"{selected.get('avg_observed_mae_pct')}/"
+                        f"{selected.get('worst_observed_mae_pct')}"
+                    ),
+                    (
+                        f"{selected.get('max_concurrent_bundle_count')}/"
+                        f"{selected.get('max_concurrent_share_units')}"
+                    ),
+                    (
+                        f"{selected.get('ending_open_bundle_count')}/"
+                        f"{selected.get('ending_open_share_units')}"
+                    ),
+                    str(carry.get("decision")),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "Each execution leg is exactly one share and only one automated bundle may be active per symbol on a trade date. Calibration paths stop strictly before the six-date holdout begins; holdout outcomes cannot select the arm. Additional legs are allowed only in the original entry session. The runtime-candidate target is observed only until the daily reset; unhit positions become unmanaged inventory diagnostics and are never rewritten as zero-return wins or losses. This report does not itself authorize live orders or a widget policy change.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Fixed-execution entry catastrophic-risk quality nested OOS",
+            "",
+            "| Venue | OOS dates | Control n/EV | Selected n/EV | Control/Selected compounded | Control/Selected budget MAE | Control/Selected disaster stops | Retention | Skip disaster/non-disaster/profitable | AP/prevalence/Brier | Bounded exploration | Decision |",
+            "| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | --- | ---: | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        quality = report["cohorts"][venue]["fixed_tp_split_entry_quality_walk_forward"]
+        control = quality["control_summary_same_dates"]
+        selected = quality["selected_summary"]
+        control_path = quality["control_path_same_dates"]
+        selected_path = quality["selected_path"]
+        capacity = quality["capacity_diagnostics"]
+        prediction = quality["prediction_diagnostics"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    str(quality["evaluation_count"]),
+                    f"{control['sample_count']}/{control['equal_weight_avg_profit_pct']}",
+                    f"{selected['sample_count']}/{selected['equal_weight_avg_profit_pct']}",
+                    (
+                        f"{control_path['compounded_planned_budget_return_pct']}/"
+                        f"{selected_path['compounded_planned_budget_return_pct']}"
+                    ),
+                    (
+                        f"{control_path['avg_planned_budget_mae_pct']}/"
+                        f"{selected_path['avg_planned_budget_mae_pct']}"
+                    ),
+                    (
+                        f"{control_path['catastrophic_stop_count']}/"
+                        f"{selected_path['catastrophic_stop_count']}"
+                    ),
+                    str(capacity["selected_vs_control_retention"]),
+                    (
+                        f"{capacity['skipped_catastrophic_count']}/"
+                        f"{capacity['skipped_noncatastrophic_count']}/"
+                        f"{capacity['skipped_positive_return_count']}"
+                    ),
+                    (
+                        f"{prediction['catastrophic_average_precision']}/"
+                        f"{prediction['catastrophic_prevalence']}/"
+                        f"{prediction['brier_score']}"
+                    ),
+                    str(capacity["bounded_exploration_enter_count"]),
+                    quality["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "The 40/60 add-at-0.8% and average-price +0.5% execution owner is fixed. Entry-time economic features and prior-only fixed-arm outcomes estimate catastrophic-loss-adjusted net EV; catastrophic probability alone never blocks an entry. Negative-EV skips are bounded so both each evaluation date and cumulative opportunity retention remain at least 75%. Skipped realized outcomes are post-OOS attribution only and cannot change the same-date model.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Broader-universe recoverable-basin direct-EV nested OOS",
+            "",
+            "| Venue | OOS dates | Broad control n/EV | Economic baseline n/EV | Basin selected n/EV | Broad/Economic/Selected compounded | Broad/Economic/Selected disaster | Retention | Skip profitable/disaster | Predicted/realized EV | MAE/correlation | Decision |",
+            "| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        basin = report["cohorts"][venue]["recoverable_basin_entry_walk_forward"]
+        broader = basin["broader_control_summary_same_dates"]
+        economic = basin["economic_selected_baseline_summary_same_dates"]
+        selected = basin["selected_summary"]
+        paths = basin["path_diagnostics"]
+        capacity = basin["capacity_diagnostics"]
+        prediction = basin["prediction_diagnostics"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    str(basin["evaluation_count"]),
+                    f"{broader['sample_count']}/{broader['equal_weight_avg_profit_pct']}",
+                    f"{economic['sample_count']}/{economic['equal_weight_avg_profit_pct']}",
+                    f"{selected['sample_count']}/{selected['equal_weight_avg_profit_pct']}",
+                    "/".join(
+                        str(paths[arm]["compounded_planned_budget_return_pct"])
+                        for arm in (
+                            "broader_control",
+                            "economic_selected_baseline",
+                            "recoverable_basin_selected",
+                        )
+                    ),
+                    "/".join(
+                        str(paths[arm]["catastrophic_stop_count"])
+                        for arm in (
+                            "broader_control",
+                            "economic_selected_baseline",
+                            "recoverable_basin_selected",
+                        )
+                    ),
+                    str(capacity["selected_vs_broader_control_retention"]),
+                    (
+                        f"{capacity['skipped_positive_return_count']}/"
+                        f"{capacity['skipped_catastrophic_count']}"
+                    ),
+                    (
+                        f"{prediction['mean_predicted_ev_pct']}/"
+                        f"{prediction['mean_realized_ev_pct']}"
+                    ),
+                    (
+                        f"{prediction['mean_absolute_error_pct']}/"
+                        f"{prediction['pearson_correlation']}"
+                    ),
+                    basin["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "The candidate universe includes every causal armed candidate from model-ready economic lanes, not only economic-selected entries. Each candidate is independently labeled by the fixed 40/60 execution, while the executable state machine considers candidates chronologically, lets an entered position own its slot until fixed exit, and immediately reconsiders later candidates after a model skip. The direct-EV model and shrinkage use prior dates only. Three same-session entries earn at most one later negative-EV skip, so no future candidate count is needed for the 75% prefix retention guarantee.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Coarse parent-archetype prior-only attribution",
+            "",
+            "| Venue | OOS dates | Broad control n/EV | Economic baseline n/EV | Prior-axis selected n/EV | Broad/Economic/Selected compounded | Broad/Economic/Selected disaster rate | Retention | Selected axis dates | Mixed-parent dates | Decision |",
+            "| --- | ---: | --- | --- | --- | --- | --- | ---: | --- | ---: | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        parent = report["cohorts"][venue]["parent_bucket_entry_walk_forward"]
+        broader = parent["broader_control_summary_same_dates"]
+        economic = parent["economic_selected_baseline_summary_same_dates"]
+        selected = parent["selected_summary"]
+        paths = parent["path_diagnostics"]
+        capacity = parent["capacity_diagnostics"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    str(parent["evaluation_count"]),
+                    f"{broader['sample_count']}/{broader['equal_weight_avg_profit_pct']}",
+                    f"{economic['sample_count']}/{economic['equal_weight_avg_profit_pct']}",
+                    f"{selected['sample_count']}/{selected['equal_weight_avg_profit_pct']}",
+                    "/".join(
+                        str(paths[key]["compounded_planned_budget_return_pct"])
+                        for key in (
+                            "broader_control",
+                            "economic_selected_baseline",
+                            "prior_selected_parent_axis",
+                        )
+                    ),
+                    "/".join(
+                        str(paths[key]["catastrophic_stop_rate_pct"])
+                        for key in (
+                            "broader_control",
+                            "economic_selected_baseline",
+                            "prior_selected_parent_axis",
+                        )
+                    ),
+                    str(capacity["selected_vs_broader_control_retention"]),
+                    str(capacity["selected_axis_evaluation_counts"]),
+                    str(
+                        parent["conflict_diagnostics"][
+                            "evaluation_with_mixed_parent_sign_count"
+                        ]
+                    ),
+                    parent["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Venue | Parent axis | OOS n/EV | Compounded | Budget MAE | Disaster stops |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for venue in base.COHORTS:
+        parent = report["cohorts"][venue]["parent_bucket_entry_walk_forward"]
+        for axis, axis_row in parent["axis_summaries"].items():
+            summary = axis_row["summary"]
+            path = axis_row["path"]
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        axis,
+                        f"{summary['sample_count']}/{summary['equal_weight_avg_profit_pct']}",
+                        str(path["compounded_planned_budget_return_pct"]),
+                        str(path["avg_planned_budget_mae_pct"]),
+                        str(path["catastrophic_stop_count"]),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "| Venue | Prior-selected axis bucket | OOS n/EV | Win rate | Disaster stops |",
+            "| --- | --- | --- | ---: | ---: |",
+        ]
+    )
+    for venue in base.COHORTS:
+        parent = report["cohorts"][venue]["parent_bucket_entry_walk_forward"]
+        attribution = parent["conflict_diagnostics"]["selected_axis_bucket_attribution"]
+        for key, row in attribution.items():
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        key,
+                        f"{row['sample_count']}/{row['equal_weight_avg_profit_pct']}",
+                        str(row["diagnostic_win_rate_pct"]),
+                        str(row["catastrophic_stop_count"]),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "Each parent axis is evaluated independently; no multi-feature child combination owns a decision. Numeric tercile boundaries, bucket EV shrinkage, and the axis used on an evaluation date are all fitted from earlier dates only. Axis-wide summaries are diagnostic only. The executable comparison uses the prior-selected axis with the unchanged fixed 40/60 execution and the same prefix-safe 75% bounded-exploration contract.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Fixed parent conflict stability",
+            "",
+            "| Venue | Focus | n/dates | EV | Positive dates | First/second half EV | Rolling-positive ratio | Leave-one min/max/all-positive | Catastrophic loss share | Worst-date loss share | Decision |",
+            "| --- | --- | --- | ---: | --- | --- | ---: | --- | ---: | ---: | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        stability = report["cohorts"][venue]["parent_bucket_conflict_stability"]
+        focus = stability["focus_summary"] or {}
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    stability["focus_key"],
+                    f"{focus.get('sample_count')}/{focus.get('observed_date_count')}",
+                    str(focus.get("equal_weight_avg_profit_pct")),
+                    f"{focus.get('positive_date_count')}/{focus.get('positive_date_ratio')}",
+                    f"{focus.get('first_half_ev_pct')}/{focus.get('second_half_ev_pct')}",
+                    str(focus.get("rolling_positive_window_ratio")),
+                    (
+                        f"{focus.get('leave_one_date_min_ev_pct')}/"
+                        f"{focus.get('leave_one_date_max_ev_pct')}/"
+                        f"{focus.get('leave_one_date_all_positive')}"
+                    ),
+                    str(focus.get("catastrophic_negative_magnitude_share")),
+                    str(focus.get("worst_date_negative_magnitude_share")),
+                    stability["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Venue | Focus date | n/EV | Simple sum | Win rate | Disaster stops |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for venue in base.COHORTS:
+        stability = report["cohorts"][venue]["parent_bucket_conflict_stability"]
+        focus = stability["focus_summary"] or {}
+        for row in focus.get("date_level") or []:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        str(row["trade_date"]),
+                        f"{row['sample_count']}/{row['equal_weight_avg_profit_pct']}",
+                        str(row["simple_sum_profit_pct"]),
+                        str(row["diagnostic_win_rate_pct"]),
+                        str(row["catastrophic_stop_count"]),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "This section consumes the already completed prior-selected parent decisions without refitting any boundary, bucket, axis, entry action, or execution owner. Rolling, leave-one-date, and concentration metrics are post-OOS diagnostics only. The predeclared volatility-middle focus cannot become a same-sample hard gate or runtime candidate.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Fixed parent catastrophic pre-entry episode audit",
+            "",
+            "| Venue | Focus decisions/EV | Catastrophic/target/session-close | Source gaps | Context available | Distribution shifts | Retention-safe signatures | Lane signature | Decision |",
+            "| --- | --- | --- | ---: | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        audit = report["cohorts"][venue]["parent_catastrophic_episode_audit"]
+        counts = audit["episode_counts"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    (
+                        f"{audit['input_focus_decision_count']}/"
+                        f"{audit['focus_source_quality_adjusted_ev_pct']}"
+                    ),
+                    (
+                        f"{counts['catastrophic_stop']}/"
+                        f"{counts['target_recovery']}/"
+                        f"{counts['session_close_other']}"
+                    ),
+                    str(audit["source_gap_count"]),
+                    str(audit["market_context_available_counts"]),
+                    ", ".join(audit["numeric_distribution_shift_candidates"]) or "none",
+                    ", ".join(audit["numeric_signature_candidates"]) or "none",
+                    str(audit["lane_summary"]["signature_candidate"]),
+                    audit["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Venue | Feature | Cat median | Target median | Direction/probability | Same-side catastrophic | Leave-one minimum | Target retention | Shift/signature |",
+            "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        audit = report["cohorts"][venue]["parent_catastrophic_episode_audit"]
+        ranked_features = sorted(
+            audit["numeric_feature_summaries"].items(),
+            key=lambda item: float(item[1].get("direction_pair_probability") or 0.0),
+            reverse=True,
+        )
+        for feature_name, summary in ranked_features:
+            if not summary["comparison_available"]:
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        feature_name,
+                        str(summary["catastrophic_median"]),
+                        str(summary["target_recovery_median"]),
+                        (
+                            f"{summary['direction']}/"
+                            f"{summary['direction_pair_probability']}"
+                        ),
+                        (
+                            f"{summary['catastrophic_same_side_of_target_median_count']}"
+                            f"/{summary['catastrophic_count']}"
+                        ),
+                        str(
+                            summary["leave_one_catastrophic_min_direction_probability"]
+                        ),
+                        str(
+                            summary[
+                                "target_recovery_retention_if_signature_side_excluded"
+                            ]
+                        ),
+                        (
+                            f"{summary['distribution_shift_candidate']}/"
+                            f"{summary['signature_candidate']}"
+                        ),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "| Venue | Outcome | Entry | Lane | Return | Context |",
+            "| --- | --- | --- | --- | ---: | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        audit = report["cohorts"][venue]["parent_catastrophic_episode_audit"]
+        for episode in audit["episodes"]:
+            if episode["outcome_class"] != "catastrophic_stop":
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        episode["outcome_class"],
+                        episode["entry_at"],
+                        episode["pairability_lane"],
+                        str(episode["planned_budget_return_pct"]),
+                        str(episode["provenance"]["market_context_available"]),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "The audit joins unchanged fixed-parent entry identities to their original causal candidate and completed bars immediately preceding entry. Outcome labels only define the comparison groups. No post-entry MFE, MAE, low, high, or exit value is used as a feature. Each diagnostic dimension stands alone; a signature candidate is future-date research input only and cannot become a same-sample hard gate, runtime policy, or order authority.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Fixed catastrophic-stop recovery path",
+            "",
+            "| Venue | Episodes | Stop control EV/compounded | Continue EV/compounded | Target recovery | Continue better/Stop protected | Recovery by 1/3/5/10/20/30/60m | Source gaps/terminal limited | Evidence complete | Decision |",
+            "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        recovery = report["cohorts"][venue]["parent_catastrophic_stop_recovery_path"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    str(recovery["episode_count"]),
+                    (
+                        f"{recovery['hard_stop_control_source_quality_adjusted_ev_pct']}"
+                        f"/{recovery['hard_stop_control_compounded_return_pct']}"
+                    ),
+                    (
+                        f"{recovery['continue_target_or_terminal_mark_source_quality_adjusted_ev_pct']}"
+                        f"/{recovery['continue_target_or_terminal_mark_compounded_return_pct']}"
+                    ),
+                    (
+                        f"{recovery['target_recovery_count']}/"
+                        f"{recovery['target_recovery_ratio']}"
+                    ),
+                    (
+                        f"{recovery['continuation_better_count']}/"
+                        f"{recovery['hard_stop_protected_count']}"
+                    ),
+                    "/".join(
+                        str(recovery["recovery_by_horizon_count"][str(minutes)])
+                        for minutes in PARENT_POST_STOP_HORIZONS_MINUTES
+                    ),
+                    (
+                        f"{recovery['source_gap_count']}/"
+                        f"{recovery['terminal_mark_limited_count']}"
+                    ),
+                    str(recovery["decision_evidence_complete"]),
+                    recovery["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Venue | Entry/Stop | Stop return | Continued exit/reason/return | Target hit minutes | Additional drawdown/Rebound from stop | Terminal mark/time/exact-close |",
+            "| --- | --- | ---: | --- | ---: | --- | ---: |",
+        ]
+    )
+    for venue in base.COHORTS:
+        recovery = report["cohorts"][venue]["parent_catastrophic_stop_recovery_path"]
+        for episode in recovery["episodes"]:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        f"{episode['entry_at']}/{episode['stop_at']}",
+                        str(episode["hard_stop_control_return_pct"]),
+                        (
+                            f"{episode['continuation_exit_at']}/"
+                            f"{episode['continuation_exit_reason']}/"
+                            f"{episode['continue_target_or_terminal_mark_return_pct']}"
+                        ),
+                        str(episode["target_recovery_first_hit_minutes"]),
+                        (
+                            f"{episode['additional_drawdown_from_stop_price_pct']}"
+                            f"/{episode['maximum_rebound_from_stop_price_pct']}"
+                        ),
+                        (
+                            f"{episode['terminal_observation_return_pct']}/"
+                            f"{episode['terminal_observation_at']}/"
+                            f"{episode['terminal_observation_exact_session_close']}"
+                        ),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "The stop-bar itself is excluded because intrabar high/low order after the stop fill is unknowable. The hard-stop control and same-quantity continuation counterfactual are reported separately and never summed. A KRX terminal mark before 15:30 is diagnostic only, makes continuation source-quality-adjusted EV unavailable for a non-target episode, and cannot support an owner change. Post-stop paths are execution outcomes only, not entry features or same-sample stop-removal authority.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Fixed post-stop bounded grace arms",
+            "",
+            "| Venue | Grace | Episodes | EV/adjusted EV/compounded | Target recovered | Improved/Worsened/Equal | Avg/Worst conservative additional MAE | Prospective only |",
+            "| --- | ---: | ---: | --- | ---: | --- | --- | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        grace = report["cohorts"][venue]["parent_post_stop_bounded_grace_arms"]
+        for minutes in PARENT_POST_STOP_GRACE_HORIZONS_MINUTES:
+            arm = grace["arms"][str(minutes)]
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        str(minutes),
+                        str(arm["episode_count"]),
+                        (
+                            f"{arm['equal_weight_avg_profit_pct']}/"
+                            f"{arm['source_quality_adjusted_ev_pct']}/"
+                            f"{arm['compounded_return_pct']}"
+                        ),
+                        str(arm["target_recovery_count"]),
+                        (
+                            f"{arm['improved_episode_count']}/"
+                            f"{arm['worsened_episode_count']}/"
+                            f"{arm['equal_episode_count']}"
+                        ),
+                        (
+                            f"{arm['average_additional_mae_from_stop_pct_conservative']}/"
+                            f"{arm['worst_additional_mae_from_stop_pct_conservative']}"
+                        ),
+                        str(arm["prospective_candidate_only"]),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "| Venue | Control EV/compounded | Candidate horizons | Same-sample best selected | Source gaps | Decision |",
+            "| --- | --- | --- | --- | ---: | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        grace = report["cohorts"][venue]["parent_post_stop_bounded_grace_arms"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    (
+                        f"{grace['hard_stop_control_equal_weight_avg_profit_pct']}/"
+                        f"{grace['hard_stop_control_compounded_return_pct']}"
+                    ),
+                    str(grace["prospective_candidate_horizons_minutes"]),
+                    str(grace["same_sample_best_arm_selected"]),
+                    str(grace["source_gap_count"]),
+                    grace["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Venue | Grace | Trade date | Exit/reason | Grace return | Delta vs stop | Conservative additional MAE |",
+            "| --- | ---: | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for venue in base.COHORTS:
+        grace = report["cohorts"][venue]["parent_post_stop_bounded_grace_arms"]
+        for minutes in PARENT_POST_STOP_GRACE_HORIZONS_MINUTES:
+            for episode in grace["arms"][str(minutes)]["episodes"]:
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            venue,
+                            str(minutes),
+                            str(episode["trade_date"]),
+                            f"{episode['exit_at']}/{episode['exit_reason']}",
+                            str(episode["grace_planned_budget_return_pct"]),
+                            str(episode["incremental_return_vs_hard_stop_pct"]),
+                            str(episode["additional_mae_from_stop_pct_conservative"]),
+                        ]
+                    )
+                    + " |"
+                )
+    lines.extend(
+        [
+            "",
+            "Each 5/10/20-minute arm starts strictly after the catastrophic-stop bar, retains the existing filled quantity and average-price target, and exits at the target if it is hit first or at the exact completed horizon-bar close. Additional MAE includes the target-hit bar as a conservative intrabar envelope; the known pre-target-bar MAE remains available per episode. Arms are never summed or ranked into a same-sample winner. Any improving horizon is prospective attribution only and has no runtime, order, quantity, target, emergency-floor, provider, or bot authority.",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "## Fixed grace prospective OOS attribution",
+            "",
+            "| Venue | Frozen at/Start | Calibration excluded/New OOS | Control EV/compounded | Source gaps | Decision |",
+            "| --- | --- | --- | --- | ---: | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        prospective = report["cohorts"][venue]["parent_post_stop_grace_prospective_oos"]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    venue,
+                    (
+                        f"{prospective['candidate_horizons_frozen_at']}/"
+                        f"{prospective['prospective_start_date']}"
+                    ),
+                    (
+                        f"{prospective['calibration_episode_count_excluded']}/"
+                        f"{prospective['prospective_episode_count']}"
+                    ),
+                    (
+                        f"{prospective['hard_stop_control_equal_weight_avg_profit_pct']}/"
+                        f"{prospective['hard_stop_control_compounded_return_pct']}"
+                    ),
+                    str(prospective["source_gap_count"]),
+                    prospective["decision"],
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Venue | Grace | New OOS | EV/adjusted EV/compounded | Target recovered | Improved/Worsened | Avg/Worst conservative additional MAE |",
+            "| --- | ---: | ---: | --- | ---: | --- | --- |",
+        ]
+    )
+    for venue in base.COHORTS:
+        prospective = report["cohorts"][venue]["parent_post_stop_grace_prospective_oos"]
+        for minutes in PARENT_POST_STOP_GRACE_HORIZONS_MINUTES:
+            arm = prospective["arms"][str(minutes)]
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        venue,
+                        str(minutes),
+                        str(arm["prospective_episode_count"]),
+                        (
+                            f"{arm['equal_weight_avg_profit_pct']}/"
+                            f"{arm['source_quality_adjusted_ev_pct']}/"
+                            f"{arm['compounded_return_pct']}"
+                        ),
+                        str(arm["target_recovery_count"]),
+                        (
+                            f"{arm['improved_episode_count']}/"
+                            f"{arm['worsened_episode_count']}"
+                        ),
+                        (
+                            f"{arm['average_additional_mae_from_stop_pct_conservative']}/"
+                            f"{arm['worst_additional_mae_from_stop_pct_conservative']}"
+                        ),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "The candidate horizons are frozen from the report ending 2026-08-10. Episodes through that date are counted only as excluded calibration provenance and never enter prospective EV. Zero new catastrophic episodes is a valid observe state with null EV, not a zero-return result. Prospective outcomes cannot select a same-sample winner or acquire runtime/order authority.",
         ]
     )
     lines.extend(
