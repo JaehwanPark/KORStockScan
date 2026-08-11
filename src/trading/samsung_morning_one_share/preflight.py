@@ -17,7 +17,7 @@ from src.trading.samsung_morning_one_share.machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "samsung_morning_two_leg_authority_v3"
+AUTHORITY_SCHEMA = "samsung_morning_two_leg_authority_v4"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_one_share_authority.json"
 )
@@ -84,6 +84,8 @@ def build_authority_artifact(
             "sor_regular_fallback": "each_unfilled_leg_from_09:00_open_until_09:30",
             "target": "fill_plus_2_ticks",
             "unfilled_target": "hold_position_without_forced_exit",
+            "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
+            "entry_tuning_bounds": "morning_baseline_only_until_observed_alternative",
             "widget_relationship": "parallel_independent_strategy",
         },
         "metric_role": "operator_preopen_runtime_authority_gate",
@@ -174,6 +176,8 @@ def validate_authority(
         "sor_regular_fallback": "each_unfilled_leg_from_09:00_open_until_09:30",
         "target": "fill_plus_2_ticks",
         "widget_relationship": "parallel_independent_strategy",
+        "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
+        "entry_tuning_bounds": "morning_baseline_only_until_observed_alternative",
     }
     if any(policy.get(key) != value for key, value in expected.items()):
         return False, "authority_sor_policy_mismatch"

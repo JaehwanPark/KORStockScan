@@ -6,6 +6,8 @@ import argparse
 import fcntl
 import json
 import os
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from src.trading.samsung_midday_one_share.gateway import (
@@ -13,8 +15,11 @@ from src.trading.samsung_midday_one_share.gateway import (
 )
 from src.trading.samsung_midday_one_share.machine import (
     DEFAULT_STATE_PATH,
+    KST,
     SamsungMiddayOneShareMachine,
 )
+from src.trading.samsung_midday_one_share.policy import DEFAULT_POLICY
+from src.trading.order.samsung_entry_policy import load_applied_machine_policy
 from src.trading.samsung_midday_one_share.preflight import (
     DEFAULT_AUTHORITY_PATH,
     validate_authority,
@@ -75,6 +80,22 @@ def main(argv: list[str] | None = None) -> int:
         if not authority_ok:
             print(f"live authority artifact blocked: {authority_reason}")
             return 4
+    policy = DEFAULT_POLICY
+    if live_enabled:
+        target_date = datetime.now(tz=KST).date()
+        applied, applied_hash, applied_reason = load_applied_machine_policy(
+            "midday", target_date=target_date
+        )
+        if applied is None:
+            print(f"live applied entry policy blocked: {applied_reason}")
+            return 5
+        policy = replace(
+            DEFAULT_POLICY,
+            rolling_high_drawdown_pct=float(applied["rolling_high_drawdown_pct"]),
+            rolling_low_proximity_pct=float(applied["rolling_low_proximity_pct"]),
+            runtime_policy_source="preopen_applied_policy",
+            runtime_policy_hash=applied_hash,
+        )
     state_path = args.state_path or (
         DEFAULT_STATE_PATH
         if live_enabled
@@ -86,7 +107,10 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     gateway = KiwoomMiddayOneShareGateway(order_authority=live_enabled)
     machine = SamsungMiddayOneShareMachine(
-        gateway=gateway, state_path=state_path, live_enabled=live_enabled
+        gateway=gateway,
+        state_path=state_path,
+        policy=policy,
+        live_enabled=live_enabled,
     )
     if args.once:
         print(json.dumps(machine.run_once(), ensure_ascii=False, indent=2))

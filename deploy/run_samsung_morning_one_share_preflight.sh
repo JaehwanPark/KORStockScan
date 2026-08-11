@@ -5,6 +5,11 @@ PROJECT_DIR="/home/ubuntu/KORStockScan"
 PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 TARGET_DATE="$(/bin/date +%F)"
 
+PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" -m \
+  src.engine.automation.samsung_machine_entry_policy_apply \
+  --target-date "$TARGET_DATE" \
+  --write
+
 for attempt in $(/usr/bin/seq 1 18); do
   if /usr/bin/tmux has-session -t bot 2>/dev/null; then
     if PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" -m \

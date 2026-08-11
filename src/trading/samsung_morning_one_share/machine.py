@@ -142,6 +142,43 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
     def _window(self, route: str) -> EntryWindow:
         return self.policy.nxt if route == "NXT" else self.policy.sor
 
+    def _signal_features(
+        self, *, route: str, signal_bar: object, open_price: int, plans: list[dict]
+    ) -> dict:
+        window = self._window(route)
+        return {
+            "schema": "samsung_morning_entry_signal_features_v1",
+            "strategy": "morning",
+            "source": f"kiwoom_005930_{route.lower()}_opening_price",
+            "route": route,
+            "routes": [route],
+            "signal_bar": str(signal_bar),
+            "opening_price": int(open_price),
+            "opening_prices": {route: int(open_price)},
+            "required_drawdown_pct": float(window.drawdown_pct),
+            "required_drawdown_pct_by_route": {route: float(window.drawdown_pct)},
+            "entry_window_start": window.open_time.isoformat(),
+            "entry_window_deadline": window.deadline.isoformat(),
+            "entry_windows": {
+                route: {
+                    "start": window.open_time.isoformat(),
+                    "deadline": window.deadline.isoformat(),
+                }
+            },
+            "target_ticks": int(self.policy.target_ticks),
+            "runtime_policy_source": str(self.policy.runtime_policy_source),
+            "runtime_policy_hash": str(self.policy.runtime_policy_hash),
+            "entry_legs": [
+                {
+                    "leg_id": str(plan["leg_id"]),
+                    "price_role": str(plan["price_role"]),
+                    "entry_price": int(plan["entry_price"]),
+                    "route": route,
+                }
+                for plan in plans
+            ],
+        }
+
     def _move_to_sor(self, now: datetime, leg: dict) -> None:
         leg.update(
             {
@@ -238,13 +275,79 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 now, "sor_open_price_wait", leg_id=leg["leg_id"], error=opening.error
             )
             return False
-        plans = {
-            plan["leg_id"]: plan
-            for plan in self.policy.entry_legs(
-                opening.price, self.policy.sor.drawdown_pct
-            )
+        plan_list = self.policy.entry_legs(opening.price, self.policy.sor.drawdown_pct)
+        plans = {plan["leg_id"]: plan for plan in plan_list}
+        for pending_leg in self._state.get("legs", []):
+            if (
+                pending_leg.get("route") != "SOR"
+                or pending_leg.get("status") != "PLANNED"
+            ):
+                continue
+            plan = plans.get(str(pending_leg.get("leg_id") or ""))
+            if plan:
+                pending_leg["entry_price"] = int(plan["entry_price"])
+        features = dict(self._state.get("signal_features") or {})
+        opening_prices = dict(features.get("opening_prices") or {})
+        opening_prices["SOR"] = int(opening.price)
+        routes = sorted(
+            {
+                str(item.get("route") or "")
+                for item in self._state.get("legs", [])
+                if item.get("route")
+            }
+        )
+        opening_prices = {
+            route_name: value
+            for route_name, value in opening_prices.items()
+            if route_name in routes
         }
-        leg["entry_price"] = int(plans[str(leg["leg_id"])]["entry_price"])
+        entry_windows = {
+            route_name: {
+                "start": self._window(route_name).open_time.isoformat(),
+                "deadline": self._window(route_name).deadline.isoformat(),
+            }
+            for route_name in routes
+        }
+        features.update(
+            {
+                "source": "kiwoom_005930_opening_prices",
+                "route": routes[0] if len(routes) == 1 else "MIXED",
+                "routes": routes,
+                "opening_price": (int(opening.price) if routes == ["SOR"] else 0),
+                "opening_prices": opening_prices,
+                "required_drawdown_pct": (
+                    float(self.policy.sor.drawdown_pct) if routes == ["SOR"] else None
+                ),
+                "required_drawdown_pct_by_route": {
+                    route_name: float(self._window(route_name).drawdown_pct)
+                    for route_name in routes
+                },
+                "entry_window_start": (
+                    entry_windows[routes[0]]["start"] if len(routes) == 1 else ""
+                ),
+                "entry_window_deadline": (
+                    entry_windows[routes[0]]["deadline"] if len(routes) == 1 else ""
+                ),
+                "entry_windows": entry_windows,
+                "entry_legs": [
+                    {
+                        "leg_id": str(item.get("leg_id") or ""),
+                        "price_role": str(item.get("price_role") or ""),
+                        "entry_price": int(item.get("entry_price", 0) or 0),
+                        "route": str(item.get("route") or ""),
+                    }
+                    for item in self._state.get("legs", [])
+                ],
+            }
+        )
+        self._state["signal_features"] = features
+        if routes == ["SOR"]:
+            self._state.update(
+                {
+                    "signal_bar": opening.source_timestamp,
+                    "signal_close": int(opening.price),
+                }
+            )
         return True
 
     def _submit_planned_buys(self, now: datetime) -> None:
@@ -385,6 +488,12 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 "attempt_consumed": True,
                 "signal_bar": signal_bar,
                 "signal_close": open_price,
+                "signal_features": self._signal_features(
+                    route=route,
+                    signal_bar=signal_bar,
+                    open_price=open_price,
+                    plans=plans,
+                ),
                 "legs": [_morning_leg(plan, route) for plan in plans],
                 "blocked_reason": "",
             }

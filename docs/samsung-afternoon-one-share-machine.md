@@ -37,3 +37,11 @@ Live mode forbids `--once` and custom state or lock paths. Any interrupted or am
 ## Installation and rollback
 
 After an explicit live-start decision, install with `sudo deploy/install_samsung_afternoon_one_share_systemd.sh`. Roll back only this machine with `sudo deploy/uninstall_samsung_afternoon_one_share_systemd.sh`; neither command changes or restarts the morning machine or widget service.
+
+## Postclose entry observation
+
+When a live episode is armed, `signal_features` freezes the completed signal bar, rolling high/low, observed drawdown and near-low distance, 30-bar lookback, five-bar entry validity, both leg prices, and the fixed +2-tick target. The 20:10 `samsung_machine_entry_tuning` report reads only the target-date state and earlier daily artifacts from the same producer; it does not query historical prices. Actual broker fills remain separate by leg, and order identifiers/audit payloads are not copied.
+
+The report compares the current signal cohort only with stricter observed subsets: drawdown may move from 1.25% to at most 1.50%, or near-low distance from 0.20% to at least 0.10%. It cannot estimate a relaxed threshold or a different cancel window. A postclose candidate requires the source-quality preflight, cumulative episode and completed-leg floors, positive rolling10/20 and cumulative notional EV, and no held/unresolved inventory. Across midday and afternoon, at most one machine and one entry axis may tighten on a given next-session PREOPEN.
+
+The preflight wrapper materializes an exact-date applied policy before the live service starts. Missing or stale candidates use the verified baseline; an invalid latest candidate or exact-date artifact blocks before broker gateway construction. A valid exact-date artifact is immutable and reused by later preflights that day. No-stop holding, two one-share legs, five completed entry bars, +2 ticks, provider, bot, cap, and broker guards are outside tuning authority.
