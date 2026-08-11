@@ -19,6 +19,12 @@ _INSTALLER_PATH = (
     / "windows"
     / "Install-SamsungPriceWidget.ps1"
 )
+_GUNICORN_WIDGET_DROPIN_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "deploy"
+    / "systemd"
+    / "korstockscan-gunicorn-widget.conf"
+)
 _SPEC = importlib.util.spec_from_file_location("samsung_price_widget", _WIDGET_PATH)
 assert _SPEC and _SPEC.loader
 widget = importlib.util.module_from_spec(_SPEC)
@@ -167,6 +173,7 @@ def test_widget_payload_parser_accepts_safe_advisory_contract():
     quote = widget.parse_quote_payload(payload, received_at=now)
 
     assert quote.advisory_state == "ENTRY_CAUTION"
+    assert quote.order_session == "KRX_REGULAR"
     assert quote.trend_assessment_state == "TREND_STABLE"
     assert quote.entry_price_low == 221000
     assert quote.external_risk_level == "CAUTION"
@@ -499,6 +506,139 @@ def test_widget_requires_https_and_access_key():
     )
 
 
+def test_widget_derives_separate_https_order_endpoint():
+    assert (
+        widget.order_endpoint_url(
+            "https://korstockscan.example/api/widget/samsung-price"
+        )
+        == "https://korstockscan.example/api/widget/samsung-order"
+    )
+    with pytest.raises(ValueError, match="invalid_order_endpoint"):
+        widget.order_endpoint_url("http://example.test/api/widget/samsung-price")
+
+
+def test_widget_manual_order_uses_dedicated_key_and_validates_receipt(monkeypatch):
+    captured = {}
+    request_id = "89725f7c-74e1-4436-88ef-91839579f4f3"
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def read():
+            return (
+                __import__("json")
+                .dumps(
+                    {
+                        "status": "accepted",
+                        "authority": "operator_widget_manual_order_v1",
+                        "client_request_id": request_id,
+                        "side": "BUY",
+                        "quantity": 3,
+                        "accepted_order_count": 2,
+                        "expected_order_count": 2,
+                        "orders": [],
+                    }
+                )
+                .encode("utf-8")
+            )
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = __import__("json").loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(widget, "urlopen", fake_urlopen)
+    settings = widget.WidgetSettings(
+        "https://korstockscan.example/api/widget/samsung-price",
+        "read-key",
+        "order-key",
+    )
+
+    result = widget.submit_manual_order(
+        settings,
+        side="BUY",
+        quantity=3,
+        displayed_price=230_500,
+        client_request_id=request_id,
+    )
+
+    assert result["status"] == "accepted"
+    assert captured["url"].endswith("/api/widget/samsung-order")
+    assert captured["headers"]["X-korstockscan-widget-order-key"] == "order-key"
+    assert "read-key" not in captured["headers"].values()
+    assert captured["body"] == {
+        "side": "BUY",
+        "quantity": 3,
+        "displayed_price": 230_500,
+        "client_request_id": request_id,
+    }
+
+
+def test_widget_manual_order_requires_order_key():
+    with pytest.raises(RuntimeError, match="주문 키 필요"):
+        widget.submit_manual_order(
+            widget.WidgetSettings(
+                "https://example.test/api/widget/samsung-price", "read-key"
+            ),
+            side="SELL",
+            quantity=1,
+            displayed_price=230_500,
+            client_request_id="df788734-664c-4fac-9e27-dd4f73e58aa9",
+        )
+
+
+def test_widget_preserves_ambiguous_broker_receipt_from_http_error(monkeypatch):
+    request_id = "31b40041-7c03-43e4-bba0-c41c7f22d43f"
+    body = (
+        __import__("json")
+        .dumps(
+            {
+                "status": "ambiguous",
+                "authority": "operator_widget_manual_order_v1",
+                "client_request_id": request_id,
+                "side": "BUY",
+                "quantity": 2,
+                "accepted_order_count": 1,
+                "expected_order_count": 2,
+                "orders": [{"order_no": "ORDER-1", "accepted": True}],
+            }
+        )
+        .encode("utf-8")
+    )
+
+    def ambiguous_urlopen(request, timeout):
+        raise widget.HTTPError(
+            request.full_url,
+            502,
+            "ambiguous",
+            hdrs=None,
+            fp=__import__("io").BytesIO(body),
+        )
+
+    monkeypatch.setattr(widget, "urlopen", ambiguous_urlopen)
+    result = widget.submit_manual_order(
+        widget.WidgetSettings(
+            "https://example.test/api/widget/samsung-price",
+            "read-key",
+            "order-key",
+        ),
+        side="BUY",
+        quantity=2,
+        displayed_price=230_500,
+        client_request_id=request_id,
+    )
+
+    assert result["status"] == "ambiguous"
+    assert result["orders"][0]["order_no"] == "ORDER-1"
+
+
 def test_widget_refreshes_every_10_seconds():
     assert widget.POLL_INTERVAL_MS == 10_000
 
@@ -509,3 +649,14 @@ def test_windows_installer_uses_a_resolved_ascii_shortcut_path():
     assert "[Environment+SpecialFolder]::DesktopDirectory" in installer
     assert "'SamsungPriceWidget.lnk'" in installer
     assert "CreateShortcut([string]$shortcutPath)" in installer
+    assert "[string]$OrderAccessKey" in installer
+    assert "order_access_key = $OrderAccessKey" in installer
+
+
+def test_gunicorn_widget_dropin_keeps_quote_and_order_keys_separate():
+    dropin = _GUNICORN_WIDGET_DROPIN_PATH.read_text(encoding="utf-8")
+
+    assert "KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY_FILE=" in dropin
+    assert "KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY_FILE=" in dropin
+    assert "samsung-price-widget.key" in dropin
+    assert "samsung-price-widget-order.key" in dropin

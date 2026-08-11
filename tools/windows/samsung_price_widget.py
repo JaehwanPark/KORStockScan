@@ -1,8 +1,8 @@
-"""Small Windows widget that shows Samsung Electronics' 10-second price delta.
+"""Samsung quote/advisory widget with explicit operator-confirmed orders.
 
-The widget only calls the KORStockScan AWS read-only quote endpoint.  It never
-stores a Kiwoom app key, secret key, or bearer token, and it cannot issue a
-token, submit an order, or control the trading bot.
+The widget never stores a Kiwoom app key, secret key, or bearer token. Quote
+and order access use separate AWS keys; every order requires a button click
+and a confirmation dialog.
 """
 
 from __future__ import annotations
@@ -12,19 +12,22 @@ import math
 import os
 import threading
 import tkinter as tk
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
+from tkinter import messagebox
 
 APP_NAME = "SamsungPriceWidget"
 POLL_INTERVAL_MS = 10_000
 LOCAL_ADVISORY_MAX_AGE_SEC = 25
-WINDOW_SIZE = "190x182"
+WINDOW_SIZE = "190x190"
 ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
-CHART_WIDTH = 174
-CHART_HEIGHT = 34
+ORDER_KEY_HEADER = "X-KORStockScan-Widget-Order-Key"
+MAX_MANUAL_ORDER_QTY = 100
 
 ADVISORY_STATES = {
     "DATA_WAIT",
@@ -48,6 +51,7 @@ EXIT_ADVISORY_STATES = {
     "EXIT_READY",
     "EXIT_CANCELLED",
 }
+ACTIVE_ORDER_SESSIONS = {"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET"}
 
 
 def default_config_path() -> Path:
@@ -59,6 +63,7 @@ def default_config_path() -> Path:
 class WidgetSettings:
     endpoint_url: str
     access_key: str
+    order_access_key: str = ""
 
 
 def load_settings(config_path: Path | None = None) -> WidgetSettings:
@@ -81,7 +86,16 @@ def load_settings(config_path: Path | None = None) -> WidgetSettings:
         or payload.get("access_key")
         or ""
     ).strip()
-    return WidgetSettings(endpoint_url=endpoint_url, access_key=access_key)
+    order_access_key = str(
+        os.getenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY")
+        or payload.get("order_access_key")
+        or ""
+    ).strip()
+    return WidgetSettings(
+        endpoint_url=endpoint_url,
+        access_key=access_key,
+        order_access_key=order_access_key,
+    )
 
 
 def validate_settings(settings: WidgetSettings) -> str | None:
@@ -90,6 +104,16 @@ def validate_settings(settings: WidgetSettings) -> str | None:
     if not settings.endpoint_url.lower().startswith("https://"):
         return "HTTPS URL 필요"
     return None
+
+
+def order_endpoint_url(endpoint_url: str) -> str:
+    parsed = urlsplit(str(endpoint_url or "").strip())
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError("invalid_order_endpoint")
+    if not parsed.path.endswith("/api/widget/samsung-price"):
+        raise ValueError("invalid_order_endpoint")
+    path = parsed.path[: -len("samsung-price")] + "samsung-order"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 @dataclass(frozen=True)
@@ -104,6 +128,7 @@ class Quote:
     market_venue: str
     market_cohort: str
     market_session: str
+    order_session: str
     advisory_state: str
     trend_assessment_state: str
     entry_price_low: int | None
@@ -268,6 +293,7 @@ def parse_quote_payload(
     observed_at = None
     advisory_observed_at = None
     advisory_valid_until = None
+    order_session = "UNKNOWN"
     if advisory_payload is not None:
         if not isinstance(advisory_payload, dict):
             raise ValueError("invalid_advisory")
@@ -279,6 +305,7 @@ def parse_quote_payload(
         ):
             raise ValueError("invalid_advisory_authority")
         advisory_state = str(advisory_payload.get("state") or "DATA_WAIT").strip()
+        order_session = str(advisory_payload.get("session") or "UNKNOWN").strip()
         if advisory_state not in ADVISORY_STATES:
             raise ValueError("invalid_advisory_state")
         trend_assessment = advisory_payload.get("trend_assessment") or {}
@@ -472,6 +499,7 @@ def parse_quote_payload(
         market_venue=market_venue,
         market_cohort=market_cohort,
         market_session=market_session,
+        order_session=order_session,
         advisory_state=advisory_state,
         trend_assessment_state=trend_assessment_state,
         entry_price_low=entry_price_low,
@@ -524,18 +552,78 @@ def fetch_current_price(settings: WidgetSettings, *, timeout_sec: int = 10) -> Q
     return parse_quote_payload(payload, received_at=datetime.now().astimezone())
 
 
+def submit_manual_order(
+    settings: WidgetSettings,
+    *,
+    side: str,
+    quantity: int,
+    displayed_price: int,
+    client_request_id: str,
+    timeout_sec: int = 10,
+) -> dict:
+    if not settings.order_access_key:
+        raise RuntimeError("주문 키 필요")
+    payload = json.dumps(
+        {
+            "side": side,
+            "quantity": quantity,
+            "displayed_price": displayed_price,
+            "client_request_id": client_request_id,
+        }
+    ).encode("utf-8")
+    request = Request(
+        order_endpoint_url(settings.endpoint_url),
+        data=payload,
+        headers={
+            ORDER_KEY_HEADER: settings.order_access_key,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout_sec) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            response_payload = json.loads(exc.read().decode("utf-8"))
+        except (OSError, ValueError, AttributeError):
+            raise RuntimeError(f"HTTP {exc.code}") from exc
+        if not isinstance(response_payload, dict):
+            raise RuntimeError(f"HTTP {exc.code}") from exc
+        if response_payload.get("authority") != "operator_widget_manual_order_v1":
+            reason = str(response_payload.get("reason") or f"HTTP {exc.code}")
+            raise RuntimeError(reason) from exc
+    except (URLError, OSError, ValueError) as exc:
+        raise RuntimeError("주문 연결 실패") from exc
+    if not isinstance(response_payload, dict):
+        raise RuntimeError("주문 응답 오류")
+    if (
+        response_payload.get("authority") != "operator_widget_manual_order_v1"
+        or response_payload.get("client_request_id") != client_request_id
+        or response_payload.get("side") != side
+        or response_payload.get("quantity") != quantity
+        or response_payload.get("status")
+        not in {"accepted", "partial", "rejected", "ambiguous"}
+    ):
+        raise RuntimeError("주문 응답 검증 실패")
+    return response_payload
+
+
 class SamsungPriceWidget:
     def __init__(self, root: tk.Tk, settings: WidgetSettings) -> None:
         self.root = root
         self.settings = settings
         self.previous_price: int | None = None
         self.inflight = False
+        self.order_inflight = False
+        self.latest_quote: Quote | None = None
         self.last_success_at: datetime | None = None
 
         root.title("삼성전자 10초")
         root.geometry(WINDOW_SIZE)
-        root.minsize(190, 182)
-        root.maxsize(190, 182)
+        root.minsize(190, 190)
+        root.maxsize(190, 190)
         root.attributes("-topmost", True)
         root.configure(bg="#1e2430")
         root.protocol("WM_DELETE_WINDOW", root.destroy)
@@ -544,7 +632,7 @@ class SamsungPriceWidget:
         frame.pack(fill="both", expand=True)
         tk.Label(
             frame,
-            text="삼성 005930 · 관측용/자동주문 아님",
+            text="삼성 005930 · 수동 실주문",
             fg="#dfe7f3",
             bg="#1e2430",
             font=("Malgun Gothic", 8, "bold"),
@@ -604,14 +692,57 @@ class SamsungPriceWidget:
             anchor="w",
         )
         self.delta_label.pack(fill="x")
-        self.chart_canvas = tk.Canvas(
-            frame,
-            width=CHART_WIDTH,
-            height=CHART_HEIGHT,
-            bg="#151a22",
-            highlightthickness=0,
+        order_frame = tk.Frame(frame, bg="#1e2430")
+        order_frame.pack(fill="x", pady=(3, 0))
+        tk.Label(
+            order_frame,
+            text="수량",
+            fg="#dfe7f3",
+            bg="#1e2430",
+            font=("Malgun Gothic", 8),
+        ).pack(side="left")
+        self.quantity_var = tk.StringVar(value="1")
+        self.quantity_entry = tk.Entry(
+            order_frame,
+            textvariable=self.quantity_var,
+            width=4,
+            justify="right",
+            font=("Segoe UI", 9),
         )
-        self.chart_canvas.pack(fill="x", pady=(2, 0))
+        self.quantity_entry.pack(side="left", padx=(3, 5))
+        self.buy_button = tk.Button(
+            order_frame,
+            text="매수",
+            width=5,
+            command=lambda: self._submit_order("BUY"),
+            bg="#b13b3b",
+            fg="#ffffff",
+            activebackground="#d34a4a",
+            activeforeground="#ffffff",
+            font=("Malgun Gothic", 8, "bold"),
+        )
+        self.buy_button.pack(side="left", padx=(0, 3))
+        self.sell_button = tk.Button(
+            order_frame,
+            text="매도",
+            width=5,
+            command=lambda: self._submit_order("SELL"),
+            bg="#3568a8",
+            fg="#ffffff",
+            activebackground="#477fc3",
+            activeforeground="#ffffff",
+            font=("Malgun Gothic", 8, "bold"),
+        )
+        self.sell_button.pack(side="left")
+        self.order_status_label = tk.Label(
+            frame,
+            text="주문 키 확인 중",
+            fg="#8fa2b7",
+            bg="#1e2430",
+            font=("Malgun Gothic", 7),
+            anchor="w",
+        )
+        self.order_status_label.pack(fill="x")
         self.status_label = tk.Label(
             frame,
             text="초기화 중",
@@ -626,7 +757,14 @@ class SamsungPriceWidget:
         problem = validate_settings(self.settings)
         if problem:
             self.status_label.configure(text=problem, fg="#ffb86c")
+            self._set_order_buttons_enabled(False)
             return
+        if not self.settings.order_access_key:
+            self.order_status_label.configure(text="주문 키 없음 · 조회만 가능")
+            self._set_order_buttons_enabled(False)
+        else:
+            self.order_status_label.configure(text="실주문 전 확인창 표시")
+            self._set_order_buttons_enabled(False)
         self._refresh()
         self.root.after(1_000, self._watchdog)
 
@@ -648,6 +786,7 @@ class SamsungPriceWidget:
 
     def _apply_quote(self, quote: Quote) -> None:
         self.last_success_at = datetime.now().astimezone()
+        self.latest_quote = quote
         current_price = quote.current_price
         previous = self.previous_price
         self.previous_price = current_price
@@ -693,7 +832,6 @@ class SamsungPriceWidget:
         )
         self.trend_label.configure(text=trend_text, fg=trend_color)
         self._apply_advisory(quote)
-        self._draw_minute_chart(quote.minute_chart)
         if previous is None:
             self.delta_label.configure(text="직전: —", fg="#aab7c8")
         else:
@@ -712,6 +850,10 @@ class SamsungPriceWidget:
                 f"{venue_label} · AWS 공유 토큰"
             ),
             fg="#8fa2b7",
+        )
+        self._set_order_buttons_enabled(
+            bool(self.settings.order_access_key)
+            and quote.order_session in ACTIVE_ORDER_SESSIONS
         )
         self._finish_cycle()
 
@@ -842,60 +984,161 @@ class SamsungPriceWidget:
             fg="#8fa2b7",
         )
 
-    def _draw_minute_chart(self, minute_chart: tuple[tuple[str, int], ...]) -> None:
-        canvas = self.chart_canvas
-        canvas.delete("all")
-        if len(minute_chart) < 2:
-            canvas.create_text(
-                5,
-                CHART_HEIGHT // 2,
-                text="20분 차트 데이터 대기",
-                fill="#8fa2b7",
-                font=("Malgun Gothic", 8),
-                anchor="w",
+    def _set_order_buttons_enabled(self, enabled: bool) -> None:
+        state = "normal" if enabled and not self.order_inflight else "disabled"
+        self.buy_button.configure(state=state)
+        self.sell_button.configure(state=state)
+
+    def _order_ui_available(self) -> bool:
+        return bool(
+            self.settings.order_access_key
+            and self.latest_quote is not None
+            and self.latest_quote.order_session in ACTIVE_ORDER_SESSIONS
+        )
+
+    def _validated_quantity(self) -> int | None:
+        try:
+            quantity = int(self.quantity_var.get().strip())
+        except ValueError:
+            quantity = 0
+        if quantity <= 0 or quantity > MAX_MANUAL_ORDER_QTY:
+            messagebox.showerror(
+                "수량 오류", f"수량은 1~{MAX_MANUAL_ORDER_QTY}주로 입력하세요."
+            )
+            return None
+        return quantity
+
+    def _submit_order(self, side: str) -> None:
+        if self.order_inflight:
+            return
+        if not self.settings.order_access_key:
+            messagebox.showerror("주문 불가", "전용 주문 키가 설정되지 않았습니다.")
+            return
+        quote = self.latest_quote
+        if quote is None or self.last_success_at is None:
+            messagebox.showerror("주문 불가", "최신 가격을 먼저 수신해야 합니다.")
+            return
+        if quote.order_session not in ACTIVE_ORDER_SESSIONS:
+            messagebox.showerror(
+                "주문 불가", "현재는 주문 가능한 KRX/NXT 세션이 아닙니다."
             )
             return
+        age_sec = (datetime.now().astimezone() - self.last_success_at).total_seconds()
+        if age_sec > LOCAL_ADVISORY_MAX_AGE_SEC:
+            messagebox.showerror(
+                "주문 불가", "가격이 오래되었습니다. 갱신 후 다시 누르세요."
+            )
+            return
+        quantity = self._validated_quantity()
+        if quantity is None:
+            return
 
-        prices = [close for _, close in minute_chart]
-        minimum, maximum = min(prices), max(prices)
-        left, right, top, bottom = 3, CHART_WIDTH - 3, 8, CHART_HEIGHT - 5
-        canvas.create_line(
-            left, (top + bottom) / 2, right, (top + bottom) / 2, fill="#293342"
-        )
-        if maximum == minimum:
-            y_values = [(top + bottom) / 2] * len(prices)
+        route = "SOR" if quote.market_venue == "KRX" else "NXT"
+        if side == "BUY":
+            upper_qty = (quantity + 1) // 2
+            lower_qty = quantity // 2
+            detail = f"{quote.current_price:,}원 × {upper_qty}주"
+            if lower_qty:
+                detail += f"\n현재가 -0.5% × {lower_qty}주"
+            title = "삼성전자 실매수 확인"
+            prompt = f"{detail}\n경로: {route}\n\n실주문을 접수할까요?"
         else:
-            y_values = [
-                bottom - ((price - minimum) / (maximum - minimum)) * (bottom - top)
-                for price in prices
-            ]
-        step = (right - left) / (len(prices) - 1)
-        points = [
-            coordinate
-            for index, y_value in enumerate(y_values)
-            for coordinate in (left + index * step, y_value)
+            order_type = "시장가" if route == "SOR" else "현재가 지정가"
+            title = "삼성전자 실매도 확인"
+            prompt = (
+                f"{quantity}주 · {order_type}\n"
+                f"표시 현재가: {quote.current_price:,}원\n경로: {route}\n\n"
+                "보유수량 자동확인 없이 실주문을 접수할까요?"
+            )
+        if not messagebox.askyesno(title, prompt, icon="warning"):
+            return
+
+        request_id = str(uuid.uuid4())
+        self.order_inflight = True
+        self._set_order_buttons_enabled(False)
+        self.order_status_label.configure(text="실주문 접수 중…", fg="#ffb86c")
+        threading.Thread(
+            target=self._order_worker,
+            kwargs={
+                "side": side,
+                "quantity": quantity,
+                "displayed_price": quote.current_price,
+                "request_id": request_id,
+            },
+            daemon=True,
+        ).start()
+
+    def _order_worker(
+        self,
+        *,
+        side: str,
+        quantity: int,
+        displayed_price: int,
+        request_id: str,
+    ) -> None:
+        try:
+            response = submit_manual_order(
+                self.settings,
+                side=side,
+                quantity=quantity,
+                displayed_price=displayed_price,
+                client_request_id=request_id,
+            )
+        except Exception as exc:
+            message = str(exc)
+            self.root.after(0, lambda message=message: self._apply_order_error(message))
+        else:
+            self.root.after(0, lambda: self._apply_order_result(response))
+
+    def _apply_order_result(self, response: dict) -> None:
+        status = str(response.get("status") or "")
+        orders = response.get("orders") or []
+        accepted = int(response.get("accepted_order_count") or 0)
+        expected = int(response.get("expected_order_count") or 0)
+        order_numbers = [
+            str(order.get("order_no"))
+            for order in orders
+            if isinstance(order, dict) and order.get("order_no")
         ]
-        color = "#ff6b6b" if prices[-1] >= prices[0] else "#5ca9ff"
-        canvas.create_line(*points, fill=color, width=2, smooth=True)
-        canvas.create_oval(
-            points[-2] - 2,
-            points[-1] - 2,
-            points[-2] + 2,
-            points[-1] + 2,
-            fill=color,
-            outline=color,
-        )
-        canvas.create_text(
-            4,
-            2,
-            text=f"20분 · {minute_chart[0][0]}–{minute_chart[-1][0]}",
-            fill="#8fa2b7",
-            font=("Segoe UI", 6),
-            anchor="nw",
+        if status in {"partial", "ambiguous"}:
+            prefix = "부분접수" if status == "partial" else "접수상태 불명"
+            text = f"{prefix} {accepted}/{expected} · 재주문 금지"
+            self.order_status_label.configure(text=text, fg="#ffb86c")
+            messagebox.showwarning(
+                "broker 확인 필요",
+                f"{text}\n주문번호: {', '.join(order_numbers) or '확인 필요'}",
+            )
+        elif status == "rejected":
+            messages = [
+                str(order.get("return_msg") or order.get("return_code") or "거절")
+                for order in orders
+                if isinstance(order, dict)
+            ]
+            text = "주문 거절"
+            self.order_status_label.configure(text=text, fg="#ffb86c")
+            messagebox.showerror("주문 거절", " · ".join(messages) or text)
+        else:
+            text = f"접수완료 {accepted}/{expected}"
+            self.order_status_label.configure(text=text, fg="#7bd88f")
+            messagebox.showinfo(
+                "주문 접수",
+                f"{text}\n주문번호: {', '.join(order_numbers) or '확인 필요'}",
+            )
+        self.order_inflight = False
+        self._set_order_buttons_enabled(self._order_ui_available())
+
+    def _apply_order_error(self, message: str) -> None:
+        self.order_status_label.configure(text=f"주문 실패 · {message}", fg="#ffb86c")
+        self.order_inflight = False
+        self._set_order_buttons_enabled(self._order_ui_available())
+        messagebox.showerror(
+            "주문 확인 필요",
+            f"{message}\n재주문 전 broker 주문내역을 확인하세요.",
         )
 
     def _apply_error(self, message: str) -> None:
         self._clear_advisory_for_stale()
+        self._set_order_buttons_enabled(False)
         age_text = self._last_success_age_text()
         self.status_label.configure(
             text=f"{message} · 마지막 성공 {age_text}", fg="#ffb86c"
@@ -923,6 +1166,7 @@ class SamsungPriceWidget:
             ).total_seconds()
             if age_sec > LOCAL_ADVISORY_MAX_AGE_SEC:
                 self._clear_advisory_for_stale()
+                self._set_order_buttons_enabled(False)
                 self.status_label.configure(
                     text=f"응답 지연 · 마지막 성공 {int(age_sec)}초 전",
                     fg="#ffb86c",

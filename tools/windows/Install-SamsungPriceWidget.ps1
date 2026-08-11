@@ -4,7 +4,10 @@ param(
     [string]$ApiUrl,
 
     [Parameter(Mandatory = $true)]
-    [string]$AccessKey
+    [string]$AccessKey,
+
+    [Parameter(Mandatory = $true)]
+    [string]$OrderAccessKey
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,6 +20,7 @@ New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 @{
     endpoint_url = $ApiUrl
     access_key = $AccessKey
+    order_access_key = $OrderAccessKey
 } | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
 
 # %APPDATA% is already scoped to the interactive Windows user.  Tightening the
@@ -44,7 +48,7 @@ $shortcut = $shell.CreateShortcut([string]$shortcutPath)
 $shortcut.TargetPath = $pythonw
 $shortcut.Arguments = ('"{0}"' -f (Join-Path $scriptDir 'samsung_price_widget.py'))
 $shortcut.WorkingDirectory = $scriptDir
-$shortcut.Description = '삼성전자 현재가와 직전 10초 가격 차이'
+$shortcut.Description = '삼성전자 현재가와 운영자 확인 수동주문'
 $shortcut.Save()
 
 Write-Host "바탕화면 바로가기를 만들었습니다: $shortcutPath"

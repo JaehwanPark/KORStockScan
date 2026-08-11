@@ -137,6 +137,18 @@ def _validated_existing_order_inputs(
     return clean_code, clean_qty, clean_route
 
 
+def _validated_limit_price(price: int) -> int:
+    if isinstance(price, bool):
+        raise ValueError("invalid_order_price")
+    try:
+        clean_price = int(price)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid_order_price") from exc
+    if clean_price <= 0 or clean_price % get_tick_size(clean_price) != 0:
+        raise ValueError("invalid_order_price")
+    return clean_price
+
+
 def _extract_rows(payload: object) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -240,6 +252,35 @@ class KiwoomSharedTokenOrderGateway:
         )
         return self._submit_result(response, body)
 
+    def submit_limit_buy(
+        self, *, code: str, qty: int, route: str, price: int
+    ) -> SubmitResult:
+        """Submit an operator-priced limit buy through the shared token only."""
+        clean_code, clean_qty, clean_route = _validated_order_inputs(
+            code=code, qty=qty, route=route
+        )
+        clean_price = _validated_limit_price(price)
+        if is_buy_side_paused():
+            return SubmitResult(
+                accepted=False,
+                order_no="",
+                return_code="TRADING_PAUSED",
+                return_msg="persistent buy-side pause is active",
+            )
+        response, body = self._post(
+            endpoint="/api/dostk/ordr",
+            api_id="kt10000",
+            payload={
+                "dmst_stex_tp": clean_route,
+                "stk_cd": clean_code,
+                "ord_qty": str(clean_qty),
+                "ord_uv": str(clean_price),
+                "trde_tp": "0",
+                "cond_uv": "",
+            },
+        )
+        return self._submit_result(response, body)
+
     def submit_sell(self, *, code: str, qty: int, route: str) -> SubmitResult:
         clean_code, clean_qty, clean_route = _validated_order_inputs(
             code=code, qty=qty, route=route
@@ -268,14 +309,7 @@ class KiwoomSharedTokenOrderGateway:
         clean_code, clean_qty, clean_route = _validated_order_inputs(
             code=code, qty=qty, route=route
         )
-        if isinstance(price, bool):
-            raise ValueError("invalid_order_price")
-        try:
-            clean_price = int(price)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("invalid_order_price") from exc
-        if clean_price <= 0 or clean_price % get_tick_size(clean_price) != 0:
-            raise ValueError("invalid_order_price")
+        clean_price = _validated_limit_price(price)
         response, body = self._post(
             endpoint="/api/dostk/ordr",
             api_id="kt10001",

@@ -1,8 +1,9 @@
-"""Read-only Samsung Electronics quote endpoint for the Windows desktop widget.
+"""Samsung quote endpoint and separately authenticated operator order endpoint.
 
-The endpoint consumes only the AWS server's existing shared Kiwoom token
-cache.  It deliberately has no token-issue, token-refresh, order, account,
-or bot-process control path.
+Both paths consume only the AWS server's existing shared Kiwoom token cache.
+The quote path is read-only. The order path requires a distinct key and an
+explicit Windows-widget action; neither path issues tokens, queries account
+cash, or controls a bot process.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from flask import Blueprint, jsonify, request
 from src.engine.monitoring import samsung_widget_contract
 from src.engine.sniper_config import CONF
 from src.trading.order.tick_utils import get_tick_size
+from src.trading.widget_auto_trade.manual_orders import ManualWidgetOrderExecutor
 from src.utils import kiwoom_utils
 
 samsung_price_widget_bp = Blueprint("samsung_price_widget", __name__)
@@ -28,6 +30,9 @@ samsung_price_widget_bp = Blueprint("samsung_price_widget", __name__)
 _WIDGET_ACCESS_KEY_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY"
 _WIDGET_ACCESS_KEY_FILE_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY_FILE"
 _WIDGET_ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
+_WIDGET_ORDER_KEY_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY"
+_WIDGET_ORDER_KEY_FILE_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY_FILE"
+_WIDGET_ORDER_KEY_HEADER = "X-KORStockScan-Widget-Order-Key"
 _WIDGET_SNAPSHOT_PATH_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH"
 _SAMSUNG_CODE = "005930"
 _SAMSUNG_NAME = "삼성전자"
@@ -40,6 +45,8 @@ _NXT_PREMARKET_END = datetime_time(hour=8, minute=50)
 _KRX_SESSION_START = datetime_time(hour=9)
 _NXT_AFTERMARKET_START = datetime_time(hour=15, minute=40)
 _NXT_AFTERMARKET_END = datetime_time(hour=20)
+_MANUAL_ORDER_SNAPSHOT_MAX_AGE_SEC = 15
+_MANUAL_ORDER_EXECUTOR: ManualWidgetOrderExecutor | None = None
 
 
 def _parse_positive_price(value: object) -> int | None:
@@ -241,11 +248,36 @@ def _authorized_request() -> bool:
     return bool(expected and supplied and hmac.compare_digest(expected, supplied))
 
 
+def _authorized_order_request() -> bool:
+    expected = _widget_order_key()
+    supplied = request.headers.get(_WIDGET_ORDER_KEY_HEADER, "").strip()
+    read_key = _widget_access_key()
+    return bool(
+        expected
+        and supplied
+        and (not read_key or not hmac.compare_digest(expected, read_key))
+        and hmac.compare_digest(expected, supplied)
+    )
+
+
 def _widget_access_key() -> str:
     direct_value = os.getenv(_WIDGET_ACCESS_KEY_ENV, "").strip()
     if direct_value:
         return direct_value
     key_path = os.getenv(_WIDGET_ACCESS_KEY_FILE_ENV, "").strip()
+    if not key_path:
+        return ""
+    try:
+        return Path(key_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _widget_order_key() -> str:
+    direct_value = os.getenv(_WIDGET_ORDER_KEY_ENV, "").strip()
+    if direct_value:
+        return direct_value
+    key_path = os.getenv(_WIDGET_ORDER_KEY_FILE_ENV, "").strip()
     if not key_path:
         return ""
     try:
@@ -267,6 +299,20 @@ def _error_response(reason: str, status_code: int):
     return response
 
 
+def _manual_order_response(result_payload: dict):
+    status = str(result_payload.get("status") or "")
+    status_code = {
+        "accepted": 200,
+        "partial": 207,
+        "rejected": 422,
+        "ambiguous": 502,
+    }.get(status, 500)
+    response = jsonify(result_payload)
+    response.status_code = status_code
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _snapshot_path() -> Path:
     configured = os.getenv(_WIDGET_SNAPSHOT_PATH_ENV, "").strip()
     return (
@@ -274,6 +320,40 @@ def _snapshot_path() -> Path:
         if configured
         else samsung_widget_contract.DEFAULT_SNAPSHOT_PATH
     )
+
+
+def _manual_order_executor() -> ManualWidgetOrderExecutor:
+    global _MANUAL_ORDER_EXECUTOR
+    if _MANUAL_ORDER_EXECUTOR is None:
+        _MANUAL_ORDER_EXECUTOR = ManualWidgetOrderExecutor()
+    return _MANUAL_ORDER_EXECUTOR
+
+
+def _fresh_manual_order_snapshot(observed_at: datetime) -> dict | None:
+    """Return only a coherent active-session quote suitable for manual orders."""
+    payload = samsung_widget_contract.load_snapshot(_snapshot_path())
+    if not samsung_widget_contract.snapshot_is_fresh(
+        payload,
+        now=observed_at,
+        max_age_sec=_MANUAL_ORDER_SNAPSHOT_MAX_AGE_SEC,
+    ):
+        return None
+    context = samsung_widget_contract.session_context(observed_at)
+    persisted_observed_at = samsung_widget_contract.snapshot_observed_at(payload)
+    if not context.active or persisted_observed_at is None:
+        return None
+    if (
+        payload.get("schema_version") != samsung_widget_contract.SNAPSHOT_SCHEMA_VERSION
+        or payload.get("status") != "ok"
+        or payload.get("symbol") != _SAMSUNG_CODE
+        or payload.get("token_mode") != "shared_cache_only"
+        or payload.get("market_venue") != context.market_venue
+        or payload.get("market_cohort") != context.market_cohort
+        or payload.get("quote_request_code") != context.request_code
+        or _parse_positive_price(payload.get("current_price")) is None
+    ):
+        return None
+    return payload
 
 
 def _fresh_collector_snapshot(observed_at: datetime) -> dict | None:
@@ -492,3 +572,75 @@ def get_samsung_price():
     )
     result.headers["Cache-Control"] = "no-store"
     return result
+
+
+@samsung_price_widget_bp.post("/api/widget/samsung-order")
+def submit_samsung_manual_order():
+    """Submit an explicit operator-confirmed Samsung order.
+
+    The collector snapshot, not the Windows payload, owns price, venue and
+    session.  A separate order key prevents read-only widget credentials from
+    becoming broker authority.
+    """
+    if not _authorized_order_request():
+        return _error_response("order_unauthorized", 401)
+    if not request.is_json:
+        return _error_response("json_body_required", 415)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _error_response("invalid_json_body", 400)
+
+    observed_at = _now_kst()
+    executor = _manual_order_executor()
+    try:
+        duplicate = executor.existing_response(
+            client_request_id=body.get("client_request_id"), now=observed_at
+        )
+    except ValueError as exc:
+        return _error_response(str(exc), 400)
+    except RuntimeError as exc:
+        return _error_response(str(exc), 503)
+    if duplicate is not None:
+        return _manual_order_response(duplicate)
+
+    snapshot = _fresh_manual_order_snapshot(observed_at)
+    if snapshot is None:
+        return _error_response("fresh_active_session_snapshot_required", 409)
+    context = samsung_widget_contract.session_context(observed_at)
+    reference_price = _parse_positive_price(snapshot.get("current_price"))
+    snapshot_observed_at = samsung_widget_contract.snapshot_observed_at(snapshot)
+    if reference_price is None or snapshot_observed_at is None:
+        return _error_response("fresh_active_session_snapshot_required", 409)
+
+    displayed_raw = body.get("displayed_price")
+    if isinstance(displayed_raw, bool):
+        return _error_response("displayed_price_required", 400)
+    try:
+        displayed_price = int(displayed_raw)
+    except (TypeError, ValueError):
+        return _error_response("displayed_price_required", 400)
+    if displayed_price <= 0:
+        return _error_response("displayed_price_required", 400)
+    maximum_drift = 2 * max(
+        get_tick_size(displayed_price), get_tick_size(reference_price)
+    )
+    if abs(displayed_price - reference_price) > maximum_drift:
+        return _error_response("displayed_price_moved_refresh_required", 409)
+
+    try:
+        result_payload = executor.execute(
+            side=body.get("side"),
+            quantity=body.get("quantity"),
+            client_request_id=body.get("client_request_id"),
+            reference_price=reference_price,
+            market_venue=context.market_venue,
+            session=context.name,
+            snapshot_observed_at=snapshot_observed_at.isoformat(),
+            now=observed_at,
+        )
+    except ValueError as exc:
+        return _error_response(str(exc), 400)
+    except RuntimeError as exc:
+        return _error_response(str(exc), 503)
+
+    return _manual_order_response(result_payload)

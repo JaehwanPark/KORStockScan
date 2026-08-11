@@ -420,6 +420,138 @@ def test_samsung_widget_requires_kiwoom_return_code(monkeypatch):
     assert response.get_json()["reason"] == "kiwoom_quote_rejected"
 
 
+class _ManualExecutor:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "status": "accepted",
+            "client_request_id": str(kwargs["client_request_id"]),
+            "symbol": "005930",
+            "side": str(kwargs["side"]),
+            "quantity": int(kwargs["quantity"]),
+            "authority": "operator_widget_manual_order_v1",
+            "actual_order_submitted": True,
+            "expected_order_count": 2,
+            "accepted_order_count": 2,
+            "orders": [],
+        }
+
+    def existing_response(self, **kwargs):
+        return None
+
+
+def _manual_order_client(monkeypatch, tmp_path, *, now, price=230_500):
+    client = _client(monkeypatch)
+    snapshot_path = tmp_path / "samsung-order-snapshot.json"
+    context = routes.samsung_widget_contract.session_context(now)
+    snapshot_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": 1,
+                "status": "ok",
+                "symbol": "005930",
+                "current_price": price,
+                "observed_at_kst": (now - timedelta(seconds=5)).isoformat(),
+                "token_mode": "shared_cache_only",
+                "market_venue": context.market_venue,
+                "market_cohort": context.market_cohort,
+                "quote_request_code": context.request_code,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY", "order-secret")
+    monkeypatch.setattr(routes, "_now_kst", lambda: now)
+    executor = _ManualExecutor()
+    monkeypatch.setattr(routes, "_MANUAL_ORDER_EXECUTOR", executor)
+    return client, executor
+
+
+def test_manual_order_requires_dedicated_order_key(monkeypatch, tmp_path):
+    now = datetime(2026, 8, 12, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    client, executor = _manual_order_client(monkeypatch, tmp_path, now=now)
+    body = {
+        "side": "BUY",
+        "quantity": 2,
+        "displayed_price": 230_500,
+        "client_request_id": "0a1e764d-287f-45db-836d-0685fc14746a",
+    }
+
+    assert client.post("/api/widget/samsung-order", json=body).status_code == 401
+    assert (
+        client.post(
+            "/api/widget/samsung-order",
+            json=body,
+            headers={"X-KORStockScan-Widget-Key": "widget-secret"},
+        ).status_code
+        == 401
+    )
+    assert executor.calls == []
+
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY", "widget-secret")
+    assert (
+        client.post(
+            "/api/widget/samsung-order",
+            json=body,
+            headers={"X-KORStockScan-Widget-Order-Key": "widget-secret"},
+        ).status_code
+        == 401
+    )
+
+
+def test_manual_order_uses_fresh_server_price_and_krx_session(monkeypatch, tmp_path):
+    now = datetime(2026, 8, 12, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    client, executor = _manual_order_client(monkeypatch, tmp_path, now=now)
+
+    response = client.post(
+        "/api/widget/samsung-order",
+        json={
+            "side": "BUY",
+            "quantity": 3,
+            "displayed_price": 230_000,
+            "client_request_id": "c2f3d99e-ec9e-4a17-a491-fb12e1e07c02",
+        },
+        headers={"X-KORStockScan-Widget-Order-Key": "order-secret"},
+    )
+
+    assert response.status_code == 200
+    assert executor.calls[0]["reference_price"] == 230_500
+    assert executor.calls[0]["market_venue"] == "KRX"
+    assert executor.calls[0]["session"] == "KRX_REGULAR"
+
+
+def test_manual_order_rejects_stale_snapshot_and_large_display_drift(
+    monkeypatch, tmp_path
+):
+    now = datetime(2026, 8, 12, 9, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    client, executor = _manual_order_client(monkeypatch, tmp_path, now=now)
+    headers = {"X-KORStockScan-Widget-Order-Key": "order-secret"}
+    body = {
+        "side": "SELL",
+        "quantity": 1,
+        "displayed_price": 225_000,
+        "client_request_id": "8750aba6-4aac-462b-b129-c8654ca2c53e",
+    }
+
+    drift = client.post("/api/widget/samsung-order", json=body, headers=headers)
+    assert drift.status_code == 409
+    assert drift.get_json()["reason"] == "displayed_price_moved_refresh_required"
+
+    snapshot_path = routes._snapshot_path()
+    snapshot = __import__("json").loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot["observed_at_kst"] = (now - timedelta(seconds=16)).isoformat()
+    snapshot_path.write_text(__import__("json").dumps(snapshot), encoding="utf-8")
+    body["displayed_price"] = 230_500
+    stale = client.post("/api/widget/samsung-order", json=body, headers=headers)
+    assert stale.status_code == 409
+    assert stale.get_json()["reason"] == "fresh_active_session_snapshot_required"
+    assert executor.calls == []
+
+
 def test_minute_chart_and_trend_use_completed_bars_and_exclude_forming_bar():
     rows = [
         {"cntr_tm": "20260728100000", "cur_prc": "70000"},

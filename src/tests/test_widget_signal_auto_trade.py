@@ -1083,9 +1083,14 @@ def test_shared_token_gateway_blocks_buy_during_global_pause(monkeypatch):
     )
 
     result = gateway.submit_buy(code="005930", qty=1, route="KRX")
+    limit_result = gateway.submit_limit_buy(
+        code="005930", qty=1, route="KRX", price=236_500
+    )
 
     assert result.accepted is False
     assert result.return_code == "TRADING_PAUSED"
+    assert limit_result.accepted is False
+    assert limit_result.return_code == "TRADING_PAUSED"
 
 
 def test_gateway_uses_documented_order_contract_without_cash_or_token_issue(
@@ -1198,6 +1203,44 @@ def test_gateway_routes_krx_limit_sell_through_sor(monkeypatch):
         "dmst_stex_tp": "SOR",
         "stk_cd": "005930",
         "ord_qty": "1",
+        "ord_uv": "236500",
+        "trde_tp": "0",
+        "cond_uv": "",
+    }
+
+
+def test_gateway_routes_operator_limit_buy_through_sor(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {"return_code": 0, "return_msg": "OK", "ord_no": "0001236"}
+
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response()
+
+    session = RecordingSession()
+    monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=session, token_loader=lambda: "cached-token"
+    )
+
+    result = gateway.submit_limit_buy(code="005930", qty=2, route="KRX", price=236_500)
+
+    assert result.accepted is True
+    _, request = session.calls[0]
+    assert request["headers"]["api-id"] == "kt10000"
+    assert request["json"] == {
+        "dmst_stex_tp": "SOR",
+        "stk_cd": "005930",
+        "ord_qty": "2",
         "ord_uv": "236500",
         "trde_tp": "0",
         "cond_uv": "",

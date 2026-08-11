@@ -1,35 +1,53 @@
 # Samsung Price Widget for Windows
 
-`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 182
+`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 190
 pixels) that shows Samsung Electronics (`005930`) current price, the difference
 from the previous successful 10-second query, today's low-price distance, and
-the completed-close direction over 1-, 3-, and 5-minute horizons on one compact
-line. It also draws a compact 20-minute line chart from completed one-minute
-closes; no additional graph is created for the three trend horizons. A compact
-advisory line shows the entry state, tick-normalized price range, primary
-reason, and external-risk quality. A holding-independent exit observation
-temporarily takes display priority when it reaches `EXIT_CAUTION`,
-`EXIT_READY`, or `EXIT_CANCELLED`; it never reads a position or submits a sell.
+the completed-close direction over 1-, 3-, and 5-minute horizons. The former
+20-minute graph has been removed. A compact advisory line remains, followed by
+an operator-entered quantity and explicit `매수`/`매도` real-order buttons.
 
 The implementation contract, state-machine order, formulas, known limits, and
 external-auditor checklist are documented in
 [`docs/audit-reports/2026-08-02-samsung-widget-advisory-external-audit-brief.md`](../../docs/audit-reports/2026-08-02-samsung-widget-advisory-external-audit-brief.md).
 
 The current-price query and previous-price delta refresh every 10 seconds;
-the trend and chart remain based on completed one-minute candles. During the
+the trends remain based on completed one-minute candles. During the
 NXT premarket (`08:00~08:50 KST`), the endpoint requests `005930_NX` for both
 the quote and minute chart, attributes it to `PREMARKET_KRX_LIKE`, and the
 widget status line shows `PRE`. During the NXT aftermarket
 (`15:40~20:00 KST`), it uses the same NXT request code and shows `NXT`.
 
-It calls the KORStockScan AWS endpoint, not Kiwoom directly. The AWS endpoint
+It calls the KORStockScan AWS endpoints, not Kiwoom directly. The AWS server
 uses only the existing `data/runtime/kiwoom_token_cache.json` shared cache and
-never issues, refreshes, revokes, exports, or logs a Kiwoom bearer token. When
-the cache is missing, near expiry, expired, or rejected, it fails closed and
-the widget keeps the last successful price with an `AWS 토큰 대기` status. It
-immediately removes any prior entry state and price range; a 25-second local
-watchdog also expires advisory colors and shows the last-success age. It does
-not access an account, place/cancel orders, or restart/control the bot.
+never issues, refreshes, revokes, exports, or logs a Kiwoom bearer token. It
+does not query holdings, orderable cash, or an account before an operator
+order, and it does not restart/control the bot. Quote and order authority use
+separate keys. Without the order key, quote/advisory display continues while
+both order buttons remain disabled.
+
+Manual order contract:
+
+- Buy quantity is split with the current-price leg first: `ceil(qty/2)` at the
+  fresh server price and `floor(qty/2)` at 0.5% below, both tick-normalized
+  limits. Quantity 1 therefore creates only the current-price leg.
+- A KRX-regular sell is a market order routed through broker `SOR`. NXT
+  premarket/aftermarket sells are NXT limit orders at the fresh current price.
+- Server quantity is bounded to 1-100 by default
+  (`KORSTOCKSCAN_SAMSUNG_WIDGET_MANUAL_MAX_QTY`). A fresh coherent collector
+  snapshot no older than 15 seconds and an active session are mandatory.
+- Each click uses a UUID idempotency key. Buttons are disabled during the
+  request and the server persists `SUBMITTING` before broker transport. A
+  partial or ambiguous two-leg result is reported with accepted order numbers;
+  the operator must check broker orders before retrying.
+- Manual sell quantity is not reconciled with holdings and can affect stock
+  bought manually or by another owner. The confirmation dialog states this;
+  verify the account and avoid overlapping ownership before using it.
+
+When the token/cache is unavailable or the quote is stale, the widget keeps
+the last display but disables ordering. The advisory contract remains pinned
+to read-only `widget_advisory_only`; manual button orders use the separate
+`operator_widget_manual_order_v1` authority.
 The advisory contract is pinned to `authority=widget_advisory_only`,
 `runtime_effect=false`, `actual_order_submitted=false`, and
 `broker_order_forbidden=true`; the Windows client rejects an advisory that
@@ -45,6 +63,13 @@ that value. The file must be readable by the Gunicorn service group only
 `root:www-data`, mode `750`. Then restart only the Gunicorn web service after
 the code is deployed. Do not run `restart.sh`, restart the trading bot, or put
 a Kiwoom app key, secret key, or bearer token in the Windows configuration.
+
+Create a second independent random value for real-order authority as
+`KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY`, preferably through
+`KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY_FILE` with the same root-owned file
+permissions. Never reuse the read-only key. `POST /api/widget/samsung-order`
+accepts only the dedicated order header and does not accept a query-string or
+read-only key.
 
 For the standard deployment, place the value in an AWS-only environment file,
 attach that file to `korstockscan-gunicorn.service` through a systemd drop-in,
@@ -133,6 +158,9 @@ The route is `GET /api/widget/samsung-price` and requires the matching
 market-data TRs `ka10001`, `ka10003`, `ka10004`, `ka10064`, `ka10080`,
 `ka10081`, `ka20001`, `ka20005`, and `ka90008`; it never calls auth, account, order,
 cancel, or bot-control endpoints.
+The separate `POST /api/widget/samsung-order` endpoint requires
+`X-KORStockScan-Widget-Order-Key` and is the only widget HTTP path allowed to
+call `kt10000`/`kt10001` through the shared-token order gateway.
 
 The advisory is deterministic, not an AI score or trading hard gate. Dynamic
 levels come from prior-day OHLC, session VWAP/opening range, confirmed recent
@@ -184,8 +212,9 @@ it cannot create `ENTRY_READY`. In the NXT aftermarket, the latest regular-KRX
 foreign/program flow is labeled `FROZEN_REGULAR_SESSION` and is never presented
 as live aftermarket flow. Each advisory expires after 60 seconds or at the
 current session close, whichever arrives first, and never later than 20:00 KST.
-The window always says `관측용/자동주문 아님`; `ENTRY_READY` and
-`ENTRY_CAUTION` are rendered as softer observation labels, not order commands.
+`ENTRY_READY` and `ENTRY_CAUTION` remain observation labels and never press an
+order button. Real orders are created only by the separate operator button,
+quantity input, confirmation dialog, and dedicated order-key path.
 
 The AWS collector also sends a plain-text Telegram notice only to the configured
 `ADMIN_ID` when a displayed advisory first becomes `ENTRY_CAUTION` or
@@ -349,10 +378,10 @@ Copy this `tools/windows` directory to the Windows PC. Run PowerShell:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\Install-SamsungPriceWidget.ps1 -ApiUrl 'https://YOUR-AWS-HOST/api/widget/samsung-price' -AccessKey 'YOUR-WIDGET-ACCESS-KEY'
+.\Install-SamsungPriceWidget.ps1 -ApiUrl 'https://YOUR-AWS-HOST/api/widget/samsung-price' -AccessKey 'YOUR-WIDGET-ACCESS-KEY' -OrderAccessKey 'YOUR-SEPARATE-ORDER-KEY'
 ```
 
-This writes the endpoint key only to the current user's `%APPDATA%` config and
+This writes both scoped endpoint keys only to the current user's `%APPDATA%` config and
 creates `SamsungPriceWidget.lnk` on the desktop. The installer tries to further
 restrict that file's ACL, but a managed Windows profile may reject the extra
 ACL operation; it then keeps the normal current-user AppData permissions and
@@ -377,6 +406,12 @@ Tkinter is required; the launcher uses `pyw.exe` so no console window is shown.
   KOSPI same-window reads use `POST /api/dostk/chart`, `api-id: ka20005`,
   body `{"inds_cd":"001","tic_scope":"1"}`, and response list
   `inds_min_pole_qry` with 100x integer index values and `cntr_tm` provenance.
+- Manual-order recheck: `2026-08-12T07:19:36+09:00`, same upstream SHA.
+  Inspected `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, and the Postman
+  collection. The widget uses `kt10000` limit buy and `kt10001` market/limit
+  sell through the cached-token gateway; it does not use token issue or cash
+  and holdings TRs.
 
 The endpoint uses `ka10001.low_pric` for today's low and `ka10080` with
 `tic_scope: "1"` for completed one-minute closes. It derives 1-, 3-, and

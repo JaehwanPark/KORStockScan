@@ -18,6 +18,13 @@
 
 ## 삼성전자 위젯 자동매매 정책
 
+- [x] `[SamsungWidgetManualOrderUI0812] Windows 위젯 수동 분할매수·세션별 매도 버튼 구현` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 07:30~08:20`, `Track: ScalpingLogic`)
+  - Source: [samsung_price_widget.py](/home/ubuntu/KORStockScan/tools/windows/samsung_price_widget.py), [samsung_price_widget_routes.py](/home/ubuntu/KORStockScan/src/web/samsung_price_widget_routes.py), [manual_orders.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/manual_orders.py), [korstockscan-gunicorn-widget.conf](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-gunicorn-widget.conf)
+  - 판정: 20분 그래프를 제거하고 운영자 입력 수량의 수동 실주문 버튼을 추가했다. 매수는 버튼 시점의 fresh server price에 `ceil(qty/2)`, -0.5% tick-normalized 가격에 `floor(qty/2)`를 지정가 제출하며 1주는 현재가 leg만 제출한다. 매도는 KRX 정규장 `SOR` 시장가, NXT 프리/애프터마켓 `NXT` 현재가 지정가다.
+  - 안전 경계: 조회 키와 별도의 order key, active-session 15초 fresh snapshot, 표시가 2틱 drift, 1~100주 기본 cap, persistent request UUID idempotency, 첫 leg 거절 시 후단 미제출, partial/ambiguous receipt 보존을 적용했다. cached token만 사용하고 계좌·보유·주문가능현금·토큰 발급/갱신·봇 제어는 호출하지 않는다. 수동 매도는 보유량 자동확인 없이 operator 입력을 따르므로 확인창과 운영문서에 다른 owner 수량 영향 가능성을 명시했다.
+  - 현재 PID 귀속: 코드·클라이언트·API 후보만 구현했으며 `current_pid_reflected=false`; Gunicorn 재기동, Windows 재설치, 실주문 제출은 수행하지 않았다. 적용에는 AWS 전용 order key 설정과 Gunicorn graceful reload 및 Windows installer 재실행이 필요하다.
+  - 리뷰/검증: Kiwoom 공식 주문 계약 SHA `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 `kt10000`/`kt10001` payload, KRX→SOR·NXT→NXT, 홀수/1주 split, stale·drift·중복·부분/ambiguous 결과, 전용 키 분리를 targeted test `116 passed`와 review gate로 검증했다. Black/Ruff/compile/systemd verify/checklist parser/`git diff --check`도 통과했고 최종 미해결 finding은 `0`이다.
+
 - [x] `[SamsungWidgetDailyScaleInPolicy0812] 순수시장 replay 기반 당일 단일포지션 분할매수·고정익절 정책 후보 구현` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 00:00~00:40`, `Track: ScalpingLogic`)
   - Source: [pure_market_adaptive_opportunity_replay_2026-06-05_2026-08-10.json](/home/ubuntu/KORStockScan/data/report/pure_market_adaptive_opportunity_replay/pure_market_adaptive_opportunity_replay_2026-06-05_2026-08-10.json), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [korstockscan-widget-signal-auto-trader.service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.service)
   - 판정: KRX `three_equal_add0p5_1p0_tp0p5`가 `widget_auto_trade_policy_candidate_ready`로 선택됐다. 1주 최초 진입, 최초 체결가 대비 -0.5%/-1.0%에서 각 1주 추가, 동일가중 평단 +0.5% 익절이며 당일 한 자동관리 bundle만 허용한다.
