@@ -1,4 +1,4 @@
-"""Same-day authority gate for the Samsung afternoon one-share live service."""
+"""Same-day authority gate for the Samsung afternoon two-leg live service."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from src.trading.samsung_afternoon_one_share.machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "samsung_afternoon_one_share_authority_v1"
+AUTHORITY_SCHEMA = "samsung_afternoon_two_leg_authority_v2"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_afternoon_one_share_authority.json"
 )
@@ -80,11 +80,12 @@ def build_authority_artifact(
         "decision": asdict(decision),
         "policy": {
             "symbol": "005930",
-            "quantity": 1,
+            "quantity": 2,
+            "allocation": "one_share_signal_close_and_one_share_minus_1tick",
             "market": "SOR_regular_integrated",
             "scan": "completed_1m_bars_14:00_through_14:40",
             "signal": "30bar_high_drawdown_gte_1.25pct_and_low_proximity_lte_0.20pct",
-            "entry": "signal_close_minus_1_tick_valid_for_next_5_completed_bars",
+            "entry": "two_independent_1share_legs_valid_for_next_5_completed_bars",
             "target": "fill_plus_2_ticks",
             "stop_loss": "none",
             "unfilled_target": "hold_position_without_forced_exit",
@@ -92,7 +93,7 @@ def build_authority_artifact(
             "widget_relationship": "parallel_independent_strategy",
         },
         "metric_role": "operator_runtime_authority_gate",
-        "decision_authority": "explicit_user_directed_afternoon_one_share_live_start",
+        "decision_authority": "explicit_user_directed_afternoon_two_leg_live_start",
         "window_policy": "target_date_afternoon_once_then_terminal_or_held",
         "sample_floor": "research_46_days_below_60_day_promotion_floor",
         "primary_decision_metric": "all_runtime_safety_contracts_ready",
@@ -101,13 +102,13 @@ def build_authority_artifact(
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
         "rollback": {
-            "trigger": "ambiguous broker write, unresolved owned order or position, source contract failure, or one-share contract breach",
+            "trigger": "ambiguous broker write, unresolved owned order or position, source contract failure, or two-leg contract breach",
             "action": "fail_closed_and_disable_only_afternoon_machine",
             "morning_service_effect": "none",
             "widget_service_effect": "none",
         },
         "forbidden_uses": [
-            "quantity_above_one",
+            "quantity_above_two_or_leg_quantity_above_one",
             "non_sor_regular_route",
             "hard_safety_or_global_buy_pause_bypass",
             "use_morning_or_widget_orders_or_positions_as_afternoon_ledger",
@@ -166,11 +167,12 @@ def validate_authority(
         return False, "authority_independence_contract_invalid"
     expected = {
         "symbol": "005930",
-        "quantity": 1,
+        "quantity": 2,
+        "allocation": "one_share_signal_close_and_one_share_minus_1tick",
         "market": "SOR_regular_integrated",
         "scan": "completed_1m_bars_14:00_through_14:40",
         "signal": "30bar_high_drawdown_gte_1.25pct_and_low_proximity_lte_0.20pct",
-        "entry": "signal_close_minus_1_tick_valid_for_next_5_completed_bars",
+        "entry": "two_independent_1share_legs_valid_for_next_5_completed_bars",
         "target": "fill_plus_2_ticks",
         "stop_loss": "none",
         "unfilled_target": "hold_position_without_forced_exit",

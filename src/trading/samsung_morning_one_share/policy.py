@@ -1,4 +1,4 @@
-"""Fixed, auditable policy for the Samsung morning one-share machine."""
+"""Fixed, auditable policy for the Samsung morning two-leg machine."""
 
 from __future__ import annotations
 
@@ -19,14 +19,14 @@ class EntryWindow:
 @dataclass(frozen=True)
 class MorningOneSharePolicy:
     symbol: str = "005930"
-    quantity: int = 1
+    quantity: int = 2
     nxt: EntryWindow = EntryWindow("NXT", time(8, 0), time(8, 10), 3.0)
     sor: EntryWindow = EntryWindow("SOR", time(9, 0), time(9, 30), 0.75)
     target_ticks: int = 2
 
     def __post_init__(self) -> None:
-        if self.symbol != "005930" or self.quantity != 1:
-            raise ValueError("policy_is_hard_limited_to_005930_one_share")
+        if self.symbol != "005930" or self.quantity != 2:
+            raise ValueError("policy_is_hard_limited_to_005930_two_share")
         if self.target_ticks <= 0:
             raise ValueError("invalid_exit_policy")
         if self.nxt.route != "NXT" or self.sor.route != "SOR":
@@ -42,6 +42,22 @@ class MorningOneSharePolicy:
         if fill_price <= 0:
             raise ValueError("invalid_fill_price")
         return move_price_by_ticks(fill_price, self.target_ticks)
+
+    @classmethod
+    def entry_legs(cls, open_price: int, drawdown_pct: float) -> list[dict]:
+        base_price = cls.entry_price(open_price, drawdown_pct)
+        return [
+            {
+                "leg_id": "base_plus_1tick",
+                "price_role": "aggressive_50pct",
+                "entry_price": move_price_by_ticks(base_price, 1),
+            },
+            {
+                "leg_id": "base",
+                "price_role": "conservative_50pct",
+                "entry_price": base_price,
+            },
+        ]
 
 
 DEFAULT_POLICY = MorningOneSharePolicy()

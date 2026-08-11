@@ -1,11 +1,11 @@
-"""Fixed, auditable policy for the Samsung midday one-share machine."""
+"""Fixed, auditable policy for the Samsung midday two-leg machine."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
-from src.trading.order.tick_utils import move_price_by_ticks
+from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class MiddaySignal:
 class MiddayOneSharePolicy:
     symbol: str = "005930"
     route: str = "SOR"
-    quantity: int = 1
+    quantity: int = 2
     scan_start: time = time(13, 15)
     # The analyzed window is half-open [13:15, 13:55), so 13:54 is the
     # final eligible completed signal bar.
@@ -45,8 +45,8 @@ class MiddayOneSharePolicy:
     max_source_lag_minutes: int = 2
 
     def __post_init__(self) -> None:
-        if self.symbol != "005930" or self.route != "SOR" or self.quantity != 1:
-            raise ValueError("policy_is_hard_limited_to_005930_one_share_sor")
+        if self.symbol != "005930" or self.route != "SOR" or self.quantity != 2:
+            raise ValueError("policy_is_hard_limited_to_005930_two_share_sor")
         if not (self.scan_start <= self.scan_last_bar):
             raise ValueError("invalid_scan_window")
         if self.lookback_bars < 2:
@@ -100,6 +100,22 @@ class MiddayOneSharePolicy:
         if fill_price <= 0:
             raise ValueError("invalid_fill_price")
         return move_price_by_ticks(fill_price, self.target_ticks)
+
+    @staticmethod
+    def entry_legs(signal_close: int) -> list[dict]:
+        executable_close = clamp_price_to_tick(signal_close)
+        return [
+            {
+                "leg_id": "signal_close",
+                "price_role": "aggressive_50pct",
+                "entry_price": executable_close,
+            },
+            {
+                "leg_id": "signal_close_minus_1tick",
+                "price_role": "conservative_50pct",
+                "entry_price": move_price_by_ticks(executable_close, -1),
+            },
+        ]
 
 
 DEFAULT_POLICY = MiddayOneSharePolicy()

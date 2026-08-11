@@ -81,14 +81,18 @@ def _machine(tmp_path: Path, gateway: FakeGateway, *, live: bool = True):
     )
 
 
-def test_policy_uses_fixed_sor_research_thresholds():
+def test_policy_uses_fixed_sor_research_thresholds_and_two_leg_allocation():
     signal = DEFAULT_POLICY.evaluate(list(_signal_bars()))
     assert DEFAULT_POLICY.symbol == "005930"
     assert DEFAULT_POLICY.route == "SOR"
-    assert DEFAULT_POLICY.quantity == 1
+    assert DEFAULT_POLICY.quantity == 2
     assert DEFAULT_POLICY.entry_valid_completed_bars == 5
     assert signal is not None
     assert signal.entry_price == 98_000
+    assert [leg["entry_price"] for leg in DEFAULT_POLICY.entry_legs(98_100)] == [
+        98_100,
+        98_000,
+    ]
     assert signal.drawdown_pct == pytest.approx(1.9)
     assert signal.near_low_pct == pytest.approx(100 / 98_000 * 100)
     assert DEFAULT_POLICY.target_price(98_000) == 98_200
@@ -106,15 +110,16 @@ def test_policy_rejects_nonconsecutive_lookback_bars():
     assert DEFAULT_POLICY.evaluate(bars) is None
 
 
-def test_latest_completed_signal_submits_one_sor_buy_once(tmp_path):
+def test_latest_completed_signal_submits_two_independent_sor_buys_once(tmp_path):
     gateway = FakeGateway()
     machine = _machine(tmp_path, gateway)
     state = machine.run_once(_at(12, 14, 1))
     assert state["status"] == "BUY_OPEN"
     assert state["attempt_consumed"] is True
-    assert gateway.buy_calls == [98_000]
+    assert gateway.buy_calls == [98_100, 98_000]
+    assert [leg["quantity"] for leg in state["legs"]] == [1, 1]
     machine.run_once(_at(12, 14, 2))
-    assert gateway.buy_calls == [98_000]
+    assert gateway.buy_calls == [98_100, 98_000]
 
 
 def test_buy_expires_only_after_five_completed_bars_and_exact_order_is_cancelled(
@@ -130,19 +135,21 @@ def test_buy_expires_only_after_five_completed_bars_and_exact_order_is_cancelled
     gateway.bars = _signal_bars(through=5)
     pending = machine.run_once(_at(12, 14, 6))
     assert pending["status"] == "BUY_CANCEL_PENDING"
-    assert gateway.cancel_calls == ["B1"]
+    assert gateway.cancel_calls == ["B1", "B2"]
 
 
-def test_fill_submits_two_tick_target_and_completes(tmp_path):
+def test_each_fill_submits_own_two_tick_target_and_completes(tmp_path):
     gateway = FakeGateway()
     machine = _machine(tmp_path, gateway)
     machine.run_once(_at(12, 14, 1))
-    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_000)
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_100)
+    gateway.snapshots["B2"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_000)
     filled = machine.run_once(_at(12, 14, 2))
-    assert filled["position_qty"] == 1
+    assert filled["position_qty"] == 2
     assert filled["status"] == "TARGET_OPEN"
-    assert gateway.sell_calls == [98_200]
-    gateway.snapshots["T2"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_200)
+    assert gateway.sell_calls == [98_300, 98_200]
+    gateway.snapshots["T3"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_300)
+    gateway.snapshots["T4"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_200)
     complete = machine.run_once(_at(12, 14, 3))
     assert complete["status"] == "COMPLETE"
     assert complete["position_qty"] == 0
@@ -154,27 +161,29 @@ def test_target_has_no_timeout_cancel_and_reconciles_original_order_across_date(
     gateway = FakeGateway()
     machine = _machine(tmp_path, gateway)
     machine.run_once(_at(12, 14, 1))
-    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_000)
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_100)
+    gateway.snapshots["B2"] = ExecutionSnapshot(True, True, 0, 0, 1)
     machine.run_once(_at(12, 14, 2))
     carried = machine.run_once(_at(13, 9, 0))
     assert carried["status"] == "TARGET_OPEN"
     assert carried["position_qty"] == 1
     assert gateway.cancel_calls == []
-    assert gateway.buy_calls == [98_000]
+    assert gateway.buy_calls == [98_100, 98_000]
 
 
 def test_target_closed_unfilled_becomes_held_without_forced_sell(tmp_path):
     gateway = FakeGateway()
     machine = _machine(tmp_path, gateway)
     machine.run_once(_at(12, 14, 1))
-    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_000)
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_100)
+    gateway.snapshots["B2"] = ExecutionSnapshot(True, True, 0, 0, 1)
     machine.run_once(_at(12, 14, 2))
-    gateway.snapshots["T2"] = ExecutionSnapshot(True, True, 0, 0, 1)
+    gateway.snapshots["T3"] = ExecutionSnapshot(True, True, 0, 0, 1)
     held = machine.run_once(_at(12, 15, 20))
     assert held["status"] == "HELD"
     assert held["position_qty"] == 1
     assert gateway.cancel_calls == []
-    assert gateway.sell_calls == [98_200]
+    assert gateway.sell_calls == [98_300]
 
 
 def test_foreign_order_number_cannot_enter_afternoon_ledger(tmp_path):
@@ -183,12 +192,12 @@ def test_foreign_order_number_cannot_enter_afternoon_ledger(tmp_path):
     machine = _machine(tmp_path, gateway)
     machine.run_once(_at(12, 14, 1))
     payload = machine.snapshot()
-    payload["buy_order_no"] = "MORNING-OR-WIDGET-77"
+    payload["legs"][0]["buy_order_no"] = "MORNING-OR-WIDGET-77"
     state_path.write_text(json.dumps(payload), encoding="utf-8")
     restarted = _machine(tmp_path, gateway)
     blocked = restarted.run_once(_at(12, 14, 2))
     assert blocked["status"] == "BLOCKED"
-    assert blocked["blocked_reason"] == "state_buy_ownership_invariant_breach"
+    assert blocked["blocked_reason"] == "state_buy_order_no_ownership_invalid"
     assert gateway.cancel_calls == []
 
 
@@ -196,13 +205,13 @@ def test_state_position_status_invariant_fails_closed(tmp_path):
     gateway = FakeGateway()
     state_path = tmp_path / "afternoon.json"
     machine = _machine(tmp_path, gateway)
-    machine.run_once(_at(12, 13, 59))
+    machine.run_once(_at(12, 14, 1))
     payload = machine.snapshot()
-    payload.update({"status": "COMPLETE", "position_qty": 1})
+    payload.update({"status": "COMPLETE"})
     state_path.write_text(json.dumps(payload), encoding="utf-8")
-    blocked = _machine(tmp_path, gateway).run_once(_at(12, 14, 0))
+    blocked = _machine(tmp_path, gateway).run_once(_at(12, 14, 2))
     assert blocked["status"] == "BLOCKED"
-    assert blocked["blocked_reason"] == "state_position_status_invariant_breach"
+    assert blocked["blocked_reason"] == "state_aggregate_status_mismatch"
 
 
 def test_invalid_previous_day_quantity_fails_closed_before_date_rollover(tmp_path):
@@ -215,15 +224,19 @@ def test_invalid_previous_day_quantity_fails_closed_before_date_rollover(tmp_pat
     state_path.write_text(json.dumps(payload), encoding="utf-8")
     blocked = _machine(tmp_path, gateway).run_once(_at(13, 13, 59))
     assert blocked["status"] == "BLOCKED"
-    assert blocked["blocked_reason"] == "state_position_quantity_invalid"
+    assert blocked["blocked_reason"] == "state_date_or_quantity_invalid"
 
 
 def test_dry_run_previews_but_never_writes_broker(tmp_path):
     gateway = FakeGateway()
     state = _machine(tmp_path, gateway, live=False).run_once(_at(12, 14, 1))
-    assert state["last_action"] == "would_submit_sor_buy"
-    assert state["preview"]["morning_relationship"] == "parallel_independent_strategy"
-    assert state["preview"]["widget_relationship"] == "parallel_independent_strategy"
+    assert state["last_action"] == "would_submit_sor_two_leg_buy"
+    assert state["preview"]["total_quantity"] == 2
+    assert [leg["entry_price"] for leg in state["preview"]["legs"]] == [
+        98_100,
+        98_000,
+    ]
+    assert state["preview"]["strategy_relationship"] == "parallel_independent_strategy"
     assert gateway.buy_calls == []
 
 
@@ -252,8 +265,11 @@ def test_interrupted_submit_intent_fails_closed_without_duplicate(tmp_path):
         machine.run_once(_at(12, 14, 1))
     blocked = _machine(tmp_path, gateway).run_once(_at(12, 14, 2))
     assert blocked["status"] == "BLOCKED"
-    assert blocked["blocked_reason"] == "broker_write_interrupted:buy_submitting"
-    assert gateway.buy_calls == [98_000]
+    assert (
+        blocked["blocked_reason"]
+        == "broker_write_interrupted:signal_close:buy_submitting"
+    )
+    assert gateway.buy_calls == [98_100]
 
 
 class FakeResponse:
@@ -372,3 +388,4 @@ def test_preflight_systemd_can_observe_existing_tmux_socket():
     ).read_text(encoding="utf-8")
     assert "PrivateTmp=true" not in preflight_unit
     assert "PrivateTmp=true" in live_unit
+    assert service_module.LIVE_CONFIRMATION in live_unit

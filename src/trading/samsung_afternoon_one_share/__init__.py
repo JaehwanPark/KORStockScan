@@ -1,1 +1,1 @@
-"""Independent Samsung afternoon one-share trading machine."""
+"""Independent Samsung afternoon two-leg machine (legacy package name)."""

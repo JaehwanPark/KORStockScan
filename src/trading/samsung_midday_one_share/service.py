@@ -1,4 +1,4 @@
-"""CLI for the independently scheduled Samsung midday one-share machine."""
+"""CLI for the independently scheduled Samsung midday two-leg machine."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from src.trading.samsung_midday_one_share.preflight import (
 )
 
 ENABLE_ENV = "KORSTOCKSCAN_SAMSUNG_MIDDAY_ONE_SHARE_ENABLED"
-LIVE_CONFIRMATION = "005930_MIDDAY_ONE_SHARE_LIVE"
+LIVE_CONFIRMATION = "005930_MIDDAY_TWO_LEG_LIVE"
 
 
 def _env_enabled() -> bool:
