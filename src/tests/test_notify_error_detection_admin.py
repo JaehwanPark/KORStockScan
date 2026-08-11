@@ -76,6 +76,7 @@ def test_notify_from_report_sends_kiwoom_auth_8005_warning(tmp_path, monkeypatch
     payload = {
         "timestamp": "2026-05-27T10:05:00+09:00",
         "summary_severity": "warning",
+        "operational_mutations": ["kiwoom_auth_restart_flag"],
         "results": [
             {
                 "detector_id": "kiwoom_auth_8005_restart",
@@ -106,6 +107,7 @@ def test_notify_from_report_sends_kiwoom_auth_8005_warning(tmp_path, monkeypatch
     assert status == "sent"
     assert len(sent) == 1
     assert "kiwoom_auth_8005_restart [warning]" in sent[0]
+    assert "operational mutations: kiwoom_auth_restart_flag" in sent[0]
 
 
 def test_notify_from_report_missing_config_does_not_raise(tmp_path, monkeypatch):

@@ -164,6 +164,12 @@
   - 안전/리뷰: active legacy state는 자동 변환하지 않고 manual reconciliation으로 차단하며, broker write intent는 leg와 집계 상태를 함께 원자 저장한다. leg별 정확 주문번호·1주 수량·중복 주문번호 금지·집계 수량/상태 정합성을 검증한다. 1차 재리뷰에서 오전 프로세스가 08:10 이후 최초 시작되면 SOR fallback 대신 NXT leg를 `NO_FILL`로 닫을 수 있는 결함을 찾아, 08:10~09:00에는 SOR leg를 대기시키고 09:00 이후에는 SOR 시가로 직접 제출하도록 보완했다. 기존 설치 unit은 자동 재기동하지 않았고 새 confirmation 계약으로 별도 재설치 전까지 fail-closed다. 공식 키움 upstream commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 주문·계좌·spec/API/Postman 계약을 15:30:19 KST에 재확인했다.
   - 검증: 세 기계·preflight·gateway/service targeted pytest=`113 passed`, Samsung/widget/manual-exclusion 회귀 pytest=`352 passed`; Ruff/Black/compileall/systemd verify/shell syntax/checklist parser/`git diff --check`=`pass`, 최종 재리뷰 미해결 finding=`0`이다. runtime/order/provider/main bot/widget 상태는 변경하지 않았다.
 
+- [x] `[ErrorDetectorInvocationContract0811] 에러디텍터 silent fail·stale report DONE·장중 artifact 오탐 보완` (`Due: 2026-08-11`, `Slot: INTRADAY`, `TimeWindow: 16:10~17:00`, `Track: ScalpingLogic`)
+  - Source: [error_detector.py](/home/ubuntu/KORStockScan/src/engine/error_detector.py), [run_error_detection.sh](/home/ubuntu/KORStockScan/deploy/run_error_detection.sh), [artifact_freshness.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/artifact_freshness.py), [time-based operations runbook](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 완료 결과 (`2026-08-11`): detector 생성 예외와 필수 detector 미등록을 report의 FAIL result와 initialization accounting에 포함하고, 모든 report를 atomic replace로 기록한다. cron wrapper는 고유 `run_id` 임시 report의 schema/mode/date/detector 집합/runtime 권한을 검증한 뒤에만 canonical report 승격·Telegram 알림·`[DONE]`을 허용하며, 누락·이전 실행·부분 JSON은 `[FAIL]`로 닫는다. 전략 runtime mutation은 none으로 유지하면서 실제 bounded 운영 조치는 `operational_mutations`로 분리했다. 20:10 postclose wrapper가 생산하는 pattern-lab propagation artifact의 freshness window를 잘못된 16:10~17:10에서 20:10~21:40으로 정렬해 장중 반복 warning 오탐을 제거했다.
+  - 권한/롤백: `runtime_effect=false`, `runtime_mutation=none`이며 threshold·주문·provider·bot 상태를 변경하지 않는다. rollback은 wrapper의 invocation validation 변경만 되돌리되 detector 생성 실패 FAIL 표면화와 atomic write는 유지한다.
+  - 리뷰/검증: 에러디텍터 전체 회귀, report 계약·생성 실패·explicit invocation path·artifact window 테스트, shell syntax, compile, checklist parser, `git diff --check`를 통과한 뒤 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 

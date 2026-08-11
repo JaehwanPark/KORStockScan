@@ -476,8 +476,8 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "max_staleness_sec": 3600,
         "critical": False,
         "trading_day_only": True,
-        "window_start": (16, 10),
-        "window_end": (17, 10),
+        "window_start": (20, 10),
+        "window_end": (21, 40),
         "suppress_missing_while_cron_in_progress": {
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",

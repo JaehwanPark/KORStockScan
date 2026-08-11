@@ -98,3 +98,18 @@ def test_codex_workorder_runner_artifact_requires_completed_status():
     )
 
     assert artifact["json_ok_values"] == ["completed", "dry_run_planned"]
+
+
+def test_pattern_lab_propagation_freshness_follows_postclose_wrapper_window():
+    artifact = next(
+        item
+        for item in ARTIFACT_REGISTRY
+        if item["id"] == "pattern_lab_propagation_audit_report"
+    )
+
+    assert artifact["window_start"] == (20, 10)
+    assert artifact["window_end"] == (21, 40)
+    assert (
+        artifact["suppress_missing_while_cron_in_progress"]["id"]
+        == "threshold_cycle_postclose"
+    )

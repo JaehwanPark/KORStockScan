@@ -106,8 +106,14 @@ def _build_message(
         f"- timestamp: {timestamp}",
         f"- alert_count: {len(fail_results)}",
         f"- log: {log_file}",
-        "- runtime mutation: none",
+        "- trading strategy runtime mutation: none",
     ]
+    operational_mutations = report.get("operational_mutations")
+    if isinstance(operational_mutations, list) and operational_mutations:
+        lines.append(
+            "- operational mutations: "
+            + ", ".join(str(item) for item in operational_mutations)
+        )
     for item in fail_results[:5]:
         detector_id = item.get("detector_id") or "-"
         severity = item.get("severity") or "-"
