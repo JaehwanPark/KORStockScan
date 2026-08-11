@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare Samsung Afternoon One-Share Same-Day Authority
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13:57:00 Asia/Seoul
+Persistent=false
+AccuracySec=1s
+Unit=korstockscan-samsung-afternoon-one-share-preflight.service
+
+[Install]
+WantedBy=timers.target
