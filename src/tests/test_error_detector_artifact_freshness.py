@@ -14,6 +14,61 @@ _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_da
 
 
 class TestArtifactFreshnessDetector:
+    def test_preopen_artifacts_allow_one_detector_interval_for_producer_race(self):
+        preopen_artifacts = {
+            artifact["id"]: artifact
+            for artifact in ARTIFACT_REGISTRY
+            if artifact["id"] in {"threshold_runtime_env", "threshold_apply_plan"}
+        }
+
+        assert set(preopen_artifacts) == {
+            "threshold_runtime_env",
+            "threshold_apply_plan",
+        }
+        assert all(
+            artifact["window_start"] == (7, 35)
+            and artifact["window_grace_sec"] == 300
+            and artifact["critical"] is True
+            for artifact in preopen_artifacts.values()
+        )
+
+    def test_preopen_stale_artifact_fails_after_producer_grace(self, tmp_path):
+        fixed_now = datetime(2026, 8, 12, 7, 40, 1)
+        artifact_path = tmp_path / "threshold_runtime_env_2026-08-12.json"
+        artifact_path.write_text("{}\n", encoding="utf-8")
+        stale_mtime = fixed_now.timestamp() - 36_000
+        os.utime(artifact_path, (stale_mtime, stale_mtime))
+        artifact = {
+            "id": "threshold_runtime_env",
+            "path_template": str(artifact_path),
+            "max_staleness_sec": 900,
+            "critical": True,
+            "window_start": (7, 35),
+            "window_end": (7, 50),
+            "window_grace_sec": 300,
+            "trading_day_only": True,
+        }
+
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY",
+                [artifact],
+            ),
+            patch(
+                "src.engine.error_detectors.artifact_freshness.datetime"
+            ) as datetime_mock,
+            patch(
+                "src.engine.error_detectors.artifact_freshness.time.time",
+                return_value=fixed_now.timestamp(),
+            ),
+        ):
+            datetime_mock.now.return_value = fixed_now
+            result = ArtifactFreshnessDetector().check()
+
+        assert result.severity == "fail"
+        assert result.details["threshold_runtime_env_status"] == "fail"
+
     def test_classify_pass(self):
         detector = ArtifactFreshnessDetector()
         severity, summary = detector._classify([], [])

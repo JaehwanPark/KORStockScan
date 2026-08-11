@@ -149,6 +149,10 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "critical": True,
         "window_start": (7, 35),
         "window_end": (7, 50),
+        # The producer and the full detector are both installed at 07:35.
+        # Allow one detector interval for the producer to replace the previous
+        # evening's target-date handoff before treating it as stale.
+        "window_grace_sec": 300,
         "trading_day_only": True,
     },
     {
@@ -158,6 +162,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "critical": True,
         "window_start": (7, 35),
         "window_end": (7, 50),
+        "window_grace_sec": 300,
         "trading_day_only": True,
     },
     {
