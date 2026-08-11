@@ -1,0 +1,19 @@
+[Unit]
+Description=KORStockScan Samsung One-Share PREOPEN Authority Gate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+ExecStart=/home/ubuntu/KORStockScan/deploy/run_samsung_morning_one_share_preflight.sh
+TimeoutStartSec=180
+UMask=0077
+Nice=5
+CPUQuota=10%
+MemoryMax=256M
+TasksMax=32
+NoNewPrivileges=true
+PrivateTmp=true
