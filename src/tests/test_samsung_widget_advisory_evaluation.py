@@ -552,3 +552,406 @@ def test_daily_evaluation_accepts_explicit_non_samsung_symbol_provenance():
     assert report["actionable_signal_count"] == 1
     assert report["outcomes"][0]["target_price"] == 80_800
     assert report["target_return_pct"] == 1.0
+    assert "entry_scenario" not in report["outcomes"][0]
+    assert report["scenario_cohort_summary"] == []
+    assert report["episode_exit_policy_comparisons"] == []
+    assert "capacity_constrained_exit_policy_replay" not in report
+    assert (
+        report["metric_contract"]["episode_exit_policy_comparison"]
+        == "not_applicable_non_samsung_widget"
+    )
+
+
+def test_episode_policy_comparison_uses_exact_episode_exit_and_two_fixed_targets():
+    start = datetime(2026, 8, 11, 10, 0, tzinfo=KST)
+    episode_id = "2026-08-11:KRX_REGULAR:20260811100000"
+    signal = _row(
+        start,
+        100_000,
+        state="ENTRY_CAUTION",
+        entry_high=100_000,
+        invalidation=99_500,
+        observation_kind="state_transition",
+    )
+    signal["advisory"]["derived"] = {
+        "retest_held": True,
+        "retest_rebound_confirmed": True,
+    }
+    signal["exit_advisory"] = {
+        "state": "EXIT_WATCH",
+        "continuity": {"entry_episode_id": episode_id},
+    }
+    unrelated_exit = _row(
+        start + timedelta(minutes=2),
+        99_900,
+        line_number=3,
+        observation_kind="exit_state_transition",
+    )
+    unrelated_exit["exit_advisory"] = _valid_exit_advisory(
+        start + timedelta(minutes=2),
+        episode_id="another-episode",
+        reference_exit_price=99_900,
+    )
+    matched_exit = _row(
+        start + timedelta(minutes=4),
+        100_800,
+        line_number=5,
+        observation_kind="exit_state_transition",
+    )
+    matched_exit["exit_advisory"] = _valid_exit_advisory(
+        start + timedelta(minutes=4),
+        episode_id=episode_id,
+        reference_exit_price=100_800,
+    )
+    rows = [
+        signal,
+        _row(start + timedelta(minutes=1), 100_600, line_number=2),
+        unrelated_exit,
+        _row(start + timedelta(minutes=3), 101_100, line_number=4),
+        matched_exit,
+    ]
+
+    report = evaluation.build_daily_evaluation(rows, target_date=start.date())
+    comparison = report["episode_exit_policy_comparisons"][0]
+
+    assert comparison["entry_scenario"] == "support_retest_reversal"
+    assert comparison["comparison_eligible"] is True
+    assert [item["status"] for item in comparison["fixed_target_results"]] == [
+        "TARGET_HIT",
+        "TARGET_HIT",
+    ]
+    assert (
+        comparison["fixed_target_results"][0]["hit_at_kst"]
+        == (start + timedelta(minutes=1)).isoformat()
+    )
+    assert (
+        comparison["fixed_target_results"][1]["hit_at_kst"]
+        == (start + timedelta(minutes=3)).isoformat()
+    )
+    assert comparison["structural_exit_result"]["status"] == ("EXIT_READY_ATTRIBUTED")
+    assert comparison["structural_exit_result"]["reference_exit_price"] == 100_800
+    assert comparison["structural_exit_result"]["gross_return_pct"] == 0.8
+    assert report["episode_exit_policy_summary"][0]["fixed_target_hit_counts"] == {
+        "fixed_0.5pct": 1,
+        "fixed_1pct": 1,
+    }
+
+
+def test_structural_exit_is_not_guessed_when_episode_provenance_is_missing():
+    start = datetime(2026, 8, 11, 10, 0, tzinfo=KST)
+    signal = _row(
+        start,
+        100_000,
+        state="ENTRY_READY",
+        entry_high=100_000,
+        observation_kind="state_transition",
+    )
+    exit_row = _row(
+        start + timedelta(minutes=1),
+        99_500,
+        line_number=2,
+        observation_kind="exit_state_transition",
+    )
+    exit_row["exit_advisory"] = _valid_exit_advisory(
+        start + timedelta(minutes=1),
+        episode_id="different-or-unknown",
+        reference_exit_price=99_500,
+    )
+
+    report = evaluation.build_daily_evaluation(
+        [signal, exit_row],
+        target_date=start.date(),
+    )
+    comparison = report["episode_exit_policy_comparisons"][0]
+
+    assert comparison["structural_exit_result"]["status"] == (
+        "UNATTRIBUTABLE_MISSING_EPISODE_ID"
+    )
+
+
+def test_episode_policy_uses_ratio_coverage_and_keeps_long_gap_diagnostic():
+    start = datetime(2026, 8, 11, 10, 0, tzinfo=KST)
+    signal = _row(
+        start,
+        100_000,
+        state="ENTRY_READY",
+        entry_high=100_000,
+        observation_kind="state_transition",
+    )
+    rows = [signal]
+    rows.extend(
+        _row(start + timedelta(minutes=minute), 100_100, line_number=minute + 1)
+        for minute in (*range(1, 8), 10)
+    )
+
+    report = evaluation.build_daily_evaluation(rows, target_date=start.date())
+    comparison = report["episode_exit_policy_comparisons"][0]
+
+    assert comparison["comparison_coverage"]["coverage_ratio"] == 0.8
+    assert comparison["comparison_coverage"]["max_gap_sec"] == 180.0
+    assert comparison["comparison_coverage"]["coverage_passed"] is False
+    assert comparison["comparison_coverage"]["episode_policy_coverage_passed"] is True
+    assert comparison["comparison_eligible"] is True
+
+
+def test_capacity_replay_removes_overlaps_and_keeps_unresolved_slot_occupied():
+    start = datetime(2026, 8, 11, 9, 0, tzinfo=KST)
+    comparisons = [
+        _capacity_comparison(
+            start,
+            line=1,
+            fixed_half_exit=start + timedelta(minutes=2),
+            fixed_one_exit=start + timedelta(minutes=4),
+            structural_exit=start + timedelta(minutes=3),
+        ),
+        _capacity_comparison(
+            start + timedelta(minutes=1),
+            line=2,
+            fixed_half_exit=start + timedelta(minutes=2),
+            fixed_one_exit=start + timedelta(minutes=3),
+            structural_exit=start + timedelta(minutes=2),
+        ),
+        _capacity_comparison(
+            start + timedelta(minutes=3),
+            line=3,
+            fixed_half_exit=start + timedelta(minutes=4),
+            fixed_one_exit=start + timedelta(minutes=5),
+            structural_exit=start + timedelta(minutes=4),
+        ),
+        _capacity_comparison(
+            start + timedelta(minutes=5),
+            line=4,
+        ),
+        _capacity_comparison(
+            start + timedelta(minutes=6),
+            line=5,
+            touch_within_validity=False,
+        ),
+    ]
+
+    replay = evaluation._build_capacity_constrained_replay(comparisons)
+    arms = {arm["policy"]: arm for arm in replay["arms"]}
+
+    half = arms["fixed_0.5pct"]
+    assert half["selected_entry_count"] == 3
+    assert half["overlap_skipped_count"] == 1
+    assert half["invalid_or_insufficient_candidate_count"] == 1
+    assert half["completed_trade_count"] == 2
+    assert half["unresolved_position_count"] == 1
+    assert half["decision_evidence_complete"] is False
+
+    one = arms["fixed_1pct"]
+    assert one["selected_entry_count"] == 2
+    assert one["overlap_skipped_count"] == 2
+    assert one["completed_trade_count"] == 1
+    assert one["unresolved_position_count"] == 1
+
+    structural = arms["observed_exact_episode_structural_exit_ready"]
+    assert structural["selected_entry_count"] == 2
+    assert structural["overlap_skipped_count"] == 2
+    assert structural["completed_trade_count"] == 1
+    assert structural["unresolved_position_count"] == 1
+
+
+def test_rolling_capacity_replay_aggregates_days_without_cross_day_slot_state():
+    start = datetime(2026, 8, 10, 9, 0, tzinfo=KST)
+    first = evaluation._build_capacity_constrained_replay(
+        [
+            _capacity_comparison(
+                start,
+                line=1,
+                fixed_half_exit=start + timedelta(minutes=2),
+                fixed_one_exit=start + timedelta(minutes=4),
+                structural_exit=start + timedelta(minutes=3),
+            )
+        ]
+    )
+    second_start = start + timedelta(days=1)
+    second = evaluation._build_capacity_constrained_replay(
+        [
+            _capacity_comparison(
+                second_start,
+                line=1,
+                fixed_half_exit=second_start + timedelta(minutes=2),
+                fixed_one_exit=second_start + timedelta(minutes=4),
+                structural_exit=second_start + timedelta(minutes=3),
+            )
+        ]
+    )
+
+    rolling = evaluation._build_rolling_capacity_replay(
+        [
+            {
+                "target_date": "2026-08-10",
+                "capacity_constrained_exit_policy_replay": first,
+            },
+            {
+                "target_date": "2026-08-11",
+                "capacity_constrained_exit_policy_replay": second,
+            },
+        ]
+    )
+    half = next(arm for arm in rolling["arms"] if arm["policy"] == "fixed_0.5pct")
+
+    assert half["source_trading_day_count"] == 2
+    assert half["selected_entry_count"] == 2
+    assert half["completed_trade_count"] == 2
+    assert {trade["source_target_date"] for trade in half["trades"]} == {
+        "2026-08-10",
+        "2026-08-11",
+    }
+
+
+def test_rolling_capacity_replay_rejects_bad_authority_and_malformed_arm():
+    start = datetime(2026, 8, 11, 9, 0, tzinfo=KST)
+    replay = evaluation._build_capacity_constrained_replay(
+        [
+            _capacity_comparison(
+                start,
+                line=1,
+                fixed_half_exit=start + timedelta(minutes=2),
+                fixed_one_exit=start + timedelta(minutes=4),
+                structural_exit=start + timedelta(minutes=3),
+            )
+        ]
+    )
+    bad_authority = json.loads(json.dumps(replay))
+    bad_authority["metric_contract"]["decision_authority"] = "real_order"
+    malformed_arm = json.loads(json.dumps(replay))
+    malformed_arm["arms"][0]["selected_entry_count"] = "not-an-int"
+
+    rolling = evaluation._build_rolling_capacity_replay(
+        [
+            {
+                "target_date": "2026-08-11",
+                "capacity_constrained_exit_policy_replay": bad_authority,
+            },
+            {
+                "target_date": "2026-08-11",
+                "capacity_constrained_exit_policy_replay": malformed_arm,
+            },
+        ]
+    )
+
+    assert rolling["source_daily_report_count"] == 1
+    assert all(arm["policy"] != "fixed_0.5pct" for arm in rolling["arms"])
+
+
+def test_rolling_capacity_replay_rejects_tampered_completed_profit():
+    start = datetime(2026, 8, 11, 9, 0, tzinfo=KST)
+    replay = evaluation._build_capacity_constrained_replay(
+        [
+            _capacity_comparison(
+                start,
+                line=1,
+                fixed_half_exit=start + timedelta(minutes=2),
+                fixed_one_exit=start + timedelta(minutes=4),
+                structural_exit=start + timedelta(minutes=3),
+            )
+        ]
+    )
+    replay["arms"][0]["trades"][0]["net_return_pct"] = 999.0
+
+    rolling = evaluation._build_rolling_capacity_replay(
+        [
+            {
+                "target_date": "2026-08-11",
+                "capacity_constrained_exit_policy_replay": replay,
+            }
+        ]
+    )
+
+    assert all(arm["policy"] != "fixed_0.5pct" for arm in rolling["arms"])
+
+
+def test_rolling_capacity_replay_rejects_tampered_unresolved_terminal_mark():
+    start = datetime(2026, 8, 11, 9, 0, tzinfo=KST)
+    replay = evaluation._build_capacity_constrained_replay(
+        [_capacity_comparison(start, line=1)]
+    )
+    replay["arms"][0]["trades"][0]["unresolved_terminal_mark_return_pct"] = 999.0
+
+    rolling = evaluation._build_rolling_capacity_replay(
+        [
+            {
+                "target_date": "2026-08-11",
+                "capacity_constrained_exit_policy_replay": replay,
+            }
+        ]
+    )
+
+    assert all(arm["policy"] != "fixed_0.5pct" for arm in rolling["arms"])
+
+
+def _valid_exit_advisory(
+    observed_at: datetime,
+    *,
+    episode_id: str,
+    reference_exit_price: int,
+) -> dict:
+    return {
+        "state": "EXIT_READY",
+        "session": "KRX_REGULAR",
+        "observed_at": observed_at.isoformat(),
+        "valid_until": (observed_at + timedelta(seconds=60)).isoformat(),
+        "reference_exit_price": reference_exit_price,
+        "continuity": {"entry_episode_id": episode_id},
+        "source_quality": {"status": "PASS", "issues": []},
+        "authority": "widget_advisory_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "holding_independent": True,
+    }
+
+
+def _capacity_comparison(
+    entry_at: datetime,
+    *,
+    line: int,
+    fixed_half_exit: datetime | None = None,
+    fixed_one_exit: datetime | None = None,
+    structural_exit: datetime | None = None,
+    touch_within_validity: bool = True,
+) -> dict:
+    def fixed_result(policy: str, target: int, exit_at: datetime | None) -> dict:
+        return {
+            "policy": policy,
+            "status": (
+                "TARGET_HIT"
+                if exit_at is not None
+                else "NOT_HIT_WITHIN_OBSERVED_SESSION_WINDOW"
+            ),
+            "target_price": target,
+            "hit_at_kst": exit_at.isoformat() if exit_at else None,
+        }
+
+    structural = {
+        "status": (
+            "EXIT_READY_ATTRIBUTED"
+            if structural_exit is not None
+            else "NO_EXIT_READY_WITHIN_OBSERVED_SESSION_WINDOW"
+        ),
+        "exit_at_kst": structural_exit.isoformat() if structural_exit else None,
+        "reference_exit_price": 100_800 if structural_exit else None,
+    }
+    return {
+        "signal_observed_at_kst": entry_at.isoformat(),
+        "signal_valid_until_kst": (entry_at + timedelta(minutes=1)).isoformat(),
+        "source_line_number": line,
+        "entry_episode_id": f"episode-{line}",
+        "entry_scenario": "support_retest_reversal",
+        "market_session": "KRX_REGULAR",
+        "market_venue": "KRX",
+        "entry_reference_price": 100_000,
+        "entry_touched_at_kst": entry_at.isoformat(),
+        "entry_touch_within_signal_validity": touch_within_validity,
+        "comparison_eligible": True,
+        "fixed_target_results": [
+            fixed_result("fixed_0.5pct", 100_500, fixed_half_exit),
+            fixed_result("fixed_1pct", 101_000, fixed_one_exit),
+        ],
+        "structural_exit_result": structural,
+        "observed_window_end_at_kst": (entry_at + timedelta(hours=6)).isoformat(),
+        "observed_window_end_price": 99_500,
+    }
