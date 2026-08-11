@@ -117,6 +117,46 @@ def test_fetch_uses_integrated_sor_and_cached_token_without_other_api_calls():
     assert meta["source_quality_status"] == "PASS"
 
 
+def test_fetch_accepts_expanding_clean_baseline_trading_day_count():
+    start = date(2026, 6, 5)
+    dates = [start + timedelta(days=index) for index in range(47)]
+    rows = [
+        {
+            "cntr_tm": f"{item.strftime('%Y%m%d')}131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+        }
+        for item in dates
+    ]
+    rows.append(
+        {
+            "cntr_tm": "20260604131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+        }
+    )
+
+    bars, meta = fetch_sor_history(
+        symbol="010140",
+        token="CACHED",
+        start_date=start,
+        end_date=dates[-1],
+        post=lambda *args, **kwargs: FakeResponse(
+            {"return_code": 0, "stk_min_pole_chart_qry": rows}
+        ),
+        page_delay_sec=0,
+        expected_trading_day_count=47,
+    )
+
+    assert len(bars) == 47
+    assert meta["expected_trading_date_count"] == 47
+    assert meta["source_quality_status"] == "PASS"
+
+
 def _episode(day: date, signal_minute: int, *, net_profit_pct: float) -> dict:
     timestamp = datetime.combine(day, time(13, signal_minute), tzinfo=KST)
     return {
@@ -143,11 +183,15 @@ def _episode(day: date, signal_minute: int, *, net_profit_pct: float) -> dict:
 
 
 def _contexts(
-    *, holdout_candidate_net: float, baseline_net: float = -0.10
+    *,
+    holdout_candidate_net: float,
+    baseline_net: float = -0.10,
+    total_days: int = 46,
+    calibration_days: int = 30,
 ) -> dict[date, DayContext]:
     started = date(2026, 6, 5)
     result = {}
-    for index in range(46):
+    for index in range(total_days):
         day = started + timedelta(days=index)
         first = SignalFeature(
             0,
@@ -163,7 +207,7 @@ def _contexts(
             2.0,
             0.05,
         )
-        candidate_net = 0.20 if index < 30 else holdout_candidate_net
+        candidate_net = 0.20 if index < calibration_days else holdout_candidate_net
         result[day] = DayContext(
             day,
             (),
@@ -192,6 +236,28 @@ def test_profile_selection_uses_calibration_then_requires_untouched_holdout(
     assert failed["calibration_winner"]["parameters"] == candidate.public()
     assert failed["decision"] == "holdout_failed_keep_baseline"
     assert failed["selected"]["parameters"] != candidate.public()
+
+
+def test_profile_selection_expands_calibration_and_keeps_16_day_holdout(
+    monkeypatch,
+):
+    candidate = SpotCandidate(13 * 60 + 20, 13 * 60 + 29, 30, 1.50, 0.10)
+    monkeypatch.setattr(research, "candidate_grid", lambda profile: (candidate,))
+
+    result = select_profile_spot(
+        RESEARCH_PROFILES["candidate_015760_midday"],
+        _contexts(
+            holdout_candidate_net=0.20,
+            total_days=47,
+            calibration_days=31,
+        ),
+        calibration_days=31,
+        holdout_days=16,
+    )
+
+    assert result["date_split"]["calibration_trading_day_count"] == 31
+    assert result["date_split"]["holdout_trading_day_count"] == 16
+    assert result["decision"] == "holdout_pass_source_only_early_candidate"
 
 
 def test_profile_selection_requires_strict_holdout_improvement(monkeypatch):

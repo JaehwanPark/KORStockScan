@@ -86,10 +86,17 @@ evidence.
 ## Daily implementation-candidate recommendation
 
 The 20:10 postclose chain runs `low_price_two_leg_expanded_candidate_research`
-after the actual-profile tuning step. It uses the most recent 46 KRX trading
-dates, never earlier than the clean baseline: the first 30 dates select a spot
-and the final 16 dates remain untouched holdout evidence. The reviewed research
-universe contains nine symbols, with midday and afternoon evaluated separately.
+after the actual-profile tuning step. It uses every KRX trading date from the
+clean baseline (`2026-06-05`) through the target date. The latest 16 dates remain
+untouched holdout evidence; every earlier clean-baseline date forms an expanding
+calibration window. The reviewed new-symbol universe contains nine symbols, with
+midday and afternoon evaluated separately.
+
+A separate existing-symbol time-extension lane evaluates only supported
+midday/afternoon sessions that have no active profile for that symbol. Active
+symbol/session pairs are excluded rather than retuned through this discovery
+producer. With the current three configured active profiles, this lane contains only
+SK Eternix afternoon; Samsung Heavy already has both supported sessions.
 
 Only profiles with matching source-qualified trading dates, positive
 notional-weighted holdout EV, the required calibration/holdout sample floors,
@@ -101,8 +108,9 @@ recovery. Missing Telegram configuration, exhausted delivery retries, or a
 report authority mismatch closes the postclose wrapper as failed rather than
 silently claiming daily delivery.
 
-If the cached Kiwoom token is unavailable or one of the nine sources fails the
-common-date/source-quality contract, the producer writes a
+If the cached Kiwoom token is unavailable or one of the new/existing-symbol
+sources fails the full clean-baseline common-date/source-quality contract, the
+producer writes a
 `source_quality_blocked` report and sends an admin notice stating that no daily
 recommendation was produced. This isolated research-source block does not stop
 unrelated postclose producers. Telegram configuration or delivery failure still
@@ -118,8 +126,9 @@ gate.
 
 - Repository: `Kiwoom-Securities/Kiwoom-REST-API`
 - Commit: `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
-- Retrieved: `2026-08-11T18:13:09+09:00`
+- Retrieved: `2026-08-11T21:27:49+09:00`
 - Inspected: `kiwoom_docs/차트.md`, `kiwoom_docs/주문.md`,
   `kiwoom_docs/계좌.md`, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
-  `kiwoom/core`, and the Postman collection
+  `kiwoom/core`, the Postman collection, and
+  `examples/국내주식/차트/get_domestic_stock_minute_chart.py`
 - Requests: `ka10080`, `kt10000`, `kt10001`, `kt10003`, and `kt00007`

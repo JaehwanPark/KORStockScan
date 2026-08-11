@@ -39,13 +39,14 @@ NEAR_LOW_GRID = (0.05, 0.10, 0.20, 0.35, 0.50, 0.75)
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-11T18:13:09+09:00",
+    "retrieved_at_kst": "2026-08-11T21:27:49+09:00",
     "inspected_paths": [
         "kiwoom_docs/차트.md",
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
         "kiwoom/core",
         "postman/kiwoom-openapi.postman_collection.json",
+        "examples/국내주식/차트/get_domestic_stock_minute_chart.py",
     ],
     "request_contract": "POST /api/dostk/chart; api-id=ka10080",
 }
@@ -175,6 +176,7 @@ def fetch_sor_history(
     page_delay_sec: float = 0.2,
     post: Callable[..., requests.Response] = requests.post,
     allowed_symbols: frozenset[str] | None = None,
+    expected_trading_day_count: int = CALIBRATION_DAYS + HOLDOUT_DAYS,
 ) -> tuple[list[Bar], dict[str, Any]]:
     """Fetch fully bracketed integrated-SOR regular bars without auth mutation."""
     symbol_allowlist = allowed_symbols or frozenset(
@@ -184,6 +186,8 @@ def fetch_sor_history(
         raise ValueError("symbol_not_in_selected_profile_allowlist")
     if start_date < CLEAN_BASELINE_DATE or start_date > end_date:
         raise ValueError("invalid_clean_baseline_date_range")
+    if int(expected_trading_day_count) < CALIBRATION_DAYS + HOLDOUT_DAYS:
+        raise ValueError("expected_trading_day_count_below_research_minimum")
     clean_token = str(token or "").replace("Bearer ", "").strip()
     if not clean_token:
         raise ResearchError("cached_token_missing")
@@ -279,7 +283,7 @@ def fetch_sor_history(
         "PASS"
         if start_date_fully_bracketed
         and invalid_row_count == 0
-        and len(trading_dates) == CALIBRATION_DAYS + HOLDOUT_DAYS
+        and len(trading_dates) == int(expected_trading_day_count)
         and trading_dates[0] == start_date.isoformat()
         and trading_dates[-1] == end_date.isoformat()
         else "FAIL"
@@ -293,6 +297,7 @@ def fetch_sor_history(
         "page_count": page_count,
         "bar_count": len(bars),
         "trading_date_count": len(trading_dates),
+        "expected_trading_date_count": int(expected_trading_day_count),
         "oldest_source_date": trading_dates[0] if trading_dates else None,
         "latest_source_date": trading_dates[-1] if trading_dates else None,
         "start_date_fully_bracketed": start_date_fully_bracketed,
@@ -523,17 +528,22 @@ def _robust_score(first: dict[str, Any], second: dict[str, Any]) -> float:
 
 
 def select_profile_spot(
-    profile: MachineProfile, contexts: dict[date, DayContext]
+    profile: MachineProfile,
+    contexts: dict[date, DayContext],
+    *,
+    calibration_days: int = CALIBRATION_DAYS,
+    holdout_days: int = HOLDOUT_DAYS,
 ) -> dict[str, Any]:
     dates = sorted(contexts)
-    if len(dates) != CALIBRATION_DAYS + HOLDOUT_DAYS:
-        raise ResearchError(
-            f"{profile.profile_id}_requires_{CALIBRATION_DAYS + HOLDOUT_DAYS}_dates"
-        )
-    calibration = dates[:CALIBRATION_DAYS]
-    holdout = dates[CALIBRATION_DAYS:]
-    first_half = calibration[: CALIBRATION_DAYS // 2]
-    second_half = calibration[CALIBRATION_DAYS // 2 :]
+    if calibration_days < CALIBRATION_DAYS or holdout_days < HOLDOUT_DAYS:
+        raise ValueError("research_split_below_minimum_sample_window")
+    required_days = calibration_days + holdout_days
+    if len(dates) != required_days:
+        raise ResearchError(f"{profile.profile_id}_requires_{required_days}_dates")
+    calibration = dates[:calibration_days]
+    holdout = dates[calibration_days:]
+    first_half = calibration[: calibration_days // 2]
+    second_half = calibration[calibration_days // 2 :]
     ranked: list[tuple[float, float, int, SpotCandidate, dict[str, Any]]] = []
     diagnostic_ranked: list[tuple[float, float, int, SpotCandidate, dict[str, Any]]] = (
         []
@@ -597,6 +607,8 @@ def select_profile_spot(
                 "calibration_end": calibration[-1].isoformat(),
                 "holdout_start": holdout[0].isoformat(),
                 "holdout_end": holdout[-1].isoformat(),
+                "calibration_trading_day_count": len(calibration),
+                "holdout_trading_day_count": len(holdout),
             },
             "grid_candidate_count": len(grid),
             "calibration_ready_candidate_count": 0,
@@ -668,6 +680,8 @@ def select_profile_spot(
             "calibration_end": calibration[-1].isoformat(),
             "holdout_start": holdout[0].isoformat(),
             "holdout_end": holdout[-1].isoformat(),
+            "calibration_trading_day_count": len(calibration),
+            "holdout_trading_day_count": len(holdout),
         },
         "grid_candidate_count": len(grid),
         "calibration_ready_candidate_count": len(ranked),

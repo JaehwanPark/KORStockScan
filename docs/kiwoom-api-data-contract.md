@@ -696,6 +696,28 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   missing timestamp is kept missing rather than substituted with a neighboring
   index bar.
 
+### 2026-08-11 Lower-price expanding-window research gate
+
+- Rechecked at `2026-08-11T21:27:49+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/차트.md`, `kiwoom/_data/kiwoom_api_spec.json`,
+  `kiwoom/specs.py`, `kiwoom/core`,
+  `postman/kiwoom-openapi.postman_collection.json`, and
+  `examples/국내주식/차트/get_domestic_stock_minute_chart.py` for `ka10080`
+  path, `api-id`, headers, request/response fields, continuation, and `_AL`
+  integrated-SOR symbol handling. Examples remain samples, not order authority.
+- The lower-price candidate producer keeps the existing documented request
+  shape: `POST /api/dostk/chart`, `api-id=ka10080`, `stk_cd={symbol}_AL`,
+  `tic_scope=1`, and `upd_stkpc_tp=1`, with `cont-yn`/`next-key` continuation.
+  This change only makes the locally expected trading-date count explicit and
+  expanding from clean baseline `2026-06-05`; it does not add a Kiwoom request
+  field or reinterpret `cntr_tm`.
+- Every expected clean-baseline trading date must be present for every research
+  symbol. Missing or malformed dates fail source quality closed. The latest 16
+  dates remain untouched holdout, and older clean-baseline dates expand only the
+  calibration side. This source-only lane has no token mutation, account,
+  order, runtime, provider, bot, cap, or broker-guard authority.
+
 ## String And Sign Parsing
 
 - Price and quantity fields are normalized as unsigned magnitude unless a

@@ -1,9 +1,9 @@
-"""Walk-forward entry-spot research for additional lower-price symbols.
+"""Expanding clean-baseline entry-spot research for lower-price machines.
 
-This source-only module deliberately keeps its candidate universe separate from
-the live profile allowlist. It reuses the completed integrated-SOR minute-bar
-research contract and cannot issue or refresh tokens, access accounts, submit
-orders, or mutate runtime policy.
+The source-only report has separate lanes for new symbols and unimplemented
+sessions on existing symbols. It reuses completed integrated-SOR minute bars
+and cannot issue or refresh tokens, access accounts, submit orders, create a
+machine, or mutate runtime policy.
 """
 
 from __future__ import annotations
@@ -33,23 +33,28 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     fetch_sor_history,
     select_profile_spot,
 )
+from src.trading.low_price_two_leg.profiles import PROFILES as LIVE_PROFILES
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
-REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v2"
+REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v3"
 REPORT_TYPE = "low_price_two_leg_expanded_candidate_research"
 AUTHORITY = "lower_price_machine_candidate_recommendation_only"
 OUTPUT_DIR = DATA_DIR / "report" / "low_price_two_leg_expanded_candidate_research"
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "low_price_two_leg_candidate_telegram_state.json"
 )
-ROLLING_WINDOW_DAYS = CALIBRATION_DAYS + HOLDOUT_DAYS
-MAX_RECOMMENDATIONS = 5
+MIN_RESEARCH_DAYS = CALIBRATION_DAYS + HOLDOUT_DAYS
+MAX_RECOMMENDATIONS_PER_LANE = 3
 MAX_LATEST_CLOSE_PRICE = 100_000
 MIDDAY_WINDOW = (time(13, 15), time(13, 54))
 AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
+SESSION_WINDOWS = {
+    "midday": MIDDAY_WINDOW,
+    "afternoon": AFTERNOON_WINDOW,
+}
 CANDIDATE_SYMBOLS = {
     "006800": "미래에셋증권",
     "007660": "이수페타시스",
@@ -61,11 +66,19 @@ CANDIDATE_SYMBOLS = {
     "042660": "한화오션",
     "080220": "제주반도체",
 }
+IMPLEMENTED_SYMBOLS = {
+    profile.symbol: profile.name for profile in LIVE_PROFILES.values()
+}
+ACTIVE_SYMBOL_SESSIONS = frozenset(
+    (profile.symbol, profile.session) for profile in LIVE_PROFILES.values()
+)
 
 METRIC_CONTRACT = {
     "metric_role": "lower_price_machine_candidate_recommendation",
     "decision_authority": AUTHORITY,
-    "window_policy": "rolling_46_trading_days_30_calibration_16_untouched_holdout",
+    "window_policy": (
+        "clean_baseline_expanding_calibration_latest_16_trading_days_holdout"
+    ),
     "sample_floor": {
         "calibration_signal_episodes": 6,
         "calibration_completed_legs": 8,
@@ -78,10 +91,11 @@ METRIC_CONTRACT = {
     "source_quality_gate": [
         "official_ka10080_success",
         "requested_start_date_fully_bracketed",
-        "46_matching_clean_baseline_trading_dates_for_every_symbol",
+        "all_clean_baseline_trading_dates_match_for_every_symbol",
         "valid_unique_completed_sor_regular_ohlc",
         "calibration_and_holdout_held_legs_zero",
         "latest_close_at_or_below_100000_krw",
+        "existing_symbol_lane_excludes_active_symbol_session_pairs",
     ],
     "forbidden_uses": [
         "automatic_machine_implementation_or_service_start",
@@ -114,15 +128,13 @@ class ResearchProfile:
     name: str
     session: str
     policy: ResearchPolicy
+    discovery_lane: str
 
 
-def _profiles() -> dict[str, ResearchProfile]:
+def _new_symbol_profiles() -> dict[str, ResearchProfile]:
     result: dict[str, ResearchProfile] = {}
     for symbol, name in CANDIDATE_SYMBOLS.items():
-        for session, window in (
-            ("midday", MIDDAY_WINDOW),
-            ("afternoon", AFTERNOON_WINDOW),
-        ):
+        for session, window in SESSION_WINDOWS.items():
             profile_id = f"candidate_{symbol}_{session}"
             result[profile_id] = ResearchProfile(
                 profile_id=profile_id,
@@ -130,25 +142,50 @@ def _profiles() -> dict[str, ResearchProfile]:
                 name=name,
                 session=session,
                 policy=ResearchPolicy(window[0], window[1]),
+                discovery_lane="new_symbol",
             )
     return result
 
 
-RESEARCH_PROFILES = _profiles()
+def _existing_symbol_time_extension_profiles() -> dict[str, ResearchProfile]:
+    result: dict[str, ResearchProfile] = {}
+    for symbol, name in IMPLEMENTED_SYMBOLS.items():
+        for session, window in SESSION_WINDOWS.items():
+            if (symbol, session) in ACTIVE_SYMBOL_SESSIONS:
+                continue
+            profile_id = f"existing_{symbol}_{session}"
+            result[profile_id] = ResearchProfile(
+                profile_id=profile_id,
+                symbol=symbol,
+                name=name,
+                session=session,
+                policy=ResearchPolicy(window[0], window[1]),
+                discovery_lane="existing_symbol_time_extension",
+            )
+    return result
 
 
-def rolling_window_start(end_date: date) -> date:
+NEW_SYMBOL_PROFILES = _new_symbol_profiles()
+EXISTING_SYMBOL_TIME_EXTENSION_PROFILES = _existing_symbol_time_extension_profiles()
+RESEARCH_PROFILES = {
+    **NEW_SYMBOL_PROFILES,
+    **EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
+}
+RESEARCH_SYMBOLS = frozenset(CANDIDATE_SYMBOLS) | frozenset(IMPLEMENTED_SYMBOLS)
+
+
+def clean_baseline_trading_dates(end_date: date) -> tuple[date, ...]:
     if not is_krx_trading_day(end_date):
         raise ValueError(f"target_date_not_krx_trading_day:{end_date}")
-    current = end_date
     selected: list[date] = []
-    while len(selected) < ROLLING_WINDOW_DAYS:
+    current = CLEAN_BASELINE_DATE
+    while current <= end_date:
         if is_krx_trading_day(current):
             selected.append(current)
-        current -= timedelta(days=1)
-        if current < CLEAN_BASELINE_DATE - timedelta(days=1):
-            raise ValueError("rolling_window_reaches_before_clean_baseline")
-    return selected[-1]
+        current += timedelta(days=1)
+    if len(selected) < MIN_RESEARCH_DAYS:
+        raise ValueError("clean_baseline_window_below_research_minimum")
+    return tuple(selected)
 
 
 def _previous_krx_trading_date(value: date) -> date:
@@ -182,6 +219,20 @@ def _recommendation_rows(
     for profile_id, item in profiles.items():
         if item.get("decision") != "holdout_pass_source_only_early_candidate":
             continue
+        profile = RESEARCH_PROFILES.get(profile_id)
+        if profile is None:
+            raise ResearchError("recommendation_profile_contract_unknown")
+        if (
+            item.get("symbol") != profile.symbol
+            or item.get("name") != profile.name
+            or item.get("session") != profile.session
+        ):
+            raise ResearchError("recommendation_profile_identity_mismatch")
+        if (
+            profile.discovery_lane == "existing_symbol_time_extension"
+            and (profile.symbol, profile.session) in ACTIVE_SYMBOL_SESSIONS
+        ):
+            raise ResearchError("existing_symbol_lane_active_session_conflict")
         meta = source_meta.get(str(item.get("symbol") or ""), {})
         latest_close = int(meta.get("latest_close_price", 0) or 0)
         if latest_close <= 0 or latest_close > MAX_LATEST_CLOSE_PRICE:
@@ -197,6 +248,12 @@ def _recommendation_rows(
                 "symbol": item["symbol"],
                 "name": item["name"],
                 "session": item["session"],
+                "discovery_lane": profile.discovery_lane,
+                "active_profile_ids_for_symbol": sorted(
+                    live_profile_id
+                    for live_profile_id, live_profile in LIVE_PROFILES.items()
+                    if live_profile.symbol == profile.symbol
+                ),
                 "latest_close_price": latest_close,
                 "price_band": _price_band(latest_close),
                 "recommended_spot": item["recommended_spot"],
@@ -231,22 +288,30 @@ def build_report(
     start_date: date,
     end_date: date,
 ) -> dict[str, Any]:
-    if start_date < CLEAN_BASELINE_DATE or end_date < start_date:
-        raise ValueError("research_window_outside_clean_baseline")
-    if set(sources) != set(CANDIDATE_SYMBOLS):
+    if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
+        raise ValueError("research_window_must_start_at_clean_baseline")
+    expected_dates = clean_baseline_trading_dates(end_date)
+    calibration_days = len(expected_dates) - HOLDOUT_DAYS
+    if set(sources) != set(RESEARCH_SYMBOLS):
         raise ResearchError("expanded_candidate_source_set_mismatch")
+    conflicting_profiles = [
+        profile.profile_id
+        for profile in RESEARCH_PROFILES.values()
+        if (profile.symbol, profile.session) in ACTIVE_SYMBOL_SESSIONS
+    ]
+    if conflicting_profiles:
+        raise ResearchError(
+            "research_profile_active_symbol_session_conflict:"
+            + ",".join(sorted(conflicting_profiles))
+        )
     contexts_by_symbol = {
         symbol: build_day_contexts(bars) for symbol, (bars, _) in sources.items()
     }
     date_sets = [tuple(sorted(contexts)) for contexts in contexts_by_symbol.values()]
     if not date_sets or any(dates != date_sets[0] for dates in date_sets[1:]):
         raise ResearchError("cross_symbol_trading_dates_mismatch")
-    if (
-        len(date_sets[0]) != ROLLING_WINDOW_DAYS
-        or date_sets[0][0] != start_date
-        or date_sets[0][-1] != end_date
-    ):
-        raise ResearchError("rolling_46_trading_date_window_mismatch")
+    if tuple(date_sets[0]) != expected_dates:
+        raise ResearchError("clean_baseline_trading_date_window_mismatch")
     source_meta: dict[str, dict[str, Any]] = {}
     for symbol, (bars, raw_meta) in sources.items():
         if not bars or raw_meta.get("source_quality_status") != "PASS":
@@ -255,27 +320,70 @@ def build_report(
         meta["latest_close_price"] = int(bars[-1].close_price)
         meta["latest_price_band"] = _price_band(int(bars[-1].close_price))
         source_meta[symbol] = meta
-    profiles = {
-        profile_id: select_profile_spot(profile, contexts_by_symbol[profile.symbol])
-        for profile_id, profile in RESEARCH_PROFILES.items()
-    }
+    profiles: dict[str, dict[str, Any]] = {}
+    for profile_id, profile in RESEARCH_PROFILES.items():
+        selected = select_profile_spot(
+            profile,
+            contexts_by_symbol[profile.symbol],
+            calibration_days=calibration_days,
+            holdout_days=HOLDOUT_DAYS,
+        )
+        selected["discovery_lane"] = profile.discovery_lane
+        selected["active_profile_ids_for_symbol"] = sorted(
+            live_profile_id
+            for live_profile_id, live_profile in LIVE_PROFILES.items()
+            if live_profile.symbol == profile.symbol
+        )
+        selected["active_symbol_session_conflict"] = (
+            profile.symbol,
+            profile.session,
+        ) in ACTIVE_SYMBOL_SESSIONS
+        profiles[profile_id] = selected
     recommendations = _recommendation_rows(profiles, source_meta)
+    new_symbol_recommendations = [
+        row for row in recommendations if row["discovery_lane"] == "new_symbol"
+    ]
+    existing_symbol_time_extension_recommendations = [
+        row
+        for row in recommendations
+        if row["discovery_lane"] == "existing_symbol_time_extension"
+    ]
     return {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "target_date": end_date.isoformat(),
+        "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
+        "trading_date_count": len(expected_dates),
+        "calibration_trading_day_count": calibration_days,
+        "holdout_trading_day_count": HOLDOUT_DAYS,
         "cost_pct": COST_PCT,
         "official_reference": OFFICIAL_REFERENCE,
         "metric_contract": METRIC_CONTRACT,
-        "candidate_universe_source": "reviewed_lower_price_research_universe_v1",
+        "candidate_universe_source": (
+            "reviewed_new_symbols_plus_existing_symbol_missing_sessions_v2"
+        ),
         "candidate_universe_size": len(CANDIDATE_SYMBOLS),
+        "existing_symbol_universe_size": len(IMPLEMENTED_SYMBOLS),
+        "source_symbol_count": len(RESEARCH_SYMBOLS),
+        "new_symbol_profile_count": len(NEW_SYMBOL_PROFILES),
+        "existing_symbol_time_extension_profile_count": len(
+            EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+        ),
         "source_meta": source_meta,
         "profiles": profiles,
         "recommendations": recommendations,
         "recommendation_count": len(recommendations),
+        "new_symbol_recommendations": new_symbol_recommendations,
+        "new_symbol_recommendation_count": len(new_symbol_recommendations),
+        "existing_symbol_time_extension_recommendations": (
+            existing_symbol_time_extension_recommendations
+        ),
+        "existing_symbol_time_extension_recommendation_count": len(
+            existing_symbol_time_extension_recommendations
+        ),
         "status": (
             "recommendations_ready" if recommendations else "no_qualified_candidate"
         ),
@@ -294,22 +402,41 @@ def build_report(
 def build_source_quality_blocked_report(
     *, start_date: date, end_date: date, reason: str
 ) -> dict[str, Any]:
+    if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
+        raise ValueError("research_window_must_start_at_clean_baseline")
+    expected_dates = clean_baseline_trading_dates(end_date)
     return {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "target_date": end_date.isoformat(),
+        "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
+        "trading_date_count": len(expected_dates),
+        "calibration_trading_day_count": len(expected_dates) - HOLDOUT_DAYS,
+        "holdout_trading_day_count": HOLDOUT_DAYS,
         "cost_pct": COST_PCT,
         "official_reference": OFFICIAL_REFERENCE,
         "metric_contract": METRIC_CONTRACT,
-        "candidate_universe_source": "reviewed_lower_price_research_universe_v1",
+        "candidate_universe_source": (
+            "reviewed_new_symbols_plus_existing_symbol_missing_sessions_v2"
+        ),
         "candidate_universe_size": len(CANDIDATE_SYMBOLS),
+        "existing_symbol_universe_size": len(IMPLEMENTED_SYMBOLS),
+        "source_symbol_count": len(RESEARCH_SYMBOLS),
+        "new_symbol_profile_count": len(NEW_SYMBOL_PROFILES),
+        "existing_symbol_time_extension_profile_count": len(
+            EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+        ),
         "source_meta": {},
         "profiles": {},
         "recommendations": [],
         "recommendation_count": 0,
+        "new_symbol_recommendations": [],
+        "new_symbol_recommendation_count": 0,
+        "existing_symbol_time_extension_recommendations": [],
+        "existing_symbol_time_extension_recommendation_count": 0,
         "status": "source_quality_blocked",
         "source_quality_reasons": [str(reason)],
         "decision": "source_quality_blocked_no_recommendation",
@@ -328,7 +455,17 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         f"# Expanded lower-price entry-spot research — {report['end_date']}",
         "",
-        "Source-only rolling 30-day calibration / 16-day untouched holdout. No live symbol was added.",
+        (
+            "Source-only clean-baseline expanding calibration / latest 16-day "
+            "holdout. No machine or live session was added."
+        ),
+        "",
+        (
+            f"Window: `{report['start_date']}~{report['end_date']}`; "
+            f"trading dates `{report['trading_date_count']}`; calibration "
+            f"`{report['calibration_trading_day_count']}`; holdout "
+            f"`{report['holdout_trading_day_count']}`."
+        ),
         "",
         f"Recommendation status: `{report['status']}`; profiles: `{report['recommendation_count']}`.",
         "",
@@ -343,8 +480,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         )
     lines.extend(
         [
-            "| Symbol | Name | Session | Decision | Recommended spot | Holdout episodes | Completed | Held | Candidate EV | Baseline EV |",
-            "|---|---|---|---|---|---:|---:|---:|---:|---:|",
+            "| Lane | Symbol | Name | Session | Decision | Recommended spot | Holdout episodes | Completed | Held | Candidate EV | Baseline EV |",
+            "|---|---|---|---|---|---|---:|---:|---:|---:|---:|",
         ]
     )
     for item in report["profiles"].values():
@@ -364,7 +501,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             candidate_ev = holdout["notional_weighted_ev_pct"]
         baseline_ev = item["baseline"]["holdout"]["notional_weighted_ev_pct"]
         lines.append(
-            f"| {item['symbol']} | {item['name']} | {item['session']} | "
+            f"| {item['discovery_lane']} | {item['symbol']} | "
+            f"{item['name']} | {item['session']} | "
             f"{item['decision']} | {spot} | {holdout['signal_episodes']} | "
             f"{holdout['completed_legs']} | {holdout['held_legs']} | "
             f"{candidate_ev} | {baseline_ev} |"
@@ -384,8 +522,17 @@ def build_telegram_message(report: dict[str, Any]) -> str:
     unique_symbols = {str(row.get("symbol") or "") for row in recommendations}
     lines = [
         f"[장후 기계후보 추천] {report['target_date']}",
-        f"분석기간: {report['start_date']}~{report['end_date']} (30일 보정+16일 OOS)",
-        f"후보군: {report['candidate_universe_size']}종목 / 통과: {len(recommendations)}프로필·{len(unique_symbols)}종목",
+        (
+            f"분석기간: {report['start_date']}~{report['end_date']} "
+            f"(clean baseline 전체 {report['trading_date_count']}일 / "
+            f"보정 {report['calibration_trading_day_count']}일 + OOS "
+            f"{report['holdout_trading_day_count']}일)"
+        ),
+        (
+            f"신규후보 {report['candidate_universe_size']}종목 + 기존종목 "
+            f"미구현시간대 {report['existing_symbol_time_extension_profile_count']}프로필 "
+            f"/ 통과 {len(recommendations)}프로필·{len(unique_symbols)}종목"
+        ),
     ]
     if report["status"] == "source_quality_blocked":
         reasons = ", ".join(str(item) for item in report["source_quality_reasons"])
@@ -393,30 +540,48 @@ def build_telegram_message(report: dict[str, Any]) -> str:
         lines.append("오늘은 source-quality 문제로 신규 추천을 산출하지 않았습니다.")
     elif not recommendations:
         lines.append("오늘 신규 구현 추천 기준을 통과한 종목·시간대가 없습니다.")
-    for index, row in enumerate(recommendations[:MAX_RECOMMENDATIONS], start=1):
-        spot = row["recommended_spot"]
-        band = "5만원 이하" if row["price_band"] == "under_50000_krw" else "10만원 이하"
-        lines.extend(
-            [
-                (
-                    f"{index}. {row['name']}({row['symbol']}) {row['session']} "
-                    f"{spot['scan_start']}~{spot['scan_end']}"
-                ),
-                (
-                    f"   종가 {row['latest_close_price']:,}원({band}) / "
-                    f"L{spot['lookback_bars']} DD{spot['rolling_high_drawdown_pct']} "
-                    f"NL{spot['rolling_low_proximity_pct']}"
-                ),
-                (
-                    f"   OOS {row['holdout_signal_episodes']}회·완료 {row['holdout_completed_legs']}leg / "
-                    f"EV {row['notional_weighted_ev_pct']:+.4f}% / 보유 {row['holdout_held_legs']}"
-                ),
-            ]
-        )
-    if len(recommendations) > MAX_RECOMMENDATIONS:
-        lines.append(
-            f"외 {len(recommendations) - MAX_RECOMMENDATIONS}개 프로필은 보고서 참조"
-        )
+    lane_sections = (
+        ("신규 종목", report["new_symbol_recommendations"]),
+        (
+            "기존 종목·신규 시간대",
+            report["existing_symbol_time_extension_recommendations"],
+        ),
+    )
+    for lane_label, lane_rows in lane_sections:
+        if not lane_rows:
+            continue
+        lines.append(f"[{lane_label}]")
+        for index, row in enumerate(lane_rows[:MAX_RECOMMENDATIONS_PER_LANE], start=1):
+            spot = row["recommended_spot"]
+            band = (
+                "5만원 이하"
+                if row["price_band"] == "under_50000_krw"
+                else "10만원 이하"
+            )
+            lines.extend(
+                [
+                    (
+                        f"{index}. {row['name']}({row['symbol']}) {row['session']} "
+                        f"{spot['scan_start']}~{spot['scan_end']}"
+                    ),
+                    (
+                        f"   종가 {row['latest_close_price']:,}원({band}) / "
+                        f"L{spot['lookback_bars']} "
+                        f"DD{spot['rolling_high_drawdown_pct']} "
+                        f"NL{spot['rolling_low_proximity_pct']}"
+                    ),
+                    (
+                        f"   OOS {row['holdout_signal_episodes']}회·완료 "
+                        f"{row['holdout_completed_legs']}leg / EV "
+                        f"{row['notional_weighted_ev_pct']:+.4f}% / "
+                        f"보유 {row['holdout_held_legs']}"
+                    ),
+                ]
+            )
+        if len(lane_rows) > MAX_RECOMMENDATIONS_PER_LANE:
+            lines.append(
+                f"외 {len(lane_rows) - MAX_RECOMMENDATIONS_PER_LANE}개 프로필은 보고서 참조"
+            )
     lines.extend(
         [
             "판정: source-only 추천이며 자동 기계 구현·기동·실주문 권한 없음",
@@ -505,7 +670,20 @@ class CandidateRecommendationNotifier:
             and report.get("broker_order_forbidden") is True
             and isinstance(recommendations, list)
             and report.get("candidate_universe_size") == len(CANDIDATE_SYMBOLS)
+            and report.get("existing_symbol_universe_size") == len(IMPLEMENTED_SYMBOLS)
+            and report.get("source_symbol_count") == len(RESEARCH_SYMBOLS)
+            and report.get("new_symbol_profile_count") == len(NEW_SYMBOL_PROFILES)
+            and report.get("existing_symbol_time_extension_profile_count")
+            == len(EXISTING_SYMBOL_TIME_EXTENSION_PROFILES)
             and report.get("recommendation_count") == len(recommendations or [])
+            and isinstance(report.get("new_symbol_recommendations"), list)
+            and report.get("new_symbol_recommendation_count")
+            == len(report.get("new_symbol_recommendations") or [])
+            and isinstance(
+                report.get("existing_symbol_time_extension_recommendations"), list
+            )
+            and report.get("existing_symbol_time_extension_recommendation_count")
+            == len(report.get("existing_symbol_time_extension_recommendations") or [])
         )
         if not basic_valid:
             return False
@@ -517,12 +695,20 @@ class CandidateRecommendationNotifier:
             return False
         if (
             end_date != target_date
-            or start_date < CLEAN_BASELINE_DATE
+            or start_date != CLEAN_BASELINE_DATE
+            or report.get("clean_tuning_baseline_date")
+            != CLEAN_BASELINE_DATE.isoformat()
             or not is_krx_trading_day(target_date)
         ):
             return False
         try:
-            if start_date != rolling_window_start(end_date):
+            expected_dates = clean_baseline_trading_dates(end_date)
+            if (
+                int(report.get("trading_date_count", 0)) != len(expected_dates)
+                or int(report.get("calibration_trading_day_count", 0))
+                != len(expected_dates) - HOLDOUT_DAYS
+                or int(report.get("holdout_trading_day_count", 0)) != HOLDOUT_DAYS
+            ):
                 return False
         except ValueError:
             return False
@@ -533,6 +719,23 @@ class CandidateRecommendationNotifier:
         profile_ids = [str(row.get("profile_id") or "") for row in recommendations]
         if len(profile_ids) != len(set(profile_ids)):
             return False
+        expected_new = [
+            row for row in recommendations if row.get("discovery_lane") == "new_symbol"
+        ]
+        expected_existing = [
+            row
+            for row in recommendations
+            if row.get("discovery_lane") == "existing_symbol_time_extension"
+        ]
+        if (
+            report.get("new_symbol_recommendations") != expected_new
+            or report.get("existing_symbol_time_extension_recommendations")
+            != expected_existing
+            or report.get("new_symbol_recommendation_count") != len(expected_new)
+            or report.get("existing_symbol_time_extension_recommendation_count")
+            != len(expected_existing)
+        ):
+            return False
         return all(
             isinstance(row, dict)
             and row.get("profile_id") in RESEARCH_PROFILES
@@ -540,6 +743,16 @@ class CandidateRecommendationNotifier:
             == RESEARCH_PROFILES[str(row.get("profile_id"))].symbol
             and row.get("session")
             == RESEARCH_PROFILES[str(row.get("profile_id"))].session
+            and row.get("discovery_lane")
+            == RESEARCH_PROFILES[str(row.get("profile_id"))].discovery_lane
+            and (
+                row.get("discovery_lane") != "existing_symbol_time_extension"
+                or (
+                    (str(row.get("symbol")), str(row.get("session")))
+                    not in ACTIVE_SYMBOL_SESSIONS
+                    and bool(row.get("active_profile_ids_for_symbol"))
+                )
+            )
             and isinstance(row.get("recommended_spot"), dict)
             and 0 < int(row.get("latest_close_price", 0) or 0) <= MAX_LATEST_CLOSE_PRICE
             and row.get("price_band") in {"under_50000_krw", "50000_to_100000_krw"}
@@ -618,7 +831,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-date")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
-    parser.add_argument("--max-pages", type=int, default=80)
+    parser.add_argument("--max-pages", type=int, default=400)
     parser.add_argument("--page-delay-sec", type=float, default=0.2)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--write", action="store_true")
@@ -638,17 +851,18 @@ def main(argv: list[str] | None = None) -> int:
     if end_date != target_date:
         raise ValueError("end_date_must_equal_target_date")
     start_date = (
-        date.fromisoformat(args.start_date)
-        if args.start_date
-        else rolling_window_start(end_date)
+        date.fromisoformat(args.start_date) if args.start_date else CLEAN_BASELINE_DATE
     )
+    if start_date != CLEAN_BASELINE_DATE:
+        raise ValueError("start_date_must_equal_clean_baseline")
+    expected_trading_day_count = len(clean_baseline_trading_dates(end_date))
     if args.notify and not args.write:
         raise ValueError("telegram_notification_requires_written_report")
     try:
         token = kiwoom_utils.get_cached_kiwoom_token()
         if not token:
             raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
-        allowlist = frozenset(CANDIDATE_SYMBOLS)
+        allowlist = RESEARCH_SYMBOLS
         sources = {
             symbol: fetch_sor_history(
                 symbol=symbol,
@@ -658,8 +872,9 @@ def main(argv: list[str] | None = None) -> int:
                 max_pages=args.max_pages,
                 page_delay_sec=args.page_delay_sec,
                 allowed_symbols=allowlist,
+                expected_trading_day_count=expected_trading_day_count,
             )
-            for symbol in CANDIDATE_SYMBOLS
+            for symbol in RESEARCH_SYMBOLS
         }
         report = build_report(sources=sources, start_date=start_date, end_date=end_date)
     except (ResearchError, requests.RequestException) as exc:
@@ -692,6 +907,12 @@ def main(argv: list[str] | None = None) -> int:
                         == "holdout_pass_source_only_early_candidate"
                     ],
                     "recommendation_count": report["recommendation_count"],
+                    "new_symbol_recommendation_count": report[
+                        "new_symbol_recommendation_count"
+                    ],
+                    "existing_symbol_time_extension_recommendation_count": report[
+                        "existing_symbol_time_extension_recommendation_count"
+                    ],
                     "telegram_status": report["telegram_status"],
                     "json_path": str(paths[0]) if paths[0] else None,
                     "markdown_path": str(paths[1]) if paths[1] else None,

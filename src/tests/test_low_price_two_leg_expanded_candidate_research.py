@@ -26,19 +26,30 @@ class FakeResponse:
         return {"return_code": 0, "stk_min_pole_chart_qry": self._rows}
 
 
-def test_expanded_profiles_are_research_only_and_disjoint_from_live_symbols():
-    assert len(expanded.RESEARCH_PROFILES) == 18
+def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():
+    assert len(expanded.NEW_SYMBOL_PROFILES) == 18
+    assert len(expanded.RESEARCH_PROFILES) == 19
     assert set(expanded.CANDIDATE_SYMBOLS).isdisjoint(
         profile.symbol for profile in PROFILES.values()
     )
     assert {
         (profile.symbol, profile.session)
-        for profile in expanded.RESEARCH_PROFILES.values()
+        for profile in expanded.NEW_SYMBOL_PROFILES.values()
     } == {
         (symbol, session)
         for symbol in expanded.CANDIDATE_SYMBOLS
         for session in ("midday", "afternoon")
     }
+    assert set(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES) == {
+        "existing_475150_afternoon"
+    }
+    existing_profile = expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES[
+        "existing_475150_afternoon"
+    ]
+    assert existing_profile.discovery_lane == "existing_symbol_time_extension"
+    assert (existing_profile.symbol, existing_profile.session) not in (
+        expanded.ACTIVE_SYMBOL_SESSIONS
+    )
 
 
 def test_fetch_expanded_symbol_requires_explicit_research_allowlist():
@@ -98,13 +109,8 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     monkeypatch,
 ):
     end_date = date(2026, 8, 11)
-    start_date = expanded.rolling_window_start(end_date)
-    trading_dates = []
-    current = start_date
-    while current <= end_date:
-        if expanded.is_krx_trading_day(current):
-            trading_dates.append(current)
-        current += timedelta(days=1)
+    start_date = expanded.CLEAN_BASELINE_DATE
+    trading_dates = list(expanded.clean_baseline_trading_dates(end_date))
     monkeypatch.setattr(
         expanded,
         "build_day_contexts",
@@ -113,7 +119,7 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     monkeypatch.setattr(
         expanded,
         "select_profile_spot",
-        lambda profile, contexts: {
+        lambda profile, contexts, **kwargs: {
             "symbol": profile.symbol,
             "name": profile.name,
             "session": profile.session,
@@ -134,7 +140,7 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
             [SimpleNamespace(close_price=20_000)],
             {"source_quality_status": "PASS"},
         )
-        for symbol in expanded.CANDIDATE_SYMBOLS
+        for symbol in expanded.RESEARCH_SYMBOLS
     }
 
     report = expanded.build_report(
@@ -145,15 +151,26 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
 
     assert report["status"] == "no_qualified_candidate"
     assert len(report["profiles"]) == len(expanded.RESEARCH_PROFILES)
+    assert report["trading_date_count"] == 47
+    assert report["calibration_trading_day_count"] == 31
+    assert report["holdout_trading_day_count"] == 16
+    assert report["existing_symbol_time_extension_profile_count"] == 1
     assert report["recommendation_count"] == 0
     assert report["runtime_effect"] is False
 
 
-def test_daily_rolling_window_stays_inside_clean_baseline():
-    assert expanded.rolling_window_start(date(2026, 8, 10)) == date(2026, 6, 5)
-    assert expanded.rolling_window_start(date(2026, 8, 11)) == date(2026, 6, 8)
+def test_daily_window_expands_from_clean_baseline_and_keeps_latest_16_holdout():
+    dates_0810 = expanded.clean_baseline_trading_dates(date(2026, 8, 10))
+    dates_0811 = expanded.clean_baseline_trading_dates(date(2026, 8, 11))
+
+    assert len(dates_0810) == 46
+    assert len(dates_0811) == 47
+    assert dates_0810[0] == dates_0811[0] == date(2026, 6, 5)
+    assert dates_0811[-1] == date(2026, 8, 11)
+    assert len(dates_0811[: -expanded.HOLDOUT_DAYS]) == 31
+    assert len(dates_0811[-expanded.HOLDOUT_DAYS :]) == 16
     with pytest.raises(ValueError, match="target_date_not_krx_trading_day"):
-        expanded.rolling_window_start(date(2026, 8, 9))
+        expanded.clean_baseline_trading_dates(date(2026, 8, 9))
 
 
 def _profile_result(
@@ -190,21 +207,21 @@ def _profile_result(
 
 def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
     profiles = {
-        "under_50k": _profile_result(
+        "candidate_080220_afternoon": _profile_result(
             symbol="080220",
             name="제주반도체",
             session="afternoon",
             candidate_ev=0.08,
             baseline_ev=0.01,
         ),
-        "under_100k": _profile_result(
+        "candidate_017670_midday": _profile_result(
             symbol="017670",
             name="SK텔레콤",
             session="midday",
             candidate_ev=0.03,
             baseline_ev=0.01,
         ),
-        "price_cap": _profile_result(
+        "candidate_007660_afternoon": _profile_result(
             symbol="007660",
             name="이수페타시스",
             session="afternoon",
@@ -220,26 +237,72 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
 
     rows = expanded._recommendation_rows(profiles, source_meta)
 
-    assert [row["profile_id"] for row in rows] == ["under_50k", "under_100k"]
+    assert [row["profile_id"] for row in rows] == [
+        "candidate_080220_afternoon",
+        "candidate_017670_midday",
+    ]
     assert rows[0]["price_band"] == "under_50000_krw"
     assert rows[1]["price_band"] == "50000_to_100000_krw"
     assert rows[0]["ev_uplift_pct_point"] == pytest.approx(0.07)
     assert all(row["runtime_effect"] is False for row in rows)
 
 
+def test_existing_symbol_time_extension_recommendation_preserves_active_profile_lineage():
+    profiles = {
+        "existing_475150_afternoon": _profile_result(
+            symbol="475150",
+            name="SK이터닉스",
+            session="afternoon",
+            candidate_ev=0.08,
+            baseline_ev=0.01,
+        )
+    }
+
+    rows = expanded._recommendation_rows(
+        profiles, {"475150": {"latest_close_price": 25_000}}
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["discovery_lane"] == "existing_symbol_time_extension"
+    assert rows[0]["active_profile_ids_for_symbol"] == ["sk_eternix_midday"]
+    assert (rows[0]["symbol"], rows[0]["session"]) not in (
+        expanded.ACTIVE_SYMBOL_SESSIONS
+    )
+
+
 def _notification_report(recommendations: list[dict] | None = None) -> dict:
     rows = recommendations or []
+    new_rows = [row for row in rows if row.get("discovery_lane") == "new_symbol"]
+    existing_rows = [
+        row
+        for row in rows
+        if row.get("discovery_lane") == "existing_symbol_time_extension"
+    ]
     return {
         "schema": expanded.REPORT_SCHEMA,
         "report_type": expanded.REPORT_TYPE,
         "status": "recommendations_ready" if rows else "no_qualified_candidate",
         "authority": expanded.AUTHORITY,
         "target_date": "2026-08-11",
-        "start_date": "2026-06-08",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "start_date": "2026-06-05",
         "end_date": "2026-08-11",
+        "trading_date_count": 47,
+        "calibration_trading_day_count": 31,
+        "holdout_trading_day_count": 16,
         "candidate_universe_size": len(expanded.CANDIDATE_SYMBOLS),
+        "existing_symbol_universe_size": len(expanded.IMPLEMENTED_SYMBOLS),
+        "source_symbol_count": len(expanded.RESEARCH_SYMBOLS),
+        "new_symbol_profile_count": len(expanded.NEW_SYMBOL_PROFILES),
+        "existing_symbol_time_extension_profile_count": len(
+            expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+        ),
         "recommendation_count": len(rows),
         "recommendations": rows,
+        "new_symbol_recommendations": new_rows,
+        "new_symbol_recommendation_count": len(new_rows),
+        "existing_symbol_time_extension_recommendations": existing_rows,
+        "existing_symbol_time_extension_recommendation_count": len(existing_rows),
         "metric_contract": expanded.METRIC_CONTRACT,
         "recommendation_only": True,
         "machine_created": False,
@@ -281,6 +344,38 @@ def test_admin_notifier_retries_sends_once_and_never_creates_machine(tmp_path):
     assert '"service_started": false' in state
 
 
+def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes():
+    rows = expanded._recommendation_rows(
+        {
+            "candidate_080220_afternoon": _profile_result(
+                symbol="080220",
+                name="제주반도체",
+                session="afternoon",
+                candidate_ev=0.08,
+                baseline_ev=0.01,
+            ),
+            "existing_475150_afternoon": _profile_result(
+                symbol="475150",
+                name="SK이터닉스",
+                session="afternoon",
+                candidate_ev=0.07,
+                baseline_ev=0.01,
+            ),
+        },
+        {
+            "080220": {"latest_close_price": 24_000},
+            "475150": {"latest_close_price": 25_000},
+        },
+    )
+
+    message = expanded.build_telegram_message(_notification_report(rows))
+
+    assert "[신규 종목]" in message
+    assert "[기존 종목·신규 시간대]" in message
+    assert "제주반도체(080220)" in message
+    assert "SK이터닉스(475150)" in message
+
+
 def test_admin_notifier_fails_closed_for_invalid_authority(tmp_path):
     report = _notification_report()
     report["runtime_effect"] = True
@@ -298,7 +393,7 @@ def test_admin_notifier_fails_closed_for_invalid_authority(tmp_path):
     assert notifier.notify(report) == "invalid_report"
 
     report = _notification_report()
-    report["start_date"] = "2026-06-05"
+    report["start_date"] = "2026-06-08"
     assert notifier.notify(report) == "invalid_report"
 
 
@@ -337,7 +432,7 @@ def test_source_quality_blocked_result_is_reported_to_admin_without_recommendati
     tmp_path,
 ):
     report = expanded.build_source_quality_blocked_report(
-        start_date=date(2026, 6, 8),
+        start_date=date(2026, 6, 5),
         end_date=date(2026, 8, 11),
         reason="015760_source_quality_fail",
     )

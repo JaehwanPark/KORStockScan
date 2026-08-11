@@ -489,6 +489,7 @@ from pathlib import Path
 
 from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
     CandidateRecommendationNotifier,
+    REPORT_SCHEMA,
 )
 
 try:
@@ -498,7 +499,7 @@ except Exception:
 target_date = sys.argv[2]
 valid = (
     isinstance(payload, dict)
-    and payload.get("schema") == "low_price_two_leg_expanded_candidate_research_v2"
+    and payload.get("schema") == REPORT_SCHEMA
     and payload.get("report_type") == "low_price_two_leg_expanded_candidate_research"
     and payload.get("target_date") == target_date
     and payload.get("end_date") == target_date
