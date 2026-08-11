@@ -62,10 +62,18 @@ def test_authority_artifact_is_same_day_and_never_controls_widget(tmp_path):
     assert artifact["policy"]["widget_relationship"] == (
         "parallel_independent_strategy"
     )
+    assert artifact["policy"]["sor_regular_fallback"] == (
+        "09:00_open_minus_0.75pct_until_09:30"
+    )
+    assert artifact["policy"]["unfilled_target"] == (
+        "hold_position_without_forced_exit"
+    )
+    assert "max_hold_minutes" not in artifact["policy"]
     assert (
         "use_widget_orders_or_positions_as_one_share_ledger"
         in artifact["forbidden_uses"]
     )
+    assert "timeout_target_cancel_or_forced_exit" in artifact["forbidden_uses"]
 
 
 def test_authority_rejects_other_trade_date(tmp_path):
@@ -79,3 +87,20 @@ def test_authority_rejects_other_trade_date(tmp_path):
         False,
         "authority_target_date_mismatch",
     )
+
+
+@pytest.mark.parametrize(
+    ("policy_change", "reason"),
+    [
+        ({"sor_regular_fallback": "09:00_krx_only"}, "authority_sor_policy_mismatch"),
+        ({"unfilled_target": "best_sell_after_12m"}, "authority_hold_policy_mismatch"),
+        ({"max_hold_minutes": 12}, "authority_timeout_policy_forbidden"),
+    ],
+)
+def test_authority_rejects_stale_or_forced_exit_policy(tmp_path, policy_change, reason):
+    now = datetime(2026, 8, 12, 7, 57, tzinfo=KST)
+    artifact = build_authority_artifact(_ready_decision(), observed_at=now)
+    artifact["policy"].update(policy_change)
+    path = tmp_path / "authority.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    assert validate_authority(path, now=now) == (False, reason)
