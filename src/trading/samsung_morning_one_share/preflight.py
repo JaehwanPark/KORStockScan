@@ -17,7 +17,7 @@ from src.trading.samsung_morning_one_share.machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "samsung_morning_one_share_authority_v1"
+AUTHORITY_SCHEMA = "samsung_morning_one_share_authority_v2"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_one_share_authority.json"
 )
@@ -80,14 +80,14 @@ def build_authority_artifact(
             "symbol": "005930",
             "quantity": 1,
             "nxt_entry": "08:00_open_minus_3pct_until_08:10",
-            "krx_fallback": "09:00_open_minus_0.75pct_until_09:30",
+            "sor_regular_fallback": "09:00_open_minus_0.75pct_until_09:30",
             "target": "fill_plus_2_ticks",
-            "max_hold_minutes": 12,
+            "unfilled_target": "hold_position_without_forced_exit",
             "widget_relationship": "parallel_independent_strategy",
         },
         "metric_role": "operator_preopen_runtime_authority_gate",
         "decision_authority": "explicit_user_directed_one_share_live_start",
-        "window_policy": "target_date_preopen_once_then_intraday_terminal",
+        "window_policy": "target_date_preopen_once_then_terminal_or_held",
         "sample_floor": "not_applicable_operator_runtime_gate",
         "primary_decision_metric": "all_preopen_safety_contracts_ready",
         "source_quality_gate": "PASS",
@@ -96,8 +96,9 @@ def build_authority_artifact(
         "broker_order_forbidden": False,
         "rollback": {
             "trigger": (
-                "any ambiguous one-share broker write, unresolved one-share prior "
-                "state, source failure, or one-share contract breach"
+                "any ambiguous one-share broker write, unresolved prior entry "
+                "order or ambiguous position state, source failure, or one-share "
+                "contract breach"
             ),
             "action": "fail_closed_and_disable_only_one_share_timers_and_service",
             "widget_service_effect": "none",
@@ -109,6 +110,7 @@ def build_authority_artifact(
             "use_for_other_symbol_or_strategy",
             "use_widget_orders_or_positions_as_one_share_ledger",
             "cancel_or_sell_widget_owned_orders_or_quantity",
+            "timeout_target_cancel_or_forced_exit",
         ],
     }
 
@@ -156,6 +158,15 @@ def validate_authority(
         return False, "authority_parallel_widget_contract_missing"
     if decision.get("independent_order_ledger_required") is not True:
         return False, "authority_independent_ledger_contract_missing"
+    policy = payload.get("policy")
+    if not isinstance(policy, dict):
+        return False, "authority_policy_missing"
+    if policy.get("sor_regular_fallback") != ("09:00_open_minus_0.75pct_until_09:30"):
+        return False, "authority_sor_policy_mismatch"
+    if policy.get("unfilled_target") != "hold_position_without_forced_exit":
+        return False, "authority_hold_policy_mismatch"
+    if "max_hold_minutes" in policy:
+        return False, "authority_timeout_policy_forbidden"
     return True, "ready"
 
 

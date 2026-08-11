@@ -21,7 +21,7 @@ from src.utils import kiwoom_utils
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-11T10:16:56+09:00",
+    "retrieved_at_kst": "2026-08-11T11:43:54+09:00",
     "inspected_paths": [
         "kiwoom_docs/주문.md",
         "kiwoom_docs/계좌.md",
@@ -161,7 +161,7 @@ class KiwoomOneShareGateway:
     @staticmethod
     def _validate_route(route: str) -> str:
         normalized = str(route or "").strip().upper()
-        if normalized not in {"KRX", "NXT"}:
+        if normalized not in {"NXT", "SOR"}:
             raise ValueError("invalid_order_route")
         return normalized
 
@@ -195,6 +195,9 @@ class KiwoomOneShareGateway:
 
     def opening_price(self, *, route: str, trade_date: date) -> OpenPriceSnapshot:
         route = self._validate_route(route)
+        # The 09:00 SOR entry policy uses the primary-market regular-session
+        # opening price as its price anchor.  SOR is the broker order route,
+        # not a claim that ka10080 returns a consolidated execution stream.
         request_code = "005930_NX" if route == "NXT" else "005930"
         try:
             response, body = self._post(
@@ -265,23 +268,6 @@ class KiwoomOneShareGateway:
                 "ord_qty": "1",
                 "ord_uv": str(price),
                 "trde_tp": "0",
-                "cond_uv": "",
-            },
-        )
-        return self._submit_result(response, body)
-
-    def submit_best_sell(self, *, route: str) -> SubmitResult:
-        self._require_write_authority()
-        route = self._validate_route(route)
-        response, body = self._post(
-            endpoint="/api/dostk/ordr",
-            api_id="kt10001",
-            payload={
-                "dmst_stex_tp": route,
-                "stk_cd": "005930",
-                "ord_qty": "1",
-                "ord_uv": "",
-                "trde_tp": "6",
                 "cond_uv": "",
             },
         )

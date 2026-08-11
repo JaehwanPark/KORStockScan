@@ -1,4 +1,4 @@
-"""Persistent state machine for one Samsung morning round trip per KST day."""
+"""Persistent state machine for one Samsung morning one-share entry episode."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 import time as time_module
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Protocol
 from zoneinfo import ZoneInfo
@@ -37,8 +37,6 @@ class OneShareGateway(Protocol):
 
     def submit_limit_sell(self, *, route: str, price: int) -> SubmitResult: ...
 
-    def submit_best_sell(self, *, route: str) -> SubmitResult: ...
-
     def cancel(self, *, route: str, order_no: str) -> SubmitResult: ...
 
     def execution_snapshot(
@@ -48,16 +46,6 @@ class OneShareGateway(Protocol):
 
 def _iso(now: datetime) -> str:
     return now.astimezone(KST).isoformat()
-
-
-def _parse_datetime(value: object) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(str(value or ""))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=KST)
-    return parsed.astimezone(KST)
 
 
 def _fresh_state(trade_date: date) -> dict:
@@ -77,8 +65,6 @@ def _fresh_state(trade_date: date) -> dict:
         "position_qty": 0,
         "target_price": 0,
         "target_order_no": "",
-        "target_cancel_requested": False,
-        "exit_order_no": "",
         "blocked_reason": "",
         "owned_order_nos": [],
         "last_action": "initialized",
@@ -198,9 +184,13 @@ class SamsungMorningOneShareMachine:
         if self._state.get("trade_date") == today.isoformat():
             return True
         status = str(self._state.get("status") or "")
+        position_qty = int(self._state.get("position_qty", 0) or 0)
+        if position_qty == 1 and status in {"TARGET_OPEN", "HELD"}:
+            # Preserve the original order date for target reconciliation.  A
+            # carried position never opens a new daily entry episode.
+            return True
         unresolved = bool(
-            int(self._state.get("position_qty", 0) or 0)
-            or status not in {"READY", "COMPLETE", "NO_TRADE"}
+            position_qty or status not in {"READY", "COMPLETE", "NO_TRADE"}
         )
         if unresolved:
             self._state["status"] = "BLOCKED"
@@ -247,7 +237,6 @@ class SamsungMorningOneShareMachine:
                 "status": "TARGET_OPEN",
                 "target_price": target_price,
                 "target_order_no": result.order_no,
-                "target_cancel_requested": False,
             }
         )
         self._own_order(result.order_no)
@@ -290,7 +279,7 @@ class SamsungMorningOneShareMachine:
 
         route = str(self._state.get("route") or "")
         deadline = (
-            self.policy.nxt.deadline if route == "NXT" else self.policy.krx.deadline
+            self.policy.nxt.deadline if route == "NXT" else self.policy.sor.deadline
         )
         if now.time() <= deadline:
             self._record(now, "buy_open_wait")
@@ -325,6 +314,9 @@ class SamsungMorningOneShareMachine:
         if not snapshot.source_ok:
             self._record(now, "target_reconciliation_wait", error=snapshot.error)
             return self.snapshot()
+        if not snapshot.found:
+            self._record(now, "target_not_found_reconciliation_wait")
+            return self.snapshot()
         if snapshot.found and snapshot.filled_qty == 1:
             self._state.update(
                 {"position_qty": 0, "status": "COMPLETE", "blocked_reason": ""}
@@ -332,74 +324,10 @@ class SamsungMorningOneShareMachine:
             self._record(now, "target_fill_confirmed")
             return self.snapshot()
         if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
-            if not bool(self._state.get("target_cancel_requested")):
-                return self._block(now, "target_disappeared_before_machine_cancel")
-            self._state["status"] = "EXIT_SUBMITTING"
-            self._record(now, "final_exit_submit_intent")
-            result = self.gateway.submit_best_sell(route=str(self._state["route"]))
-            if result.ambiguous:
-                return self._block(now, "final_exit_submit_ambiguous")
-            if not result.accepted:
-                self._state["status"] = "TARGET_CANCEL_PENDING"
-                self._record(
-                    now,
-                    "final_exit_submit_rejected_retryable",
-                    return_code=result.return_code,
-                )
-                return self.snapshot()
-            self._state.update(
-                {"status": "EXIT_OPEN", "exit_order_no": result.order_no}
-            )
-            self._own_order(result.order_no)
-            self._record(now, "final_exit_submitted")
+            self._state.update({"status": "HELD", "blocked_reason": ""})
+            self._record(now, "target_closed_unfilled_position_held")
             return self.snapshot()
-
-        filled_at = _parse_datetime(self._state.get("buy_filled_at"))
-        if filled_at is None:
-            return self._block(now, "buy_fill_timestamp_missing")
-        deadline = filled_at + timedelta(minutes=self.policy.max_hold_minutes)
-        if now <= deadline:
-            self._record(now, "target_open_wait")
-            return self.snapshot()
-        if bool(self._state.get("target_cancel_requested")):
-            self._record(now, "target_cancel_reconciliation_wait")
-            return self.snapshot()
-        self._state["status"] = "TARGET_CANCEL_SUBMITTING"
-        self._record(now, "target_cancel_intent")
-        result = self.gateway.cancel(route=str(self._state["route"]), order_no=order_no)
-        if result.ambiguous:
-            return self._block(now, "target_cancel_ambiguous_reconciliation_required")
-        if not result.accepted:
-            self._state["status"] = "TARGET_OPEN"
-            self._record(
-                now,
-                "target_cancel_rejected_retryable",
-                return_code=result.return_code,
-            )
-            return self.snapshot()
-        self._state["status"] = "TARGET_CANCEL_PENDING"
-        self._state["target_cancel_requested"] = True
-        self._own_order(result.order_no)
-        self._record(now, "target_cancel_submitted")
-        return self.snapshot()
-
-    def _reconcile_exit(self, now: datetime) -> dict:
-        order_no = str(self._state.get("exit_order_no") or "")
-        if not self._owns_order(order_no):
-            return self._block(now, "exit_order_not_owned_by_one_share_machine")
-        snapshot = self._execution(order_no)
-        if not snapshot.source_ok or not snapshot.found:
-            self._record(now, "final_exit_reconciliation_wait", error=snapshot.error)
-            return self.snapshot()
-        if snapshot.filled_qty == 1:
-            self._state.update(
-                {"position_qty": 0, "status": "COMPLETE", "blocked_reason": ""}
-            )
-            self._record(now, "final_exit_fill_confirmed")
-            return self.snapshot()
-        if snapshot.remaining_qty == 0:
-            return self._block(now, "final_exit_closed_without_fill")
-        self._record(now, "final_exit_open_wait")
+        self._record(now, "target_open_wait")
         return self.snapshot()
 
     def _submit_entry(self, now: datetime, window: EntryWindow) -> dict:
@@ -487,6 +415,7 @@ class SamsungMorningOneShareMachine:
             "TARGET_SUBMITTING",
             "TARGET_CANCEL_SUBMITTING",
             "EXIT_SUBMITTING",
+            "EXIT_OPEN",
         }:
             return self._block(now, f"broker_write_interrupted:{status.lower()}")
         if status in {"BUY_OPEN", "BUY_CANCEL_PENDING"}:
@@ -495,9 +424,7 @@ class SamsungMorningOneShareMachine:
             return self._submit_target(now)
         if status in {"TARGET_OPEN", "TARGET_CANCEL_PENDING"}:
             return self._reconcile_target(now)
-        if status == "EXIT_OPEN":
-            return self._reconcile_exit(now)
-        if status in {"COMPLETE", "NO_TRADE"} or bool(
+        if status in {"COMPLETE", "NO_TRADE", "HELD"} or bool(
             self._state.get("daily_trade_consumed")
         ):
             return self.snapshot()
@@ -514,13 +441,13 @@ class SamsungMorningOneShareMachine:
                 self._save()
                 return self.snapshot()
 
-        if self.policy.krx.open_time <= current <= self.policy.krx.deadline:
-            return self._submit_entry(now, self.policy.krx)
-        if current > self.policy.krx.deadline:
+        if self.policy.sor.open_time <= current <= self.policy.sor.deadline:
+            return self._submit_entry(now, self.policy.sor)
+        if current > self.policy.sor.deadline:
             self._state["status"] = "NO_TRADE"
-            self._record(now, "krx_window_expired_without_fill")
+            self._record(now, "sor_window_expired_without_fill")
         else:
-            self._state["last_action"] = "waiting_for_krx_window"
+            self._state["last_action"] = "waiting_for_sor_window"
             self._save()
         return self.snapshot()
 
@@ -532,6 +459,6 @@ class SamsungMorningOneShareMachine:
     def run_until_terminal(self, *, interval_sec: float = 2.0) -> dict:
         while True:
             state = self.run_once()
-            if state.get("status") in {"COMPLETE", "NO_TRADE", "BLOCKED"}:
+            if state.get("status") in {"COMPLETE", "NO_TRADE", "HELD", "BLOCKED"}:
                 return state
             time_module.sleep(max(0.2, float(interval_sec)))

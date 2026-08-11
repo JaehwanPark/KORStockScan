@@ -21,16 +21,15 @@ class MorningOneSharePolicy:
     symbol: str = "005930"
     quantity: int = 1
     nxt: EntryWindow = EntryWindow("NXT", time(8, 0), time(8, 10), 3.0)
-    krx: EntryWindow = EntryWindow("KRX", time(9, 0), time(9, 30), 0.75)
+    sor: EntryWindow = EntryWindow("SOR", time(9, 0), time(9, 30), 0.75)
     target_ticks: int = 2
-    max_hold_minutes: int = 12
 
     def __post_init__(self) -> None:
         if self.symbol != "005930" or self.quantity != 1:
             raise ValueError("policy_is_hard_limited_to_005930_one_share")
-        if self.target_ticks <= 0 or self.max_hold_minutes <= 0:
+        if self.target_ticks <= 0:
             raise ValueError("invalid_exit_policy")
-        if self.nxt.route != "NXT" or self.krx.route != "KRX":
+        if self.nxt.route != "NXT" or self.sor.route != "SOR":
             raise ValueError("invalid_route_priority")
 
     @staticmethod

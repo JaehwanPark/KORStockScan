@@ -21,10 +21,9 @@ from src.trading.samsung_morning_one_share import service as service_module
 
 class FakeGateway:
     def __init__(self) -> None:
-        self.opens = {"NXT": 300_000, "KRX": 300_000}
+        self.opens = {"NXT": 300_000, "SOR": 300_000}
         self.buy_calls: list[tuple[str, int]] = []
         self.limit_sell_calls: list[tuple[str, int]] = []
-        self.best_sell_calls: list[str] = []
         self.cancel_calls: list[tuple[str, str]] = []
         self.snapshots: dict[str, ExecutionSnapshot] = {}
         self.sequence = 0
@@ -44,10 +43,6 @@ class FakeGateway:
     def submit_limit_sell(self, *, route, price):
         self.limit_sell_calls.append((route, price))
         return self._accepted("T")
-
-    def submit_best_sell(self, *, route):
-        self.best_sell_calls.append(route)
-        return self._accepted("S")
 
     def cancel(self, *, route, order_no):
         self.cancel_calls.append((route, order_no))
@@ -73,6 +68,8 @@ def _machine(tmp_path: Path, gateway: FakeGateway, *, live: bool = True):
 def test_policy_prices_are_fixed_to_one_share_strategy():
     assert DEFAULT_POLICY.quantity == 1
     assert DEFAULT_POLICY.symbol == "005930"
+    assert DEFAULT_POLICY.nxt.route == "NXT"
+    assert DEFAULT_POLICY.sor.route == "SOR"
     assert DEFAULT_POLICY.entry_price(300_000, 3.0) == 291_000
     assert DEFAULT_POLICY.entry_price(300_000, 0.75) == 297_500
     assert DEFAULT_POLICY.target_price(291_000) == 292_000
@@ -99,7 +96,7 @@ def test_nxt_fill_submits_two_tick_target_and_completes(tmp_path):
     assert len(gateway.buy_calls) == 1
 
 
-def test_nxt_cancel_must_reconcile_before_krx_fallback(tmp_path):
+def test_nxt_cancel_must_reconcile_before_sor_regular_fallback(tmp_path):
     gateway = FakeGateway()
     machine = _machine(tmp_path, gateway)
     machine.run_once(_at(11, 8, 1))
@@ -113,31 +110,57 @@ def test_nxt_cancel_must_reconcile_before_krx_fallback(tmp_path):
     assert resolved["nxt_resolved_without_fill"] is True
     assert gateway.buy_calls == [("NXT", 291_000)]
 
-    krx = machine.run_once(_at(11, 9, 0))
-    assert krx["route"] == "KRX"
-    assert gateway.buy_calls[-1] == ("KRX", 297_500)
+    sor = machine.run_once(_at(11, 9, 0))
+    assert sor["route"] == "SOR"
+    assert gateway.buy_calls[-1] == ("SOR", 297_500)
 
 
-def test_target_timeout_cancels_then_submits_exact_one_share_best_sell(tmp_path):
+def test_target_has_no_timeout_cancel_or_forced_exit(tmp_path):
     gateway = FakeGateway()
     machine = _machine(tmp_path, gateway)
     machine.run_once(_at(11, 8, 1))
     gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 291_000)
     machine.run_once(_at(11, 8, 2))
 
-    pending = machine.run_once(_at(11, 8, 15))
-    assert pending["status"] == "TARGET_CANCEL_PENDING"
-    assert gateway.cancel_calls[-1] == ("NXT", "T2")
+    still_open = machine.run_once(_at(11, 8, 15))
+    assert still_open["status"] == "TARGET_OPEN"
+    assert still_open["position_qty"] == 1
+    assert gateway.cancel_calls == []
+    assert gateway.limit_sell_calls == [("NXT", 292_000)]
 
+
+def test_target_closed_unfilled_keeps_one_share_held(tmp_path):
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+    machine.run_once(_at(11, 8, 1))
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 291_000)
+    machine.run_once(_at(11, 8, 2))
     gateway.snapshots["T2"] = ExecutionSnapshot(True, True, 0, 0, 1)
-    exiting = machine.run_once(_at(11, 8, 16))
-    assert exiting["status"] == "EXIT_OPEN"
-    assert gateway.best_sell_calls == ["NXT"]
+    held = machine.run_once(_at(11, 20, 1))
+    assert held["status"] == "HELD"
+    assert held["position_qty"] == 1
+    assert held["last_action"] == "target_closed_unfilled_position_held"
+    assert gateway.cancel_calls == []
+    assert gateway.buy_calls == [("NXT", 291_000)]
 
-    gateway.snapshots["S4"] = ExecutionSnapshot(True, True, 1, 0, 1, 290_000)
-    closed = machine.run_once(_at(11, 8, 17))
-    assert closed["status"] == "COMPLETE"
-    assert closed["position_qty"] == 0
+    carried = machine.run_once(_at(12, 8, 1))
+    assert carried["status"] == "HELD"
+    assert carried["position_qty"] == 1
+    assert gateway.buy_calls == [("NXT", 291_000)]
+
+
+def test_open_target_reconciles_across_trade_date_without_new_entry(tmp_path):
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+    machine.run_once(_at(11, 8, 1))
+    gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 291_000)
+    machine.run_once(_at(11, 8, 2))
+
+    carried = machine.run_once(_at(12, 8, 1))
+    assert carried["status"] == "TARGET_OPEN"
+    assert carried["position_qty"] == 1
+    assert gateway.buy_calls == [("NXT", 291_000)]
+    assert gateway.cancel_calls == []
 
 
 def test_no_operator_exclusion_blocks_new_buy(tmp_path):
@@ -312,12 +335,26 @@ def test_gateway_hard_codes_symbol_quantity_limit_order_and_shared_token(monkeyp
     }
 
 
+def test_gateway_supports_sor_regular_limit_orders(monkeypatch):
+    monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
+    session = FakeSession([FakeResponse({"return_code": 0, "ord_no": "124"})])
+    gateway = KiwoomOneShareGateway(
+        request_session=session,
+        token_loader=lambda: "SHARED_TOKEN",
+        order_authority=True,
+        base_url="https://api.kiwoom.com",
+    )
+    result = gateway.submit_limit_buy(route="SOR", price=297_500)
+    assert result.accepted is True
+    assert session.calls[0][1]["json"]["dmst_stex_tp"] == "SOR"
+
+
 def test_gateway_write_is_disabled_without_both_authority_and_production():
     disabled = KiwoomOneShareGateway(
         token_loader=lambda: "token", order_authority=False
     )
     with pytest.raises(PermissionError, match="authority_disabled"):
-        disabled.submit_limit_buy(route="KRX", price=297_500)
+        disabled.submit_limit_buy(route="SOR", price=297_500)
 
     wrong_endpoint = KiwoomOneShareGateway(
         token_loader=lambda: "token",
@@ -325,7 +362,19 @@ def test_gateway_write_is_disabled_without_both_authority_and_production():
         base_url="https://example.test",
     )
     with pytest.raises(PermissionError, match="production_endpoint"):
-        wrong_endpoint.submit_limit_buy(route="KRX", price=297_500)
+        wrong_endpoint.submit_limit_buy(route="SOR", price=297_500)
+
+
+def test_gateway_rejects_direct_krx_route_for_regular_session(monkeypatch):
+    monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
+    gateway = KiwoomOneShareGateway(
+        request_session=FakeSession([]),
+        token_loader=lambda: "token",
+        order_authority=True,
+        base_url="https://api.kiwoom.com",
+    )
+    with pytest.raises(ValueError, match="invalid_order_route"):
+        gateway.submit_limit_buy(route="KRX", price=297_500)
 
 
 def test_gateway_open_price_uses_only_official_ka10080_fields():
