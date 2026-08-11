@@ -1,4 +1,4 @@
-"""Shared execution core for independent Samsung regular-session two-leg machines.
+"""Shared execution core for independent regular-session two-leg machines.
 
 The caller owns the process, state path, policy, and broker gateway.  This module
 only removes duplicated order-lifecycle code; it never shares state or orders
@@ -75,7 +75,11 @@ def _fresh_state(now: datetime, schema: str) -> dict:
 
 
 class SamsungRegularTwoLegMachine:
-    """Persistent two-order episode with exact per-leg broker ownership."""
+    """Persistent two-order episode with exact per-leg broker ownership.
+
+    The compatibility class name is retained for the original Samsung callers.
+    Symbol and session ownership come from the immutable caller policy.
+    """
 
     LEG_IDS = ("signal_close", "signal_close_minus_1tick")
 
@@ -715,7 +719,9 @@ class SamsungRegularTwoLegMachine:
             self._state.update(
                 {
                     "last_action": "operator_exclusion_required",
-                    "blocked_reason": "005930_not_excluded_from_primary_bot",
+                    "blocked_reason": (
+                        f"{self.policy.symbol}_not_excluded_from_primary_bot"
+                    ),
                 }
             )
             self._save()
@@ -726,9 +732,14 @@ class SamsungRegularTwoLegMachine:
                 "signal_bar": latest_iso,
                 "signal_close": latest.close_price,
                 "signal_features": {
-                    "schema": "samsung_regular_entry_signal_features_v1",
+                    "schema": (
+                        "samsung_regular_entry_signal_features_v1"
+                        if self.policy.symbol == "005930"
+                        else "regular_two_leg_entry_signal_features_v1"
+                    ),
                     "strategy": self.strategy_name,
-                    "source": "kiwoom_ka10080_005930_AL_completed_1m",
+                    "symbol": str(self.policy.symbol),
+                    "source": (f"kiwoom_ka10080_{self.policy.symbol}_AL_completed_1m"),
                     "signal_bar": latest_iso,
                     "signal_close": int(latest.close_price),
                     "rolling_high": int(signal.rolling_high),

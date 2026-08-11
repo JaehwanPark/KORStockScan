@@ -1,0 +1,24 @@
+[Unit]
+Description=KORStockScan Lower-Price Two-Leg Live Machine (%i)
+After=network-online.target korstockscan-low-price-two-leg-preflight@%i.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=30
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+ExecStart=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh %i
+Restart=on-failure
+RestartSec=5
+UMask=0077
+Nice=5
+CPUQuota=10%
+MemoryMax=256M
+TasksMax=32
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+PrivateTmp=true

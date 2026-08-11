@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="/home/ubuntu/KORStockScan"
+PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
+PROFILE="${1:-}"
+TARGET_DATE="$(/bin/date +%F)"
+
+case "$PROFILE" in
+  samsung_heavy_midday|samsung_heavy_afternoon|daewoo_ec_midday|daewoo_ec_afternoon|sk_eternix_midday) ;;
+  *)
+    echo "unsupported low-price two-leg profile: $PROFILE" >&2
+    exit 2
+    ;;
+esac
+
+/usr/bin/mkdir -p "$PROJECT_DIR/data/runtime/low_price_two_leg"
+exec 9>"$PROJECT_DIR/data/runtime/low_price_two_leg/policy_apply.lock"
+/usr/bin/flock -w 30 9
+PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" -m \
+  src.engine.automation.low_price_two_leg_policy_apply \
+  --target-date "$TARGET_DATE" \
+  --write
+/usr/bin/flock -u 9
+
+for attempt in $(/usr/bin/seq 1 18); do
+  if /usr/bin/tmux has-session -t bot 2>/dev/null; then
+    if PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" -m \
+      src.trading.low_price_two_leg.preflight \
+      --profile "$PROFILE" \
+      --target-date "$TARGET_DATE" \
+      --main-bot-active \
+      --write; then
+      exit 0
+    fi
+  else
+    echo "preflight profile=$PROFILE attempt=$attempt main_bot_inactive"
+  fi
+  /bin/sleep 5
+done
+
+echo "low-price two-leg preflight failed profile=$PROFILE after 18 attempts" >&2
+exit 2
