@@ -53036,7 +53036,11 @@ def _expire_opening_rotation_ttl_promotion(
             or runtime_position_tag not in {"SCANNER", OPENING_ROTATION_POSITION_TAG}
             or str(stock.get("scanner_promotion_id") or "").strip()
             != normalized_promotion_id
-            or stock.get("buy_time") not in (None, "", 0)
+            # Boot-restored WATCHING rows can carry pandas.NaT even though the
+            # persisted column is SQL NULL.  Treat only a real positive
+            # timestamp as position evidence; the DB compare-and-set below
+            # remains the authoritative no-fill guard.
+            or _coerce_optional_timestamp(stock.get("buy_time")) > 0.0
             or _safe_int(stock.get("buy_qty"), 0) > 0
             or _safe_int(stock.get("entry_filled_qty"), 0) > 0
             or _safe_int(stock.get("holding_qty"), 0) > 0

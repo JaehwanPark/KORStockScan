@@ -3,6 +3,7 @@ import inspect
 from threading import Event, Thread
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from src.engine.scalping.opening_rotation import (
@@ -675,6 +676,56 @@ def test_opening_rotation_ttl_release_keeps_ws_for_other_active_owner(monkeypatc
     assert expired is True
     assert stock["status"] == "EXPIRED"
     assert event_bus.events == []
+
+
+def test_opening_rotation_ttl_release_accepts_boot_restored_nat_buy_time(
+    monkeypatch,
+):
+    stock = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        # DB keeps SCANNER while the admitted runtime owner uses this tag.
+        "position_tag": POSITION_TAG,
+        "scanner_promotion_id": "PROMO-RESTORED",
+        "buy_qty": 0,
+        "buy_time": pd.NaT,
+    }
+    fake_db = _OpeningTTLDB()
+    event_bus = _OpeningTTLEventBus()
+    monkeypatch.setattr(handlers, "DB", fake_db)
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [stock])
+    monkeypatch.setattr(handlers, "EVENT_BUS", event_bus)
+    monkeypatch.setattr(
+        handlers, "should_retain_ws_subscription", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        handlers,
+        "should_retain_rising_missed_nxt_post_block_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *_args, **_kwargs: None)
+
+    expired = handlers._expire_opening_rotation_ttl_promotion(
+        stock,
+        "005930",
+        promotion_id="PROMO-RESTORED",
+        now_ts=datetime(2026, 8, 11, 9, 5).timestamp(),
+    )
+
+    assert expired is True
+    assert stock["status"] == "EXPIRED"
+    assert event_bus.events == [
+        (
+            "COMMAND_WS_UNREG",
+            {
+                "codes": ["005930"],
+                "source": "opening_rotation_promotion_ttl_expired",
+                "reason": "promotion_ttl_expired",
+            },
+        )
+    ]
 
 
 def test_opening_rotation_ttl_release_keeps_slot_when_db_rejects(monkeypatch):
