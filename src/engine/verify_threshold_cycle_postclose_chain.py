@@ -4181,6 +4181,12 @@ def _active_sim_priority_handoff_status(
     ):
         missing.append("active_sim_priority_catalog_schema_invalid")
     producer_seed_ids = {str(item.get("active_seed_id")) for item in producer_seeds}
+    active_producer_seed_ids = {
+        str(item.get("active_seed_id"))
+        for item in producer_seeds
+        if str(item.get("status") or "") == "active"
+    }
+    inactive_producer_seed_ids = producer_seed_ids - active_producer_seed_ids
     catalog_seed_ids = {str(item.get("active_seed_id")) for item in catalog_seeds}
     active_seed_ids = {
         str(item.get("active_seed_id"))
@@ -4188,9 +4194,15 @@ def _active_sim_priority_handoff_status(
         if str(item.get("status") or "") == "active"
     }
     inactive_seed_ids = catalog_seed_ids - active_seed_ids
-    if producer_seed_ids and not catalog_seed_ids:
+    # The control tower deliberately rejects a cooldown/retired-only lifecycle
+    # approval.  Those producer rows remain lifecycle history, not policy
+    # handoff obligations.  Requiring them in an empty catalog makes the
+    # verifier contradict that contract.  Active producer seeds still fail
+    # closed when the catalog omits them, while runtime consumption of an
+    # inactive/unknown key is checked independently below.
+    if active_producer_seed_ids and not catalog_seed_ids:
         missing.append("active_sim_priority_catalog_seed_missing")
-    if producer_seed_ids and producer_seed_ids - catalog_seed_ids:
+    if active_producer_seed_ids - catalog_seed_ids:
         missing.append("active_sim_priority_producer_catalog_key_mismatch")
     for seed in catalog_seeds:
         prefix = (
@@ -4640,6 +4652,8 @@ def _active_sim_priority_handoff_status(
             )
         ),
         "producer_seed_ids": sorted(producer_seed_ids),
+        "active_producer_seed_ids": sorted(active_producer_seed_ids),
+        "inactive_producer_seed_ids": sorted(inactive_producer_seed_ids),
         "catalog_seed_ids": sorted(catalog_seed_ids),
         "active_seed_ids": sorted(active_seed_ids),
         "preopen_seed_ids": sorted(preopen_seed_ids),

@@ -3372,6 +3372,67 @@ def test_pattern_lab_ai_review_marks_generic_swing_ai_gap_as_source_only_two_pas
     assert provenance["runtime_effect"] is False
 
 
+def test_pattern_lab_ai_review_resolves_ldm_policy_floor_alias_with_collection_provenance():
+    payload = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "sample_floor": 20,
+        "joined_sample_floor": 10,
+        "window_policy": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+        "summary": {
+            "total_rows": 525,
+            "joined_rows": 28,
+            "stage_counts": {"entry": 469, "scale_in": 19},
+            "complete_flow_count": 3,
+            "join_contract_blocked": False,
+        },
+        "policy_entries": [
+            {
+                "policy_key": "entry:weighted_adm_v1",
+                "stage": "entry",
+                "sample": 469,
+                "joined_sample": 3,
+                "source_quality_gate": "hold_sample",
+                "promote_ready": False,
+            },
+            {
+                "policy_key": "scale_in:weighted_adm_v1",
+                "stage": "scale_in",
+                "sample": 19,
+                "joined_sample": 16,
+                "source_quality_gate": "hold_sample",
+                "promote_ready": False,
+            },
+        ],
+        "warnings": ["all_stage_policy_entries_below_sample_floor"],
+    }
+    context = {
+        "sources": {
+            "lifecycle_decision_matrix": {"summary": mod._summary_for(payload)}
+        }
+    }
+    item = {
+        "review_id": "lifecycle_decision_matrix_all_policy_entries_below_sample_floor",
+        "final_state": "source_quality_gap",
+        "final_decision": "block_runtime_use",
+    }
+
+    status, contract_id, details = mod._source_maturity_resolution(item, context)
+
+    assert status == "resolved_as_observed_sample_maturity_hold"
+    assert contract_id == "lifecycle_decision_matrix_stage_sample_maturity"
+    assert details["sample_floor"] == 20
+    assert details["joined_sample_floor"] == 10
+    assert details["policy_entry_count"] == 2
+    assert details["policy_pass_count"] == 0
+    assert details["collection_priority"][0]["stage"] == "scale_in"
+    assert details["collection_priority"][0]["sample_deficit"] == 1
+    assert details["collection_priority"][1]["joined_sample_deficit"] == 7
+    assert details["root_cause_closure_status"] == "evidence_collection_open"
+    assert details["runtime_effect"] is False
+    assert details["allowed_runtime_apply"] is False
+
+
 def test_pattern_lab_ai_review_marks_recursive_workorder_review_id_as_implemented_source_only():
     status, provenance = mod._implementation_marker_for_conclusion(
         {

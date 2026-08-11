@@ -3611,6 +3611,37 @@ def test_active_sim_priority_handoff_passes_with_matching_preopen_and_runtime(
     assert status["active_swing_priority_policy_ids"] == ["priority_arm05"]
 
 
+def test_active_sim_priority_handoff_does_not_require_cooldown_only_producer_catalog(
+    monkeypatch,
+):
+    monkeypatch.setattr(mod, "_iter_pipeline_event_fields", lambda target_date: [])
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-01",
+        discovery={
+            "active_sim_priority_seeds": [
+                {
+                    "active_seed_id": "active_seed_cooldown",
+                    "source_parent_bucket_id": "parent_no_longer_eligible",
+                    "status": "cooldown",
+                }
+            ]
+        },
+        scalp_catalog={
+            "schema_version": "scalp_sim_policy_catalog_v1",
+            "active_sim_priority_seeds": [],
+        },
+        swing_catalog={},
+        preopen_apply={},
+        swing_sim_report={},
+    )
+
+    assert status["status"] == "not_applicable"
+    assert status["missing"] == []
+    assert status["active_producer_seed_ids"] == []
+    assert status["inactive_producer_seed_ids"] == ["active_seed_cooldown"]
+
+
 def test_active_sim_priority_handoff_parses_python_list_runtime_provenance(
     monkeypatch,
 ):

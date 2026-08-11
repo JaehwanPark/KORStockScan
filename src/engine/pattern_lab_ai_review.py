@@ -197,6 +197,45 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(payload.get("source_quality_preflight_gate"), dict)
         else {}
     )
+    policy_entries = (
+        payload.get("policy_entries")
+        if isinstance(payload.get("policy_entries"), list)
+        else []
+    )
+    sample_floor = _safe_int(payload.get("sample_floor"), 0)
+    joined_sample_floor = _safe_int(payload.get("joined_sample_floor"), 0)
+    policy_maturity_rows: list[dict[str, Any]] = []
+    if policy_entries and sample_floor > 0 and joined_sample_floor > 0:
+        for entry in policy_entries:
+            if not isinstance(entry, dict):
+                continue
+            sample = _safe_int(entry.get("sample"), 0)
+            joined_sample = _safe_int(entry.get("joined_sample"), 0)
+            sample_ratio = min(1.0, sample / sample_floor)
+            joined_ratio = min(1.0, joined_sample / joined_sample_floor)
+            policy_maturity_rows.append(
+                {
+                    "policy_key": entry.get("policy_key"),
+                    "stage": entry.get("stage"),
+                    "sample": sample,
+                    "sample_floor": sample_floor,
+                    "sample_deficit": max(0, sample_floor - sample),
+                    "joined_sample": joined_sample,
+                    "joined_sample_floor": joined_sample_floor,
+                    "joined_sample_deficit": max(
+                        0, joined_sample_floor - joined_sample
+                    ),
+                    "maturity_ratio": round(min(sample_ratio, joined_ratio), 4),
+                    "source_quality_gate": entry.get("source_quality_gate"),
+                    "promote_ready": entry.get("promote_ready") is True,
+                }
+            )
+        policy_maturity_rows.sort(
+            key=lambda item: (
+                -float(item.get("maturity_ratio") or 0.0),
+                str(item.get("stage") or ""),
+            )
+        )
     return {
         "status": payload.get("status") or summary.get("status"),
         "runtime_effect": payload.get("runtime_effect"),
@@ -220,6 +259,20 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "warnings": _top_list(payload.get("warnings"), 50),
         "source_quality_preflight_gate": source_quality_preflight_gate,
+        "policy_sample_maturity": {
+            "policy_entry_count": len(policy_maturity_rows),
+            "policy_pass_count": sum(
+                1
+                for item in policy_maturity_rows
+                if item.get("source_quality_gate") == "pass"
+            ),
+            "sample_floor": sample_floor,
+            "joined_sample_floor": joined_sample_floor,
+            "collection_priority": policy_maturity_rows,
+            "window_policy": payload.get("window_policy"),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
     }
 
 
@@ -1238,15 +1291,31 @@ def _source_maturity_resolution(
                 },
             )
 
-    if review_id == "lifecycle_decision_matrix_all_stage_below_sample_floor":
+    if review_id in {
+        "lifecycle_decision_matrix_all_stage_below_sample_floor",
+        "lifecycle_decision_matrix_all_policy_entries_below_sample_floor",
+    }:
         source = _source_summary(context, "lifecycle_decision_matrix")
         summary = _nested_report_summary(source)
         warnings = {str(value) for value in source.get("warnings") or []}
+        maturity = (
+            source.get("policy_sample_maturity")
+            if isinstance(source.get("policy_sample_maturity"), dict)
+            else {}
+        )
         if (
             source.get("runtime_effect") is False
             and source.get("allowed_runtime_apply") is not True
             and "all_stage_policy_entries_below_sample_floor" in warnings
             and _safe_int(summary.get("total_rows")) > 0
+            and (
+                review_id
+                == "lifecycle_decision_matrix_all_stage_below_sample_floor"
+                or (
+                    _safe_int(maturity.get("policy_entry_count")) > 0
+                    and _safe_int(maturity.get("policy_pass_count")) == 0
+                )
+            )
         ):
             return (
                 "resolved_as_observed_sample_maturity_hold",
@@ -1259,6 +1328,21 @@ def _source_maturity_resolution(
                         summary.get("complete_flow_count")
                     ),
                     "join_contract_blocked": bool(summary.get("join_contract_blocked")),
+                    "sample_floor": _safe_int(maturity.get("sample_floor")),
+                    "joined_sample_floor": _safe_int(
+                        maturity.get("joined_sample_floor")
+                    ),
+                    "policy_entry_count": _safe_int(
+                        maturity.get("policy_entry_count")
+                    ),
+                    "policy_pass_count": _safe_int(
+                        maturity.get("policy_pass_count")
+                    ),
+                    "collection_priority": maturity.get("collection_priority") or [],
+                    "window_policy": maturity.get("window_policy"),
+                    "root_cause_closure_status": "evidence_collection_open",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
                 },
             )
 
