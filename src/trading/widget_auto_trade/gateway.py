@@ -21,7 +21,7 @@ from src.utils import kiwoom_utils
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-10T09:49:53+09:00",
+    "retrieved_at_kst": "2026-08-12T07:19:36+09:00",
     "inspected_paths": [
         "kiwoom_docs/주문.md",
         "kiwoom_docs/계좌.md",
@@ -83,7 +83,46 @@ def _same_order_no(left: object, right: object) -> bool:
     )
 
 
+def resolve_widget_broker_route(route: str) -> str:
+    """Resolve a market venue to the broker route used for a new order.
+
+    KRX observations retain KRX as their market-data venue, but regular-market
+    orders use Kiwoom SOR. NXT observations are the only path that submits to
+    NXT directly. Accepting SOR makes the function idempotent for callers that
+    already resolved the route.
+    """
+
+    clean_route = str(route or "").strip().upper()
+    if clean_route in {"KRX", "SOR"}:
+        return "SOR"
+    if clean_route == "NXT":
+        return "NXT"
+    raise ValueError("invalid_order_route")
+
+
 def _validated_order_inputs(*, code: str, qty: int, route: str) -> tuple[str, int, str]:
+    clean_code = _clean_code(code)
+    clean_route = resolve_widget_broker_route(route)
+    if isinstance(qty, bool):
+        raise ValueError("invalid_order_quantity")
+    clean_qty = int(qty)
+    if not clean_code or len(clean_code) != 6:
+        raise ValueError("invalid_stock_code")
+    if clean_qty <= 0:
+        raise ValueError("invalid_order_quantity")
+    return clean_code, clean_qty, clean_route
+
+
+def _validated_existing_order_inputs(
+    *, code: str, qty: int, route: str
+) -> tuple[str, int, str]:
+    """Validate a cancel/reconcile route without rewriting legacy orders.
+
+    Orders submitted before the SOR migration can still be open on the direct
+    KRX route. New orders persist SOR, while this compatibility path ensures an
+    older KRX order can still be reconciled or cancelled on its original route.
+    """
+
     clean_code = _clean_code(code)
     clean_route = str(route or "").strip().upper()
     if isinstance(qty, bool):
@@ -93,7 +132,7 @@ def _validated_order_inputs(*, code: str, qty: int, route: str) -> tuple[str, in
         raise ValueError("invalid_stock_code")
     if clean_qty <= 0:
         raise ValueError("invalid_order_quantity")
-    if clean_route not in {"KRX", "NXT"}:
+    if clean_route not in {"KRX", "SOR", "NXT"}:
         raise ValueError("invalid_order_route")
     return clean_code, clean_qty, clean_route
 
@@ -205,9 +244,10 @@ class KiwoomSharedTokenOrderGateway:
         clean_code, clean_qty, clean_route = _validated_order_inputs(
             code=code, qty=qty, route=route
         )
-        # NXT does not reliably accept market orders.  Use best-limit there and
-        # market on KRX so a final exit remains execution-oriented.
-        order_type = "3" if clean_route == "KRX" else "6"
+        # NXT does not reliably accept market orders. Use best-limit only for
+        # NXT; a KRX observation resolves to SOR and keeps an execution-oriented
+        # market order for the final exit.
+        order_type = "6" if clean_route == "NXT" else "3"
         response, body = self._post(
             endpoint="/api/dostk/ordr",
             api_id="kt10001",
@@ -251,7 +291,7 @@ class KiwoomSharedTokenOrderGateway:
         return self._submit_result(response, body)
 
     def cancel(self, *, code: str, order_no: str, qty: int, route: str) -> SubmitResult:
-        clean_code, clean_qty, clean_route = _validated_order_inputs(
+        clean_code, clean_qty, clean_route = _validated_existing_order_inputs(
             code=code, qty=qty, route=route
         )
         clean_order_no = _order_no(order_no)
@@ -285,7 +325,7 @@ class KiwoomSharedTokenOrderGateway:
             not clean_code
             or len(clean_code) != 6
             or not clean_order_no
-            or clean_route not in {"KRX", "NXT"}
+            or clean_route not in {"KRX", "SOR", "NXT"}
             or len(clean_order_date) != 8
             or not clean_order_date.isdigit()
         ):

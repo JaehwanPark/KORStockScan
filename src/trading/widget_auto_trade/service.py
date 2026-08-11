@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import fcntl
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from src.trading.widget_auto_trade.engine import (
     DEFAULT_STATE_PATH,
     DEFAULT_WIDGET_SPECS,
+    SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
     WidgetSpec,
     WidgetSignalAutoTrader,
 )
@@ -39,20 +41,35 @@ def _env_specs() -> tuple[WidgetSpec, ...]:
     """
 
     raw = os.getenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS")
-    if raw is None:
-        return DEFAULT_WIDGET_SPECS
-    requested = {
-        token.strip().upper().removeprefix("A")
-        for token in raw.split(",")
-        if token.strip()
-    }
+    requested = (
+        {spec.code for spec in DEFAULT_WIDGET_SPECS}
+        if raw is None
+        else {
+            token.strip().upper().removeprefix("A")
+            for token in raw.split(",")
+            if token.strip()
+        }
+    )
     by_code = {spec.code: spec for spec in DEFAULT_WIDGET_SPECS}
     if not requested:
         raise ValueError("widget_auto_trader_symbols_empty")
     unknown = sorted(requested - by_code.keys())
     if unknown:
         raise ValueError(f"widget_auto_trader_symbols_unknown:{','.join(unknown)}")
-    return tuple(spec for spec in DEFAULT_WIDGET_SPECS if spec.code in requested)
+    samsung_policy = str(
+        os.getenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY", "") or ""
+    ).strip()
+    if samsung_policy and samsung_policy != SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID:
+        raise ValueError(f"widget_auto_trader_samsung_policy_unknown:{samsung_policy}")
+    return tuple(
+        (
+            replace(spec, execution_policy_id=samsung_policy)
+            if spec.code == "005930" and samsung_policy
+            else spec
+        )
+        for spec in DEFAULT_WIDGET_SPECS
+        if spec.code in requested
+    )
 
 
 def _parser() -> argparse.ArgumentParser:

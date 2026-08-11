@@ -20,11 +20,12 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.engine.trade_pause_control import is_buy_side_paused
-from src.trading.order.tick_utils import move_price_up_by_bps
+from src.trading.order.tick_utils import clamp_price_to_tick, move_price_up_by_bps
 from src.trading.widget_auto_trade.gateway import (
     ExecutionSnapshot,
     KiwoomSharedTokenOrderGateway,
     SubmitResult,
+    resolve_widget_broker_route,
 )
 from src.utils.constants import PROJECT_ROOT
 
@@ -49,10 +50,29 @@ MAX_CANCEL_ATTEMPTS = 3
 MAX_SELL_ATTEMPTS = 3
 SELL_RETRY_SEC = 5
 TAKE_PROFIT_BPS = 100
+SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID = "SAMSUNG_EQUAL_1_ADD0P5_ADD1P0_TP0P5_V1"
+SAMSUNG_DAILY_EQUAL_SHARE_POLICY = {
+    "policy_id": SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
+    "research_arm": "three_equal_add0p5_1p0_tp0p5",
+    "evidence_window": "2026-06-05_2026-08-10",
+    "evidence_artifact": (
+        "data/report/pure_market_adaptive_opportunity_replay/"
+        "pure_market_adaptive_opportunity_replay_2026-06-05_2026-08-10.json"
+    ),
+    "leg_quantity_each": 1,
+    "add_trigger_bps_from_initial_fill": (-50, -100),
+    "take_profit_bps_from_equal_share_average": 50,
+    "allowed_entry_sessions": ("KRX_REGULAR",),
+    "allowed_entry_venues": ("KRX",),
+    "additional_leg_window": "original_entry_session_only",
+    "source_final_exit_action": "observe_only_no_forced_sell",
+    "unhit_policy": "daily_reset_unmanaged_overnight_inventory",
+}
 MAX_TAKE_PROFIT_FAILURES = 3
 OBSERVABILITY_PERSIST_INTERVAL_SEC = 60
 
 ORDER_ROLE_ENTRY_BUY = "ENTRY_BUY"
+ORDER_ROLE_SCALE_IN_BUY = "SCALE_IN_BUY"
 ORDER_ROLE_TAKE_PROFIT = "TAKE_PROFIT_SELL"
 ORDER_ROLE_FINAL_EXIT = "FINAL_EXIT_SELL"
 
@@ -109,6 +129,7 @@ class WidgetSpec:
     contract: Any
     event_based: bool
     structural_execution_qualification: bool = False
+    execution_policy_id: str | None = None
 
 
 DEFAULT_WIDGET_SPECS = (
@@ -169,6 +190,14 @@ def _take_profit_price(fill_price: int, *, profit_bps: int = TAKE_PROFIT_BPS) ->
     if clean_fill <= 0 or clean_bps <= 0:
         raise ValueError("invalid_take_profit_basis")
     return move_price_up_by_bps(clean_fill, clean_bps)
+
+
+def _execution_policy(spec: WidgetSpec) -> dict[str, Any] | None:
+    if spec.code != samsung_contract.SAMSUNG_CODE or not spec.execution_policy_id:
+        return None
+    if spec.execution_policy_id != SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID:
+        raise ValueError(f"unknown_widget_execution_policy:{spec.execution_policy_id}")
+    return SAMSUNG_DAILY_EQUAL_SHARE_POLICY
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -240,6 +269,18 @@ class WidgetSignalAutoTrader:
         self.snapshot_loader = snapshot_loader
         self.entry_qty = qty
         self.enabled = bool(enabled)
+        self._configured_execution_policies = {
+            spec.code: spec.execution_policy_id
+            for spec in specs
+            if spec.execution_policy_id
+        }
+        for spec in specs:
+            policy = _execution_policy(spec)
+            if policy is not None and qty != int(policy["leg_quantity_each"]):
+                raise ValueError(
+                    "widget_execution_policy_entry_qty_mismatch:"
+                    f"{spec.code}:expected={policy['leg_quantity_each']}:actual={qty}"
+                )
         self._state = self._load_state()
 
     def _load_state(self) -> dict[str, Any]:
@@ -249,6 +290,27 @@ class WidgetSignalAutoTrader:
             or state.get("execution_authority") != EXECUTION_AUTHORITY
         ):
             return {}
+        stored_policies = state.get("execution_policies")
+        stored_policies = stored_policies if isinstance(stored_policies, dict) else {}
+        if stored_policies != self._configured_execution_policies:
+            same_trade_date = state.get("active_date") == _now_kst().date().isoformat()
+            symbols = state.get("symbols")
+            symbols = symbols if isinstance(symbols, dict) else {}
+            has_live_intent_or_qty = any(
+                self._open_qty(symbol_state) > 0
+                or any(
+                    order.get("status") in ACTIVE_ORDER_STATUSES
+                    for order in symbol_state.get("orders") or []
+                )
+                for symbol_state in symbols.values()
+                if isinstance(symbol_state, dict)
+            )
+            if same_trade_date and has_live_intent_or_qty:
+                raise ValueError(
+                    "widget_execution_policy_state_mismatch_with_active_orders"
+                )
+            if same_trade_date:
+                return {}
         return state
 
     @staticmethod
@@ -283,6 +345,7 @@ class WidgetSignalAutoTrader:
                 "token_mode": "shared_cache_only_no_issue_no_refresh",
                 "entry_qty": self.entry_qty,
                 "enabled_symbols": [spec.code for spec in self.specs],
+                "execution_policies": self._configured_execution_policies,
                 "execution_contract": EXECUTION_CONTRACT,
             }
         )
@@ -358,6 +421,7 @@ class WidgetSignalAutoTrader:
     def _event(
         self, event_type: str, spec: WidgetSpec, now: datetime, **fields: Any
     ) -> None:
+        execution_policy = _execution_policy(spec)
         payload = {
             "event_type": event_type,
             "observed_at": now.isoformat(),
@@ -370,6 +434,18 @@ class WidgetSignalAutoTrader:
             "broker_order_forbidden": False,
             "cash_precheck_performed": False,
             "token_mode": "shared_cache_only_no_issue_no_refresh",
+            "execution_policy_id": (
+                execution_policy["policy_id"] if execution_policy else None
+            ),
+            "execution_policy_research_arm": (
+                execution_policy["research_arm"] if execution_policy else None
+            ),
+            "execution_policy_evidence_window": (
+                execution_policy["evidence_window"] if execution_policy else None
+            ),
+            "execution_policy_evidence_artifact": (
+                execution_policy["evidence_artifact"] if execution_policy else None
+            ),
             **EXECUTION_CONTRACT,
             **fields,
         }
@@ -433,6 +509,16 @@ class WidgetSignalAutoTrader:
         advisory = payload.get("advisory")
         if not isinstance(advisory, dict):
             return None
+        execution_policy = _execution_policy(spec)
+        policy_block_reason = (
+            "entry_blocked_execution_policy_venue"
+            if execution_policy is not None
+            and (
+                context.name not in execution_policy["allowed_entry_sessions"]
+                or context.market_venue not in execution_policy["allowed_entry_venues"]
+            )
+            else None
+        )
         if spec.event_based:
             event = payload.get("entry_event")
             if not isinstance(
@@ -444,7 +530,7 @@ class WidgetSignalAutoTrader:
             state = str(event.get("state") or "")
             event_id = str(event.get("event_id") or "")
             return (
-                (event_id, state, None)
+                (event_id, state, policy_block_reason)
                 if event_id and state in ACTIONABLE_ENTRY_STATES
                 else None
             )
@@ -458,8 +544,12 @@ class WidgetSignalAutoTrader:
         state = str(advisory.get("state") or "")
         if state not in ACTIONABLE_ENTRY_STATES:
             return None
-        block_reason = None
-        if spec.structural_execution_qualification:
+        block_reason = policy_block_reason
+        if (
+            not block_reason
+            and spec.structural_execution_qualification
+            and execution_policy is None
+        ):
             derived = advisory.get("derived")
             derived = derived if isinstance(derived, dict) else {}
             regime = advisory.get("intraday_regime")
@@ -545,17 +635,22 @@ class WidgetSignalAutoTrader:
         order_role: str,
         limit_price: int | None = None,
         parent_entry_signal_id: str | None = None,
+        scale_in_leg_index: int | None = None,
     ) -> dict[str, Any]:
+        broker_route = resolve_widget_broker_route(route)
         return {
             "side": side,
             "requested_qty": qty,
             "filled_qty": 0,
             "remaining_qty": qty,
-            "route": route,
+            "market_venue": route,
+            "route": broker_route,
+            "broker_route": broker_route,
             "signal_id": signal_id,
             "order_role": order_role,
             "limit_price": limit_price,
             "parent_entry_signal_id": parent_entry_signal_id,
+            "scale_in_leg_index": scale_in_leg_index,
             "order_date": now.date().isoformat(),
             "intent_created_at": now.isoformat(),
             "status": "SUBMITTING",
@@ -579,6 +674,7 @@ class WidgetSignalAutoTrader:
         order_role: str,
         limit_price: int | None = None,
         parent_entry_signal_id: str | None = None,
+        scale_in_leg_index: int | None = None,
     ) -> dict[str, Any]:
         order = self._order_record(
             side=side,
@@ -589,21 +685,27 @@ class WidgetSignalAutoTrader:
             order_role=order_role,
             limit_price=limit_price,
             parent_entry_signal_id=parent_entry_signal_id,
+            scale_in_leg_index=scale_in_leg_index,
         )
         symbol_state.setdefault("orders", []).append(order)
         self._save()  # crash-before/after-submit ambiguity guard
+        broker_route = str(order["broker_route"])
         try:
             if side == "BUY":
-                result = self.gateway.submit_buy(code=spec.code, qty=qty, route=route)
+                result = self.gateway.submit_buy(
+                    code=spec.code, qty=qty, route=broker_route
+                )
             elif order_role == ORDER_ROLE_TAKE_PROFIT and limit_price is not None:
                 result = self.gateway.submit_limit_sell(
                     code=spec.code,
                     qty=qty,
-                    route=route,
+                    route=broker_route,
                     price=limit_price,
                 )
             else:
-                result = self.gateway.submit_sell(code=spec.code, qty=qty, route=route)
+                result = self.gateway.submit_sell(
+                    code=spec.code, qty=qty, route=broker_route
+                )
         except Exception as exc:
             order.update(
                 {
@@ -621,6 +723,8 @@ class WidgetSignalAutoTrader:
                 requested_qty=qty,
                 signal_id=signal_id,
                 error=type(exc).__name__,
+                market_venue=route,
+                broker_route=broker_route,
             )
             return order
         order.update(
@@ -645,7 +749,9 @@ class WidgetSignalAutoTrader:
             side=side,
             requested_qty=qty,
             signal_id=signal_id,
-            route=route,
+            route=broker_route,
+            market_venue=route,
+            broker_route=broker_route,
             order_no=result.order_no,
             return_code=result.return_code,
             ambiguous=result.ambiguous,
@@ -837,9 +943,13 @@ class WidgetSignalAutoTrader:
         rows = [
             order
             for order in symbol_state.get("orders") or []
-            if order.get("order_role") in {None, "", ORDER_ROLE_ENTRY_BUY}
+            if order.get("order_role")
+            in {None, "", ORDER_ROLE_ENTRY_BUY, ORDER_ROLE_SCALE_IN_BUY}
             and order.get("side") == "BUY"
-            and order.get("signal_id") == entry_signal_id
+            and (
+                order.get("signal_id") == entry_signal_id
+                or order.get("parent_entry_signal_id") == entry_signal_id
+            )
             and order.get("broker_accepted") is True
             and _positive_int(order.get("filled_qty")) > 0
             and _positive_int(order.get("fill_price")) > 0
@@ -854,13 +964,251 @@ class WidgetSignalAutoTrader:
         )
         return total_qty, total_notional // total_qty
 
+    @staticmethod
+    def _initial_entry_fill_price(
+        symbol_state: dict[str, Any], entry_signal_id: str
+    ) -> int:
+        prices = [
+            _positive_int(order.get("fill_price"))
+            for order in symbol_state.get("orders") or []
+            if order.get("order_role") in {None, "", ORDER_ROLE_ENTRY_BUY}
+            and order.get("side") == "BUY"
+            and order.get("signal_id") == entry_signal_id
+            and order.get("broker_accepted") is True
+            and _positive_int(order.get("filled_qty")) > 0
+        ]
+        return prices[0] if prices else 0
+
+    @staticmethod
+    def _take_profit_filled_qty(
+        symbol_state: dict[str, Any], entry_signal_id: str
+    ) -> int:
+        return sum(
+            _positive_int(order.get("filled_qty"))
+            for order in symbol_state.get("orders") or []
+            if order.get("order_role") == ORDER_ROLE_TAKE_PROFIT
+            and order.get("parent_entry_signal_id") == entry_signal_id
+            and order.get("broker_accepted") is True
+        )
+
+    def _close_completed_take_profit_episode(
+        self,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        now: datetime,
+    ) -> bool:
+        entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
+        if (
+            not entry_signal_id
+            or not symbol_state.get("entry_episode_open")
+            or self._take_profit_filled_qty(symbol_state, entry_signal_id) <= 0
+            or self._open_qty(symbol_state) > 0
+            or self._has_pending(symbol_state, "BUY")
+            or self._has_pending(symbol_state, "SELL")
+        ):
+            return False
+        symbol_state["entry_episode_open"] = False
+        symbol_state["take_profit_completed_at"] = now.isoformat()
+        symbol_state["scale_in_requested"] = False
+        self._save()
+        self._event(
+            "take_profit_episode_completed",
+            spec,
+            now,
+            signal_id=entry_signal_id,
+            take_profit_filled_qty=self._take_profit_filled_qty(
+                symbol_state, entry_signal_id
+            ),
+            actual_order_submitted=True,
+        )
+        return True
+
+    def _maybe_submit_scale_in(
+        self,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        payload: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        policy = _execution_policy(spec)
+        if policy is None or not symbol_state.get("entry_episode_open"):
+            return
+        entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
+        if not entry_signal_id or symbol_state.get("exit_requested"):
+            return
+        scale_orders = [
+            order
+            for order in symbol_state.get("orders") or []
+            if order.get("order_role") == ORDER_ROLE_SCALE_IN_BUY
+            and order.get("parent_entry_signal_id") == entry_signal_id
+        ]
+        if any(order.get("status") in ACTIVE_ORDER_STATUSES for order in scale_orders):
+            return
+        completed_scale_orders = [
+            order
+            for order in scale_orders
+            if order.get("broker_accepted") is True
+            and _positive_int(order.get("filled_qty"))
+            >= _positive_int(order.get("requested_qty"))
+        ]
+        next_leg_index = len(completed_scale_orders) + 1
+        trigger_bps = tuple(policy["add_trigger_bps_from_initial_fill"])
+        if next_leg_index > len(trigger_bps):
+            return
+        if any(
+            _positive_int(order.get("scale_in_leg_index")) == next_leg_index
+            for order in scale_orders
+        ):
+            # A failed or ambiguous submission is never silently retried.
+            return
+        entry_consumed_at = _timestamp(symbol_state.get("entry_consumed_at"))
+        context = spec.contract.session_context(now)
+        validated_context, snapshot_at = self._validated_context(spec, payload, now)
+        if (
+            entry_consumed_at is None
+            or entry_consumed_at.date() != now.date()
+            or not context.active
+            or context.name != symbol_state.get("entry_session")
+            or context.name not in policy["allowed_entry_sessions"]
+            or context.market_venue not in policy["allowed_entry_venues"]
+            or validated_context is None
+            or snapshot_at is None
+        ):
+            return
+        advisory = payload.get("advisory")
+        advisory = advisory if isinstance(advisory, dict) else {}
+        advisory_validator = getattr(spec.contract, "advisory_contract_is_valid", None)
+        if callable(advisory_validator) and not advisory_validator(
+            advisory,
+            snapshot_observed_at=snapshot_at,
+            context=validated_context,
+            evaluated_at=now,
+        ):
+            return
+        source_quality = advisory.get("source_quality")
+        if (
+            not isinstance(source_quality, dict)
+            or source_quality.get("status") != "PASS"
+        ):
+            return
+        current_price = _positive_int(payload.get("current_price"))
+        initial_fill_price = self._initial_entry_fill_price(
+            symbol_state, entry_signal_id
+        )
+        if current_price <= 0 or initial_fill_price <= 0:
+            return
+        trigger_price = clamp_price_to_tick(
+            initial_fill_price * (1.0 + int(trigger_bps[next_leg_index - 1]) / 10_000.0)
+        )
+        if current_price > trigger_price:
+            return
+        exclusion = evaluate_manual_control_exclusion(spec.code)
+        operator_source = manual_control_operator_exclusion_source(spec.code)
+        if not exclusion.excluded or not operator_source:
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=f"{entry_signal_id}:ADD{next_leg_index}",
+                reason="scale_in_blocked_main_bot_ownership_not_excluded",
+                now=now,
+                exclusion_applied=exclusion.excluded,
+                exclusion_source=exclusion.source,
+                required_source="manual_operator_or_explicit_env",
+            )
+            return
+        if is_buy_side_paused():
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=f"{entry_signal_id}:ADD{next_leg_index}",
+                reason="scale_in_blocked_global_buy_pause",
+                now=now,
+            )
+            return
+        if self._take_profit_filled_qty(symbol_state, entry_signal_id) > 0:
+            if not symbol_state.get("scale_in_blocked_after_take_profit_fill_at"):
+                symbol_state["scale_in_blocked_after_take_profit_fill_at"] = (
+                    now.isoformat()
+                )
+                self._save()
+                self._event(
+                    "scale_in_blocked_after_take_profit_fill",
+                    spec,
+                    now,
+                    signal_id=entry_signal_id,
+                    trigger_price=trigger_price,
+                    current_price=current_price,
+                )
+            return
+        leg_trigger_already_requested = (
+            _positive_int(symbol_state.get("scale_in_triggered_leg_count"))
+            == next_leg_index
+        )
+        open_qty = self._open_qty(symbol_state)
+        pending_take_profit_qty = self._take_profit_pending_qty(
+            symbol_state, entry_signal_id
+        )
+        if not leg_trigger_already_requested and (
+            open_qty <= 0 or pending_take_profit_qty < open_qty
+        ):
+            self._record_entry_block_once(
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=f"{entry_signal_id}:ADD{next_leg_index}",
+                reason="scale_in_blocked_take_profit_coverage_missing",
+                now=now,
+                current_day_open_qty=open_qty,
+                pending_take_profit_qty=pending_take_profit_qty,
+            )
+            return
+        if not leg_trigger_already_requested:
+            symbol_state["scale_in_requested"] = True
+            symbol_state["scale_in_trigger_price"] = trigger_price
+            symbol_state["scale_in_triggered_at"] = now.isoformat()
+            symbol_state["scale_in_triggered_leg_count"] = next_leg_index
+            self._save()
+            self._event(
+                "scale_in_triggered",
+                spec,
+                now,
+                signal_id=entry_signal_id,
+                scale_in_leg_index=next_leg_index,
+                trigger_price=trigger_price,
+                current_price=current_price,
+            )
+        self._cancel_pending_take_profit_sells(spec, symbol_state, now)
+        if self._has_pending(symbol_state, "SELL") or self._has_pending(
+            symbol_state, "BUY"
+        ):
+            return
+        route = str(symbol_state.get("entry_route") or "").upper()
+        if route not in {"KRX", "NXT"}:
+            return
+        self._submit(
+            spec=spec,
+            symbol_state=symbol_state,
+            side="BUY",
+            qty=int(policy["leg_quantity_each"]),
+            route=route,
+            signal_id=f"{entry_signal_id}:ADD{next_leg_index}:{trigger_price}",
+            now=now,
+            order_role=ORDER_ROLE_SCALE_IN_BUY,
+            parent_entry_signal_id=entry_signal_id,
+            scale_in_leg_index=next_leg_index,
+        )
+
     def _maybe_submit_take_profit(
         self,
         spec: WidgetSpec,
         symbol_state: dict[str, Any],
         now: datetime,
     ) -> None:
-        if symbol_state.get("exit_requested"):
+        pending_scale_in = any(
+            order.get("order_role") == ORDER_ROLE_SCALE_IN_BUY
+            and order.get("status") in ACTIVE_ORDER_STATUSES
+            for order in symbol_state.get("orders") or []
+        )
+        if symbol_state.get("exit_requested") or pending_scale_in:
             return
         entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
         if not entry_signal_id or not symbol_state.get("entry_episode_open"):
@@ -920,10 +1268,19 @@ class WidgetSignalAutoTrader:
         route = str(symbol_state.get("entry_route") or "").upper()
         if route not in {"KRX", "NXT"}:
             return
-        target_price = _take_profit_price(average_fill_price)
+        policy = _execution_policy(spec)
+        take_profit_bps = (
+            int(policy["take_profit_bps_from_equal_share_average"])
+            if policy is not None
+            else TAKE_PROFIT_BPS
+        )
+        target_price = _take_profit_price(
+            average_fill_price,
+            profit_bps=take_profit_bps,
+        )
         symbol_state["take_profit_target_price"] = target_price
         symbol_state["take_profit_basis_fill_price"] = average_fill_price
-        symbol_state["take_profit_bps"] = TAKE_PROFIT_BPS
+        symbol_state["take_profit_bps"] = take_profit_bps
         self._save()
         order = self._submit(
             spec=spec,
@@ -1087,8 +1444,42 @@ class WidgetSignalAutoTrader:
     ) -> None:
         symbol_state = self._state["symbols"][spec.code]
         self._reconcile(spec, symbol_state, now)
+        if self._close_completed_take_profit_episode(spec, symbol_state, now):
+            return
 
         exit_signal_id = self._exit_signal(spec, payload, now)
+        execution_policy = _execution_policy(spec)
+        if execution_policy is not None and symbol_state.get("exit_requested"):
+            pending_final_exit = any(
+                order.get("order_role") == ORDER_ROLE_FINAL_EXIT
+                and order.get("status") in ACTIVE_ORDER_STATUSES
+                for order in symbol_state.get("orders") or []
+            )
+            if pending_final_exit:
+                return
+            symbol_state["exit_requested"] = False
+            symbol_state["exit_signal_id"] = None
+            symbol_state["sell_attempt_count"] = 0
+            symbol_state["last_sell_attempt_at"] = None
+            self._save()
+        source_exit_observed = bool(exit_signal_id and execution_policy is not None)
+        if source_exit_observed:
+            if symbol_state.get(
+                "entry_episode_open"
+            ) and exit_signal_id != symbol_state.get(
+                "last_observed_source_exit_signal_id"
+            ):
+                symbol_state["last_observed_source_exit_signal_id"] = exit_signal_id
+                self._save()
+                self._event(
+                    "source_final_exit_observed_without_forced_sell",
+                    spec,
+                    now,
+                    signal_id=exit_signal_id,
+                    current_day_open_qty=self._open_qty(symbol_state),
+                    execution_policy_id=execution_policy["policy_id"],
+                )
+            exit_signal_id = None
         if exit_signal_id and exit_signal_id != symbol_state.get("exit_signal_id"):
             symbol_state.update(
                 {
@@ -1114,6 +1505,14 @@ class WidgetSignalAutoTrader:
         if symbol_state.get("exit_requested") or exit_signal_id:
             return
 
+        # The fixed-target policy observes source EXIT without forcing a sell,
+        # but that bearish snapshot must not create fresh exposure. Keep only
+        # the already-owned quantity's target order covered in this cycle.
+        if source_exit_observed:
+            self._maybe_submit_take_profit(spec, symbol_state, now)
+            return
+
+        self._maybe_submit_scale_in(spec, symbol_state, payload, now)
         self._maybe_submit_take_profit(spec, symbol_state, now)
 
         entry_signal = self._entry_signal(spec, payload, now)
@@ -1186,6 +1585,11 @@ class WidgetSignalAutoTrader:
             "take_profit_target_price",
             "take_profit_basis_fill_price",
             "take_profit_bps",
+            "scale_in_requested",
+            "scale_in_trigger_price",
+            "scale_in_triggered_at",
+            "scale_in_blocked_after_take_profit_fill_at",
+            "scale_in_triggered_leg_count",
         ):
             symbol_state.pop(key, None)
         symbol_state.update(
@@ -1194,7 +1598,11 @@ class WidgetSignalAutoTrader:
                 "entry_signal_id": signal_id,
                 "entry_source_state": source_state,
                 "entry_route": route,
+                "entry_session": spec.contract.session_context(now).name,
                 "entry_consumed_at": now.isoformat(),
+                "execution_policy_id": (
+                    execution_policy["policy_id"] if execution_policy else None
+                ),
                 "take_profit_failure_count": 0,
                 "last_take_profit_attempt_at": None,
             }

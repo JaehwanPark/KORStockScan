@@ -16,6 +16,22 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 삼성전자 위젯 자동매매 정책
+
+- [x] `[SamsungWidgetDailyScaleInPolicy0812] 순수시장 replay 기반 당일 단일포지션 분할매수·고정익절 정책 후보 구현` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 00:00~00:40`, `Track: ScalpingLogic`)
+  - Source: [pure_market_adaptive_opportunity_replay_2026-06-05_2026-08-10.json](/home/ubuntu/KORStockScan/data/report/pure_market_adaptive_opportunity_replay/pure_market_adaptive_opportunity_replay_2026-06-05_2026-08-10.json), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [korstockscan-widget-signal-auto-trader.service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.service)
+  - 판정: KRX `three_equal_add0p5_1p0_tp0p5`가 `widget_auto_trade_policy_candidate_ready`로 선택됐다. 1주 최초 진입, 최초 체결가 대비 -0.5%/-1.0%에서 각 1주 추가, 동일가중 평단 +0.5% 익절이며 당일 한 자동관리 bundle만 허용한다.
+  - 근거: 보정 실행가능 표본 49건 중 당일 목표완료 43건·right-censored 6건, untouched 6일 holdout은 16/16 당일 완료, 비용 0.20% 차감 완료건 평균 +0.392912%, holdout 평균 MAE -0.319658%·worst MAE -0.537057%다. 미완료는 익일 수익으로 재분류하지 않고 일자 초기화 시 unmanaged inventory로만 남긴다.
+  - 구현 경계: 신호·시장 provenance는 KRX 정규장 venue 전용이고 신규 broker 주문은 SOR로 제출한다. NXT venue 주문만 NXT로 직접 제출하며 venue와 broker route를 혼용하지 않는다. 수량 1+1+1 고정, source-quality/freshness/manual-operator exclusion/global BUY pause/기존 TP 전량 coverage를 재검증한다. source EXIT는 신규진입 veto와 관측만 수행하고 강제매도하지 않는다.
+  - 현재 PID 귀속: repo와 배포 unit 후보만 갱신했으며 `current_pid_reflected=false`, 서비스 재기동·실주문 제출은 수행하지 않았다. 롤백은 정책 env 제거 후 당일 자동관리 주문·수량이 없는 상태에서 재기동한다.
+  - 리뷰/검증: 실행 제약 누락, stale scale-in, ownership/BUY-pause 재확인 누락, 정책 변경 상태 충돌, TP coverage 공백, EXIT 관측 주기의 추가노출 가능성을 보완했다. KRX venue 주문의 SOR 라우팅과 NXT venue의 NXT 직접 라우팅을 매수·익절·최종청산·취소·체결조회 전 경로에서 검증하고, 기존 KRX 직접 주문은 원 route로 정리 가능한 호환성을 유지했다. 관련 회귀 `456 passed`; Black/Ruff/compile/systemd verify/report invariant/checklist parser/`git diff --check` 통과, 최종 미해결 finding=`0`이다.
+
+- [ ] `[SamsungWidgetDailyScaleInPostApply0812] 정책 배포 후 주문 귀속과 3-leg/TP 재가격 검증` (`Due: 2026-08-12`, `Slot: PREOPEN`, `TimeWindow: 07:50~09:30`, `Track: ScalpingLogic`)
+  - Source: [widget_signal_auto_trade_state.json](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json), [widget_signal_auto_trade_events](/home/ubuntu/KORStockScan/data/report/widget_signal_auto_trade_events), [korstockscan-widget-signal-auto-trader.service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-widget-signal-auto-trader.service)
+  - 판정 기준: 사용자가 배포·재기동을 지시한 경우에만 현재 PID env의 `SAMSUNG_EQUAL_1_ADD0P5_ADD1P0_TP0P5_V1` 반영, KRX venue 전용 진입과 SOR broker route, 추가매수 전 기존 TP 취소확정, 1/2/3주 평단별 +0.5% 재가격, 일자 초기화 unmanaged 수량 분리를 확인한다.
+  - 금지: active order 또는 당일 widget-owned 수량이 있는 상태에서 정책을 교체하거나 stale/source-quality 실패·global BUY pause·manual ownership guard를 우회하지 않는다.
+  - 다음 액션: `not_deployed`, `runtime_reflected_no_sample`, `runtime_reflected_valid_sample`, `state_mismatch_blocked`, `rollback_required` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-08-11` postclose -> `2026-08-12`)
 

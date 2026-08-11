@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -156,6 +157,49 @@ def _trader(tmp_path, monkeypatch, payload_box, *, qty=1):
     return trader, gateway, recorder
 
 
+def _samsung_policy_trader(tmp_path, monkeypatch, payload_box):
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeContract,
+        event_based=True,
+        structural_execution_qualification=True,
+        execution_policy_id=engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
+    )
+    gateway = FakeGateway()
+    recorder = FakeRecorder([])
+    monkeypatch.setattr(
+        engine,
+        "evaluate_manual_control_exclusion",
+        lambda code: SimpleNamespace(excluded=True, source="test"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "manual_control_operator_exclusion_source",
+        lambda code: "manual_operator",
+    )
+    monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
+    trader = WidgetSignalAutoTrader(
+        gateway=gateway,
+        specs=(spec,),
+        state_path=tmp_path / "state.json",
+        event_recorder=recorder,
+        snapshot_loader=lambda path: payload_box["payload"],
+        entry_qty=1,
+        enabled=True,
+    )
+    return trader, gateway, recorder
+
+
+def _samsung_policy_payload(now, *, entry_id="ENTRY-1", exit_id=None, price=100_000):
+    payload = _payload(now, entry_id=entry_id, exit_id=exit_id)
+    payload["symbol"] = "005930"
+    payload["current_price"] = price
+    payload["advisory"] = {"source_quality": {"status": "PASS"}}
+    return payload
+
+
 def _fill(gateway, order_no, qty=1, price=1000):
     gateway.snapshots[order_no] = ExecutionSnapshot(
         True, True, qty, 0, qty, fill_price=price
@@ -170,22 +214,26 @@ def test_one_order_per_entry_episode_and_rearms_only_after_final_exit(
     trader, gateway, _ = _trader(tmp_path, monkeypatch, box)
 
     first = trader.run_once(now)
-    assert gateway.buy_calls == [("999999", 1, "KRX")]
-    assert first["symbols"]["999999"]["orders"][0]["broker_accepted"] is True
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+    first_order = first["symbols"]["999999"]["orders"][0]
+    assert first_order["broker_accepted"] is True
+    assert first_order["market_venue"] == "KRX"
+    assert first_order["broker_route"] == "SOR"
+    assert first_order["route"] == "SOR"
 
     trader.run_once(now)
     assert len(gateway.buy_calls) == 1
     _fill(gateway, "B1")
     trader.run_once(now)
-    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 1_010)]
+    assert gateway.limit_sell_calls == [("999999", 1, "SOR", 1_010)]
 
     box["payload"] = _payload(now, exit_id="EXIT-1")
     trader.run_once(now)
-    assert gateway.cancel_calls == [("999999", "L2", 1, "KRX")]
+    assert gateway.cancel_calls == [("999999", "L2", 1, "SOR")]
     assert gateway.sell_calls == []
     gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 1)
     trader.run_once(now)
-    assert gateway.sell_calls == [("999999", 1, "KRX")]
+    assert gateway.sell_calls == [("999999", 1, "SOR")]
     _fill(gateway, "S4")
     closed = trader.run_once(now)
     assert closed["symbols"]["999999"]["exit_requested"] is False
@@ -212,7 +260,7 @@ def test_daily_reset_archives_but_never_sells_prior_day_quantity(tmp_path, monke
 
     _fill(gateway, "B3")
     trader.run_once(day_two)
-    assert gateway.limit_sell_calls[-1] == ("999999", 1, "KRX", 1_010)
+    assert gateway.limit_sell_calls[-1] == ("999999", 1, "SOR", 1_010)
     box["payload"] = _payload(day_two, exit_id="DAY2-EXIT")
     trader.run_once(day_two)
     take_profit_order_no = next(
@@ -222,7 +270,7 @@ def test_daily_reset_archives_but_never_sells_prior_day_quantity(tmp_path, monke
     )
     gateway.snapshots[take_profit_order_no] = ExecutionSnapshot(True, True, 0, 0, 1)
     trader.run_once(day_two)
-    assert gateway.sell_calls == [("999999", 1, "KRX")]
+    assert gateway.sell_calls == [("999999", 1, "SOR")]
 
 
 def test_configurable_quantity_and_non_final_states_do_not_submit(
@@ -236,7 +284,7 @@ def test_configurable_quantity_and_non_final_states_do_not_submit(
 
     box["payload"] = _payload(now, entry_id="READY", entry_state="ENTRY_READY")
     trader.run_once(now)
-    assert gateway.buy_calls == [("999999", 3, "KRX")]
+    assert gateway.buy_calls == [("999999", 3, "SOR")]
 
 
 @pytest.mark.parametrize(
@@ -254,6 +302,278 @@ def test_take_profit_price_rounds_up_to_at_least_one_percent(fill_price, expecte
     assert target * 10_000 >= fill_price * 10_100
 
 
+def test_samsung_equal_share_policy_cancels_targets_adds_two_and_reprices(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
+
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+    initial_target = engine._take_profit_price(100_000, profit_bps=50)
+    assert gateway.limit_sell_calls == [("005930", 1, "SOR", initial_target)]
+
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+    trader.run_once(now.replace(second=1))
+    assert gateway.cancel_calls == [("005930", "L2", 1, "SOR")]
+    assert len(gateway.buy_calls) == 1
+
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 1)
+    trader.run_once(now.replace(second=2))
+    assert gateway.buy_calls == [("005930", 1, "SOR"), ("005930", 1, "SOR")]
+
+    _fill(gateway, "B4", price=99_500)
+    trader.run_once(now.replace(second=3))
+    repriced_target = engine._take_profit_price(99_750, profit_bps=50)
+    assert gateway.limit_sell_calls[-1] == ("005930", 2, "SOR", repriced_target)
+
+    box["payload"] = _samsung_policy_payload(now.replace(second=4), price=99_000)
+    trader.run_once(now.replace(second=4))
+    assert gateway.cancel_calls[-1][0:2] == ("005930", "L5")
+    gateway.snapshots["L5"] = ExecutionSnapshot(True, True, 0, 0, 2)
+    trader.run_once(now.replace(second=5))
+    assert gateway.buy_calls[-1] == ("005930", 1, "SOR")
+    _fill(gateway, "B7", price=99_000)
+    trader.run_once(now.replace(second=6))
+    final_target = engine._take_profit_price(99_500, profit_bps=50)
+    assert gateway.limit_sell_calls[-1] == ("005930", 3, "SOR", final_target)
+    state = trader._state["symbols"]["005930"]
+    assert state["take_profit_bps"] == 50
+    assert state["take_profit_basis_fill_price"] == 99_500
+
+
+def test_samsung_equal_share_policy_observes_source_exit_without_forced_sell(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+
+    box["payload"] = _samsung_policy_payload(
+        now.replace(second=1), exit_id="EXIT-1", price=99_000
+    )
+    trader.run_once(now.replace(second=1))
+
+    assert gateway.sell_calls == []
+    assert gateway.cancel_calls == []
+    assert len(gateway.buy_calls) == 1
+    assert recorder.events[-1]["event_type"] == (
+        "source_final_exit_observed_without_forced_sell"
+    )
+
+
+def test_samsung_equal_share_policy_requires_pass_source_for_add(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+    box["payload"]["advisory"]["source_quality"]["status"] = "STALE"
+    trader.run_once(now.replace(second=1))
+
+    assert len(gateway.buy_calls) == 1
+    assert gateway.cancel_calls == []
+
+
+def test_samsung_equal_share_policy_requires_fresh_snapshot_for_add(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+
+    stale_now = now.replace(minute=1)
+    box["payload"] = _samsung_policy_payload(now, price=99_500)
+    trader.run_once(stale_now)
+
+    assert len(gateway.buy_calls) == 1
+    assert gateway.cancel_calls == []
+
+
+def test_samsung_equal_share_policy_rechecks_global_buy_pause_before_add(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+
+    monkeypatch.setattr(engine, "is_buy_side_paused", lambda: True)
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+    trader.run_once(now.replace(second=1))
+
+    assert len(gateway.buy_calls) == 1
+    assert gateway.cancel_calls == []
+    assert recorder.events[-1]["event_type"] == "scale_in_blocked_global_buy_pause"
+
+
+def test_samsung_equal_share_policy_requires_existing_target_coverage_before_add(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+    target_order = trader._state["symbols"]["005930"]["orders"][-1]
+    target_order["status"] = "FAILED"
+    target_order["broker_accepted"] = False
+    trader._save()
+
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+    trader.run_once(now.replace(second=1))
+
+    assert len(gateway.buy_calls) == 1
+    assert gateway.cancel_calls == []
+    assert any(
+        event["event_type"] == "scale_in_blocked_take_profit_coverage_missing"
+        for event in recorder.events
+    )
+
+
+def test_samsung_equal_share_policy_rechecks_manual_ownership_before_add(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+
+    monkeypatch.setattr(
+        engine,
+        "evaluate_manual_control_exclusion",
+        lambda code: SimpleNamespace(excluded=False, source="none"),
+    )
+    monkeypatch.setattr(
+        engine, "manual_control_operator_exclusion_source", lambda code: None
+    )
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+    trader.run_once(now.replace(second=1))
+
+    assert len(gateway.buy_calls) == 1
+    assert gateway.cancel_calls == []
+    assert recorder.events[-1]["event_type"] == (
+        "scale_in_blocked_main_bot_ownership_not_excluded"
+    )
+
+
+def test_samsung_equal_share_policy_exit_vetoes_new_entry_in_same_snapshot(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {
+        "payload": _samsung_policy_payload(now, entry_id="ENTRY-1", exit_id="EXIT-1")
+    }
+    trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
+
+    trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert not any(
+        event["event_type"] == "source_final_exit_observed_without_forced_sell"
+        for event in recorder.events
+    )
+
+
+def test_samsung_policy_requires_one_share_initial_leg(tmp_path):
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeContract,
+        event_based=True,
+        execution_policy_id=engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
+    )
+
+    with pytest.raises(ValueError, match="widget_execution_policy_entry_qty_mismatch"):
+        WidgetSignalAutoTrader(
+            gateway=FakeGateway(),
+            specs=(spec,),
+            state_path=tmp_path / "state.json",
+            event_recorder=FakeRecorder([]),
+            entry_qty=2,
+            enabled=True,
+        )
+
+
+def test_samsung_runtime_policy_matches_selected_research_arm():
+    policy = engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY
+
+    assert policy["research_arm"] == "three_equal_add0p5_1p0_tp0p5"
+    assert policy["leg_quantity_each"] == 1
+    assert policy["add_trigger_bps_from_initial_fill"] == (-50, -100)
+    assert policy["take_profit_bps_from_equal_share_average"] == 50
+    assert policy["allowed_entry_sessions"] == ("KRX_REGULAR",)
+    assert policy["allowed_entry_venues"] == ("KRX",)
+
+
+def test_samsung_policy_change_fails_closed_with_same_day_open_quantity(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    monkeypatch.setattr(engine, "_now_kst", lambda: now)
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": engine.STATE_SCHEMA_VERSION,
+                "execution_authority": engine.EXECUTION_AUTHORITY,
+                "active_date": now.date().isoformat(),
+                "execution_policies": {},
+                "symbols": {
+                    "005930": {
+                        "orders": [
+                            {
+                                "side": "BUY",
+                                "broker_accepted": True,
+                                "filled_qty": 1,
+                                "status": "FILLED",
+                            }
+                        ]
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeContract,
+        event_based=True,
+        execution_policy_id=engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
+    )
+
+    with pytest.raises(
+        ValueError, match="widget_execution_policy_state_mismatch_with_active_orders"
+    ):
+        WidgetSignalAutoTrader(
+            gateway=FakeGateway(),
+            specs=(spec,),
+            state_path=state_path,
+            event_recorder=FakeRecorder([]),
+            entry_qty=1,
+            enabled=True,
+        )
+
+
 def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     tmp_path, monkeypatch
 ):
@@ -266,7 +586,7 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     _fill(gateway, "B1", price=234_000)
     state = trader.run_once(now)
 
-    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 236_500)]
+    assert gateway.limit_sell_calls == [("999999", 1, "SOR", 236_500)]
     take_profit = state["symbols"]["999999"]["orders"][-1]
     assert take_profit["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
     assert take_profit["parent_entry_signal_id"] == "ENTRY-1"
@@ -283,7 +603,7 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
         enabled=True,
     )
     restarted.run_once(now)
-    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 236_500)]
+    assert gateway.limit_sell_calls == [("999999", 1, "SOR", 236_500)]
 
 
 def test_partial_buy_fills_receive_only_incremental_take_profit_coverage(
@@ -296,13 +616,13 @@ def test_partial_buy_fills_receive_only_incremental_take_profit_coverage(
 
     gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 2, 3, fill_price=100_000)
     trader.run_once(now)
-    assert gateway.limit_sell_calls == [("999999", 1, "KRX", 101_000)]
+    assert gateway.limit_sell_calls == [("999999", 1, "SOR", 101_000)]
 
     gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 3, 0, 3, fill_price=100_000)
     trader.run_once(now)
     assert gateway.limit_sell_calls == [
-        ("999999", 1, "KRX", 101_000),
-        ("999999", 2, "KRX", 101_000),
+        ("999999", 1, "SOR", 101_000),
+        ("999999", 2, "SOR", 101_000),
     ]
 
 
@@ -319,7 +639,7 @@ def test_filled_take_profit_never_sells_more_than_widget_owned_quantity(
     state = trader.run_once(now)
 
     assert trader._open_qty(state["symbols"]["999999"]) == 0
-    assert state["symbols"]["999999"]["entry_episode_open"] is True
+    assert state["symbols"]["999999"]["entry_episode_open"] is False
 
     box["payload"] = _payload(now, exit_id="EXIT-1")
     closed = trader.run_once(now)
@@ -367,17 +687,17 @@ def test_final_exit_cancels_partial_take_profit_then_sells_only_remainder(
     trader.run_once(now)
     _fill(gateway, "B1", qty=3, price=100_000)
     trader.run_once(now)
-    assert gateway.limit_sell_calls == [("999999", 3, "KRX", 101_000)]
+    assert gateway.limit_sell_calls == [("999999", 3, "SOR", 101_000)]
 
     gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 1, 2, 3, fill_price=101_000)
     box["payload"] = _payload(now, exit_id="EXIT-1")
     trader.run_once(now)
-    assert gateway.cancel_calls == [("999999", "L2", 2, "KRX")]
+    assert gateway.cancel_calls == [("999999", "L2", 2, "SOR")]
     assert gateway.sell_calls == []
 
     gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 1, 0, 3, fill_price=101_000)
     trader.run_once(now)
-    assert gateway.sell_calls == [("999999", 2, "KRX")]
+    assert gateway.sell_calls == [("999999", 2, "SOR")]
 
 
 def test_definite_take_profit_rejection_retries_bounded_and_keeps_final_exit(
@@ -409,7 +729,7 @@ def test_definite_take_profit_rejection_retries_bounded_and_keeps_final_exit(
 
     box["payload"] = _payload(now.replace(second=16), exit_id="EXIT-1")
     trader.run_once(now.replace(second=16))
-    assert gateway.sell_calls == [("999999", 1, "KRX")]
+    assert gateway.sell_calls == [("999999", 1, "SOR")]
 
 
 def test_automatic_exclusion_does_not_transfer_real_order_ownership(
@@ -507,6 +827,84 @@ def test_samsung_execution_blocks_entry_without_recent_resistance_reclaim(
 
     assert signal is not None
     assert signal[2] == "entry_blocked_recent_resistance_not_reclaimed"
+
+
+def test_samsung_equal_share_policy_does_not_repeat_widget_entry_hard_gates(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": {}}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=FakeSamsungContractWithoutTopLevelProfile,
+        event_based=False,
+        structural_execution_qualification=True,
+        execution_policy_id=engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
+    )
+    payload = {
+        "status": "ok",
+        "symbol": "005930",
+        "market_venue": "KRX",
+        "observed_at_kst": now.isoformat(),
+        "advisory": {
+            "valid": True,
+            "state": "ENTRY_CAUTION",
+            "session": "KRX_REGULAR",
+            "observed_at": now.isoformat(),
+            "intraday_regime": {"state": "down"},
+            "derived": {
+                "recent_resistance_reclaimed": False,
+                "resistance_reclaim_hold_confirmed": False,
+                "entry_reward_risk_guard": {"passed": False},
+            },
+        },
+    }
+
+    signal = trader._entry_signal(spec, payload, now)
+
+    assert signal is not None
+    assert signal[2] is None
+
+
+def test_samsung_equal_share_policy_blocks_unvalidated_nxt_entry(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": {}}
+    trader, _, _ = _trader(tmp_path, monkeypatch, box)
+    nxt_contract = SimpleNamespace(
+        session_context=lambda observed_at: SimpleNamespace(
+            active=True, market_venue="NXT", name="NXT_PREMARKET"
+        ),
+        snapshot_is_fresh=lambda payload, now: True,
+        advisory_contract_is_valid=lambda advisory, snapshot_observed_at, context, evaluated_at: True,
+    )
+    spec = WidgetSpec(
+        code="005930",
+        name="Samsung",
+        snapshot_path=Path("unused.json"),
+        contract=nxt_contract,
+        event_based=False,
+        structural_execution_qualification=True,
+        execution_policy_id=engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
+    )
+    payload = {
+        "status": "ok",
+        "symbol": "005930",
+        "market_venue": "NXT",
+        "observed_at_kst": now.isoformat(),
+        "advisory": {
+            "valid": True,
+            "state": "ENTRY_READY",
+            "observed_at": now.isoformat(),
+        },
+    }
+
+    signal = trader._entry_signal(spec, payload, now)
+
+    assert signal is not None
+    assert signal[2] == "entry_blocked_execution_policy_venue"
 
 
 def test_samsung_execution_allows_completed_structural_recovery(tmp_path, monkeypatch):
@@ -671,7 +1069,7 @@ def test_global_buy_pause_does_not_consume_entry_episode(tmp_path, monkeypatch):
 
     monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
     trader.run_once(now)
-    assert gateway.buy_calls == [("999999", 1, "KRX")]
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
 
 
 def test_shared_token_gateway_blocks_buy_during_global_pause(monkeypatch):
@@ -735,7 +1133,41 @@ def test_gateway_uses_documented_order_contract_without_cash_or_token_issue(
     assert all(call[1]["headers"]["api-id"] != "kt00001" for call in session.calls)
 
 
-def test_gateway_uses_documented_normal_limit_sell_for_take_profit(monkeypatch):
+def test_gateway_routes_krx_buy_and_final_sell_through_sor(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {"return_code": 0, "return_msg": "OK", "ord_no": "0001234"}
+
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response()
+
+    session = RecordingSession()
+    monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=session, token_loader=lambda: "cached-token"
+    )
+
+    assert gateway.submit_buy(code="005930", qty=1, route="KRX").accepted is True
+    assert gateway.submit_sell(code="005930", qty=1, route="KRX").accepted is True
+
+    buy_payload = session.calls[0][1]["json"]
+    sell_payload = session.calls[1][1]["json"]
+    assert buy_payload["dmst_stex_tp"] == "SOR"
+    assert buy_payload["trde_tp"] == "6"
+    assert sell_payload["dmst_stex_tp"] == "SOR"
+    assert sell_payload["trde_tp"] == "3"
+
+
+def test_gateway_routes_krx_limit_sell_through_sor(monkeypatch):
     class Response:
         status_code = 200
         headers = {}
@@ -763,7 +1195,7 @@ def test_gateway_uses_documented_normal_limit_sell_for_take_profit(monkeypatch):
     _, request = session.calls[0]
     assert request["headers"]["api-id"] == "kt10001"
     assert request["json"] == {
-        "dmst_stex_tp": "KRX",
+        "dmst_stex_tp": "SOR",
         "stk_cd": "005930",
         "ord_qty": "1",
         "ord_uv": "236500",
@@ -783,7 +1215,7 @@ def test_gateway_rejects_invalid_route_and_quantity_before_broker_call(monkeypat
     )
 
     with pytest.raises(ValueError, match="invalid_order_route"):
-        gateway.submit_buy(code="005930", qty=1, route="SOR")
+        gateway.submit_buy(code="005930", qty=1, route="INVALID")
     with pytest.raises(ValueError, match="invalid_order_quantity"):
         gateway.submit_sell(code="005930", qty=0, route="KRX")
     with pytest.raises(ValueError, match="invalid_order_price"):
@@ -864,6 +1296,29 @@ def test_service_symbol_allowlist_selects_only_requested_widgets(monkeypatch):
     assert [spec.code for spec in specs] == ["005930"]
 
 
+def test_service_explicit_samsung_execution_policy_is_attached(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", "005930")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY",
+        engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
+    )
+
+    specs = service_module._env_specs()
+
+    assert len(specs) == 1
+    assert specs[0].execution_policy_id == engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID
+
+
+def test_service_unknown_samsung_execution_policy_fails_closed(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", "005930")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY", "UNKNOWN"
+    )
+
+    with pytest.raises(ValueError, match="widget_auto_trader_samsung_policy_unknown"):
+        service_module._env_specs()
+
+
 @pytest.mark.parametrize("value", ["", "999999", "005930,999999"])
 def test_service_symbol_allowlist_fails_closed_for_invalid_values(monkeypatch, value):
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", value)
@@ -874,6 +1329,9 @@ def test_service_symbol_allowlist_fails_closed_for_invalid_values(monkeypatch, v
 
 def test_service_symbol_allowlist_omission_preserves_legacy_specs(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", raising=False)
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY", raising=False
+    )
 
     assert service_module._env_specs() == engine.DEFAULT_WIDGET_SPECS
 
@@ -888,6 +1346,10 @@ def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
 
     assert "WantedBy=multi-user.target" not in service
     assert 'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS=005930"' in service
+    assert (
+        'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY='
+        'SAMSUNG_EQUAL_1_ADD0P5_ADD1P0_TP0P5_V1"' in service
+    )
     assert "OnCalendar=Mon..Fri *-*-* 07:58:00 Asia/Seoul" in timer
     assert "Persistent=true" in timer
     assert "AccuracySec=1s" in timer
