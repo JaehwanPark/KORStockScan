@@ -63,14 +63,14 @@ def test_authority_artifact_is_same_day_and_never_controls_widget(tmp_path):
         "parallel_independent_strategy"
     )
     assert artifact["policy"]["sor_regular_fallback"] == (
-        "09:00_open_minus_0.75pct_until_09:30"
+        "each_unfilled_leg_from_09:00_open_until_09:30"
     )
     assert artifact["policy"]["unfilled_target"] == (
         "hold_position_without_forced_exit"
     )
     assert "max_hold_minutes" not in artifact["policy"]
     assert (
-        "use_widget_orders_or_positions_as_one_share_ledger"
+        "use_widget_orders_or_positions_as_morning_machine_ledger"
         in artifact["forbidden_uses"]
     )
     assert "timeout_target_cancel_or_forced_exit" in artifact["forbidden_uses"]

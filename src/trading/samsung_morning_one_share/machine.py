@@ -1,24 +1,15 @@
-"""Persistent state machine for one Samsung morning one-share entry episode."""
+"""Persistent state machine for the independent Samsung morning two-leg episode."""
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
-import time as time_module
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Protocol
-from zoneinfo import ZoneInfo
+from typing import Callable
 
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
-from src.trading.samsung_morning_one_share.gateway import (
-    ExecutionSnapshot,
-    OpenPriceSnapshot,
-    SubmitResult,
-)
+from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
 from src.trading.samsung_morning_one_share.policy import (
     DEFAULT_POLICY,
     EntryWindow,
@@ -26,439 +17,383 @@ from src.trading.samsung_morning_one_share.policy import (
 )
 from src.utils.constants import DATA_DIR
 
-KST = ZoneInfo("Asia/Seoul")
 DEFAULT_STATE_PATH = DATA_DIR / "runtime" / "samsung_morning_one_share_state.json"
 
 
-class OneShareGateway(Protocol):
-    def opening_price(self, *, route: str, trade_date: date) -> OpenPriceSnapshot: ...
-
-    def submit_limit_buy(self, *, route: str, price: int) -> SubmitResult: ...
-
-    def submit_limit_sell(self, *, route: str, price: int) -> SubmitResult: ...
-
-    def cancel(self, *, route: str, order_no: str) -> SubmitResult: ...
-
-    def execution_snapshot(
-        self, *, route: str, order_no: str, order_date: str
-    ) -> ExecutionSnapshot: ...
-
-
-def _iso(now: datetime) -> str:
-    return now.astimezone(KST).isoformat()
-
-
-def _fresh_state(trade_date: date) -> dict:
+def _morning_leg(plan: dict, route: str) -> dict:
     return {
-        "schema": "samsung_morning_one_share_state_v1",
-        "trade_date": trade_date.isoformat(),
-        "status": "READY",
-        "nxt_resolved_without_fill": False,
-        "daily_trade_consumed": False,
-        "route": "",
-        "entry_price": 0,
+        **plan,
+        "quantity": 1,
+        "route": route,
+        "status": "PLANNED",
         "buy_order_no": "",
-        "buy_submitted_at": "",
+        "buy_order_date": "",
         "buy_cancel_requested": False,
         "fill_price": 0,
         "buy_filled_at": "",
         "position_qty": 0,
         "target_price": 0,
         "target_order_no": "",
-        "blocked_reason": "",
-        "owned_order_nos": [],
-        "last_action": "initialized",
-        "audit": [],
+        "target_order_date": "",
+        "target_filled_qty": 0,
     }
 
 
-class SamsungMorningOneShareMachine:
-    """Independent one-share executor; existing strategy decisions are not inputs."""
+class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
+    """Compatibility class name; runtime authority is two one-share legs."""
+
+    LEG_IDS = ("base_plus_1tick", "base")
 
     def __init__(
         self,
         *,
-        gateway: OneShareGateway,
+        gateway,
         state_path: Path = DEFAULT_STATE_PATH,
         policy: MorningOneSharePolicy = DEFAULT_POLICY,
         live_enabled: bool = False,
-        ownership_source: Callable[[object], str] = (
-            manual_control_operator_exclusion_source
-        ),
+        ownership_source: Callable[
+            [object], str
+        ] = manual_control_operator_exclusion_source,
     ) -> None:
-        self.gateway = gateway
-        self.state_path = Path(state_path)
-        self.policy = policy
-        self.live_enabled = bool(live_enabled)
-        self.ownership_source = ownership_source
-        self._state = self._load_state()
-
-    def _load_state(self) -> dict:
-        try:
-            payload = json.loads(self.state_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except (OSError, json.JSONDecodeError) as exc:
-            return {
-                "schema": "samsung_morning_one_share_state_v1",
-                "trade_date": "",
-                "status": "BLOCKED",
-                "position_qty": 0,
-                "blocked_reason": f"state_unreadable:{type(exc).__name__}",
-                "last_action": "blocked_state_load",
-                "audit": [],
-            }
-        if not isinstance(payload, dict) or payload.get("schema") != (
-            "samsung_morning_one_share_state_v1"
-        ):
-            return {
-                "schema": "samsung_morning_one_share_state_v1",
-                "trade_date": "",
-                "status": "BLOCKED",
-                "position_qty": 0,
-                "blocked_reason": "state_schema_invalid",
-                "last_action": "blocked_state_load",
-                "audit": [],
-            }
-        return payload
-
-    def _save(self) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(
-            prefix=f".{self.state_path.name}.", dir=self.state_path.parent
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(
-                    self._state, handle, ensure_ascii=False, indent=2, sort_keys=True
-                )
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_name, self.state_path)
-        finally:
-            if os.path.exists(temp_name):
-                os.unlink(temp_name)
-
-    def _record(self, now: datetime, action: str, **fields: object) -> None:
-        self._state["last_action"] = action
-        audit = self._state.setdefault("audit", [])
-        audit.append({"at_kst": _iso(now), "action": action, **fields})
-        self._state["audit"] = audit[-100:]
-        self._save()
-
-    def _own_order(self, order_no: str) -> None:
-        clean = str(order_no or "").strip()
-        owned = {str(item) for item in self._state.get("owned_order_nos", []) if item}
-        if clean:
-            owned.add(clean)
-        self._state["owned_order_nos"] = sorted(owned)
-
-    def _owns_order(self, order_no: str) -> bool:
-        clean = str(order_no or "").strip()
-        return bool(
-            clean
-            and clean
-            in {
-                str(item).strip()
-                for item in self._state.get("owned_order_nos", [])
-                if item
-            }
+        super().__init__(
+            gateway=gateway,
+            state_path=state_path,
+            policy=policy,
+            strategy_name="morning",
+            schema="samsung_morning_two_leg_state_v2",
+            legacy_schema="samsung_morning_one_share_state_v1",
+            live_enabled=live_enabled,
+            ownership_source=ownership_source,
         )
 
-    def _block(self, now: datetime, reason: str) -> dict:
-        self._state["status"] = "BLOCKED"
-        self._state["blocked_reason"] = reason
-        self._record(now, "blocked", reason=reason)
-        return self.snapshot()
-
-    def snapshot(self) -> dict:
-        return json.loads(json.dumps(self._state, ensure_ascii=False))
-
-    def _roll_date(self, now: datetime) -> bool:
-        today = now.date()
-        if not self._state:
-            self._state = _fresh_state(today)
-            self._save()
-            return True
-        if self._state.get("trade_date") == today.isoformat():
-            return True
-        status = str(self._state.get("status") or "")
-        position_qty = int(self._state.get("position_qty", 0) or 0)
-        if position_qty == 1 and status in {"TARGET_OPEN", "HELD"}:
-            # Preserve the original order date for target reconciliation.  A
-            # carried position never opens a new daily entry episode.
-            return True
-        unresolved = bool(
-            position_qty or status not in {"READY", "COMPLETE", "NO_TRADE"}
-        )
-        if unresolved:
-            self._state["status"] = "BLOCKED"
-            self._state["blocked_reason"] = "previous_day_order_or_position_unresolved"
-            self._record(now, "blocked_date_rollover")
+    def _validate_state_contract(self, now: datetime) -> bool:
+        if not super()._validate_state_contract(now):
             return False
-        self._state = _fresh_state(today)
-        self._record(now, "daily_state_initialized")
+        for leg in self._state.get("legs", []):
+            if leg.get("route") not in {"NXT", "SOR"}:
+                self._block(now, "state_leg_route_invalid")
+                return False
         return True
 
-    def _execution(self, order_no: str) -> ExecutionSnapshot:
+    def _execution(self, leg: dict, order_key: str):
+        order_no = str(leg.get(order_key) or "")
+        if not self._owns_order(order_no):
+            raise ValueError(f"{order_key}_not_owned")
+        date_key = (
+            "buy_order_date" if order_key == "buy_order_no" else "target_order_date"
+        )
         return self.gateway.execution_snapshot(
-            route=str(self._state.get("route") or ""),
+            route=str(leg["route"]),
             order_no=order_no,
-            order_date=str(self._state.get("trade_date") or ""),
+            order_date=str(leg.get(date_key) or ""),
         )
 
-    def _submit_target(self, now: datetime) -> dict:
-        if int(self._state.get("position_qty", 0) or 0) != 1:
-            return self._block(now, "target_requires_exact_owned_one_share")
-        if not self._owns_order(str(self._state.get("buy_order_no") or "")):
-            return self._block(now, "filled_buy_not_owned_by_one_share_machine")
-        fill_price = int(self._state.get("fill_price", 0) or 0)
-        if fill_price <= 0:
-            return self._block(now, "confirmed_fill_price_missing")
-        target_price = self.policy.target_price(fill_price)
-        self._state["status"] = "TARGET_SUBMITTING"
-        self._record(now, "target_submit_intent", target_price=target_price)
+    def _submit_target(self, now: datetime, leg: dict) -> None:
+        if (
+            int(leg.get("position_qty", 0) or 0) != 1
+            or int(leg.get("fill_price", 0) or 0) <= 0
+        ):
+            self._block(now, f"target_requires_confirmed_leg_fill:{leg.get('leg_id')}")
+            return
+        leg["status"] = "TARGET_SUBMITTING"
+        target_price = self.policy.target_price(int(leg["fill_price"]))
+        self._record(
+            now,
+            "target_submit_intent",
+            leg_id=leg["leg_id"],
+            route=leg["route"],
+            target_price=target_price,
+        )
         result = self.gateway.submit_limit_sell(
-            route=str(self._state["route"]), price=target_price
+            route=str(leg["route"]), price=target_price
         )
         if result.ambiguous:
-            return self._block(now, "target_submit_ambiguous_reconciliation_required")
+            self._block(now, f"target_submit_ambiguous:{leg['leg_id']}")
+            return
         if not result.accepted:
-            self._state["status"] = "POSITION_OPEN"
+            leg["status"] = "POSITION_OPEN"
             self._record(
                 now,
                 "target_submit_rejected_retryable",
+                leg_id=leg["leg_id"],
                 return_code=result.return_code,
             )
-            return self.snapshot()
-        self._state.update(
+            return
+        leg.update(
             {
                 "status": "TARGET_OPEN",
                 "target_price": target_price,
                 "target_order_no": result.order_no,
+                "target_order_date": now.date().isoformat(),
             }
         )
         self._own_order(result.order_no)
-        self._record(now, "target_submitted", target_price=target_price)
-        return self.snapshot()
-
-    def _reconcile_buy(self, now: datetime) -> dict:
-        order_no = str(self._state.get("buy_order_no") or "")
-        if not self._owns_order(order_no):
-            return self._block(now, "buy_order_not_owned_by_one_share_machine")
-        snapshot = self._execution(order_no)
-        if not snapshot.source_ok:
-            self._record(now, "buy_reconciliation_wait", error=snapshot.error)
-            return self.snapshot()
-        if snapshot.found and snapshot.filled_qty == 1:
-            if snapshot.fill_price is None or snapshot.fill_price <= 0:
-                return self._block(now, "buy_fill_price_missing")
-            self._state.update(
-                {
-                    "daily_trade_consumed": True,
-                    "position_qty": 1,
-                    "fill_price": snapshot.fill_price,
-                    "buy_filled_at": _iso(now),
-                    "status": "POSITION_OPEN",
-                }
-            )
-            self._record(now, "buy_fill_confirmed", fill_price=snapshot.fill_price)
-            return self._submit_target(now)
-        if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
-            route = str(self._state.get("route") or "")
-            self._state.update(
-                {
-                    "status": "READY" if route == "NXT" else "NO_TRADE",
-                    "nxt_resolved_without_fill": route == "NXT",
-                    "buy_cancel_requested": False,
-                }
-            )
-            self._record(now, "buy_resolved_without_fill", route=route)
-            return self.snapshot()
-
-        route = str(self._state.get("route") or "")
-        deadline = (
-            self.policy.nxt.deadline if route == "NXT" else self.policy.sor.deadline
+        self._record(
+            now,
+            "target_submitted",
+            leg_id=leg["leg_id"],
+            route=leg["route"],
+            target_price=target_price,
         )
-        if now.time() <= deadline:
-            self._record(now, "buy_open_wait")
-            return self.snapshot()
-        if bool(self._state.get("buy_cancel_requested")):
-            self._record(now, "buy_cancel_reconciliation_wait")
-            return self.snapshot()
-        self._state["status"] = "BUY_CANCEL_SUBMITTING"
-        self._record(now, "buy_cancel_intent")
-        result = self.gateway.cancel(route=route, order_no=order_no)
+
+    def _completed_bars_after_signal(self, now: datetime) -> int | None:
+        return 0
+
+    def _window(self, route: str) -> EntryWindow:
+        return self.policy.nxt if route == "NXT" else self.policy.sor
+
+    def _move_to_sor(self, now: datetime, leg: dict) -> None:
+        leg.update(
+            {
+                "route": "SOR",
+                "status": "PLANNED",
+                "entry_price": 0,
+                "buy_order_no": "",
+                "buy_order_date": "",
+                "buy_cancel_requested": False,
+            }
+        )
+        self._record(now, "nxt_leg_released_for_sor_fallback", leg_id=leg["leg_id"])
+
+    def _cancel_buy(self, now: datetime, leg: dict, elapsed: int) -> None:
+        leg["status"] = "BUY_CANCEL_SUBMITTING"
+        self._record(now, "buy_cancel_intent", leg_id=leg["leg_id"], route=leg["route"])
+        result = self.gateway.cancel(
+            route=str(leg["route"]), order_no=str(leg["buy_order_no"])
+        )
         if result.ambiguous:
-            return self._block(now, "buy_cancel_ambiguous_reconciliation_required")
+            self._block(now, f"buy_cancel_ambiguous:{leg['leg_id']}")
+            return
         if not result.accepted:
-            self._state["status"] = "BUY_OPEN"
+            leg["status"] = "BUY_OPEN"
             self._record(
                 now,
                 "buy_cancel_rejected_retryable",
+                leg_id=leg["leg_id"],
                 return_code=result.return_code,
             )
-            return self.snapshot()
-        self._state["status"] = "BUY_CANCEL_PENDING"
-        self._state["buy_cancel_requested"] = True
+            return
+        leg.update({"status": "BUY_CANCEL_PENDING", "buy_cancel_requested": True})
         self._own_order(result.order_no)
-        self._record(now, "buy_cancel_submitted")
-        return self.snapshot()
+        self._record(
+            now, "buy_cancel_submitted", leg_id=leg["leg_id"], route=leg["route"]
+        )
 
-    def _reconcile_target(self, now: datetime) -> dict:
-        order_no = str(self._state.get("target_order_no") or "")
-        if not self._owns_order(order_no):
-            return self._block(now, "target_order_not_owned_by_one_share_machine")
-        snapshot = self._execution(order_no)
+    def _reconcile_buy(self, now: datetime, leg: dict, elapsed: int | None) -> None:
+        try:
+            snapshot = self._execution(leg, "buy_order_no")
+        except ValueError:
+            self._block(now, f"buy_order_not_owned:{leg.get('leg_id')}")
+            return
         if not snapshot.source_ok:
-            self._record(now, "target_reconciliation_wait", error=snapshot.error)
-            return self.snapshot()
-        if not snapshot.found:
-            self._record(now, "target_not_found_reconciliation_wait")
-            return self.snapshot()
-        if snapshot.found and snapshot.filled_qty == 1:
-            self._state.update(
-                {"position_qty": 0, "status": "COMPLETE", "blocked_reason": ""}
+            self._record(
+                now,
+                "buy_reconciliation_wait",
+                leg_id=leg["leg_id"],
+                error=snapshot.error,
             )
-            self._record(now, "target_fill_confirmed")
-            return self.snapshot()
+            return
+        if snapshot.found and snapshot.filled_qty == 1:
+            if not snapshot.fill_price:
+                self._block(now, f"buy_fill_price_missing:{leg['leg_id']}")
+                return
+            leg.update(
+                {
+                    "position_qty": 1,
+                    "fill_price": snapshot.fill_price,
+                    "buy_filled_at": now.astimezone(KST).isoformat(),
+                    "status": "POSITION_OPEN",
+                }
+            )
+            self._record(
+                now,
+                "buy_fill_confirmed",
+                leg_id=leg["leg_id"],
+                route=leg["route"],
+                fill_price=snapshot.fill_price,
+            )
+            self._submit_target(now, leg)
+            return
         if snapshot.found and snapshot.filled_qty == 0 and snapshot.remaining_qty == 0:
-            self._state.update({"status": "HELD", "blocked_reason": ""})
-            self._record(now, "target_closed_unfilled_position_held")
-            return self.snapshot()
-        self._record(now, "target_open_wait")
-        return self.snapshot()
-
-    def _submit_entry(self, now: datetime, window: EntryWindow) -> dict:
-        source = str(self.ownership_source(self.policy.symbol) or "")
-        if self.live_enabled and not source:
-            self._state["last_action"] = "operator_exclusion_required"
-            self._state["blocked_reason"] = "005930_not_excluded_from_primary_bot"
-            self._save()
-            return self.snapshot()
-        opening = self.gateway.opening_price(route=window.route, trade_date=now.date())
-        if not opening.source_ok or not opening.price:
-            self._state["last_action"] = "opening_price_wait"
-            self._state["blocked_reason"] = opening.error
-            self._save()
-            return self.snapshot()
-        entry_price = self.policy.entry_price(opening.price, window.drawdown_pct)
-        if not self.live_enabled:
-            self._state["last_action"] = f"would_submit_{window.route.lower()}_buy"
-            self._state["blocked_reason"] = "live_authority_disabled"
-            self._state["preview"] = {
-                "route": window.route,
-                "open_price": opening.price,
-                "entry_price": entry_price,
-                "quantity": 1,
-                "operator_exclusion_ready": bool(source),
-                "parallel_widget_orders_allowed": True,
-            }
-            self._save()
-            return self.snapshot()
-        self._state.update(
-            {
-                "status": "BUY_SUBMITTING",
-                "route": window.route,
-                "entry_price": entry_price,
-                "blocked_reason": "",
-            }
-        )
-        self._record(
-            now,
-            "buy_submit_intent",
-            route=window.route,
-            open_price=opening.price,
-            entry_price=entry_price,
-        )
-        result = self.gateway.submit_limit_buy(route=window.route, price=entry_price)
-        if result.ambiguous:
-            return self._block(now, "buy_submit_ambiguous_reconciliation_required")
-        if not result.accepted:
-            self._state["status"] = "READY"
-            self._state["last_action"] = "buy_submit_rejected"
-            self._state["blocked_reason"] = result.return_code
-            self._save()
-            return self.snapshot()
-        self._state.update(
-            {
-                "status": "BUY_OPEN",
-                "route": window.route,
-                "entry_price": entry_price,
-                "buy_order_no": result.order_no,
-                "buy_submitted_at": _iso(now),
-                "buy_cancel_requested": False,
-                "blocked_reason": "",
-            }
-        )
-        self._own_order(result.order_no)
-        self._record(
-            now,
-            "buy_submitted",
-            route=window.route,
-            open_price=opening.price,
-            entry_price=entry_price,
-        )
-        return self.snapshot()
-
-    def run_once(self, now: datetime | None = None) -> dict:
-        now = (now or datetime.now(tz=KST)).astimezone(KST)
-        if not self._roll_date(now):
-            return self.snapshot()
-        status = str(self._state.get("status") or "")
-        if status == "BLOCKED":
-            return self.snapshot()
-        if status in {
-            "BUY_SUBMITTING",
-            "BUY_CANCEL_SUBMITTING",
-            "TARGET_SUBMITTING",
-            "TARGET_CANCEL_SUBMITTING",
-            "EXIT_SUBMITTING",
-            "EXIT_OPEN",
-        }:
-            return self._block(now, f"broker_write_interrupted:{status.lower()}")
-        if status in {"BUY_OPEN", "BUY_CANCEL_PENDING"}:
-            return self._reconcile_buy(now)
-        if status == "POSITION_OPEN":
-            return self._submit_target(now)
-        if status in {"TARGET_OPEN", "TARGET_CANCEL_PENDING"}:
-            return self._reconcile_target(now)
-        if status in {"COMPLETE", "NO_TRADE", "HELD"} or bool(
-            self._state.get("daily_trade_consumed")
-        ):
-            return self.snapshot()
-
-        current = now.time()
-        if not bool(self._state.get("nxt_resolved_without_fill")):
-            if self.policy.nxt.open_time <= current <= self.policy.nxt.deadline:
-                return self._submit_entry(now, self.policy.nxt)
-            if current > self.policy.nxt.deadline:
-                self._state["nxt_resolved_without_fill"] = True
-                self._record(now, "nxt_window_skipped_or_expired")
+            if leg["route"] == "NXT":
+                self._move_to_sor(now, leg)
             else:
-                self._state["last_action"] = "waiting_for_nxt_window"
+                leg.update({"status": "NO_FILL", "buy_cancel_requested": False})
+                self._record(
+                    now, "buy_resolved_without_fill", leg_id=leg["leg_id"], route="SOR"
+                )
+            return
+        deadline = self._window(str(leg["route"])).deadline
+        if leg.get("buy_cancel_requested"):
+            self._record(now, "buy_cancel_reconciliation_wait", leg_id=leg["leg_id"])
+        elif now.time() >= deadline:
+            self._cancel_buy(now, leg, 0)
+        else:
+            self._record(now, "buy_open_wait", leg_id=leg["leg_id"], route=leg["route"])
+
+    def _price_sor_leg(self, now: datetime, leg: dict) -> bool:
+        opening = self.gateway.opening_price(route="SOR", trade_date=now.date())
+        if not opening.source_ok or not opening.price:
+            self._record(
+                now, "sor_open_price_wait", leg_id=leg["leg_id"], error=opening.error
+            )
+            return False
+        plans = {
+            plan["leg_id"]: plan
+            for plan in self.policy.entry_legs(
+                opening.price, self.policy.sor.drawdown_pct
+            )
+        }
+        leg["entry_price"] = int(plans[str(leg["leg_id"])]["entry_price"])
+        return True
+
+    def _submit_planned_buys(self, now: datetime) -> None:
+        for leg in self._state.get("legs", []):
+            if leg.get("status") != "PLANNED" or self._state.get("status") == "BLOCKED":
+                continue
+            route = str(leg["route"])
+            window = self._window(route)
+            if now.time() < window.open_time:
+                continue
+            if now.time() >= window.deadline:
+                leg["status"] = "NO_FILL"
+                self._record(
+                    now,
+                    "entry_window_elapsed_without_submit",
+                    leg_id=leg["leg_id"],
+                    route=route,
+                )
+                continue
+            if (
+                route == "SOR"
+                and int(leg.get("entry_price", 0) or 0) <= 0
+                and not self._price_sor_leg(now, leg)
+            ):
+                continue
+            leg["status"] = "BUY_SUBMITTING"
+            self._record(
+                now,
+                "buy_submit_intent",
+                leg_id=leg["leg_id"],
+                route=route,
+                entry_price=leg["entry_price"],
+            )
+            result = self.gateway.submit_limit_buy(
+                route=route, price=int(leg["entry_price"])
+            )
+            if result.ambiguous:
+                self._block(now, f"buy_submit_ambiguous:{leg['leg_id']}")
+                return
+            if not result.accepted:
+                leg["status"] = "NO_FILL"
+                self._record(
+                    now,
+                    "buy_submit_rejected",
+                    leg_id=leg["leg_id"],
+                    route=route,
+                    return_code=result.return_code,
+                )
+                continue
+            leg.update(
+                {
+                    "status": "BUY_OPEN",
+                    "buy_order_no": result.order_no,
+                    "buy_order_date": now.date().isoformat(),
+                }
+            )
+            self._own_order(result.order_no)
+            self._record(
+                now,
+                "buy_submitted",
+                leg_id=leg["leg_id"],
+                route=route,
+                entry_price=leg["entry_price"],
+            )
+
+    def _consider_entry(self, now: datetime) -> dict:
+        if now.time() < self.policy.nxt.open_time:
+            self._state.update(
+                {"last_action": "waiting_for_nxt_premarket", "blocked_reason": ""}
+            )
+            self._save()
+            return self.snapshot()
+        if now.time() >= self.policy.sor.deadline:
+            self._state["status"] = "NO_TRADE"
+            self._record(now, "morning_scan_window_closed")
+            return self.snapshot()
+        source_owner = str(self.ownership_source(self.policy.symbol) or "")
+        route = "NXT" if now.time() < self.policy.nxt.deadline else "SOR"
+        opening = None
+        if route == "NXT" or now.time() >= self.policy.sor.open_time:
+            opening = self.gateway.opening_price(route=route, trade_date=now.date())
+            if not opening.source_ok or not opening.price:
+                self._state.update(
+                    {
+                        "last_action": f"{route.lower()}_open_price_wait",
+                        "blocked_reason": opening.error,
+                    }
+                )
                 self._save()
                 return self.snapshot()
-
-        if self.policy.sor.open_time <= current <= self.policy.sor.deadline:
-            return self._submit_entry(now, self.policy.sor)
-        if current > self.policy.sor.deadline:
-            self._state["status"] = "NO_TRADE"
-            self._record(now, "sor_window_expired_without_fill")
+            window = self._window(route)
+            plans = self.policy.entry_legs(opening.price, window.drawdown_pct)
+            open_price = opening.price
+            signal_bar = opening.source_timestamp
         else:
-            self._state["last_action"] = "waiting_for_sor_window"
+            plans = [
+                {
+                    "leg_id": "base_plus_1tick",
+                    "price_role": "aggressive_50pct",
+                    "entry_price": 0,
+                },
+                {
+                    "leg_id": "base",
+                    "price_role": "conservative_50pct",
+                    "entry_price": 0,
+                },
+            ]
+            open_price = 0
+            signal_bar = now.isoformat()
+        if not self.live_enabled:
+            self._state.update(
+                {
+                    "last_action": f"would_submit_{route.lower()}_two_leg_buy",
+                    "blocked_reason": "live_authority_disabled",
+                    "preview": {
+                        "route": route,
+                        "open_price": open_price,
+                        "total_quantity": 2,
+                        "legs": plans,
+                        "operator_exclusion_ready": bool(source_owner),
+                        "widget_relationship": "parallel_independent_strategy",
+                    },
+                }
+            )
             self._save()
+            return self.snapshot()
+        if not source_owner:
+            self._state.update(
+                {
+                    "last_action": "operator_exclusion_required",
+                    "blocked_reason": "005930_not_excluded_from_primary_bot",
+                }
+            )
+            self._save()
+            return self.snapshot()
+        self._state.update(
+            {
+                "attempt_consumed": True,
+                "signal_bar": signal_bar,
+                "signal_close": open_price,
+                "legs": [_morning_leg(plan, route) for plan in plans],
+                "blocked_reason": "",
+            }
+        )
+        self._sync_aggregate()
+        self._record(
+            now, "morning_two_leg_entry_armed", route=route, open_price=open_price
+        )
+        self._submit_planned_buys(now)
+        self._sync_aggregate()
+        self._save()
         return self.snapshot()
-
-    def run_forever(self, *, interval_sec: float = 1.0) -> None:
-        while True:
-            self.run_once()
-            time_module.sleep(max(0.2, float(interval_sec)))
-
-    def run_until_terminal(self, *, interval_sec: float = 2.0) -> dict:
-        while True:
-            state = self.run_once()
-            if state.get("status") in {"COMPLETE", "NO_TRADE", "HELD", "BLOCKED"}:
-                return state
-            time_module.sleep(max(0.2, float(interval_sec)))

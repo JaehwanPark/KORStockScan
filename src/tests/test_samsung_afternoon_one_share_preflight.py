@@ -66,7 +66,8 @@ def test_authority_exactly_preserves_no_stop_and_sor_contract(tmp_path):
     "change",
     [
         {"symbol": "000660"},
-        {"quantity": 2},
+        {"quantity": 3},
+        {"allocation": "two_shares_at_signal_close"},
         {"market": "NXT_regular_separate"},
         {"entry": "best_bid"},
         {"stop_loss": "minus_2_ticks"},
