@@ -19,6 +19,7 @@ from typing import Any
 from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
+    POLICY_BOUNDS,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
@@ -572,20 +573,21 @@ def build_candidate(
             for item in current_windows.values()
         )
         alternatives: list[tuple[str, float, float]] = []
-        if float(current["rolling_high_drawdown_pct"]) < 1.50:
+        bounds = POLICY_BOUNDS[profile_id]
+        if float(current["rolling_high_drawdown_pct"]) < bounds["drawdown_max"]:
             alternatives.append(
                 (
                     "rolling_high_drawdown_pct",
-                    1.50,
+                    bounds["drawdown_max"],
                     float(current["rolling_low_proximity_pct"]),
                 )
             )
-        if float(current["rolling_low_proximity_pct"]) > 0.10:
+        if float(current["rolling_low_proximity_pct"]) > bounds["near_low_min"]:
             alternatives.append(
                 (
                     "rolling_low_proximity_pct",
                     float(current["rolling_high_drawdown_pct"]),
-                    0.10,
+                    bounds["near_low_min"],
                 )
             )
         evaluated_alternatives = []

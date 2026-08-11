@@ -39,6 +39,17 @@ def _baseline_policy(profile_id: str) -> dict[str, Any]:
 BASELINE_POLICIES = {
     profile_id: _baseline_policy(profile_id) for profile_id in PROFILES
 }
+POLICY_BOUNDS = {
+    profile_id: {
+        "drawdown_min": float(policy["rolling_high_drawdown_pct"]),
+        "drawdown_max": round(float(policy["rolling_high_drawdown_pct"]) + 0.25, 6),
+        "near_low_min": round(
+            max(0.05, float(policy["rolling_low_proximity_pct"]) - 0.10), 6
+        ),
+        "near_low_max": float(policy["rolling_low_proximity_pct"]),
+    }
+    for profile_id, policy in BASELINE_POLICIES.items()
+}
 
 
 def _canonical_hash(payload: Any) -> str:
@@ -123,9 +134,16 @@ def validate_profile_policy(profile_id: str, policy: Any) -> tuple[bool, str]:
             return False, f"immutable_{key}_mismatch"
     drawdown = _finite_number(policy.get("rolling_high_drawdown_pct"))
     near_low = _finite_number(policy.get("rolling_low_proximity_pct"))
-    if drawdown is None or not 1.25 <= drawdown <= 1.50:
+    bounds = POLICY_BOUNDS[profile_id]
+    if (
+        drawdown is None
+        or not bounds["drawdown_min"] <= drawdown <= bounds["drawdown_max"]
+    ):
         return False, "drawdown_outside_bounded_tightening"
-    if near_low is None or not 0.10 <= near_low <= 0.20:
+    if (
+        near_low is None
+        or not bounds["near_low_min"] <= near_low <= bounds["near_low_max"]
+    ):
         return False, "near_low_outside_bounded_tightening"
     return True, "valid"
 

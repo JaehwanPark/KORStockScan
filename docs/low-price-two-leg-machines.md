@@ -2,20 +2,20 @@
 
 ## Scope
 
-Five independent regular-session profiles implement the user-selected first
-three research priorities.  Every profile owns its process, lock, durable state,
+Three independent regular-session profiles implement the user-selected active
+scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
 | Profile | Symbol | Session | Scan bars |
 |---|---|---|---|
-| `samsung_heavy_midday` | 삼성중공업 `010140` | SOR regular | 13:15 through 13:54 |
+| `samsung_heavy_midday` | 삼성중공업 `010140` | SOR regular | 13:20 through 13:29 |
 | `samsung_heavy_afternoon` | 삼성중공업 `010140` | SOR regular | 14:00 through 14:40 |
-| `daewoo_ec_midday` | 대우건설 `047040` | SOR regular | 13:15 through 13:54 |
-| `daewoo_ec_afternoon` | 대우건설 `047040` | SOR regular | 14:00 through 14:40 |
-| `sk_eternix_midday` | SK이터닉스 `475150` | SOR regular | 13:15 through 13:54 |
+| `sk_eternix_midday` | SK이터닉스 `475150` | SOR regular | 13:30 through 13:54 |
 
-The baseline contract is a 30-completed-bar high-to-close drawdown of at least
-1.25% and close-to-window-low proximity of at most 0.20%.  One signal may create
+The 30-day calibration and 16-day untouched holdout selected independent entry
+contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
+near-low at most 0.35%; Samsung Heavy afternoon keeps 30 bars, 1.25%, and
+0.20%; SK Eternix midday uses 20 bars, 2.00%, and 0.75%. One signal may create
 exactly two independent one-share limit buys: one at the signal close and one at
 one tick below.  Entry orders remain valid for five subsequently completed
 one-minute bars.  Each confirmed fill owns one +2-tick limit target.  There is no
@@ -37,11 +37,12 @@ exact profile and date:
 - the endpoint is `https://api.kiwoom.com`, the route is SOR, and each order is
   exactly one share.
 
-The implementation does not add the three symbols to
-`data/config/manual_control_excluded_codes.txt`, install timers, or start a
-service by itself.  This prevents an unstarted profile from silently removing a
-symbol from primary-bot ownership.  Activation is a separate operator action
-after review and explicit exclusion confirmation:
+Activation adds only `010140` and `475150` to
+`data/config/manual_control_excluded_codes.txt` with the protected
+`manual_operator` marker, after the account inventory and unfinished-order
+checks are clear. This transfers those symbols from the primary bot to these
+independent profile ledgers. Timer installation remains a separate reviewed
+operator action:
 
 ```bash
 sudo deploy/install_low_price_two_leg_systemd.sh
@@ -65,10 +66,10 @@ After at least 20 completed legs cumulatively, at least three completed legs in
 each recent window, positive current and candidate EV, and no held/unresolved
 inventory, one profile may propose one tightening axis for the next PREOPEN:
 
-- drawdown `1.25 -> 1.50`, or
-- near-low proximity `0.20 -> 0.10`.
+- drawdown from the profile baseline to at most `baseline + 0.25%p`, or
+- near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all five profiles and the existing Samsung regular machines, at most one
+Across all three profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward.  Quantity, 50:50
@@ -76,6 +77,11 @@ legs, target ticks, entry validity, route, stop/hold
 behavior, provider, bot, cap, and broker guards are immutable.  Each preflight
 first materializes or reuses the exact-date applied policy and binds its hash to
 the profile authority artifact.
+
+The retired Daewoo E&C profiles are absent from the runtime allowlist, wrappers,
+and install timers. The installer also removes any legacy Daewoo timer files and
+stops their exact service instances without deleting state or held-position
+evidence.
 
 ## Official Kiwoom reference evidence
 

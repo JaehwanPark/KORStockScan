@@ -24,11 +24,11 @@ AUTHORITY_SCHEMA = "low_price_two_leg_authority_v1"
 RESEARCH_REPORT_PATH = (
     DATA_DIR
     / "report"
-    / "samsung_like_machine_candidate_scan_low_price"
-    / "samsung_like_machine_candidate_scan_2026-08-10.json"
+    / "low_price_two_leg_entry_spot_research"
+    / "low_price_two_leg_entry_spot_research_2026-08-10.json"
 )
 RESEARCH_REPORT_SHA256 = (
-    "4ec41693eb70c6cf3fd148d4104fac78c7278fc87e60b5ac9e16619d92fb504f"
+    "cff37627ad294efce6dbbe6e5a95f763aa5fbf75fb21164818d4430fd1061105"
 )
 
 
@@ -70,34 +70,49 @@ def validate_research_evidence(
         return False, f"research_report_unreadable:{type(exc).__name__}"
     if not isinstance(payload, dict):
         return False, "research_report_contract_invalid"
-    canonical_payload = dict(payload)
-    embedded_sha256 = str(canonical_payload.pop("report_sha256", ""))
     canonical_sha256 = hashlib.sha256(
-        json.dumps(canonical_payload, ensure_ascii=False, sort_keys=True).encode(
-            "utf-8"
-        )
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
     if (
-        payload.get("schema") != "samsung_like_machine_candidate_scan_v1"
+        payload.get("schema") != "low_price_two_leg_entry_spot_research_v1"
         or payload.get("start_date") != "2026-06-05"
         or payload.get("end_date") != "2026-08-10"
-        or embedded_sha256 != expected_sha256
         or canonical_sha256 != expected_sha256
         or payload.get("runtime_effect") is not False
+        or payload.get("allowed_runtime_apply") is not False
         or payload.get("actual_order_submitted") is not False
+        or payload.get("broker_order_forbidden") is not True
     ):
         return False, "research_report_provenance_invalid"
-    symbol = (payload.get("symbols") or {}).get(profile.symbol)
-    machine = (symbol or {}).get("machines", {}).get(profile.session)
-    if not isinstance(machine, dict):
+    source = (payload.get("source_meta") or {}).get(profile.symbol)
+    result = (payload.get("profiles") or {}).get(profile.profile_id)
+    if not isinstance(source, dict) or not isinstance(result, dict):
         return False, "research_profile_result_missing"
+    policy = profile.policy
+    expected_spot = {
+        "scan_start": policy.scan_start.strftime("%H:%M"),
+        "scan_end": policy.scan_last_bar.strftime("%H:%M"),
+        "lookback_bars": policy.lookback_bars,
+        "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
+        "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
+    }
+    holdout = (result.get("selected") or {}).get("holdout")
     if (
-        machine.get("source_quality_ready") is not True
-        or int(machine.get("coverage_days", 0) or 0) < 46
-        or int(machine.get("completed_legs", 0) or 0) < 10
-        or int(machine.get("held_legs", 0) or 0) != 0
-        or float(machine.get("notional_weighted_realized_ev_pct", 0.0) or 0.0) <= 0.0
-        or machine.get("status") != "implementation_candidate_source_only"
+        source.get("source_quality_status") != "PASS"
+        or int(source.get("trading_date_count", 0) or 0) != 46
+        or int(source.get("invalid_row_count", 0) or 0) != 0
+        or int(source.get("duplicate_row_count", 0) or 0) != 0
+        or result.get("recommended_spot") != expected_spot
+        or result.get("decision")
+        not in {
+            "holdout_pass_source_only_early_candidate",
+            "holdout_positive_not_better_keep_baseline",
+        }
+        or not isinstance(holdout, dict)
+        or int(holdout.get("signal_episodes", 0) or 0) < 3
+        or int(holdout.get("completed_legs", 0) or 0) < 4
+        or int(holdout.get("held_legs", 0) or 0) != 0
+        or float(holdout.get("notional_weighted_ev_pct", 0.0) or 0.0) <= 0.0
     ):
         return False, "research_profile_result_not_eligible"
     return True, "ready"
