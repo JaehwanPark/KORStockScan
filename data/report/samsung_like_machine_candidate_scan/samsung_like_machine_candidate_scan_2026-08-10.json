@@ -1,0 +1,865 @@
+{
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "cost_pct": 0.2,
+  "decision": "source_only_candidate_discovery_no_symbol_runtime_promotion",
+  "end_date": "2026-08-10",
+  "generated_at_kst": "2026-08-11T17:13:47+09:00",
+  "metric_contract": {
+    "decision_authority": "candidate_discovery_only_no_runtime_or_order_authority",
+    "forbidden_uses": [
+      "price_touch_as_actual_fill_evidence",
+      "same_bar_fill_then_target_sequence_assumption",
+      "real_order_submission_or_runtime_enablement",
+      "automatic_symbol_addition",
+      "threshold_provider_bot_cap_or_broker_guard_change",
+      "stop_loss_or_forced_exit_creation"
+    ],
+    "metric_role": "source_only_cross_symbol_machine_suitability_replay",
+    "primary_decision_metric": [
+      "completed_target_legs_per_attempted_leg",
+      "held_legs",
+      "notional_weighted_realized_ev_pct"
+    ],
+    "sample_floor": {
+      "completed_legs": 10,
+      "coverage_days": 20
+    },
+    "source_quality_gate": [
+      "official_ka10080_continuation_reaches_requested_start",
+      "valid_unique_completed_one_minute_ohlcv",
+      "sor_regular_not_split_into_krx_and_nxt_regular",
+      "nxt_used_only_for_premarket_morning_leg_and_its_owned_target"
+    ],
+    "window_policy": "clean_baseline_completed_1m_sor_and_nxt_sessions"
+  },
+  "ranking": [
+    {
+      "attempted_legs": 30,
+      "completed_legs": 25,
+      "completed_target_legs_per_attempted_leg": 0.833333,
+      "coverage_days": 46,
+      "held_legs": 0,
+      "machine": "midday",
+      "name": "현대차",
+      "no_fill_legs": 5,
+      "notional_weighted_realized_ev_pct": 0.052383,
+      "signal_episodes": 15,
+      "source_quality_ready": true,
+      "status": "implementation_candidate_source_only",
+      "symbol": "005380"
+    },
+    {
+      "attempted_legs": 92,
+      "completed_legs": 69,
+      "completed_target_legs_per_attempted_leg": 0.75,
+      "coverage_days": 46,
+      "held_legs": 4,
+      "machine": "morning",
+      "name": "NAVER",
+      "no_fill_legs": 19,
+      "notional_weighted_realized_ev_pct": 0.109701,
+      "signal_episodes": 46,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "035420"
+    },
+    {
+      "attempted_legs": 22,
+      "completed_legs": 16,
+      "completed_target_legs_per_attempted_leg": 0.727273,
+      "coverage_days": 46,
+      "held_legs": 3,
+      "machine": "midday",
+      "name": "NAVER",
+      "no_fill_legs": 3,
+      "notional_weighted_realized_ev_pct": 0.081738,
+      "signal_episodes": 11,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "035420"
+    },
+    {
+      "attempted_legs": 40,
+      "completed_legs": 34,
+      "completed_target_legs_per_attempted_leg": 0.85,
+      "coverage_days": 46,
+      "held_legs": 2,
+      "machine": "midday",
+      "name": "LG전자",
+      "no_fill_legs": 4,
+      "notional_weighted_realized_ev_pct": 0.08,
+      "signal_episodes": 20,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "066570"
+    },
+    {
+      "attempted_legs": 22,
+      "completed_legs": 17,
+      "completed_target_legs_per_attempted_leg": 0.772727,
+      "coverage_days": 46,
+      "held_legs": 1,
+      "machine": "afternoon",
+      "name": "NAVER",
+      "no_fill_legs": 4,
+      "notional_weighted_realized_ev_pct": 0.066769,
+      "signal_episodes": 11,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "035420"
+    },
+    {
+      "attempted_legs": 92,
+      "completed_legs": 73,
+      "completed_target_legs_per_attempted_leg": 0.793478,
+      "coverage_days": 46,
+      "held_legs": 8,
+      "machine": "morning",
+      "name": "현대차",
+      "no_fill_legs": 11,
+      "notional_weighted_realized_ev_pct": 0.058118,
+      "signal_episodes": 46,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "005380"
+    },
+    {
+      "attempted_legs": 34,
+      "completed_legs": 27,
+      "completed_target_legs_per_attempted_leg": 0.794118,
+      "coverage_days": 46,
+      "held_legs": 5,
+      "machine": "afternoon",
+      "name": "현대차",
+      "no_fill_legs": 2,
+      "notional_weighted_realized_ev_pct": 0.053666,
+      "signal_episodes": 17,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "005380"
+    },
+    {
+      "attempted_legs": 92,
+      "completed_legs": 71,
+      "completed_target_legs_per_attempted_leg": 0.771739,
+      "coverage_days": 46,
+      "held_legs": 10,
+      "machine": "morning",
+      "name": "LG전자",
+      "no_fill_legs": 11,
+      "notional_weighted_realized_ev_pct": 0.048951,
+      "signal_episodes": 46,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "066570"
+    },
+    {
+      "attempted_legs": 52,
+      "completed_legs": 37,
+      "completed_target_legs_per_attempted_leg": 0.711538,
+      "coverage_days": 46,
+      "held_legs": 6,
+      "machine": "afternoon",
+      "name": "LG전자",
+      "no_fill_legs": 9,
+      "notional_weighted_realized_ev_pct": 0.039977,
+      "signal_episodes": 26,
+      "source_quality_ready": true,
+      "status": "research_candidate_has_unresolved_hold_proxy",
+      "symbol": "066570"
+    },
+    {
+      "attempted_legs": 52,
+      "completed_legs": 50,
+      "completed_target_legs_per_attempted_leg": 0.961538,
+      "coverage_days": 46,
+      "held_legs": 0,
+      "machine": "midday",
+      "name": "SK스퀘어",
+      "no_fill_legs": 2,
+      "notional_weighted_realized_ev_pct": -0.036328,
+      "signal_episodes": 26,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "402340"
+    },
+    {
+      "attempted_legs": 48,
+      "completed_legs": 47,
+      "completed_target_legs_per_attempted_leg": 0.979167,
+      "coverage_days": 46,
+      "held_legs": 0,
+      "machine": "afternoon",
+      "name": "SK스퀘어",
+      "no_fill_legs": 1,
+      "notional_weighted_realized_ev_pct": -0.04976,
+      "signal_episodes": 24,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "402340"
+    },
+    {
+      "attempted_legs": 56,
+      "completed_legs": 53,
+      "completed_target_legs_per_attempted_leg": 0.946429,
+      "coverage_days": 46,
+      "held_legs": 0,
+      "machine": "midday",
+      "name": "삼성전기",
+      "no_fill_legs": 3,
+      "notional_weighted_realized_ev_pct": -0.072889,
+      "signal_episodes": 28,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "009150"
+    },
+    {
+      "attempted_legs": 58,
+      "completed_legs": 56,
+      "completed_target_legs_per_attempted_leg": 0.965517,
+      "coverage_days": 46,
+      "held_legs": 0,
+      "machine": "midday",
+      "name": "SK하이닉스",
+      "no_fill_legs": 2,
+      "notional_weighted_realized_ev_pct": -0.098997,
+      "signal_episodes": 29,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "000660"
+    },
+    {
+      "attempted_legs": 92,
+      "completed_legs": 67,
+      "completed_target_legs_per_attempted_leg": 0.728261,
+      "coverage_days": 46,
+      "held_legs": 13,
+      "machine": "morning",
+      "name": "SK스퀘어",
+      "no_fill_legs": 12,
+      "notional_weighted_realized_ev_pct": -0.037539,
+      "signal_episodes": 46,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "402340"
+    },
+    {
+      "attempted_legs": 92,
+      "completed_legs": 68,
+      "completed_target_legs_per_attempted_leg": 0.73913,
+      "coverage_days": 46,
+      "held_legs": 16,
+      "machine": "morning",
+      "name": "삼성전기",
+      "no_fill_legs": 8,
+      "notional_weighted_realized_ev_pct": -0.055397,
+      "signal_episodes": 46,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "009150"
+    },
+    {
+      "attempted_legs": 56,
+      "completed_legs": 51,
+      "completed_target_legs_per_attempted_leg": 0.910714,
+      "coverage_days": 46,
+      "held_legs": 4,
+      "machine": "afternoon",
+      "name": "삼성전기",
+      "no_fill_legs": 1,
+      "notional_weighted_realized_ev_pct": -0.065803,
+      "signal_episodes": 28,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "009150"
+    },
+    {
+      "attempted_legs": 92,
+      "completed_legs": 75,
+      "completed_target_legs_per_attempted_leg": 0.815217,
+      "coverage_days": 46,
+      "held_legs": 2,
+      "machine": "morning",
+      "name": "SK하이닉스",
+      "no_fill_legs": 15,
+      "notional_weighted_realized_ev_pct": -0.082762,
+      "signal_episodes": 46,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "000660"
+    },
+    {
+      "attempted_legs": 52,
+      "completed_legs": 47,
+      "completed_target_legs_per_attempted_leg": 0.903846,
+      "coverage_days": 46,
+      "held_legs": 5,
+      "machine": "afternoon",
+      "name": "SK하이닉스",
+      "no_fill_legs": 0,
+      "notional_weighted_realized_ev_pct": -0.091589,
+      "signal_episodes": 26,
+      "source_quality_ready": true,
+      "status": "reject_non_positive_realized_ev_proxy",
+      "symbol": "000660"
+    }
+  ],
+  "runtime_effect": false,
+  "schema": "samsung_like_machine_candidate_scan_v1",
+  "start_date": "2026-06-05",
+  "symbols": {
+    "000660": {
+      "machines": {
+        "afternoon": {
+          "attempted_legs": 52,
+          "completed_legs": 47,
+          "completed_target_legs_per_attempted_leg": 0.903846,
+          "coverage_days": 46,
+          "held_legs": 5,
+          "no_fill_legs": 0,
+          "notional_weighted_realized_ev_pct": -0.091589,
+          "signal_episodes": 26,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        },
+        "midday": {
+          "attempted_legs": 58,
+          "completed_legs": 56,
+          "completed_target_legs_per_attempted_leg": 0.965517,
+          "coverage_days": 46,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_realized_ev_pct": -0.098997,
+          "signal_episodes": 29,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        },
+        "morning": {
+          "attempted_legs": 92,
+          "completed_legs": 75,
+          "completed_target_legs_per_attempted_leg": 0.815217,
+          "coverage_days": 46,
+          "held_legs": 2,
+          "no_fill_legs": 15,
+          "notional_weighted_realized_ev_pct": -0.082762,
+          "signal_episodes": 46,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        }
+      },
+      "name": "SK하이닉스",
+      "source_meta": {
+        "NXT": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 31528,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 49,
+          "page_count": 36,
+          "request_code": "000660_NX",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "NXT"
+        },
+        "SOR": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 17277,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 15062,
+          "page_count": 37,
+          "request_code": "000660_AL",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "SOR"
+        },
+        "official_reference": {
+          "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+          "inspected_paths": [
+            "kiwoom_docs/차트.md",
+            "kiwoom/_data/kiwoom_api_spec.json",
+            "kiwoom/specs.py",
+            "kiwoom/core/client.py",
+            "postman/kiwoom-openapi.postman_collection.json"
+          ],
+          "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+          "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+          "retrieved_at_kst": "2026-08-11T10:10:15+09:00"
+        }
+      }
+    },
+    "005380": {
+      "machines": {
+        "afternoon": {
+          "attempted_legs": 34,
+          "completed_legs": 27,
+          "completed_target_legs_per_attempted_leg": 0.794118,
+          "coverage_days": 46,
+          "held_legs": 5,
+          "no_fill_legs": 2,
+          "notional_weighted_realized_ev_pct": 0.053666,
+          "signal_episodes": 17,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        },
+        "midday": {
+          "attempted_legs": 30,
+          "completed_legs": 25,
+          "completed_target_legs_per_attempted_leg": 0.833333,
+          "coverage_days": 46,
+          "held_legs": 0,
+          "no_fill_legs": 5,
+          "notional_weighted_realized_ev_pct": 0.052383,
+          "signal_episodes": 15,
+          "source_quality_ready": true,
+          "status": "implementation_candidate_source_only"
+        },
+        "morning": {
+          "attempted_legs": 92,
+          "completed_legs": 73,
+          "completed_target_legs_per_attempted_leg": 0.793478,
+          "coverage_days": 46,
+          "held_legs": 8,
+          "no_fill_legs": 11,
+          "notional_weighted_realized_ev_pct": 0.058118,
+          "signal_episodes": 46,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        }
+      },
+      "name": "현대차",
+      "source_meta": {
+        "NXT": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 31534,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 43,
+          "page_count": 36,
+          "request_code": "005380_NX",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "NXT"
+        },
+        "SOR": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 17277,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 15067,
+          "page_count": 37,
+          "request_code": "005380_AL",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "SOR"
+        },
+        "official_reference": {
+          "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+          "inspected_paths": [
+            "kiwoom_docs/차트.md",
+            "kiwoom/_data/kiwoom_api_spec.json",
+            "kiwoom/specs.py",
+            "kiwoom/core/client.py",
+            "postman/kiwoom-openapi.postman_collection.json"
+          ],
+          "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+          "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+          "retrieved_at_kst": "2026-08-11T10:10:15+09:00"
+        }
+      }
+    },
+    "009150": {
+      "machines": {
+        "afternoon": {
+          "attempted_legs": 56,
+          "completed_legs": 51,
+          "completed_target_legs_per_attempted_leg": 0.910714,
+          "coverage_days": 46,
+          "held_legs": 4,
+          "no_fill_legs": 1,
+          "notional_weighted_realized_ev_pct": -0.065803,
+          "signal_episodes": 28,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        },
+        "midday": {
+          "attempted_legs": 56,
+          "completed_legs": 53,
+          "completed_target_legs_per_attempted_leg": 0.946429,
+          "coverage_days": 46,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_realized_ev_pct": -0.072889,
+          "signal_episodes": 28,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        },
+        "morning": {
+          "attempted_legs": 92,
+          "completed_legs": 68,
+          "completed_target_legs_per_attempted_leg": 0.73913,
+          "coverage_days": 46,
+          "held_legs": 16,
+          "no_fill_legs": 8,
+          "notional_weighted_realized_ev_pct": -0.055397,
+          "signal_episodes": 46,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        }
+      },
+      "name": "삼성전기",
+      "source_meta": {
+        "NXT": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 31513,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 47,
+          "page_count": 36,
+          "request_code": "009150_NX",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "NXT"
+        },
+        "SOR": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 17277,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 14734,
+          "page_count": 36,
+          "request_code": "009150_AL",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "SOR"
+        },
+        "official_reference": {
+          "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+          "inspected_paths": [
+            "kiwoom_docs/차트.md",
+            "kiwoom/_data/kiwoom_api_spec.json",
+            "kiwoom/specs.py",
+            "kiwoom/core/client.py",
+            "postman/kiwoom-openapi.postman_collection.json"
+          ],
+          "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+          "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+          "retrieved_at_kst": "2026-08-11T10:10:15+09:00"
+        }
+      }
+    },
+    "035420": {
+      "machines": {
+        "afternoon": {
+          "attempted_legs": 22,
+          "completed_legs": 17,
+          "completed_target_legs_per_attempted_leg": 0.772727,
+          "coverage_days": 46,
+          "held_legs": 1,
+          "no_fill_legs": 4,
+          "notional_weighted_realized_ev_pct": 0.066769,
+          "signal_episodes": 11,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        },
+        "midday": {
+          "attempted_legs": 22,
+          "completed_legs": 16,
+          "completed_target_legs_per_attempted_leg": 0.727273,
+          "coverage_days": 46,
+          "held_legs": 3,
+          "no_fill_legs": 3,
+          "notional_weighted_realized_ev_pct": 0.081738,
+          "signal_episodes": 11,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        },
+        "morning": {
+          "attempted_legs": 92,
+          "completed_legs": 69,
+          "completed_target_legs_per_attempted_leg": 0.75,
+          "coverage_days": 46,
+          "held_legs": 4,
+          "no_fill_legs": 19,
+          "notional_weighted_realized_ev_pct": 0.109701,
+          "signal_episodes": 46,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        }
+      },
+      "name": "NAVER",
+      "source_meta": {
+        "NXT": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 31510,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 39,
+          "page_count": 36,
+          "request_code": "035420_NX",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "NXT"
+        },
+        "SOR": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 17277,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 14732,
+          "page_count": 36,
+          "request_code": "035420_AL",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "SOR"
+        },
+        "official_reference": {
+          "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+          "inspected_paths": [
+            "kiwoom_docs/차트.md",
+            "kiwoom/_data/kiwoom_api_spec.json",
+            "kiwoom/specs.py",
+            "kiwoom/core/client.py",
+            "postman/kiwoom-openapi.postman_collection.json"
+          ],
+          "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+          "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+          "retrieved_at_kst": "2026-08-11T10:10:15+09:00"
+        }
+      }
+    },
+    "066570": {
+      "machines": {
+        "afternoon": {
+          "attempted_legs": 52,
+          "completed_legs": 37,
+          "completed_target_legs_per_attempted_leg": 0.711538,
+          "coverage_days": 46,
+          "held_legs": 6,
+          "no_fill_legs": 9,
+          "notional_weighted_realized_ev_pct": 0.039977,
+          "signal_episodes": 26,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        },
+        "midday": {
+          "attempted_legs": 40,
+          "completed_legs": 34,
+          "completed_target_legs_per_attempted_leg": 0.85,
+          "coverage_days": 46,
+          "held_legs": 2,
+          "no_fill_legs": 4,
+          "notional_weighted_realized_ev_pct": 0.08,
+          "signal_episodes": 20,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        },
+        "morning": {
+          "attempted_legs": 92,
+          "completed_legs": 71,
+          "completed_target_legs_per_attempted_leg": 0.771739,
+          "coverage_days": 46,
+          "held_legs": 10,
+          "no_fill_legs": 11,
+          "notional_weighted_realized_ev_pct": 0.048951,
+          "signal_episodes": 46,
+          "source_quality_ready": true,
+          "status": "research_candidate_has_unresolved_hold_proxy"
+        }
+      },
+      "name": "LG전자",
+      "source_meta": {
+        "NXT": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 31521,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 44,
+          "page_count": 36,
+          "request_code": "066570_NX",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "NXT"
+        },
+        "SOR": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 17277,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 15053,
+          "page_count": 37,
+          "request_code": "066570_AL",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "SOR"
+        },
+        "official_reference": {
+          "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+          "inspected_paths": [
+            "kiwoom_docs/차트.md",
+            "kiwoom/_data/kiwoom_api_spec.json",
+            "kiwoom/specs.py",
+            "kiwoom/core/client.py",
+            "postman/kiwoom-openapi.postman_collection.json"
+          ],
+          "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+          "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+          "retrieved_at_kst": "2026-08-11T10:10:15+09:00"
+        }
+      }
+    },
+    "402340": {
+      "machines": {
+        "afternoon": {
+          "attempted_legs": 48,
+          "completed_legs": 47,
+          "completed_target_legs_per_attempted_leg": 0.979167,
+          "coverage_days": 46,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_realized_ev_pct": -0.04976,
+          "signal_episodes": 24,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        },
+        "midday": {
+          "attempted_legs": 52,
+          "completed_legs": 50,
+          "completed_target_legs_per_attempted_leg": 0.961538,
+          "coverage_days": 46,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_realized_ev_pct": -0.036328,
+          "signal_episodes": 26,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        },
+        "morning": {
+          "attempted_legs": 92,
+          "completed_legs": 67,
+          "completed_target_legs_per_attempted_leg": 0.728261,
+          "coverage_days": 46,
+          "held_legs": 13,
+          "no_fill_legs": 12,
+          "notional_weighted_realized_ev_pct": -0.037539,
+          "signal_episodes": 46,
+          "source_quality_ready": true,
+          "status": "reject_non_positive_realized_ev_proxy"
+        }
+      },
+      "name": "SK스퀘어",
+      "source_meta": {
+        "NXT": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 31514,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 42,
+          "page_count": 36,
+          "request_code": "402340_NX",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "NXT"
+        },
+        "SOR": {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 17277,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 14737,
+          "page_count": 36,
+          "request_code": "402340_AL",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "SOR"
+        },
+        "official_reference": {
+          "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+          "inspected_paths": [
+            "kiwoom_docs/차트.md",
+            "kiwoom/_data/kiwoom_api_spec.json",
+            "kiwoom/specs.py",
+            "kiwoom/core/client.py",
+            "postman/kiwoom-openapi.postman_collection.json"
+          ],
+          "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+          "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+          "retrieved_at_kst": "2026-08-11T10:10:15+09:00"
+        }
+      }
+    }
+  }
+}

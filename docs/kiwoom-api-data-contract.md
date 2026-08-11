@@ -633,8 +633,10 @@ are confirmed and the local producer-to-consumer contract is reviewed.
 ## ka10080 and ka10081
 
 - `ka10080` is implemented through `/api/dostk/chart` with `api-id=ka10080`.
-  The current minute-candle request payload is `stk_cd`, `tic_scope=1`,
-  `upd_stkpc_tp=1`, and same-day `base_dt`.
+  The official request payload is `stk_cd`, `tic_scope=1`, and
+  `upd_stkpc_tp=1`. The existing runtime helper also sends same-day `base_dt`
+  as a locally observed extension; consumers must not assume that extension is
+  portable or use it as historical-range authority.
 - Continuation is controlled by response `cont-yn` and `next-key`.
 - Client code must sort final merged rows oldest to latest:
   - `ka10080`: by `cntr_tm`.
@@ -663,6 +665,36 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   - `get_minute_candles_ka10080_with_meta` returns `(candles, meta)`.
   - `get_daily_ohlcv_ka10081_df` returns a DataFrame with
     `df.attrs["kiwoom_source_meta"]`.
+
+### 2026-08-11 Pure-market reversal backfill gate
+
+- Rechecked at `2026-08-11T10:10:15+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/차트.md`, `kiwoom/_data/kiwoom_api_spec.json`,
+  `kiwoom/specs.py`, `kiwoom/core/client.py`, and
+  `postman/kiwoom-openapi.postman_collection.json` for `ka10080` path, headers,
+  request/response fields, continuation, and venue suffix handling.
+- `pure_market_kiwoom_backfill` therefore sends only the three documented
+  request fields and uses `005930` for KRX and `005930_NX` for NXT. It follows
+  `cont-yn`/`next-key`, keeps `cntr_tm` as the source bar timestamp, and rejects
+  malformed OHLCV or out-of-session rows without filling gaps. Expected
+  out-of-session exclusions and malformed source rows are counted separately;
+  only the latter degrades source quality. Continuation must reach a date older
+  than the requested start date before the start boundary is complete; merely
+  seeing one row on the start date is not sufficient.
+- The producer may read only an already-valid shared cached token. Any missing
+  token, HTTP/API error including authentication rejection, or malformed
+  continuation fails closed without token issuance, refresh, invalidation, or
+  replacement. It has no account, order, quantity, runtime, provider, or bot
+  authority.
+- The same read-only producer uses official `ka20005` at
+  `POST /api/dostk/chart` for KOSPI minute context with `inds_cd=001` and
+  `tic_scope=1`, parses `inds_min_pole_qry`, and follows the same
+  `cont-yn`/`next-key` continuation contract. Index prices are preserved in
+  their raw x100 representation; only dimensionless returns are compared with
+  Samsung returns. Context joins require the exact `cntr_tm` timestamp, and a
+  missing timestamp is kept missing rather than substituted with a neighboring
+  index bar.
 
 ## String And Sign Parsing
 
