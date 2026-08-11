@@ -113,6 +113,18 @@
   - 금지: source-only decision을 standalone live promotion, PREOPEN env mutation, hard/protect/emergency 우회, provider/bot/cap/quantity 변경 근거로 사용하지 않는다. `source_only_bounded_review_ready`는 동일 holding/exit stage 단일 bounded-canary 설계 검토만 열 수 있다.
   - 다음 액션: `source_quality_blocked`, `hold_sample`, `hold_outcome`, `hold_direction_conflict`, `hold_no_edge`, `source_only_bounded_review_ready` 중 하나로 닫는다.
 
+- [x] `[SamsungMorningOneShareMachineImplementation0811] 삼성전자 오전 1주 독립 상태기계와 추가 1개월 분석 구현·리뷰` (`Due: 2026-08-11`, `Slot: INTRADAY`, `TimeWindow: 09:30~11:30`, `Track: ScalpingLogic`)
+  - Source: [samsung-morning-one-share-machine.md](/home/ubuntu/KORStockScan/docs/samsung-morning-one-share-machine.md), [machine.py](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/machine.py), [gateway.py](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/gateway.py), [test_samsung_morning_one_share.py](/home/ubuntu/KORStockScan/src/tests/test_samsung_morning_one_share.py)
+  - 완료 결과 (`2026-08-11`): 기존 entry/holding/exit/ADM/LDM/AI/수량결정과 분리한 `005930` 1주 전용 NXT-first/KRX-fallback 상태기계를 추가했다. 2026-05-06~08-10 공통 완전일 64일 중 고정 정책 진입 49일·+2호가 12분 내 도달 49일이며, clean baseline 44일은 진입 35·도달 35, archive-only 추가월 20일은 진입 14·도달 14다. pre-baseline은 archive/audit로만 유지한다.
+  - 안전/권한: 기본 OFF, env+CLI 확인문구+production endpoint+명시적 manual-operator exclusion+당일 PREOPEN authority가 모두 있어야 broker write가 가능하다. 전일 전용기계 미해결 주문/보유, 수량·응답 계약 이상, write 중단·모호 응답은 fail-closed다. 모든 주문은 1주로 하드코딩했다. widget 자동매매와 전용기계는 서로의 주문을 차단하거나 청산하지 않고 각자 broker 주문번호·체결수량만 소유한다.
+  - 리뷰/검증: write-ahead 중복주문 방지, 독립 전략 장부 경계, 라이브 `--once`/임의 state 경로 금지, 당일 authority gate를 보완했다. 전용 pytest=`23 passed`, 수동제외·기존 widget 회귀 포함 pytest=`79 passed`, checklist parser pytest=`58 passed`, Ruff/Black/compile/systemd/shell/`git diff --check`=`pass`다. 최종 재리뷰 미해결 finding=`0`이다.
+
+- [ ] `[SamsungMorningOneShareLiveStart0812] 삼성전자 오전 1주 독립 기계 최초 실운용·귀속 확인` (`Due: 2026-08-12`, `Slot: PREOPEN`, `TimeWindow: 07:55~09:35`, `Track: ScalpingLogic`)
+  - Source: [samsung-morning-one-share-machine.md](/home/ubuntu/KORStockScan/docs/samsung-morning-one-share-machine.md), [preflight.py](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/preflight.py), [service.py](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/service.py)
+  - 판정 기준: 07:57 PREOPEN authority가 당일 메인 봇·공유토큰·manual-operator exclusion을 PASS하고 07:59 전용 서비스가 시작되는지 확인한다. 기존 widget과 전용기계가 모두 독립 활성 상태이며, 각자 생성한 주문번호·체결수량만 취소·매도하는지 최초 episode attribution으로 확인한다. NXT 08:00·KRX 09:00 시가, -3.0%/-0.75% 진입가, NXT 우선/KRX fallback, +2호가 및 12분 종료도 함께 검증한다.
+  - 금지: 한 전략의 삼성전자 총보유수량·주문을 다른 전략의 장부로 간주하거나 상대 주문을 취소·청산하지 않는다. widget 중지·삼성 제외·재기동, 1주 상한 완화, threshold/provider/cap/hard-safety 변경을 열지 않는다.
+  - 다음 액션: `parallel_independent_episode_pass`, `no_entry_condition`, `opening_source_missing`, `preflight_authority_blocked`, `independent_ledger_breach_disable_one_share_only`, `state_or_lock_failure` 중 하나로 닫는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 
