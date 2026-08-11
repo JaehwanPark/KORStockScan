@@ -16,6 +16,12 @@ from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
 CANDIDATE_SCHEMA = "samsung_machine_entry_policy_candidate_v1"
+SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
+    {
+        "samsung_machine_entry_tuning_report_v2",
+        "samsung_machine_entry_tuning_report_v3",
+    }
+)
 APPLIED_SCHEMA = "samsung_machine_entry_policy_applied_v1"
 CANDIDATE_DIR = (
     DATA_DIR / "threshold_cycle" / "samsung_machine_entry_policy" / "candidates"
@@ -162,8 +168,7 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
         return False, "candidate_clean_baseline_invalid"
     if (
         payload.get("source_report") != "samsung_machine_entry_tuning"
-        or payload.get("source_report_schema")
-        != "samsung_machine_entry_tuning_report_v2"
+        or payload.get("source_report_schema") not in SUPPORTED_SOURCE_REPORT_SCHEMAS
     ):
         return False, "candidate_source_report_contract_invalid"
     if payload.get("decision_authority") != "postclose_bounded_candidate_only":

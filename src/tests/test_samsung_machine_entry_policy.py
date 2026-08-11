@@ -93,6 +93,15 @@ def test_candidate_rejects_more_than_one_same_stage_policy_axis():
     )
 
 
+def test_candidate_accepts_current_and_legacy_tuning_report_schemas():
+    legacy = _candidate("2026-08-11")
+    assert validate_candidate(legacy) == (True, "valid")
+
+    current = _candidate("2026-08-11")
+    current["source_report_schema"] = "samsung_machine_entry_tuning_report_v3"
+    assert validate_candidate(current) == (True, "valid")
+
+
 def test_missing_candidate_writes_valid_exact_date_baseline(tmp_path: Path):
     target = date(2026, 8, 12)
     payload, status = build_applied_policy(

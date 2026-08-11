@@ -13,7 +13,7 @@ import math
 import os
 import tempfile
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -27,14 +27,18 @@ from src.trading.order.samsung_entry_policy import (
     policy_hash,
     validate_candidate,
 )
+from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "samsung_machine_entry_tuning"
-REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v2"
+REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v3"
+SUPPORTED_REPORT_SCHEMAS = frozenset(
+    {"samsung_machine_entry_tuning_report_v2", REPORT_SCHEMA}
+)
 CLEAN_BASELINE_DATE = date.fromisoformat("2026-06-05")
+CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 SAMPLE_FLOOR = 20
 AUTO_MIN_COMPLETED_LEGS = 20
-AUTO_MIN_RECENT_COMPLETED_LEGS = 3
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 MACHINE_FILES = {
     "morning": "samsung_morning_one_share_state.json",
@@ -69,8 +73,13 @@ KNOWN_LEG_STATUSES = {
 METRIC_CONTRACT = {
     "metric_role": "samsung_machine_entry_tuning_observation",
     "decision_authority": "report_only_independent_machine_entry_tuning",
-    "window_policy": "daily_and_last_10_or_20_report_days_and_clean_baseline_cumulative",
-    "sample_floor": SAMPLE_FLOOR,
+    "window_policy": (
+        "daily_and_all_available_actual_observations_since_clean_baseline"
+    ),
+    "sample_floor": {
+        "clean_baseline_cumulative_completed_signal_episodes": SAMPLE_FLOOR,
+        "clean_baseline_cumulative_completed_legs": AUTO_MIN_COMPLETED_LEGS,
+    },
     "primary_decision_metric": [
         "completed_signal_episodes",
         "completed_legs_per_attempted_leg",
@@ -83,6 +92,9 @@ METRIC_CONTRACT = {
         "two_one_share_legs_have_exact_terminal_or_open_status",
         "held_or_unresolved_inventory_blocks_candidate_readiness",
         "observation_source_quality_audit_tuning_input_allowed",
+        "target_date_krx_trading_day_for_candidate",
+        "prebaseline_and_nontrading_reports_excluded",
+        "historical_replay_not_mixed_with_actual_outcomes",
     ],
     "forbidden_uses": [
         "direct_or_same_day_runtime_or_threshold_mutation",
@@ -95,6 +107,18 @@ METRIC_CONTRACT = {
         "real_runtime_approval",
     ],
 }
+
+
+def _clean_trading_dates_through(target_date: date) -> tuple[date, ...]:
+    if target_date < CLEAN_BASELINE_DATE:
+        raise ValueError("target_date_precedes_clean_tuning_baseline")
+    selected: list[date] = []
+    current = CLEAN_BASELINE_DATE
+    while current <= target_date:
+        if is_krx_trading_day(current):
+            selected.append(current)
+        current += timedelta(days=1)
+    return tuple(selected)
 
 
 def _as_int(value: Any) -> int:
@@ -675,26 +699,23 @@ def build_policy_candidate(
             }
             starting_policies[machine] = dict(baseline)
             continue
-        window_axes = {
-            window: {
-                item["axis"]: item
-                for item in report["windows"][window][machine][
-                    "entry_axis_observations"
-                ]
-            }
-            for window in ("rolling10", "rolling20", "cumulative")
+        clean_window_axes = {
+            item["axis"]: item
+            for item in report["windows"][CLEAN_WINDOW_NAME][machine][
+                "entry_axis_observations"
+            ]
         }
         current_policy = dict((prior_policies or {}).get(machine, baseline))
-        cumulative_axes = window_axes["cumulative"]
         starting_policies[machine] = dict(current_policy)
         eligible: list[tuple[float, str, dict[str, Any]]] = []
         machine_gate_ready = (
-            report["operator_review_gate"][machine]["status"]
+            report.get("target_date_is_krx_trading_day") is True
+            and report["operator_review_gate"][machine]["status"]
             == "operator_review_candidate"
             and report.get("source_quality_preflight", {}).get("tuning_input_allowed")
             is True
         )
-        axis_items = cumulative_axes.items() if machine_gate_ready else ()
+        axis_items = clean_window_axes.items() if machine_gate_ready else ()
         for axis, item in axis_items:
             outcome = item["outcome"]
             resulting_policy = item["resulting_policy"]
@@ -714,26 +735,9 @@ def build_policy_candidate(
             ]
             if len(changed_axes) > 1:
                 continue
-            rolling10 = window_axes["rolling10"].get(axis, {}).get("outcome", {})
-            rolling20 = window_axes["rolling20"].get(axis, {}).get("outcome", {})
             if outcome.get("candidate_status") != "operator_review_candidate":
                 continue
             if outcome.get("completed_legs", 0) < AUTO_MIN_COMPLETED_LEGS:
-                continue
-            recent_evs = [
-                rolling10.get("notional_weighted_ev_pct"),
-                rolling20.get("notional_weighted_ev_pct"),
-            ]
-            if any(value is None or float(value) <= 0 for value in recent_evs):
-                continue
-            if any(
-                window_axes[window]
-                .get(axis, {})
-                .get("outcome", {})
-                .get("completed_legs", 0)
-                < AUTO_MIN_RECENT_COMPLETED_LEGS
-                for window in ("rolling10", "rolling20")
-            ):
                 continue
             ev = outcome.get("notional_weighted_ev_pct")
             if ev is not None and float(ev) > 0:
@@ -753,9 +757,7 @@ def build_policy_candidate(
                 else "bounded_tightening_selected"
             )
             evidence = {
-                "cumulative": selected["outcome"],
-                "rolling10": window_axes["rolling10"][selected_axis]["outcome"],
-                "rolling20": window_axes["rolling20"][selected_axis]["outcome"],
+                CLEAN_WINDOW_NAME: selected["outcome"],
             }
         else:
             selection_ev = None
@@ -877,6 +879,8 @@ def _load_prior_daily_rows(
             continue
         if not CLEAN_BASELINE_DATE <= report_date < target_date:
             continue
+        if not is_krx_trading_day(report_date):
+            continue
         payload = _read_json(path)
         if not payload:
             by_date[filename_date] = {
@@ -894,7 +898,7 @@ def _load_prior_daily_rows(
             payload_cost = -1.0
         if (
             payload.get("report_type") != REPORT_TYPE
-            or payload.get("schema") != REPORT_SCHEMA
+            or payload.get("schema") not in SUPPORTED_REPORT_SCHEMAS
             or payload_date != report_date
             or abs(payload_cost - cost_pct) > 1e-9
         ):
@@ -936,8 +940,8 @@ def build_report(
     source_quality_dir: Path = SOURCE_QUALITY_DIR,
 ) -> dict[str, Any]:
     parsed_date = date.fromisoformat(target_date)
-    if parsed_date < CLEAN_BASELINE_DATE:
-        raise ValueError("target_date_precedes_clean_tuning_baseline")
+    expected_clean_dates = _clean_trading_dates_through(parsed_date)
+    target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
         raise ValueError("cost_pct_must_be_finite_percentage")
     daily_machines = {
@@ -961,55 +965,42 @@ def build_report(
                 reasons.append("observation_source_quality_audit_blocked")
             row["source_quality_reasons"] = reasons
     history = _load_prior_daily_rows(output_dir, parsed_date, cost_pct)
-    history[target_date] = daily_machines
+    if target_date_is_trading:
+        history[target_date] = daily_machines
     ordered_dates = sorted(history)
-    windows: dict[str, dict[str, Any]] = {}
-    for window_name, selected_dates in {
-        "rolling10": ordered_dates[-10:],
-        "rolling20": ordered_dates[-20:],
-        "cumulative": ordered_dates,
-    }.items():
-        windows[window_name] = {}
-        for machine in MACHINE_FILES:
-            rows = [history[day].get(machine) for day in selected_dates]
-            clean_rows = [row for row in rows if isinstance(row, dict)]
-            windows[window_name][machine] = {
-                "summary": _aggregate_rows(clean_rows),
-                "entry_axis_observations": _axis_observations(clean_rows, machine),
-            }
+    observed_date_set = {date.fromisoformat(item) for item in ordered_dates}
+    unobserved_dates = [
+        item.isoformat()
+        for item in expected_clean_dates
+        if item not in observed_date_set
+    ]
+    windows: dict[str, dict[str, Any]] = {CLEAN_WINDOW_NAME: {}}
+    for machine in MACHINE_FILES:
+        rows = [history[day].get(machine) for day in ordered_dates]
+        clean_rows = [row for row in rows if isinstance(row, dict)]
+        windows[CLEAN_WINDOW_NAME][machine] = {
+            "summary": _aggregate_rows(clean_rows),
+            "entry_axis_observations": _axis_observations(clean_rows, machine),
+        }
     review_gate: dict[str, dict[str, Any]] = {}
     for machine in MACHINE_FILES:
-        cumulative = windows["cumulative"][machine]["summary"]
-        rolling10 = windows["rolling10"][machine]["summary"]
-        rolling20 = windows["rolling20"][machine]["summary"]
-        status = str(cumulative["candidate_status"])
+        clean_cumulative = windows[CLEAN_WINDOW_NAME][machine]["summary"]
+        status = str(clean_cumulative["candidate_status"])
         if (
             not source_quality_preflight["tuning_input_allowed"]
             or daily_machines[machine].get("source_quality") != "pass"
         ):
             status = "source_quality_blocked"
-        if status == "operator_review_candidate":
-            recent_evs = [
-                rolling10.get("equal_weight_avg_profit_pct"),
-                rolling20.get("equal_weight_avg_profit_pct"),
-            ]
-            if any(value is None for value in recent_evs):
-                status = "collect_recent_window_outcomes"
-            elif any(float(value) <= 0 for value in recent_evs):
-                status = "hold_recent_window_direction_conflict"
         review_gate[machine] = {
             "status": status,
-            "cumulative_completed_signal_episodes": cumulative[
+            "clean_baseline_completed_signal_episodes": clean_cumulative[
                 "completed_signal_episodes"
             ],
-            "rolling10_equal_weight_avg_profit_pct": rolling10[
+            "clean_baseline_equal_weight_avg_profit_pct": clean_cumulative[
                 "equal_weight_avg_profit_pct"
             ],
-            "rolling20_equal_weight_avg_profit_pct": rolling20[
-                "equal_weight_avg_profit_pct"
-            ],
-            "cumulative_equal_weight_avg_profit_pct": cumulative[
-                "equal_weight_avg_profit_pct"
+            "clean_baseline_notional_weighted_ev_pct": clean_cumulative[
+                "notional_weighted_ev_pct"
             ],
             "allowed_runtime_apply": False,
         }
@@ -1020,6 +1011,7 @@ def build_report(
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "symbol": "005930",
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
+        "target_date_is_krx_trading_day": target_date_is_trading,
         "cost_pct": cost_pct,
         "metric_contract": METRIC_CONTRACT,
         "source_quality_preflight": source_quality_preflight,
@@ -1028,6 +1020,19 @@ def build_report(
         "actual_order_submitted": False,
         "observes_actual_order_outcomes": True,
         "daily": {"machines": daily_machines},
+        "clean_baseline_window": {
+            "start_date": CLEAN_BASELINE_DATE.isoformat(),
+            "end_date": target_date,
+            "expected_trading_date_count": len(expected_clean_dates),
+            "available_actual_observation_dates": ordered_dates,
+            "available_actual_observation_date_count": len(ordered_dates),
+            "unobserved_trading_dates": unobserved_dates,
+            "unobserved_trading_date_count": len(unobserved_dates),
+            "unobserved_dates_block_candidate": False,
+            "candidate_window_uses_only_available_actual_observations": True,
+            "missing_dates_imputed_as_outcomes": False,
+            "historical_market_replay_included": False,
+        },
         "windows": windows,
         "operator_review_gate": review_gate,
         "decision": (
@@ -1049,6 +1054,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "- Decision: actual-state observation plus a bounded next-PREOPEN candidate; no same-day runtime change.",
         "- Source: target-date machine state plus prior artifacts from this producer only; no market-history query.",
         f"- Clean baseline: {report['clean_tuning_baseline_date']}",
+        f"- Clean-baseline actual observations: {report['clean_baseline_window']['available_actual_observation_date_count']}/{report['clean_baseline_window']['expected_trading_date_count']} trading dates; missing dates are coverage only and are not imputed.",
         "- Held/unresolved inventory blocks candidate readiness; there is no stop-loss or forced exit.",
         "",
         "## Daily",
@@ -1068,11 +1074,10 @@ def render_markdown(report: dict[str, Any]) -> str:
     for machine, gate in report["operator_review_gate"].items():
         lines.append(
             f"- {machine}: `{gate['status']}`; "
-            f"complete episodes {gate['cumulative_completed_signal_episodes']}/{SAMPLE_FLOOR}, "
-            f"rolling10/20/cumulative EV "
-            f"{gate['rolling10_equal_weight_avg_profit_pct']}/"
-            f"{gate['rolling20_equal_weight_avg_profit_pct']}/"
-            f"{gate['cumulative_equal_weight_avg_profit_pct']}."
+            f"complete episodes {gate['clean_baseline_completed_signal_episodes']}/{SAMPLE_FLOOR}, "
+            f"clean-baseline cumulative equal-weight/weighted EV "
+            f"{gate['clean_baseline_equal_weight_avg_profit_pct']}/"
+            f"{gate['clean_baseline_notional_weighted_ev_pct']}."
         )
     lines.extend(
         [

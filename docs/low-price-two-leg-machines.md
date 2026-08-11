@@ -59,12 +59,17 @@ sudo deploy/uninstall_low_price_two_leg_systemd.sh
 
 Postclose `low_price_two_leg_tuning` reads only each profile's durable actual
 broker state and its own prior reports.  It never re-queries historical prices
-and never pools different symbols or sessions.  Daily, rolling-10,
-rolling-20, and clean-baseline cumulative outcomes use notional-weighted EV.
+and never pools different symbols or sessions.  Its sole decision window is
+`clean_baseline_cumulative`: every available actual-state daily observation
+from `2026-06-05` through the target date, including explicit reconciliation
+of a carried episode to its original trade date, with notional-weighted EV as
+the primary metric.  Trading dates before machine observation began, or dates
+without an observation, are disclosed as coverage gaps but are not imputed as
+outcomes and are not backfilled from historical market replay.
 
-After at least 20 completed legs cumulatively, at least three completed legs in
-each recent window, positive current and candidate EV, and no held/unresolved
-inventory, one profile may propose one tightening axis for the next PREOPEN:
+After at least 20 completed legs in that clean-baseline actual-observation window,
+positive current and candidate EV, and no held/unresolved inventory, one
+profile may propose one tightening axis for the next PREOPEN:
 
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.

@@ -9,6 +9,8 @@ import pytest
 
 from src.engine.automation.low_price_two_leg_policy_apply import build_applied_policy
 from src.engine.monitoring.low_price_two_leg_tuning import (
+    CLEAN_WINDOW_NAME,
+    REPORT_SCHEMA,
     build_candidate,
     build_report,
 )
@@ -424,20 +426,24 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
 
     target = "samsung_heavy_midday"
     rows = [_tuning_row(target, index, strong=index % 2 == 0) for index in range(20)]
-    windows = {}
-    for window in ("rolling10", "rolling20", "cumulative"):
-        windows[window] = {}
-        for profile_id in PROFILES:
-            profile_rows = rows if profile_id == target else []
-            windows[window][profile_id] = {
-                "summary": _aggregate(profile_rows),
-                "rows": profile_rows,
-            }
+    windows = {CLEAN_WINDOW_NAME: {}}
+    for profile_id in PROFILES:
+        profile_rows = rows if profile_id == target else []
+        windows[CLEAN_WINDOW_NAME][profile_id] = {
+            "summary": _aggregate(profile_rows),
+            "rows": profile_rows,
+        }
     report = {
         "target_date": "2026-08-11",
         "generated_at_kst": "2026-08-11T20:10:00+09:00",
         "clean_tuning_baseline_date": "2026-06-05",
+        "target_date_is_krx_trading_day": True,
         "source_quality_preflight": {"tuning_input_allowed": True},
+        "daily": {
+            "profiles": {
+                profile_id: {"source_quality": "pass"} for profile_id in PROFILES
+            }
+        },
         "windows": windows,
     }
     candidate = build_candidate(
@@ -446,6 +452,9 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
         samsung_candidate_dir=tmp_path / "samsung",
     )
     assert validate_candidate(candidate)[0]
+    legacy_candidate = json.loads(json.dumps(candidate))
+    legacy_candidate["source_report_schema"] = "low_price_two_leg_tuning_report_v1"
+    assert validate_candidate(legacy_candidate) == (True, "valid")
     assert candidate["policy_mutations"] == [
         {
             "profile_id": target,
@@ -459,6 +468,15 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
         for profile_id, item in candidate["profiles"].items()
         if profile_id != target
     )
+
+    source_gap_report = json.loads(json.dumps(report))
+    source_gap_report["daily"]["profiles"][target]["source_quality"] = "gap"
+    source_gap_candidate = build_candidate(
+        source_gap_report,
+        candidate_dir=tmp_path / "low_price_source_gap",
+        samsung_candidate_dir=tmp_path / "samsung_source_gap",
+    )
+    assert source_gap_candidate["policy_mutations"] == []
 
     samsung_dir = tmp_path / "samsung_blocked"
     samsung_dir.mkdir()
@@ -497,21 +515,25 @@ def test_profile_inventory_blocks_tuning_even_when_held_row_has_no_axis_features
             }
         )
     rows.append(held)
-    windows = {}
-    for window in ("rolling10", "rolling20", "cumulative"):
-        windows[window] = {}
-        for profile_id in PROFILES:
-            profile_rows = rows if profile_id == target else []
-            windows[window][profile_id] = {
-                "summary": _aggregate(profile_rows),
-                "rows": profile_rows,
-            }
+    windows = {CLEAN_WINDOW_NAME: {}}
+    for profile_id in PROFILES:
+        profile_rows = rows if profile_id == target else []
+        windows[CLEAN_WINDOW_NAME][profile_id] = {
+            "summary": _aggregate(profile_rows),
+            "rows": profile_rows,
+        }
     candidate = build_candidate(
         {
             "target_date": "2026-08-11",
             "generated_at_kst": "2026-08-11T20:10:00+09:00",
             "clean_tuning_baseline_date": "2026-06-05",
+            "target_date_is_krx_trading_day": True,
             "source_quality_preflight": {"tuning_input_allowed": True},
+            "daily": {
+                "profiles": {
+                    profile_id: {"source_quality": "pass"} for profile_id in PROFILES
+                }
+            },
             "windows": windows,
         },
         candidate_dir=tmp_path / "low_price",
@@ -594,10 +616,111 @@ def test_prior_episode_completion_is_reconciled_to_original_profile_date(tmp_pat
     reconciliation = report["prior_state_reconciliations"][profile_id]
     assert reconciliation["source_date"] == "2026-08-10"
     assert reconciliation["state_status"] == "COMPLETE"
-    summary = report["windows"]["cumulative"][profile_id]["summary"]
+    summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
     assert summary["completed_legs"] == 2
     assert summary["held_or_unresolved_legs"] == 0
     assert report["daily"]["profiles"][profile_id]["attempted"] is False
+
+
+def test_clean_window_loads_legacy_report_and_does_not_impute_missing_dates(tmp_path):
+    profile_id = "samsung_heavy_midday"
+    state_dir = tmp_path / "states"
+    report_dir = tmp_path / "reports"
+    source_quality_dir = tmp_path / "source_quality"
+    _write_carried_state(state_dir, profile_id, "2026-08-10", held=False)
+    _write_source_quality_audit(source_quality_dir, "2026-08-10")
+    first = build_report(
+        target_date="2026-08-10",
+        state_dir=state_dir,
+        output_dir=report_dir,
+        source_quality_dir=source_quality_dir,
+    )
+    first["schema"] = "low_price_two_leg_tuning_report_v1"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "low_price_two_leg_tuning_2026-08-10.json").write_text(
+        json.dumps(first), encoding="utf-8"
+    )
+
+    _write_carried_state(state_dir, profile_id, "2026-08-11", held=False)
+    _write_source_quality_audit(source_quality_dir, "2026-08-11")
+    second = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=report_dir,
+        source_quality_dir=source_quality_dir,
+    )
+
+    assert second["schema"] == REPORT_SCHEMA
+    assert set(second["windows"]) == {CLEAN_WINDOW_NAME}
+    coverage = second["clean_baseline_window"]
+    assert coverage["available_actual_observation_dates"] == [
+        "2026-08-10",
+        "2026-08-11",
+    ]
+    assert coverage["available_actual_observation_date_count"] == 2
+    assert coverage["unobserved_trading_date_count"] > 0
+    assert coverage["unobserved_dates_block_candidate"] is False
+    assert coverage["candidate_window_uses_only_available_actual_observations"] is True
+    assert coverage["missing_dates_imputed_as_outcomes"] is False
+    assert coverage["historical_market_replay_included"] is False
+    summary = second["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
+    assert summary["eligible_days"] == 2
+    assert summary["completed_legs"] == 4
+
+
+def test_prior_report_cost_contract_mismatch_is_excluded(tmp_path):
+    profile_id = "samsung_heavy_midday"
+    state_dir = tmp_path / "states"
+    report_dir = tmp_path / "reports"
+    source_quality_dir = tmp_path / "source_quality"
+    _write_carried_state(state_dir, profile_id, "2026-08-10", held=False)
+    _write_source_quality_audit(source_quality_dir, "2026-08-10")
+    first = build_report(
+        target_date="2026-08-10",
+        state_dir=state_dir,
+        output_dir=report_dir,
+        source_quality_dir=source_quality_dir,
+    )
+    first["cost_pct"] = 0.10
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "low_price_two_leg_tuning_2026-08-10.json").write_text(
+        json.dumps(first), encoding="utf-8"
+    )
+
+    _write_carried_state(state_dir, profile_id, "2026-08-11", held=False)
+    _write_source_quality_audit(source_quality_dir, "2026-08-11")
+    second = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=report_dir,
+        source_quality_dir=source_quality_dir,
+    )
+
+    summary = second["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
+    assert summary["source_gap_days"] == 1
+    assert summary["eligible_days"] == 1
+    assert summary["completed_legs"] == 2
+
+
+def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path):
+    report = build_report(
+        target_date="2026-08-09",
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "source_quality",
+    )
+    candidate = build_candidate(
+        report,
+        candidate_dir=tmp_path / "candidates",
+        samsung_candidate_dir=tmp_path / "samsung_candidates",
+    )
+
+    assert report["target_date_is_krx_trading_day"] is False
+    assert (
+        "2026-08-09"
+        not in report["clean_baseline_window"]["available_actual_observation_dates"]
+    )
+    assert candidate["policy_mutations"] == []
 
 
 def test_prior_held_episode_blocks_only_its_own_profile_tuning(tmp_path):
@@ -615,11 +738,11 @@ def test_prior_held_episode_blocks_only_its_own_profile_tuning(tmp_path):
         source_quality_dir=source_quality_dir,
     )
 
-    summary = report["windows"]["cumulative"][profile_id]["summary"]
+    summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
     assert summary["completed_legs"] == 0
     assert summary["held_or_unresolved_legs"] == 2
     for other_profile in set(PROFILES) - {profile_id}:
-        other = report["windows"]["cumulative"][other_profile]["summary"]
+        other = report["windows"][CLEAN_WINDOW_NAME][other_profile]["summary"]
         assert other["held_or_unresolved_legs"] == 0
 
 

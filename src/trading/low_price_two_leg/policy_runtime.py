@@ -17,6 +17,12 @@ from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
 CANDIDATE_SCHEMA = "low_price_two_leg_policy_candidate_v1"
+SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
+    {
+        "low_price_two_leg_tuning_report_v1",
+        "low_price_two_leg_tuning_report_v2",
+    }
+)
 APPLIED_SCHEMA = "low_price_two_leg_policy_applied_v1"
 CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "candidates"
 APPLIED_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "applied"
@@ -167,7 +173,7 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
         return False, "candidate_clean_baseline_invalid"
     if (
         payload.get("source_report") != "low_price_two_leg_tuning"
-        or payload.get("source_report_schema") != "low_price_two_leg_tuning_report_v1"
+        or payload.get("source_report_schema") not in SUPPORTED_SOURCE_REPORT_SCHEMAS
         or payload.get("decision_authority") != "postclose_bounded_candidate_only"
     ):
         return False, "candidate_source_contract_invalid"

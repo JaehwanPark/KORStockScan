@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from src.engine.monitoring.samsung_machine_entry_tuning import (
+    CLEAN_WINDOW_NAME,
+    REPORT_SCHEMA,
     REPORT_TYPE,
     build_policy_candidate,
     build_report,
@@ -237,7 +239,10 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
         cost_pct=0.20,
         source_quality_dir=source_quality_dir,
     )
-    write_report(first, output_dir)
+    first_json, _ = write_report(first, output_dir)
+    legacy = json.loads(first_json.read_text(encoding="utf-8"))
+    legacy["schema"] = "samsung_machine_entry_tuning_report_v2"
+    first_json.write_text(json.dumps(legacy), encoding="utf-8")
 
     _write_states(state_dir, "2026-08-11", held_machine="midday")
     _write_source_quality(source_quality_dir, "2026-08-11")
@@ -249,17 +254,29 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
         source_quality_dir=source_quality_dir,
     )
 
-    midday = second["windows"]["cumulative"]["midday"]
+    midday = second["windows"][CLEAN_WINDOW_NAME]["midday"]
+    assert second["schema"] == REPORT_SCHEMA
+    assert set(second["windows"]) == {CLEAN_WINDOW_NAME}
+    coverage = second["clean_baseline_window"]
+    assert coverage["available_actual_observation_dates"] == [
+        "2026-08-10",
+        "2026-08-11",
+    ]
+    assert coverage["available_actual_observation_date_count"] == 2
+    assert coverage["unobserved_trading_date_count"] > 0
+    assert coverage["unobserved_dates_block_candidate"] is False
+    assert coverage["candidate_window_uses_only_available_actual_observations"] is True
+    assert coverage["missing_dates_imputed_as_outcomes"] is False
+    assert coverage["historical_market_replay_included"] is False
     assert midday["summary"]["report_days"] == 2
     assert midday["summary"]["held_legs"] == 1
     assert midday["summary"]["candidate_status"] == "inventory_or_order_unresolved"
     assert midday["summary"]["allowed_runtime_apply"] is False
     assert second["operator_review_gate"]["midday"] == {
         "status": "inventory_or_order_unresolved",
-        "cumulative_completed_signal_episodes": 1,
-        "rolling10_equal_weight_avg_profit_pct": pytest.approx(0.085714),
-        "rolling20_equal_weight_avg_profit_pct": pytest.approx(0.085714),
-        "cumulative_equal_weight_avg_profit_pct": pytest.approx(0.085714),
+        "clean_baseline_completed_signal_episodes": 1,
+        "clean_baseline_equal_weight_avg_profit_pct": pytest.approx(0.085714),
+        "clean_baseline_notional_weighted_ev_pct": pytest.approx(0.021444),
         "allowed_runtime_apply": False,
     }
     assert any(
@@ -316,7 +333,7 @@ def test_prior_report_contract_mismatch_is_counted_and_excluded(tmp_path: Path):
         source_quality_dir=source_quality_dir,
     )
 
-    summary = second["windows"]["cumulative"]["midday"]["summary"]
+    summary = second["windows"][CLEAN_WINDOW_NAME]["midday"]["summary"]
     assert summary["source_gap_days"] == 1
     assert summary["eligible_report_days"] == 1
     assert summary["candidate_status"] == "collect_sample"
@@ -419,20 +436,21 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
         "target_date": "2026-08-11",
         "generated_at_kst": "2026-08-11T20:10:00+09:00",
         "clean_tuning_baseline_date": "2026-06-05",
+        "target_date_is_krx_trading_day": True,
         "source_quality_preflight": {"tuning_input_allowed": True},
         "operator_review_gate": {
             "morning": {"status": "collect_sample"},
             "midday": {"status": "operator_review_candidate"},
             "afternoon": {"status": "operator_review_candidate"},
         },
-        "windows": {},
+        "windows": {
+            CLEAN_WINDOW_NAME: {
+                "morning": {"entry_axis_observations": []},
+                "midday": {"entry_axis_observations": [midday_single, midday_combined]},
+                "afternoon": {"entry_axis_observations": [afternoon_single]},
+            }
+        },
     }
-    for window in ("rolling10", "rolling20", "cumulative"):
-        report["windows"][window] = {
-            "morning": {"entry_axis_observations": []},
-            "midday": {"entry_axis_observations": [midday_single, midday_combined]},
-            "afternoon": {"entry_axis_observations": [afternoon_single]},
-        }
 
     candidate = build_policy_candidate(report)
 
@@ -448,6 +466,24 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
     assert candidate["machines"]["midday"]["selection_status"] == (
         "carry_forward_same_stage_single_axis_guard"
     )
+
+
+def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path: Path):
+    report = build_report(
+        target_date="2026-08-09",
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        cost_pct=0.20,
+        source_quality_dir=tmp_path / "source_quality",
+    )
+    candidate = build_policy_candidate(report)
+
+    assert report["target_date_is_krx_trading_day"] is False
+    assert (
+        "2026-08-09"
+        not in report["clean_baseline_window"]["available_actual_observation_dates"]
+    )
+    assert candidate["policy_mutations"] == []
 
 
 def test_postclose_wrapper_declares_report_only_producer():

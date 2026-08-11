@@ -12,7 +12,7 @@ import json
 import math
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,12 +36,16 @@ from src.trading.order.samsung_entry_policy import (
     validate_candidate as validate_samsung_candidate,
 )
 from src.utils.constants import DATA_DIR
+from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v1"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v2"
+SUPPORTED_REPORT_SCHEMAS = frozenset(
+    {"low_price_two_leg_tuning_report_v1", REPORT_SCHEMA}
+)
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
+CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 SAMPLE_FLOOR_COMPLETED_LEGS = 20
-RECENT_FLOOR_COMPLETED_LEGS = 3
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
@@ -61,11 +65,11 @@ KNOWN_LEG_STATUSES = {
 METRIC_CONTRACT = {
     "metric_role": "low_price_two_leg_profile_entry_tuning_observation",
     "decision_authority": "postclose_bounded_candidate_only",
-    "window_policy": "profile_separated_daily_rolling10_rolling20_and_clean_cumulative",
+    "window_policy": (
+        "profile_separated_daily_and_all_available_actual_observations_since_clean_baseline"
+    ),
     "sample_floor": {
-        "cumulative_completed_legs": SAMPLE_FLOOR_COMPLETED_LEGS,
-        "rolling10_completed_legs": RECENT_FLOOR_COMPLETED_LEGS,
-        "rolling20_completed_legs": RECENT_FLOOR_COMPLETED_LEGS,
+        "clean_baseline_cumulative_completed_legs": SAMPLE_FLOOR_COMPLETED_LEGS,
     },
     "primary_decision_metric": "notional_weighted_ev_pct",
     "source_quality_gate": [
@@ -75,6 +79,9 @@ METRIC_CONTRACT = {
         "existing_samsung_regular_entry_same_stage_owner_guard",
         "held_or_unresolved_inventory_blocks_tightening",
         "observation_source_quality_audit_tuning_input_allowed",
+        "target_date_krx_trading_day_for_candidate",
+        "prebaseline_and_nontrading_reports_excluded",
+        "historical_replay_not_mixed_with_actual_outcomes",
     ],
     "forbidden_uses": [
         "historical_market_data_requery",
@@ -87,6 +94,18 @@ METRIC_CONTRACT = {
         "provider_bot_cap_or_broker_guard_change",
     ],
 }
+
+
+def _clean_trading_dates_through(target_date: date) -> tuple[date, ...]:
+    if target_date < CLEAN_BASELINE_DATE:
+        raise ValueError("target_date_precedes_clean_baseline")
+    selected: list[date] = []
+    current = CLEAN_BASELINE_DATE
+    while current <= target_date:
+        if is_krx_trading_day(current):
+            selected.append(current)
+        current += timedelta(days=1)
+    return tuple(selected)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -325,7 +344,9 @@ def _axis_outcome(
     return _aggregate(selected)
 
 
-def _load_history(output_dir: Path, target_date: date) -> dict[str, dict[str, dict]]:
+def _load_history(
+    output_dir: Path, target_date: date, cost_pct: float
+) -> dict[str, dict[str, dict]]:
     history: dict[str, dict[str, dict]] = {}
     for path in sorted(output_dir.glob(f"{REPORT_TYPE}_*.json")):
         raw_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
@@ -335,12 +356,23 @@ def _load_history(output_dir: Path, target_date: date) -> dict[str, dict[str, di
             continue
         if not CLEAN_BASELINE_DATE <= report_date < target_date:
             continue
+        if not is_krx_trading_day(report_date):
+            continue
         payload = _read_json(path)
         profiles = (payload or {}).get("daily", {}).get("profiles", {})
+        try:
+            payload_cost = float((payload or {}).get("cost_pct"))
+        except (TypeError, ValueError):
+            payload_cost = -1.0
         if (
             not payload
-            or payload.get("schema") != REPORT_SCHEMA
+            or payload.get("report_type") != REPORT_TYPE
+            or payload.get("schema") not in SUPPORTED_REPORT_SCHEMAS
             or payload.get("target_date") != raw_date
+            or payload.get("clean_tuning_baseline_date")
+            != CLEAN_BASELINE_DATE.isoformat()
+            or not math.isfinite(payload_cost)
+            or abs(payload_cost - cost_pct) > 1e-9
             or not isinstance(profiles, dict)
         ):
             history[raw_date] = {
@@ -429,8 +461,8 @@ def build_report(
     cost_pct: float = 0.20,
 ) -> dict:
     parsed_date = date.fromisoformat(target_date)
-    if parsed_date < CLEAN_BASELINE_DATE:
-        raise ValueError("target_date_precedes_clean_baseline")
+    expected_clean_dates = _clean_trading_dates_through(parsed_date)
+    target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
         raise ValueError("cost_pct_must_be_finite_percentage")
     daily: dict[str, dict] = {}
@@ -443,7 +475,11 @@ def build_report(
             state_date = date.fromisoformat(raw_state_date)
         except ValueError:
             state_date = None
-        if state_date is not None and CLEAN_BASELINE_DATE <= state_date < parsed_date:
+        if (
+            state_date is not None
+            and CLEAN_BASELINE_DATE <= state_date < parsed_date
+            and is_krx_trading_day(state_date)
+        ):
             resolved_row = extract_profile_row(
                 profile_id=profile_id,
                 state_path=state_path,
@@ -493,7 +529,7 @@ def build_report(
                     "observation_source_quality_audit_blocked"
                 )
             row["source_quality"] = "gap"
-    history = _load_history(output_dir, parsed_date)
+    history = _load_history(output_dir, parsed_date, cost_pct)
     for profile_id, reconciliation in prior_state_reconciliations.items():
         source_date = reconciliation["source_date"]
         history.setdefault(
@@ -508,32 +544,47 @@ def build_report(
             },
         )
         history[source_date][profile_id] = reconciliation["row"]
-    history[target_date] = daily
+    if target_date_is_trading:
+        history[target_date] = daily
     dates = sorted(history)
-    windows: dict[str, dict[str, Any]] = {}
-    for name, selected_dates in {
-        "rolling10": dates[-10:],
-        "rolling20": dates[-20:],
-        "cumulative": dates,
-    }.items():
-        windows[name] = {}
-        for profile_id in PROFILES:
-            rows = [history[day][profile_id] for day in selected_dates]
-            windows[name][profile_id] = {
-                "summary": _aggregate(rows),
-                "rows": rows,
-            }
+    observed_date_set = {date.fromisoformat(item) for item in dates}
+    unobserved_dates = [
+        item.isoformat()
+        for item in expected_clean_dates
+        if item not in observed_date_set
+    ]
+    windows: dict[str, dict[str, Any]] = {CLEAN_WINDOW_NAME: {}}
+    for profile_id in PROFILES:
+        rows = [history[day][profile_id] for day in dates]
+        windows[CLEAN_WINDOW_NAME][profile_id] = {
+            "summary": _aggregate(rows),
+            "rows": rows,
+        }
     return {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
+        "target_date_is_krx_trading_day": target_date_is_trading,
         "cost_pct": cost_pct,
         "metric_contract": METRIC_CONTRACT,
         "source_quality_preflight": source_preflight,
         "daily": {"profiles": daily},
         "prior_state_reconciliations": prior_state_reconciliations,
+        "clean_baseline_window": {
+            "start_date": CLEAN_BASELINE_DATE.isoformat(),
+            "end_date": target_date,
+            "expected_trading_date_count": len(expected_clean_dates),
+            "available_actual_observation_dates": dates,
+            "available_actual_observation_date_count": len(dates),
+            "unobserved_trading_dates": unobserved_dates,
+            "unobserved_trading_date_count": len(unobserved_dates),
+            "unobserved_dates_block_candidate": False,
+            "candidate_window_uses_only_available_actual_observations": True,
+            "missing_dates_imputed_as_outcomes": False,
+            "historical_market_replay_included": False,
+        },
         "windows": windows,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -556,21 +607,14 @@ def build_candidate(
     eligible: list[tuple[float, str, str, float]] = []
     for profile_id in PROFILES:
         current = prior[profile_id]
-        current_windows = {
-            window: report["windows"][window][profile_id]
-            for window in ("rolling10", "rolling20", "cumulative")
-        }
-        current_outcomes = {
-            window: _axis_outcome(
-                item["rows"],
-                min_drawdown=float(current["rolling_high_drawdown_pct"]),
-                max_near_low=float(current["rolling_low_proximity_pct"]),
-            )
-            for window, item in current_windows.items()
-        }
-        profile_inventory_clear = all(
-            item["summary"]["held_or_unresolved_legs"] == 0
-            for item in current_windows.values()
+        clean_window = report["windows"][CLEAN_WINDOW_NAME][profile_id]
+        current_outcome = _axis_outcome(
+            clean_window["rows"],
+            min_drawdown=float(current["rolling_high_drawdown_pct"]),
+            max_near_low=float(current["rolling_low_proximity_pct"]),
+        )
+        profile_inventory_clear = (
+            clean_window["summary"]["held_or_unresolved_legs"] == 0
         )
         alternatives: list[tuple[str, float, float]] = []
         bounds = POLICY_BOUNDS[profile_id]
@@ -592,38 +636,31 @@ def build_candidate(
             )
         evaluated_alternatives = []
         for axis, drawdown, near_low in alternatives:
-            outcomes = {
-                window: _axis_outcome(
-                    item["rows"], min_drawdown=drawdown, max_near_low=near_low
-                )
-                for window, item in current_windows.items()
-            }
-            cumulative = outcomes["cumulative"]
-            recent = [outcomes["rolling10"], outcomes["rolling20"]]
-            current_ev = current_outcomes["cumulative"]["notional_weighted_ev_pct"]
-            candidate_ev = cumulative["notional_weighted_ev_pct"]
+            clean_outcome = _axis_outcome(
+                clean_window["rows"],
+                min_drawdown=drawdown,
+                max_near_low=near_low,
+            )
+            current_ev = current_outcome["notional_weighted_ev_pct"]
+            candidate_ev = clean_outcome["notional_weighted_ev_pct"]
             ready = bool(
-                report["source_quality_preflight"]["tuning_input_allowed"]
+                report.get("target_date_is_krx_trading_day") is True
+                and report["source_quality_preflight"]["tuning_input_allowed"]
+                and report["daily"]["profiles"][profile_id].get("source_quality")
+                == "pass"
                 and profile_inventory_clear
-                and cumulative["completed_legs"] >= SAMPLE_FLOOR_COMPLETED_LEGS
-                and cumulative["held_or_unresolved_legs"] == 0
+                and clean_outcome["completed_legs"] >= SAMPLE_FLOOR_COMPLETED_LEGS
+                and clean_outcome["held_or_unresolved_legs"] == 0
                 and candidate_ev is not None
                 and current_ev is not None
                 and float(candidate_ev) > max(0.0, float(current_ev))
-                and all(
-                    item["completed_legs"] >= RECENT_FLOOR_COMPLETED_LEGS
-                    and item["held_or_unresolved_legs"] == 0
-                    and item["notional_weighted_ev_pct"] is not None
-                    and float(item["notional_weighted_ev_pct"]) > 0.0
-                    for item in recent
-                )
             )
             evaluated_alternatives.append(
                 {
                     "axis": axis,
                     "resulting_drawdown_pct": drawdown,
                     "resulting_near_low_pct": near_low,
-                    "outcomes": outcomes,
+                    "clean_baseline_cumulative_outcome": clean_outcome,
                     "ready": ready,
                 }
             )
@@ -634,7 +671,7 @@ def build_candidate(
                 )
         evaluations[profile_id] = {
             "current_policy": current,
-            "current_outcomes": current_outcomes,
+            "current_clean_baseline_cumulative_outcome": current_outcome,
             "profile_inventory_clear": profile_inventory_clear,
             "alternatives": evaluated_alternatives,
         }
@@ -705,12 +742,13 @@ def render_markdown(report: dict, candidate: dict) -> str:
         "",
         "- Decision: profile-separated actual broker outcomes; next-PREOPEN bounded tightening only.",
         "- No market-history query, cross-profile pooling, stop loss, forced exit, quantity, target, or validity change.",
+        f"- Clean-baseline actual observations: {report['clean_baseline_window']['available_actual_observation_date_count']}/{report['clean_baseline_window']['expected_trading_date_count']} trading dates; missing dates are coverage only and are not imputed.",
         "",
-        "| Profile | Symbol | Session | Daily status | Cumulative attempts | Complete legs | Held/unresolved | EV |",
+        "| Profile | Symbol | Session | Daily status | Clean cumulative attempts | Complete legs | Held/unresolved | EV |",
         "|---|---|---|---|---:|---:|---:|---:|",
     ]
     for profile_id, row in report["daily"]["profiles"].items():
-        summary = report["windows"]["cumulative"][profile_id]["summary"]
+        summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
         lines.append(
             f"| {profile_id} | {row['symbol']} | {row['session']} | "
             f"{row['source_quality']} | {summary['attempted_episodes']} | "
