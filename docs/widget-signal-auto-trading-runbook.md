@@ -23,6 +23,11 @@
   지속 상태는 중복 주문으로 보지 않는다.
 - 기본 수량은 1주이며 `KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY`로 변경한다.
   코드상 허용 범위는 1~100주다.
+- 주문 대상은 `KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS`의 쉼표 구분 code
+  allowlist로 제한한다. 변수를 명시한 경우 빈 값이나 미등록 code는 전체 종목으로
+  되돌아가지 않고 기동을 실패시킨다. 현재 운영값은 삼성전자 `005930`만이며
+  두산에너빌리티 `034020`과 한화오션 `042660`은 수집·신호·장후 calibration은
+  유지하되 자동매매 대상에서 제외한다.
 - 두산에너빌리티·한화오션은 immutable `entry_event`/`exit_event`를 사용한다.
   삼성전자는 유효한 actionable advisory로 진입하고 `EXIT_READY`만 최종 청산으로
   사용한다. `EXIT_CAUTION`과 비최종 상태는 주문 권한이 없다.
@@ -74,7 +79,11 @@ static이며 직접 enable하지 않는다. 평일 07:58 KST timer만 enable해 
 기동과 당일 공유 토큰 준비 뒤 서비스를 시작한다. 서버가 07:58 이후 기동되면
 `Persistent=true`에 따라 누락된 기동을 보충하지만, 주문 전 shared cached token과
 source freshness guard는 그대로 적용한다. 시작 전 3개 collector freshness, 공유
-토큰, 세 종목의 `manual_operator` 제외를 확인한다.
+토큰, allowlist 대상 종목의 `manual_operator` 제외를 확인한다.
+
+allowlist에서 빠진 종목은 신규 주문뿐 아니라 기존 실행기 원장의 reconciliation과
+자동 청산도 수행하지 않는다. 따라서 장중 제외 전에는 해당 종목의 활성 주문과
+당일 원장 수량을 확인해야 하며, 상태 파일을 삭제해 중복 주문을 유발해서는 안 된다.
 
 설치 시 service와 timer 파일을 `/etc/systemd/system/`에 배치한 뒤 service의 기존
 boot enable을 제거하고 timer만 enable한다. `systemctl enable

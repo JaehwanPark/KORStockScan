@@ -856,6 +856,28 @@ def test_service_single_instance_lock_is_exclusive(tmp_path):
     replacement.close()
 
 
+def test_service_symbol_allowlist_selects_only_requested_widgets(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", "A005930")
+
+    specs = service_module._env_specs()
+
+    assert [spec.code for spec in specs] == ["005930"]
+
+
+@pytest.mark.parametrize("value", ["", "999999", "005930,999999"])
+def test_service_symbol_allowlist_fails_closed_for_invalid_values(monkeypatch, value):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", value)
+
+    with pytest.raises(ValueError, match="widget_auto_trader_symbols_"):
+        service_module._env_specs()
+
+
+def test_service_symbol_allowlist_omission_preserves_legacy_specs(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", raising=False)
+
+    assert service_module._env_specs() == engine.DEFAULT_WIDGET_SPECS
+
+
 def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
     service = Path(
         "deploy/systemd/korstockscan-widget-signal-auto-trader.service"
@@ -865,6 +887,7 @@ def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
     ).read_text(encoding="utf-8")
 
     assert "WantedBy=multi-user.target" not in service
+    assert 'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS=005930"' in service
     assert "OnCalendar=Mon..Fri *-*-* 07:58:00 Asia/Seoul" in timer
     assert "Persistent=true" in timer
     assert "AccuracySec=1s" in timer

@@ -11,6 +11,7 @@ WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
 Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENABLED=true"
 Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY=1"
+Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS=005930"
 ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.widget_auto_trade.service --interval-sec 1
 Restart=on-failure
 RestartSec=3

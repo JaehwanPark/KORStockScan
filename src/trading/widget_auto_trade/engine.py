@@ -282,6 +282,7 @@ class WidgetSignalAutoTrader:
                 "cash_precheck_performed": False,
                 "token_mode": "shared_cache_only_no_issue_no_refresh",
                 "entry_qty": self.entry_qty,
+                "enabled_symbols": [spec.code for spec in self.specs],
                 "execution_contract": EXECUTION_CONTRACT,
             }
         )

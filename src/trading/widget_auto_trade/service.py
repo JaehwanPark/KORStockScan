@@ -9,6 +9,8 @@ from pathlib import Path
 
 from src.trading.widget_auto_trade.engine import (
     DEFAULT_STATE_PATH,
+    DEFAULT_WIDGET_SPECS,
+    WidgetSpec,
     WidgetSignalAutoTrader,
 )
 
@@ -26,6 +28,31 @@ def _env_enabled() -> bool:
 
 def _env_qty() -> int:
     return int(os.getenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY", "1") or "1")
+
+
+def _env_specs() -> tuple[WidgetSpec, ...]:
+    """Return the explicitly selected execution symbols.
+
+    An omitted variable preserves the legacy all-symbol behavior.  Once the
+    variable is present it is a strict allowlist: blank or unknown values fail
+    closed instead of accidentally restoring order authority to every widget.
+    """
+
+    raw = os.getenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS")
+    if raw is None:
+        return DEFAULT_WIDGET_SPECS
+    requested = {
+        token.strip().upper().removeprefix("A")
+        for token in raw.split(",")
+        if token.strip()
+    }
+    by_code = {spec.code: spec for spec in DEFAULT_WIDGET_SPECS}
+    if not requested:
+        raise ValueError("widget_auto_trader_symbols_empty")
+    unknown = sorted(requested - by_code.keys())
+    if unknown:
+        raise ValueError(f"widget_auto_trader_symbols_unknown:{','.join(unknown)}")
+    return tuple(spec for spec in DEFAULT_WIDGET_SPECS if spec.code in requested)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -62,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         state_path=args.state_path,
         entry_qty=_env_qty(),
         enabled=_env_enabled(),
+        specs=_env_specs(),
     )
     if args.once:
         trader.run_once()
