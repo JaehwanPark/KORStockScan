@@ -194,6 +194,7 @@ from src.engine.ai_response_contracts import (
 from src.engine.sniper_post_sell_feedback import (
     record_sim_post_sell_candidate,
     retain_ws_subscription_until,
+    should_retain_ws_subscription,
 )
 from src.engine.holding_exit_matrix_runtime import (
     resolve_holding_exit_matrix_scale_in_bias,
@@ -53003,6 +53004,153 @@ def _record_opening_rotation_pre_ai_baseline_deferral(
     )
 
 
+def _expire_opening_rotation_ttl_promotion(
+    stock: dict,
+    code: str,
+    *,
+    promotion_id: str,
+    now_ts: float,
+) -> bool:
+    """Atomically retire one terminal Opening watch promotion.
+
+    The entry evaluator owns only the deterministic ``DROP`` decision.  This
+    runtime owner closes the matching DB row and releases its two-slot watch
+    capacity.  Exact promotion identity plus the no-position/no-order checks
+    prevent a stale async result from expiring a newer promotion or inventory.
+    """
+
+    normalized_code = str(code or stock.get("code") or "").strip()[:6]
+    normalized_promotion_id = str(promotion_id or "").strip()
+    record_id = stock.get("id")
+    if not normalized_code or not normalized_promotion_id or not record_id:
+        return False
+
+    ws_unregister_requested = False
+    with ENTRY_LOCK:
+        if (
+            str(stock.get("status") or "").strip().upper() != "WATCHING"
+            or normalize_strategy(stock.get("strategy")) != "SCALPING"
+            or normalize_position_tag("SCALPING", stock.get("position_tag"))
+            != "SCANNER"
+            or str(stock.get("scanner_promotion_id") or "").strip()
+            != normalized_promotion_id
+            or stock.get("buy_time") not in (None, "", 0)
+            or _safe_int(stock.get("buy_qty"), 0) > 0
+            or _safe_int(stock.get("entry_filled_qty"), 0) > 0
+            or _safe_int(stock.get("holding_qty"), 0) > 0
+            or _has_open_pending_entry_orders(stock)
+            or bool(stock.get("opening_rotation_order_ambiguity"))
+            or bool(stock.get("opening_rotation_new_episode_blocked"))
+        ):
+            return False
+        if DB is None:
+            log_error(
+                "[OPENING_ROTATION_TTL_RELEASE] DB dependency unavailable "
+                f"code={normalized_code} id={record_id}"
+            )
+            return False
+
+        try:
+            with DB.get_session() as session:
+                updated = (
+                    session.query(RecommendationHistory)
+                    .filter(
+                        RecommendationHistory.id == record_id,
+                        RecommendationHistory.stock_code == normalized_code,
+                        RecommendationHistory.status == "WATCHING",
+                        RecommendationHistory.strategy == "SCALPING",
+                        RecommendationHistory.position_tag == "SCANNER",
+                        RecommendationHistory.scanner_promotion_id
+                        == normalized_promotion_id,
+                        RecommendationHistory.buy_time.is_(None),
+                        RecommendationHistory.buy_qty == 0,
+                    )
+                    .update({"status": "EXPIRED"}, synchronize_session=False)
+                )
+        except Exception as exc:
+            log_error(
+                "[OPENING_ROTATION_TTL_RELEASE] DB expiration failed "
+                f"code={normalized_code} id={record_id} "
+                f"promotion_id={normalized_promotion_id}: {exc}"
+            )
+            return False
+        if updated != 1:
+            log_error(
+                "[OPENING_ROTATION_TTL_RELEASE] conditional expiration rejected "
+                f"code={normalized_code} id={record_id} "
+                f"promotion_id={normalized_promotion_id} updated={updated}"
+            )
+            return False
+
+        stock.update(
+            {
+                "status": "EXPIRED",
+                "opening_rotation_consumed_promotion_id": normalized_promotion_id,
+                "opening_rotation_watch_phase": "PROMOTION_TTL_EXPIRED",
+                "opening_rotation_terminal_reason": "promotion_ttl_expired",
+                "opening_rotation_terminal_at_epoch": float(now_ts),
+            }
+        )
+        _OPENING_ROTATION_CONTEXT_CACHE.pop(normalized_code, None)
+
+        active_same_code = any(
+            item is not stock
+            and str((item or {}).get("code") or "").strip()[:6]
+            == normalized_code
+            and str((item or {}).get("status") or "").strip().upper()
+            not in {"COMPLETED", "EXPIRED"}
+            for item in (ACTIVE_TARGETS or [])
+        )
+        retain_subscription = bool(
+            should_retain_ws_subscription(normalized_code, now_ts=now_ts)
+            or should_retain_rising_missed_nxt_post_block_subscription(
+                normalized_code, now_ts=now_ts
+            )
+        )
+        if not active_same_code and not retain_subscription and EVENT_BUS is not None:
+            try:
+                EVENT_BUS.publish(
+                    "COMMAND_WS_UNREG",
+                    {
+                        "codes": [normalized_code],
+                        "source": "opening_rotation_promotion_ttl_expired",
+                        "reason": "promotion_ttl_expired",
+                    },
+                )
+                ws_unregister_requested = True
+            except Exception as exc:
+                log_error(
+                    "[OPENING_ROTATION_TTL_RELEASE] WS unregister publish failed "
+                    f"code={normalized_code}: {exc}"
+                )
+
+    _log_entry_pipeline(
+        stock,
+        normalized_code,
+        "opening_rotation_promotion_ttl_released",
+        reason="promotion_ttl_expired",
+        scanner_promotion_id=normalized_promotion_id,
+        opening_rotation_watch_slot_released=True,
+        opening_rotation_db_status="EXPIRED",
+        opening_rotation_ws_unregister_requested=ws_unregister_requested,
+        metric_role="runtime_capacity_provenance",
+        decision_authority="opening_rotation_watch_lifecycle_only",
+        window_policy="same_scanner_promotion_60_second_ttl",
+        sample_floor="not_applicable_runtime_terminal_transition",
+        primary_decision_metric="opening_rotation_watch_slot_released",
+        source_quality_gate="exact_record_code_and_promotion_identity",
+        runtime_effect=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        allowed_runtime_apply=False,
+        forbidden_uses=(
+            "order_submit,order_cancel,position_change,quantity_or_cap_change,"
+            "threshold_mutation,provider_route_change,broker_guard_bypass"
+        ),
+    )
+    return True
+
+
 def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> bool:
     now_ts = runtime["now_ts"]
     now_dt = runtime.get("now_dt") or datetime.fromtimestamp(now_ts)
@@ -53477,6 +53625,13 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
     if not decision.get("qualified"):
         # The strategy owns and deterministically consumes an admitted
         # promotion.  A miss ends as WAIT/DROP and never reaches Entry AI.
+        if reason == "promotion_ttl_expired":
+            _expire_opening_rotation_ttl_promotion(
+                stock,
+                code,
+                promotion_id=current_promotion_id,
+                now_ts=float(now_ts),
+            )
         return True
 
     current_price = _safe_int(decision.get("curr_price"), runtime["curr_price"])
