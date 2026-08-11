@@ -502,7 +502,12 @@ valid = (
     and payload.get("report_type") == "low_price_two_leg_expanded_candidate_research"
     and payload.get("target_date") == target_date
     and payload.get("end_date") == target_date
-    and payload.get("status") in {"recommendations_ready", "no_qualified_candidate"}
+    and payload.get("status")
+    in {
+        "recommendations_ready",
+        "no_qualified_candidate",
+        "source_quality_blocked",
+    }
     and CandidateRecommendationNotifier._valid_report(payload)
     and payload.get("telegram_status")
     in {"sent", "duplicate", "sent_state_persist_failed"}

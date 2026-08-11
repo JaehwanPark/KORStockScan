@@ -155,6 +155,10 @@ def test_postclose_wrapper_runs_daily_low_price_candidate_recommendation_and_adm
     assert "low_price_candidate_recommendation_reusable()" in script
     assert "CandidateRecommendationNotifier._valid_report(payload)" in script
     assert (
+        '"recommendations_ready",\n        "no_qualified_candidate",\n'
+        '        "source_quality_blocked",'
+    ) in script
+    assert (
         '"$PROJECT_DIR/src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py"'
         in script
     )
