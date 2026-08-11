@@ -133,6 +133,43 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     )
 
 
+def test_postclose_wrapper_runs_daily_low_price_candidate_recommendation_and_admin_notice():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert (
+        'RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION="${THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION:-true}"'
+        in script
+    )
+    tuning_idx = script.index("-m src.engine.monitoring.low_price_two_leg_tuning")
+    recommendation_idx = script.index(
+        "-m src.engine.monitoring.low_price_two_leg_expanded_candidate_research"
+    )
+    assert tuning_idx < recommendation_idx
+    assert '--target-date "$TARGET_DATE"' in script[recommendation_idx:]
+    assert "--write" in script[recommendation_idx:]
+    assert "--notify" in script[recommendation_idx:]
+    assert (
+        'wait_for_postclose_resources "low_price_two_leg_candidate_recommendation"'
+        in script
+    )
+    assert "low_price_candidate_recommendation_reusable()" in script
+    assert "CandidateRecommendationNotifier._valid_report(payload)" in script
+    assert (
+        '"$PROJECT_DIR/src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py"'
+        in script
+    )
+    assert (
+        '&& low_price_candidate_recommendation_reusable "$candidate_recommendation_json"'
+        in script
+    )
+    assert 'in {"sent", "duplicate", "sent_state_persist_failed"}' in script
+    assert '"low_price_two_leg_candidate_recommendation"' in script
+    assert (
+        "low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION"
+        in script
+    )
+
+
 def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():
     script = Path("deploy/run_scalp_sim_overnight_preclose.sh").read_text(
         encoding="utf-8"

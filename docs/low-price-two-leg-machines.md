@@ -83,6 +83,37 @@ and install timers. The installer also removes any legacy Daewoo timer files and
 stops their exact service instances without deleting state or held-position
 evidence.
 
+## Daily implementation-candidate recommendation
+
+The 20:10 postclose chain runs `low_price_two_leg_expanded_candidate_research`
+after the actual-profile tuning step. It uses the most recent 46 KRX trading
+dates, never earlier than the clean baseline: the first 30 dates select a spot
+and the final 16 dates remain untouched holdout evidence. The reviewed research
+universe contains nine symbols, with midday and afternoon evaluated separately.
+
+Only profiles with matching source-qualified trading dates, positive
+notional-weighted holdout EV, the required calibration/holdout sample floors,
+zero held legs, and a latest close at or below KRW 100,000 enter the ranked
+recommendation list. The JSON and Markdown report are atomically written before
+an `ADMIN_ONLY` Telegram message is attempted. Delivery retries up to three
+times, and a target-date state file prevents duplicate notices during postclose
+recovery. Missing Telegram configuration, exhausted delivery retries, or a
+report authority mismatch closes the postclose wrapper as failed rather than
+silently claiming daily delivery.
+
+If the cached Kiwoom token is unavailable or one of the nine sources fails the
+common-date/source-quality contract, the producer writes a
+`source_quality_blocked` report and sends an admin notice stating that no daily
+recommendation was produced. This isolated research-source block does not stop
+unrelated postclose producers. Telegram configuration or delivery failure still
+fails the wrapper because daily delivery itself was not completed.
+
+This is recommendation-only automation. It cannot add a profile, install or
+start a service, create a PREOPEN policy, submit an order, or change quantity,
+targets, stops, providers, the main bot, caps, or broker guards. A recommended
+profile still requires a separate user instruction, implementation, and review
+gate.
+
 ## Official Kiwoom reference evidence
 
 - Repository: `Kiwoom-Securities/Kiwoom-REST-API`
