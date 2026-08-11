@@ -1,0 +1,3848 @@
+{
+  "actual_order_submitted": false,
+  "allowed_runtime_apply": false,
+  "broker_order_forbidden": true,
+  "cost_pct": 0.2,
+  "decision": "mixed_profile_validation_source_only_do_not_promote_failed_profiles",
+  "end_date": "2026-08-10",
+  "generated_at_kst": "2026-08-11T19:07:53+09:00",
+  "grid": {
+    "allocation": "one_share_signal_close_one_share_signal_close_minus_1tick",
+    "drawdown_pct": [
+      0.5,
+      0.75,
+      1.0,
+      1.25,
+      1.5,
+      1.75,
+      2.0,
+      2.5,
+      3.0
+    ],
+    "entry_valid_completed_bars": 5,
+    "lookback_bars": [
+      15,
+      20,
+      30,
+      45,
+      60
+    ],
+    "near_low_pct": [
+      0.05,
+      0.1,
+      0.2,
+      0.35,
+      0.5,
+      0.75
+    ],
+    "quantity": 2,
+    "same_bar_fill_target": "forbidden_target_starts_after_fill_bar",
+    "stop_loss": "none",
+    "target_ticks": 2,
+    "time_window_policy": "profile_base_window_subwindows_starting_every_5_minutes",
+    "unclosed_position": "held"
+  },
+  "metric_contract": {
+    "decision_authority": "source_only_no_runtime_or_order_authority",
+    "forbidden_uses": [
+      "current_holdout_outcome_used_for_candidate_selection",
+      "cross_profile_outcome_pooling",
+      "price_touch_as_real_fill_evidence",
+      "same_bar_fill_then_target_assumption",
+      "token_issue_refresh_invalidation_or_replacement",
+      "account_or_order_api",
+      "runtime_policy_threshold_provider_bot_cap_or_broker_guard_mutation",
+      "stop_loss_or_forced_exit_creation"
+    ],
+    "metric_role": "profile_specific_entry_spot_offline_research",
+    "primary_decision_metric": "notional_weighted_ev_pct",
+    "sample_floor": {
+      "calibration_completed_legs": 8,
+      "calibration_signal_episodes": 6,
+      "each_calibration_half_completed_legs": 3,
+      "full_window_completed_legs": 10,
+      "holdout_completed_legs": 4,
+      "holdout_signal_episodes": 3
+    },
+    "source_quality_gate": [
+      "official_ka10080_success",
+      "requested_start_date_fully_bracketed",
+      "46_clean_baseline_trading_dates",
+      "valid_unique_completed_sor_regular_ohlc",
+      "calibration_and_holdout_held_legs_zero"
+    ],
+    "window_policy": "first_30_trading_days_calibration_last_16_untouched_holdout"
+  },
+  "official_reference": {
+    "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+    "inspected_paths": [
+      "kiwoom_docs/차트.md",
+      "kiwoom/_data/kiwoom_api_spec.json",
+      "kiwoom/specs.py",
+      "kiwoom/core",
+      "postman/kiwoom-openapi.postman_collection.json"
+    ],
+    "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+    "request_contract": "POST /api/dostk/chart; api-id=ka10080",
+    "retrieved_at_kst": "2026-08-11T18:13:09+09:00"
+  },
+  "profiles": {
+    "daewoo_ec_afternoon": {
+      "baseline": {
+        "calibration": {
+          "attempted_legs": 34,
+          "completed_legs": 31,
+          "completed_legs_per_attempted_leg": 0.911765,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.095926,
+          "signal_episodes": 17
+        },
+        "full": {
+          "attempted_legs": 48,
+          "completed_legs": 45,
+          "completed_legs_per_attempted_leg": 0.9375,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.062264,
+          "signal_episodes": 24
+        },
+        "holdout": {
+          "attempted_legs": 14,
+          "completed_legs": 14,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": -0.056004,
+          "signal_episodes": 7
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "14:40",
+          "scan_start": "14:00"
+        }
+      },
+      "best_diagnostic_candidate": {
+        "calibration_first_half": {
+          "attempted_legs": 8,
+          "completed_legs": 8,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.265657,
+          "signal_episodes": 4
+        },
+        "calibration_full": {
+          "attempted_legs": 12,
+          "completed_legs": 11,
+          "completed_legs_per_attempted_leg": 0.916667,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_ev_pct": 0.180227,
+          "signal_episodes": 6
+        },
+        "calibration_second_half": {
+          "attempted_legs": 4,
+          "completed_legs": 3,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_ev_pct": -0.053633,
+          "signal_episodes": 2
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.75,
+          "rolling_low_proximity_pct": 0.5,
+          "scan_end": "14:39",
+          "scan_start": "14:20"
+        },
+        "robust_calibration_score": -0.017878
+      },
+      "calibration_gate_counts": {
+        "both_halves_positive_ev": 0,
+        "inventory_clear": 1078,
+        "sample_ready": 2593
+      },
+      "calibration_ready_candidate_count": 0,
+      "date_split": {
+        "calibration_end": "2026-07-16",
+        "calibration_start": "2026-06-05",
+        "holdout_end": "2026-08-10",
+        "holdout_start": "2026-07-20"
+      },
+      "decision": "no_robust_calibration_candidate_do_not_promote",
+      "grid_candidate_count": 5940,
+      "name": "대우건설",
+      "profile_id": "daewoo_ec_afternoon",
+      "recommended_action": "do_not_activate_profile_from_this_evidence",
+      "recommended_spot": null,
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "attempted_legs": 34,
+          "completed_legs": 31,
+          "completed_legs_per_attempted_leg": 0.911765,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.095926,
+          "signal_episodes": 17
+        },
+        "full": {
+          "attempted_legs": 48,
+          "completed_legs": 45,
+          "completed_legs_per_attempted_leg": 0.9375,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.062264,
+          "signal_episodes": 24
+        },
+        "holdout": {
+          "attempted_legs": 14,
+          "completed_legs": 14,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": -0.056004,
+          "signal_episodes": 7
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "14:40",
+          "scan_start": "14:00"
+        }
+      },
+      "session": "afternoon",
+      "symbol": "047040",
+      "top_calibration_candidates": []
+    },
+    "daewoo_ec_midday": {
+      "baseline": {
+        "calibration": {
+          "attempted_legs": 24,
+          "completed_legs": 24,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.066589,
+          "signal_episodes": 12
+        },
+        "full": {
+          "attempted_legs": 38,
+          "completed_legs": 35,
+          "completed_legs_per_attempted_leg": 0.921053,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.034489,
+          "signal_episodes": 19
+        },
+        "holdout": {
+          "attempted_legs": 14,
+          "completed_legs": 11,
+          "completed_legs_per_attempted_leg": 0.785714,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": -0.043105,
+          "signal_episodes": 7
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "13:54",
+          "scan_start": "13:15"
+        }
+      },
+      "best_diagnostic_candidate": {
+        "calibration_first_half": {
+          "attempted_legs": 12,
+          "completed_legs": 11,
+          "completed_legs_per_attempted_leg": 0.916667,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_ev_pct": 0.222986,
+          "signal_episodes": 6
+        },
+        "calibration_full": {
+          "attempted_legs": 16,
+          "completed_legs": 14,
+          "completed_legs_per_attempted_leg": 0.875,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.169839,
+          "signal_episodes": 8
+        },
+        "calibration_second_half": {
+          "attempted_legs": 4,
+          "completed_legs": 3,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_ev_pct": -0.056098,
+          "signal_episodes": 2
+        },
+        "parameters": {
+          "lookback_bars": 60,
+          "rolling_high_drawdown_pct": 1.75,
+          "rolling_low_proximity_pct": 0.75,
+          "scan_end": "13:44",
+          "scan_start": "13:15"
+        },
+        "robust_calibration_score": -0.018699
+      },
+      "calibration_gate_counts": {
+        "both_halves_positive_ev": 0,
+        "inventory_clear": 1009,
+        "sample_ready": 2365
+      },
+      "calibration_ready_candidate_count": 0,
+      "date_split": {
+        "calibration_end": "2026-07-16",
+        "calibration_start": "2026-06-05",
+        "holdout_end": "2026-08-10",
+        "holdout_start": "2026-07-20"
+      },
+      "decision": "no_robust_calibration_candidate_do_not_promote",
+      "grid_candidate_count": 5130,
+      "name": "대우건설",
+      "profile_id": "daewoo_ec_midday",
+      "recommended_action": "do_not_activate_profile_from_this_evidence",
+      "recommended_spot": null,
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "attempted_legs": 24,
+          "completed_legs": 24,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.066589,
+          "signal_episodes": 12
+        },
+        "full": {
+          "attempted_legs": 38,
+          "completed_legs": 35,
+          "completed_legs_per_attempted_leg": 0.921053,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.034489,
+          "signal_episodes": 19
+        },
+        "holdout": {
+          "attempted_legs": 14,
+          "completed_legs": 11,
+          "completed_legs_per_attempted_leg": 0.785714,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": -0.043105,
+          "signal_episodes": 7
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "13:54",
+          "scan_start": "13:15"
+        }
+      },
+      "session": "midday",
+      "symbol": "047040",
+      "top_calibration_candidates": []
+    },
+    "samsung_heavy_afternoon": {
+      "baseline": {
+        "calibration": {
+          "attempted_legs": 24,
+          "completed_legs": 19,
+          "completed_legs_per_attempted_leg": 0.791667,
+          "held_legs": 0,
+          "no_fill_legs": 5,
+          "notional_weighted_ev_pct": 0.167515,
+          "signal_episodes": 12
+        },
+        "full": {
+          "attempted_legs": 32,
+          "completed_legs": 25,
+          "completed_legs_per_attempted_leg": 0.78125,
+          "held_legs": 0,
+          "no_fill_legs": 7,
+          "notional_weighted_ev_pct": 0.17613,
+          "signal_episodes": 16
+        },
+        "holdout": {
+          "attempted_legs": 8,
+          "completed_legs": 6,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.20605,
+          "signal_episodes": 4
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "14:40",
+          "scan_start": "14:00"
+        }
+      },
+      "best_diagnostic_candidate": {
+        "calibration_first_half": {
+          "attempted_legs": 12,
+          "completed_legs": 9,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.137158,
+          "signal_episodes": 6
+        },
+        "calibration_full": {
+          "attempted_legs": 20,
+          "completed_legs": 17,
+          "completed_legs_per_attempted_leg": 0.85,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.176431,
+          "signal_episodes": 10
+        },
+        "calibration_second_half": {
+          "attempted_legs": 8,
+          "completed_legs": 8,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.245186,
+          "signal_episodes": 4
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "14:34",
+          "scan_start": "14:05"
+        },
+        "robust_calibration_score": 0.082295
+      },
+      "calibration_gate_counts": {
+        "both_halves_positive_ev": 80,
+        "inventory_clear": 80,
+        "sample_ready": 2383
+      },
+      "calibration_ready_candidate_count": 80,
+      "calibration_winner": {
+        "calibration": {
+          "attempted_legs": 20,
+          "completed_legs": 17,
+          "completed_legs_per_attempted_leg": 0.85,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.176431,
+          "signal_episodes": 10
+        },
+        "calibration_first_half": {
+          "attempted_legs": 12,
+          "completed_legs": 9,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 3,
+          "notional_weighted_ev_pct": 0.137158,
+          "signal_episodes": 6
+        },
+        "calibration_second_half": {
+          "attempted_legs": 8,
+          "completed_legs": 8,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.245186,
+          "signal_episodes": 4
+        },
+        "full": {
+          "attempted_legs": 28,
+          "completed_legs": 23,
+          "completed_legs_per_attempted_leg": 0.821429,
+          "episodes": [
+            {
+              "date": "2026-06-08",
+              "legs": [
+                {
+                  "entry_price": 26250,
+                  "fill_at": "2026-06-08T14:17:00+09:00",
+                  "net_profit_pct": 0.180952,
+                  "status": "COMPLETE",
+                  "target_price": 26350
+                },
+                {
+                  "entry_price": 26200,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 2.052239,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-08T14:16:00+09:00",
+              "signal_close": 26250
+            },
+            {
+              "date": "2026-06-09",
+              "legs": [
+                {
+                  "entry_price": 25950,
+                  "fill_at": "2026-06-09T14:31:00+09:00",
+                  "net_profit_pct": 0.185356,
+                  "status": "COMPLETE",
+                  "target_price": 26050
+                },
+                {
+                  "entry_price": 25900,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.330798,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-09T14:30:00+09:00",
+              "signal_close": 25950
+            },
+            {
+              "date": "2026-06-10",
+              "legs": [
+                {
+                  "entry_price": 25150,
+                  "fill_at": "2026-06-10T14:21:00+09:00",
+                  "net_profit_pct": 0.197614,
+                  "status": "COMPLETE",
+                  "target_price": 25250
+                },
+                {
+                  "entry_price": 25100,
+                  "fill_at": "2026-06-10T14:21:00+09:00",
+                  "net_profit_pct": 0.198406,
+                  "status": "COMPLETE",
+                  "target_price": 25200
+                }
+              ],
+              "observed_drawdown_pct": 1.178782,
+              "observed_near_low_pct": 0.199203,
+              "signal_at": "2026-06-10T14:20:00+09:00",
+              "signal_close": 25150
+            },
+            {
+              "date": "2026-06-12",
+              "legs": [
+                {
+                  "entry_price": 27200,
+                  "fill_at": "2026-06-12T14:07:00+09:00",
+                  "net_profit_pct": 0.167647,
+                  "status": "COMPLETE",
+                  "target_price": 27300
+                },
+                {
+                  "entry_price": 27150,
+                  "fill_at": "2026-06-12T14:07:00+09:00",
+                  "net_profit_pct": 0.168324,
+                  "status": "COMPLETE",
+                  "target_price": 27250
+                }
+              ],
+              "observed_drawdown_pct": 0.729927,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-12T14:06:00+09:00",
+              "signal_close": 27200
+            },
+            {
+              "date": "2026-06-16",
+              "legs": [
+                {
+                  "entry_price": 28300,
+                  "fill_at": "2026-06-16T14:23:00+09:00",
+                  "net_profit_pct": 0.153357,
+                  "status": "COMPLETE",
+                  "target_price": 28400
+                },
+                {
+                  "entry_price": 28250,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.393728,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-16T14:22:00+09:00",
+              "signal_close": 28300
+            },
+            {
+              "date": "2026-06-23",
+              "legs": [
+                {
+                  "entry_price": 24600,
+                  "fill_at": "2026-06-23T15:03:00+09:00",
+                  "net_profit_pct": 0.206504,
+                  "status": "COMPLETE",
+                  "target_price": 24700
+                },
+                {
+                  "entry_price": 24550,
+                  "fill_at": "2026-06-23T15:04:00+09:00",
+                  "net_profit_pct": 0.207332,
+                  "status": "COMPLETE",
+                  "target_price": 24650
+                }
+              ],
+              "observed_drawdown_pct": 1.402806,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-23T14:33:00+09:00",
+              "signal_close": 24600
+            },
+            {
+              "date": "2026-06-30",
+              "legs": [
+                {
+                  "entry_price": 23550,
+                  "fill_at": "2026-06-30T14:31:00+09:00",
+                  "net_profit_pct": 0.224628,
+                  "status": "COMPLETE",
+                  "target_price": 23650
+                },
+                {
+                  "entry_price": 23500,
+                  "fill_at": "2026-06-30T14:33:00+09:00",
+                  "net_profit_pct": 0.225532,
+                  "status": "COMPLETE",
+                  "target_price": 23600
+                }
+              ],
+              "observed_drawdown_pct": 1.05042,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-30T14:30:00+09:00",
+              "signal_close": 23550
+            },
+            {
+              "date": "2026-07-03",
+              "legs": [
+                {
+                  "entry_price": 23200,
+                  "fill_at": "2026-07-03T14:09:00+09:00",
+                  "net_profit_pct": 0.231034,
+                  "status": "COMPLETE",
+                  "target_price": 23300
+                },
+                {
+                  "entry_price": 23150,
+                  "fill_at": "2026-07-03T14:12:00+09:00",
+                  "net_profit_pct": 0.231965,
+                  "status": "COMPLETE",
+                  "target_price": 23250
+                }
+              ],
+              "observed_drawdown_pct": 0.854701,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-03T14:08:00+09:00",
+              "signal_close": 23200
+            },
+            {
+              "date": "2026-07-09",
+              "legs": [
+                {
+                  "entry_price": 21050,
+                  "fill_at": "2026-07-09T14:17:00+09:00",
+                  "net_profit_pct": 0.275059,
+                  "status": "COMPLETE",
+                  "target_price": 21150
+                },
+                {
+                  "entry_price": 21000,
+                  "fill_at": "2026-07-09T14:17:00+09:00",
+                  "net_profit_pct": 0.27619,
+                  "status": "COMPLETE",
+                  "target_price": 21100
+                }
+              ],
+              "observed_drawdown_pct": 1.405152,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-09T14:16:00+09:00",
+              "signal_close": 21050
+            },
+            {
+              "date": "2026-07-10",
+              "legs": [
+                {
+                  "entry_price": 22150,
+                  "fill_at": "2026-07-10T14:06:00+09:00",
+                  "net_profit_pct": 0.251467,
+                  "status": "COMPLETE",
+                  "target_price": 22250
+                },
+                {
+                  "entry_price": 22100,
+                  "fill_at": "2026-07-10T14:08:00+09:00",
+                  "net_profit_pct": 0.252489,
+                  "status": "COMPLETE",
+                  "target_price": 22200
+                }
+              ],
+              "observed_drawdown_pct": 0.672646,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-10T14:05:00+09:00",
+              "signal_close": 22150
+            },
+            {
+              "date": "2026-07-20",
+              "legs": [
+                {
+                  "entry_price": 21050,
+                  "fill_at": "2026-07-20T14:11:00+09:00",
+                  "net_profit_pct": 0.275059,
+                  "status": "COMPLETE",
+                  "target_price": 21150
+                },
+                {
+                  "entry_price": 21000,
+                  "fill_at": "2026-07-20T14:11:00+09:00",
+                  "net_profit_pct": 0.27619,
+                  "status": "COMPLETE",
+                  "target_price": 21100
+                }
+              ],
+              "observed_drawdown_pct": 1.405152,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-20T14:10:00+09:00",
+              "signal_close": 21050
+            },
+            {
+              "date": "2026-07-21",
+              "legs": [
+                {
+                  "entry_price": 20950,
+                  "fill_at": "2026-07-21T14:15:00+09:00",
+                  "net_profit_pct": 0.277327,
+                  "status": "COMPLETE",
+                  "target_price": 21050
+                },
+                {
+                  "entry_price": 20900,
+                  "fill_at": "2026-07-21T14:16:00+09:00",
+                  "net_profit_pct": 0.278469,
+                  "status": "COMPLETE",
+                  "target_price": 21000
+                }
+              ],
+              "observed_drawdown_pct": 1.411765,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-21T14:14:00+09:00",
+              "signal_close": 20950
+            },
+            {
+              "date": "2026-07-22",
+              "legs": [
+                {
+                  "entry_price": 21800,
+                  "fill_at": "2026-07-22T14:17:00+09:00",
+                  "net_profit_pct": 0.258716,
+                  "status": "COMPLETE",
+                  "target_price": 21900
+                },
+                {
+                  "entry_price": 21750,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.467269,
+              "observed_near_low_pct": 0.114679,
+              "signal_at": "2026-07-22T14:16:00+09:00",
+              "signal_close": 21825
+            },
+            {
+              "date": "2026-07-28",
+              "legs": [
+                {
+                  "entry_price": 20600,
+                  "fill_at": "2026-07-28T14:29:00+09:00",
+                  "net_profit_pct": 0.285437,
+                  "status": "COMPLETE",
+                  "target_price": 20700
+                },
+                {
+                  "entry_price": 20550,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.435407,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-28T14:28:00+09:00",
+              "signal_close": 20600
+            }
+          ],
+          "held_legs": 0,
+          "no_fill_legs": 5,
+          "notional_weighted_ev_pct": 0.183964,
+          "signal_episodes": 14
+        },
+        "holdout": {
+          "attempted_legs": 8,
+          "completed_legs": 6,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.20605,
+          "signal_episodes": 4
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "14:34",
+          "scan_start": "14:05"
+        },
+        "robust_calibration_score": 0.082295
+      },
+      "date_split": {
+        "calibration_end": "2026-07-16",
+        "calibration_start": "2026-06-05",
+        "holdout_end": "2026-08-10",
+        "holdout_start": "2026-07-20"
+      },
+      "decision": "holdout_positive_not_better_keep_baseline",
+      "grid_candidate_count": 5940,
+      "name": "삼성중공업",
+      "profile_id": "samsung_heavy_afternoon",
+      "recommended_action": "retain_existing_baseline",
+      "recommended_spot": {
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 1.25,
+        "rolling_low_proximity_pct": 0.2,
+        "scan_end": "14:40",
+        "scan_start": "14:00"
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "attempted_legs": 24,
+          "completed_legs": 19,
+          "completed_legs_per_attempted_leg": 0.791667,
+          "held_legs": 0,
+          "no_fill_legs": 5,
+          "notional_weighted_ev_pct": 0.167515,
+          "signal_episodes": 12
+        },
+        "full": {
+          "attempted_legs": 32,
+          "completed_legs": 25,
+          "completed_legs_per_attempted_leg": 0.78125,
+          "held_legs": 0,
+          "no_fill_legs": 7,
+          "notional_weighted_ev_pct": 0.17613,
+          "signal_episodes": 16
+        },
+        "holdout": {
+          "attempted_legs": 8,
+          "completed_legs": 6,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.20605,
+          "signal_episodes": 4
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "14:40",
+          "scan_start": "14:00"
+        }
+      },
+      "session": "afternoon",
+      "symbol": "010140",
+      "top_calibration_candidates": [
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 9,
+            "completed_legs_per_attempted_leg": 0.75,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.137158,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 20,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.85,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.176431,
+            "signal_episodes": 10
+          },
+          "calibration_second_half": {
+            "attempted_legs": 8,
+            "completed_legs": 8,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.245186,
+            "signal_episodes": 4
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.2,
+            "scan_end": "14:34",
+            "scan_start": "14:05"
+          },
+          "robust_calibration_score": 0.082295
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 9,
+            "completed_legs_per_attempted_leg": 0.75,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.137158,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 24,
+            "completed_legs": 19,
+            "completed_legs_per_attempted_leg": 0.791667,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.167606,
+            "signal_episodes": 12
+          },
+          "calibration_second_half": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.202992,
+            "signal_episodes": 6
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.2,
+            "scan_end": "14:40",
+            "scan_start": "14:05"
+          },
+          "robust_calibration_score": 0.082295
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 9,
+            "completed_legs_per_attempted_leg": 0.75,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.137008,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 24,
+            "completed_legs": 19,
+            "completed_legs_per_attempted_leg": 0.791667,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.167515,
+            "signal_episodes": 12
+          },
+          "calibration_second_half": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.202992,
+            "signal_episodes": 6
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.2,
+            "scan_end": "14:40",
+            "scan_start": "14:00"
+          },
+          "robust_calibration_score": 0.082205
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 8,
+            "completed_legs": 6,
+            "completed_legs_per_attempted_leg": 0.75,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.139334,
+            "signal_episodes": 4
+          },
+          "calibration_full": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.175715,
+            "signal_episodes": 6
+          },
+          "calibration_second_half": {
+            "attempted_legs": 4,
+            "completed_legs": 4,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.262963,
+            "signal_episodes": 2
+          },
+          "parameters": {
+            "lookback_bars": 60,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.2,
+            "scan_end": "14:09",
+            "scan_start": "14:00"
+          },
+          "robust_calibration_score": 0.069667
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 7,
+            "completed_legs_per_attempted_leg": 0.7,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.125591,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 18,
+            "completed_legs": 15,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.173989,
+            "signal_episodes": 9
+          },
+          "calibration_second_half": {
+            "attempted_legs": 8,
+            "completed_legs": 8,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.245186,
+            "signal_episodes": 4
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.05,
+            "scan_end": "14:34",
+            "scan_start": "14:05"
+          },
+          "robust_calibration_score": 0.067626
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 7,
+            "completed_legs_per_attempted_leg": 0.7,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.125591,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 18,
+            "completed_legs": 15,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.173989,
+            "signal_episodes": 9
+          },
+          "calibration_second_half": {
+            "attempted_legs": 8,
+            "completed_legs": 8,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.245186,
+            "signal_episodes": 4
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.1,
+            "scan_end": "14:34",
+            "scan_start": "14:05"
+          },
+          "robust_calibration_score": 0.067626
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 7,
+            "completed_legs_per_attempted_leg": 0.7,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.125591,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 22,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.772727,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.164751,
+            "signal_episodes": 11
+          },
+          "calibration_second_half": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.202992,
+            "signal_episodes": 6
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.05,
+            "scan_end": "14:40",
+            "scan_start": "14:05"
+          },
+          "robust_calibration_score": 0.067626
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 7,
+            "completed_legs_per_attempted_leg": 0.7,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.125591,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 22,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.772727,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.164751,
+            "signal_episodes": 11
+          },
+          "calibration_second_half": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.202992,
+            "signal_episodes": 6
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.1,
+            "scan_end": "14:40",
+            "scan_start": "14:05"
+          },
+          "robust_calibration_score": 0.067626
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 7,
+            "completed_legs_per_attempted_leg": 0.7,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.125421,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 22,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.772727,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.164652,
+            "signal_episodes": 11
+          },
+          "calibration_second_half": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.202992,
+            "signal_episodes": 6
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.05,
+            "scan_end": "14:40",
+            "scan_start": "14:00"
+          },
+          "robust_calibration_score": 0.067534
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 7,
+            "completed_legs_per_attempted_leg": 0.7,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.125421,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 22,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.772727,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.164652,
+            "signal_episodes": 11
+          },
+          "calibration_second_half": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.202992,
+            "signal_episodes": 6
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.1,
+            "scan_end": "14:40",
+            "scan_start": "14:00"
+          },
+          "robust_calibration_score": 0.067534
+        }
+      ]
+    },
+    "samsung_heavy_midday": {
+      "baseline": {
+        "calibration": {
+          "attempted_legs": 22,
+          "completed_legs": 17,
+          "completed_legs_per_attempted_leg": 0.772727,
+          "held_legs": 0,
+          "no_fill_legs": 5,
+          "notional_weighted_ev_pct": 0.168984,
+          "signal_episodes": 11
+        },
+        "full": {
+          "attempted_legs": 26,
+          "completed_legs": 20,
+          "completed_legs_per_attempted_leg": 0.769231,
+          "held_legs": 0,
+          "no_fill_legs": 6,
+          "notional_weighted_ev_pct": 0.174495,
+          "signal_episodes": 13
+        },
+        "holdout": {
+          "attempted_legs": 4,
+          "completed_legs": 3,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_ev_pct": 0.208971,
+          "signal_episodes": 2
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "13:54",
+          "scan_start": "13:15"
+        }
+      },
+      "best_diagnostic_candidate": {
+        "calibration_first_half": {
+          "attempted_legs": 12,
+          "completed_legs": 12,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.191007,
+          "signal_episodes": 6
+        },
+        "calibration_full": {
+          "attempted_legs": 30,
+          "completed_legs": 26,
+          "completed_legs_per_attempted_leg": 0.866667,
+          "held_legs": 0,
+          "no_fill_legs": 4,
+          "notional_weighted_ev_pct": 0.190737,
+          "signal_episodes": 15
+        },
+        "calibration_second_half": {
+          "attempted_legs": 18,
+          "completed_legs": 14,
+          "completed_legs_per_attempted_leg": 0.777778,
+          "held_legs": 0,
+          "no_fill_legs": 4,
+          "notional_weighted_ev_pct": 0.190533,
+          "signal_episodes": 9
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 0.75,
+          "rolling_low_proximity_pct": 0.35,
+          "scan_end": "13:29",
+          "scan_start": "13:20"
+        },
+        "robust_calibration_score": 0.127338
+      },
+      "calibration_gate_counts": {
+        "both_halves_positive_ev": 722,
+        "inventory_clear": 722,
+        "sample_ready": 2021
+      },
+      "calibration_ready_candidate_count": 722,
+      "calibration_winner": {
+        "calibration": {
+          "attempted_legs": 30,
+          "completed_legs": 26,
+          "completed_legs_per_attempted_leg": 0.866667,
+          "held_legs": 0,
+          "no_fill_legs": 4,
+          "notional_weighted_ev_pct": 0.190737,
+          "signal_episodes": 15
+        },
+        "calibration_first_half": {
+          "attempted_legs": 12,
+          "completed_legs": 12,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.191007,
+          "signal_episodes": 6
+        },
+        "calibration_second_half": {
+          "attempted_legs": 18,
+          "completed_legs": 14,
+          "completed_legs_per_attempted_leg": 0.777778,
+          "held_legs": 0,
+          "no_fill_legs": 4,
+          "notional_weighted_ev_pct": 0.190533,
+          "signal_episodes": 9
+        },
+        "full": {
+          "attempted_legs": 36,
+          "completed_legs": 31,
+          "completed_legs_per_attempted_leg": 0.861111,
+          "episodes": [
+            {
+              "date": "2026-06-10",
+              "legs": [
+                {
+                  "entry_price": 25700,
+                  "fill_at": "2026-06-10T13:23:00+09:00",
+                  "net_profit_pct": 0.189105,
+                  "status": "COMPLETE",
+                  "target_price": 25800
+                },
+                {
+                  "entry_price": 25650,
+                  "fill_at": "2026-06-10T13:23:00+09:00",
+                  "net_profit_pct": 0.189864,
+                  "status": "COMPLETE",
+                  "target_price": 25750
+                }
+              ],
+              "observed_drawdown_pct": 0.772201,
+              "observed_near_low_pct": 0.194932,
+              "signal_at": "2026-06-10T13:22:00+09:00",
+              "signal_close": 25700
+            },
+            {
+              "date": "2026-06-11",
+              "legs": [
+                {
+                  "entry_price": 25250,
+                  "fill_at": "2026-06-11T13:21:00+09:00",
+                  "net_profit_pct": 0.19604,
+                  "status": "COMPLETE",
+                  "target_price": 25350
+                },
+                {
+                  "entry_price": 25200,
+                  "fill_at": "2026-06-11T13:21:00+09:00",
+                  "net_profit_pct": 0.196825,
+                  "status": "COMPLETE",
+                  "target_price": 25300
+                }
+              ],
+              "observed_drawdown_pct": 0.590551,
+              "observed_near_low_pct": 0.198413,
+              "signal_at": "2026-06-11T13:20:00+09:00",
+              "signal_close": 25250
+            },
+            {
+              "date": "2026-06-17",
+              "legs": [
+                {
+                  "entry_price": 29150,
+                  "fill_at": "2026-06-17T13:21:00+09:00",
+                  "net_profit_pct": 0.143053,
+                  "status": "COMPLETE",
+                  "target_price": 29250
+                },
+                {
+                  "entry_price": 29100,
+                  "fill_at": "2026-06-17T13:21:00+09:00",
+                  "net_profit_pct": 0.143643,
+                  "status": "COMPLETE",
+                  "target_price": 29200
+                }
+              ],
+              "observed_drawdown_pct": 1.018676,
+              "observed_near_low_pct": 0.344234,
+              "signal_at": "2026-06-17T13:20:00+09:00",
+              "signal_close": 29150
+            },
+            {
+              "date": "2026-06-23",
+              "legs": [
+                {
+                  "entry_price": 25000,
+                  "fill_at": "2026-06-23T13:24:00+09:00",
+                  "net_profit_pct": 0.2,
+                  "status": "COMPLETE",
+                  "target_price": 25100
+                },
+                {
+                  "entry_price": 24950,
+                  "fill_at": "2026-06-23T13:24:00+09:00",
+                  "net_profit_pct": 0.200802,
+                  "status": "COMPLETE",
+                  "target_price": 25050
+                }
+              ],
+              "observed_drawdown_pct": 0.793651,
+              "observed_near_low_pct": 0.200401,
+              "signal_at": "2026-06-23T13:23:00+09:00",
+              "signal_close": 25000
+            },
+            {
+              "date": "2026-06-24",
+              "legs": [
+                {
+                  "entry_price": 24350,
+                  "fill_at": "2026-06-24T13:21:00+09:00",
+                  "net_profit_pct": 0.210678,
+                  "status": "COMPLETE",
+                  "target_price": 24450
+                },
+                {
+                  "entry_price": 24300,
+                  "fill_at": "2026-06-24T13:21:00+09:00",
+                  "net_profit_pct": 0.211523,
+                  "status": "COMPLETE",
+                  "target_price": 24400
+                }
+              ],
+              "observed_drawdown_pct": 0.814664,
+              "observed_near_low_pct": 0.205761,
+              "signal_at": "2026-06-24T13:20:00+09:00",
+              "signal_close": 24350
+            },
+            {
+              "date": "2026-06-25",
+              "legs": [
+                {
+                  "entry_price": 24150,
+                  "fill_at": "2026-06-25T13:22:00+09:00",
+                  "net_profit_pct": 0.214079,
+                  "status": "COMPLETE",
+                  "target_price": 24250
+                },
+                {
+                  "entry_price": 24100,
+                  "fill_at": "2026-06-25T13:23:00+09:00",
+                  "net_profit_pct": 0.214938,
+                  "status": "COMPLETE",
+                  "target_price": 24200
+                }
+              ],
+              "observed_drawdown_pct": 0.821355,
+              "observed_near_low_pct": 0.207469,
+              "signal_at": "2026-06-25T13:21:00+09:00",
+              "signal_close": 24150
+            },
+            {
+              "date": "2026-06-29",
+              "legs": [
+                {
+                  "entry_price": 23800,
+                  "fill_at": "2026-06-29T13:22:00+09:00",
+                  "net_profit_pct": 0.220168,
+                  "status": "COMPLETE",
+                  "target_price": 23900
+                },
+                {
+                  "entry_price": 23750,
+                  "fill_at": "2026-06-29T13:22:00+09:00",
+                  "net_profit_pct": 0.221053,
+                  "status": "COMPLETE",
+                  "target_price": 23850
+                }
+              ],
+              "observed_drawdown_pct": 0.833333,
+              "observed_near_low_pct": 0.210526,
+              "signal_at": "2026-06-29T13:21:00+09:00",
+              "signal_close": 23800
+            },
+            {
+              "date": "2026-06-30",
+              "legs": [
+                {
+                  "entry_price": 23450,
+                  "fill_at": "2026-06-30T13:28:00+09:00",
+                  "net_profit_pct": 0.226439,
+                  "status": "COMPLETE",
+                  "target_price": 23550
+                },
+                {
+                  "entry_price": 23400,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 0.635593,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-30T13:27:00+09:00",
+              "signal_close": 23450
+            },
+            {
+              "date": "2026-07-01",
+              "legs": [
+                {
+                  "entry_price": 23700,
+                  "fill_at": "2026-07-01T13:23:00+09:00",
+                  "net_profit_pct": 0.221941,
+                  "status": "COMPLETE",
+                  "target_price": 23800
+                },
+                {
+                  "entry_price": 23650,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.043841,
+              "observed_near_low_pct": 0.211416,
+              "signal_at": "2026-07-01T13:22:00+09:00",
+              "signal_close": 23700
+            },
+            {
+              "date": "2026-07-02",
+              "legs": [
+                {
+                  "entry_price": 23200,
+                  "fill_at": "2026-07-02T13:21:00+09:00",
+                  "net_profit_pct": 0.231034,
+                  "status": "COMPLETE",
+                  "target_price": 23300
+                },
+                {
+                  "entry_price": 23150,
+                  "fill_at": "2026-07-02T13:21:00+09:00",
+                  "net_profit_pct": 0.231965,
+                  "status": "COMPLETE",
+                  "target_price": 23250
+                }
+              ],
+              "observed_drawdown_pct": 0.960512,
+              "observed_near_low_pct": 0.215983,
+              "signal_at": "2026-07-02T13:20:00+09:00",
+              "signal_close": 23200
+            },
+            {
+              "date": "2026-07-07",
+              "legs": [
+                {
+                  "entry_price": 22050,
+                  "fill_at": "2026-07-07T13:23:00+09:00",
+                  "net_profit_pct": 0.253515,
+                  "status": "COMPLETE",
+                  "target_price": 22150
+                },
+                {
+                  "entry_price": 22000,
+                  "fill_at": "2026-07-07T13:23:00+09:00",
+                  "net_profit_pct": 0.254545,
+                  "status": "COMPLETE",
+                  "target_price": 22100
+                }
+              ],
+              "observed_drawdown_pct": 0.898876,
+              "observed_near_low_pct": 0.227273,
+              "signal_at": "2026-07-07T13:22:00+09:00",
+              "signal_close": 22050
+            },
+            {
+              "date": "2026-07-08",
+              "legs": [
+                {
+                  "entry_price": 21100,
+                  "fill_at": "2026-07-08T13:22:00+09:00",
+                  "net_profit_pct": 0.273934,
+                  "status": "COMPLETE",
+                  "target_price": 21200
+                },
+                {
+                  "entry_price": 21050,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.401869,
+              "observed_near_low_pct": 0.23753,
+              "signal_at": "2026-07-08T13:21:00+09:00",
+              "signal_close": 21100
+            },
+            {
+              "date": "2026-07-09",
+              "legs": [
+                {
+                  "entry_price": 21250,
+                  "fill_at": "2026-07-09T13:22:00+09:00",
+                  "net_profit_pct": 0.270588,
+                  "status": "COMPLETE",
+                  "target_price": 21350
+                },
+                {
+                  "entry_price": 21200,
+                  "fill_at": "2026-07-09T13:22:00+09:00",
+                  "net_profit_pct": 0.271698,
+                  "status": "COMPLETE",
+                  "target_price": 21300
+                }
+              ],
+              "observed_drawdown_pct": 0.932401,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-09T13:21:00+09:00",
+              "signal_close": 21250
+            },
+            {
+              "date": "2026-07-13",
+              "legs": [
+                {
+                  "entry_price": 22050,
+                  "fill_at": "2026-07-13T13:22:00+09:00",
+                  "net_profit_pct": 0.253515,
+                  "status": "COMPLETE",
+                  "target_price": 22150
+                },
+                {
+                  "entry_price": 22000,
+                  "fill_at": "2026-07-13T13:24:00+09:00",
+                  "net_profit_pct": 0.254545,
+                  "status": "COMPLETE",
+                  "target_price": 22100
+                }
+              ],
+              "observed_drawdown_pct": 0.675676,
+              "observed_near_low_pct": 0.227273,
+              "signal_at": "2026-07-13T13:21:00+09:00",
+              "signal_close": 22050
+            },
+            {
+              "date": "2026-07-15",
+              "legs": [
+                {
+                  "entry_price": 21900,
+                  "fill_at": "2026-07-15T13:26:00+09:00",
+                  "net_profit_pct": 0.256621,
+                  "status": "COMPLETE",
+                  "target_price": 22000
+                },
+                {
+                  "entry_price": 21850,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 0.680272,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-15T13:25:00+09:00",
+              "signal_close": 21900
+            },
+            {
+              "date": "2026-07-20",
+              "legs": [
+                {
+                  "entry_price": 21050,
+                  "fill_at": "2026-07-20T13:21:00+09:00",
+                  "net_profit_pct": 0.275059,
+                  "status": "COMPLETE",
+                  "target_price": 21150
+                },
+                {
+                  "entry_price": 21000,
+                  "fill_at": "2026-07-20T13:21:00+09:00",
+                  "net_profit_pct": 0.27619,
+                  "status": "COMPLETE",
+                  "target_price": 21100
+                }
+              ],
+              "observed_drawdown_pct": 1.405152,
+              "observed_near_low_pct": 0.238095,
+              "signal_at": "2026-07-20T13:20:00+09:00",
+              "signal_close": 21050
+            },
+            {
+              "date": "2026-07-30",
+              "legs": [
+                {
+                  "entry_price": 20500,
+                  "fill_at": "2026-07-30T13:21:00+09:00",
+                  "net_profit_pct": 0.287805,
+                  "status": "COMPLETE",
+                  "target_price": 20600
+                },
+                {
+                  "entry_price": 20450,
+                  "fill_at": "2026-07-30T13:21:00+09:00",
+                  "net_profit_pct": 0.288998,
+                  "status": "COMPLETE",
+                  "target_price": 20550
+                }
+              ],
+              "observed_drawdown_pct": 1.442308,
+              "observed_near_low_pct": 0.244499,
+              "signal_at": "2026-07-30T13:20:00+09:00",
+              "signal_close": 20500
+            },
+            {
+              "date": "2026-08-05",
+              "legs": [
+                {
+                  "entry_price": 22050,
+                  "fill_at": "2026-08-05T13:22:00+09:00",
+                  "net_profit_pct": 0.253515,
+                  "status": "COMPLETE",
+                  "target_price": 22150
+                },
+                {
+                  "entry_price": 22000,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 0.898876,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-08-05T13:21:00+09:00",
+              "signal_close": 22050
+            }
+          ],
+          "held_legs": 0,
+          "no_fill_legs": 5,
+          "notional_weighted_ev_pct": 0.19641,
+          "signal_episodes": 18
+        },
+        "holdout": {
+          "attempted_legs": 6,
+          "completed_legs": 5,
+          "completed_legs_per_attempted_leg": 0.833333,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_ev_pct": 0.228178,
+          "signal_episodes": 3
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 0.75,
+          "rolling_low_proximity_pct": 0.35,
+          "scan_end": "13:29",
+          "scan_start": "13:20"
+        },
+        "robust_calibration_score": 0.127338
+      },
+      "date_split": {
+        "calibration_end": "2026-07-16",
+        "calibration_start": "2026-06-05",
+        "holdout_end": "2026-08-10",
+        "holdout_start": "2026-07-20"
+      },
+      "decision": "holdout_pass_source_only_early_candidate",
+      "grid_candidate_count": 5130,
+      "name": "삼성중공업",
+      "profile_id": "samsung_heavy_midday",
+      "recommended_action": "source_only_candidate_requires_separate_runtime_change",
+      "recommended_spot": {
+        "lookback_bars": 30,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "13:29",
+        "scan_start": "13:20"
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "attempted_legs": 30,
+          "completed_legs": 26,
+          "completed_legs_per_attempted_leg": 0.866667,
+          "held_legs": 0,
+          "no_fill_legs": 4,
+          "notional_weighted_ev_pct": 0.190737,
+          "signal_episodes": 15
+        },
+        "calibration_first_half": {
+          "attempted_legs": 12,
+          "completed_legs": 12,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.191007,
+          "signal_episodes": 6
+        },
+        "calibration_second_half": {
+          "attempted_legs": 18,
+          "completed_legs": 14,
+          "completed_legs_per_attempted_leg": 0.777778,
+          "held_legs": 0,
+          "no_fill_legs": 4,
+          "notional_weighted_ev_pct": 0.190533,
+          "signal_episodes": 9
+        },
+        "full": {
+          "attempted_legs": 36,
+          "completed_legs": 31,
+          "completed_legs_per_attempted_leg": 0.861111,
+          "episodes": [
+            {
+              "date": "2026-06-10",
+              "legs": [
+                {
+                  "entry_price": 25700,
+                  "fill_at": "2026-06-10T13:23:00+09:00",
+                  "net_profit_pct": 0.189105,
+                  "status": "COMPLETE",
+                  "target_price": 25800
+                },
+                {
+                  "entry_price": 25650,
+                  "fill_at": "2026-06-10T13:23:00+09:00",
+                  "net_profit_pct": 0.189864,
+                  "status": "COMPLETE",
+                  "target_price": 25750
+                }
+              ],
+              "observed_drawdown_pct": 0.772201,
+              "observed_near_low_pct": 0.194932,
+              "signal_at": "2026-06-10T13:22:00+09:00",
+              "signal_close": 25700
+            },
+            {
+              "date": "2026-06-11",
+              "legs": [
+                {
+                  "entry_price": 25250,
+                  "fill_at": "2026-06-11T13:21:00+09:00",
+                  "net_profit_pct": 0.19604,
+                  "status": "COMPLETE",
+                  "target_price": 25350
+                },
+                {
+                  "entry_price": 25200,
+                  "fill_at": "2026-06-11T13:21:00+09:00",
+                  "net_profit_pct": 0.196825,
+                  "status": "COMPLETE",
+                  "target_price": 25300
+                }
+              ],
+              "observed_drawdown_pct": 0.590551,
+              "observed_near_low_pct": 0.198413,
+              "signal_at": "2026-06-11T13:20:00+09:00",
+              "signal_close": 25250
+            },
+            {
+              "date": "2026-06-17",
+              "legs": [
+                {
+                  "entry_price": 29150,
+                  "fill_at": "2026-06-17T13:21:00+09:00",
+                  "net_profit_pct": 0.143053,
+                  "status": "COMPLETE",
+                  "target_price": 29250
+                },
+                {
+                  "entry_price": 29100,
+                  "fill_at": "2026-06-17T13:21:00+09:00",
+                  "net_profit_pct": 0.143643,
+                  "status": "COMPLETE",
+                  "target_price": 29200
+                }
+              ],
+              "observed_drawdown_pct": 1.018676,
+              "observed_near_low_pct": 0.344234,
+              "signal_at": "2026-06-17T13:20:00+09:00",
+              "signal_close": 29150
+            },
+            {
+              "date": "2026-06-23",
+              "legs": [
+                {
+                  "entry_price": 25000,
+                  "fill_at": "2026-06-23T13:24:00+09:00",
+                  "net_profit_pct": 0.2,
+                  "status": "COMPLETE",
+                  "target_price": 25100
+                },
+                {
+                  "entry_price": 24950,
+                  "fill_at": "2026-06-23T13:24:00+09:00",
+                  "net_profit_pct": 0.200802,
+                  "status": "COMPLETE",
+                  "target_price": 25050
+                }
+              ],
+              "observed_drawdown_pct": 0.793651,
+              "observed_near_low_pct": 0.200401,
+              "signal_at": "2026-06-23T13:23:00+09:00",
+              "signal_close": 25000
+            },
+            {
+              "date": "2026-06-24",
+              "legs": [
+                {
+                  "entry_price": 24350,
+                  "fill_at": "2026-06-24T13:21:00+09:00",
+                  "net_profit_pct": 0.210678,
+                  "status": "COMPLETE",
+                  "target_price": 24450
+                },
+                {
+                  "entry_price": 24300,
+                  "fill_at": "2026-06-24T13:21:00+09:00",
+                  "net_profit_pct": 0.211523,
+                  "status": "COMPLETE",
+                  "target_price": 24400
+                }
+              ],
+              "observed_drawdown_pct": 0.814664,
+              "observed_near_low_pct": 0.205761,
+              "signal_at": "2026-06-24T13:20:00+09:00",
+              "signal_close": 24350
+            },
+            {
+              "date": "2026-06-25",
+              "legs": [
+                {
+                  "entry_price": 24150,
+                  "fill_at": "2026-06-25T13:22:00+09:00",
+                  "net_profit_pct": 0.214079,
+                  "status": "COMPLETE",
+                  "target_price": 24250
+                },
+                {
+                  "entry_price": 24100,
+                  "fill_at": "2026-06-25T13:23:00+09:00",
+                  "net_profit_pct": 0.214938,
+                  "status": "COMPLETE",
+                  "target_price": 24200
+                }
+              ],
+              "observed_drawdown_pct": 0.821355,
+              "observed_near_low_pct": 0.207469,
+              "signal_at": "2026-06-25T13:21:00+09:00",
+              "signal_close": 24150
+            },
+            {
+              "date": "2026-06-29",
+              "legs": [
+                {
+                  "entry_price": 23800,
+                  "fill_at": "2026-06-29T13:22:00+09:00",
+                  "net_profit_pct": 0.220168,
+                  "status": "COMPLETE",
+                  "target_price": 23900
+                },
+                {
+                  "entry_price": 23750,
+                  "fill_at": "2026-06-29T13:22:00+09:00",
+                  "net_profit_pct": 0.221053,
+                  "status": "COMPLETE",
+                  "target_price": 23850
+                }
+              ],
+              "observed_drawdown_pct": 0.833333,
+              "observed_near_low_pct": 0.210526,
+              "signal_at": "2026-06-29T13:21:00+09:00",
+              "signal_close": 23800
+            },
+            {
+              "date": "2026-06-30",
+              "legs": [
+                {
+                  "entry_price": 23450,
+                  "fill_at": "2026-06-30T13:28:00+09:00",
+                  "net_profit_pct": 0.226439,
+                  "status": "COMPLETE",
+                  "target_price": 23550
+                },
+                {
+                  "entry_price": 23400,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 0.635593,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-06-30T13:27:00+09:00",
+              "signal_close": 23450
+            },
+            {
+              "date": "2026-07-01",
+              "legs": [
+                {
+                  "entry_price": 23700,
+                  "fill_at": "2026-07-01T13:23:00+09:00",
+                  "net_profit_pct": 0.221941,
+                  "status": "COMPLETE",
+                  "target_price": 23800
+                },
+                {
+                  "entry_price": 23650,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.043841,
+              "observed_near_low_pct": 0.211416,
+              "signal_at": "2026-07-01T13:22:00+09:00",
+              "signal_close": 23700
+            },
+            {
+              "date": "2026-07-02",
+              "legs": [
+                {
+                  "entry_price": 23200,
+                  "fill_at": "2026-07-02T13:21:00+09:00",
+                  "net_profit_pct": 0.231034,
+                  "status": "COMPLETE",
+                  "target_price": 23300
+                },
+                {
+                  "entry_price": 23150,
+                  "fill_at": "2026-07-02T13:21:00+09:00",
+                  "net_profit_pct": 0.231965,
+                  "status": "COMPLETE",
+                  "target_price": 23250
+                }
+              ],
+              "observed_drawdown_pct": 0.960512,
+              "observed_near_low_pct": 0.215983,
+              "signal_at": "2026-07-02T13:20:00+09:00",
+              "signal_close": 23200
+            },
+            {
+              "date": "2026-07-07",
+              "legs": [
+                {
+                  "entry_price": 22050,
+                  "fill_at": "2026-07-07T13:23:00+09:00",
+                  "net_profit_pct": 0.253515,
+                  "status": "COMPLETE",
+                  "target_price": 22150
+                },
+                {
+                  "entry_price": 22000,
+                  "fill_at": "2026-07-07T13:23:00+09:00",
+                  "net_profit_pct": 0.254545,
+                  "status": "COMPLETE",
+                  "target_price": 22100
+                }
+              ],
+              "observed_drawdown_pct": 0.898876,
+              "observed_near_low_pct": 0.227273,
+              "signal_at": "2026-07-07T13:22:00+09:00",
+              "signal_close": 22050
+            },
+            {
+              "date": "2026-07-08",
+              "legs": [
+                {
+                  "entry_price": 21100,
+                  "fill_at": "2026-07-08T13:22:00+09:00",
+                  "net_profit_pct": 0.273934,
+                  "status": "COMPLETE",
+                  "target_price": 21200
+                },
+                {
+                  "entry_price": 21050,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 1.401869,
+              "observed_near_low_pct": 0.23753,
+              "signal_at": "2026-07-08T13:21:00+09:00",
+              "signal_close": 21100
+            },
+            {
+              "date": "2026-07-09",
+              "legs": [
+                {
+                  "entry_price": 21250,
+                  "fill_at": "2026-07-09T13:22:00+09:00",
+                  "net_profit_pct": 0.270588,
+                  "status": "COMPLETE",
+                  "target_price": 21350
+                },
+                {
+                  "entry_price": 21200,
+                  "fill_at": "2026-07-09T13:22:00+09:00",
+                  "net_profit_pct": 0.271698,
+                  "status": "COMPLETE",
+                  "target_price": 21300
+                }
+              ],
+              "observed_drawdown_pct": 0.932401,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-09T13:21:00+09:00",
+              "signal_close": 21250
+            },
+            {
+              "date": "2026-07-13",
+              "legs": [
+                {
+                  "entry_price": 22050,
+                  "fill_at": "2026-07-13T13:22:00+09:00",
+                  "net_profit_pct": 0.253515,
+                  "status": "COMPLETE",
+                  "target_price": 22150
+                },
+                {
+                  "entry_price": 22000,
+                  "fill_at": "2026-07-13T13:24:00+09:00",
+                  "net_profit_pct": 0.254545,
+                  "status": "COMPLETE",
+                  "target_price": 22100
+                }
+              ],
+              "observed_drawdown_pct": 0.675676,
+              "observed_near_low_pct": 0.227273,
+              "signal_at": "2026-07-13T13:21:00+09:00",
+              "signal_close": 22050
+            },
+            {
+              "date": "2026-07-15",
+              "legs": [
+                {
+                  "entry_price": 21900,
+                  "fill_at": "2026-07-15T13:26:00+09:00",
+                  "net_profit_pct": 0.256621,
+                  "status": "COMPLETE",
+                  "target_price": 22000
+                },
+                {
+                  "entry_price": 21850,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 0.680272,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-15T13:25:00+09:00",
+              "signal_close": 21900
+            },
+            {
+              "date": "2026-07-20",
+              "legs": [
+                {
+                  "entry_price": 21050,
+                  "fill_at": "2026-07-20T13:21:00+09:00",
+                  "net_profit_pct": 0.275059,
+                  "status": "COMPLETE",
+                  "target_price": 21150
+                },
+                {
+                  "entry_price": 21000,
+                  "fill_at": "2026-07-20T13:21:00+09:00",
+                  "net_profit_pct": 0.27619,
+                  "status": "COMPLETE",
+                  "target_price": 21100
+                }
+              ],
+              "observed_drawdown_pct": 1.405152,
+              "observed_near_low_pct": 0.238095,
+              "signal_at": "2026-07-20T13:20:00+09:00",
+              "signal_close": 21050
+            },
+            {
+              "date": "2026-07-30",
+              "legs": [
+                {
+                  "entry_price": 20500,
+                  "fill_at": "2026-07-30T13:21:00+09:00",
+                  "net_profit_pct": 0.287805,
+                  "status": "COMPLETE",
+                  "target_price": 20600
+                },
+                {
+                  "entry_price": 20450,
+                  "fill_at": "2026-07-30T13:21:00+09:00",
+                  "net_profit_pct": 0.288998,
+                  "status": "COMPLETE",
+                  "target_price": 20550
+                }
+              ],
+              "observed_drawdown_pct": 1.442308,
+              "observed_near_low_pct": 0.244499,
+              "signal_at": "2026-07-30T13:20:00+09:00",
+              "signal_close": 20500
+            },
+            {
+              "date": "2026-08-05",
+              "legs": [
+                {
+                  "entry_price": 22050,
+                  "fill_at": "2026-08-05T13:22:00+09:00",
+                  "net_profit_pct": 0.253515,
+                  "status": "COMPLETE",
+                  "target_price": 22150
+                },
+                {
+                  "entry_price": 22000,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 0.898876,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-08-05T13:21:00+09:00",
+              "signal_close": 22050
+            }
+          ],
+          "held_legs": 0,
+          "no_fill_legs": 5,
+          "notional_weighted_ev_pct": 0.19641,
+          "signal_episodes": 18
+        },
+        "holdout": {
+          "attempted_legs": 6,
+          "completed_legs": 5,
+          "completed_legs_per_attempted_leg": 0.833333,
+          "held_legs": 0,
+          "no_fill_legs": 1,
+          "notional_weighted_ev_pct": 0.228178,
+          "signal_episodes": 3
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 0.75,
+          "rolling_low_proximity_pct": 0.35,
+          "scan_end": "13:29",
+          "scan_start": "13:20"
+        }
+      },
+      "session": "midday",
+      "symbol": "010140",
+      "top_calibration_candidates": [
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 12,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.191007,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 30,
+            "completed_legs": 26,
+            "completed_legs_per_attempted_leg": 0.866667,
+            "held_legs": 0,
+            "no_fill_legs": 4,
+            "notional_weighted_ev_pct": 0.190737,
+            "signal_episodes": 15
+          },
+          "calibration_second_half": {
+            "attempted_legs": 18,
+            "completed_legs": 14,
+            "completed_legs_per_attempted_leg": 0.777778,
+            "held_legs": 0,
+            "no_fill_legs": 4,
+            "notional_weighted_ev_pct": 0.190533,
+            "signal_episodes": 9
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.35,
+            "scan_end": "13:29",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.127338
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 12,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.19088,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 34,
+            "completed_legs": 32,
+            "completed_legs_per_attempted_leg": 0.941176,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.212008,
+            "signal_episodes": 17
+          },
+          "calibration_second_half": {
+            "attempted_legs": 22,
+            "completed_legs": 20,
+            "completed_legs_per_attempted_leg": 0.909091,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.225201,
+            "signal_episodes": 11
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:29",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.127253
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 12,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.19088,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 32,
+            "completed_legs": 30,
+            "completed_legs_per_attempted_leg": 0.9375,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.209718,
+            "signal_episodes": 16
+          },
+          "calibration_second_half": {
+            "attempted_legs": 20,
+            "completed_legs": 18,
+            "completed_legs_per_attempted_leg": 0.9,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.222647,
+            "signal_episodes": 10
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.5,
+            "scan_end": "13:29",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.127253
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 16,
+            "completed_legs": 15,
+            "completed_legs_per_attempted_leg": 0.9375,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.172527,
+            "signal_episodes": 8
+          },
+          "calibration_full": {
+            "attempted_legs": 36,
+            "completed_legs": 32,
+            "completed_legs_per_attempted_leg": 0.888889,
+            "held_legs": 0,
+            "no_fill_legs": 4,
+            "notional_weighted_ev_pct": 0.192414,
+            "signal_episodes": 18
+          },
+          "calibration_second_half": {
+            "attempted_legs": 20,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.85,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.210979,
+            "signal_episodes": 10
+          },
+          "parameters": {
+            "lookback_bars": 45,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:29",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.123234
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 20,
+            "completed_legs": 18,
+            "completed_legs_per_attempted_leg": 0.9,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.162147,
+            "signal_episodes": 10
+          },
+          "calibration_full": {
+            "attempted_legs": 38,
+            "completed_legs": 33,
+            "completed_legs_per_attempted_leg": 0.868421,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.180679,
+            "signal_episodes": 19
+          },
+          "calibration_second_half": {
+            "attempted_legs": 18,
+            "completed_legs": 15,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.20487,
+            "signal_episodes": 9
+          },
+          "parameters": {
+            "lookback_bars": 60,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:29",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.12161
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 14,
+            "completed_legs": 13,
+            "completed_legs_per_attempted_leg": 0.928571,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.172822,
+            "signal_episodes": 7
+          },
+          "calibration_full": {
+            "attempted_legs": 32,
+            "completed_legs": 28,
+            "completed_legs_per_attempted_leg": 0.875,
+            "held_legs": 0,
+            "no_fill_legs": 4,
+            "notional_weighted_ev_pct": 0.189632,
+            "signal_episodes": 16
+          },
+          "calibration_second_half": {
+            "attempted_legs": 18,
+            "completed_legs": 15,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.20467,
+            "signal_episodes": 9
+          },
+          "parameters": {
+            "lookback_bars": 45,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.5,
+            "scan_end": "13:29",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.118247
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 22,
+            "completed_legs": 19,
+            "completed_legs_per_attempted_leg": 0.863636,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.153627,
+            "signal_episodes": 11
+          },
+          "calibration_full": {
+            "attempted_legs": 42,
+            "completed_legs": 36,
+            "completed_legs_per_attempted_leg": 0.857143,
+            "held_legs": 0,
+            "no_fill_legs": 6,
+            "notional_weighted_ev_pct": 0.177664,
+            "signal_episodes": 21
+          },
+          "calibration_second_half": {
+            "attempted_legs": 20,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.85,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.208968,
+            "signal_episodes": 10
+          },
+          "parameters": {
+            "lookback_bars": 60,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:39",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.116757
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 18,
+            "completed_legs": 16,
+            "completed_legs_per_attempted_leg": 0.888889,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.160173,
+            "signal_episodes": 9
+          },
+          "calibration_full": {
+            "attempted_legs": 36,
+            "completed_legs": 31,
+            "completed_legs_per_attempted_leg": 0.861111,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.180913,
+            "signal_episodes": 18
+          },
+          "calibration_second_half": {
+            "attempted_legs": 18,
+            "completed_legs": 15,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.20516,
+            "signal_episodes": 9
+          },
+          "parameters": {
+            "lookback_bars": 60,
+            "rolling_high_drawdown_pct": 1.0,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:49",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.116489
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.185877,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 32,
+            "completed_legs": 29,
+            "completed_legs_per_attempted_leg": 0.90625,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.20365,
+            "signal_episodes": 16
+          },
+          "calibration_second_half": {
+            "attempted_legs": 22,
+            "completed_legs": 19,
+            "completed_legs_per_attempted_leg": 0.863636,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.212969,
+            "signal_episodes": 11
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.0,
+            "rolling_low_proximity_pct": 0.5,
+            "scan_end": "13:49",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.116173
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 10,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.185877,
+            "signal_episodes": 5
+          },
+          "calibration_full": {
+            "attempted_legs": 32,
+            "completed_legs": 29,
+            "completed_legs_per_attempted_leg": 0.90625,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.20365,
+            "signal_episodes": 16
+          },
+          "calibration_second_half": {
+            "attempted_legs": 22,
+            "completed_legs": 19,
+            "completed_legs_per_attempted_leg": 0.863636,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.212969,
+            "signal_episodes": 11
+          },
+          "parameters": {
+            "lookback_bars": 30,
+            "rolling_high_drawdown_pct": 1.0,
+            "rolling_low_proximity_pct": 0.5,
+            "scan_end": "13:54",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.116173
+        }
+      ]
+    },
+    "sk_eternix_midday": {
+      "baseline": {
+        "calibration": {
+          "attempted_legs": 36,
+          "completed_legs": 34,
+          "completed_legs_per_attempted_leg": 0.944444,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.093752,
+          "signal_episodes": 18
+        },
+        "full": {
+          "attempted_legs": 50,
+          "completed_legs": 44,
+          "completed_legs_per_attempted_leg": 0.88,
+          "held_legs": 0,
+          "no_fill_legs": 6,
+          "notional_weighted_ev_pct": 0.080611,
+          "signal_episodes": 25
+        },
+        "holdout": {
+          "attempted_legs": 14,
+          "completed_legs": 10,
+          "completed_legs_per_attempted_leg": 0.714286,
+          "held_legs": 0,
+          "no_fill_legs": 4,
+          "notional_weighted_ev_pct": 0.053195,
+          "signal_episodes": 7
+        },
+        "parameters": {
+          "lookback_bars": 30,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "13:54",
+          "scan_start": "13:15"
+        }
+      },
+      "best_diagnostic_candidate": {
+        "calibration_first_half": {
+          "attempted_legs": 8,
+          "completed_legs": 8,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.141755,
+          "signal_episodes": 4
+        },
+        "calibration_full": {
+          "attempted_legs": 18,
+          "completed_legs": 18,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.131547,
+          "signal_episodes": 9
+        },
+        "calibration_second_half": {
+          "attempted_legs": 10,
+          "completed_legs": 10,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.123102,
+          "signal_episodes": 5
+        },
+        "parameters": {
+          "lookback_bars": 20,
+          "rolling_high_drawdown_pct": 2.0,
+          "rolling_low_proximity_pct": 0.75,
+          "scan_end": "13:54",
+          "scan_start": "13:30"
+        },
+        "robust_calibration_score": 0.076939
+      },
+      "calibration_gate_counts": {
+        "both_halves_positive_ev": 3188,
+        "inventory_clear": 3188,
+        "sample_ready": 3516
+      },
+      "calibration_ready_candidate_count": 3188,
+      "calibration_winner": {
+        "calibration": {
+          "attempted_legs": 18,
+          "completed_legs": 18,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.131547,
+          "signal_episodes": 9
+        },
+        "calibration_first_half": {
+          "attempted_legs": 8,
+          "completed_legs": 8,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.141755,
+          "signal_episodes": 4
+        },
+        "calibration_second_half": {
+          "attempted_legs": 10,
+          "completed_legs": 10,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.123102,
+          "signal_episodes": 5
+        },
+        "full": {
+          "attempted_legs": 26,
+          "completed_legs": 24,
+          "completed_legs_per_attempted_leg": 0.923077,
+          "episodes": [
+            {
+              "date": "2026-06-11",
+              "legs": [
+                {
+                  "entry_price": 40700,
+                  "fill_at": "2026-06-11T13:37:00+09:00",
+                  "net_profit_pct": 0.0457,
+                  "status": "COMPLETE",
+                  "target_price": 40800
+                },
+                {
+                  "entry_price": 40650,
+                  "fill_at": "2026-06-11T13:37:00+09:00",
+                  "net_profit_pct": 0.046002,
+                  "status": "COMPLETE",
+                  "target_price": 40750
+                }
+              ],
+              "observed_drawdown_pct": 1.809409,
+              "observed_near_low_pct": 0.123001,
+              "signal_at": "2026-06-11T13:36:00+09:00",
+              "signal_close": 40700
+            },
+            {
+              "date": "2026-06-15",
+              "legs": [
+                {
+                  "entry_price": 50100,
+                  "fill_at": "2026-06-15T13:32:00+09:00",
+                  "net_profit_pct": 0.199202,
+                  "status": "COMPLETE",
+                  "target_price": 50300
+                },
+                {
+                  "entry_price": 50000,
+                  "fill_at": "2026-06-15T13:32:00+09:00",
+                  "net_profit_pct": 0.2,
+                  "status": "COMPLETE",
+                  "target_price": 50200
+                }
+              ],
+              "observed_drawdown_pct": 2.339181,
+              "observed_near_low_pct": 0.703518,
+              "signal_at": "2026-06-15T13:31:00+09:00",
+              "signal_close": 50100
+            },
+            {
+              "date": "2026-06-16",
+              "legs": [
+                {
+                  "entry_price": 59900,
+                  "fill_at": "2026-06-16T13:55:00+09:00",
+                  "net_profit_pct": 0.13389,
+                  "status": "COMPLETE",
+                  "target_price": 60100
+                },
+                {
+                  "entry_price": 59800,
+                  "fill_at": "2026-06-16T13:55:00+09:00",
+                  "net_profit_pct": 0.134448,
+                  "status": "COMPLETE",
+                  "target_price": 60000
+                }
+              ],
+              "observed_drawdown_pct": 3.231018,
+              "observed_near_low_pct": 0.672269,
+              "signal_at": "2026-06-16T13:54:00+09:00",
+              "signal_close": 59900
+            },
+            {
+              "date": "2026-06-17",
+              "legs": [
+                {
+                  "entry_price": 54300,
+                  "fill_at": "2026-06-17T13:31:00+09:00",
+                  "net_profit_pct": 0.168324,
+                  "status": "COMPLETE",
+                  "target_price": 54500
+                },
+                {
+                  "entry_price": 54200,
+                  "fill_at": "2026-06-17T13:32:00+09:00",
+                  "net_profit_pct": 0.169004,
+                  "status": "COMPLETE",
+                  "target_price": 54400
+                }
+              ],
+              "observed_drawdown_pct": 1.98556,
+              "observed_near_low_pct": 0.555556,
+              "signal_at": "2026-06-17T13:30:00+09:00",
+              "signal_close": 54300
+            },
+            {
+              "date": "2026-06-26",
+              "legs": [
+                {
+                  "entry_price": 42150,
+                  "fill_at": "2026-06-26T13:32:00+09:00",
+                  "net_profit_pct": 0.037248,
+                  "status": "COMPLETE",
+                  "target_price": 42250
+                },
+                {
+                  "entry_price": 42100,
+                  "fill_at": "2026-06-26T13:32:00+09:00",
+                  "net_profit_pct": 0.03753,
+                  "status": "COMPLETE",
+                  "target_price": 42200
+                }
+              ],
+              "observed_drawdown_pct": 2.655889,
+              "observed_near_low_pct": 0.237812,
+              "signal_at": "2026-06-26T13:31:00+09:00",
+              "signal_close": 42150
+            },
+            {
+              "date": "2026-07-01",
+              "legs": [
+                {
+                  "entry_price": 57400,
+                  "fill_at": "2026-07-01T13:31:00+09:00",
+                  "net_profit_pct": 0.148432,
+                  "status": "COMPLETE",
+                  "target_price": 57600
+                },
+                {
+                  "entry_price": 57300,
+                  "fill_at": "2026-07-01T13:31:00+09:00",
+                  "net_profit_pct": 0.14904,
+                  "status": "COMPLETE",
+                  "target_price": 57500
+                }
+              ],
+              "observed_drawdown_pct": 1.880342,
+              "observed_near_low_pct": 0.525394,
+              "signal_at": "2026-07-01T13:30:00+09:00",
+              "signal_close": 57400
+            },
+            {
+              "date": "2026-07-02",
+              "legs": [
+                {
+                  "entry_price": 53600,
+                  "fill_at": "2026-07-02T13:34:00+09:00",
+                  "net_profit_pct": 0.173134,
+                  "status": "COMPLETE",
+                  "target_price": 53800
+                },
+                {
+                  "entry_price": 53500,
+                  "fill_at": "2026-07-02T13:34:00+09:00",
+                  "net_profit_pct": 0.173832,
+                  "status": "COMPLETE",
+                  "target_price": 53700
+                }
+              ],
+              "observed_drawdown_pct": 2.09854,
+              "observed_near_low_pct": 0.093284,
+              "signal_at": "2026-07-02T13:33:00+09:00",
+              "signal_close": 53650
+            },
+            {
+              "date": "2026-07-08",
+              "legs": [
+                {
+                  "entry_price": 41650,
+                  "fill_at": "2026-07-08T13:38:00+09:00",
+                  "net_profit_pct": 0.040096,
+                  "status": "COMPLETE",
+                  "target_price": 41750
+                },
+                {
+                  "entry_price": 41600,
+                  "fill_at": "2026-07-08T13:38:00+09:00",
+                  "net_profit_pct": 0.040385,
+                  "status": "COMPLETE",
+                  "target_price": 41700
+                }
+              ],
+              "observed_drawdown_pct": 2.0,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-08T13:37:00+09:00",
+              "signal_close": 41650
+            },
+            {
+              "date": "2026-07-15",
+              "legs": [
+                {
+                  "entry_price": 53000,
+                  "fill_at": "2026-07-15T13:45:00+09:00",
+                  "net_profit_pct": 0.177358,
+                  "status": "COMPLETE",
+                  "target_price": 53200
+                },
+                {
+                  "entry_price": 52900,
+                  "fill_at": "2026-07-15T13:45:00+09:00",
+                  "net_profit_pct": 0.178072,
+                  "status": "COMPLETE",
+                  "target_price": 53100
+                }
+              ],
+              "observed_drawdown_pct": 1.669759,
+              "observed_near_low_pct": 0.189036,
+              "signal_at": "2026-07-15T13:44:00+09:00",
+              "signal_close": 53000
+            },
+            {
+              "date": "2026-07-22",
+              "legs": [
+                {
+                  "entry_price": 65200,
+                  "fill_at": "2026-07-22T13:48:00+09:00",
+                  "net_profit_pct": 0.106748,
+                  "status": "COMPLETE",
+                  "target_price": 65400
+                },
+                {
+                  "entry_price": 65100,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 2.39521,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-22T13:47:00+09:00",
+              "signal_close": 65200
+            },
+            {
+              "date": "2026-07-27",
+              "legs": [
+                {
+                  "entry_price": 57800,
+                  "fill_at": "2026-07-27T13:35:00+09:00",
+                  "net_profit_pct": 0.146021,
+                  "status": "COMPLETE",
+                  "target_price": 58000
+                },
+                {
+                  "entry_price": 57700,
+                  "fill_at": "2026-07-27T13:37:00+09:00",
+                  "net_profit_pct": 0.14662,
+                  "status": "COMPLETE",
+                  "target_price": 57900
+                }
+              ],
+              "observed_drawdown_pct": 2.033898,
+              "observed_near_low_pct": 0.17331,
+              "signal_at": "2026-07-27T13:34:00+09:00",
+              "signal_close": 57800
+            },
+            {
+              "date": "2026-07-29",
+              "legs": [
+                {
+                  "entry_price": 41600,
+                  "fill_at": "2026-07-29T13:31:00+09:00",
+                  "net_profit_pct": 0.040385,
+                  "status": "COMPLETE",
+                  "target_price": 41700
+                },
+                {
+                  "entry_price": 41550,
+                  "fill_at": "2026-07-29T13:33:00+09:00",
+                  "net_profit_pct": 0.040674,
+                  "status": "COMPLETE",
+                  "target_price": 41650
+                }
+              ],
+              "observed_drawdown_pct": 2.803738,
+              "observed_near_low_pct": 0.240964,
+              "signal_at": "2026-07-29T13:30:00+09:00",
+              "signal_close": 41600
+            },
+            {
+              "date": "2026-07-30",
+              "legs": [
+                {
+                  "entry_price": 42750,
+                  "fill_at": "2026-07-30T13:43:00+09:00",
+                  "net_profit_pct": 0.033918,
+                  "status": "COMPLETE",
+                  "target_price": 42850
+                },
+                {
+                  "entry_price": 42700,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 2.173913,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-30T13:42:00+09:00",
+              "signal_close": 42750
+            }
+          ],
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.111965,
+          "signal_episodes": 13
+        },
+        "holdout": {
+          "attempted_legs": 8,
+          "completed_legs": 6,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.069208,
+          "signal_episodes": 4
+        },
+        "parameters": {
+          "lookback_bars": 20,
+          "rolling_high_drawdown_pct": 2.0,
+          "rolling_low_proximity_pct": 0.75,
+          "scan_end": "13:54",
+          "scan_start": "13:30"
+        },
+        "robust_calibration_score": 0.076939
+      },
+      "date_split": {
+        "calibration_end": "2026-07-16",
+        "calibration_start": "2026-06-05",
+        "holdout_end": "2026-08-10",
+        "holdout_start": "2026-07-20"
+      },
+      "decision": "holdout_pass_source_only_early_candidate",
+      "grid_candidate_count": 5130,
+      "name": "SK이터닉스",
+      "profile_id": "sk_eternix_midday",
+      "recommended_action": "source_only_candidate_requires_separate_runtime_change",
+      "recommended_spot": {
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 2.0,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "13:54",
+        "scan_start": "13:30"
+      },
+      "runtime_effect": false,
+      "selected": {
+        "calibration": {
+          "attempted_legs": 18,
+          "completed_legs": 18,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.131547,
+          "signal_episodes": 9
+        },
+        "calibration_first_half": {
+          "attempted_legs": 8,
+          "completed_legs": 8,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.141755,
+          "signal_episodes": 4
+        },
+        "calibration_second_half": {
+          "attempted_legs": 10,
+          "completed_legs": 10,
+          "completed_legs_per_attempted_leg": 1.0,
+          "held_legs": 0,
+          "no_fill_legs": 0,
+          "notional_weighted_ev_pct": 0.123102,
+          "signal_episodes": 5
+        },
+        "full": {
+          "attempted_legs": 26,
+          "completed_legs": 24,
+          "completed_legs_per_attempted_leg": 0.923077,
+          "episodes": [
+            {
+              "date": "2026-06-11",
+              "legs": [
+                {
+                  "entry_price": 40700,
+                  "fill_at": "2026-06-11T13:37:00+09:00",
+                  "net_profit_pct": 0.0457,
+                  "status": "COMPLETE",
+                  "target_price": 40800
+                },
+                {
+                  "entry_price": 40650,
+                  "fill_at": "2026-06-11T13:37:00+09:00",
+                  "net_profit_pct": 0.046002,
+                  "status": "COMPLETE",
+                  "target_price": 40750
+                }
+              ],
+              "observed_drawdown_pct": 1.809409,
+              "observed_near_low_pct": 0.123001,
+              "signal_at": "2026-06-11T13:36:00+09:00",
+              "signal_close": 40700
+            },
+            {
+              "date": "2026-06-15",
+              "legs": [
+                {
+                  "entry_price": 50100,
+                  "fill_at": "2026-06-15T13:32:00+09:00",
+                  "net_profit_pct": 0.199202,
+                  "status": "COMPLETE",
+                  "target_price": 50300
+                },
+                {
+                  "entry_price": 50000,
+                  "fill_at": "2026-06-15T13:32:00+09:00",
+                  "net_profit_pct": 0.2,
+                  "status": "COMPLETE",
+                  "target_price": 50200
+                }
+              ],
+              "observed_drawdown_pct": 2.339181,
+              "observed_near_low_pct": 0.703518,
+              "signal_at": "2026-06-15T13:31:00+09:00",
+              "signal_close": 50100
+            },
+            {
+              "date": "2026-06-16",
+              "legs": [
+                {
+                  "entry_price": 59900,
+                  "fill_at": "2026-06-16T13:55:00+09:00",
+                  "net_profit_pct": 0.13389,
+                  "status": "COMPLETE",
+                  "target_price": 60100
+                },
+                {
+                  "entry_price": 59800,
+                  "fill_at": "2026-06-16T13:55:00+09:00",
+                  "net_profit_pct": 0.134448,
+                  "status": "COMPLETE",
+                  "target_price": 60000
+                }
+              ],
+              "observed_drawdown_pct": 3.231018,
+              "observed_near_low_pct": 0.672269,
+              "signal_at": "2026-06-16T13:54:00+09:00",
+              "signal_close": 59900
+            },
+            {
+              "date": "2026-06-17",
+              "legs": [
+                {
+                  "entry_price": 54300,
+                  "fill_at": "2026-06-17T13:31:00+09:00",
+                  "net_profit_pct": 0.168324,
+                  "status": "COMPLETE",
+                  "target_price": 54500
+                },
+                {
+                  "entry_price": 54200,
+                  "fill_at": "2026-06-17T13:32:00+09:00",
+                  "net_profit_pct": 0.169004,
+                  "status": "COMPLETE",
+                  "target_price": 54400
+                }
+              ],
+              "observed_drawdown_pct": 1.98556,
+              "observed_near_low_pct": 0.555556,
+              "signal_at": "2026-06-17T13:30:00+09:00",
+              "signal_close": 54300
+            },
+            {
+              "date": "2026-06-26",
+              "legs": [
+                {
+                  "entry_price": 42150,
+                  "fill_at": "2026-06-26T13:32:00+09:00",
+                  "net_profit_pct": 0.037248,
+                  "status": "COMPLETE",
+                  "target_price": 42250
+                },
+                {
+                  "entry_price": 42100,
+                  "fill_at": "2026-06-26T13:32:00+09:00",
+                  "net_profit_pct": 0.03753,
+                  "status": "COMPLETE",
+                  "target_price": 42200
+                }
+              ],
+              "observed_drawdown_pct": 2.655889,
+              "observed_near_low_pct": 0.237812,
+              "signal_at": "2026-06-26T13:31:00+09:00",
+              "signal_close": 42150
+            },
+            {
+              "date": "2026-07-01",
+              "legs": [
+                {
+                  "entry_price": 57400,
+                  "fill_at": "2026-07-01T13:31:00+09:00",
+                  "net_profit_pct": 0.148432,
+                  "status": "COMPLETE",
+                  "target_price": 57600
+                },
+                {
+                  "entry_price": 57300,
+                  "fill_at": "2026-07-01T13:31:00+09:00",
+                  "net_profit_pct": 0.14904,
+                  "status": "COMPLETE",
+                  "target_price": 57500
+                }
+              ],
+              "observed_drawdown_pct": 1.880342,
+              "observed_near_low_pct": 0.525394,
+              "signal_at": "2026-07-01T13:30:00+09:00",
+              "signal_close": 57400
+            },
+            {
+              "date": "2026-07-02",
+              "legs": [
+                {
+                  "entry_price": 53600,
+                  "fill_at": "2026-07-02T13:34:00+09:00",
+                  "net_profit_pct": 0.173134,
+                  "status": "COMPLETE",
+                  "target_price": 53800
+                },
+                {
+                  "entry_price": 53500,
+                  "fill_at": "2026-07-02T13:34:00+09:00",
+                  "net_profit_pct": 0.173832,
+                  "status": "COMPLETE",
+                  "target_price": 53700
+                }
+              ],
+              "observed_drawdown_pct": 2.09854,
+              "observed_near_low_pct": 0.093284,
+              "signal_at": "2026-07-02T13:33:00+09:00",
+              "signal_close": 53650
+            },
+            {
+              "date": "2026-07-08",
+              "legs": [
+                {
+                  "entry_price": 41650,
+                  "fill_at": "2026-07-08T13:38:00+09:00",
+                  "net_profit_pct": 0.040096,
+                  "status": "COMPLETE",
+                  "target_price": 41750
+                },
+                {
+                  "entry_price": 41600,
+                  "fill_at": "2026-07-08T13:38:00+09:00",
+                  "net_profit_pct": 0.040385,
+                  "status": "COMPLETE",
+                  "target_price": 41700
+                }
+              ],
+              "observed_drawdown_pct": 2.0,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-08T13:37:00+09:00",
+              "signal_close": 41650
+            },
+            {
+              "date": "2026-07-15",
+              "legs": [
+                {
+                  "entry_price": 53000,
+                  "fill_at": "2026-07-15T13:45:00+09:00",
+                  "net_profit_pct": 0.177358,
+                  "status": "COMPLETE",
+                  "target_price": 53200
+                },
+                {
+                  "entry_price": 52900,
+                  "fill_at": "2026-07-15T13:45:00+09:00",
+                  "net_profit_pct": 0.178072,
+                  "status": "COMPLETE",
+                  "target_price": 53100
+                }
+              ],
+              "observed_drawdown_pct": 1.669759,
+              "observed_near_low_pct": 0.189036,
+              "signal_at": "2026-07-15T13:44:00+09:00",
+              "signal_close": 53000
+            },
+            {
+              "date": "2026-07-22",
+              "legs": [
+                {
+                  "entry_price": 65200,
+                  "fill_at": "2026-07-22T13:48:00+09:00",
+                  "net_profit_pct": 0.106748,
+                  "status": "COMPLETE",
+                  "target_price": 65400
+                },
+                {
+                  "entry_price": 65100,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 2.39521,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-22T13:47:00+09:00",
+              "signal_close": 65200
+            },
+            {
+              "date": "2026-07-27",
+              "legs": [
+                {
+                  "entry_price": 57800,
+                  "fill_at": "2026-07-27T13:35:00+09:00",
+                  "net_profit_pct": 0.146021,
+                  "status": "COMPLETE",
+                  "target_price": 58000
+                },
+                {
+                  "entry_price": 57700,
+                  "fill_at": "2026-07-27T13:37:00+09:00",
+                  "net_profit_pct": 0.14662,
+                  "status": "COMPLETE",
+                  "target_price": 57900
+                }
+              ],
+              "observed_drawdown_pct": 2.033898,
+              "observed_near_low_pct": 0.17331,
+              "signal_at": "2026-07-27T13:34:00+09:00",
+              "signal_close": 57800
+            },
+            {
+              "date": "2026-07-29",
+              "legs": [
+                {
+                  "entry_price": 41600,
+                  "fill_at": "2026-07-29T13:31:00+09:00",
+                  "net_profit_pct": 0.040385,
+                  "status": "COMPLETE",
+                  "target_price": 41700
+                },
+                {
+                  "entry_price": 41550,
+                  "fill_at": "2026-07-29T13:33:00+09:00",
+                  "net_profit_pct": 0.040674,
+                  "status": "COMPLETE",
+                  "target_price": 41650
+                }
+              ],
+              "observed_drawdown_pct": 2.803738,
+              "observed_near_low_pct": 0.240964,
+              "signal_at": "2026-07-29T13:30:00+09:00",
+              "signal_close": 41600
+            },
+            {
+              "date": "2026-07-30",
+              "legs": [
+                {
+                  "entry_price": 42750,
+                  "fill_at": "2026-07-30T13:43:00+09:00",
+                  "net_profit_pct": 0.033918,
+                  "status": "COMPLETE",
+                  "target_price": 42850
+                },
+                {
+                  "entry_price": 42700,
+                  "status": "NO_FILL"
+                }
+              ],
+              "observed_drawdown_pct": 2.173913,
+              "observed_near_low_pct": 0.0,
+              "signal_at": "2026-07-30T13:42:00+09:00",
+              "signal_close": 42750
+            }
+          ],
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.111965,
+          "signal_episodes": 13
+        },
+        "holdout": {
+          "attempted_legs": 8,
+          "completed_legs": 6,
+          "completed_legs_per_attempted_leg": 0.75,
+          "held_legs": 0,
+          "no_fill_legs": 2,
+          "notional_weighted_ev_pct": 0.069208,
+          "signal_episodes": 4
+        },
+        "parameters": {
+          "lookback_bars": 20,
+          "rolling_high_drawdown_pct": 2.0,
+          "rolling_low_proximity_pct": 0.75,
+          "scan_end": "13:54",
+          "scan_start": "13:30"
+        }
+      },
+      "session": "midday",
+      "symbol": "475150",
+      "top_calibration_candidates": [
+        {
+          "calibration_first_half": {
+            "attempted_legs": 8,
+            "completed_legs": 8,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.141755,
+            "signal_episodes": 4
+          },
+          "calibration_full": {
+            "attempted_legs": 18,
+            "completed_legs": 18,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.131547,
+            "signal_episodes": 9
+          },
+          "calibration_second_half": {
+            "attempted_legs": 10,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.123102,
+            "signal_episodes": 5
+          },
+          "parameters": {
+            "lookback_bars": 20,
+            "rolling_high_drawdown_pct": 2.0,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:54",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.076939
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 8,
+            "completed_legs": 8,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.141505,
+            "signal_episodes": 4
+          },
+          "calibration_full": {
+            "attempted_legs": 18,
+            "completed_legs": 18,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.131254,
+            "signal_episodes": 9
+          },
+          "calibration_second_half": {
+            "attempted_legs": 10,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.122776,
+            "signal_episodes": 5
+          },
+          "parameters": {
+            "lookback_bars": 20,
+            "rolling_high_drawdown_pct": 1.75,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:54",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.076735
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 11,
+            "completed_legs_per_attempted_leg": 0.916667,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.117657,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 26,
+            "completed_legs": 25,
+            "completed_legs_per_attempted_leg": 0.961538,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.131592,
+            "signal_episodes": 13
+          },
+          "calibration_second_half": {
+            "attempted_legs": 14,
+            "completed_legs": 14,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.143544,
+            "signal_episodes": 7
+          },
+          "parameters": {
+            "lookback_bars": 15,
+            "rolling_high_drawdown_pct": 1.5,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:49",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.076131
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 11,
+            "completed_legs_per_attempted_leg": 0.916667,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.117657,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 26,
+            "completed_legs": 25,
+            "completed_legs_per_attempted_leg": 0.961538,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.131592,
+            "signal_episodes": 13
+          },
+          "calibration_second_half": {
+            "attempted_legs": 14,
+            "completed_legs": 14,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.143544,
+            "signal_episodes": 7
+          },
+          "parameters": {
+            "lookback_bars": 15,
+            "rolling_high_drawdown_pct": 1.5,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:54",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.076131
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 11,
+            "completed_legs_per_attempted_leg": 0.916667,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.117657,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 26,
+            "completed_legs": 24,
+            "completed_legs_per_attempted_leg": 0.923077,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.1239,
+            "signal_episodes": 13
+          },
+          "calibration_second_half": {
+            "attempted_legs": 14,
+            "completed_legs": 13,
+            "completed_legs_per_attempted_leg": 0.928571,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.129252,
+            "signal_episodes": 7
+          },
+          "parameters": {
+            "lookback_bars": 20,
+            "rolling_high_drawdown_pct": 1.5,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:54",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.076131
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 11,
+            "completed_legs_per_attempted_leg": 0.916667,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.117445,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 30,
+            "completed_legs": 28,
+            "completed_legs_per_attempted_leg": 0.933333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.122641,
+            "signal_episodes": 15
+          },
+          "calibration_second_half": {
+            "attempted_legs": 18,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.944444,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.126138,
+            "signal_episodes": 9
+          },
+          "parameters": {
+            "lookback_bars": 15,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:49",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.075994
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 11,
+            "completed_legs_per_attempted_leg": 0.916667,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.117445,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 30,
+            "completed_legs": 28,
+            "completed_legs_per_attempted_leg": 0.933333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.122641,
+            "signal_episodes": 15
+          },
+          "calibration_second_half": {
+            "attempted_legs": 18,
+            "completed_legs": 17,
+            "completed_legs_per_attempted_leg": 0.944444,
+            "held_legs": 0,
+            "no_fill_legs": 1,
+            "notional_weighted_ev_pct": 0.126138,
+            "signal_episodes": 9
+          },
+          "parameters": {
+            "lookback_bars": 15,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:54",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.075994
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 6,
+            "completed_legs": 6,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.144887,
+            "signal_episodes": 3
+          },
+          "calibration_full": {
+            "attempted_legs": 16,
+            "completed_legs": 16,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.131147,
+            "signal_episodes": 8
+          },
+          "calibration_second_half": {
+            "attempted_legs": 10,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.123102,
+            "signal_episodes": 5
+          },
+          "parameters": {
+            "lookback_bars": 20,
+            "rolling_high_drawdown_pct": 2.0,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:49",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.072443
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 6,
+            "completed_legs": 6,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.144531,
+            "signal_episodes": 3
+          },
+          "calibration_full": {
+            "attempted_legs": 16,
+            "completed_legs": 16,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.13081,
+            "signal_episodes": 8
+          },
+          "calibration_second_half": {
+            "attempted_legs": 10,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 1.0,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.122776,
+            "signal_episodes": 5
+          },
+          "parameters": {
+            "lookback_bars": 20,
+            "rolling_high_drawdown_pct": 1.75,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:49",
+            "scan_start": "13:30"
+          },
+          "robust_calibration_score": 0.072265
+        },
+        {
+          "calibration_first_half": {
+            "attempted_legs": 12,
+            "completed_legs": 10,
+            "completed_legs_per_attempted_leg": 0.833333,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.114821,
+            "signal_episodes": 6
+          },
+          "calibration_full": {
+            "attempted_legs": 34,
+            "completed_legs": 29,
+            "completed_legs_per_attempted_leg": 0.852941,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.103685,
+            "signal_episodes": 17
+          },
+          "calibration_second_half": {
+            "attempted_legs": 22,
+            "completed_legs": 19,
+            "completed_legs_per_attempted_leg": 0.863636,
+            "held_legs": 0,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.09745,
+            "signal_episodes": 11
+          },
+          "parameters": {
+            "lookback_bars": 15,
+            "rolling_high_drawdown_pct": 1.25,
+            "rolling_low_proximity_pct": 0.75,
+            "scan_end": "13:49",
+            "scan_start": "13:20"
+          },
+          "robust_calibration_score": 0.071763
+        }
+      ]
+    }
+  },
+  "runtime_effect": false,
+  "schema": "low_price_two_leg_entry_spot_research_v1",
+  "source_meta": {
+    "010140": {
+      "api_id": "ka10080",
+      "api_url": "https://api.kiwoom.com/api/dostk/chart",
+      "bar_count": 17277,
+      "continuation_exhausted": false,
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-10",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "out_of_session_row_count": 14743,
+      "page_count": 36,
+      "request_code": "010140_AL",
+      "source_quality_status": "PASS",
+      "start_date_fully_bracketed": true,
+      "symbol": "010140",
+      "trading_date_count": 46
+    },
+    "047040": {
+      "api_id": "ka10080",
+      "api_url": "https://api.kiwoom.com/api/dostk/chart",
+      "bar_count": 17251,
+      "continuation_exhausted": false,
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-10",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "out_of_session_row_count": 96,
+      "page_count": 20,
+      "request_code": "047040_AL",
+      "source_quality_status": "PASS",
+      "start_date_fully_bracketed": true,
+      "symbol": "047040",
+      "trading_date_count": 46
+    },
+    "475150": {
+      "api_id": "ka10080",
+      "api_url": "https://api.kiwoom.com/api/dostk/chart",
+      "bar_count": 17235,
+      "continuation_exhausted": false,
+      "duplicate_row_count": 0,
+      "invalid_row_count": 0,
+      "latest_source_date": "2026-08-10",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "out_of_session_row_count": 2185,
+      "page_count": 22,
+      "request_code": "475150_AL",
+      "source_quality_status": "PASS",
+      "start_date_fully_bracketed": true,
+      "symbol": "475150",
+      "trading_date_count": 46
+    }
+  },
+  "start_date": "2026-06-05"
+}

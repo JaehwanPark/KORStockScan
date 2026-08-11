@@ -21,6 +21,7 @@ from src.trading.low_price_two_leg.gateway import (
 from src.trading.low_price_two_leg.machine import LowPriceTwoLegMachine
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
+    POLICY_BOUNDS,
     atomic_write_json,
     load_applied_profile_policy,
     validate_applied,
@@ -32,8 +33,9 @@ from src.trading.low_price_two_leg.preflight import (
 )
 from src.trading.low_price_two_leg.profiles import (
     AFTERNOON_WINDOW,
-    MIDDAY_WINDOW,
     PROFILES,
+    SAMSUNG_HEAVY_MIDDAY_WINDOW,
+    SK_ETERNIX_MIDDAY_WINDOW,
     MinuteBar,
 )
 from src.trading.order.regular_two_leg_machine import KST
@@ -48,7 +50,7 @@ def _signal_bars(profile_id: str, *, through: int = 0) -> tuple[MinuteBar, ...]:
     latest = datetime.combine(date(2026, 8, 12), profile.policy.scan_start, tzinfo=KST)
     start = latest - timedelta(minutes=29)
     bars = [
-        MinuteBar(start + timedelta(minutes=index), 23_000, 23_000, 22_650, 23_000)
+        MinuteBar(start + timedelta(minutes=index), 23_500, 23_500, 22_650, 23_500)
         for index in range(29)
     ]
     bars.append(MinuteBar(latest, 22_700, 22_700, 22_650, 22_650))
@@ -63,6 +65,13 @@ def _signal_bars(profile_id: str, *, through: int = 0) -> tuple[MinuteBar, ...]:
             )
         )
     return tuple(bars)
+
+
+def _profile_run_at(profile_id: str) -> datetime:
+    started = datetime.combine(
+        date(2026, 8, 12), PROFILES[profile_id].policy.scan_start, tzinfo=KST
+    )
+    return started + timedelta(minutes=1, seconds=10)
 
 
 class FakeGateway:
@@ -117,18 +126,38 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def test_profiles_are_exact_three_symbols_and_five_independent_sessions():
+def test_profiles_are_exact_two_symbols_and_three_independent_sessions():
     assert {key: (item.symbol, item.session) for key, item in PROFILES.items()} == {
         "samsung_heavy_midday": ("010140", "midday"),
         "samsung_heavy_afternoon": ("010140", "afternoon"),
-        "daewoo_ec_midday": ("047040", "midday"),
-        "daewoo_ec_afternoon": ("047040", "afternoon"),
         "sk_eternix_midday": ("475150", "midday"),
     }
     assert {
         (item.policy.scan_start, item.policy.scan_last_bar)
         for item in PROFILES.values()
-    } == {MIDDAY_WINDOW, AFTERNOON_WINDOW}
+    } == {
+        SAMSUNG_HEAVY_MIDDAY_WINDOW,
+        AFTERNOON_WINDOW,
+        SK_ETERNIX_MIDDAY_WINDOW,
+    }
+    assert PROFILES["samsung_heavy_midday"].policy.lookback_bars == 30
+    assert PROFILES["samsung_heavy_midday"].policy.rolling_high_drawdown_pct == 0.75
+    assert PROFILES["samsung_heavy_midday"].policy.rolling_low_proximity_pct == 0.35
+    assert PROFILES["sk_eternix_midday"].policy.lookback_bars == 20
+    assert PROFILES["sk_eternix_midday"].policy.rolling_high_drawdown_pct == 2.0
+    assert PROFILES["sk_eternix_midday"].policy.rolling_low_proximity_pct == 0.75
+    assert POLICY_BOUNDS["samsung_heavy_midday"] == {
+        "drawdown_min": 0.75,
+        "drawdown_max": 1.0,
+        "near_low_min": 0.25,
+        "near_low_max": 0.35,
+    }
+    assert POLICY_BOUNDS["sk_eternix_midday"] == {
+        "drawdown_min": 2.0,
+        "drawdown_max": 2.25,
+        "near_low_min": 0.65,
+        "near_low_max": 0.75,
+    }
     assert all(item.policy.quantity == 2 for item in PROFILES.values())
     assert all(item.policy.target_ticks == 2 for item in PROFILES.values())
     assert all(
@@ -141,7 +170,7 @@ def test_each_profile_uses_same_two_leg_signal_contract(profile_id):
     policy = PROFILES[profile_id].policy
     signal = policy.evaluate(list(_signal_bars(profile_id)))
     assert signal is not None
-    assert signal.drawdown_pct > 1.25
+    assert signal.drawdown_pct > policy.rolling_high_drawdown_pct
     assert signal.near_low_pct == 0.0
     assert [leg["entry_price"] for leg in policy.entry_legs(22_650)] == [
         22_650,
@@ -160,7 +189,7 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
         live_enabled=True,
         ownership_source=lambda code: "manual_operator",
     )
-    state = machine.run_once(_at(12, 13, 16))
+    state = machine.run_once(_profile_run_at(profile.profile_id))
     assert state["status"] == "BUY_OPEN"
     assert gateway.buy_calls == [22_650, 22_600]
     assert state["signal_features"]["symbol"] == "010140"
@@ -171,7 +200,7 @@ def test_machine_state_and_order_ledger_are_bound_to_one_profile(tmp_path):
 
 
 def test_machine_requires_profile_symbol_manual_exclusion(tmp_path):
-    profile = PROFILES["daewoo_ec_midday"]
+    profile = PROFILES["sk_eternix_midday"]
     gateway = FakeGateway(profile.profile_id)
     state = LowPriceTwoLegMachine(
         profile=profile,
@@ -179,8 +208,8 @@ def test_machine_requires_profile_symbol_manual_exclusion(tmp_path):
         state_path=tmp_path / "state.json",
         live_enabled=True,
         ownership_source=lambda code: "",
-    ).run_once(_at(12, 13, 16))
-    assert state["blocked_reason"] == "047040_not_excluded_from_primary_bot"
+    ).run_once(_profile_run_at(profile.profile_id))
+    assert state["blocked_reason"] == "475150_not_excluded_from_primary_bot"
     assert gateway.buy_calls == []
 
 
@@ -193,7 +222,7 @@ def test_gateway_uses_bound_symbol_sor_and_one_share_for_every_write():
         ]
     )
     gateway = KiwoomLowPriceTwoLegGateway(
-        symbol="047040",
+        symbol="475150",
         request_session=session,
         token_loader=lambda: "TOKEN",
         order_authority=True,
@@ -207,7 +236,7 @@ def test_gateway_uses_bound_symbol_sor_and_one_share_for_every_write():
         "kt10001",
         "kt10003",
     ]
-    assert all(call[1]["json"]["stk_cd"] == "047040" for call in session.calls)
+    assert all(call[1]["json"]["stk_cd"] == "475150" for call in session.calls)
     assert all(call[1]["json"].get("dmst_stex_tp") == "SOR" for call in session.calls)
     assert session.calls[0][1]["json"]["ord_qty"] == "1"
     assert session.calls[1][1]["json"]["ord_qty"] == "1"
@@ -241,7 +270,7 @@ def test_gateway_minute_request_uses_integrated_sor_code_and_completed_bar_only(
         ]
     )
     gateway = KiwoomLowPriceTwoLegGateway(
-        symbol="047040", request_session=session, token_loader=lambda: "TOKEN"
+        symbol="475150", request_session=session, token_loader=lambda: "TOKEN"
     )
     snapshot = gateway.completed_sor_minute_bars(
         trade_date=date(2026, 8, 12), now=_at(12, 13, 16)
@@ -249,41 +278,60 @@ def test_gateway_minute_request_uses_integrated_sor_code_and_completed_bar_only(
     assert snapshot.source_ok
     assert len(snapshot.bars) == 1
     assert session.calls[0][1]["headers"]["api-id"] == "ka10080"
-    assert session.calls[0][1]["json"]["stk_cd"] == "047040_AL"
+    assert session.calls[0][1]["json"]["stk_cd"] == "475150_AL"
 
 
 def test_research_evidence_gate_validates_each_selected_profile(tmp_path):
-    symbols = {}
+    profiles = {}
+    source_meta = {}
     for profile in PROFILES.values():
-        symbols.setdefault(profile.symbol, {"machines": {}})["machines"][
-            profile.session
-        ] = {
-            "source_quality_ready": True,
-            "coverage_days": 46,
-            "completed_legs": 20,
-            "held_legs": 0,
-            "notional_weighted_realized_ev_pct": 0.01,
-            "status": "implementation_candidate_source_only",
+        source_meta[profile.symbol] = {
+            "source_quality_status": "PASS",
+            "trading_date_count": 46,
+            "invalid_row_count": 0,
+            "duplicate_row_count": 0,
+        }
+        profiles[profile.profile_id] = {
+            "recommended_spot": {
+                "scan_start": profile.policy.scan_start.strftime("%H:%M"),
+                "scan_end": profile.policy.scan_last_bar.strftime("%H:%M"),
+                "lookback_bars": profile.policy.lookback_bars,
+                "rolling_high_drawdown_pct": profile.policy.rolling_high_drawdown_pct,
+                "rolling_low_proximity_pct": profile.policy.rolling_low_proximity_pct,
+            },
+            "decision": "holdout_pass_source_only_early_candidate",
+            "selected": {
+                "holdout": {
+                    "signal_episodes": 3,
+                    "completed_legs": 4,
+                    "held_legs": 0,
+                    "notional_weighted_ev_pct": 0.01,
+                }
+            },
         }
     path = tmp_path / "report.json"
     payload = {
-        "schema": "samsung_like_machine_candidate_scan_v1",
+        "schema": "low_price_two_leg_entry_spot_research_v1",
         "start_date": "2026-06-05",
         "end_date": "2026-08-10",
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "actual_order_submitted": False,
-        "symbols": symbols,
+        "broker_order_forbidden": True,
+        "source_meta": source_meta,
+        "profiles": profiles,
     }
     digest = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
-    payload["report_sha256"] = digest
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert all(
         validate_research_evidence(profile, path, expected_sha256=digest)[0]
         for profile in PROFILES.values()
     )
-    payload["symbols"]["010140"]["machines"]["midday"]["completed_legs"] = 999
+    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"][
+        "scan_start"
+    ] = "13:19"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert not validate_research_evidence(
         PROFILES["samsung_heavy_midday"], path, expected_sha256=digest
@@ -350,7 +398,7 @@ def _tuning_row(profile_id: str, index: int, *, strong: bool) -> dict:
         "no_signal": False,
         "state_status": "COMPLETE",
         "signal_features": {
-            "observed_drawdown_pct": 1.60 if strong else 1.30,
+            "observed_drawdown_pct": 1.60 if strong else 0.80,
             "observed_near_low_pct": 0.15,
         },
         "legs": [
@@ -402,8 +450,8 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
         {
             "profile_id": target,
             "axis": "rolling_high_drawdown_pct",
-            "before": 1.25,
-            "after": 1.5,
+            "before": 0.75,
+            "after": 1.0,
         }
     ]
     assert all(
@@ -529,7 +577,7 @@ def _write_carried_state(
 
 
 def test_prior_episode_completion_is_reconciled_to_original_profile_date(tmp_path):
-    profile_id = "daewoo_ec_midday"
+    profile_id = "samsung_heavy_midday"
     state_dir = tmp_path / "states"
     source_quality_dir = tmp_path / "source_quality"
     _write_carried_state(state_dir, profile_id, "2026-08-10", held=False)
@@ -576,7 +624,7 @@ def test_prior_held_episode_blocks_only_its_own_profile_tuning(tmp_path):
 
 
 def test_contradictory_complete_receipt_is_quarantined(tmp_path):
-    profile_id = "daewoo_ec_afternoon"
+    profile_id = "samsung_heavy_afternoon"
     state_dir = tmp_path / "states"
     source_quality_dir = tmp_path / "source_quality"
     _write_carried_state(state_dir, profile_id, "2026-08-11", held=False)

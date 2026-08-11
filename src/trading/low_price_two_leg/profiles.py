@@ -7,9 +7,17 @@ from datetime import datetime, time, timedelta
 
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 
-MIDDAY_WINDOW = (time(13, 15), time(13, 54))
+SAMSUNG_HEAVY_MIDDAY_WINDOW = (time(13, 20), time(13, 29))
 AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
-ALLOWED_SYMBOLS = frozenset({"010140", "047040", "475150"})
+SK_ETERNIX_MIDDAY_WINDOW = (time(13, 30), time(13, 54))
+ALLOWED_SYMBOLS = frozenset({"010140", "475150"})
+SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
+    {
+        SAMSUNG_HEAVY_MIDDAY_WINDOW,
+        AFTERNOON_WINDOW,
+        SK_ETERNIX_MIDDAY_WINDOW,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -53,10 +61,7 @@ class RegularTwoLegPolicy:
             raise ValueError("symbol_not_in_low_price_machine_allowlist")
         if self.route != "SOR" or self.quantity != 2:
             raise ValueError("policy_requires_two_share_integrated_sor")
-        if (self.scan_start, self.scan_last_bar) not in {
-            MIDDAY_WINDOW,
-            AFTERNOON_WINDOW,
-        }:
+        if (self.scan_start, self.scan_last_bar) not in SUPPORTED_REGULAR_SCAN_WINDOWS:
             raise ValueError("unsupported_regular_scan_window")
         if self.lookback_bars < 2:
             raise ValueError("invalid_lookback")
@@ -138,8 +143,17 @@ class MachineProfile:
     live_confirmation: str
 
 
-def _profile(profile_id: str, symbol: str, name: str, session: str) -> MachineProfile:
-    window = MIDDAY_WINDOW if session == "midday" else AFTERNOON_WINDOW
+def _profile(
+    profile_id: str,
+    symbol: str,
+    name: str,
+    session: str,
+    *,
+    window: tuple[time, time],
+    lookback_bars: int,
+    drawdown_pct: float,
+    near_low_pct: float,
+) -> MachineProfile:
     upper = profile_id.upper()
     return MachineProfile(
         profile_id=profile_id,
@@ -150,6 +164,10 @@ def _profile(profile_id: str, symbol: str, name: str, session: str) -> MachinePr
             symbol=symbol,
             scan_start=window[0],
             scan_last_bar=window[1],
+            lookback_bars=lookback_bars,
+            rolling_high_drawdown_pct=drawdown_pct,
+            rolling_low_proximity_pct=near_low_pct,
+            runtime_policy_source="clean_baseline_30d_calibration_16d_holdout_selected_v2",
         ),
         enable_env=f"KORSTOCKSCAN_LOW_PRICE_TWO_LEG_{upper}_ENABLED",
         live_confirmation=f"{symbol}_{session.upper()}_TWO_LEG_LIVE",
@@ -159,11 +177,36 @@ def _profile(profile_id: str, symbol: str, name: str, session: str) -> MachinePr
 PROFILES = {
     profile.profile_id: profile
     for profile in (
-        _profile("samsung_heavy_midday", "010140", "삼성중공업", "midday"),
-        _profile("samsung_heavy_afternoon", "010140", "삼성중공업", "afternoon"),
-        _profile("daewoo_ec_midday", "047040", "대우건설", "midday"),
-        _profile("daewoo_ec_afternoon", "047040", "대우건설", "afternoon"),
-        _profile("sk_eternix_midday", "475150", "SK이터닉스", "midday"),
+        _profile(
+            "samsung_heavy_midday",
+            "010140",
+            "삼성중공업",
+            "midday",
+            window=SAMSUNG_HEAVY_MIDDAY_WINDOW,
+            lookback_bars=30,
+            drawdown_pct=0.75,
+            near_low_pct=0.35,
+        ),
+        _profile(
+            "samsung_heavy_afternoon",
+            "010140",
+            "삼성중공업",
+            "afternoon",
+            window=AFTERNOON_WINDOW,
+            lookback_bars=30,
+            drawdown_pct=1.25,
+            near_low_pct=0.20,
+        ),
+        _profile(
+            "sk_eternix_midday",
+            "475150",
+            "SK이터닉스",
+            "midday",
+            window=SK_ETERNIX_MIDDAY_WINDOW,
+            lookback_bars=20,
+            drawdown_pct=2.00,
+            near_low_pct=0.75,
+        ),
     )
 }
 

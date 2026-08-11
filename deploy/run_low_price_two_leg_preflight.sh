@@ -7,7 +7,7 @@ PROFILE="${1:-}"
 TARGET_DATE="$(/bin/date +%F)"
 
 case "$PROFILE" in
-  samsung_heavy_midday|samsung_heavy_afternoon|daewoo_ec_midday|daewoo_ec_afternoon|sk_eternix_midday) ;;
+  samsung_heavy_midday|samsung_heavy_afternoon|sk_eternix_midday) ;;
   *)
     echo "unsupported low-price two-leg profile: $PROFILE" >&2
     exit 2
