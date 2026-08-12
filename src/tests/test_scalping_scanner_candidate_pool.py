@@ -379,14 +379,14 @@ def test_prewarm_release_only_unsubscribes_codes_without_runtime_owner():
     ]
 
 
-def test_watch_budget_opening_config_accepts_minute_precision_env(monkeypatch):
+def test_watch_budget_opening_config_ignores_legacy_per_field_env(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_OBSERVE_START", "08:50")
     monkeypatch.setenv("KORSTOCKSCAN_OPENING_ROTATION_1PCT_ENTRY_END", "14:55")
 
     config = scalping_scanner._scanner_watch_budget_opening_config()
 
-    assert config.observe_start == time(8, 50)
-    assert config.entry_end == time(14, 55)
+    assert config.observe_start == time(9, 0)
+    assert config.entry_end == time(11, 40)
 
 
 def test_is_valid_stock_blocks_fund_prefix_products():
@@ -1084,6 +1084,7 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
             "Name": "LOW1",
             "Price": 10000,
             "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "ScannerWatchBudgetOwner": scalping_scanner.RISING_MISSED,
             "LowReboundPct": 3.0,
             "IntradayLowPrice": 9500,
             "IntradayHighPrice": 11000,
@@ -1095,6 +1096,7 @@ def test_promote_candidates_reserves_two_slots_for_low_rebound(monkeypatch):
             "Name": "LOW2",
             "Price": 20000,
             "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "ScannerWatchBudgetOwner": scalping_scanner.RISING_MISSED,
             "LowReboundPct": 4.0,
             "IntradayLowPrice": 19000,
             "IntradayHighPrice": 22000,
@@ -1168,6 +1170,7 @@ def test_promote_candidates_does_not_reserve_under_10000_low_rebound(monkeypatch
             "Name": "LOW_UNDER",
             "Price": 9900,
             "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "ScannerWatchBudgetOwner": scalping_scanner.RISING_MISSED,
             "LowReboundPct": 3.0,
             "IntradayLowPrice": 9400,
             "IntradayHighPrice": 11000,
@@ -1179,6 +1182,7 @@ def test_promote_candidates_does_not_reserve_under_10000_low_rebound(monkeypatch
             "Name": "LOW_HIGH",
             "Price": 12000,
             "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "ScannerWatchBudgetOwner": scalping_scanner.RISING_MISSED,
             "LowReboundPct": 4.0,
             "IntradayLowPrice": 11000,
             "IntradayHighPrice": 13000,
@@ -1303,6 +1307,7 @@ def test_promote_candidates_passes_low_price_to_product_filter(monkeypatch):
             "Name": "LOW_VOLUME_SURGE",
             "Price": 3900,
             "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+            "ScannerWatchBudgetOwner": scalping_scanner.RISING_MISSED,
             "SourceSet": {
                 scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
                 "VOLUME_SURGE_RAW",
@@ -1376,6 +1381,7 @@ def test_low_rebound_floor_replaces_old_general_watching_without_increasing_cap(
                 "Name": "LOW",
                 "Price": 10000,
                 "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+                "ScannerWatchBudgetOwner": scalping_scanner.RISING_MISSED,
                 "LowReboundPct": 3.0,
                 "IntradayLowPrice": 9500,
                 "IntradayHighPrice": 11000,
@@ -1463,6 +1469,7 @@ def test_low_rebound_floor_protects_known_low_rebound_watching(monkeypatch):
                 "Name": "LOW_NEW",
                 "Price": 10000,
                 "Source": scalping_scanner.LOW_REBOUND_RISING_MISSED_SOURCE,
+                "ScannerWatchBudgetOwner": scalping_scanner.RISING_MISSED,
                 "LowReboundPct": 3.0,
                 "IntradayLowPrice": 9500,
                 "IntradayHighPrice": 11000,

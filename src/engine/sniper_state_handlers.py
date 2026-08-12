@@ -52411,6 +52411,162 @@ def _fetch_opening_rotation_candles_bounded(code: str) -> tuple[list, str]:
                 block=False,
             )
         except Exception as exc:
+_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY = "opening_rotation_watch_slot_promotion_id"
+_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY = (
+    "opening_rotation_watch_slot_claimed_at_epoch"
+)
+
+
+def _opening_rotation_watch_slot_owned(stock: dict, promotion_id: str) -> bool:
+    normalized_promotion_id = str(promotion_id or "").strip()
+    return bool(
+        normalized_promotion_id
+        and str(stock.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or "").strip()
+        == normalized_promotion_id
+    )
+
+
+def _claim_opening_rotation_watch_slot(
+    stock: dict,
+    *,
+    promotion_id: str,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Atomically claim one of the two Opening entry-observation slots."""
+
+    normalized_promotion_id = str(promotion_id or "").strip()
+    if not normalized_promotion_id:
+        return {
+            "allowed": False,
+            "reason": "scanner_promotion_id_missing",
+            "slot_limit": 0,
+            "active_slot_count": 0,
+            "newly_claimed": False,
+        }
+    try:
+        slot_limit = int(load_active_opening_rotation_runtime_policy().watch_slots)
+    except (OSError, ValueError, TypeError) as exc:
+        log_error(f"[OPENING_ROTATION] invalid watch-slot policy: {exc}")
+        return {
+            "allowed": False,
+            "reason": "runtime_policy_invalid",
+            "slot_limit": 0,
+            "active_slot_count": 0,
+            "newly_claimed": False,
+        }
+
+    with ENTRY_LOCK:
+        current_slot_promotion_id = str(
+            stock.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or ""
+        ).strip()
+        if current_slot_promotion_id == normalized_promotion_id:
+            active_slot_count = sum(
+                1
+                for target in (ACTIVE_TARGETS or [])
+                if isinstance(target, dict)
+                and str(
+                    target.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or ""
+                ).strip()
+                and str(target.get("status") or "").strip().upper() == "WATCHING"
+                and str(target.get("scanner_promotion_id") or "").strip()
+                == str(
+                    target.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or ""
+                ).strip()
+            )
+            return {
+                "allowed": True,
+                "reason": "watch_slot_already_owned",
+                "slot_limit": slot_limit,
+                "active_slot_count": active_slot_count,
+                "newly_claimed": False,
+            }
+        if current_slot_promotion_id:
+            stock.pop(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY, None)
+            stock.pop(_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY, None)
+
+        active_slot_count = sum(
+            1
+            for target in (ACTIVE_TARGETS or [])
+            if target is not stock
+            and isinstance(target, dict)
+            and str(target.get("status") or "").strip().upper() == "WATCHING"
+            and str(
+                target.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or ""
+            ).strip()
+            and str(target.get("scanner_promotion_id") or "").strip()
+            == str(target.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or "").strip()
+        )
+        if active_slot_count >= slot_limit:
+            return {
+                "allowed": False,
+                "reason": "watch_slot_capacity_full",
+                "slot_limit": slot_limit,
+                "active_slot_count": active_slot_count,
+                "newly_claimed": False,
+            }
+        stock[_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY] = normalized_promotion_id
+        stock[_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY] = float(now_ts)
+        return {
+            "allowed": True,
+            "reason": "watch_slot_claimed",
+            "slot_limit": slot_limit,
+            "active_slot_count": active_slot_count + 1,
+            "newly_claimed": True,
+        }
+
+
+def _release_opening_rotation_watch_slot(
+    stock: dict,
+    *,
+    promotion_id: str,
+) -> bool:
+    normalized_promotion_id = str(promotion_id or "").strip()
+    with ENTRY_LOCK:
+        if not _opening_rotation_watch_slot_owned(stock, normalized_promotion_id):
+            return False
+        stock.pop(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY, None)
+        stock.pop(_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY, None)
+        return True
+
+
+def _release_opening_rotation_watch_slot_with_event(
+    stock: dict,
+    code: str,
+    *,
+    promotion_id: str,
+    reason: str,
+) -> bool:
+    released = _release_opening_rotation_watch_slot(
+        stock,
+        promotion_id=promotion_id,
+    )
+    if not released:
+        return False
+    _log_entry_pipeline(
+        stock,
+        code,
+        "opening_rotation_watch_slot_released",
+        reason=reason,
+        scanner_promotion_id=promotion_id,
+        opening_rotation_watch_slot_released=True,
+        metric_role="runtime_capacity_provenance",
+        decision_authority="opening_rotation_watch_lifecycle_only",
+        window_policy="same_scanner_promotion_runtime_watch_window",
+        sample_floor="not_applicable_runtime_capacity_transition",
+        primary_decision_metric="opening_rotation_watch_slot_released",
+        source_quality_gate="exact_promotion_identity_and_runtime_owner_transition",
+        runtime_effect=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        allowed_runtime_apply=False,
+        forbidden_uses=(
+            "order_submit,position_change,quantity_or_cap_change,"
+            "threshold_mutation,provider_route_change,broker_guard_bypass"
+        ),
+    )
+    return True
+
+
             results.put(([], f"error:{type(exc).__name__}"), block=False)
         finally:
             _OPENING_ROTATION_CONTEXT_FETCH_LOCK.release()
@@ -53143,15 +53299,20 @@ def _expire_opening_rotation_ttl_promotion(
     _log_entry_pipeline(
         stock,
         normalized_code,
+        watch_slot_released = _opening_rotation_watch_slot_owned(
+            stock, normalized_promotion_id
+        )
         "opening_rotation_promotion_ttl_released",
         reason="promotion_ttl_expired",
         scanner_promotion_id=normalized_promotion_id,
-        opening_rotation_watch_slot_released=True,
+        opening_rotation_watch_slot_released=watch_slot_released,
         opening_rotation_db_status="EXPIRED",
         opening_rotation_ws_unregister_requested=ws_unregister_requested,
         metric_role="runtime_capacity_provenance",
         decision_authority="opening_rotation_watch_lifecycle_only",
         window_policy="same_scanner_promotion_60_second_ttl",
+        stock.pop(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY, None)
+        stock.pop(_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY, None)
         sample_floor="not_applicable_runtime_terminal_transition",
         primary_decision_metric="opening_rotation_watch_slot_released",
         source_quality_gate="exact_record_code_and_promotion_identity",
@@ -53238,6 +53399,12 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             else "opening_rotation_position_protection_required"
         )
         previous_log_at = _safe_float(
+        _release_opening_rotation_watch_slot_with_event(
+            stock,
+            code,
+            promotion_id=current_promotion_id,
+            reason="promotion_already_consumed",
+        )
             stock.get("opening_rotation_new_episode_block_last_log_at"), 0.0
         )
         should_log = now_ts - previous_log_at >= 10.0
@@ -53281,6 +53448,12 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             pop_fields=[
                 OPENING_ROTATION_STATE_KEY,
                 "opening_rotation_1pct_last_reason",
+        _release_opening_rotation_watch_slot_with_event(
+            stock,
+            code,
+            promotion_id=current_promotion_id,
+            reason=block_reason,
+        )
                 "opening_rotation_mechanical_signal_strength",
                 "opening_rotation_ai_score_hard_gate",
                 "opening_rotation_ai_score_decision_authority",
@@ -53320,6 +53493,12 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
                 allowed_runtime_apply=False,
+        _release_opening_rotation_watch_slot_with_event(
+            stock,
+            code,
+            promotion_id=current_promotion_id,
+            reason="specialist_owner_takeover",
+        )
                 forbidden_uses=(
                     "threshold_mutation,provider_change,order_price_change,"
                     "quantity_or_cap_change,broker_guard_bypass,stale_quote_bypass"
@@ -53369,19 +53548,40 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 ),
             )
         return bool(direct_position)
-    candidate = is_opening_rotation_watch_candidate(
-        position_tag=pos_tag,
-        source_signature=source_signature,
-        day_change_pct=day_change_pct,
-        now_dt=now_dt,
-        config=entry_config,
+    if not entry_config.enabled or now_dt.time() > entry_config.entry_end:
+        with ENTRY_LOCK:
+            _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
+        _release_opening_rotation_watch_slot_with_event(
+            stock,
+            code,
+            promotion_id=current_promotion_id,
+            reason=(
+                "runtime_policy_disabled"
+                if not entry_config.enabled
+                else "entry_window_closed"
+            ),
+        )
+        return bool(direct_position)
+    slot_already_owned = _opening_rotation_watch_slot_owned(stock, current_promotion_id)
+    candidate = bool(
+        slot_already_owned
+        or is_opening_rotation_watch_candidate(
+            position_tag=pos_tag,
+            source_signature=source_signature,
+            day_change_pct=day_change_pct,
+            now_dt=now_dt,
+            config=entry_config,
+        )
     )
     if not candidate:
-        if not entry_config.enabled or now_dt.time() > entry_config.entry_end:
-            with ENTRY_LOCK:
-                _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
         return bool(direct_position)
 
+        _release_opening_rotation_watch_slot_with_event(
+            stock,
+            code,
+            promotion_id=current_promotion_id,
+            reason="krx_regular_scope_lost",
+        )
     promotion_price_fields = _scanner_promotion_price_consistency_fields(
         stock,
         ws_data,
@@ -53472,6 +53672,77 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
             "async_context_reason": async_context.get("reason") or "-",
             "state": stock.get(OPENING_ROTATION_STATE_KEY) or {},
         }
+    slot_claim = _claim_opening_rotation_watch_slot(
+        stock,
+        promotion_id=current_promotion_id,
+        now_ts=float(now_ts),
+    )
+    if not slot_claim.get("allowed"):
+        previous_log_at = _safe_float(
+            stock.get("opening_rotation_watch_slot_block_last_log_at"), 0.0
+        )
+        if now_ts - previous_log_at >= 10.0:
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "opening_rotation_watch_slot_block_last_log_at": now_ts,
+                },
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "opening_rotation_watch_slot_capacity_blocked",
+                reason=slot_claim.get("reason") or "watch_slot_capacity_full",
+                scanner_promotion_id=current_promotion_id or "-",
+                opening_rotation_watch_slot_limit=slot_claim.get("slot_limit", 0),
+                opening_rotation_active_watch_slot_count=slot_claim.get(
+                    "active_slot_count", 0
+                ),
+                metric_role="runtime_capacity_provenance",
+                decision_authority="opening_rotation_entry_owner_arbitration_only",
+                window_policy="same_scanner_promotion_runtime_watch_window",
+                sample_floor="not_applicable_runtime_capacity_guard",
+                primary_decision_metric="opening_rotation_active_watch_slot_count",
+                source_quality_gate="exact_promotion_identity_and_active_target_state",
+                runtime_effect=False,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "standalone_buy,order_submit,quantity_or_cap_change,"
+                    "threshold_mutation,provider_route_change,broker_guard_bypass"
+                ),
+            )
+        # A boot-restored Opening-owned promotion must not leak into a general
+        # entry owner merely because both observation slots are already full.
+        return bool(direct_position)
+    if slot_claim.get("newly_claimed"):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "opening_rotation_watch_slot_claimed",
+            reason="watch_slot_claimed",
+            scanner_promotion_id=current_promotion_id,
+            opening_rotation_watch_slot_limit=slot_claim.get("slot_limit", 2),
+            opening_rotation_active_watch_slot_count=slot_claim.get(
+                "active_slot_count", 1
+            ),
+            metric_role="runtime_capacity_provenance",
+            decision_authority="opening_rotation_watch_lifecycle_only",
+            window_policy="same_scanner_promotion_runtime_watch_window",
+            sample_floor="not_applicable_runtime_capacity_transition",
+            primary_decision_metric="opening_rotation_active_watch_slot_count",
+            source_quality_gate="exact_promotion_identity_and_active_target_state",
+            runtime_effect=True,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            allowed_runtime_apply=False,
+            forbidden_uses=(
+                "order_submit,position_change,quantity_or_cap_change,"
+                "threshold_mutation,provider_route_change,broker_guard_bypass"
+            ),
+        )
+
     else:
         try:
             feature_packet = _opening_rotation_feature_packet(
@@ -53597,6 +53868,12 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
                 if decision.get("qualified")
                 else "opening_rotation_1pct_observed"
             ),
+        _release_opening_rotation_watch_slot_with_event(
+            stock,
+            code,
+            promotion_id=current_promotion_id,
+            reason="entry_qualified",
+        )
             reason=reason,
             position_tag_candidate=OPENING_ROTATION_POSITION_TAG,
             entry_window_start=entry_config.entry_start.isoformat(),
@@ -53692,6 +53969,19 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
     )
     return True
 
+        elif reason in {
+            "disabled",
+            "before_observation_window",
+            "entry_window_closed",
+        }:
+            with ENTRY_LOCK:
+                _OPENING_ROTATION_CONTEXT_CACHE.pop(code, None)
+            _release_opening_rotation_watch_slot_with_event(
+                stock,
+                code,
+                promotion_id=current_promotion_id,
+                reason=reason,
+            )
 
 def _scanner_async_entry_state_version(stock: dict) -> str:
     """Fingerprint only state that must remain stable across async evaluation."""
@@ -73525,13 +73815,10 @@ def handle_watching_state(
             return
 
     # Opening Rotation context preparation is context-only and its worker has
-    # no order authority.  Hydrating the historical same-symbol guard before
-    # that preparation can block the scheduler's initial heavy lane for
-    # seconds, starving a newly queued promotion.  The final submit owner
-    # still evaluates the same guard (and its bounded rebound exception)
-    # immediately before any broker call.  Restrict this deferral to an
-    # async-enabled Opening Rotation candidate; every other WATCHING path
-    # retains the existing pre-AI guard timing.
+    # no order authority.  Defer the historical same-symbol guard only after
+    # this exact promotion owns one of the two Opening watch slots.  A merely
+    # eligible third promotion must retain the ordinary guard path because it
+    # can fall through to the general entry owner when capacity is full.
     opening_rotation_async_context_candidate = bool(
         strategy == "SCALPING"
         and not scanner_async_commit_phase
@@ -73543,16 +73830,9 @@ def handle_watching_state(
         )
         and (
             is_opening_rotation_position(pos_tag)
-            or is_opening_rotation_watch_candidate(
-                position_tag=pos_tag,
-                source_signature=stock.get("source_signature")
-                or stock.get("scanner_source_signature"),
-                day_change_pct=_safe_float(
-                    ws_data.get("fluctuation", ws_data.get("fluctuation_rate")),
-                    0.0,
-                ),
-                now_dt=now_dt,
-                config=_opening_rotation_entry_config(),
+            or _opening_rotation_watch_slot_owned(
+                stock,
+                str(stock.get("scanner_promotion_id") or "").strip(),
             )
         )
     )

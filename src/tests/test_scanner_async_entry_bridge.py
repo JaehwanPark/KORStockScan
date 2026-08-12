@@ -1738,6 +1738,8 @@ def test_async_opening_rotation_defers_reentry_hydration_until_submit(monkeypatc
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
         "source_signature": "VALUE_TOP",
+        "scanner_promotion_id": "PROMO-ASYNC-OPENING",
+        "opening_rotation_watch_slot_promotion_id": "PROMO-ASYNC-OPENING",
     }
     monkeypatch.setattr(
         handlers, "_observe_entry_cancel_wait_counterfactuals", lambda *a, **k: None
