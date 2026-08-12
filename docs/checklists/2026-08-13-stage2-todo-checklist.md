@@ -102,6 +102,12 @@
 
 ## 독립시간대 매매기계
 
+- [ ] `[SamsungMorningManualAddon1000813] 삼성전자 morning 오늘 한정 100주 수동매도용 추가 BUY 실행·귀속 확인` (`Due: 2026-08-13`, `Slot: PREOPEN`, `TimeWindow: 07:57~09:35`, `Track: RuntimeStability`)
+  - Source: [manual_addon.py](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/manual_addon.py), [exact-date timer](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-samsung-morning-manual-addon-20260813.timer), [Kiwoom contract](/home/ubuntu/KORStockScan/docs/kiwoom-api-data-contract.md)
+  - 실행: 사용자 명시 지시에 따라 `2026-08-13`에만 기존 morning BUY leg의 route·가격을 따라 50주씩 2개, 최대 100주를 별도 원장으로 주문한다. 기존 1주×2 episode 주문과 자동 +2호가 목표는 변경하지 않는다.
+  - 판정: normal morning source order가 broker 접수되고 source episode/leg가 아직 active인 경우에만 mirror하며, terminal/completed source의 지연 추종은 금지한다. add-on exact-order fill/remainder와 NXT 취소 후 SOR 잔량 이동을 대사한다. 체결수량은 `manual_sell_required_quantity`로 기록하고 기계 SELL은 금지한다.
+  - 금지: add-on target/stop/강제청산, 자동매도, 100주 초과, 기존 episode/widget/main-bot 주문 취소·매도, 다른 날짜 재실행, source order 이전 선행 주문을 허용하지 않는다.
+
 - [ ] `[EpisodeMachineExpandedProfileFirstPreflight0813] 13-profile 첫 PREOPEN 실기동 검증` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:15`, `Track: RuntimeStability`)
   - Source: [tracked evidence projection](/home/ubuntu/KORStockScan/data/config/low_price_two_leg_expanded_profile_evidence_2026-08-12.json), [installer](/home/ubuntu/KORStockScan/deploy/install_low_price_two_leg_systemd.sh), [runbook](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
   - 선행 실행 완료 (`2026-08-12 22:30 KST`): 사용자 지시에 따라 reviewed installer로 13-profile 26개 timer와 2개 template unit을 설치·활성화했다. 설치본은 tracked source와 일치하고 active profile service는 `0`이라 소급 실주문이 없으며, 카카오·한국전력 owner는 `manual_operator`로 분리됐다. 다음 session dry-run은 13-profile candidate hash `aa066f3c84db7abad3421ee35bae6a26a792e140cc098a441601c4496ab3cd30`을 통과했고 exact-date applied artifact는 첫 09:05 preflight가 생성하도록 유지했다. main bot은 crontab 기준 07:55 기동되어 첫 preflight보다 앞선다.

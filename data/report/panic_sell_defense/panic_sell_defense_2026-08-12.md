@@ -9,19 +9,19 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-08-12T14:58:02`
-- latest_event_at: `2026-08-12T14:58:11`
+- as_of: `2026-08-12T21:05:09`
+- latest_event_at: `2026-08-12T19:59:59`
 - reasons: `panic thresholds not breached`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `183770`
+- scanned_row_count: `322263`
 - retained_exit_event_count: `1893`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `0`
-- unique_market_observation_count: `16891`
-- duplicate_snapshot_skipped_count: `11958`
+- unique_market_observation_count: `27319`
+- duplicate_snapshot_skipped_count: `20597`
 
 ## 패닉 지표
 
@@ -57,21 +57,21 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `536`
+- evaluated_symbol_count: `820`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `323`
-- degraded_orderbook_count: `323`
-- stale_or_unhealthy_orderbook_count: `11`
+- missing_orderbook_count: `453`
+- degraded_orderbook_count: `453`
+- stale_or_unhealthy_orderbook_count: `12`
 - panic_report_entry_count: `0`
 - panic_active_confirmation_count: `0`
 - recovery_release_transition_count: `0`
 - max_observed_panic_score: `0.4967`
 - panic_near_threshold_observation_count: `0`
-- max_panic_score: `0.3149`
+- max_panic_score: `0.4119`
 - max_recovery_score: `0.6793`
 - micro_cusum_triggered_symbol_count: `0`
 - micro_consensus_pass_symbol_count: `0`
@@ -80,11 +80,11 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_ON`
-- market_panic_breadth_as_of: `2026-08-12T14:58:01`
+- market_panic_breadth_as_of: `2026-08-12T21:05:09`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
 - market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `536`
+- evaluated_symbol_count: `820`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `false`

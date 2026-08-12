@@ -68,6 +68,34 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-08-13 Samsung Morning Exact-Date Manual Add-on Order Gate
+
+- Re-verified at `2026-08-13T07:20:00+09:00` against current upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, and
+  `postman/kiwoom-openapi.postman_collection.json` for `kt10000`, `kt10003`,
+  `kt00007`, `ord_qty`, `cntr_qty`, `ord_remnq`, `cntr_uv`, `cncl_qty`,
+  `orig_ord_no`, and `dmst_stex_tp`. The official contract keeps order/cancel at
+  `POST /api/dostk/ordr`, accepts `NXT|SOR`, defines quantity in shares, and
+  documents `cncl_qty=0` as cancel-all-remaining for the exact original order.
+  `kt00007` returns order, filled, and remaining quantity in one-share units;
+  normal-machine reconciliation remains fixed at one share while the add-on
+  requires the exact submitted quantity, bounded to `1..50`, on every lookup.
+- The user-directed `2026-08-13` add-on has a separate state, lock, order
+  ledger, env key, live confirmation, and non-persistent exact-date timer. It
+  follows only accepted BUY legs while the normal Samsung morning episode and
+  the exact source leg are still active, and submits at most two 50-share BUY
+  orders at the same route and price. A terminal source episode or completed
+  source leg cannot be mirrored late. If the normal leg migrates from NXT to
+  SOR after reconciliation, only the unfilled add-on remainder may follow it.
+- The add-on may cancel only its exact owned BUY-order remainder. It has no
+  SELL endpoint, target, stop, forced exit, quantity escalation, provider/bot
+  control, or authority over the normal episode/widget/main-bot orders. Filled
+  quantity is recorded as `manual_sell_required_quantity` and is handed to the
+  operator for manual sale. The normal 1-share-by-2-leg episode remains
+  unchanged.
+
 ### 2026-08-10 Opening Rotation Margin Orderability Gate
 
 - Rechecked at `2026-08-10T18:35:18+09:00` from upstream commit

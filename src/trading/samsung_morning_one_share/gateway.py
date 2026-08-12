@@ -1,8 +1,9 @@
 """Shared-token-only Kiwoom gateway for the independent one-share machine.
 
 This module owns no token lifecycle and imports no KORStockScan entry, holding,
-exit, ADM, LDM, sizing, or strategy code. Broker writes require an explicit
-constructor authority and are hard-limited to one share of 005930.
+exit, ADM, LDM, sizing, or strategy code. Normal machine writes remain hard
+limited to one share of 005930. The separately named manual-add-on methods are
+bounded to at most 50 shares and are not used by the normal machine.
 """
 
 from __future__ import annotations
@@ -328,6 +329,39 @@ class KiwoomOneShareGateway:
         )
         return self._submit_result(response, body)
 
+    def submit_manual_addon_limit_buy(
+        self, *, price: int, quantity: int, route: str
+    ) -> SubmitResult:
+        """Submit one explicitly authorized manual-add-on BUY leg.
+
+        This method is intentionally separate from ``submit_limit_buy`` so the
+        two one-share episode cannot inherit a larger quantity by accident.
+        """
+
+        self._require_write_authority()
+        route = self._validate_route(route)
+        price = self._validate_price(price)
+        if isinstance(quantity, bool) or int(quantity) != quantity:
+            raise ValueError("invalid_manual_addon_quantity")
+        quantity = int(quantity)
+        if not 1 <= quantity <= 50:
+            raise ValueError("manual_addon_quantity_outside_1_to_50")
+        if is_buy_side_paused():
+            return SubmitResult(False, return_code="TRADING_PAUSED")
+        response, body = self._post(
+            endpoint="/api/dostk/ordr",
+            api_id="kt10000",
+            payload={
+                "dmst_stex_tp": route,
+                "stk_cd": "005930",
+                "ord_qty": str(quantity),
+                "ord_uv": str(price),
+                "trde_tp": "0",
+                "cond_uv": "",
+            },
+        )
+        return self._submit_result(response, body)
+
     def submit_limit_sell(self, *, price: int, route: str = "SOR") -> SubmitResult:
         self._require_write_authority()
         route = self._validate_route(route)
@@ -364,11 +398,39 @@ class KiwoomOneShareGateway:
         )
         return self._submit_result(response, body)
 
+    def cancel_manual_addon_remaining(
+        self, *, route: str, order_no: str
+    ) -> SubmitResult:
+        """Cancel all remaining quantity of one exact add-on order."""
+
+        self._require_write_authority()
+        route = self._validate_route(route)
+        clean_order_no = _clean_order_no(order_no)
+        if not clean_order_no:
+            raise ValueError("missing_original_order_number")
+        response, body = self._post(
+            endpoint="/api/dostk/ordr",
+            api_id="kt10003",
+            payload={
+                "dmst_stex_tp": route,
+                "orig_ord_no": clean_order_no,
+                "stk_cd": "005930",
+                "cncl_qty": "0",
+            },
+        )
+        return self._submit_result(response, body)
+
     def cancel_buy(self, *, order_no: str) -> SubmitResult:
         return self.cancel(route="SOR", order_no=order_no)
 
-    def execution_snapshot(
-        self, *, order_no: str, order_date: str, route: str = "SOR"
+    def _execution_snapshot_for_quantity(
+        self,
+        *,
+        order_no: str,
+        order_date: str,
+        route: str,
+        expected_order_qty: int,
+        quantity_error: str,
     ) -> ExecutionSnapshot:
         route = self._validate_route(route)
         clean_order_no = _clean_order_no(order_no)
@@ -432,24 +494,31 @@ class KiwoomOneShareGateway:
         order_qty = _positive_int(row.get("ord_qty"))
         filled_qty = _positive_int(row.get("cntr_qty"))
         raw_remaining = row.get("ord_remnq", row.get("oso_qty"))
-        if order_qty != 1 or filled_qty > 1 or raw_remaining is None:
+        if (
+            order_qty != expected_order_qty
+            or filled_qty > expected_order_qty
+            or raw_remaining is None
+        ):
             return ExecutionSnapshot(
                 False,
                 True,
                 filled_qty,
                 _positive_int(raw_remaining),
                 order_qty,
-                error="invalid_one_share_execution_contract",
+                error=quantity_error,
             )
         remaining_qty = _positive_int(raw_remaining)
-        if remaining_qty > 1 or filled_qty + remaining_qty > 1:
+        if (
+            remaining_qty > expected_order_qty
+            or filled_qty + remaining_qty > expected_order_qty
+        ):
             return ExecutionSnapshot(
                 False,
                 True,
                 filled_qty,
                 remaining_qty,
                 order_qty,
-                error="invalid_one_share_execution_contract",
+                error=quantity_error,
             )
         return ExecutionSnapshot(
             True,
@@ -458,4 +527,47 @@ class KiwoomOneShareGateway:
             remaining_qty,
             order_qty,
             _positive_int(row.get("cntr_uv", row.get("cntr_pric"))) or None,
+        )
+
+    def execution_snapshot(
+        self, *, order_no: str, order_date: str, route: str = "SOR"
+    ) -> ExecutionSnapshot:
+        """Reconcile an exact order owned by the normal one-share machine."""
+
+        return self._execution_snapshot_for_quantity(
+            route=route,
+            order_no=order_no,
+            order_date=order_date,
+            expected_order_qty=1,
+            quantity_error="invalid_one_share_execution_contract",
+        )
+
+    def manual_addon_execution_snapshot(
+        self,
+        *,
+        order_no: str,
+        order_date: str,
+        route: str,
+        expected_order_qty: int,
+    ) -> ExecutionSnapshot:
+        """Reconcile one exact manual-add-on order without widening normal scope."""
+
+        if (
+            isinstance(expected_order_qty, bool)
+            or int(expected_order_qty) != expected_order_qty
+        ):
+            return ExecutionSnapshot(
+                False, False, 0, 0, 0, error="invalid_manual_addon_expected_quantity"
+            )
+        expected_order_qty = int(expected_order_qty)
+        if not 1 <= expected_order_qty <= 50:
+            return ExecutionSnapshot(
+                False, False, 0, 0, 0, error="invalid_manual_addon_expected_quantity"
+            )
+        return self._execution_snapshot_for_quantity(
+            route=route,
+            order_no=order_no,
+            order_date=order_date,
+            expected_order_qty=expected_order_qty,
+            quantity_error="invalid_manual_addon_execution_contract",
         )

@@ -1,0 +1,11 @@
+[Unit]
+Description=Start Samsung Morning Exact-Date Manual 100-Share BUY Add-on
+
+[Timer]
+OnCalendar=2026-08-13 07:59:05 Asia/Seoul
+Persistent=false
+AccuracySec=1s
+Unit=korstockscan-samsung-morning-manual-addon-20260813.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=KORStockScan Samsung Morning Exact-Date Manual 100-Share BUY Add-on
+After=network-online.target korstockscan-samsung-one-share-preflight.service korstockscan-samsung-morning-one-share.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+Environment="KORSTOCKSCAN_SAMSUNG_MORNING_MANUAL_ADDON_20260813_ENABLED=true"
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.samsung_morning_one_share.manual_addon --live --confirm 005930_MORNING_MANUAL_ADDON_100_20260813 --interval-sec 2
+Restart=on-failure
+RestartSec=3
+UMask=0077
+Nice=5
+CPUQuota=10%
+MemoryMax=256M
+TasksMax=32
+NoNewPrivileges=true
+PrivateTmp=true
