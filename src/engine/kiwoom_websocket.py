@@ -53,6 +53,17 @@ def _load_system_config():
 
 
 WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
+# Official Kiwoom reference gate (retrieved 2026-08-13T08:00:25+09:00):
+# upstream SHA 69642586f7d84ba9fd8a6faf1f1537c7fda6568b; inspected
+# kiwoom_docs/실시간시세.md, kiwoom/realtime/packets.py,
+# kiwoom/realtime/{events,decoders,schemas,stream}.py, kiwoom/core/ws_client.py,
+# and the upstream Postman collection. 0B FID 10 owns current price;
+# KRX/NXT/SOR items use 005930/005930_NX/005930_AL and REG refresh=1.
+WS_PINNED_OBSERVATION_ITEMS_ENV = "KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS"
+WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV = (
+    "KORSTOCKSCAN_WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC"
+)
+DEFAULT_WS_PINNED_OBSERVATION_ITEMS = ("005930_AL",)
 SCALP_CONDITION_PREWARM_MAX_CODES = 16
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCALP_CONDITION_KEYWORDS = (
@@ -118,6 +129,62 @@ _WS_HOT_RUNTIME_OVERRIDES = {
     "next_check_ts": 0.0,
 }
 _WS_HOT_RUNTIME_OVERRIDES_LOCK = threading.Lock()
+
+
+def pinned_ws_observation_items() -> tuple[str, ...]:
+    """Return read-only market-data items that survive target pruning.
+
+    The default Samsung SOR item feeds only the Windows widget comparison.
+    It grants no recommendation, order, sizing, or lifecycle authority.
+    Setting the environment variable to an empty string disables the pin.
+    """
+
+    raw = os.getenv(WS_PINNED_OBSERVATION_ITEMS_ENV)
+    values = (
+        DEFAULT_WS_PINNED_OBSERVATION_ITEMS
+        if raw is None
+        else tuple(part.strip().upper() for part in raw.split(",") if part.strip())
+    )
+    result = []
+    seen = set()
+    for value in values:
+        base = value
+        suffix = ""
+        if value.endswith(("_AL", "_NX")):
+            base, suffix = value[:-3], value[-3:]
+        if base != "005930":
+            continue
+        item = f"{base}{suffix}"
+        if item not in seen:
+            result.append(item)
+            seen.add(item)
+    return tuple(result[:1])
+
+
+def pinned_ws_observation_codes() -> frozenset[str]:
+    return frozenset(item[:6] for item in pinned_ws_observation_items())
+
+
+def is_pinned_ws_observation_registration(
+    code: str, items: tuple[str, ...] | list[str]
+) -> bool:
+    pinned_items = set(pinned_ws_observation_items())
+    registered_items = {
+        str(item or "").strip().upper() for item in items if str(item or "").strip()
+    }
+    return bool(
+        str(code or "").strip()[:6] in pinned_ws_observation_codes()
+        and registered_items
+        and registered_items.issubset(pinned_items)
+    )
+
+
+def _ws_dashboard_snapshot_interval_sec() -> float:
+    raw = os.getenv(WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV, "1.0")
+    try:
+        return max(0.25, min(10.0, float(raw)))
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def is_ws_condition_search_enabled() -> bool:
@@ -263,6 +330,7 @@ class KiwoomWSManager:
         self._persistent_repair_overflow_codes = OrderedDict()
         self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
+        self._pinned_unreg_notice_codes = set()
         # Most subscriptions can be considered live after any quote packet.
         # Scanner entry is stricter: its short-window tape requires a post-REG
         # 0B receipt, not merely a 0D order-book update.
@@ -871,6 +939,16 @@ class KiwoomWSManager:
             len(tuple(items or ())) for items in self._registered_items_by_code.values()
         )
 
+    def is_pinned_observation_subscription(self, code):
+        normalized = self._normalize_code(code)
+        if not normalized:
+            return False
+        with self.lock:
+            registered_items = tuple(
+                self._registered_items_by_code.get(normalized) or ()
+            )
+        return is_pinned_ws_observation_registration(normalized, registered_items)
+
     def _items_by_code(self, normalized_codes, register_items):
         items_by_code = {}
         for code in normalized_codes or []:
@@ -925,7 +1003,11 @@ class KiwoomWSManager:
         skipped_codes = []
 
         with self.lock:
-            planned_item_count = self._registered_item_count_locked()
+            planned_item_count = sum(
+                len(tuple(items or ()))
+                for code, items in self._registered_items_by_code.items()
+                if not is_pinned_ws_observation_registration(code, tuple(items or ()))
+            )
             for code in normalized_codes or []:
                 candidate_items = tuple(items_by_code.get(code) or ())
                 if not candidate_items:
@@ -938,13 +1020,18 @@ class KiwoomWSManager:
                     required_delta = len(candidate_items)
                 else:
                     required_delta = len(delta_items)
+                pinned_registration = is_pinned_ws_observation_registration(
+                    code, candidate_items
+                )
                 if (
-                    required_delta > 0
+                    not pinned_registration
+                    and required_delta > 0
                     and planned_item_count + required_delta > max_items
                 ):
                     skipped_codes.append(code)
                     continue
-                planned_item_count += max(0, required_delta)
+                if not pinned_registration:
+                    planned_item_count += max(0, required_delta)
                 allowed_codes.append(code)
                 allowed_items.extend(candidate_items)
 
@@ -1772,7 +1859,8 @@ class KiwoomWSManager:
         now_ts = time.time()
         if (
             self._dashboard_snapshot_write_inflight
-            or now_ts - float(self._last_dashboard_snapshot_at or 0.0) < 10.0
+            or now_ts - float(self._last_dashboard_snapshot_at or 0.0)
+            < _ws_dashboard_snapshot_interval_sec()
         ):
             return
         self._last_dashboard_snapshot_at = now_ts
@@ -3937,6 +4025,27 @@ class KiwoomWSManager:
             codes = [codes]
 
         normalized_codes = set(self._normalize_subscribe_codes(codes))
+        with self.lock:
+            retained_codes = {
+                code
+                for code in normalized_codes
+                if is_pinned_ws_observation_registration(
+                    code, tuple(self._registered_items_by_code.get(code) or ())
+                )
+            }
+        normalized_codes.difference_update(retained_codes)
+        if retained_codes:
+            with self.lock:
+                first_notice_codes = retained_codes.difference(
+                    self._pinned_unreg_notice_codes
+                )
+                self._pinned_unreg_notice_codes.update(retained_codes)
+            if first_notice_codes:
+                print(
+                    "📌 [WS] 비교전용 관측 구독 REMOVE 생략: "
+                    f"codes={sorted(first_notice_codes)} "
+                    "authority=widget_ws_price_comparison_only"
+                )
         if not normalized_codes:
             return
 

@@ -28,9 +28,125 @@ def _client(monkeypatch):
         "KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH",
         "/tmp/korstockscan-test-no-widget-snapshot.json",
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH",
+        "/tmp/korstockscan-test-no-widget-ws-snapshot.json",
+    )
     app = Flask(__name__)
     app.register_blueprint(routes.samsung_price_widget_bp)
     return app.test_client()
+
+
+def test_websocket_price_comparison_accepts_fresh_shared_0b(monkeypatch, tmp_path):
+    now = datetime(2026, 8, 13, 9, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+    snapshot_path = tmp_path / "ws.json"
+    snapshot_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "stocks": {
+                    "005930": {
+                        "curr": 242_500,
+                        "last_realtime_type_ts": {"0B": now.timestamp() - 0.4},
+                        "last_realtime_type_item": {"0B": "005930_AL"},
+                        "last_trade_tick": {
+                            "price": 242_500,
+                            "ts": now.timestamp() - 0.4,
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH", str(snapshot_path)
+    )
+
+    comparison = routes._websocket_price_comparison(
+        reference_price=242_000, observed_at=now
+    )
+
+    assert comparison["status"] == "OK"
+    assert comparison["current_price"] == 242_500
+    assert comparison["price_delta"] == 500
+    assert comparison["market_route"] == "SOR"
+    assert comparison["age_ms"] == 400.0
+    assert comparison["used_for_manual_order"] is False
+    assert comparison["runtime_effect"] is False
+
+
+def test_websocket_price_comparison_rejects_stale_0b(monkeypatch, tmp_path):
+    now = datetime(2026, 8, 13, 9, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+    snapshot_path = tmp_path / "ws.json"
+    snapshot_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "stocks": {
+                    "005930": {
+                        "curr": 242_500,
+                        "last_realtime_type_ts": {"0B": now.timestamp() - 5.1},
+                        "last_realtime_type_item": {"0B": "005930_AL"},
+                        "last_trade_tick": {
+                            "price": 242_500,
+                            "ts": now.timestamp() - 5.1,
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH", str(snapshot_path)
+    )
+
+    comparison = routes._websocket_price_comparison(
+        reference_price=242_000, observed_at=now
+    )
+
+    assert comparison["status"] == "UNAVAILABLE"
+    assert comparison["reason"] == "samsung_0b_stale"
+
+
+def test_websocket_price_comparison_rejects_unknown_samsung_item(monkeypatch, tmp_path):
+    now = datetime(2026, 8, 13, 9, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+    snapshot_path = tmp_path / "ws.json"
+    snapshot_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "stocks": {
+                    "005930": {
+                        "last_realtime_type_ts": {"0B": now.timestamp()},
+                        "last_realtime_type_item": {"0B": "005930_BAD"},
+                        "last_trade_tick": {
+                            "price": 242_500,
+                            "ts": now.timestamp(),
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH", str(snapshot_path)
+    )
+
+    comparison = routes._websocket_price_comparison(
+        reference_price=242_000, observed_at=now
+    )
+
+    assert comparison["status"] == "UNAVAILABLE"
+    assert comparison["reason"] == "samsung_0b_item_mismatch"
 
 
 def test_samsung_widget_rejects_missing_or_wrong_access_key(monkeypatch):
@@ -122,8 +238,14 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
         "/api/widget/samsung-price",
         headers={"X-KORStockScan-Widget-Key": "widget-secret"},
     )
+    repeated_response = client.get(
+        "/api/widget/samsung-price",
+        headers={"X-KORStockScan-Widget-Key": "widget-secret"},
+    )
 
     assert response.status_code == 200
+    assert repeated_response.status_code == 200
+    assert repeated_response.get_json()["current_price"] == 71200
     assert response.get_json()["current_price"] == 71200
     assert response.get_json()["day_low_delta"] == 400
     assert response.get_json()["market_venue"] == "KRX"

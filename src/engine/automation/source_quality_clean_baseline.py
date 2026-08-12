@@ -91,6 +91,49 @@ def is_date_allowed(source_date: str, policy: dict[str, Any] | None = None) -> b
     return source >= baseline
 
 
+def embedded_source_date_gate(
+    payload: dict[str, Any] | None,
+    *,
+    source_date_field: str = "source_report_date",
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate dated embedded tuning evidence before a policy can consume it."""
+
+    policy = policy or clean_baseline_policy()
+    payload = payload if isinstance(payload, dict) else {}
+    source_date = str(payload.get(source_date_field) or "").strip()
+    baseline_date = str(
+        policy.get("clean_tuning_baseline_date") or DEFAULT_START_DATE
+    ).strip()
+    if not payload:
+        status = "missing"
+        allowed = False
+    elif not source_date:
+        status = "source_date_missing"
+        allowed = False
+    else:
+        try:
+            parsed_source_date = date.fromisoformat(source_date)
+            parsed_baseline_date = date.fromisoformat(baseline_date)
+        except ValueError:
+            status = "source_date_invalid"
+            allowed = False
+        else:
+            allowed = bool(
+                not policy.get("enabled", True)
+                or parsed_source_date >= parsed_baseline_date
+            )
+            status = "pass" if allowed else "pre_clean_baseline_archive_only"
+    return {
+        "allowed": allowed,
+        "status": status,
+        "source_date_field": source_date_field,
+        "source_report_date": source_date or None,
+        "clean_tuning_baseline_date": baseline_date,
+        "runtime_effect": False,
+    }
+
+
 def filter_allowed_dates(
     source_dates: list[str], policy: dict[str, Any] | None = None
 ) -> tuple[list[str], list[str]]:

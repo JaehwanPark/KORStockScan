@@ -196,7 +196,10 @@ from src.engine.sniper_post_sell_feedback import should_retain_ws_subscription
 
 # 💡 뇌(AI)와 눈(웹소켓, 레이더) 임포트
 from src.engine import kiwoom_orders
-from src.engine.kiwoom_websocket import KiwoomWSManager
+from src.engine.kiwoom_websocket import (
+    KiwoomWSManager,
+    pinned_ws_observation_items,
+)
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine_openai import GPTSniperEngine, OpenAIDualPersonaShadowEngine
 
@@ -1166,6 +1169,11 @@ def _is_ok_response(res):
     return sniper_trade_utils.is_ok_response(res)
 
 
+def _ws_subscription_is_pinned_observation(code):
+    checker = getattr(WS_MANAGER, "is_pinned_observation_subscription", None)
+    return bool(callable(checker) and checker(code))
+
+
 def _prune_ws_subscriptions_for_inactive_targets(targets):
     if not WS_MANAGER:
         return
@@ -1183,6 +1191,8 @@ def _prune_ws_subscriptions_for_inactive_targets(targets):
     for code in subscribed_codes:
         norm = str(code or "").strip()[:6]
         if not norm or norm in active_codes:
+            continue
+        if _ws_subscription_is_pinned_observation(norm):
             continue
         if _is_scanner_promotion_pending_attach(norm, now_ts=now_ts):
             continue
@@ -5627,6 +5637,7 @@ def _expire_scalping_watch_budget_targets(
         code
         for code in sorted(set(expired_codes))
         if code not in active_codes
+        and not _ws_subscription_is_pinned_observation(code)
         and not should_retain_ws_subscription(code)
         and not sniper_state_handlers.should_retain_rising_missed_nxt_post_block_subscription(
             code
@@ -11329,10 +11340,20 @@ def run_sniper(is_test_mode=False):
     priority_codes, scanner_boot_codes = _initial_ws_registration_groups(
         targets, now_ts=time.time()
     )
-    if priority_codes:
+    widget_observation_items = list(pinned_ws_observation_items())
+    boot_priority_items = widget_observation_items + [
+        code
+        for code in priority_codes
+        if str(code or "").strip()[:6]
+        not in {item[:6] for item in widget_observation_items}
+    ]
+    if boot_priority_items:
         event_bus.publish(
             "COMMAND_WS_REG",
-            {"codes": priority_codes, "source": "sniper_boot_priority_ws_budget"},
+            {
+                "codes": boot_priority_items,
+                "source": "sniper_boot_priority_and_widget_observation_ws_budget",
+            },
         )
     if scanner_boot_codes:
         event_bus.publish(

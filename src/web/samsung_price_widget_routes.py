@@ -10,6 +10,7 @@ process.
 from __future__ import annotations
 
 import hmac
+import json
 import math
 import os
 import threading
@@ -37,6 +38,7 @@ _WIDGET_ORDER_KEY_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY"
 _WIDGET_ORDER_KEY_FILE_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_ORDER_KEY_FILE"
 _WIDGET_ORDER_KEY_HEADER = "X-KORStockScan-Widget-Order-Key"
 _WIDGET_SNAPSHOT_PATH_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH"
+_WIDGET_WS_SNAPSHOT_PATH_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH"
 _SAMSUNG_CODE = "005930"
 _SAMSUNG_NAME = "삼성전자"
 _REQUEST_TIMEOUT_SEC = 5
@@ -55,6 +57,18 @@ _POSITION_FAILURE_CACHE_TTL_SEC = 10
 _POSITION_AUTHORITY = "widget_account_position_display_only"
 _POSITION_CACHE_LOCK = threading.Lock()
 _POSITION_CACHE: tuple[float, dict] | None = None
+_DIRECT_QUOTE_CACHE_LOCK = threading.Lock()
+_DIRECT_QUOTE_CACHE: tuple[float, str, dict] | None = None
+_DIRECT_QUOTE_CACHE_TTL_SEC = 8.0
+_WS_COMPARISON_MAX_AGE_SEC = 5.0
+_WS_COMPARISON_AUTHORITY = "widget_ws_price_comparison_only"
+_DEFAULT_WS_SNAPSHOT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "runtime"
+    / "kiwoom_ws_snapshot"
+    / "latest.json"
+)
 
 # Official Kiwoom reference gate evidence (retrieved 2026-08-12T13:55:33+09:00):
 # upstream SHA 69642586f7d84ba9fd8a6faf1f1537c7fda6568b
@@ -76,6 +90,105 @@ def _parse_positive_price(value: object) -> int | None:
 
 def _now_kst() -> datetime:
     return datetime.now(ZoneInfo("Asia/Seoul"))
+
+
+def _ws_snapshot_path() -> Path:
+    configured = str(os.getenv(_WIDGET_WS_SNAPSHOT_PATH_ENV) or "").strip()
+    return Path(configured) if configured else _DEFAULT_WS_SNAPSHOT_PATH
+
+
+def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) -> dict:
+    """Build a fail-closed, display-only comparison from shared 0B state."""
+
+    result = {
+        "status": "UNAVAILABLE",
+        "symbol": _SAMSUNG_CODE,
+        "current_price": None,
+        "reference_price": int(reference_price),
+        "price_delta": None,
+        "observed_at_kst": None,
+        "age_ms": None,
+        "ws_item": None,
+        "market_route": None,
+        "source": "shared_kiwoom_ws_dashboard_snapshot_0B",
+        "authority": _WS_COMPARISON_AUTHORITY,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "used_for_manual_order": False,
+        "reason": "snapshot_missing_or_invalid",
+    }
+    try:
+        payload = json.loads(_ws_snapshot_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return result
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != "kiwoom_ws_dashboard_snapshot_v1"
+        or payload.get("decision_authority") != "source_quality_only"
+        or payload.get("runtime_effect") is not False
+    ):
+        result["reason"] = "snapshot_contract_mismatch"
+        return result
+    stocks = payload.get("stocks")
+    row = stocks.get(_SAMSUNG_CODE) if isinstance(stocks, dict) else None
+    if not isinstance(row, dict):
+        result["reason"] = "samsung_0b_not_subscribed"
+        return result
+    last_trade_tick = row.get("last_trade_tick")
+    last_trade_tick = last_trade_tick if isinstance(last_trade_tick, dict) else {}
+    price = _parse_positive_price(last_trade_tick.get("price"))
+    try:
+        tick_ts = float(last_trade_tick.get("ts"))
+        type_tick_ts = float((row.get("last_realtime_type_ts") or {}).get("0B"))
+    except (TypeError, ValueError, AttributeError):
+        tick_ts = 0.0
+        type_tick_ts = 0.0
+    age_sec = observed_at.timestamp() - tick_ts if tick_ts > 0 else math.inf
+    if (
+        price is None
+        or not math.isfinite(age_sec)
+        or not math.isfinite(type_tick_ts)
+        or abs(tick_ts - type_tick_ts) > 0.001
+    ):
+        result["reason"] = "samsung_0b_price_missing"
+        return result
+    if age_sec < -2.0 or age_sec > _WS_COMPARISON_MAX_AGE_SEC:
+        result.update(
+            {
+                "age_ms": round(max(0.0, age_sec) * 1000.0, 1),
+                "reason": "samsung_0b_stale",
+            }
+        )
+        return result
+    type_items = row.get("last_realtime_type_item")
+    ws_item = (
+        str(type_items.get("0B") or "").strip().upper()
+        if isinstance(type_items, dict)
+        else ""
+    )
+    if ws_item not in {_SAMSUNG_CODE, f"{_SAMSUNG_CODE}_NX", f"{_SAMSUNG_CODE}_AL"}:
+        result["reason"] = "samsung_0b_item_mismatch"
+        return result
+    route = (
+        "SOR"
+        if ws_item.endswith("_AL")
+        else "NXT" if ws_item.endswith("_NX") else "KRX"
+    )
+    tick_time = datetime.fromtimestamp(tick_ts, tz=ZoneInfo("Asia/Seoul"))
+    result.update(
+        {
+            "status": "OK",
+            "current_price": price,
+            "price_delta": price - int(reference_price),
+            "observed_at_kst": tick_time.isoformat(),
+            "age_ms": round(max(0.0, age_sec) * 1000.0, 1),
+            "ws_item": ws_item,
+            "market_route": route,
+            "reason": None,
+        }
+    )
+    return result
 
 
 def _quote_route_for_observed_at(observed_at: datetime) -> tuple[str, str, str]:
@@ -263,6 +376,34 @@ def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
     return response_payload
 
 
+def _cached_direct_quote(
+    token: str, *, request_code: str, observed_at: datetime
+) -> dict | None:
+    """Bound quote-only fallback load while the 10-second collector is stale."""
+
+    global _DIRECT_QUOTE_CACHE
+    now_epoch = observed_at.timestamp()
+    with _DIRECT_QUOTE_CACHE_LOCK:
+        cached = _DIRECT_QUOTE_CACHE
+        if (
+            cached is not None
+            and cached[1] == request_code
+            and -2.0 <= now_epoch - cached[0] <= _DIRECT_QUOTE_CACHE_TTL_SEC
+        ):
+            return dict(cached[2])
+    payload = _kiwoom_post(
+        token,
+        path="/api/dostk/stkinfo",
+        api_id="ka10001",
+        payload={"stk_cd": request_code},
+    )
+    if not isinstance(payload, dict):
+        return None
+    with _DIRECT_QUOTE_CACHE_LOCK:
+        _DIRECT_QUOTE_CACHE = (now_epoch, request_code, dict(payload))
+    return payload
+
+
 def _position_contract_payload(
     *,
     status: str,
@@ -407,9 +548,11 @@ def _cached_samsung_position(token: str | None, observed_at: datetime) -> dict:
 
 
 def _reset_position_cache_for_test() -> None:
-    global _POSITION_CACHE
+    global _DIRECT_QUOTE_CACHE, _POSITION_CACHE
     with _POSITION_CACHE_LOCK:
         _POSITION_CACHE = None
+    with _DIRECT_QUOTE_CACHE_LOCK:
+        _DIRECT_QUOTE_CACHE = None
 
 
 def _authorized_request() -> bool:
@@ -647,6 +790,12 @@ def get_samsung_price():
         token = kiwoom_utils.get_cached_kiwoom_token(CONF)
         response_payload = dict(collector_snapshot)
         response_payload["position"] = _cached_samsung_position(token, observed_at)
+        response_payload["websocket_comparison"] = _websocket_price_comparison(
+            reference_price=_parse_positive_price(
+                response_payload.get("current_price")
+            ),
+            observed_at=observed_at,
+        )
         result = jsonify(response_payload)
         result.headers["Cache-Control"] = "no-store"
         return result
@@ -663,11 +812,10 @@ def get_samsung_price():
         "nxt_aftermarket": _NXT_AFTERMARKET_START,
         "krx_or_closed": _KRX_SESSION_START,
     }[market_session]
-    quote_payload = _kiwoom_post(
+    quote_payload = _cached_direct_quote(
         token,
-        path="/api/dostk/stkinfo",
-        api_id="ka10001",
-        payload={"stk_cd": request_code},
+        request_code=request_code,
+        observed_at=observed_at,
     )
     if quote_payload is None:
         return _error_response("kiwoom_quote_rejected", 503)
@@ -741,6 +889,10 @@ def get_samsung_price():
             "exit_advisory": _fallback_exit_advisory(
                 observed_at,
                 samsung_widget_contract.session_context(observed_at).name,
+            ),
+            "websocket_comparison": _websocket_price_comparison(
+                reference_price=current_price,
+                observed_at=observed_at,
             ),
         }
     )

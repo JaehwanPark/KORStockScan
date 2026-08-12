@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from src.engine import lifecycle_bucket_discovery
+from src.engine.automation.source_quality_clean_baseline import (
+    embedded_source_date_gate,
+)
 from src.engine.lifecycle_bucket_discovery import (
     bucket_catalog_path,
     sim_auto_approval_path,
@@ -101,23 +104,33 @@ def rising_missed_classifier_prior_path(target_date: str) -> Path:
     )
 
 
-def _latest_hypothesis_observation_plan(target_date: str) -> dict[str, Any]:
+def _latest_hypothesis_observation_plan(
+    target_date: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     exact = (
         LDM_HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
     )
-    if exact.exists():
-        return _load_json(exact)
     candidates: list[tuple[str, Path]] = []
+    if exact.exists():
+        candidates.append((target_date, exact))
     if LDM_HYPOTHESIS_PLAN_DIR.exists():
         for path in LDM_HYPOTHESIS_PLAN_DIR.glob(
             "ldm_hypothesis_observation_plan_*.json"
         ):
             plan_date = path.stem.removeprefix("ldm_hypothesis_observation_plan_")
-            if plan_date <= target_date:
+            if plan_date <= target_date and path != exact:
                 candidates.append((plan_date, path))
     if not candidates:
-        return {}
-    return _load_json(sorted(candidates)[-1][1])
+        return {}, embedded_source_date_gate({})
+    latest_rejection: dict[str, Any] = {}
+    for _plan_date, path in sorted(candidates, reverse=True):
+        payload = _load_json(path)
+        gate = {**embedded_source_date_gate(payload), "source_artifact": str(path)}
+        if gate["allowed"]:
+            return payload, gate
+        if not latest_rejection:
+            latest_rejection = gate
+    return {}, latest_rejection
 
 
 def _lifecycle_contract_ok(payload: dict[str, Any]) -> bool:
@@ -640,7 +653,9 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(item, dict)
             )
     target_date = _date_text(approval.get("date"))
-    hypothesis_plan = _latest_hypothesis_observation_plan(target_date)
+    hypothesis_plan, hypothesis_plan_gate = _latest_hypothesis_observation_plan(
+        target_date
+    )
     overrides_by_prefix = {
         str(item.get("prefix_key") or "").strip(): item
         for item in active_seed_status_overrides
@@ -691,6 +706,7 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
             "lineage_artifact": f"data/report/key_lineage_ledger/key_lineage_ledger_{target_date}.json",
         },
         "hypothesis_observation_plan": hypothesis_plan or {},
+        "hypothesis_observation_plan_clean_baseline_gate": hypothesis_plan_gate,
         "forbidden_uses": FORBIDDEN_USES,
     }
 

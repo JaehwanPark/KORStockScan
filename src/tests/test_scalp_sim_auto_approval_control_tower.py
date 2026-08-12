@@ -378,3 +378,29 @@ def test_scalp_control_tower_writes_approval_and_catalog(tmp_path, monkeypatch):
     assert catalog["schema_version"] == "scalp_sim_policy_catalog_v1"
     assert catalog["broker_order_forbidden"] is True
     assert len(catalog["policies"]) == 2
+
+
+def test_scalp_catalog_excludes_pre_clean_baseline_hypothesis_plan(
+    tmp_path, monkeypatch
+):
+    plan_dir = tmp_path / "plans"
+    plan_dir.mkdir()
+    monkeypatch.setattr(mod, "LDM_HYPOTHESIS_PLAN_DIR", plan_dir)
+    plan_dir.joinpath("ldm_hypothesis_observation_plan_2026-06-02.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ldm_hypothesis_observation_plan_v1",
+                "apply_date": "2026-06-02",
+                "source_report_date": "2026-06-01",
+                "hypotheses": [{"soft_hypothesis_id": "archive_only"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    catalog = mod.build_policy_catalog({"date": "2026-08-12"})
+
+    assert catalog["hypothesis_observation_plan"] == {}
+    assert catalog["hypothesis_observation_plan_clean_baseline_gate"]["status"] == (
+        "pre_clean_baseline_archive_only"
+    )

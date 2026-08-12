@@ -1,8 +1,9 @@
 # Samsung Price Widget for Windows
 
-`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 204
-pixels) that shows Samsung Electronics (`005930`) current price, the difference
-from the previous successful 10-second query, the broker account's current
+`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 220
+pixels) that shows Samsung Electronics (`005930`) collector/REST current price,
+the shared Kiwoom WebSocket 0B current price and their difference, the difference
+from the previous successful query, the broker account's current
 Samsung quantity and average purchase price, today's low-price distance, and the
 completed-close direction over 1-, 3-, and 5-minute horizons. The former
 20-minute graph has been removed. A compact advisory line remains, followed by
@@ -12,8 +13,16 @@ The implementation contract, state-machine order, formulas, known limits, and
 external-auditor checklist are documented in
 [`docs/audit-reports/2026-08-02-samsung-widget-advisory-external-audit-brief.md`](../../docs/audit-reports/2026-08-02-samsung-widget-advisory-external-audit-brief.md).
 
-The current-price query and previous-price delta refresh every 10 seconds;
-the trends remain based on completed one-minute candles. During the
+The Windows client refreshes every 2 seconds. The primary collector/REST price
+continues on its existing 10-second source cadence, while a display-only shared
+WebSocket snapshot is bridged at up to one-second cadence. `WS/KRX`, `WS/NXT`,
+or `WS/SOR` shows the 0B price, its difference from the primary display price,
+and observation age. A missing or older-than-five-second tick shows `WS: 수신
+대기`; it never replaces the primary price and is never used for manual-order
+price validation, quantity, or submission. The trends remain based on completed
+one-minute candles. If the collector snapshot is stale, the direct REST
+quote-only fallback is cached for eight seconds so the 2-second client does not
+multiply broker requests. During the
 NXT premarket (`08:00~08:50 KST`), the endpoint requests `005930_NX` for both
 the quote and minute chart, attributes it to `PREMARKET_KRX_LIKE`, and the
 widget status line shows `PRE`. During the NXT aftermarket

@@ -7046,6 +7046,58 @@ def test_scalp_sim_auto_approval_missing_keeps_legacy_scale_in_fallback(
     )
 
 
+def test_scalp_sim_auto_approval_blocks_pre_clean_baseline_embedded_plan(
+    tmp_path, monkeypatch
+):
+    _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(
+        tmp_path, monkeypatch
+    )
+    (policy_dir / "scalp_sim_policy_catalog_2026-05-26.json").write_text(
+        json.dumps(
+            _scalp_sim_policy_catalog_payload(
+                hypothesis_observation_plan={
+                    "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "source_report_date": "2026-06-01",
+                    "hypotheses": [{"soft_hypothesis_id": "archive_only"}],
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+    (approval_dir / "scalp_sim_auto_approval_2026-05-26.json").write_text(
+        json.dumps(
+            {
+                "report_type": "scalp_sim_auto_approval",
+                "approved": True,
+                "human_approval_required": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "decision_authority": "scalp_sim_auto_approval_control_tower",
+                "approved_source_ids": ["lifecycle_bucket_discovery"],
+                "approved_policy_count": 1,
+                "approved_policies": [{"policy_id": "source_only"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-27",
+        source_date="2026-05-26",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["scalp_sim_auto_approval"]["selected"] == []
+    assert (
+        "scalp_sim_policy_catalog_hypothesis_plan_clean_baseline_invalid"
+        in manifest["scalp_sim_auto_approval"]["blocked"]
+    )
+
+
 def test_scalp_sim_auto_approval_blocked_does_not_write_env(tmp_path, monkeypatch):
     _, approval_dir, policy_dir, _ = _install_scalp_sim_auto_test_dirs(
         tmp_path, monkeypatch
@@ -9460,6 +9512,54 @@ def test_verify_runtime_env_handoff_requires_scalp_sim_policy_source_date(
     assert (
         "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE"
         in result["findings"][0]["missing_env_keys"]
+    )
+
+
+def test_verify_runtime_env_handoff_rejects_pre_clean_baseline_embedded_plan(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    policy_path = tmp_path / "scalp_sim_policy_catalog.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "hypothesis_observation_plan": {
+                    "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "source_report_date": "2026-06-01",
+                    "hypotheses": [{"soft_hypothesis_id": "archive_only"}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_dir.joinpath("threshold_runtime_env_2026-08-13.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-08-13",
+                "selected_families": ["scalp_sim_auto_approval"],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "true",
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE": str(policy_path),
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION": (
+                        "scalp_sim_auto_approval:2026-08-12"
+                    ),
+                    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE": "2026-08-12",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = mod.verify_runtime_env_handoff("2026-08-13")
+
+    assert result["status"] == "fail"
+    assert any(
+        finding.get("policy_reason")
+        == "hypothesis_plan_pre_clean_baseline_archive_only"
+        for finding in result["findings"]
     )
 
 

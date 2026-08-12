@@ -10412,6 +10412,7 @@ def test_scanner_fast_precheck_ws_backoff_missing_until_still_expires(
 def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution(
     monkeypatch,
 ):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS", "")
     published = []
     manager = SimpleNamespace(subscribed_codes={"005930"})
     monkeypatch.setattr(kiwoom_sniper_v2, "WS_MANAGER", manager)
@@ -10452,6 +10453,30 @@ def test_scanner_promotion_pending_attach_prevents_prune_until_attach_resolution
         ]
     finally:
         kiwoom_sniper_v2._SCANNER_PROMOTION_PENDING_ATTACH_UNTIL.clear()
+
+
+def test_ws_prune_retains_widget_price_comparison_subscription(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WS_PINNED_OBSERVATION_ITEMS", "005930_AL")
+    published = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "WS_MANAGER",
+        SimpleNamespace(
+            subscribed_codes={"005930"},
+            is_pinned_observation_subscription=lambda code: code == "005930",
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "event_bus",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+
+    kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
+
+    assert published == []
 
 
 def test_execution_dependencies_bind_non_revive_smoothing_registration(monkeypatch):

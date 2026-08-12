@@ -22,10 +22,11 @@ from urllib.request import Request, urlopen
 from tkinter import messagebox
 
 APP_NAME = "SamsungPriceWidget"
-POLL_INTERVAL_MS = 10_000
+POLL_INTERVAL_MS = 2_000
 LOCAL_ADVISORY_MAX_AGE_SEC = 25
 LOCAL_POSITION_MAX_AGE_SEC = 45
-WINDOW_SIZE = "190x204"
+LOCAL_WS_COMPARISON_MAX_AGE_SEC = 7
+WINDOW_SIZE = "190x220"
 ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
 ORDER_KEY_HEADER = "X-KORStockScan-Widget-Order-Key"
 MAX_MANUAL_ORDER_QTY = 100
@@ -120,6 +121,11 @@ def order_endpoint_url(endpoint_url: str) -> str:
 @dataclass(frozen=True)
 class Quote:
     current_price: int
+    websocket_price: int | None
+    websocket_price_delta: int | None
+    websocket_status: str
+    websocket_age_ms: float | None
+    websocket_route: str | None
     holding_quantity: int | None
     holding_average_price: int | None
     holding_status: str
@@ -199,6 +205,48 @@ def _string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 
+def _parse_websocket_comparison(
+    payload: object, *, reference_price: int, received_at: datetime | None
+) -> tuple[int | None, int | None, str, float | None, str | None]:
+    if not isinstance(payload, dict):
+        return None, None, "UNAVAILABLE", None, None
+    if (
+        payload.get("authority") != "widget_ws_price_comparison_only"
+        or payload.get("runtime_effect") is not False
+        or payload.get("actual_order_submitted") is not False
+        or payload.get("broker_order_forbidden") is not True
+        or payload.get("used_for_manual_order") is not False
+    ):
+        return None, None, "UNAVAILABLE", None, None
+    if payload.get("status") != "OK":
+        return None, None, "UNAVAILABLE", None, None
+    route = str(payload.get("market_route") or "").strip().upper()
+    if route not in {"KRX", "NXT", "SOR"}:
+        return None, None, "UNAVAILABLE", None, None
+    try:
+        price = abs(int(payload.get("current_price")))
+        declared_reference = abs(int(payload.get("reference_price")))
+        declared_delta = int(payload.get("price_delta"))
+        observed_at = _aware_datetime(
+            payload.get("observed_at_kst"), field="websocket_observed_at_kst"
+        )
+    except (TypeError, ValueError):
+        return None, None, "UNAVAILABLE", None, None
+    local_received_at = received_at or datetime.now().astimezone()
+    age_sec = (
+        local_received_at.astimezone(observed_at.tzinfo) - observed_at
+    ).total_seconds()
+    if (
+        price <= 0
+        or declared_reference != reference_price
+        or declared_delta != price - reference_price
+        or age_sec < -2
+        or age_sec > LOCAL_WS_COMPARISON_MAX_AGE_SEC
+    ):
+        return None, None, "UNAVAILABLE", None, None
+    return price, declared_delta, "OK", max(0.0, age_sec) * 1000.0, route
+
+
 def advisory_range_text(quote: Quote) -> str:
     """Render a range only for actionable states and explain its absence."""
     if quote.entry_price_low is not None and quote.entry_price_high is not None:
@@ -239,6 +287,17 @@ def parse_quote_payload(
         raise ValueError("invalid_price") from exc
     if price <= 0:
         raise ValueError("invalid_price")
+    (
+        websocket_price,
+        websocket_price_delta,
+        websocket_status,
+        websocket_age_ms,
+        websocket_route,
+    ) = _parse_websocket_comparison(
+        payload.get("websocket_comparison"),
+        reference_price=price,
+        received_at=received_at,
+    )
     holding_quantity = None
     holding_average_price = None
     holding_status = "UNAVAILABLE"
@@ -545,6 +604,11 @@ def parse_quote_payload(
         )
     return Quote(
         current_price=price,
+        websocket_price=websocket_price,
+        websocket_price_delta=websocket_price_delta,
+        websocket_status=websocket_status,
+        websocket_age_ms=websocket_age_ms,
+        websocket_route=websocket_route,
         holding_quantity=holding_quantity,
         holding_average_price=holding_average_price,
         holding_status=holding_status,
@@ -678,10 +742,10 @@ class SamsungPriceWidget:
         self.latest_quote: Quote | None = None
         self.last_success_at: datetime | None = None
 
-        root.title("삼성전자 10초")
+        root.title("삼성전자 2초 비교")
         root.geometry(WINDOW_SIZE)
-        root.minsize(190, 204)
-        root.maxsize(190, 204)
+        root.minsize(190, 220)
+        root.maxsize(190, 220)
         root.attributes("-topmost", True)
         root.configure(bg="#1e2430")
         root.protocol("WM_DELETE_WINDOW", root.destroy)
@@ -705,6 +769,15 @@ class SamsungPriceWidget:
             anchor="w",
         )
         self.price_label.pack(fill="x", pady=(2, 0))
+        self.websocket_label = tk.Label(
+            frame,
+            text="WS: 수신 대기",
+            fg="#8fa2b7",
+            bg="#1e2430",
+            font=("Malgun Gothic", 7),
+            anchor="w",
+        )
+        self.websocket_label.pack(fill="x")
         self.position_label = tk.Label(
             frame,
             text="보유: 확인 대기",
@@ -858,6 +931,27 @@ class SamsungPriceWidget:
         previous = self.previous_price
         self.previous_price = current_price
         self.price_label.configure(text=f"{current_price:,}원")
+        if (
+            quote.websocket_status == "OK"
+            and quote.websocket_price is not None
+            and quote.websocket_price_delta is not None
+            and quote.websocket_route is not None
+        ):
+            ws_delta = quote.websocket_price_delta
+            ws_sign = "+" if ws_delta > 0 else ""
+            ws_color = (
+                "#ff6b6b" if ws_delta > 0 else "#5ca9ff" if ws_delta < 0 else "#7bd88f"
+            )
+            self.websocket_label.configure(
+                text=(
+                    f"WS/{quote.websocket_route} {quote.websocket_price:,}원 "
+                    f"· {ws_sign}{ws_delta:,} · "
+                    f"{(quote.websocket_age_ms or 0.0) / 1000.0:.1f}초"
+                ),
+                fg=ws_color,
+            )
+        else:
+            self.websocket_label.configure(text="WS: 수신 대기", fg="#8fa2b7")
         if quote.holding_status != "OK" or quote.holding_quantity is None:
             self.position_label.configure(text="보유: 확인불가", fg="#ffb86c")
         elif quote.holding_quantity == 0:
