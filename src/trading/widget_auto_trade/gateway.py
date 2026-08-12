@@ -21,7 +21,7 @@ from src.utils import kiwoom_utils
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-12T07:19:36+09:00",
+    "retrieved_at_kst": "2026-08-12T14:42:04+09:00",
     "inspected_paths": [
         "kiwoom_docs/주문.md",
         "kiwoom_docs/계좌.md",
@@ -407,10 +407,10 @@ class KiwoomSharedTokenOrderGateway:
             if cont_yn != "Y" or not next_key:
                 break
 
+        all_rows = [row for page in pages for row in _extract_rows(page)]
         matches = [
             row
-            for page in pages
-            for row in _extract_rows(page)
+            for row in all_rows
             if _same_order_no(row.get("ord_no"), clean_order_no)
             and _clean_code(row.get("stk_cd")) == clean_code
         ]
@@ -442,6 +442,72 @@ class KiwoomSharedTokenOrderGateway:
             raw_remaining = row.get("ord_remnq", row.get("oso_qty"))
             if raw_remaining is None or str(raw_remaining).strip() == "":
                 remaining_qty = order_qty - filled_qty
+
+        # A broker correction/replacement receives a new order number and
+        # points at the owned order through orig_ord_no.  The original row then
+        # looks canceled even when its direct successor filled.  Follow only a
+        # same-symbol descendant chain, and only when the exact root reports no
+        # fill and an explicit zero remainder.  This avoids attributing an
+        # unrelated account order or guessing through an ambiguous partial
+        # fill chain.
+        if filled_qty == 0 and remaining_qty == 0:
+            chain_order_nos = {clean_order_no}
+            descendants: list[dict[str, Any]] = []
+            changed = True
+            while changed:
+                changed = False
+                for candidate in all_rows:
+                    candidate_no = _order_no(candidate.get("ord_no"))
+                    original_no = _order_no(
+                        candidate.get("orig_ord_no")
+                        or candidate.get("orgn_ord_no")
+                        or candidate.get("org_ord_no")
+                    )
+                    if (
+                        not candidate_no
+                        or candidate_no in chain_order_nos
+                        or _clean_code(candidate.get("stk_cd")) != clean_code
+                        or not any(
+                            _same_order_no(original_no, known)
+                            for known in chain_order_nos
+                        )
+                    ):
+                        continue
+                    chain_order_nos.add(candidate_no)
+                    descendants.append(candidate)
+                    changed = True
+            filled_descendants = []
+            for candidate in descendants:
+                successor_order_qty = _positive_int(candidate.get("ord_qty"))
+                successor_filled = _positive_int(candidate.get("cntr_qty"))
+                raw_successor_remaining = candidate.get(
+                    "ord_remnq", candidate.get("oso_qty")
+                )
+                if (
+                    successor_order_qty <= 0
+                    or successor_order_qty > order_qty
+                    or successor_filled <= 0
+                    or raw_successor_remaining is None
+                    or str(raw_successor_remaining).strip() == ""
+                ):
+                    continue
+                successor_remaining = _positive_int(raw_successor_remaining)
+                if successor_filled + successor_remaining != successor_order_qty:
+                    continue
+                filled_descendants.append(candidate)
+            if filled_descendants:
+                successor = max(
+                    filled_descendants,
+                    key=lambda candidate: _positive_int(candidate.get("cntr_qty")),
+                )
+                successor_filled = _positive_int(successor.get("cntr_qty"))
+                successor_remaining = _positive_int(
+                    successor.get("ord_remnq", successor.get("oso_qty"))
+                )
+                if successor_filled + successor_remaining <= order_qty:
+                    filled_qty = successor_filled
+                    remaining_qty = successor_remaining
+                    row = successor
         return ExecutionSnapshot(
             source_ok=True,
             found=True,

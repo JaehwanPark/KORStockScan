@@ -1,8 +1,9 @@
 """Recommend, but never create, additional widget collector symbols.
 
-The deterministic report combines up to 20 clean-baseline exact Entry-AI
-payload/replay dates.  It is an operator recommendation and has no authority to
-create collectors, start services, call Kiwoom, or alter trading behavior.
+The deterministic report combines every available clean-baseline exact
+Entry-AI payload/replay date.  It is an operator recommendation and has no
+authority to create collectors, start services, call Kiwoom, or alter trading
+behavior.
 """
 
 from __future__ import annotations
@@ -27,12 +28,16 @@ from src.engine.risk.manual_control_exclusion import (
     configured_manual_control_exclusion_codes,
 )
 from src.engine.scalping.ai_decision_trace import replay_source_input
+from src.engine.monitoring.widget_symbol_signal_policy_research import (
+    SYMBOLS as RESEARCH_WIDGET_SYMBOLS,
+)
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
 AUTHORITY = "widget_collector_expansion_recommendation_only"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 ACTIVE_WIDGET_CODES = frozenset({"005930", "034020", "042660"})
+IMPLEMENTED_WIDGET_CODES = ACTIVE_WIDGET_CODES | frozenset(RESEARCH_WIDGET_SYMBOLS)
 DEFAULT_REPLAY_DIR = Path("data/report/widget_mechanical_entry_replay")
 DEFAULT_PAYLOAD_DIR = Path("data/ai_decision_payloads")
 DEFAULT_SENTINEL_DIR = Path("data/runtime/sentinel_event_cache")
@@ -40,18 +45,18 @@ DEFAULT_OUTPUT_DIR = Path("data/report/widget_collector_expansion_recommendation
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "widget_collector_expansion_telegram_state.json"
 )
-MAX_SOURCE_DATES = 20
 MAX_RECOMMENDATIONS = 5
+ROUND_TRIP_COST_PCT = 0.20
 
 METRIC_CONTRACT = {
     "metric_role": "collector_expansion_recommendation",
     "decision_authority": AUTHORITY,
-    "window_policy": "last_20_available_clean_baseline_exact_replay_dates",
+    "window_policy": "all_available_clean_baseline_exact_replay_dates",
     "sample_floor": "two_joined_rows_and_one_decisive_outcome",
-    "primary_decision_metric": "equal_weight_avg_profit_pct",
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
-        "portable_mechanical_candidate_with_exact_replay_outcome_plus_"
-        "fresh_entry_context_liquidity_and_quote_features"
+        "source_qualified_exact_replay_outcome_plus_fresh_entry_context_"
+        "liquidity_and_quote_features;portable_setup_is_diagnostic"
     ),
     "forbidden_uses": [
         "automatic_collector_creation",
@@ -78,7 +83,7 @@ def _dated_paths(directory: Path, prefix: str, *, through_date: date) -> list[Pa
             continue
         if CLEAN_BASELINE_DATE <= artifact_date <= through_date:
             selected.append((artifact_date, path))
-    return [path for _, path in sorted(selected)[-MAX_SOURCE_DATES:]]
+    return [path for _, path in sorted(selected)]
 
 
 def _load_names(paths: list[Path]) -> dict[str, str]:
@@ -292,11 +297,6 @@ def _load_replay_history(
             if str(row.get("mechanical_source_issue") or "").strip():
                 continue
             item["source_qualified_joined_count"] += 1
-            if not (
-                row.get("mechanical_signal") is True
-                or row.get("mechanical_candidate_before_spread_gate") is True
-            ):
-                continue
             first_hit = str(row.get("entry_path_first_hit") or "")
             if first_hit not in {
                 "target_first",
@@ -334,11 +334,11 @@ def _score_candidate(
     ev_component = max(0.0, min(1.0, (equal_weight_ev_pct + 1.0) / 2.0))
     volatility_component = max(0.0, min(1.0, (intraday_range_pct - 1.0) / 7.0))
     return round(
-        target_share_pct * 0.40
-        + ev_component * 25.0
-        + max(0.0, min(100.0, liquidity_score)) * 0.15
+        target_share_pct * 0.10
+        + ev_component * 45.0
+        + max(0.0, min(100.0, liquidity_score)) * 0.20
         + min(1.0, sample_count / 10.0) * 10.0
-        + volatility_component * 5.0
+        + volatility_component * 10.0
         + max(0.0, min(1.0, portability_ratio)) * 5.0,
         4,
     )
@@ -365,7 +365,7 @@ def build_recommendation_report(
     exclusion_counts: dict[str, int] = defaultdict(int)
     outcome_candidates: dict[str, dict[str, Any]] = {}
     for code, item in replay.items():
-        if code in ACTIVE_WIDGET_CODES:
+        if code in IMPLEMENTED_WIDGET_CODES:
             exclusion_counts["already_active_widget"] += 1
             continue
         if code in excluded_codes:
@@ -376,11 +376,15 @@ def build_recommendation_report(
         adverse_first = int(item["adverse_first_count"])
         decisive = target_first + adverse_first
         end_returns = item["end_returns"]
-        equal_weight_ev = sum(end_returns) / len(end_returns) if end_returns else 0.0
+        equal_weight_ev = (
+            sum(end_returns) / len(end_returns) - ROUND_TRIP_COST_PCT
+            if end_returns
+            else 0.0
+        )
         if samples < 2 or decisive < 1:
             exclusion_counts["sample_floor_not_met"] += 1
             continue
-        if target_first <= adverse_first or equal_weight_ev <= 0:
+        if equal_weight_ev <= 0:
             exclusion_counts["outcome_quality_not_positive"] += 1
             continue
         outcome_candidates[code] = {
@@ -419,7 +423,9 @@ def build_recommendation_report(
         if liquidity < 60 or intraday_range < 1.0 or fresh_quote_rate < 0.80:
             exclusion_counts["tradability_floor_not_met"] += 1
             continue
-        portability_count = samples
+        portability_count = int(item["mechanical_signal_count"]) + int(
+            item["pre_spread_candidate_count"]
+        )
         source_qualified_joined_count = int(item["source_qualified_joined_count"])
         portability_ratio = portability_count / max(1, source_qualified_joined_count)
         target_share = target_first / decisive * 100
@@ -442,6 +448,7 @@ def build_recommendation_report(
                 "diagnostic_target_share_among_decisive_pct": round(target_share, 4),
                 "equal_weight_avg_profit_pct": round(equal_weight_ev, 6),
                 "source_quality_adjusted_ev_pct": round(equal_weight_ev, 6),
+                "round_trip_cost_pct": ROUND_TRIP_COST_PCT,
                 "source_quality_adjustment_policy": (
                     "exclude_ineligible_rows_then_equal_weight"
                 ),
@@ -493,7 +500,7 @@ def build_recommendation_report(
                 else None
             ),
             "feature_paths": feature_paths,
-            "active_widget_codes": sorted(ACTIVE_WIDGET_CODES),
+            "active_widget_codes": sorted(IMPLEMENTED_WIDGET_CODES),
             "manual_excluded_codes": sorted(excluded_codes),
         },
         "metric_contract": METRIC_CONTRACT,

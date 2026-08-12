@@ -1,0 +1,11 @@
+[Unit]
+Description=Start Calibrated Widget Symbol Collector Before KRX
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:57:00 Asia/Seoul
+Persistent=true
+AccuracySec=1s
+Unit=korstockscan-widget-symbol-runtime-collector.service
+
+[Install]
+WantedBy=timers.target

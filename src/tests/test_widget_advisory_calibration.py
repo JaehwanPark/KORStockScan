@@ -163,6 +163,34 @@ def test_verified_target_dominance_restores_two_confirmations(tmp_path):
     assert selected["decision"] == "restore_responsive_confirmation"
 
 
+def test_adverse_first_recovery_uses_ev_and_keeps_responsive_confirmation(tmp_path):
+    spec = _spec(tmp_path)
+    target_date = date(2026, 8, 6)
+    daily = _daily_report(target_date)
+    daily["outcomes"] = [
+        {
+            "market_session": "KRX_REGULAR",
+            "horizon_minutes": 10,
+            "evaluation_eligible": True,
+            "first_hit": "adverse_first",
+            "mfe_pct": 1.2,
+            "mae_pct": -0.4,
+        }
+    ]
+
+    policy, _ = calibration.build_calibration_policy(
+        target_date=target_date,
+        daily_reports={spec.symbol: daily},
+        policy_dir=tmp_path / "policies",
+        specs=(spec,),
+    )
+
+    selected = policy["symbols"][spec.symbol]["sessions"]["KRX_REGULAR"]
+    assert selected["required_actionable_confirmations"] == 2
+    assert selected["cumulative_adverse_first_recovered_count"] == 1
+    assert selected["source_quality_adjusted_ev_pct"] == 0.8
+
+
 def test_failed_daily_report_carries_latest_valid_policy(tmp_path):
     spec = _spec(tmp_path)
     target_date = date(2026, 8, 6)

@@ -6,11 +6,17 @@ import argparse
 import fcntl
 import os
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
+from src.engine.monitoring.samsung_widget_contract import KST
+from src.engine.monitoring.widget_symbol_runtime_policy import (
+    WidgetSymbolRuntimePolicyLoader,
+)
 from src.trading.widget_auto_trade.engine import (
+    ALL_WIDGET_SPECS,
+    CALIBRATED_WIDGET_SPECS,
     DEFAULT_STATE_PATH,
-    DEFAULT_WIDGET_SPECS,
     SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
     WidgetSpec,
     WidgetSignalAutoTrader,
@@ -18,6 +24,8 @@ from src.trading.widget_auto_trade.engine import (
 from src.trading.widget_auto_trade.notifications import (
     WidgetAutoTradeEntryTelegramNotifier,
 )
+
+LEGACY_DEFAULT_SYMBOLS = frozenset({"005930", "034020", "042660"})
 
 
 def _env_enabled() -> bool:
@@ -45,7 +53,7 @@ def _env_specs() -> tuple[WidgetSpec, ...]:
 
     raw = os.getenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS")
     requested = (
-        {spec.code for spec in DEFAULT_WIDGET_SPECS}
+        set(LEGACY_DEFAULT_SYMBOLS)
         if raw is None
         else {
             token.strip().upper().removeprefix("A")
@@ -53,7 +61,13 @@ def _env_specs() -> tuple[WidgetSpec, ...]:
             if token.strip()
         }
     )
-    by_code = {spec.code: spec for spec in DEFAULT_WIDGET_SPECS}
+    promoted = set(
+        WidgetSymbolRuntimePolicyLoader()
+        .resolve_all(observed_date=datetime.now(KST).date())
+        .keys()
+    )
+    requested.update(promoted)
+    by_code = {spec.code: spec for spec in ALL_WIDGET_SPECS}
     if not requested:
         raise ValueError("widget_auto_trader_symbols_empty")
     unknown = sorted(requested - by_code.keys())
@@ -70,7 +84,7 @@ def _env_specs() -> tuple[WidgetSpec, ...]:
             if spec.code == "005930" and samsung_policy
             else spec
         )
-        for spec in DEFAULT_WIDGET_SPECS
+        for spec in ALL_WIDGET_SPECS
         if spec.code in requested
     )
 
@@ -110,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         entry_qty=_env_qty(),
         enabled=_env_enabled(),
         specs=_env_specs(),
+        dynamic_spec_catalog=CALIBRATED_WIDGET_SPECS,
         entry_action_notifier=WidgetAutoTradeEntryTelegramNotifier(),
     )
     if args.once:

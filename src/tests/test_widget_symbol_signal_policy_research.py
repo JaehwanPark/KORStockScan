@@ -1,0 +1,358 @@
+from __future__ import annotations
+
+from datetime import date, datetime, time, timedelta
+
+import pytest
+
+from src.engine.monitoring import widget_symbol_signal_policy_research as research
+from src.engine.monitoring.widget_symbol_signal_policy_research import (
+    Bar,
+    KST,
+    ResearchError,
+    SignalPolicy,
+)
+
+
+class FakeResponse:
+    status_code = 200
+    headers = {}
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def json(self):
+        return {"return_code": 0, "stk_min_pole_chart_qry": self._rows}
+
+
+class RateLimitResponse:
+    status_code = 429
+    headers = {"Retry-After": "0"}
+
+    def json(self):
+        return {}
+
+
+def _bars(
+    values: list[tuple[int, int, int, int, int]],
+    *,
+    started: time = time(9, 0),
+) -> tuple[Bar, ...]:
+    base = datetime.combine(date(2026, 8, 11), started, tzinfo=KST)
+    return tuple(
+        Bar(base + timedelta(minutes=index), open_, high, low, close, volume)
+        for index, (open_, high, low, close, volume) in enumerate(values)
+    )
+
+
+def _policy() -> SignalPolicy:
+    return SignalPolicy(
+        segment="morning",
+        lookback_bars=3,
+        drawdown_pct=0.5,
+        near_low_pct=0.5,
+        reclaim_ticks=1,
+        target_bps=50,
+    )
+
+
+def test_widget_source_is_independent_read_only_ohlcv_contract():
+    started = date(2026, 6, 5)
+    dates = [started + timedelta(days=index) for index in range(17)]
+    rows = [
+        {
+            "cntr_tm": f"{item.strftime('%Y%m%d')}131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": str(100 + index),
+        }
+        for index, item in enumerate(dates)
+    ]
+    rows.append(
+        {
+            "cntr_tm": "20260604131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "99",
+        }
+    )
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse(rows)
+
+    bars, meta = research.fetch_krx_history(
+        symbol="006800",
+        token="CACHED",
+        start_date=started,
+        end_date=dates[-1],
+        expected_trading_day_count=len(dates),
+        page_delay_sec=0,
+        post=post,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]["headers"]["api-id"] == "ka10080"
+    assert calls[0][1]["json"] == {
+        "stk_cd": "006800",
+        "tic_scope": "1",
+        "upd_stkpc_tp": "1",
+    }
+    assert bars[0].volume == 100
+    assert meta["source_quality_status"] == "PASS"
+    assert meta["market"] == "KRX_regular"
+
+
+def test_widget_source_retries_429_without_auth_or_owner_fallback(monkeypatch):
+    started = date(2026, 6, 5)
+    dates = [started + timedelta(days=index) for index in range(17)]
+    rows = [
+        {
+            "cntr_tm": f"{item.strftime('%Y%m%d')}131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "100",
+        }
+        for item in dates
+    ]
+    rows.append(
+        {
+            "cntr_tm": "20260604131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "100",
+        }
+    )
+    responses = [RateLimitResponse(), FakeResponse(rows)]
+    sleeps = []
+    monkeypatch.setattr(research.time_module, "sleep", sleeps.append)
+
+    bars, meta = research.fetch_krx_history(
+        symbol="006800",
+        token="CACHED",
+        start_date=started,
+        end_date=dates[-1],
+        expected_trading_day_count=len(dates),
+        page_delay_sec=0,
+        post=lambda *args, **kwargs: responses.pop(0),
+    )
+
+    assert len(bars) == len(dates)
+    assert sleeps == [0.2]
+    assert meta["request_count"] == 2
+    assert meta["rate_limit_retry_count"] == 1
+
+
+def test_entry_uses_next_completed_bar_open_and_not_signal_bar_price():
+    rows = _bars(
+        [
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_010, 10_000, 10_010, 120),
+            (10_020, 10_030, 10_010, 10_020, 100),
+        ]
+    )
+
+    found = research._find_entry(rows, 5, _policy(), segment_end=time(10, 30))
+
+    assert found is not None
+    entry_index, entry_price, state, volume_ratio = found
+    assert entry_index == 7
+    assert entry_price == 10_020
+    assert state == "ENTRY_READY"
+    assert volume_ratio == pytest.approx(1.2)
+
+
+def test_daily_source_coverage_requires_open_close_and_volume():
+    trade_date = date(2026, 8, 11)
+    rows = _bars([(10_000, 10_000, 10_000, 10_000, 100)] * 381)
+
+    passed = research._daily_source_coverage({trade_date: rows}, [trade_date])
+    failed = research._daily_source_coverage({trade_date: rows[:299]}, [trade_date])
+
+    assert passed["status"] == "PASS"
+    assert failed["status"] == "FAIL"
+    assert failed["qualified_date_count"] == 0
+    assert failed["failed_dates"][0]["reasons"] == [
+        "bar_count_below_300",
+        "regular_close_not_covered",
+    ]
+
+
+def test_daily_source_coverage_excludes_one_partial_day_when_sample_remains():
+    started = date(2026, 6, 5)
+    dates = [started + timedelta(days=index) for index in range(26)]
+    grouped = {}
+    for trade_date in dates:
+        base = datetime.combine(trade_date, time(9, 0), tzinfo=KST)
+        count = 378 if trade_date == dates[5] else 381
+        grouped[trade_date] = tuple(
+            Bar(
+                base + timedelta(minutes=index),
+                10_000,
+                10_000,
+                10_000,
+                10_000,
+                100,
+            )
+            for index in range(count)
+        )
+
+    result = research._daily_source_coverage(grouped, dates)
+
+    assert result["status"] == "PASS_WITH_DATE_EXCLUSIONS"
+    assert result["failed_date_count"] == 1
+    assert result["qualified_date_count"] == 25
+    assert dates[5].isoformat() not in result["qualified_dates"]
+
+
+def test_entry_does_not_cross_segment_end_or_broken_support_gap():
+    near_end = _bars(
+        [
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_000, 9_990, 10_000, 100),
+            (10_000, 10_010, 10_000, 10_010, 120),
+            (10_010, 10_020, 10_000, 10_010, 100),
+        ],
+        started=time(10, 23),
+    )
+    assert (
+        research._find_entry(
+            near_end,
+            5,
+            _policy(),
+            segment_end=time(10, 30),
+        )
+        is None
+    )
+
+    broken_support = list(near_end)
+    broken_support[7] = Bar(
+        broken_support[7].timestamp,
+        9_980,
+        10_000,
+        9_970,
+        9_990,
+        100,
+    )
+    assert (
+        research._find_entry(
+            tuple(broken_support),
+            5,
+            _policy(),
+            segment_end=time(10, 31),
+        )
+        is None
+    )
+
+
+def test_same_bar_target_and_confirmed_adverse_resolves_adverse():
+    rows = _bars(
+        [
+            (10_000, 10_000, 10_000, 10_000, 100),
+            (10_000, 10_000, 9_980, 9_980, 100),
+            (9_980, 10_100, 9_970, 9_970, 100),
+            (9_970, 9_980, 9_960, 9_960, 100),
+            (9_960, 9_970, 9_950, 9_950, 100),
+        ]
+    )
+
+    result = research._exit_episode(
+        rows,
+        entry_index=1,
+        entry_price=10_000,
+        support=9_990,
+        target_bps=50,
+    )
+
+    assert result["exit_reason"] == "same_bar_conflict_adverse"
+    assert result["exit_price"] == 9_970
+
+
+def test_final_completed_regular_bar_is_force_flat_boundary():
+    rows = _bars(
+        [
+            (10_000, 10_000, 10_000, 10_000, 100),
+            (10_000, 10_010, 9_990, 10_000, 100),
+        ],
+        started=time(15, 18),
+    )
+
+    result = research._exit_episode(
+        rows,
+        entry_index=0,
+        entry_price=10_000,
+        support=9_900,
+        target_bps=100,
+    )
+
+    assert result["exit_at"].endswith("15:19:00+09:00")
+    assert result["exit_reason"] == "force_flat"
+
+
+def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
+    monkeypatch,
+):
+    selected = _policy()
+    expected_dates = [date(2026, 6, 5) + timedelta(days=index) for index in range(26)]
+    grouped = {
+        item: _bars([(10_000, 10_000, 10_000, 10_000, 1)]) for item in expected_dates
+    }
+    monkeypatch.setattr(research, "_group_bars", lambda bars: grouped)
+    monkeypatch.setattr(research, "policy_grid", lambda: (selected,))
+
+    def fake_evaluate(grouped_arg, dates, policy, *, include_episodes=False):
+        del grouped_arg, policy
+        is_holdout = dates == expected_dates[-research.HOLDOUT_DAYS :]
+        result = {
+            "episode_count": 4 if is_holdout else max(4, len(dates)),
+            "target_count": 0,
+            "adverse_exit_count": 0,
+            "force_flat_count": 0,
+            "entry_ready_count": 0,
+            "entry_caution_count": 0,
+            "notional_weighted_ev_pct": -0.1 if is_holdout else 0.2,
+            "worst_episode_return_pct": -0.5,
+            "average_peak_return_pct": 0.3,
+        }
+        if include_episodes:
+            result["episodes"] = []
+        return result
+
+    monkeypatch.setattr(research, "evaluate_policy", fake_evaluate)
+
+    result = research.discover_symbol_policy([], expected_dates=expected_dates)
+
+    assert result["selected_policy"] == research.asdict(selected)
+    assert result["decision"] == "holdout_failed_no_widget_runtime_promotion"
+    assert result["allowed_runtime_apply"] is False
+
+
+def test_report_requires_exact_sources_and_declares_cross_owner_prohibition():
+    with pytest.raises(ResearchError, match="widget_symbol_source_set_mismatch"):
+        research.build_report(sources={}, end_date=date(2026, 8, 11))
+
+    assert research.OWNER_CONTRACT["owner"] == "widget_symbol_auto_trade"
+    assert (
+        "sell_other_owner_quantity"
+        in research.OWNER_CONTRACT["forbidden_cross_owner_actions"]
+    )
+    assert "mutate_low_price_two_leg_profile_policy_or_service" in (
+        research.OWNER_CONTRACT["forbidden_cross_owner_actions"]
+    )

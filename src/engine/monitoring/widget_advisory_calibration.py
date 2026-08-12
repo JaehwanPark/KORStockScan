@@ -50,6 +50,7 @@ from src.utils.market_day import is_krx_trading_day
 
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CALIBRATION_HORIZON_MINUTES = 10
+ROUND_TRIP_COST_PCT = 0.20
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_advisory_calibration")
 DAILY_STATUS_ALLOWLIST = {"observed", "no_mature_actionable_sample"}
 
@@ -60,7 +61,7 @@ CALIBRATION_CONTRACT = {
         "clean_baseline_cumulative_from_first_locally_qualified_10m_outcome"
     ),
     "sample_floor": "one_decisive_target_or_adverse_first_outcome",
-    "primary_decision_metric": "target_minus_adverse_first_count_at_10m",
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
         "daily_report_contract_and_exact_entry_touch_with_local_80pct_coverage"
     ),
@@ -332,8 +333,47 @@ def _eligible_decisive_outcomes(
             and horizon == CALIBRATION_HORIZON_MINUTES
             and outcome.get("first_hit") in {"target_first", "adverse_first"}
         ):
-            selected.append({**outcome, "source_report": source_report})
+            selected.append(
+                {
+                    **outcome,
+                    "target_return_pct": report.get("target_return_pct"),
+                    "fallback_adverse_pct": report.get("fallback_adverse_pct"),
+                    "source_report": source_report,
+                }
+            )
     return selected
+
+
+def _opportunity_net_return_proxy(outcome: dict[str, Any]) -> tuple[float, bool]:
+    """Return a bounded 10-minute EV proxy and adverse-first recovery flag.
+
+    A first adverse touch is not automatically a losing opportunity.  If the
+    same mature window subsequently reaches the configured target MFE, retain
+    its target EV.  Otherwise use the observed MAE (or the report's adverse
+    policy when legacy evidence lacks MAE) and deduct round-trip cost.
+    """
+
+    try:
+        target = float(outcome.get("target_return_pct"))
+    except (TypeError, ValueError):
+        target = 0.5
+    try:
+        mfe = float(outcome.get("mfe_pct"))
+    except (TypeError, ValueError):
+        mfe = 0.0
+    recovered = bool(
+        outcome.get("first_hit") == "adverse_first" and mfe + 1e-9 >= target
+    )
+    if outcome.get("first_hit") == "target_first" or recovered:
+        return target - ROUND_TRIP_COST_PCT, recovered
+    try:
+        adverse = float(outcome.get("mae_pct"))
+    except (TypeError, ValueError):
+        try:
+            adverse = float(outcome.get("fallback_adverse_pct"))
+        except (TypeError, ValueError):
+            adverse = -0.3
+    return min(0.0, adverse) - ROUND_TRIP_COST_PCT, recovered
 
 
 def _bounded_step(previous: int, desired: int) -> int:
@@ -363,23 +403,27 @@ def _select_session_policy(
         row.get("first_hit") == "adverse_first" for row in session_outcomes
     )
     decisive = target_first + adverse_first
+    proxy_rows = [_opportunity_net_return_proxy(row) for row in session_outcomes]
+    proxy_values = [value for value, _ in proxy_rows]
+    adjusted_ev = sum(proxy_values) / len(proxy_values) if proxy_values else None
+    recovered_adverse = sum(recovered for _, recovered in proxy_rows)
     selected = previous_value
     decision = "carry_forward_no_decisive_sample"
     reason = "no_source_qualified_decisive_10m_outcome"
     if daily_report_issue is not None:
         decision = "carry_forward_report_verification_failed"
         reason = daily_report_issue
-    elif decisive > 0 and adverse_first > target_first:
+    elif adjusted_ev is not None and adjusted_ev < 0:
         selected = _bounded_step(previous_value, MAX_REQUIRED_CONFIRMATIONS)
         decision = "tighten_confirmation"
-        reason = "cumulative_10m_adverse_first_exceeds_target_first"
-    elif decisive > 0 and target_first > adverse_first:
+        reason = "cumulative_10m_source_quality_adjusted_ev_negative"
+    elif adjusted_ev is not None and adjusted_ev > 0:
         selected = _bounded_step(previous_value, MIN_REQUIRED_CONFIRMATIONS)
         decision = "restore_responsive_confirmation"
-        reason = "cumulative_10m_target_first_exceeds_adverse_first"
-    elif decisive > 0:
-        decision = "carry_forward_tied_decisive_outcomes"
-        reason = "cumulative_10m_target_and_adverse_first_tied"
+        reason = "cumulative_10m_source_quality_adjusted_ev_positive"
+    elif adjusted_ev is not None:
+        decision = "carry_forward_zero_ev"
+        reason = "cumulative_10m_source_quality_adjusted_ev_zero"
     return {
         "required_actionable_confirmations": selected,
         "previous_required_actionable_confirmations": previous_value,
@@ -391,10 +435,15 @@ def _select_session_policy(
         "cumulative_decisive_sample_count": decisive,
         "cumulative_target_first_count": target_first,
         "cumulative_adverse_first_count": adverse_first,
+        "cumulative_adverse_first_recovered_count": recovered_adverse,
+        "source_quality_adjusted_ev_pct": (
+            round(adjusted_ev, 6) if adjusted_ev is not None else None
+        ),
+        "round_trip_cost_pct": ROUND_TRIP_COST_PCT,
         "source_report_verification_issue": daily_report_issue,
         "rollback_value": previous_value,
         "rollback_condition": (
-            "next verified cumulative outcome reverses the target/adverse balance "
+            "next verified cumulative opportunity EV reverses sign "
             "or policy/source verification fails"
         ),
     }

@@ -23,7 +23,9 @@ DEFAULT_RETRY_SEC = 30
 DEFAULT_ACTION_MAX_AGE_SEC = 300
 MAX_DELIVERY_ROWS = 200
 SUPPORTED_BUY_ROLES = frozenset({"ENTRY_BUY", "SCALE_IN_BUY"})
-DEFAULT_ALLOWED_SYMBOLS = frozenset({"005930", "034020", "042660"})
+DEFAULT_ALLOWED_SYMBOLS = frozenset(
+    {"005930", "034020", "042660", "006800", "010140", "080220", "475150"}
+)
 
 ConfigLoader = Callable[[], tuple[str, str]]
 Sender = Callable[[str, str, str], None]

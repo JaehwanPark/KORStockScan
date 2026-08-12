@@ -50,6 +50,7 @@ from src.utils.market_day import is_krx_trading_day
 
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_auto_trade_policy_calibration")
+DEFAULT_EXECUTION_EVENT_DIR = Path("data/report/widget_signal_auto_trade_events")
 ROUND_TRIP_COST_PCT = 0.20
 ACTIONABLE_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
 POSTCLOSE_COMPLETE_TIME = time(20, 1)
@@ -66,7 +67,8 @@ METRIC_CONTRACT = {
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
         "completed_prior_dates;fresh_actionable_source_rows;valid_completed_bar_ohlc;"
-        "venue_and_session_provenance"
+        "venue_and_session_provenance;chronological_holdout_not_used_for_selection;"
+        "real_execution_terminal_sell_failure_veto"
     ),
     "forbidden_uses": [
         "same_day_outcome_to_same_day_policy",
@@ -508,6 +510,65 @@ def _summary(trades: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _holdout_date_count(source_date_count: int) -> int:
+    if source_date_count < 3:
+        return 0
+    if source_date_count < 10:
+        return 1
+    return max(2, min(10, round(source_date_count * 0.20)))
+
+
+def _load_execution_quality(
+    symbol: str,
+    *,
+    target_date: date,
+    event_dir: Path = DEFAULT_EXECUTION_EVENT_DIR,
+) -> dict[str, Any]:
+    path = event_dir / f"widget_signal_auto_trade_events_{target_date:%Y%m%d}.jsonl"
+    counts: dict[str, int] = {}
+    accepted_order_count = 0
+    if path.exists():
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or str(row.get("symbol") or "") != symbol:
+                    continue
+                event_type = str(row.get("event_type") or "")
+                if not event_type:
+                    continue
+                counts[event_type] = counts.get(event_type, 0) + 1
+                if (
+                    event_type == "order_submitted"
+                    and row.get("actual_order_submitted") is True
+                ):
+                    accepted_order_count += 1
+    terminal_failure_types = {
+        "buy_cancel_terminal_failure",
+        "sell_terminal_failure",
+        "take_profit_cancel_terminal_failure",
+        "take_profit_terminal_failure",
+    }
+    terminal_failures = sum(
+        count
+        for event_type, count in counts.items()
+        if event_type in terminal_failure_types
+    )
+    return {
+        "status": "SAFETY_VETO" if terminal_failures else "PASS",
+        "source_path": str(path) if path.exists() else None,
+        "accepted_order_count": accepted_order_count,
+        "order_submit_failed_count": counts.get("order_submit_failed", 0),
+        "terminal_execution_failure_count": terminal_failures,
+        "terminal_sell_failure_count": terminal_failures,
+        "event_counts": dict(sorted(counts.items())),
+        "runtime_apply_allowed": terminal_failures == 0,
+        "decision_authority": "execution_quality_real_only",
+    }
+
+
 def _candidate_ready(
     spec: SymbolSpec,
     session: SessionSpec,
@@ -529,8 +590,6 @@ def _candidate_ready(
         if worst is None or float(worst) < -2.0:
             return False, "worst_trade_exceeds_bounded_initial_floor"
     else:
-        if float(summary.get("target_completion_ratio") or 0.0) < 0.5:
-            return False, "target_completion_ratio_below_half"
         if summary["target_exit_count"] < 2:
             return False, "insufficient_target_completions"
     return True, "bounded_cumulative_candidate_ready"
@@ -624,6 +683,36 @@ def _calibrate_session(
     for row in rows:
         if row["session"] == session.session and row["venue"] == session.venue:
             rows_by_date.setdefault(row["trade_date"], []).append(row)
+    ordered_dates = sorted(rows_by_date)
+    holdout_count = _holdout_date_count(len(ordered_dates))
+    holdout_dates = set(ordered_dates[-holdout_count:]) if holdout_count else set()
+    calibration_dates = [value for value in ordered_dates if value not in holdout_dates]
+
+    def simulate_dates(
+        dates: Sequence[date],
+        *,
+        add_triggers: tuple[int, ...],
+        target_bps: int,
+        max_entries: int,
+        cutoff: str,
+        cooldown: int,
+        force_exit_time: str | None,
+    ) -> list[dict[str, Any]]:
+        return [
+            trade
+            for source_date in dates
+            for trade in _simulate_day(
+                rows_by_date[source_date],
+                session=session,
+                add_triggers_bps=add_triggers,
+                target_bps=target_bps,
+                max_entries=max_entries,
+                cutoff=cutoff,
+                cooldown_minutes=cooldown,
+                force_exit_time=force_exit_time,
+            )
+        ]
+
     candidates: list[dict[str, Any]] = []
     for add_triggers in spec.add_trigger_arms:
         for target_bps in spec.target_bps_values:
@@ -634,20 +723,15 @@ def _calibrate_session(
                             session.force_exit_times if session.force_flat else (None,)
                         )
                         for force_exit_time in force_exit_times:
-                            trades = [
-                                trade
-                                for day_rows in rows_by_date.values()
-                                for trade in _simulate_day(
-                                    day_rows,
-                                    session=session,
-                                    add_triggers_bps=add_triggers,
-                                    target_bps=target_bps,
-                                    max_entries=max_entries,
-                                    cutoff=cutoff,
-                                    cooldown_minutes=cooldown,
-                                    force_exit_time=force_exit_time,
-                                )
-                            ]
+                            trades = simulate_dates(
+                                calibration_dates,
+                                add_triggers=add_triggers,
+                                target_bps=target_bps,
+                                max_entries=max_entries,
+                                cutoff=cutoff,
+                                cooldown=cooldown,
+                                force_exit_time=force_exit_time,
+                            )
                             summary = _summary(trades)
                             ready, reason = _candidate_ready(spec, session, summary)
                             candidates.append(
@@ -698,15 +782,47 @@ def _calibrate_session(
             "candidate_count": 0,
             "research_accumulation": research_accumulation,
         }
-    selected_dates = selected["summary"]["signal_dates"]
-    holdout_dates = selected_dates[-1:] if len(selected_dates) >= 2 else []
-    holdout = _summary(
-        [row for row in selected["trades"] if row["trade_date"] in holdout_dates]
+    selected_parameters = {
+        key: selected[key]
+        for key in (
+            "add_trigger_bps_from_initial_fill",
+            "target_bps",
+            "max_completed_entries_per_day",
+            "new_entry_cutoff_time",
+            "reentry_cooldown_minutes",
+            "force_exit_time",
+        )
+    }
+    holdout_trades = simulate_dates(
+        sorted(holdout_dates),
+        add_triggers=tuple(selected_parameters["add_trigger_bps_from_initial_fill"]),
+        target_bps=int(selected_parameters["target_bps"]),
+        max_entries=int(selected_parameters["max_completed_entries_per_day"]),
+        cutoff=str(selected_parameters["new_entry_cutoff_time"]),
+        cooldown=int(selected_parameters["reentry_cooldown_minutes"]),
+        force_exit_time=selected_parameters["force_exit_time"],
     )
+    holdout = _summary(holdout_trades)
+    holdout_ready = bool(holdout["signal_trade_count"] >= 1)
+    holdout_reason = "independent_holdout_pass"
+    if not holdout_ready:
+        holdout_reason = "independent_holdout_signal_missing"
+    elif session.force_flat:
+        holdout_ready = bool(
+            holdout["resolved_trade_count"] == holdout["signal_trade_count"]
+            and float(holdout.get("source_quality_adjusted_ev_pct") or 0.0) > 0
+            and float(holdout.get("worst_net_return_pct") or -999.0) >= -2.0
+        )
+        if not holdout_ready:
+            holdout_reason = "independent_holdout_ev_or_tail_failed"
+    else:
+        holdout_ready = bool(holdout["target_exit_count"] >= 1)
+        if not holdout_ready:
+            holdout_reason = "independent_holdout_target_missing"
     provisional_decision = (
         "widget_auto_trade_policy_candidate_ready"
-        if selected["ready"]
-        else selected["reason"]
+        if selected["ready"] and holdout_ready
+        else selected["reason"] if not selected["ready"] else holdout_reason
     )
     return {
         "decision": (
@@ -716,21 +832,15 @@ def _calibrate_session(
         ),
         "provisional_candidate_decision": provisional_decision,
         "candidate_count": len(candidates),
-        "selected_policy": {
-            key: selected[key]
-            for key in (
-                "add_trigger_bps_from_initial_fill",
-                "target_bps",
-                "max_completed_entries_per_day",
-                "new_entry_cutoff_time",
-                "reentry_cooldown_minutes",
-                "force_exit_time",
-            )
-        },
+        "selected_policy": selected_parameters,
         "selected_summary": selected["summary"],
-        "latest_date_holdout_summary": holdout,
+        "independent_holdout_summary": holdout,
+        "independent_holdout_decision": holdout_reason,
+        "calibration_dates": [value.isoformat() for value in calibration_dates],
+        "holdout_dates": [value.isoformat() for value in sorted(holdout_dates)],
         "selected_trades": selected["trades"],
-        "policy_tier": "bounded_initial_cumulative_small_sample",
+        "holdout_trades": holdout_trades,
+        "policy_tier": "bounded_chronological_holdout",
         "rollback_condition": (
             "next cumulative source-quality-adjusted net EV <= 0; "
             "unresolved forced-flat path; "
@@ -750,6 +860,7 @@ def build_report(*, target_date: date) -> dict[str, Any]:
     for spec in SPECS:
         rows, paths = _load_rows(spec, target_date=target_date)
         source_paths.extend(paths)
+        source_dates = sorted({row["trade_date"].isoformat() for row in rows})
         sessions = {
             session.session: _calibrate_session(
                 spec,
@@ -762,12 +873,24 @@ def build_report(*, target_date: date) -> dict[str, Any]:
         symbol_reports[spec.symbol] = {
             "name": spec.name,
             "source_row_count": len(rows),
-            "source_dates": sorted({row["trade_date"].isoformat() for row in rows}),
+            "source_quality_status": "PASS" if rows else "BLOCKED",
+            "source_dates": source_dates,
+            "actual_evidence_start_date": source_dates[0] if source_dates else None,
             "analysis_start_date": spec.analysis_start_date.isoformat(),
+            "execution_quality": _load_execution_quality(
+                spec.symbol, target_date=target_date
+            ),
             "sessions": sessions,
         }
-    ready_count = sum(
+    statistically_ready_count = sum(
         session_report["decision"] == "widget_auto_trade_policy_candidate_ready"
+        for symbol_report in symbol_reports.values()
+        for session_report in symbol_report["sessions"].values()
+    )
+    ready_count = sum(
+        symbol_report["source_quality_status"] == "PASS"
+        and symbol_report["execution_quality"]["runtime_apply_allowed"] is True
+        and session_report["decision"] == "widget_auto_trade_policy_candidate_ready"
         for symbol_report in symbol_reports.values()
         for session_report in symbol_report["sessions"].values()
     )
@@ -779,7 +902,12 @@ def build_report(*, target_date: date) -> dict[str, Any]:
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "round_trip_cost_pct": ROUND_TRIP_COST_PCT,
         "source_paths": sorted(set(source_paths)),
-        "source_quality_status": "PASS" if source_paths else "BLOCKED",
+        "source_quality_status": (
+            "PASS"
+            if any(value["source_row_count"] > 0 for value in symbol_reports.values())
+            else "BLOCKED"
+        ),
+        "statistically_ready_session_policy_count": statistically_ready_count,
         "ready_session_policy_count": ready_count,
         "symbols": symbol_reports,
         "metric_contract": METRIC_CONTRACT,
@@ -793,11 +921,27 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
     target_date = str(report["target_date"])
     effective_date = str(report["effective_date"])
     policy_symbols: dict[str, Any] = {}
+    blocked_sessions: dict[str, dict[str, str]] = {}
     for spec in SPECS:
         source = report["symbols"][spec.symbol]
         session_specs = {value.session: value for value in spec.sessions}
         sessions: dict[str, Any] = {}
         for session_name, calibration in source["sessions"].items():
+            block_reason = None
+            if source.get("source_quality_status") != "PASS":
+                block_reason = "source_quality_blocked"
+            elif not source.get("execution_quality", {}).get(
+                "runtime_apply_allowed", False
+            ):
+                block_reason = "execution_quality_safety_veto"
+            elif calibration["decision"] != "widget_auto_trade_policy_candidate_ready":
+                block_reason = str(calibration["decision"])
+            if block_reason is not None:
+                if spec.symbol == SAMSUNG_CODE:
+                    blocked_sessions.setdefault(spec.symbol, {})[
+                        session_name
+                    ] = block_reason
+                continue
             if calibration["decision"] != "widget_auto_trade_policy_candidate_ready":
                 continue
             selected = calibration["selected_policy"]
@@ -826,7 +970,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                     f"tp{selected['target_bps']}_multi"
                 ),
                 "evidence_window": (
-                    f"{spec.analysis_start_date.isoformat()}_{target_date}"
+                    f"{source['actual_evidence_start_date']}_{target_date}"
                 ),
                 "evidence_artifact": (
                     "data/report/widget_auto_trade_policy_calibration/"
@@ -834,6 +978,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "policy_tier": calibration["policy_tier"],
                 "rollback_condition": calibration["rollback_condition"],
+                "execution_quality": source["execution_quality"],
                 "actual_order_submitted": False,
                 "broker_guard_bypass": False,
                 "research_accumulation_start_date": research_accumulation["start_date"],
@@ -849,7 +994,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
             policy_symbols[spec.symbol] = {"name": spec.name, "sessions": sessions}
     policy = {
         "schema": POLICY_SCHEMA,
-        "status": "verified" if policy_symbols else "no_ready_policy",
+        "status": (
+            "verified" if policy_symbols or blocked_sessions else "no_ready_policy"
+        ),
         "policy_version": f"widget_auto_trade_policy_{effective_date}_from_{target_date}",
         "source_target_date": target_date,
         "effective_date": effective_date,
@@ -861,6 +1008,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
             f"widget_auto_trade_policy_calibration_{target_date}.json"
         ),
         "symbols": policy_symbols,
+        "blocked_sessions": blocked_sessions,
         "metric_contract": METRIC_CONTRACT,
         "runtime_effect": True,
         "actual_order_submitted": False,
@@ -874,14 +1022,19 @@ def verify_policy(policy: dict[str, Any], *, policy_dir: Path) -> dict[str, Any]
     verification_path = policy_dir / (
         f"{POLICY_FILE_PREFIX}_{effective_date.isoformat()}.json"
     )
-    loaded = WidgetAutoTradePolicyLoader(policy_dir).resolve_all(
-        observed_date=effective_date
-    )
+    loaded = WidgetAutoTradePolicyLoader(
+        policy_dir, include_symbol_expansion=False
+    ).resolve_all(observed_date=effective_date)
     expected_sessions = {
         (symbol, session)
         for symbol, symbol_payload in policy.get("symbols", {}).items()
         for session in symbol_payload.get("sessions", {})
     }
+    expected_sessions.update(
+        (symbol, session)
+        for symbol, sessions in policy.get("blocked_sessions", {}).items()
+        for session in sessions
+    )
     loaded_sessions = {
         (symbol, session) for symbol, sessions in loaded.items() for session in sessions
     }
@@ -917,6 +1070,9 @@ def write_outputs(
     expected_session_count = sum(
         len(symbol_payload.get("sessions", {}))
         for symbol_payload in policy.get("symbols", {}).values()
+    )
+    expected_session_count += sum(
+        len(sessions) for sessions in policy.get("blocked_sessions", {}).values()
     )
     report["policy_verification"] = {
         "status": "pass",

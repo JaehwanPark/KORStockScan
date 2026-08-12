@@ -190,7 +190,13 @@ class FakeDatedPolicyLoader:
         return self.policies
 
 
-def _dated_policy(*, force_flat=True, cutoff="14:30:00", target_bps=100):
+def _dated_policy(
+    *,
+    force_flat=True,
+    cutoff="14:30:00",
+    target_bps=100,
+    source_exit_action="observe_only_no_forced_sell",
+):
     return {
         "policy_id": "dated-policy-v1",
         "symbol": "999999",
@@ -208,7 +214,7 @@ def _dated_policy(*, force_flat=True, cutoff="14:30:00", target_bps=100):
         "force_flat_at_session_end": force_flat,
         "force_exit_time": "15:18:00" if force_flat else None,
         "overnight_forbidden": force_flat,
-        "source_final_exit_action": "observe_only_no_forced_sell",
+        "source_final_exit_action": source_exit_action,
         "research_arm": "test",
         "evidence_window": "2026-06-05_2026-08-11",
         "evidence_artifact": "test.json",
@@ -766,6 +772,55 @@ def test_dated_policy_controls_target_and_observes_source_exit(tmp_path, monkeyp
     )
 
 
+def test_dated_policy_can_consume_source_exit_for_owned_quantity_only(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="DATED-ENTRY")}
+    trader, gateway, recorder = _dated_policy_trader(
+        tmp_path,
+        monkeypatch,
+        box,
+        policy=_dated_policy(source_exit_action="sell_own_filled_quantity"),
+    )
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now.replace(second=1))
+
+    box["payload"] = _payload(now.replace(second=2), exit_id="SOURCE-EXIT")
+    trader.run_once(now.replace(second=2))
+    assert gateway.cancel_calls == [("999999", "L2", 1, "SOR")]
+    assert gateway.sell_calls == []
+
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 1)
+    trader.run_once(now.replace(second=3))
+    assert gateway.sell_calls == [("999999", 1, "SOR")]
+    assert any(
+        event["event_type"] == "final_exit_signal_consumed" for event in recorder.events
+    )
+
+
+def test_unknown_source_exit_action_fails_closed_without_sell_or_new_entry(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="DATED-ENTRY", exit_id="SOURCE-EXIT")}
+    trader, gateway, recorder = _dated_policy_trader(
+        tmp_path,
+        monkeypatch,
+        box,
+        policy=_dated_policy(source_exit_action="unknown_action"),
+    )
+
+    trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert gateway.sell_calls == []
+    assert recorder.events[-1]["event_type"] == (
+        "source_final_exit_blocked_invalid_policy_action"
+    )
+
+
 def test_dated_policy_force_flat_cancels_target_and_sells_owned_quantity(
     tmp_path, monkeypatch
 ):
@@ -833,7 +888,9 @@ def test_required_dated_policy_fails_closed_when_artifact_is_missing(
     now = _at(10)
     box = {"payload": _payload(now, entry_id="NO-POLICY")}
     trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
-    trader.specs = (replace(trader.specs[0], dated_policy_required=True),)
+    required_spec = replace(trader.specs[0], dated_policy_required=True)
+    trader._static_specs = (required_spec,)
+    trader.specs = (required_spec,)
 
     trader.run_once(now)
 
@@ -1656,6 +1713,115 @@ def test_gateway_reconciles_only_exact_documented_order_row():
     assert snapshot.fill_price == 234000
 
 
+def test_gateway_reconciles_filled_same_symbol_successor_order_chain():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0040442",
+                        "orig_ord_no": "0000000",
+                        "stk_cd": "A042660",
+                        "ord_qty": "1",
+                        "cntr_qty": "0",
+                        "ord_remnq": "0",
+                    },
+                    {
+                        "ord_no": "0041229",
+                        "orig_ord_no": "0040442",
+                        "stk_cd": "A042660",
+                        "ord_qty": "1",
+                        "cntr_qty": "1",
+                        "cntr_uv": "90300",
+                        "ord_remnq": "0",
+                    },
+                    {
+                        "ord_no": "0099999",
+                        "orig_ord_no": "0040442",
+                        "stk_cd": "A005930",
+                        "ord_qty": "10",
+                        "cntr_qty": "10",
+                        "ord_remnq": "0",
+                    },
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        @staticmethod
+        def post(*args, **kwargs):
+            return Response()
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=Session(), token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="042660", order_no="0040442", route="SOR", order_date="2026-08-12"
+    )
+
+    assert snapshot.source_ok is True
+    assert snapshot.found is True
+    assert snapshot.order_qty == 1
+    assert snapshot.filled_qty == 1
+    assert snapshot.remaining_qty == 0
+    assert snapshot.fill_price == 90300
+
+
+def test_gateway_does_not_merge_successor_when_root_is_partially_filled():
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {
+                "acnt_ord_cntr_prps_dtl": [
+                    {
+                        "ord_no": "0040442",
+                        "orig_ord_no": "0000000",
+                        "stk_cd": "A042660",
+                        "ord_qty": "2",
+                        "cntr_qty": "1",
+                        "cntr_uv": "90000",
+                        "ord_remnq": "0",
+                    },
+                    {
+                        "ord_no": "0041229",
+                        "orig_ord_no": "0040442",
+                        "stk_cd": "A042660",
+                        "ord_qty": "1",
+                        "cntr_qty": "1",
+                        "cntr_uv": "90300",
+                        "ord_remnq": "0",
+                    },
+                ],
+                "return_code": 0,
+            }
+
+    class Session:
+        @staticmethod
+        def post(*args, **kwargs):
+            return Response()
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=Session(), token_loader=lambda: "cached-token"
+    )
+
+    snapshot = gateway.execution_snapshot(
+        code="042660", order_no="0040442", route="SOR", order_date="2026-08-12"
+    )
+
+    assert snapshot.order_qty == 2
+    assert snapshot.filled_qty == 1
+    assert snapshot.remaining_qty == 0
+    assert snapshot.fill_price == 90000
+
+
 def test_service_single_instance_lock_is_exclusive(tmp_path):
     lock_path = tmp_path / "widget-auto-trader.lock"
     first = service_module._acquire_single_instance_lock(lock_path)
@@ -1676,6 +1842,67 @@ def test_service_symbol_allowlist_selects_only_requested_widgets(monkeypatch):
     specs = service_module._env_specs()
 
     assert [spec.code for spec in specs] == ["005930"]
+
+
+def test_service_adds_only_exact_date_postclose_promoted_widget_symbols(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", "005930")
+    monkeypatch.setattr(
+        service_module.WidgetSymbolRuntimePolicyLoader,
+        "resolve_all",
+        lambda self, observed_date: {"006800": {"policy_id": "verified"}},
+    )
+
+    specs = service_module._env_specs()
+
+    assert [spec.code for spec in specs] == ["005930", "006800"]
+
+
+def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_path):
+    dynamic_spec = WidgetSpec(
+        code="888888",
+        name="dynamic",
+        snapshot_path=Path("unused-dynamic.json"),
+        contract=FakeContract,
+        event_based=True,
+        dated_policy_required=True,
+    )
+    base_spec = WidgetSpec(
+        code="999999",
+        name="base",
+        snapshot_path=Path("unused-base.json"),
+        contract=FakeContract,
+        event_based=True,
+    )
+
+    class DatePolicyLoader:
+        @staticmethod
+        def resolve_all(*, observed_date):
+            if observed_date.isoformat() != "2026-08-13":
+                return {}
+            policy = _dated_policy()
+            policy.update(symbol="888888", policy_id="dynamic-2026-08-13")
+            return {"888888": {"KRX_REGULAR": policy}}
+
+    trader = WidgetSignalAutoTrader(
+        gateway=FakeGateway(),
+        specs=(base_spec,),
+        dynamic_spec_catalog=(dynamic_spec,),
+        state_path=tmp_path / "state.json",
+        event_recorder=FakeRecorder([]),
+        snapshot_loader=lambda path: {},
+        policy_loader=DatePolicyLoader(),
+        enabled=False,
+    )
+
+    trader.run_once(datetime(2026, 8, 12, 10, 0, tzinfo=KST))
+    assert [spec.code for spec in trader.specs] == ["999999"]
+    trader.run_once(datetime(2026, 8, 13, 10, 0, tzinfo=KST))
+    assert [spec.code for spec in trader.specs] == ["999999", "888888"]
+    assert trader._state["execution_policies"] == {
+        "888888": {"KRX_REGULAR": "dynamic-2026-08-13"}
+    }
+    trader.run_once(datetime(2026, 8, 14, 10, 0, tzinfo=KST))
+    assert [spec.code for spec in trader.specs] == ["999999"]
 
 
 def test_service_explicit_samsung_execution_policy_is_attached(monkeypatch):
@@ -1751,3 +1978,22 @@ def test_postclose_widget_evaluation_writes_next_day_execution_policy():
     assert (
         "src.engine.monitoring.widget_auto_trade_policy_calibration --write" in service
     )
+    assert (
+        "src.engine.monitoring.widget_symbol_signal_policy_research --write" in service
+    )
+    assert "src.engine.monitoring.widget_symbol_runtime_policy --write" in service
+
+
+def test_calibrated_widget_symbol_collector_is_exact_date_policy_gated():
+    service = Path(
+        "deploy/systemd/korstockscan-widget-symbol-runtime-collector.service"
+    ).read_text(encoding="utf-8")
+    timer = Path(
+        "deploy/systemd/korstockscan-widget-symbol-runtime-collector.timer"
+    ).read_text(encoding="utf-8")
+
+    assert "widget_symbol_runtime_policy --check-active" in service
+    assert "widget_symbol_runtime_collector --interval-sec 15" in service
+    assert "Restart=on-failure" in service
+    assert "OnCalendar=Mon..Fri *-*-* 08:57:00 Asia/Seoul" in timer
+    assert "Persistent=true" in timer

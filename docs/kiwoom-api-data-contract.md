@@ -122,6 +122,21 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   forbidden sell inputs. The gateway reads the existing shared token cache
   only and has no issue/refresh fallback.
 
+### 2026-08-12 Widget Successor-Order Reconciliation Gate
+
+- Re-verified at `2026-08-12T14:42:04+09:00` against upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/계좌.md`, `kiwoom_docs/주문.md`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, and
+  `postman/kiwoom-openapi.postman_collection.json` for `kt00007` order detail,
+  `ord_no`, `orig_ord_no`, `ord_qty`, `cntr_qty`, and `ord_remnq`.
+- A broker correction or replacement may have a new order number linked to the
+  widget-owned root through `orig_ord_no`. Reconciliation follows only an
+  exact same-symbol descendant chain when the root has zero fill and explicit
+  zero remainder. It rejects missing quantity/remainder fields and oversized
+  successors. A partially filled root is never combined with a descendant,
+  preventing ambiguous fill aggregation and accidental excess sell quantity.
+
 ### 2026-08-07 Daily Runtime Token Ownership Gate
 
 - Retrieved at `2026-08-07T09:03:03+09:00` from upstream commit

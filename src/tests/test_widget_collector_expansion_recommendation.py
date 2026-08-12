@@ -104,6 +104,8 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     assert candidate["collector_created"] is False
     assert candidate["service_started"] is False
     assert candidate["estimated_added_requests_per_minute"] == 13
+    assert candidate["source_quality_adjusted_ev_pct"] == 0.4
+    assert candidate["round_trip_cost_pct"] == 0.2
     assert report["runtime_effect"] is False
 
 
@@ -187,7 +189,7 @@ def test_default_target_date_uses_completed_session_date():
     ) == date(2026, 8, 7)
 
 
-def test_recommendation_rejects_positive_ai_rows_without_portable_widget_setup(
+def test_recommendation_keeps_positive_ev_observation_candidate_without_portable_setup(
     tmp_path,
 ):
     replay_dir = tmp_path / "replay"
@@ -222,8 +224,10 @@ def test_recommendation_rejects_positive_ai_rows_without_portable_widget_setup(
         manual_excluded_codes=frozenset(),
     )
 
-    assert report["status"] == "no_qualified_candidate"
-    assert report["exclusion_counts"]["sample_floor_not_met"] == 1
+    assert report["status"] == "recommendations_ready"
+    candidate = report["recommendations"][0]
+    assert candidate["stock_code"] == "111111"
+    assert candidate["portability_ratio_pct"] == 0.0
 
 
 def test_cli_writes_replay_and_recommendation_without_notification(tmp_path):

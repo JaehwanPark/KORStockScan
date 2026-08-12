@@ -1,6 +1,6 @@
 [Unit]
 Description=KORStockScan Operator-Directed Widget Signal Auto Trader
-After=network-online.target korstockscan-samsung-widget-collector.service korstockscan-doosan-widget-collector.service korstockscan-hanwha-ocean-widget-collector.service
+After=network-online.target korstockscan-samsung-widget-collector.service korstockscan-doosan-widget-collector.service korstockscan-hanwha-ocean-widget-collector.service korstockscan-widget-symbol-runtime-collector.service
 Wants=network-online.target
 
 [Service]

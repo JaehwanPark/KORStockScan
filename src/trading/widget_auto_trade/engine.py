@@ -16,6 +16,9 @@ from typing import Any, Callable, Protocol
 from src.engine.monitoring import doosan_widget_contract as doosan_contract
 from src.engine.monitoring import hanwha_ocean_widget_contract as hanwha_contract
 from src.engine.monitoring import samsung_widget_contract as samsung_contract
+from src.engine.monitoring.widget_symbol_runtime_contract import (
+    CONTRACTS as WIDGET_SYMBOL_RUNTIME_CONTRACTS,
+)
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.risk.manual_control_exclusion import (
     evaluate_manual_control_exclusion,
@@ -182,6 +185,20 @@ DEFAULT_WIDGET_SPECS = (
     ),
 )
 
+CALIBRATED_WIDGET_SPECS = tuple(
+    WidgetSpec(
+        contract.code,
+        contract.name,
+        contract.DEFAULT_SNAPSHOT_PATH,
+        contract,
+        True,
+        dated_policy_required=True,
+    )
+    for contract in WIDGET_SYMBOL_RUNTIME_CONTRACTS.values()
+)
+
+ALL_WIDGET_SPECS = DEFAULT_WIDGET_SPECS + CALIBRATED_WIDGET_SPECS
+
 SnapshotLoader = Callable[[Path], dict[str, Any]]
 
 
@@ -338,6 +355,7 @@ class WidgetSignalAutoTrader:
         snapshot_loader: SnapshotLoader = _load_json,
         entry_action_notifier: EntryActionNotifier | None = None,
         policy_loader: WidgetAutoTradePolicyLoader | None = None,
+        dynamic_spec_catalog: tuple[WidgetSpec, ...] = (),
         entry_qty: int = 1,
         enabled: bool = False,
     ) -> None:
@@ -345,7 +363,12 @@ class WidgetSignalAutoTrader:
         if qty < 1 or qty > MAX_ENTRY_QTY:
             raise ValueError(f"entry_qty must be between 1 and {MAX_ENTRY_QTY}")
         self.gateway = gateway or KiwoomSharedTokenOrderGateway()
-        self.specs = specs
+        dynamic_codes = {spec.code for spec in dynamic_spec_catalog}
+        self._static_specs = tuple(
+            spec for spec in specs if spec.code not in dynamic_codes
+        )
+        self._dynamic_spec_catalog = tuple(dynamic_spec_catalog)
+        self.specs = tuple(specs)
         self.state_path = state_path
         self.event_recorder = event_recorder or WidgetTradeEventRecorder()
         self.snapshot_loader = snapshot_loader
@@ -357,19 +380,30 @@ class WidgetSignalAutoTrader:
         self._dated_execution_policies = self.policy_loader.resolve_all(
             observed_date=self._policy_date
         )
+        self._refresh_dynamic_specs()
         self._configured_execution_policies = self._policy_manifest()
-        for spec in specs:
+        self._validate_policy_quantities()
+        self._state = self._load_state()
+
+    def _refresh_dynamic_specs(self) -> None:
+        promoted = set(self._dated_execution_policies)
+        self.specs = self._static_specs + tuple(
+            spec for spec in self._dynamic_spec_catalog if spec.code in promoted
+        )
+
+    def _validate_policy_quantities(self) -> None:
+        for spec in self.specs:
             policies = list(self._dated_execution_policies.get(spec.code, {}).values())
             legacy = _legacy_execution_policy(spec)
             if not policies and legacy is not None:
                 policies = [legacy]
             for policy in policies:
-                if qty != int(policy["leg_quantity_each"]):
+                if self.entry_qty != int(policy["leg_quantity_each"]):
                     raise ValueError(
                         "widget_execution_policy_entry_qty_mismatch:"
-                        f"{spec.code}:expected={policy['leg_quantity_each']}:actual={qty}"
+                        f"{spec.code}:expected={policy['leg_quantity_each']}:"
+                        f"actual={self.entry_qty}"
                     )
-        self._state = self._load_state()
 
     def _policy_manifest(self) -> dict[str, Any]:
         manifest: dict[str, Any] = {}
@@ -530,6 +564,8 @@ class WidgetSignalAutoTrader:
         self._dated_execution_policies = self.policy_loader.resolve_all(
             observed_date=self._policy_date
         )
+        self._refresh_dynamic_specs()
+        self._validate_policy_quantities()
         self._configured_execution_policies = self._policy_manifest()
         new_symbols: dict[str, dict[str, Any]] = {}
         for spec in self.specs:
@@ -1759,7 +1795,32 @@ class WidgetSignalAutoTrader:
             session=current_context.name,
             symbol_state=symbol_state,
         )
-        source_exit_observed = bool(exit_signal_id and execution_policy is not None)
+        source_exit_action = (
+            str(execution_policy.get("source_final_exit_action") or "")
+            if execution_policy is not None
+            else ""
+        )
+        source_exit_action_invalid = bool(
+            exit_signal_id
+            and execution_policy is not None
+            and source_exit_action
+            not in {"observe_only_no_forced_sell", "sell_own_filled_quantity"}
+        )
+        if source_exit_action_invalid:
+            self._event(
+                "source_final_exit_blocked_invalid_policy_action",
+                spec,
+                now,
+                signal_id=exit_signal_id,
+                source_final_exit_action=source_exit_action,
+                execution_policy_id=execution_policy.get("policy_id"),
+            )
+            exit_signal_id = None
+        source_exit_observed = bool(
+            exit_signal_id
+            and execution_policy is not None
+            and source_exit_action == "observe_only_no_forced_sell"
+        )
         if source_exit_observed:
             if symbol_state.get(
                 "entry_episode_open"
@@ -1777,6 +1838,9 @@ class WidgetSignalAutoTrader:
                     execution_policy_id=execution_policy["policy_id"],
                 )
             exit_signal_id = None
+        if source_exit_action_invalid:
+            self._maybe_submit_take_profit(spec, symbol_state, now)
+            return
         if exit_signal_id and exit_signal_id != symbol_state.get("exit_signal_id"):
             symbol_state.update(
                 {

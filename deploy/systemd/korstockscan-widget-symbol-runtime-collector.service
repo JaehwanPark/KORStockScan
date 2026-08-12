@@ -1,0 +1,27 @@
+[Unit]
+Description=KORStockScan Calibrated Widget Symbol Read-Only Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+ExecCondition=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_symbol_runtime_policy --check-active
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_symbol_runtime_collector --interval-sec 15
+Restart=on-failure
+RestartSec=3
+UMask=0077
+Nice=10
+CPUQuota=20%
+MemoryMax=384M
+TasksMax=32
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

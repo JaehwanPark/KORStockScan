@@ -272,6 +272,15 @@ def _validated_payload(
     if not isinstance(payload, dict):
         return None
     metric_contract = payload.get("metric_contract")
+    symbols = payload.get("symbols")
+    blocked_sessions = payload.get("blocked_sessions")
+    has_runtime_policy = isinstance(symbols, dict) and bool(symbols)
+    has_samsung_block = bool(
+        isinstance(blocked_sessions, dict)
+        and isinstance(blocked_sessions.get("005930"), dict)
+        and blocked_sessions["005930"]
+    )
+    source_quality_status = payload.get("source_quality_status")
     if (
         payload.get("schema") != POLICY_SCHEMA
         or payload.get("status") != "verified"
@@ -289,7 +298,9 @@ def _validated_payload(
         or not metric_contract.get("sample_floor")
         or not metric_contract.get("source_quality_gate")
         or not isinstance(metric_contract.get("forbidden_uses"), list)
-        or payload.get("source_quality_status") != "PASS"
+        or source_quality_status not in {"PASS", "BLOCKED"}
+        or (has_runtime_policy and source_quality_status != "PASS")
+        or (source_quality_status == "BLOCKED" and not has_samsung_block)
     ):
         return None
     try:
@@ -314,7 +325,7 @@ def _validated_payload(
     verification = evidence.get("policy_verification")
     if (
         evidence.get("status") != "complete"
-        or evidence.get("source_quality_status") != "PASS"
+        or evidence.get("source_quality_status") != source_quality_status
         or evidence.get("target_date") != source_target_date.isoformat()
         or evidence.get("effective_date") != effective_date.isoformat()
         or not isinstance(verification, dict)
@@ -323,7 +334,6 @@ def _validated_payload(
     ):
         return None
     policy_id = str(payload.get("policy_version") or "").strip()
-    symbols = payload.get("symbols")
     if not policy_id or not isinstance(symbols, dict):
         return None
     validated: dict[str, dict[str, dict[str, Any]]] = {}
@@ -353,14 +363,57 @@ def _validated_payload(
             )
             if session_policy is not None:
                 validated.setdefault(str(symbol), {})[str(session)] = session_policy
+    blocked_sessions = payload.get("blocked_sessions")
+    if isinstance(blocked_sessions, dict):
+        for symbol, sessions in blocked_sessions.items():
+            if str(symbol) != "005930" or not isinstance(sessions, dict):
+                continue
+            for session, reason in sessions.items():
+                session_name = str(session)
+                venue = SESSION_VENUES.get(session_name)
+                reason_text = str(reason or "").strip()
+                if (
+                    venue is None
+                    or not reason_text
+                    or session_name in validated.get(str(symbol), {})
+                ):
+                    continue
+                validated.setdefault(str(symbol), {})[session_name] = {
+                    "policy_id": policy_id,
+                    "symbol": str(symbol),
+                    "session": session_name,
+                    "market_venue": venue,
+                    "allowed_entry_sessions": (session_name,),
+                    "allowed_entry_venues": (venue,),
+                    "allowed_entry_states": tuple(SUPPORTED_ENTRY_STATES),
+                    "leg_quantity_each": 1,
+                    "new_entry_runtime_eligible": False,
+                    "new_entry_runtime_block_reason": reason_text,
+                    "research_arm": "blocked_no_runtime_apply",
+                    "evidence_window": (
+                        f"{source_target_date.isoformat()}_{source_target_date.isoformat()}"
+                    ),
+                    "evidence_artifact": evidence_path_text,
+                    "policy_tier": "safety_or_evidence_block",
+                    "effective_date": effective_date.isoformat(),
+                    "source_target_date": source_target_date.isoformat(),
+                    "policy_path": str(policy_path),
+                    "authority": POLICY_AUTHORITY,
+                }
     return validated or None
 
 
 class WidgetAutoTradePolicyLoader:
     """Resolve the newest verified policy effective for a trading date."""
 
-    def __init__(self, policy_dir: Path = DEFAULT_POLICY_DIR) -> None:
+    def __init__(
+        self,
+        policy_dir: Path = DEFAULT_POLICY_DIR,
+        *,
+        include_symbol_expansion: bool = True,
+    ) -> None:
         self.policy_dir = policy_dir
+        self.include_symbol_expansion = bool(include_symbol_expansion)
         self._directory_mtime_ns: int | None = None
         self._cached_payloads: list[tuple[Path, object]] = []
 
@@ -402,7 +455,50 @@ class WidgetAutoTradePolicyLoader:
                     validated,
                 )
             )
-        if not candidates:
-            return {}
-        _, _, selected = max(candidates, key=lambda item: (item[0], item[1]))
+        selected: dict[str, dict[str, Any]] = {}
+        if candidates:
+            _, _, selected = max(candidates, key=lambda item: (item[0], item[1]))
+            selected = {symbol: dict(sessions) for symbol, sessions in selected.items()}
+        if not self.include_symbol_expansion:
+            return selected
+
+        # This exact-date bridge is a distinct widget owner and cannot replace
+        # an existing standard-policy symbol/session.  A conflict fails closed
+        # for the expansion row rather than changing the incumbent owner.
+        from src.engine.monitoring.widget_symbol_runtime_policy import (
+            WidgetSymbolRuntimePolicyLoader,
+        )
+
+        expansion = WidgetSymbolRuntimePolicyLoader().resolve_all(
+            observed_date=observed_date
+        )
+        for symbol, payload in expansion.items():
+            execution = payload["execution_policy"]
+            session = str(execution["session"])
+            if session in selected.get(symbol, {}):
+                continue
+            selected.setdefault(symbol, {})[session] = {
+                **execution,
+                "policy_id": payload["policy_id"],
+                "symbol": symbol,
+                "research_arm": (
+                    "symbol_specific_"
+                    f"{payload['signal_policy']['segment']}_"
+                    f"tp{payload['signal_policy']['target_bps']}"
+                ),
+                "evidence_window": payload["evidence_window"],
+                "evidence_artifact": payload["evidence_artifact"],
+                "policy_tier": "holdout_verified_symbol_specific",
+                "rollback_condition": (
+                    "exact_date_policy_missing; source-quality failure; "
+                    "postclose holdout/EV gate failure; unresolved forced-flat"
+                ),
+                "effective_date": payload["effective_date"],
+                "source_target_date": payload["source_target_date"],
+                "policy_path": payload["policy_path"],
+                "authority": payload["authority"],
+                "new_entry_runtime_eligible": True,
+                "new_entry_runtime_block_reason": None,
+                "research_accumulation_gate_status": "holdout_verified",
+            }
         return selected

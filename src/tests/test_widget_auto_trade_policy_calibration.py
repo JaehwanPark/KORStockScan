@@ -5,6 +5,9 @@ from datetime import date, datetime
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.monitoring.widget_auto_trade_policy_calibration import (
     SessionSpec,
+    SymbolSpec,
+    _calibrate_session,
+    _load_execution_quality,
     _research_accumulation,
     _simulate_day,
     _summary,
@@ -12,6 +15,7 @@ from src.engine.monitoring.widget_auto_trade_policy_calibration import (
     write_outputs,
 )
 from src.engine.monitoring import widget_auto_trade_policy_calibration as calibration
+from src.trading.widget_auto_trade.policy import WidgetAutoTradePolicyLoader
 from src.utils.market_day import is_krx_trading_day
 
 
@@ -97,6 +101,79 @@ def test_replay_force_flat_resolves_unhit_target_at_preclose() -> None:
     assert summary["right_censored_count"] == 0
 
 
+def test_non_force_flat_candidate_keeps_unresolved_as_diagnostic_not_hard_block() -> (
+    None
+):
+    spec = calibration.SPECS[0]
+    session = spec.sessions[1]
+    summary = {
+        "distinct_signal_date_count": 5,
+        "signal_trade_count": 5,
+        "target_exit_count": 2,
+        "target_completion_ratio": 0.4,
+        "source_quality_adjusted_ev_pct": 0.12,
+        "equal_weight_avg_net_return_pct": 0.3,
+        "worst_net_return_pct": 0.3,
+        "resolved_trade_count": 2,
+    }
+
+    ready, reason = calibration._candidate_ready(spec, session, summary)
+
+    assert ready is True
+    assert reason == "bounded_cumulative_candidate_ready"
+
+
+def test_policy_selection_uses_chronological_holdout_not_selection_rows(
+    tmp_path,
+) -> None:
+    session = SessionSpec(
+        "KRX_REGULAR", "KRX", ("14:30:00",), True, ("15:18:00",), True
+    )
+    spec = SymbolSpec(
+        symbol="999999",
+        name="테스트",
+        observation_dir=tmp_path,
+        prefix="test",
+        sessions=(session,),
+        add_trigger_arms=((),),
+        target_bps_values=(100,),
+        max_entries_values=(2,),
+        minimum_signal_dates=2,
+        minimum_trades=2,
+        analysis_start_date=date(2026, 8, 3),
+        minimum_qualified_observation_dates=0,
+    )
+    rows = []
+    for day in (3, 4, 5, 6):
+        trade_date = date(2026, 8, day)
+        entry = {
+            **_row(0, state="ENTRY_READY", previous_state="WATCH"),
+            "trade_date": trade_date,
+            "observed_at": datetime(2026, 8, day, 10, 0, 10, tzinfo=KST),
+            "bar_at": datetime(2026, 8, day, 10, 0, tzinfo=KST),
+        }
+        terminal_price = 99.0 if day == 6 else 102.0
+        terminal = {
+            **_row(1, current=terminal_price, low=terminal_price, high=terminal_price),
+            "trade_date": trade_date,
+            "observed_at": datetime(2026, 8, day, 15, 18, 1, tzinfo=KST),
+            "bar_at": datetime(2026, 8, day, 15, 17, tzinfo=KST),
+        }
+        rows.extend((entry, terminal))
+
+    report = _calibrate_session(spec, session, rows, target_date=date(2026, 8, 6))
+
+    assert report["calibration_dates"] == [
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    ]
+    assert report["holdout_dates"] == ["2026-08-06"]
+    assert report["selected_summary"]["source_quality_adjusted_ev_pct"] > 0
+    assert report["independent_holdout_summary"]["source_quality_adjusted_ev_pct"] < 0
+    assert report["decision"] == "independent_holdout_ev_or_tail_failed"
+
+
 def test_default_target_uses_completed_current_date_only_after_postclose(
     monkeypatch,
 ) -> None:
@@ -117,6 +194,58 @@ def test_default_target_uses_completed_current_date_only_after_postclose(
     assert calibration._resolve_default_target_date() == date(2026, 8, 12)
 
 
+def test_execution_quality_surfaces_terminal_sell_failure_as_safety_veto(
+    tmp_path,
+) -> None:
+    target_date = date(2026, 8, 11)
+    path = tmp_path / "widget_signal_auto_trade_events_20260811.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                '{"symbol":"999999","event_type":"order_submitted",'
+                '"actual_order_submitted":true}',
+                '{"symbol":"999999","event_type":"take_profit_terminal_failure"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = _load_execution_quality(
+        "999999", target_date=target_date, event_dir=tmp_path
+    )
+
+    assert quality["status"] == "SAFETY_VETO"
+    assert quality["accepted_order_count"] == 1
+    assert quality["terminal_sell_failure_count"] == 1
+    assert quality["runtime_apply_allowed"] is False
+
+
+def test_execution_quality_counts_actual_engine_terminal_failure_names(
+    tmp_path,
+) -> None:
+    target_date = date(2026, 8, 11)
+    path = tmp_path / "widget_signal_auto_trade_events_20260811.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                '{"symbol":"999999","event_type":"sell_terminal_failure"}',
+                '{"symbol":"999999","event_type":"buy_cancel_terminal_failure"}',
+                '{"symbol":"999999","event_type":"take_profit_cancel_terminal_failure"}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = _load_execution_quality(
+        "999999", target_date=target_date, event_dir=tmp_path
+    )
+
+    assert quality["status"] == "SAFETY_VETO"
+    assert quality["terminal_sell_failure_count"] == 3
+
+
 def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
     session_reports = {}
     for spec in calibration.SPECS:
@@ -135,7 +264,7 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
         "status": "complete",
         "target_date": "2026-08-11",
         "effective_date": "2026-08-12",
-        "source_quality_status": "PASS",
+        "source_quality_status": "BLOCKED",
         "symbols": session_reports,
         "metric_contract": calibration.METRIC_CONTRACT,
     }
@@ -151,6 +280,18 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
     assert report_path.exists()
     assert policy_path.exists()
     assert verification["status"] == "pass"
+    loaded = WidgetAutoTradePolicyLoader(
+        tmp_path / "policies", include_symbol_expansion=False
+    ).resolve_all(observed_date=date(2026, 8, 12))
+    assert set(loaded["005930"]) == {
+        "NXT_PREMARKET",
+        "KRX_REGULAR",
+        "NXT_AFTERMARKET",
+    }
+    assert all(
+        policy["new_entry_runtime_eligible"] is False
+        for policy in loaded["005930"].values()
+    )
 
 
 def test_low_symbol_research_gate_requires_40_full_krx_dates() -> None:
