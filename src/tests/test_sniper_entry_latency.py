@@ -5664,6 +5664,19 @@ def test_latency_spread_relief_true_ofi_provenance_is_forwarded_to_pipeline_even
             "latency_true_ofi_direct_canary_reason": "direct_canary_true_ofi_false_negative_allow",
             "latency_true_ofi_direct_canary_relief_runtime_enabled": True,
             "latency_true_ofi_direct_canary_true_ofi_ewma": 0.012,
+            "latency_true_ofi_direct_canary_effective_max_ws_age_ms": 750.0,
+            "latency_true_ofi_direct_canary_dynamic_age_band_enabled": True,
+            "latency_true_ofi_direct_canary_dynamic_age_band_active": True,
+            "latency_true_ofi_direct_canary_dynamic_age_band_active_date": "2026-08-12",
+            "latency_true_ofi_direct_canary_dynamic_age_band_eligible": True,
+            "latency_true_ofi_direct_canary_dynamic_age_band_applied": True,
+            "latency_true_ofi_direct_canary_dynamic_age_band_max_ws_age_ms": 750.0,
+            "latency_true_ofi_direct_canary_dynamic_age_band_min_samples": 25,
+            "latency_true_ofi_direct_canary_dynamic_age_band_tp1_context_age_sec": 2.5,
+            "latency_true_ofi_direct_canary_dynamic_age_band_max_spread_bps": 85.0,
+            "latency_true_ofi_direct_canary_dynamic_age_band_min_true_ofi": -0.05,
+            "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_buy_ratio": 70.0,
+            "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_samples": 3,
         }
     )
     assert remeasure_fields["latency_false_negative_remeasure_enqueued"] is True
@@ -5694,6 +5707,28 @@ def test_latency_spread_relief_true_ofi_provenance_is_forwarded_to_pipeline_even
         is True
     )
     assert remeasure_fields["latency_true_ofi_direct_canary_true_ofi_ewma"] == 0.012
+    assert (
+        remeasure_fields["latency_true_ofi_direct_canary_effective_max_ws_age_ms"]
+        == 750.0
+    )
+    assert (
+        remeasure_fields["latency_true_ofi_direct_canary_dynamic_age_band_eligible"]
+        is True
+    )
+    assert (
+        remeasure_fields["latency_true_ofi_direct_canary_dynamic_age_band_applied"]
+        is True
+    )
+    assert (
+        remeasure_fields["latency_true_ofi_direct_canary_dynamic_age_band_active_date"]
+        == "2026-08-12"
+    )
+    assert (
+        remeasure_fields[
+            "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_samples"
+        ]
+        == 3
+    )
 
 
 def test_latency_wide_spread_passive_requote_allows_scanner_target_price(monkeypatch):

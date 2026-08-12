@@ -659,6 +659,24 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         for event in events
         if event.stage == "budget_pass" or event.stage in BUDGET_BLOCKER_STAGES
     ]
+    lineage_contract_events = [
+        event
+        for event in lineage_events
+        if "pre_submit_parent_ai_lineage_status" in event.fields
+    ]
+    pre_ai_expected = [
+        event
+        for event in lineage_contract_events
+        if _field_first(event.fields, ("pre_submit_parent_ai_lineage_status",))
+        == "missing_ai_trace"
+        and _field_first(event.fields, ("pre_submit_parent_ai_action",))
+        in {"", "-", "NOT_EVALUATED"}
+        and _field_first(event.fields, ("pre_submit_parent_ai_attempt_trace_id",))
+        in {"", "-", "unknown", "not_available"}
+        and _field_first(event.fields, ("pre_submit_parent_ai_result_source",))
+        in {"", "-", "not_available"}
+    ]
+    pre_ai_expected_ids = {id(event) for event in pre_ai_expected}
     lineage_present = [
         event
         for event in lineage_events
@@ -688,8 +706,16 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         _ai_trace_key(event) for event in linked if event.stage in BUDGET_BLOCKER_STAGES
     }
     stage_counts = Counter(event.stage for event in linked)
-    coverage_pct = (
+    join_eligible_events = [
+        event for event in lineage_events if id(event) not in pre_ai_expected_ids
+    ]
+    raw_coverage_pct = (
         round((len(linked) / len(lineage_events)) * 100.0, 2) if lineage_events else 0.0
+    )
+    coverage_pct = (
+        round((len(linked) / len(join_eligible_events)) * 100.0, 2)
+        if join_eligible_events
+        else 0.0
     )
     if linked_block:
         status = "explicit_ai_trace_budget_block_observed"
@@ -699,6 +725,8 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         status = "exact_parent_ai_trace_unresolved"
     elif lineage_present:
         status = "parent_ai_trace_untrusted_or_not_exact"
+    elif pre_ai_expected and len(pre_ai_expected) == len(lineage_contract_events):
+        status = "pre_ai_budget_order_observed_no_parent_expected"
     else:
         status = "instrumentation_gap_parent_ai_trace_missing"
     return {
@@ -709,10 +737,32 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         "raw_ai_budget_census_is_causal": False,
         "ai_trace_count": len(ai_trace_ids),
         "budget_or_block_event_count": len(lineage_events),
+        "lineage_contract_event_count": len(lineage_contract_events),
+        "lineage_contract_coverage_pct": (
+            round((len(lineage_contract_events) / len(lineage_events)) * 100.0, 2)
+            if lineage_events
+            else 0.0
+        ),
+        "pre_ai_parent_not_expected_event_count": len(pre_ai_expected),
+        "lineage_join_eligible_event_count": len(join_eligible_events),
+        "lineage_contract_missing_event_count": (
+            len(lineage_events) - len(lineage_contract_events)
+        ),
         "lineage_field_present_count": len(lineage_present),
+        "parent_trace_missing_when_expected_event_count": (
+            len(join_eligible_events) - len(lineage_present)
+        ),
         "lineage_exact_trusted_count": len(exact_lineage),
+        "lineage_untrusted_or_stale_event_count": (
+            len(lineage_present) - len(exact_lineage)
+        ),
         "lineage_joined_event_count": len(linked),
+        "exact_parent_trace_unresolved_event_count": len(exact_lineage) - len(linked),
         "lineage_join_coverage_pct": coverage_pct,
+        "raw_event_lineage_join_coverage_pct": raw_coverage_pct,
+        "lineage_join_coverage_denominator": (
+            "all_events_except_explicit_pre_ai_parent_not_expected"
+        ),
         "linked_budget_pass_trace_count": len(linked_pass),
         "linked_budget_block_trace_count": len(linked_block),
         "linked_stage_counts": dict(sorted(stage_counts.items())),
@@ -2054,8 +2104,9 @@ def _entry_submit_drought_observation_breakdown(
                 "budget_ai_lineage": budget_ai_lineage,
             },
             "next_repair_action": (
-                "collect explicit parent AI trace on budget pass/block events; "
-                "only joined budget blocks may become a causal EV cohort"
+                "treat pre-AI budget events as expected no-parent observations; "
+                "repair only missing lineage contracts or stale/untrusted post-AI "
+                "parents, and keep causal EV attribution limited to exact joins"
             ),
         },
         "LATENCY_PRE_SUBMIT": {

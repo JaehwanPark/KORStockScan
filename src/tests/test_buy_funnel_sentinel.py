@@ -382,6 +382,100 @@ def test_budget_census_gap_is_observation_only_without_explicit_ai_lineage(
     assert "BUDGET_PASS_COLLAPSE" in breakdown["observation_only_axes"]
 
 
+def test_pre_ai_budget_events_are_not_counted_as_lineage_join_failures(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-11"
+    rows = [
+        _event(
+            target_date,
+            "10:00:00",
+            "budget_pass",
+            fields={
+                "pre_submit_parent_ai_decision_trace_id": "-",
+                "pre_submit_parent_ai_attempt_trace_id": "-",
+                "pre_submit_parent_ai_action": "NOT_EVALUATED",
+                "pre_submit_parent_ai_result_source": "not_available",
+                "pre_submit_parent_ai_lineage_status": "missing_ai_trace",
+                "pre_submit_parent_ai_attempt_trusted": False,
+                "pre_submit_parent_ai_source_fresh": False,
+            },
+        ),
+        _event(
+            target_date,
+            "10:00:05",
+            "ai_confirmed",
+            fields={"ai_decision_trace_id": "trace-1", "action": "WAIT"},
+        ),
+        _event(
+            target_date,
+            "10:00:10",
+            "budget_pass",
+            fields={
+                "pre_submit_parent_ai_decision_trace_id": "trace-1",
+                "pre_submit_parent_ai_attempt_trace_id": "trace-1",
+                "pre_submit_parent_ai_action": "WAIT",
+                "pre_submit_parent_ai_result_source": "live",
+                "pre_submit_parent_ai_lineage_status": (
+                    "exact_latest_watching_ai_trace"
+                ),
+                "pre_submit_parent_ai_attempt_trusted": True,
+                "pre_submit_parent_ai_source_fresh": True,
+            },
+            record_id=2,
+        ),
+    ]
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    lineage = report["current"]["session"]["budget_ai_lineage"]
+
+    assert lineage["budget_or_block_event_count"] == 2
+    assert lineage["lineage_contract_event_count"] == 2
+    assert lineage["pre_ai_parent_not_expected_event_count"] == 1
+    assert lineage["lineage_join_eligible_event_count"] == 1
+    assert lineage["lineage_contract_missing_event_count"] == 0
+    assert lineage["parent_trace_missing_when_expected_event_count"] == 0
+    assert lineage["lineage_joined_event_count"] == 1
+    assert lineage["lineage_untrusted_or_stale_event_count"] == 0
+    assert lineage["exact_parent_trace_unresolved_event_count"] == 0
+    assert lineage["lineage_join_coverage_pct"] == 100.0
+    assert lineage["raw_event_lineage_join_coverage_pct"] == 50.0
+    assert lineage["lineage_join_coverage_denominator"] == (
+        "all_events_except_explicit_pre_ai_parent_not_expected"
+    )
+
+
+def test_pre_ai_only_budget_lineage_is_an_expected_observation() -> None:
+    event = sentinel.PipelineEvent(
+        emitted_at=sentinel._parse_as_of("2026-05-11", "10:00:00"),
+        pipeline="ENTRY_PIPELINE",
+        stage="budget_pass",
+        stock_name="테스트종목",
+        stock_code="000001",
+        record_id="1",
+        fields={
+            "pre_submit_parent_ai_decision_trace_id": "-",
+            "pre_submit_parent_ai_attempt_trace_id": "-",
+            "pre_submit_parent_ai_action": "NOT_EVALUATED",
+            "pre_submit_parent_ai_result_source": "not_available",
+            "pre_submit_parent_ai_lineage_status": "missing_ai_trace",
+        },
+    )
+
+    lineage = sentinel._budget_ai_lineage_summary([event])
+
+    assert lineage["status"] == "pre_ai_budget_order_observed_no_parent_expected"
+    assert lineage["pre_ai_parent_not_expected_event_count"] == 1
+    assert lineage["lineage_join_eligible_event_count"] == 0
+    assert lineage["parent_trace_missing_when_expected_event_count"] == 0
+    assert lineage["lineage_contract_coverage_pct"] == 100.0
+
+
 def test_budget_block_is_causal_only_when_parent_ai_trace_joins(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     target_date = "2026-05-12"
