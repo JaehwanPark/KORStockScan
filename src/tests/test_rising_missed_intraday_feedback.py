@@ -2963,6 +2963,82 @@ def test_latency_and_tick_counterfactuals_reject_mark_only_mfe(tmp_path):
     assert report["summary"]["submit_safety_executable_bbo_labeled_count"] == 0
 
 
+def test_latency_false_negative_preserves_runtime_dynamic_age_provenance():
+    block = mod._submit_safety_block_row(
+        _event(
+            902,
+            "000902",
+            "dynamic-age-observed",
+            "latency_block",
+            {
+                "forced_entry_reason": "rising_missed_one_share_entry",
+                "reason": "latency_state_danger",
+                "best_bid_at_submit": 1000,
+                "best_ask_at_submit": 1005,
+                "ws_age_ms": 320,
+                "latency_spread_block_bucket": "latency_true_ofi_below_floor",
+                "latency_spread_block_spread_bps": 49.8,
+                "latency_spread_relief_micro_estimator_true_ofi_ewma": 0.03,
+                "latency_spread_relief_micro_estimator_true_ofi_sample_count": 120,
+                "latency_spread_relief_micro_estimator_reason": "true_ofi_below_floor",
+                "latency_true_ofi_direct_canary_enabled": True,
+                "latency_true_ofi_direct_canary_applied": False,
+                "latency_true_ofi_direct_canary_reason": "ws_age_too_high",
+                "latency_true_ofi_direct_canary_ws_age_ms": 325,
+                "latency_true_ofi_direct_canary_effective_max_ws_age_ms": 500,
+                "latency_true_ofi_direct_canary_dynamic_age_band_enabled": True,
+                "latency_true_ofi_direct_canary_dynamic_age_band_active": True,
+                "latency_true_ofi_direct_canary_dynamic_age_band_eligible": True,
+                "latency_true_ofi_direct_canary_dynamic_age_band_applied": False,
+                "latency_true_ofi_direct_canary_dynamic_age_band_max_ws_age_ms": 500,
+                "latency_true_ofi_direct_canary_dynamic_age_band_min_samples": 100,
+                "latency_true_ofi_direct_canary_dynamic_age_band_max_spread_bps": 60,
+                "latency_true_ofi_direct_canary_dynamic_age_band_min_true_ofi": 0,
+                "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_buy_ratio": 80,
+                "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_samples": 3,
+                "latency_true_ofi_direct_canary_signed_tape_sample_count": 5,
+                "latency_true_ofi_direct_canary_signed_tape_trusted_ws_count": 5,
+                "latency_true_ofi_direct_canary_signed_tape_unknown_source_count": 0,
+                "latency_true_ofi_direct_canary_signed_tape_buy_ratio": 100,
+                "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side": "BUY",
+                "latency_true_ofi_direct_canary_signed_tape_sell_dominated": False,
+                "latency_true_ofi_direct_canary_large_sell_print_detected": False,
+            },
+            emitted_at="2026-08-04T09:00:00+09:00",
+        )
+    )
+    block["mfe_after_block_pct"] = 5.0
+    block["mae_after_block_pct"] = -1.0
+
+    review_summary, review_rows = mod._build_latency_false_negative_review([block])
+    canary_summary, canary_rows = mod._build_latency_false_negative_canary_candidates(
+        review_rows
+    )
+
+    assert review_summary["latency_false_negative_review_count"] == 1
+    assert review_rows[0]["runtime_dynamic_age_band_eligible"] is True
+    assert review_rows[0]["runtime_signed_tape_latest_side"] == "BUY"
+    assert canary_rows[0]["canary_grade"] == "hold_sample"
+    assert (
+        canary_rows[0]["canary_reason"] == "ws_age_not_fresh_enough_for_canary_recheck"
+    )
+    assert (
+        canary_rows[0]["runtime_dynamic_age_band_provenance_state"]
+        == "observed_active_eligible_not_applied"
+    )
+    assert canary_rows[0]["allowed_runtime_apply"] is False
+    assert (
+        canary_summary["latency_false_negative_runtime_dynamic_age_eligible_count"] == 1
+    )
+    assert (
+        canary_summary["latency_false_negative_runtime_dynamic_age_applied_count"] == 0
+    )
+    assert (
+        canary_summary["latency_false_negative_runtime_dynamic_age_source_gap_count"]
+        == 0
+    )
+
+
 def test_clean_baseline_rolling_nxt_post_block_outcomes(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
     prior_row = {

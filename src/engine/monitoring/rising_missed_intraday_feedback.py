@@ -1332,6 +1332,78 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
             fields.get("latency_spread_relief_micro_estimator_true_ofi_sample_count")
         ),
         "true_ofi_reason": fields.get("latency_spread_relief_micro_estimator_reason"),
+        "runtime_direct_canary_enabled": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_enabled")
+        ),
+        "runtime_direct_canary_applied": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_applied")
+        ),
+        "runtime_direct_canary_reason": fields.get(
+            "latency_true_ofi_direct_canary_reason"
+        ),
+        "runtime_direct_canary_ws_age_ms": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_ws_age_ms")
+        ),
+        "runtime_direct_canary_effective_max_ws_age_ms": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_effective_max_ws_age_ms")
+        ),
+        "runtime_dynamic_age_band_enabled": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_enabled")
+        ),
+        "runtime_dynamic_age_band_active": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_active")
+        ),
+        "runtime_dynamic_age_band_eligible": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_eligible")
+        ),
+        "runtime_dynamic_age_band_applied": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_applied")
+        ),
+        "runtime_dynamic_age_band_max_ws_age_ms": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_max_ws_age_ms")
+        ),
+        "runtime_dynamic_age_band_min_samples": _safe_int(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_min_samples")
+        ),
+        "runtime_dynamic_age_band_max_spread_bps": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_max_spread_bps")
+        ),
+        "runtime_dynamic_age_band_min_true_ofi": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_dynamic_age_band_min_true_ofi")
+        ),
+        "runtime_dynamic_age_band_min_signed_tape_buy_ratio": _safe_float(
+            fields.get(
+                "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_buy_ratio"
+            )
+        ),
+        "runtime_dynamic_age_band_min_signed_tape_samples": _safe_int(
+            fields.get(
+                "latency_true_ofi_direct_canary_dynamic_age_band_min_signed_tape_samples"
+            )
+        ),
+        "runtime_signed_tape_sample_count": _safe_int(
+            fields.get("latency_true_ofi_direct_canary_signed_tape_sample_count")
+        ),
+        "runtime_signed_tape_trusted_ws_count": _safe_int(
+            fields.get("latency_true_ofi_direct_canary_signed_tape_trusted_ws_count")
+        ),
+        "runtime_signed_tape_unknown_source_count": _safe_int(
+            fields.get(
+                "latency_true_ofi_direct_canary_signed_tape_unknown_source_count"
+            )
+        ),
+        "runtime_signed_tape_buy_ratio": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_signed_tape_buy_ratio")
+        ),
+        "runtime_signed_tape_latest_side": fields.get(
+            "latency_true_ofi_direct_canary_signed_tape_event_time_latest_side"
+        ),
+        "runtime_signed_tape_sell_dominated": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_signed_tape_sell_dominated")
+        ),
+        "runtime_large_sell_print_detected": _optional_boolish(
+            fields.get("latency_true_ofi_direct_canary_large_sell_print_detected")
+        ),
         "source_quality_gate": fields.get("source_quality_gate"),
         "source_quality_state": fields.get(
             "weak_ai_micro_entry_block_source_quality_state"
@@ -1728,6 +1800,72 @@ def _build_latency_false_negative_review(
                 "true_ofi_ewma": block.get("true_ofi_ewma"),
                 "true_ofi_sample_count": block.get("true_ofi_sample_count"),
                 "true_ofi_reason": block.get("true_ofi_reason"),
+                "runtime_direct_canary_enabled": block.get(
+                    "runtime_direct_canary_enabled"
+                ),
+                "runtime_direct_canary_applied": block.get(
+                    "runtime_direct_canary_applied"
+                ),
+                "runtime_direct_canary_reason": block.get(
+                    "runtime_direct_canary_reason"
+                ),
+                "runtime_direct_canary_ws_age_ms": block.get(
+                    "runtime_direct_canary_ws_age_ms"
+                ),
+                "runtime_direct_canary_effective_max_ws_age_ms": block.get(
+                    "runtime_direct_canary_effective_max_ws_age_ms"
+                ),
+                "runtime_dynamic_age_band_enabled": block.get(
+                    "runtime_dynamic_age_band_enabled"
+                ),
+                "runtime_dynamic_age_band_active": block.get(
+                    "runtime_dynamic_age_band_active"
+                ),
+                "runtime_dynamic_age_band_eligible": block.get(
+                    "runtime_dynamic_age_band_eligible"
+                ),
+                "runtime_dynamic_age_band_applied": block.get(
+                    "runtime_dynamic_age_band_applied"
+                ),
+                "runtime_dynamic_age_band_max_ws_age_ms": block.get(
+                    "runtime_dynamic_age_band_max_ws_age_ms"
+                ),
+                "runtime_dynamic_age_band_min_samples": block.get(
+                    "runtime_dynamic_age_band_min_samples"
+                ),
+                "runtime_dynamic_age_band_max_spread_bps": block.get(
+                    "runtime_dynamic_age_band_max_spread_bps"
+                ),
+                "runtime_dynamic_age_band_min_true_ofi": block.get(
+                    "runtime_dynamic_age_band_min_true_ofi"
+                ),
+                "runtime_dynamic_age_band_min_signed_tape_buy_ratio": block.get(
+                    "runtime_dynamic_age_band_min_signed_tape_buy_ratio"
+                ),
+                "runtime_dynamic_age_band_min_signed_tape_samples": block.get(
+                    "runtime_dynamic_age_band_min_signed_tape_samples"
+                ),
+                "runtime_signed_tape_sample_count": block.get(
+                    "runtime_signed_tape_sample_count"
+                ),
+                "runtime_signed_tape_trusted_ws_count": block.get(
+                    "runtime_signed_tape_trusted_ws_count"
+                ),
+                "runtime_signed_tape_unknown_source_count": block.get(
+                    "runtime_signed_tape_unknown_source_count"
+                ),
+                "runtime_signed_tape_buy_ratio": block.get(
+                    "runtime_signed_tape_buy_ratio"
+                ),
+                "runtime_signed_tape_latest_side": block.get(
+                    "runtime_signed_tape_latest_side"
+                ),
+                "runtime_signed_tape_sell_dominated": block.get(
+                    "runtime_signed_tape_sell_dominated"
+                ),
+                "runtime_large_sell_print_detected": block.get(
+                    "runtime_large_sell_print_detected"
+                ),
                 "ai_action": block.get("ai_action"),
                 "ai_score": block.get("ai_score"),
                 "source_signature": block.get("source_signature"),
@@ -1808,6 +1946,7 @@ def _build_latency_false_negative_canary_candidates(
     rows: list[dict[str, Any]] = []
     cohort_counts: Counter[str] = Counter()
     grade_counts: Counter[str] = Counter()
+    runtime_dynamic_age_state_counts: Counter[str] = Counter()
     for item in review_rows:
         mfe = _safe_float(item.get("mfe_after_block_pct"))
         mae = _safe_float(item.get("mae_after_block_pct"))
@@ -1816,8 +1955,26 @@ def _build_latency_false_negative_canary_candidates(
         review_score = round(mfe - abs(mae), 4)
         cohort = _latency_canary_cohort(item)
         grade, reason = _latency_canary_grade(item, review_score)
+        dynamic_active = item.get("runtime_dynamic_age_band_active")
+        dynamic_eligible = item.get("runtime_dynamic_age_band_eligible")
+        dynamic_applied = item.get("runtime_dynamic_age_band_applied")
+        if (
+            dynamic_active is None
+            or dynamic_eligible is None
+            or dynamic_applied is None
+        ):
+            dynamic_state = "source_gap_not_observed"
+        elif not dynamic_active:
+            dynamic_state = "observed_inactive"
+        elif dynamic_applied:
+            dynamic_state = "observed_active_applied"
+        elif dynamic_eligible:
+            dynamic_state = "observed_active_eligible_not_applied"
+        else:
+            dynamic_state = "observed_active_not_eligible"
         cohort_counts[cohort] += 1
         grade_counts[grade] += 1
+        runtime_dynamic_age_state_counts[dynamic_state] += 1
         rows.append(
             {
                 **item,
@@ -1834,6 +1991,10 @@ def _build_latency_false_negative_canary_candidates(
                     "bounded_latency_remeasure_enqueue"
                     if grade == "ready_for_recheck"
                     else "source_only_accumulate_more_false_negative_samples"
+                ),
+                "runtime_dynamic_age_band_provenance_state": dynamic_state,
+                "runtime_dynamic_age_band_contract_relation": (
+                    "diagnostic_parallel_to_strict_recheck_no_grade_override"
                 ),
                 "decision_authority": "source_only_latency_false_negative_canary_candidate",
                 "runtime_effect": False,
@@ -1868,6 +2029,22 @@ def _build_latency_false_negative_canary_candidates(
             {"canary_grade": key, "count": value}
             for key, value in grade_counts.most_common()
         ],
+        "latency_false_negative_runtime_dynamic_age_state_counts": [
+            {"runtime_dynamic_age_state": key, "count": value}
+            for key, value in runtime_dynamic_age_state_counts.most_common()
+        ],
+        "latency_false_negative_runtime_dynamic_age_source_gap_count": (
+            runtime_dynamic_age_state_counts.get("source_gap_not_observed", 0)
+        ),
+        "latency_false_negative_runtime_dynamic_age_eligible_count": (
+            runtime_dynamic_age_state_counts.get(
+                "observed_active_eligible_not_applied", 0
+            )
+            + runtime_dynamic_age_state_counts.get("observed_active_applied", 0)
+        ),
+        "latency_false_negative_runtime_dynamic_age_applied_count": (
+            runtime_dynamic_age_state_counts.get("observed_active_applied", 0)
+        ),
         "latency_false_negative_canary_min_review_score_pct": LATENCY_CANARY_MIN_REVIEW_SCORE_PCT,
         "latency_false_negative_canary_true_ofi_min_sample_count": LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT,
         "latency_false_negative_canary_fresh_ws_max_age_ms": LATENCY_CANARY_FRESH_WS_MAX_AGE_MS,
@@ -4152,7 +4329,8 @@ def build_report(
                 "primary_decision_metric": "latency_false_negative_canary_ready_count",
                 "source_quality_gate": (
                     "latency_false_negative_review_rows_with_spread_true_ofi_ws_age_"
-                    "and_executable_bbo_post_block_mfe_mae"
+                    "and_executable_bbo_post_block_mfe_mae_and_runtime_dynamic_age_"
+                    "signed_tape_provenance_when_emitted"
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
@@ -4468,6 +4646,12 @@ def write_outputs(
         f"{summary.get('latency_false_negative_canary_observe_wide_spread_count')}",
         f"- latency_false_negative_canary_hold_sample_count: "
         f"{summary.get('latency_false_negative_canary_hold_sample_count')}",
+        f"- latency_false_negative_runtime_dynamic_age_source_gap_count: "
+        f"{summary.get('latency_false_negative_runtime_dynamic_age_source_gap_count')}",
+        f"- latency_false_negative_runtime_dynamic_age_eligible_count: "
+        f"{summary.get('latency_false_negative_runtime_dynamic_age_eligible_count')}",
+        f"- latency_false_negative_runtime_dynamic_age_applied_count: "
+        f"{summary.get('latency_false_negative_runtime_dynamic_age_applied_count')}",
         f"- rising_missed_tp1_counterfactual_submit_safety_count: "
         f"{summary.get('rising_missed_tp1_counterfactual_submit_safety_count')}",
         f"- rising_missed_tp1_counterfactual_unique_symbol_count: "
@@ -4706,6 +4890,7 @@ def write_outputs(
             "mfe_after={mfe_after_block_pct} mae_after={mae_after_block_pct} "
             "spread_bps={spread_bps} true_ofi={true_ofi_ewma} samples={true_ofi_sample_count} "
             "ws_age_ms={ws_age_ms} reason={canary_reason} next_action={canary_next_action} "
+            "runtime_dynamic_age_state={runtime_dynamic_age_band_provenance_state} "
             "decision_authority={decision_authority}".format(**item)
         )
     lines.extend(["", "## TP1 Counterfactual First-hit Labels", ""])
