@@ -99,6 +99,9 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "key_lineage_ledger",
     "conversion_lane",
     "upper_limit_watch_candidate_source",
+    "low_price_two_leg_tuning",
+    "low_price_two_leg_policy_candidate",
+    "low_price_two_leg_expanded_candidate_research",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -133,6 +136,86 @@ def _load_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return ""
+
+
+def _low_price_two_leg_postclose_contract_status(
+    tuning: dict[str, Any],
+    policy_candidate: dict[str, Any],
+    expanded: dict[str, Any],
+    *,
+    target_date: str,
+) -> dict[str, Any]:
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+        CandidateRecommendationNotifier,
+        EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES,
+        EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
+        RESEARCH_PROFILES,
+    )
+    from src.trading.low_price_two_leg.policy_runtime import validate_candidate
+    from src.trading.low_price_two_leg.profiles import PROFILES
+
+    issues: list[str] = []
+    if tuning.get("schema") != "low_price_two_leg_tuning_report_v2":
+        issues.append("tuning_schema_invalid")
+    if tuning.get("target_date") != target_date:
+        issues.append("tuning_target_date_mismatch")
+    daily_profiles = (tuning.get("daily") or {}).get("profiles") or {}
+    if set(daily_profiles) != set(PROFILES):
+        issues.append("tuning_profile_inventory_mismatch")
+    if any(
+        tuning.get(key) is not expected
+        for key, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+        )
+    ):
+        issues.append("tuning_authority_contract_invalid")
+
+    candidate_valid, candidate_reason = validate_candidate(policy_candidate)
+    if not candidate_valid:
+        issues.append(f"policy_candidate_{candidate_reason}")
+    elif policy_candidate.get("source_date") != target_date:
+        issues.append("policy_candidate_source_date_mismatch")
+
+    if not CandidateRecommendationNotifier._valid_report(expanded):
+        issues.append("expanded_candidate_report_contract_invalid")
+    else:
+        profile_inventory = expanded.get("research_profile_inventory") or {}
+        if expanded.get("target_date") != target_date:
+            issues.append("expanded_candidate_target_date_mismatch")
+        if expanded.get("status") != "source_quality_blocked" and len(
+            expanded.get("profiles") or {}
+        ) != len(profile_inventory):
+            issues.append("expanded_candidate_profile_inventory_mismatch")
+        if expanded.get("new_symbol_profile_count") != (
+            int(expanded.get("candidate_universe_size", 0) or 0) * 4
+        ):
+            issues.append("expanded_candidate_new_symbol_lane_count_mismatch")
+        if expanded.get("existing_symbol_time_extension_profile_count") != len(
+            EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+        ):
+            issues.append("expanded_candidate_time_lane_count_mismatch")
+        if expanded.get("existing_symbol_logic_improvement_profile_count") != len(
+            EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+        ):
+            issues.append("expanded_candidate_logic_lane_count_mismatch")
+    return {
+        "status": "fail" if issues else "pass",
+        "issues": issues,
+        "live_profile_count": len(PROFILES),
+        "research_profile_count": len(
+            expanded.get("research_profile_inventory") or RESEARCH_PROFILES
+        ),
+        "recommendation_count": len(expanded.get("recommendations") or []),
+        "quarantined_source_symbol_count": int(
+            expanded.get("quarantined_source_symbol_count", 0) or 0
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
 
 
 def _has_runtime_applicable_candidate(value: Any) -> bool:
@@ -1588,6 +1671,18 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "threshold_cycle_cumulative": REPORT_DIR
         / "threshold_cycle_cumulative"
         / f"threshold_cycle_cumulative_{target_date}.json",
+        "low_price_two_leg_tuning": REPORT_DIR
+        / "low_price_two_leg_tuning"
+        / f"low_price_two_leg_tuning_{target_date}.json",
+        "low_price_two_leg_policy_candidate": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "low_price_two_leg"
+        / "candidates"
+        / f"low_price_two_leg_policy_candidate_{target_date}.json",
+        "low_price_two_leg_expanded_candidate_research": REPORT_DIR
+        / "low_price_two_leg_expanded_candidate_research"
+        / f"low_price_two_leg_expanded_candidate_research_{target_date}.json",
         "scalp_entry_action_decision_matrix": REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json",
@@ -5852,6 +5947,41 @@ def build_threshold_cycle_postclose_verification(
 
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
+    low_price_two_leg_tuning = _load_json(paths["low_price_two_leg_tuning"])
+    low_price_two_leg_policy_candidate = _load_json(
+        paths["low_price_two_leg_policy_candidate"]
+    )
+    low_price_two_leg_expanded_candidate_research = _load_json(
+        paths["low_price_two_leg_expanded_candidate_research"]
+    )
+    low_price_two_leg_verification_enabled = any(
+        paths[label].exists()
+        for label in (
+            "low_price_two_leg_tuning",
+            "low_price_two_leg_policy_candidate",
+            "low_price_two_leg_expanded_candidate_research",
+        )
+    )
+    low_price_two_leg_postclose = (
+        _low_price_two_leg_postclose_contract_status(
+            low_price_two_leg_tuning,
+            low_price_two_leg_policy_candidate,
+            low_price_two_leg_expanded_candidate_research,
+            target_date=target_date,
+        )
+        if low_price_two_leg_verification_enabled
+        else {
+            "status": "not_enabled",
+            "issues": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    )
+    if low_price_two_leg_postclose["status"] == "fail":
+        log_issues.extend(
+            f"low_price_two_leg_{issue}"
+            for issue in low_price_two_leg_postclose["issues"]
+        )
     threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
     threshold_cycle_cumulative = _load_json(paths["threshold_cycle_cumulative"])
     smoothing_source_only_path_journal = (
@@ -7510,6 +7640,7 @@ def build_threshold_cycle_postclose_verification(
         },
         "artifact_status": artifact_status,
         "missing_required_artifacts": missing_required_artifacts,
+        "low_price_two_leg_postclose": low_price_two_leg_postclose,
         "smoothing_source_only_path_journal": smoothing_source_only_path_journal,
         "limit_down_watch": limit_down_watch_status,
         "upper_limit_watch": upper_limit_watch_status,

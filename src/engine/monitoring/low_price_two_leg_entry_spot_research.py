@@ -2,8 +2,8 @@
 
 The module uses only completed Kiwoom ``ka10080`` SOR one-minute bars and an
 already-valid shared token.  It cannot issue or refresh tokens, access accounts,
-submit orders, or mutate runtime policy.  Candidate selection uses the first 30
-clean-baseline trading days; the final 16 days remain untouched holdout data.
+submit orders, or mutate runtime policy. Candidate selection uses every supplied
+clean-baseline calibration day; the final 16 days remain untouched holdout data.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_tick
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-REPORT_SCHEMA = "low_price_two_leg_entry_spot_research_v1"
+REPORT_SCHEMA = "low_price_two_leg_entry_spot_research_v2"
 OUTPUT_DIR = DATA_DIR / "report" / "low_price_two_leg_entry_spot_research"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 DEFAULT_END_DATE = date(2026, 8, 10)
@@ -36,6 +36,14 @@ COST_PCT = 0.20
 LOOKBACK_GRID = (15, 20, 30, 45, 60)
 DRAWDOWN_GRID = (0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50, 3.00)
 NEAR_LOW_GRID = (0.05, 0.10, 0.20, 0.35, 0.50, 0.75)
+EXECUTION_PLAN_GRID = (
+    ((0, -1), 5, 2),
+    ((0, -1), 5, 4),
+    ((0, -1), 3, 4),
+    ((-1, -2), 5, 4),
+)
+MAX_MANAGEABLE_HELD_LEG_RATE = 0.25
+MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT = 3.0
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
@@ -53,7 +61,7 @@ OFFICIAL_REFERENCE = {
 METRIC_CONTRACT = {
     "metric_role": "profile_specific_entry_spot_offline_research",
     "decision_authority": "source_only_no_runtime_or_order_authority",
-    "window_policy": "first_30_trading_days_calibration_last_16_untouched_holdout",
+    "window_policy": "clean_baseline_expanding_calibration_latest_16_untouched_holdout",
     "sample_floor": {
         "calibration_signal_episodes": 6,
         "calibration_completed_legs": 8,
@@ -66,9 +74,9 @@ METRIC_CONTRACT = {
     "source_quality_gate": [
         "official_ka10080_success",
         "requested_start_date_fully_bracketed",
-        "46_clean_baseline_trading_dates",
+        "clean_baseline_minimum_46_trading_dates",
         "valid_unique_completed_sor_regular_ohlc",
-        "calibration_and_holdout_held_legs_zero",
+        "bounded_carry_rate_and_mark_to_market_drawdown",
     ],
     "forbidden_uses": [
         "current_holdout_outcome_used_for_candidate_selection",
@@ -79,6 +87,7 @@ METRIC_CONTRACT = {
         "account_or_order_api",
         "runtime_policy_threshold_provider_bot_cap_or_broker_guard_mutation",
         "stop_loss_or_forced_exit_creation",
+        "active_unrealized_merged_into_completed_ev",
     ],
 }
 
@@ -110,7 +119,7 @@ class DayContext:
     trade_date: date
     bars: tuple[Bar, ...]
     features: dict[int, tuple[SignalFeature, ...]]
-    outcome_cache: dict[int, dict[str, Any]] = field(default_factory=dict)
+    outcome_cache: dict[Any, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -120,6 +129,9 @@ class SpotCandidate:
     lookback_bars: int
     rolling_high_drawdown_pct: float
     rolling_low_proximity_pct: float
+    entry_offsets_ticks: tuple[int, int] = (0, -1)
+    entry_valid_completed_bars: int = 5
+    target_ticks: int = 2
 
     def public(self) -> dict[str, Any]:
         return {
@@ -128,6 +140,9 @@ class SpotCandidate:
             "lookback_bars": self.lookback_bars,
             "rolling_high_drawdown_pct": self.rolling_high_drawdown_pct,
             "rolling_low_proximity_pct": self.rolling_low_proximity_pct,
+            "entry_offsets_ticks": list(self.entry_offsets_ticks),
+            "entry_valid_completed_bars": self.entry_valid_completed_bars,
+            "target_ticks": self.target_ticks,
         }
 
 
@@ -367,12 +382,32 @@ def _window_grid(profile: MachineProfile) -> tuple[tuple[int, int], ...]:
 
 
 def candidate_grid(profile: MachineProfile) -> tuple[SpotCandidate, ...]:
+    baseline_plan = (
+        tuple(profile.policy.entry_offsets_ticks),
+        int(profile.policy.entry_valid_completed_bars),
+        int(profile.policy.target_ticks),
+    )
+    execution_plans = (
+        tuple(dict.fromkeys((baseline_plan, *EXECUTION_PLAN_GRID)))
+        if getattr(profile, "discovery_lane", "") == "existing_symbol_logic_improvement"
+        else (baseline_plan,)
+    )
     return tuple(
-        SpotCandidate(start, end, lookback, drawdown, near_low)
+        SpotCandidate(
+            start,
+            end,
+            lookback,
+            drawdown,
+            near_low,
+            tuple(offsets),
+            valid_bars,
+            target_ticks,
+        )
         for start, end in _window_grid(profile)
         for lookback in LOOKBACK_GRID
         for drawdown in DRAWDOWN_GRID
         for near_low in NEAR_LOW_GRID
+        for offsets, valid_bars, target_ticks in execution_plans
     )
 
 
@@ -383,47 +418,95 @@ def baseline_candidate(profile: MachineProfile) -> SpotCandidate:
         profile.policy.lookback_bars,
         profile.policy.rolling_high_drawdown_pct,
         profile.policy.rolling_low_proximity_pct,
+        tuple(profile.policy.entry_offsets_ticks),
+        int(profile.policy.entry_valid_completed_bars),
+        int(profile.policy.target_ticks),
     )
 
 
 def _leg_outcome(
-    *, entry_price: int, fill_bars: tuple[Bar, ...], target_bars: tuple[Bar, ...]
+    *,
+    entry_price: int,
+    fill_bars: tuple[Bar, ...],
+    target_bars: tuple[Bar, ...],
+    target_ticks: int = 2,
 ) -> dict[str, Any]:
     fill = next((bar for bar in fill_bars if bar.low_price <= entry_price), None)
     if fill is None:
         return {"status": "NO_FILL", "entry_price": entry_price}
-    target_price = move_price_by_ticks(entry_price, 2)
-    completed = any(
-        bar.timestamp > fill.timestamp and bar.high_price >= target_price
-        for bar in target_bars
+    target_price = move_price_by_ticks(entry_price, target_ticks)
+    post_fill_bars = tuple(bar for bar in target_bars if bar.timestamp > fill.timestamp)
+    completed_bar = next(
+        (bar for bar in post_fill_bars if bar.high_price >= target_price), None
     )
+    observed_bars = tuple(
+        bar
+        for bar in post_fill_bars
+        if completed_bar is None or bar.timestamp <= completed_bar.timestamp
+    ) or (fill,)
+    minimum_price = min(bar.low_price for bar in observed_bars)
+    maximum_price = max(bar.high_price for bar in observed_bars)
     result = {
-        "status": "COMPLETE" if completed else "HELD",
+        "status": "COMPLETE" if completed_bar else "HELD",
         "entry_price": entry_price,
         "target_price": target_price,
         "fill_at": fill.timestamp.isoformat(),
+        "holding_completed_bars": len(observed_bars),
+        "max_adverse_excursion_pct": round(
+            (minimum_price / entry_price - 1.0) * 100.0, 6
+        ),
+        "max_favorable_excursion_pct": round(
+            (maximum_price / entry_price - 1.0) * 100.0, 6
+        ),
     }
-    if completed:
+    if completed_bar:
+        result["target_at"] = completed_bar.timestamp.isoformat()
         result["net_profit_pct"] = round(
             (target_price / entry_price - 1.0) * 100.0 - COST_PCT, 6
+        )
+    else:
+        mark_price = int(observed_bars[-1].close_price)
+        result["mark_price"] = mark_price
+        result["active_unrealized_pct"] = round(
+            (mark_price / entry_price - 1.0) * 100.0 - COST_PCT, 6
         )
     return result
 
 
-def _episode(context: DayContext, signal: SignalFeature) -> dict[str, Any]:
-    cached = context.outcome_cache.get(signal.index)
+def _episode(
+    context: DayContext, signal: SignalFeature, candidate: SpotCandidate
+) -> dict[str, Any]:
+    cache_key = (
+        signal.index,
+        candidate.entry_offsets_ticks,
+        candidate.entry_valid_completed_bars,
+        candidate.target_ticks,
+    )
+    cached = context.outcome_cache.get(cache_key)
+    if cached is None and (
+        candidate.entry_offsets_ticks,
+        candidate.entry_valid_completed_bars,
+        candidate.target_ticks,
+    ) == ((0, -1), 5, 2):
+        cached = context.outcome_cache.get(signal.index)
     if cached is not None:
         return cached
     close = clamp_price_to_tick(signal.close_price)
-    fill_bars = context.bars[signal.index + 1 : signal.index + 6]
+    fill_bars = context.bars[
+        signal.index + 1 : signal.index + 1 + candidate.entry_valid_completed_bars
+    ]
     target_bars = context.bars[signal.index + 1 :]
     legs = [
         _leg_outcome(
             entry_price=entry_price,
             fill_bars=fill_bars,
             target_bars=target_bars,
+            target_ticks=candidate.target_ticks,
         )
-        for entry_price in (close, move_price_by_ticks(close, -1))
+        for entry_price in (
+            move_price_by_ticks(close, offset)
+            for offset in candidate.entry_offsets_ticks
+        )
     ]
     episode = {
         "date": context.trade_date.isoformat(),
@@ -431,27 +514,69 @@ def _episode(context: DayContext, signal: SignalFeature) -> dict[str, Any]:
         "signal_close": signal.close_price,
         "observed_drawdown_pct": round(signal.drawdown_pct, 6),
         "observed_near_low_pct": round(signal.near_low_pct, 6),
+        "execution_plan": {
+            "entry_offsets_ticks": list(candidate.entry_offsets_ticks),
+            "entry_valid_completed_bars": candidate.entry_valid_completed_bars,
+            "target_ticks": candidate.target_ticks,
+        },
         "legs": legs,
     }
-    context.outcome_cache[signal.index] = episode
+    context.outcome_cache[cache_key] = episode
     return episode
 
 
 def _summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     legs = [leg for episode in episodes for leg in episode["legs"]]
     completed = [leg for leg in legs if leg["status"] == "COMPLETE"]
+    filled = [leg for leg in legs if leg["status"] in {"COMPLETE", "HELD"}]
+    held = [leg for leg in legs if leg["status"] == "HELD"]
     attempted_notional = sum(int(leg["entry_price"]) for leg in legs)
     realized_profit = sum(
         int(leg["entry_price"]) * float(leg["net_profit_pct"]) / 100.0
         for leg in completed
     )
     ev = realized_profit / attempted_notional * 100.0 if attempted_notional else None
+    held_notional = sum(int(leg["entry_price"]) for leg in held)
+    held_mark_value = sum(
+        int(leg["entry_price"])
+        * float(leg.get("active_unrealized_pct", 0.0) or 0.0)
+        / 100.0
+        for leg in held
+    )
+    held_mark_to_market_pct = (
+        held_mark_value / held_notional * 100.0 if held_notional else None
+    )
+    held_rate = len(held) / len(filled) if filled else 0.0
+    worst_held_mark_to_market_pct = min(
+        (float(leg.get("active_unrealized_pct", 0.0) or 0.0) for leg in held),
+        default=None,
+    )
     return {
         "signal_episodes": len(episodes),
         "attempted_legs": len(legs),
         "completed_legs": len(completed),
+        "filled_legs": len(filled),
         "no_fill_legs": sum(leg["status"] == "NO_FILL" for leg in legs),
-        "held_legs": sum(leg["status"] == "HELD" for leg in legs),
+        "held_legs": len(held),
+        "held_leg_rate_per_filled_leg": round(held_rate, 6),
+        "held_notional_krw": held_notional,
+        "active_unrealized_notional_weighted_pct": (
+            round(held_mark_to_market_pct, 6)
+            if held_mark_to_market_pct is not None
+            else None
+        ),
+        "worst_held_active_unrealized_pct": worst_held_mark_to_market_pct,
+        "worst_filled_max_adverse_excursion_pct": min(
+            (float(leg.get("max_adverse_excursion_pct", 0.0) or 0.0) for leg in filled),
+            default=None,
+        ),
+        "capital_exposure_completed_bars": sum(
+            int(leg.get("holding_completed_bars", 0) or 0) for leg in filled
+        ),
+        "realized_net_profit_krw": round(realized_profit, 2),
+        "realized_net_profit_krw_per_episode": (
+            round(realized_profit / len(episodes), 2) if episodes else None
+        ),
         "completed_legs_per_attempted_leg": (
             round(len(completed) / len(legs), 6) if legs else None
         ),
@@ -482,7 +607,7 @@ def evaluate_candidate(
             None,
         )
         if signal is not None:
-            episodes.append(_episode(context, signal))
+            episodes.append(_episode(context, signal, candidate))
     result = _summary(episodes)
     if include_episodes:
         result["episodes"] = episodes
@@ -499,11 +624,23 @@ def _calibration_ready(
 ) -> bool:
     return bool(
         _calibration_sample_ready(full, first, second)
-        and full["held_legs"] == 0
-        and first["held_legs"] == 0
-        and second["held_legs"] == 0
+        and _manageable_carry(full)
+        and _manageable_carry(first)
+        and _manageable_carry(second)
         and _positive_ev(first)
         and _positive_ev(second)
+    )
+
+
+def _manageable_carry(summary: dict[str, Any]) -> bool:
+    held_rate = float(summary.get("held_leg_rate_per_filled_leg", 0.0) or 0.0)
+    worst_mark = summary.get("worst_held_active_unrealized_pct")
+    return bool(
+        held_rate <= MAX_MANAGEABLE_HELD_LEG_RATE + 1e-12
+        and (
+            worst_mark is None
+            or float(worst_mark) >= -MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT - 1e-12
+        )
     )
 
 
@@ -549,7 +686,7 @@ def select_profile_spot(
         []
     )
     grid = candidate_grid(profile)
-    sample_ready_count = inventory_clear_count = both_half_positive_count = 0
+    sample_ready_count = manageable_carry_count = both_half_positive_count = 0
     for candidate in grid:
         first = evaluate_candidate(candidate, contexts, first_half)
         second = evaluate_candidate(candidate, contexts, second_half)
@@ -557,13 +694,11 @@ def select_profile_spot(
         evidence = {"first_half": first, "second_half": second, "full": full}
         if _calibration_sample_ready(full, first, second):
             sample_ready_count += 1
-            inventory_clear = (
-                full["held_legs"] == 0
-                and first["held_legs"] == 0
-                and second["held_legs"] == 0
+            manageable_carry = all(
+                _manageable_carry(summary) for summary in (full, first, second)
             )
-            if inventory_clear:
-                inventory_clear_count += 1
+            if manageable_carry:
+                manageable_carry_count += 1
                 score = _robust_score(first, second)
                 diagnostic_ranked.append(
                     (
@@ -614,7 +749,7 @@ def select_profile_spot(
             "calibration_ready_candidate_count": 0,
             "calibration_gate_counts": {
                 "sample_ready": sample_ready_count,
-                "inventory_clear": inventory_clear_count,
+                "manageable_carry": manageable_carry_count,
                 "both_halves_positive_ev": both_half_positive_count,
             },
             "best_diagnostic_candidate": (
@@ -642,9 +777,9 @@ def select_profile_spot(
     holdout_ready = bool(
         candidate_holdout["signal_episodes"] >= 3
         and candidate_holdout["completed_legs"] >= 4
-        and candidate_holdout["held_legs"] == 0
+        and _manageable_carry(candidate_holdout)
         and candidate_results["full"]["completed_legs"] >= 10
-        and candidate_results["full"]["held_legs"] == 0
+        and _manageable_carry(candidate_results["full"])
         and _positive_ev(candidate_holdout)
     )
     beats_baseline = bool(
@@ -687,7 +822,7 @@ def select_profile_spot(
         "calibration_ready_candidate_count": len(ranked),
         "calibration_gate_counts": {
             "sample_ready": sample_ready_count,
-            "inventory_clear": inventory_clear_count,
+            "manageable_carry": manageable_carry_count,
             "both_halves_positive_ev": both_half_positive_count,
         },
         "best_diagnostic_candidate": (

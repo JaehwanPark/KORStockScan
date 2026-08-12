@@ -9,6 +9,7 @@ machine, or mutate runtime policy.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import time as time_module
@@ -25,6 +26,8 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     COST_PCT,
     CALIBRATION_DAYS,
     HOLDOUT_DAYS,
+    MAX_MANAGEABLE_HELD_LEG_RATE,
+    MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT,
     OFFICIAL_REFERENCE,
     Bar,
     ResearchError,
@@ -39,19 +42,25 @@ from src.utils import kiwoom_utils
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
-REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v3"
+REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v4"
 REPORT_TYPE = "low_price_two_leg_expanded_candidate_research"
 AUTHORITY = "lower_price_machine_candidate_recommendation_only"
 OUTPUT_DIR = DATA_DIR / "report" / "low_price_two_leg_expanded_candidate_research"
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "low_price_two_leg_candidate_telegram_state.json"
 )
+DEFAULT_DYNAMIC_UNIVERSE_PATH = DATA_DIR / "daily_recommendations_v2.csv"
+MAX_DYNAMIC_SYMBOLS_PER_DAY = 5
 MIN_RESEARCH_DAYS = CALIBRATION_DAYS + HOLDOUT_DAYS
 MAX_RECOMMENDATIONS_PER_LANE = 3
 MAX_LATEST_CLOSE_PRICE = 100_000
+MORNING_WINDOW = (time(9, 10), time(9, 59))
+LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
 MIDDAY_WINDOW = (time(13, 15), time(13, 54))
 AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
 SESSION_WINDOWS = {
+    "morning": MORNING_WINDOW,
+    "late_morning": LATE_MORNING_WINDOW,
     "midday": MIDDAY_WINDOW,
     "afternoon": AFTERNOON_WINDOW,
 }
@@ -96,9 +105,9 @@ METRIC_CONTRACT = {
     "source_quality_gate": [
         "official_ka10080_success",
         "requested_start_date_fully_bracketed",
-        "all_clean_baseline_trading_dates_match_for_every_symbol",
+        "per_symbol_clean_baseline_trading_dates_complete_or_quarantined",
         "valid_unique_completed_sor_regular_ohlc",
-        "calibration_and_holdout_held_legs_zero",
+        "bounded_carry_rate_and_mark_to_market_drawdown",
         "latest_close_at_or_below_100000_krw",
         "existing_symbol_lane_excludes_active_symbol_session_pairs",
     ],
@@ -110,6 +119,8 @@ METRIC_CONTRACT = {
         "token_issue_refresh_invalidation_or_replacement",
         "provider_bot_cap_threshold_or_broker_guard_change",
         "stop_loss_or_forced_exit_creation",
+        "active_unrealized_merged_into_completed_ev",
+        "risk_budget_diagnostic_as_standalone_live_authority",
     ],
 }
 
@@ -124,6 +135,9 @@ class ResearchPolicy:
     lookback_bars: int = 30
     rolling_high_drawdown_pct: float = 1.25
     rolling_low_proximity_pct: float = 0.20
+    entry_offsets_ticks: tuple[int, int] = (0, -1)
+    entry_valid_completed_bars: int = 5
+    target_ticks: int = 2
 
 
 @dataclass(frozen=True)
@@ -136,9 +150,11 @@ class ResearchProfile:
     discovery_lane: str
 
 
-def _new_symbol_profiles() -> dict[str, ResearchProfile]:
+def _new_symbol_profiles(
+    candidate_symbols: dict[str, str] | None = None,
+) -> dict[str, ResearchProfile]:
     result: dict[str, ResearchProfile] = {}
-    for symbol, name in CANDIDATE_SYMBOLS.items():
+    for symbol, name in (candidate_symbols or CANDIDATE_SYMBOLS).items():
         for session, window in SESSION_WINDOWS.items():
             profile_id = f"candidate_{symbol}_{session}"
             result[profile_id] = ResearchProfile(
@@ -150,6 +166,81 @@ def _new_symbol_profiles() -> dict[str, ResearchProfile]:
                 discovery_lane="new_symbol",
             )
     return result
+
+
+def _dynamic_candidate_snapshot(
+    target_date: date,
+    *,
+    path: Path = DEFAULT_DYNAMIC_UNIVERSE_PATH,
+) -> tuple[date | None, dict[str, str]]:
+    try:
+        handle = path.open(encoding="utf-8-sig", newline="")
+    except OSError:
+        return None, {}
+    with handle:
+        rows_by_date: dict[date, list[dict[str, str]]] = {}
+        for raw_row in csv.DictReader(handle):
+            try:
+                row_date = date.fromisoformat(str(raw_row.get("date") or ""))
+            except ValueError:
+                continue
+            if CLEAN_BASELINE_DATE <= row_date <= target_date:
+                rows_by_date.setdefault(row_date, []).append(raw_row)
+        if not rows_by_date:
+            return None, {}
+        source_date = max(rows_by_date)
+        ranked_by_symbol: dict[str, tuple[int, str, str]] = {}
+        for row in rows_by_date[source_date]:
+            raw_symbol = str(row.get("code") or "").strip()
+            symbol = raw_symbol.zfill(6)
+            name = str(row.get("name") or "").strip()
+            try:
+                close = int(float(row.get("close") or 0))
+                rank = int(float(row.get("score_rank") or 999_999))
+            except (TypeError, ValueError):
+                continue
+            if (
+                not raw_symbol
+                or len(symbol) != 6
+                or not symbol.isdigit()
+                or not name
+                or not 0 < close <= MAX_LATEST_CLOSE_PRICE
+                or symbol in REVIEWED_SYMBOLS
+                or symbol in IMPLEMENTED_SYMBOLS
+            ):
+                continue
+            candidate = (rank, symbol, name)
+            current = ranked_by_symbol.get(symbol)
+            if current is None or candidate < current:
+                ranked_by_symbol[symbol] = candidate
+    return source_date, {
+        symbol: name
+        for _, symbol, name in sorted(ranked_by_symbol.values())[
+            :MAX_DYNAMIC_SYMBOLS_PER_DAY
+        ]
+    }
+
+
+def _dynamic_candidate_symbols(
+    target_date: date,
+    *,
+    path: Path = DEFAULT_DYNAMIC_UNIVERSE_PATH,
+) -> dict[str, str]:
+    return _dynamic_candidate_snapshot(target_date, path=path)[1]
+
+
+def _research_inventory(
+    candidate_symbols: dict[str, str],
+) -> tuple[dict[str, ResearchProfile], dict[str, ResearchProfile]]:
+    new_profiles = _new_symbol_profiles(candidate_symbols)
+    return (
+        new_profiles,
+        {
+            **new_profiles,
+            **EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
+            **EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES,
+        },
+    )
 
 
 def _existing_symbol_time_extension_profiles() -> dict[str, ResearchProfile]:
@@ -170,11 +261,40 @@ def _existing_symbol_time_extension_profiles() -> dict[str, ResearchProfile]:
     return result
 
 
+def _existing_symbol_logic_improvement_profiles() -> dict[str, ResearchProfile]:
+    result: dict[str, ResearchProfile] = {}
+    for live_profile_id, live_profile in LIVE_PROFILES.items():
+        policy = live_profile.policy
+        profile_id = f"logic_{live_profile_id}"
+        result[profile_id] = ResearchProfile(
+            profile_id=profile_id,
+            symbol=live_profile.symbol,
+            name=live_profile.name,
+            session=live_profile.session,
+            policy=ResearchPolicy(
+                policy.scan_start,
+                policy.scan_last_bar,
+                lookback_bars=policy.lookback_bars,
+                rolling_high_drawdown_pct=policy.rolling_high_drawdown_pct,
+                rolling_low_proximity_pct=policy.rolling_low_proximity_pct,
+                entry_offsets_ticks=tuple(policy.entry_offsets_ticks),
+                entry_valid_completed_bars=policy.entry_valid_completed_bars,
+                target_ticks=policy.target_ticks,
+            ),
+            discovery_lane="existing_symbol_logic_improvement",
+        )
+    return result
+
+
 NEW_SYMBOL_PROFILES = _new_symbol_profiles()
 EXISTING_SYMBOL_TIME_EXTENSION_PROFILES = _existing_symbol_time_extension_profiles()
+EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES = (
+    _existing_symbol_logic_improvement_profiles()
+)
 RESEARCH_PROFILES = {
     **NEW_SYMBOL_PROFILES,
     **EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
+    **EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES,
 }
 RESEARCH_SYMBOLS = frozenset(CANDIDATE_SYMBOLS) | frozenset(IMPLEMENTED_SYMBOLS)
 
@@ -218,13 +338,17 @@ def _price_band(latest_close_price: int) -> str:
 
 
 def _recommendation_rows(
-    profiles: dict[str, dict[str, Any]], source_meta: dict[str, dict[str, Any]]
+    profiles: dict[str, dict[str, Any]],
+    source_meta: dict[str, dict[str, Any]],
+    *,
+    research_profiles: dict[str, ResearchProfile] | None = None,
 ) -> list[dict[str, Any]]:
+    profile_inventory = research_profiles or RESEARCH_PROFILES
     rows: list[dict[str, Any]] = []
     for profile_id, item in profiles.items():
         if item.get("decision") != "holdout_pass_source_only_early_candidate":
             continue
-        profile = RESEARCH_PROFILES.get(profile_id)
+        profile = profile_inventory.get(profile_id)
         if profile is None:
             raise ResearchError("recommendation_profile_contract_unknown")
         if (
@@ -245,6 +369,13 @@ def _recommendation_rows(
         holdout = (item.get("selected") or {}).get("holdout") or {}
         baseline_holdout = (item.get("baseline") or {}).get("holdout") or {}
         candidate_ev = float(holdout.get("notional_weighted_ev_pct") or 0.0)
+        held_rate = float(holdout.get("held_leg_rate_per_filled_leg", 0.0) or 0.0)
+        held_mark = holdout.get("active_unrealized_notional_weighted_pct")
+        if not 0.0 <= held_rate <= MAX_MANAGEABLE_HELD_LEG_RATE or (
+            held_mark is not None
+            and float(held_mark) < -MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT
+        ):
+            continue
         baseline_ev_raw = baseline_holdout.get("notional_weighted_ev_pct")
         baseline_ev = float(baseline_ev_raw) if baseline_ev_raw is not None else None
         rows.append(
@@ -265,6 +396,16 @@ def _recommendation_rows(
                 "holdout_signal_episodes": int(holdout.get("signal_episodes", 0) or 0),
                 "holdout_completed_legs": int(holdout.get("completed_legs", 0) or 0),
                 "holdout_held_legs": int(holdout.get("held_legs", 0) or 0),
+                "holdout_held_leg_rate_per_filled_leg": held_rate,
+                "holdout_active_unrealized_notional_weighted_pct": holdout.get(
+                    "active_unrealized_notional_weighted_pct"
+                ),
+                "holdout_worst_filled_max_adverse_excursion_pct": holdout.get(
+                    "worst_filled_max_adverse_excursion_pct"
+                ),
+                "holdout_realized_net_profit_krw_per_episode": holdout.get(
+                    "realized_net_profit_krw_per_episode"
+                ),
                 "notional_weighted_ev_pct": candidate_ev,
                 "baseline_notional_weighted_ev_pct": baseline_ev,
                 "ev_uplift_pct_point": (
@@ -279,6 +420,8 @@ def _recommendation_rows(
     rows.sort(
         key=lambda row: (
             float(row["notional_weighted_ev_pct"]),
+            float(row.get("holdout_realized_net_profit_krw_per_episode") or 0.0),
+            -float(row["holdout_held_leg_rate_per_filled_leg"]),
             int(row["holdout_completed_legs"]),
             -int(row["latest_close_price"]),
         ),
@@ -292,41 +435,75 @@ def build_report(
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
     start_date: date,
     end_date: date,
+    candidate_symbols: dict[str, str] | None = None,
+    research_profiles: dict[str, ResearchProfile] | None = None,
+    dynamic_universe_source_date: date | None = None,
 ) -> dict[str, Any]:
     if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
         raise ValueError("research_window_must_start_at_clean_baseline")
     expected_dates = clean_baseline_trading_dates(end_date)
     calibration_days = len(expected_dates) - HOLDOUT_DAYS
-    if set(sources) != set(RESEARCH_SYMBOLS):
+    selected_candidate_symbols = candidate_symbols or CANDIDATE_SYMBOLS
+    selected_new_profiles, default_profiles = _research_inventory(
+        selected_candidate_symbols
+    )
+    selected_profiles = research_profiles or default_profiles
+    selected_symbols = frozenset(selected_candidate_symbols) | frozenset(
+        IMPLEMENTED_SYMBOLS
+    )
+    if set(sources) - set(selected_symbols):
         raise ResearchError("expanded_candidate_source_set_mismatch")
     conflicting_profiles = [
         profile.profile_id
-        for profile in RESEARCH_PROFILES.values()
-        if (profile.symbol, profile.session) in ACTIVE_SYMBOL_SESSIONS
+        for profile in selected_profiles.values()
+        if profile.discovery_lane != "existing_symbol_logic_improvement"
+        and (profile.symbol, profile.session) in ACTIVE_SYMBOL_SESSIONS
     ]
     if conflicting_profiles:
         raise ResearchError(
             "research_profile_active_symbol_session_conflict:"
             + ",".join(sorted(conflicting_profiles))
         )
-    contexts_by_symbol = {
-        symbol: build_day_contexts(bars) for symbol, (bars, _) in sources.items()
-    }
-    date_sets = [tuple(sorted(contexts)) for contexts in contexts_by_symbol.values()]
-    if not date_sets or any(dates != date_sets[0] for dates in date_sets[1:]):
-        raise ResearchError("cross_symbol_trading_dates_mismatch")
-    if tuple(date_sets[0]) != expected_dates:
-        raise ResearchError("clean_baseline_trading_date_window_mismatch")
+    contexts_by_symbol: dict[str, dict[date, Any]] = {}
     source_meta: dict[str, dict[str, Any]] = {}
-    for symbol, (bars, raw_meta) in sources.items():
+    source_quarantine: dict[str, str] = {}
+    for symbol in selected_symbols:
+        source = sources.get(symbol)
+        if source is None:
+            source_quarantine[symbol] = "source_missing"
+            continue
+        bars, raw_meta = source
         if not bars or raw_meta.get("source_quality_status") != "PASS":
-            raise ResearchError(f"{symbol}_source_quality_not_pass")
+            source_quarantine[symbol] = "source_quality_not_pass"
+            continue
+        contexts = build_day_contexts(bars)
+        if tuple(sorted(contexts)) != expected_dates:
+            source_quarantine[symbol] = "clean_baseline_trading_date_window_mismatch"
+            continue
+        contexts_by_symbol[symbol] = contexts
         meta = dict(raw_meta)
         meta["latest_close_price"] = int(bars[-1].close_price)
         meta["latest_price_band"] = _price_band(int(bars[-1].close_price))
         source_meta[symbol] = meta
+    if not contexts_by_symbol:
+        raise ResearchError("all_research_symbols_source_quality_blocked")
     profiles: dict[str, dict[str, Any]] = {}
-    for profile_id, profile in RESEARCH_PROFILES.items():
+    for profile_id, profile in selected_profiles.items():
+        if profile.symbol not in contexts_by_symbol:
+            profiles[profile_id] = {
+                "profile_id": profile.profile_id,
+                "symbol": profile.symbol,
+                "name": profile.name,
+                "session": profile.session,
+                "discovery_lane": profile.discovery_lane,
+                "decision": "source_quality_quarantined_no_evaluation",
+                "recommended_spot": None,
+                "source_quality_reason": source_quarantine.get(
+                    profile.symbol, "source_unavailable"
+                ),
+                "runtime_effect": False,
+            }
+            continue
         selected = select_profile_spot(
             profile,
             contexts_by_symbol[profile.symbol],
@@ -344,7 +521,9 @@ def build_report(
             profile.session,
         ) in ACTIVE_SYMBOL_SESSIONS
         profiles[profile_id] = selected
-    recommendations = _recommendation_rows(profiles, source_meta)
+    recommendations = _recommendation_rows(
+        profiles, source_meta, research_profiles=selected_profiles
+    )
     new_symbol_recommendations = [
         row for row in recommendations if row["discovery_lane"] == "new_symbol"
     ]
@@ -352,6 +531,11 @@ def build_report(
         row
         for row in recommendations
         if row["discovery_lane"] == "existing_symbol_time_extension"
+    ]
+    existing_symbol_logic_improvement_recommendations = [
+        row
+        for row in recommendations
+        if row["discovery_lane"] == "existing_symbol_logic_improvement"
     ]
     return {
         "schema": REPORT_SCHEMA,
@@ -368,15 +552,37 @@ def build_report(
         "official_reference": OFFICIAL_REFERENCE,
         "metric_contract": METRIC_CONTRACT,
         "candidate_universe_source": (
-            "reviewed_new_symbols_plus_existing_symbol_missing_sessions_v2"
+            "reviewed_new_symbols_plus_latest_completed_daily_recommendations_"
+            "and_existing_symbol_missing_sessions_and_logic_v4"
         ),
-        "candidate_universe_size": len(CANDIDATE_SYMBOLS),
+        "dynamic_universe_source_date": (
+            dynamic_universe_source_date.isoformat()
+            if dynamic_universe_source_date is not None
+            else None
+        ),
+        "candidate_universe_size": len(selected_candidate_symbols),
+        "candidate_symbols": selected_candidate_symbols,
         "existing_symbol_universe_size": len(IMPLEMENTED_SYMBOLS),
-        "source_symbol_count": len(RESEARCH_SYMBOLS),
-        "new_symbol_profile_count": len(NEW_SYMBOL_PROFILES),
+        "source_symbol_count": len(selected_symbols),
+        "new_symbol_profile_count": len(selected_new_profiles),
         "existing_symbol_time_extension_profile_count": len(
             EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
         ),
+        "existing_symbol_logic_improvement_profile_count": len(
+            EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+        ),
+        "eligible_source_symbol_count": len(contexts_by_symbol),
+        "quarantined_source_symbol_count": len(source_quarantine),
+        "source_quarantine": source_quarantine,
+        "research_profile_inventory": {
+            profile_id: {
+                "symbol": profile.symbol,
+                "name": profile.name,
+                "session": profile.session,
+                "discovery_lane": profile.discovery_lane,
+            }
+            for profile_id, profile in selected_profiles.items()
+        },
         "source_meta": source_meta,
         "profiles": profiles,
         "recommendations": recommendations,
@@ -389,8 +595,20 @@ def build_report(
         "existing_symbol_time_extension_recommendation_count": len(
             existing_symbol_time_extension_recommendations
         ),
+        "existing_symbol_logic_improvement_recommendations": (
+            existing_symbol_logic_improvement_recommendations
+        ),
+        "existing_symbol_logic_improvement_recommendation_count": len(
+            existing_symbol_logic_improvement_recommendations
+        ),
         "status": (
-            "recommendations_ready" if recommendations else "no_qualified_candidate"
+            "recommendations_ready"
+            if recommendations
+            else (
+                "partial_source_quality"
+                if source_quarantine
+                else "no_qualified_candidate"
+            )
         ),
         "decision": "expanded_candidates_source_only_no_runtime_promotion",
         "authority": AUTHORITY,
@@ -425,15 +643,35 @@ def build_source_quality_blocked_report(
         "official_reference": OFFICIAL_REFERENCE,
         "metric_contract": METRIC_CONTRACT,
         "candidate_universe_source": (
-            "reviewed_new_symbols_plus_existing_symbol_missing_sessions_v2"
+            "reviewed_new_symbols_plus_latest_completed_daily_recommendations_"
+            "and_existing_symbol_missing_sessions_and_logic_v4"
         ),
+        "dynamic_universe_source_date": None,
         "candidate_universe_size": len(CANDIDATE_SYMBOLS),
+        "candidate_symbols": CANDIDATE_SYMBOLS,
         "existing_symbol_universe_size": len(IMPLEMENTED_SYMBOLS),
         "source_symbol_count": len(RESEARCH_SYMBOLS),
         "new_symbol_profile_count": len(NEW_SYMBOL_PROFILES),
         "existing_symbol_time_extension_profile_count": len(
             EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
         ),
+        "existing_symbol_logic_improvement_profile_count": len(
+            EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+        ),
+        "eligible_source_symbol_count": 0,
+        "quarantined_source_symbol_count": len(RESEARCH_SYMBOLS),
+        "source_quarantine": {
+            symbol: str(reason) for symbol in sorted(RESEARCH_SYMBOLS)
+        },
+        "research_profile_inventory": {
+            profile_id: {
+                "symbol": profile.symbol,
+                "name": profile.name,
+                "session": profile.session,
+                "discovery_lane": profile.discovery_lane,
+            }
+            for profile_id, profile in RESEARCH_PROFILES.items()
+        },
         "source_meta": {},
         "profiles": {},
         "recommendations": [],
@@ -442,6 +680,8 @@ def build_source_quality_blocked_report(
         "new_symbol_recommendation_count": 0,
         "existing_symbol_time_extension_recommendations": [],
         "existing_symbol_time_extension_recommendation_count": 0,
+        "existing_symbol_logic_improvement_recommendations": [],
+        "existing_symbol_logic_improvement_recommendation_count": 0,
         "status": "source_quality_blocked",
         "source_quality_reasons": [str(reason)],
         "decision": "source_quality_blocked_no_recommendation",
@@ -483,6 +723,19 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "",
             ]
         )
+    elif report.get("source_quarantine"):
+        lines.extend(
+            [
+                "Quarantined source symbols:",
+                *[
+                    f"- `{symbol}`: `{reason}`"
+                    for symbol, reason in sorted(
+                        report.get("source_quarantine", {}).items()
+                    )
+                ],
+                "",
+            ]
+        )
     lines.extend(
         [
             "| Lane | Symbol | Name | Session | Decision | Recommended spot | Holdout episodes | Completed | Held | Candidate EV | Baseline EV |",
@@ -490,6 +743,14 @@ def render_markdown(report: dict[str, Any]) -> str:
         ]
     )
     for item in report["profiles"].values():
+        if item.get("decision") == "source_quality_quarantined_no_evaluation":
+            lines.append(
+                f"| {item['discovery_lane']} | {item['symbol']} | "
+                f"{item['name']} | {item['session']} | "
+                f"{item['decision']}:{item['source_quality_reason']} | N/A | "
+                "0 | 0 | 0 | N/A | N/A |"
+            )
+            continue
         recommended = item["recommended_spot"]
         if recommended is None:
             spot = "N/A"
@@ -534,8 +795,13 @@ def build_telegram_message(report: dict[str, Any]) -> str:
             f"{report['holdout_trading_day_count']}일)"
         ),
         (
+            "동적 후보 원천일: "
+            f"{report.get('dynamic_universe_source_date') or '사용 가능한 완료 스냅샷 없음'}"
+        ),
+        (
             f"신규후보 {report['candidate_universe_size']}종목 + 기존종목 "
-            f"미구현시간대 {report['existing_symbol_time_extension_profile_count']}프로필 "
+            f"미구현시간대 {report['existing_symbol_time_extension_profile_count']}프로필 + "
+            f"로직개선 {report['existing_symbol_logic_improvement_profile_count']}프로필 "
             f"/ 통과 {len(recommendations)}프로필·{len(unique_symbols)}종목"
         ),
     ]
@@ -543,6 +809,14 @@ def build_telegram_message(report: dict[str, Any]) -> str:
         reasons = ", ".join(str(item) for item in report["source_quality_reasons"])
         lines.append(f"분석 차단: {reasons}")
         lines.append("오늘은 source-quality 문제로 신규 추천을 산출하지 않았습니다.")
+    elif report.get("source_quarantine"):
+        lines.append(
+            "일부 종목 격리: "
+            + ", ".join(
+                f"{symbol}({reason})"
+                for symbol, reason in sorted(report["source_quarantine"].items())
+            )
+        )
     elif not recommendations:
         lines.append("오늘 신규 구현 추천 기준을 통과한 종목·시간대가 없습니다.")
     lane_sections = (
@@ -550,6 +824,10 @@ def build_telegram_message(report: dict[str, Any]) -> str:
         (
             "기존 종목·신규 시간대",
             report["existing_symbol_time_extension_recommendations"],
+        ),
+        (
+            "기존 종목·로직 개선",
+            report["existing_symbol_logic_improvement_recommendations"],
         ),
     )
     for lane_label, lane_rows in lane_sections:
@@ -580,6 +858,7 @@ def build_telegram_message(report: dict[str, Any]) -> str:
                         f"{row['holdout_completed_legs']}leg / EV "
                         f"{row['notional_weighted_ev_pct']:+.4f}% / "
                         f"보유 {row['holdout_held_legs']}"
+                        f"({row['holdout_held_leg_rate_per_filled_leg']:.1%})"
                     ),
                 ]
             )
@@ -655,6 +934,8 @@ class CandidateRecommendationNotifier:
     @staticmethod
     def _valid_report(report: dict[str, Any]) -> bool:
         recommendations = report.get("recommendations")
+        candidate_symbols = report.get("candidate_symbols")
+        profile_inventory = report.get("research_profile_inventory")
         basic_valid = bool(
             report.get("schema") == REPORT_SCHEMA
             and report.get("report_type") == REPORT_TYPE
@@ -662,6 +943,7 @@ class CandidateRecommendationNotifier:
             in {
                 "recommendations_ready",
                 "no_qualified_candidate",
+                "partial_source_quality",
                 "source_quality_blocked",
             }
             and report.get("metric_contract") == METRIC_CONTRACT
@@ -674,12 +956,26 @@ class CandidateRecommendationNotifier:
             and report.get("actual_order_submitted") is False
             and report.get("broker_order_forbidden") is True
             and isinstance(recommendations, list)
-            and report.get("candidate_universe_size") == len(CANDIDATE_SYMBOLS)
+            and isinstance(candidate_symbols, dict)
+            and all(
+                isinstance(symbol, str)
+                and len(symbol) == 6
+                and symbol.isdigit()
+                and isinstance(name, str)
+                and bool(name.strip())
+                for symbol, name in candidate_symbols.items()
+            )
+            and report.get("candidate_universe_size") == len(candidate_symbols)
+            and set(candidate_symbols).isdisjoint(IMPLEMENTED_SYMBOLS)
             and report.get("existing_symbol_universe_size") == len(IMPLEMENTED_SYMBOLS)
-            and report.get("source_symbol_count") == len(RESEARCH_SYMBOLS)
-            and report.get("new_symbol_profile_count") == len(NEW_SYMBOL_PROFILES)
+            and report.get("source_symbol_count")
+            == len(set(candidate_symbols) | set(IMPLEMENTED_SYMBOLS))
+            and report.get("new_symbol_profile_count")
+            == len(candidate_symbols) * len(SESSION_WINDOWS)
             and report.get("existing_symbol_time_extension_profile_count")
             == len(EXISTING_SYMBOL_TIME_EXTENSION_PROFILES)
+            and report.get("existing_symbol_logic_improvement_profile_count")
+            == len(EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES)
             and report.get("recommendation_count") == len(recommendations or [])
             and isinstance(report.get("new_symbol_recommendations"), list)
             and report.get("new_symbol_recommendation_count")
@@ -689,6 +985,44 @@ class CandidateRecommendationNotifier:
             )
             and report.get("existing_symbol_time_extension_recommendation_count")
             == len(report.get("existing_symbol_time_extension_recommendations") or [])
+            and isinstance(
+                report.get("existing_symbol_logic_improvement_recommendations"), list
+            )
+            and report.get("existing_symbol_logic_improvement_recommendation_count")
+            == len(
+                report.get("existing_symbol_logic_improvement_recommendations") or []
+            )
+            and int(report.get("eligible_source_symbol_count", -1))
+            + int(report.get("quarantined_source_symbol_count", -1))
+            == int(report.get("source_symbol_count", -1))
+            and isinstance(report.get("source_quarantine"), dict)
+            and isinstance(report.get("source_meta"), dict)
+            and int(report.get("eligible_source_symbol_count", -1))
+            == len(report.get("source_meta") or {})
+            and int(report.get("quarantined_source_symbol_count", -1))
+            == len(report.get("source_quarantine") or {})
+            and set(report.get("source_meta") or {}).isdisjoint(
+                report.get("source_quarantine") or {}
+            )
+            and set(report.get("source_meta") or {})
+            | set(report.get("source_quarantine") or {})
+            == set(candidate_symbols) | set(IMPLEMENTED_SYMBOLS)
+            and isinstance(profile_inventory, dict)
+            and isinstance(report.get("profiles"), dict)
+            and (
+                (
+                    report.get("status") == "source_quality_blocked"
+                    and not report.get("profiles")
+                )
+                or set(report.get("profiles") or {}) == set(profile_inventory)
+            )
+            and len(profile_inventory)
+            == int(report.get("new_symbol_profile_count", -1))
+            + int(report.get("existing_symbol_time_extension_profile_count", -1))
+            + int(report.get("existing_symbol_logic_improvement_profile_count", -1))
+            and set(report.get("source_quarantine") or {}).issubset(
+                set(candidate_symbols) | set(IMPLEMENTED_SYMBOLS)
+            )
         )
         if not basic_valid:
             return False
@@ -698,12 +1032,24 @@ class CandidateRecommendationNotifier:
             target_date = date.fromisoformat(str(report.get("target_date") or ""))
         except ValueError:
             return False
+        dynamic_source_date: date | None = None
+        if report.get("dynamic_universe_source_date") is not None:
+            try:
+                dynamic_source_date = date.fromisoformat(
+                    str(report["dynamic_universe_source_date"])
+                )
+            except ValueError:
+                return False
         if (
             end_date != target_date
             or start_date != CLEAN_BASELINE_DATE
             or report.get("clean_tuning_baseline_date")
             != CLEAN_BASELINE_DATE.isoformat()
             or not is_krx_trading_day(target_date)
+            or (
+                dynamic_source_date is not None
+                and not (CLEAN_BASELINE_DATE <= dynamic_source_date <= target_date)
+            )
         ):
             return False
         try:
@@ -732,6 +1078,11 @@ class CandidateRecommendationNotifier:
             for row in recommendations
             if row.get("discovery_lane") == "existing_symbol_time_extension"
         ]
+        expected_logic = [
+            row
+            for row in recommendations
+            if row.get("discovery_lane") == "existing_symbol_logic_improvement"
+        ]
         if (
             report.get("new_symbol_recommendations") != expected_new
             or report.get("existing_symbol_time_extension_recommendations")
@@ -739,17 +1090,21 @@ class CandidateRecommendationNotifier:
             or report.get("new_symbol_recommendation_count") != len(expected_new)
             or report.get("existing_symbol_time_extension_recommendation_count")
             != len(expected_existing)
+            or report.get("existing_symbol_logic_improvement_recommendations")
+            != expected_logic
+            or report.get("existing_symbol_logic_improvement_recommendation_count")
+            != len(expected_logic)
         ):
             return False
         return all(
             isinstance(row, dict)
-            and row.get("profile_id") in RESEARCH_PROFILES
+            and row.get("profile_id") in profile_inventory
             and row.get("symbol")
-            == RESEARCH_PROFILES[str(row.get("profile_id"))].symbol
+            == profile_inventory[str(row.get("profile_id"))].get("symbol")
             and row.get("session")
-            == RESEARCH_PROFILES[str(row.get("profile_id"))].session
+            == profile_inventory[str(row.get("profile_id"))].get("session")
             and row.get("discovery_lane")
-            == RESEARCH_PROFILES[str(row.get("profile_id"))].discovery_lane
+            == profile_inventory[str(row.get("profile_id"))].get("discovery_lane")
             and (
                 row.get("discovery_lane") != "existing_symbol_time_extension"
                 or (
@@ -761,7 +1116,14 @@ class CandidateRecommendationNotifier:
             and isinstance(row.get("recommended_spot"), dict)
             and 0 < int(row.get("latest_close_price", 0) or 0) <= MAX_LATEST_CLOSE_PRICE
             and row.get("price_band") in {"under_50000_krw", "50000_to_100000_krw"}
-            and int(row.get("holdout_held_legs", -1)) == 0
+            and 0.0
+            <= float(row.get("holdout_held_leg_rate_per_filled_leg", -1.0))
+            <= MAX_MANAGEABLE_HELD_LEG_RATE
+            and (
+                row.get("holdout_active_unrealized_notional_weighted_pct") is None
+                or float(row["holdout_active_unrealized_notional_weighted_pct"])
+                >= -MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT
+            )
             and float(row.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
             and row.get("implementation_status")
             == "source_only_requires_review_and_user_approval"
@@ -867,21 +1229,54 @@ def main(argv: list[str] | None = None) -> int:
         token = kiwoom_utils.get_cached_kiwoom_token()
         if not token:
             raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
-        allowlist = RESEARCH_SYMBOLS
-        sources = {
-            symbol: fetch_sor_history(
-                symbol=symbol,
-                token=token,
-                start_date=start_date,
-                end_date=end_date,
-                max_pages=args.max_pages,
-                page_delay_sec=args.page_delay_sec,
-                allowed_symbols=allowlist,
-                expected_trading_day_count=expected_trading_day_count,
+        dynamic_source_date, dynamic_symbols = _dynamic_candidate_snapshot(target_date)
+        candidate_symbols = {**CANDIDATE_SYMBOLS, **dynamic_symbols}
+        _, research_profiles = _research_inventory(candidate_symbols)
+        allowlist = frozenset(candidate_symbols) | frozenset(IMPLEMENTED_SYMBOLS)
+        sources: dict[str, tuple[list[Bar], dict[str, Any]]] = {}
+        fetch_failures: dict[str, str] = {}
+        for symbol in sorted(allowlist):
+            try:
+                sources[symbol] = fetch_sor_history(
+                    symbol=symbol,
+                    token=token,
+                    start_date=start_date,
+                    end_date=end_date,
+                    max_pages=args.max_pages,
+                    page_delay_sec=args.page_delay_sec,
+                    allowed_symbols=allowlist,
+                    expected_trading_day_count=expected_trading_day_count,
+                )
+            except (ResearchError, requests.RequestException) as exc:
+                fetch_failures[symbol] = str(exc)
+        if not sources:
+            distinct_reasons = sorted(set(fetch_failures.values()))
+            raise ResearchError(
+                "all_research_symbols_source_quality_blocked:"
+                + "|".join(distinct_reasons)
             )
-            for symbol in RESEARCH_SYMBOLS
-        }
-        report = build_report(sources=sources, start_date=start_date, end_date=end_date)
+        report = build_report(
+            sources=sources,
+            start_date=start_date,
+            end_date=end_date,
+            candidate_symbols=candidate_symbols,
+            research_profiles=research_profiles,
+            dynamic_universe_source_date=dynamic_source_date,
+        )
+        if fetch_failures:
+            report["source_quarantine"].update(fetch_failures)
+            for item in report["profiles"].values():
+                symbol = str(item.get("symbol") or "")
+                if symbol in fetch_failures and item.get("decision") == (
+                    "source_quality_quarantined_no_evaluation"
+                ):
+                    item["source_quality_reason"] = fetch_failures[symbol]
+            report["quarantined_source_symbol_count"] = len(report["source_quarantine"])
+            report["eligible_source_symbol_count"] = len(allowlist) - len(
+                report["source_quarantine"]
+            )
+            if report["status"] == "no_qualified_candidate":
+                report["status"] = "partial_source_quality"
     except (ResearchError, requests.RequestException) as exc:
         report = build_source_quality_blocked_report(
             start_date=start_date, end_date=end_date, reason=str(exc)

@@ -507,6 +507,7 @@ valid = (
     in {
         "recommendations_ready",
         "no_qualified_candidate",
+        "partial_source_quality",
         "source_quality_blocked",
     }
     and CandidateRecommendationNotifier._valid_report(payload)

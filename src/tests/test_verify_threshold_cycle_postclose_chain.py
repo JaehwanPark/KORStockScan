@@ -9,6 +9,17 @@ import pytest
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
+def test_low_price_postclose_contract_rejects_missing_handoff_artifacts():
+    status = mod._low_price_two_leg_postclose_contract_status(
+        {}, {}, {}, target_date="2026-08-12"
+    )
+
+    assert status["status"] == "fail"
+    assert "tuning_schema_invalid" in status["issues"]
+    assert "expanded_candidate_report_contract_invalid" in status["issues"]
+    assert status["runtime_effect"] is False
+
+
 def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:
     return {
         "schema": "smoothing_source_only_path_journal_v3",

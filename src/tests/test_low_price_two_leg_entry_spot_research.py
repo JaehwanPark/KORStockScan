@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
+import pytest
+
 from src.engine.monitoring import low_price_two_leg_entry_spot_research as research
 from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
     RESEARCH_PROFILES,
@@ -49,6 +51,22 @@ def test_candidate_grid_stays_inside_each_profile_base_window():
         )
 
 
+def test_logic_improvement_grid_expands_execution_plan_without_live_authority():
+    profile = RESEARCH_PROFILES["logic_mirae_asset_morning"]
+    plans = {
+        (
+            item.entry_offsets_ticks,
+            item.entry_valid_completed_bars,
+            item.target_ticks,
+        )
+        for item in candidate_grid(profile)
+    }
+
+    assert ((-1, -2), 5, 4) in plans
+    assert ((0, -1), 3, 4) in plans
+    assert all(len(item.entry_offsets_ticks) == 2 for item in candidate_grid(profile))
+
+
 def test_target_cannot_complete_on_the_same_bar_as_fill():
     started = datetime(2026, 8, 10, 13, 16, tzinfo=KST)
     fill = _bar(started, low=19_900, high=20_100)
@@ -67,6 +85,33 @@ def test_target_cannot_complete_on_the_same_bar_as_fill():
         target_bars=(fill, later_target),
     )
     assert complete["status"] == "COMPLETE"
+
+
+def test_held_leg_exposes_mark_to_market_mae_and_manageable_carry_budget():
+    started = datetime(2026, 8, 10, 13, 16, tzinfo=KST)
+    fill = Bar(started, 20_000, 20_000, 19_950, 20_000)
+    later = Bar(started + timedelta(minutes=1), 19_800, 19_850, 19_500, 19_600)
+    held = _leg_outcome(
+        entry_price=20_000,
+        fill_bars=(fill,),
+        target_bars=(fill, later),
+    )
+
+    assert held["status"] == "HELD"
+    assert held["active_unrealized_pct"] == pytest.approx(-2.2)
+    assert held["max_adverse_excursion_pct"] == pytest.approx(-2.5)
+    assert research._manageable_carry(
+        {
+            "held_leg_rate_per_filled_leg": 0.25,
+            "worst_held_active_unrealized_pct": -2.2,
+        }
+    )
+    assert not research._manageable_carry(
+        {
+            "held_leg_rate_per_filled_leg": 0.26,
+            "worst_held_active_unrealized_pct": -2.2,
+        }
+    )
 
 
 def test_fetch_uses_integrated_sor_and_cached_token_without_other_api_calls():

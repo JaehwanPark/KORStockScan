@@ -27,8 +27,8 @@ class FakeResponse:
 
 
 def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():
-    assert len(expanded.NEW_SYMBOL_PROFILES) == 10
-    assert len(expanded.RESEARCH_PROFILES) == 19
+    assert len(expanded.NEW_SYMBOL_PROFILES) == 20
+    assert len(expanded.RESEARCH_PROFILES) == 44
     assert set(expanded.CANDIDATE_SYMBOLS).isdisjoint(
         profile.symbol for profile in PROFILES.values()
     )
@@ -38,18 +38,12 @@ def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions()
     } == {
         (symbol, session)
         for symbol in expanded.CANDIDATE_SYMBOLS
-        for session in ("midday", "afternoon")
+        for session in ("morning", "late_morning", "midday", "afternoon")
     }
-    assert set(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES) == {
-        "existing_006800_midday",
-        "existing_006800_afternoon",
-        "existing_034020_midday",
-        "existing_034020_afternoon",
-        "existing_042660_midday",
-        "existing_042660_afternoon",
-        "existing_080220_midday",
-        "existing_080220_afternoon",
-        "existing_475150_afternoon",
+    assert len(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES) == 17
+    assert len(expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES) == len(PROFILES)
+    assert set(expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES) == {
+        f"logic_{profile_id}" for profile_id in PROFILES
     }
     existing_profile = expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES[
         "existing_475150_afternoon"
@@ -105,7 +99,9 @@ def test_fetch_expanded_symbol_requires_explicit_research_allowlist():
 
 
 def test_expanded_report_fails_closed_on_incomplete_source_universe():
-    with pytest.raises(ResearchError, match="expanded_candidate_source_set_mismatch"):
+    with pytest.raises(
+        ResearchError, match="all_research_symbols_source_quality_blocked"
+    ):
         expanded.build_report(
             sources={},
             start_date=expanded.CLEAN_BASELINE_DATE,
@@ -162,9 +158,58 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     assert report["trading_date_count"] == 47
     assert report["calibration_trading_day_count"] == 31
     assert report["holdout_trading_day_count"] == 16
-    assert report["existing_symbol_time_extension_profile_count"] == 9
+    assert report["existing_symbol_time_extension_profile_count"] == 17
+    assert report["existing_symbol_logic_improvement_profile_count"] == 7
     assert report["recommendation_count"] == 0
     assert report["runtime_effect"] is False
+
+
+def test_expanded_report_quarantines_one_bad_symbol_without_blocking_others(
+    monkeypatch,
+):
+    end_date = date(2026, 8, 11)
+    trading_dates = list(expanded.clean_baseline_trading_dates(end_date))
+    monkeypatch.setattr(
+        expanded,
+        "build_day_contexts",
+        lambda bars: {item: object() for item in trading_dates},
+    )
+    monkeypatch.setattr(
+        expanded,
+        "select_profile_spot",
+        lambda profile, contexts, **kwargs: {
+            "symbol": profile.symbol,
+            "name": profile.name,
+            "session": profile.session,
+            "decision": "no_calibration_candidate",
+            "recommended_spot": None,
+            "baseline": {"holdout": {"notional_weighted_ev_pct": None}},
+        },
+    )
+    missing_symbol = sorted(expanded.RESEARCH_SYMBOLS)[0]
+    sources = {
+        symbol: (
+            [SimpleNamespace(close_price=20_000)],
+            {"source_quality_status": "PASS"},
+        )
+        for symbol in expanded.RESEARCH_SYMBOLS
+        if symbol != missing_symbol
+    }
+
+    report = expanded.build_report(
+        sources=sources,
+        start_date=expanded.CLEAN_BASELINE_DATE,
+        end_date=end_date,
+    )
+
+    assert report["status"] == "partial_source_quality"
+    assert report["source_quarantine"] == {missing_symbol: "source_missing"}
+    assert report["eligible_source_symbol_count"] == len(expanded.RESEARCH_SYMBOLS) - 1
+    assert all(
+        item["decision"] == "source_quality_quarantined_no_evaluation"
+        for item in report["profiles"].values()
+        if item["symbol"] == missing_symbol
+    )
 
 
 def test_daily_window_expands_from_clean_baseline_and_keeps_latest_16_holdout():
@@ -181,6 +226,88 @@ def test_daily_window_expands_from_clean_baseline_and_keeps_latest_16_holdout():
         expanded.clean_baseline_trading_dates(date(2026, 8, 9))
 
 
+def test_dynamic_universe_adds_ranked_under_100000_symbols_only(tmp_path):
+    path = tmp_path / "daily.csv"
+    path.write_text(
+        "date,code,name,close,score_rank\n"
+        "2026-08-11,000990,DB하이텍,93200,2\n"
+        "2026-08-11,042700,고가종목,213000,1\n"
+        "2026-08-11,017670,기존검토종목,86000,3\n"
+        "2026-08-10,123456,전일종목,10000,1\n",
+        encoding="utf-8",
+    )
+
+    result = expanded._dynamic_candidate_symbols(date(2026, 8, 11), path=path)
+
+    assert result == {"000990": "DB하이텍"}
+
+
+def test_dynamic_universe_uses_latest_completed_snapshot_not_after_target(tmp_path):
+    path = tmp_path / "daily.csv"
+    path.write_text(
+        "date,code,name,close,score_rank\n"
+        "2026-08-10,123456,전일종목,10000,1\n"
+        "2026-08-11,000990,DB하이텍,93200,2\n"
+        "2026-08-13,654321,미래종목,20000,1\n",
+        encoding="utf-8",
+    )
+
+    source_date, result = expanded._dynamic_candidate_snapshot(
+        date(2026, 8, 12), path=path
+    )
+
+    assert source_date == date(2026, 8, 11)
+    assert result == {"000990": "DB하이텍"}
+
+
+def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypatch):
+    end_date = date(2026, 8, 11)
+    trading_dates = list(expanded.clean_baseline_trading_dates(end_date))
+    candidate_symbols = {**expanded.CANDIDATE_SYMBOLS, "000990": "DB하이텍"}
+    _, research_profiles = expanded._research_inventory(candidate_symbols)
+    source_symbols = set(candidate_symbols) | set(expanded.IMPLEMENTED_SYMBOLS)
+    monkeypatch.setattr(
+        expanded,
+        "build_day_contexts",
+        lambda bars: {item: object() for item in trading_dates},
+    )
+    monkeypatch.setattr(
+        expanded,
+        "select_profile_spot",
+        lambda profile, contexts, **kwargs: {
+            "symbol": profile.symbol,
+            "name": profile.name,
+            "session": profile.session,
+            "decision": "no_calibration_candidate",
+            "recommended_spot": None,
+            "baseline": {"holdout": {"notional_weighted_ev_pct": None}},
+        },
+    )
+
+    report = expanded.build_report(
+        sources={
+            symbol: (
+                [SimpleNamespace(close_price=20_000)],
+                {"source_quality_status": "PASS"},
+            )
+            for symbol in source_symbols
+        },
+        start_date=expanded.CLEAN_BASELINE_DATE,
+        end_date=end_date,
+        candidate_symbols=candidate_symbols,
+        research_profiles=research_profiles,
+        dynamic_universe_source_date=end_date,
+    )
+
+    assert report["candidate_symbols"]["000990"] == "DB하이텍"
+    assert report["dynamic_universe_source_date"] == "2026-08-11"
+    assert report["new_symbol_profile_count"] == len(candidate_symbols) * 4
+    assert expanded.CandidateRecommendationNotifier._valid_report(report)
+
+    report["dynamic_universe_source_date"] = "2026-08-12"
+    assert not expanded.CandidateRecommendationNotifier._valid_report(report)
+
+
 def _profile_result(
     *,
     symbol: str,
@@ -188,6 +315,9 @@ def _profile_result(
     session: str,
     candidate_ev: float,
     baseline_ev: float,
+    held_legs: int = 0,
+    held_rate: float = 0.0,
+    held_mark_pct: float | None = None,
 ) -> dict:
     return {
         "symbol": symbol,
@@ -205,7 +335,11 @@ def _profile_result(
             "holdout": {
                 "signal_episodes": 4,
                 "completed_legs": 7,
-                "held_legs": 0,
+                "held_legs": held_legs,
+                "held_leg_rate_per_filled_leg": held_rate,
+                "active_unrealized_notional_weighted_pct": held_mark_pct,
+                "worst_filled_max_adverse_excursion_pct": -0.5,
+                "realized_net_profit_krw_per_episode": 100.0,
                 "notional_weighted_ev_pct": candidate_ev,
             }
         },
@@ -255,6 +389,43 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
     assert all(row["runtime_effect"] is False for row in rows)
 
 
+def test_recommendation_accepts_manageable_carry_and_rejects_excess_carry():
+    manageable = _profile_result(
+        symbol="017670",
+        name="SK텔레콤",
+        session="midday",
+        candidate_ev=0.05,
+        baseline_ev=0.01,
+        held_legs=1,
+        held_rate=0.20,
+        held_mark_pct=-2.5,
+    )
+    excessive = _profile_result(
+        symbol="007660",
+        name="이수페타시스",
+        session="midday",
+        candidate_ev=0.20,
+        baseline_ev=0.01,
+        held_legs=1,
+        held_rate=0.30,
+        held_mark_pct=-2.5,
+    )
+
+    rows = expanded._recommendation_rows(
+        {
+            "candidate_017670_midday": manageable,
+            "candidate_007660_midday": excessive,
+        },
+        {
+            "017670": {"latest_close_price": 65_000},
+            "007660": {"latest_close_price": 40_000},
+        },
+    )
+
+    assert [row["profile_id"] for row in rows] == ["candidate_017670_midday"]
+    assert rows[0]["holdout_held_leg_rate_per_filled_leg"] == pytest.approx(0.20)
+
+
 def test_existing_symbol_time_extension_recommendation_preserves_active_profile_lineage():
     profiles = {
         "existing_475150_afternoon": _profile_result(
@@ -286,6 +457,11 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         for row in rows
         if row.get("discovery_lane") == "existing_symbol_time_extension"
     ]
+    logic_rows = [
+        row
+        for row in rows
+        if row.get("discovery_lane") == "existing_symbol_logic_improvement"
+    ]
     return {
         "schema": expanded.REPORT_SCHEMA,
         "report_type": expanded.REPORT_TYPE,
@@ -299,18 +475,38 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         "calibration_trading_day_count": 31,
         "holdout_trading_day_count": 16,
         "candidate_universe_size": len(expanded.CANDIDATE_SYMBOLS),
+        "candidate_symbols": expanded.CANDIDATE_SYMBOLS,
         "existing_symbol_universe_size": len(expanded.IMPLEMENTED_SYMBOLS),
         "source_symbol_count": len(expanded.RESEARCH_SYMBOLS),
         "new_symbol_profile_count": len(expanded.NEW_SYMBOL_PROFILES),
         "existing_symbol_time_extension_profile_count": len(
             expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
         ),
+        "existing_symbol_logic_improvement_profile_count": len(
+            expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+        ),
+        "eligible_source_symbol_count": len(expanded.RESEARCH_SYMBOLS),
+        "quarantined_source_symbol_count": 0,
+        "source_quarantine": {},
+        "source_meta": {symbol: {} for symbol in expanded.RESEARCH_SYMBOLS},
+        "research_profile_inventory": {
+            profile_id: {
+                "symbol": profile.symbol,
+                "name": profile.name,
+                "session": profile.session,
+                "discovery_lane": profile.discovery_lane,
+            }
+            for profile_id, profile in expanded.RESEARCH_PROFILES.items()
+        },
+        "profiles": {profile_id: {} for profile_id in expanded.RESEARCH_PROFILES},
         "recommendation_count": len(rows),
         "recommendations": rows,
         "new_symbol_recommendations": new_rows,
         "new_symbol_recommendation_count": len(new_rows),
         "existing_symbol_time_extension_recommendations": existing_rows,
         "existing_symbol_time_extension_recommendation_count": len(existing_rows),
+        "existing_symbol_logic_improvement_recommendations": logic_rows,
+        "existing_symbol_logic_improvement_recommendation_count": len(logic_rows),
         "metric_contract": expanded.METRIC_CONTRACT,
         "recommendation_only": True,
         "machine_created": False,
