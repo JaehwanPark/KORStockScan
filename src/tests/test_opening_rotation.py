@@ -510,6 +510,28 @@ def test_opening_rotation_watch_slots_cap_two_active_promotions(monkeypatch):
     assert replacement_claim["active_slot_count"] == 2
 
 
+def test_opening_rotation_repeated_claim_backfills_missing_claim_time(monkeypatch):
+    now_ts = datetime(2026, 8, 12, 9, 10).timestamp()
+    stock = {
+        "id": 1,
+        "code": "000001",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-1",
+        "opening_rotation_watch_slot_promotion_id": "PROMO-1",
+    }
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [stock])
+
+    claim = handlers._claim_opening_rotation_watch_slot(
+        stock, promotion_id="PROMO-1", now_ts=now_ts
+    )
+
+    assert claim["allowed"] is True
+    assert claim["newly_claimed"] is False
+    assert stock["opening_rotation_watch_slot_claimed_at_epoch"] == now_ts
+
+
 def test_opening_rotation_capacity_full_falls_through_without_opening_context(
     monkeypatch,
 ):
@@ -685,6 +707,84 @@ def test_opening_rotation_ttl_drop_expires_watch_and_releases_slot(monkeypatch):
     assert release_fields["opening_rotation_watch_slot_released"] is True
     assert release_fields["opening_rotation_ws_unregister_requested"] is True
     assert release_fields["actual_order_submitted"] is False
+
+
+def test_opening_rotation_claim_ttl_expires_before_stuck_async_or_price_guard(
+    monkeypatch,
+):
+    now_dt = datetime(2026, 8, 11, 9, 5)
+    promotion_id = "SCANPROM-005930-CLAIM-TTL"
+    stock = {
+        "id": 505931,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": promotion_id,
+        "source_signature": "PRICE_JUMP_START",
+        "buy_qty": 0,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_claimed_at_epoch": now_dt.timestamp() - 61.0,
+    }
+    fake_db = _OpeningTTLDB()
+    event_bus = _OpeningTTLEventBus()
+    emitted = []
+    monkeypatch.setattr(handlers, "DB", fake_db)
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [stock])
+    monkeypatch.setattr(handlers, "EVENT_BUS", event_bus)
+    monkeypatch.setattr(
+        handlers, "should_retain_ws_subscription", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        handlers,
+        "should_retain_rising_missed_nxt_post_block_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_scanner_promotion_price_consistency_fields",
+        lambda *_args, **_kwargs: pytest.fail(
+            "expired watch slot must close before price-source arbitration"
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_scanner_async_opening_rotation_context",
+        lambda *_args, **_kwargs: pytest.fail(
+            "expired watch slot must close before async context resolution"
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        stock,
+        "005930",
+        {"curr": 70_000, "fluctuation": 3.0},
+        {
+            "pos_tag": "SCANNER",
+            "now_ts": now_dt.timestamp(),
+            "now_dt": now_dt,
+            "fluctuation": 3.0,
+            "curr_price": 70_000,
+            "is_trigger": False,
+        },
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is True
+    assert stock["status"] == "EXPIRED"
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
+    assert fake_db.updates == [({"status": "EXPIRED"}, False)]
+    release = next(
+        fields
+        for stage, fields in emitted
+        if stage == "opening_rotation_promotion_ttl_released"
+    )
+    assert release["opening_rotation_watch_slot_released"] is True
 
 
 @pytest.mark.parametrize(
