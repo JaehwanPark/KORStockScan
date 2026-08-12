@@ -444,6 +444,62 @@ def test_postclose_deduplicates_promotion_bins_and_rejects_episode_hash_conflict
     assert candidate["status"] == "no_change"
 
 
+def test_postclose_enriches_missing_promotion_day_change_from_later_same_identity(
+    tmp_path,
+):
+    events = tmp_path / "events"
+    promotion_id = "PROMO-LATE-DAY-CHANGE"
+    _write_jsonl(
+        events / "pipeline_events_2026-08-08.jsonl",
+        [
+            _event(
+                "scalping_scanner_candidate_promoted",
+                "2026-08-08T09:10:00+09:00",
+                "005930",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "krx_regular",
+                },
+            ),
+            _event(
+                "scalping_scanner_fast_precheck",
+                "2026-08-08T09:10:01+09:00",
+                "005930",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "opening_rotation_upstream_day_change_pct": 3.5,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "krx_regular",
+                },
+            ),
+            _event(
+                "opening_rotation_1pct_observed",
+                "2026-08-08T09:10:02+09:00",
+                "005930",
+                {
+                    "scanner_promotion_id": promotion_id,
+                    "day_change_pct": 3.6,
+                    "reason": "pullback_not_observed",
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "krx_regular",
+                },
+            ),
+        ],
+    )
+
+    report, _candidate = build_postclose_report(
+        "2026-08-08",
+        events_dir=events,
+        source_quality_dir=tmp_path / "audits",
+        runtime_root=tmp_path / "runtime",
+    )
+
+    assert report["funnel"]["unique_scanner_promotion_count"] == 1
+    assert report["day_change_distribution"]["3_to_5"] == 1
+    assert report["day_change_distribution"]["missing"] == 0
+
+
 def test_postclose_promotion_funnel_excludes_non_krx_or_outside_opening_window(
     tmp_path,
 ):

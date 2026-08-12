@@ -210,6 +210,27 @@ def _day_bin(value: float | None) -> str:
     return "gt_8"
 
 
+def _promotion_day_change(fields: dict[str, Any]) -> float | None:
+    """Return the earliest usable promotion-time day-change observation.
+
+    Scanner promotion rows are emitted before a fresh quote is guaranteed and
+    commonly omit the value.  The fast precheck and Opening evaluator carry
+    the same promotion identity and can supply it without converting a later
+    outcome into an entry feature.
+    """
+
+    for key in (
+        "day_change_pct",
+        "fluctuation",
+        "fluctuation_rate",
+        "opening_rotation_upstream_day_change_pct",
+    ):
+        value = _safe_float(fields.get(key))
+        if value is not None:
+            return value
+    return None
+
+
 def _krx_regular_opening_promotion(
     event: dict[str, Any], fields: dict[str, Any]
 ) -> bool:
@@ -705,8 +726,7 @@ def build_postclose_report(
     episodes: dict[str, dict[str, Any]] = {}
     stage_counts = Counter()
     funnel_reasons = Counter()
-    promotion_ids: set[str] = set()
-    day_bins = Counter()
+    promotion_day_changes: dict[str, float | None] = {}
     source_dates: set[str] = set()
     relevant_dates: set[str] = set()
 
@@ -728,15 +748,12 @@ def build_postclose_report(
                     or ""
                 ).strip()
                 promotion_key = f"{source_date}:{promotion_id}"
-                if promotion_id and promotion_key not in promotion_ids:
-                    promotion_ids.add(promotion_key)
-                    day_bins[
-                        _day_bin(
-                            _safe_float(
-                                fields.get("day_change_pct", fields.get("fluctuation"))
-                            )
-                        )
-                    ] += 1
+                if promotion_id:
+                    promotion_day_changes.setdefault(promotion_key, None)
+                    if promotion_day_changes[promotion_key] is None:
+                        observed_change = _promotion_day_change(fields)
+                        if observed_change is not None:
+                            promotion_day_changes[promotion_key] = observed_change
             if stage == "opening_rotation_1pct_observed":
                 funnel_reasons[str(fields.get("reason") or "unknown")] += 1
             episode_id = _episode_key(fields)
@@ -751,6 +768,9 @@ def build_postclose_report(
                 target_date=source_date,
             )
 
+    day_bins = Counter(
+        _day_bin(day_change_pct) for day_change_pct in promotion_day_changes.values()
+    )
     contract_eligible_episodes = [
         row
         for row in episodes.values()
@@ -1022,7 +1042,7 @@ def build_postclose_report(
         "source_quality": source_quality,
         "active_policy": active_policy.as_artifact(),
         "funnel": {
-            "unique_scanner_promotion_count": len(promotion_ids),
+            "unique_scanner_promotion_count": len(promotion_day_changes),
             "strict_episode_count": len(strict_episodes),
             "non_krx_or_unknown_episode_scope_excluded_count": (
                 episode_scope_excluded_count

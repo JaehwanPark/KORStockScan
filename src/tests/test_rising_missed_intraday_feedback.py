@@ -1700,6 +1700,22 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
                 "latest_gate_reason": "scale_in_cooldown",
             }
         ],
+        "dynamic_age_post_apply_attribution_rows": [
+            {
+                "ts": "2026-07-02T09:00:00+09:00",
+                "stock_code": "000102",
+                "stock_name": "dynamic-age",
+                "effective_venue": "KRX",
+                "dynamic_age_source_stage": "latency_pass",
+                "downstream_terminal_stage": "pre_submit_entry_ai_authority_guard_block",
+                "entry_executable_best_ask": 1000.0,
+                "first_hit": "not_observed",
+                "first_hit_elapsed_sec": None,
+                "actual_order_submitted": False,
+                "horizons": {"1m": {"event_count": 2, "mfe_pct": 0.1, "mae_pct": -0.2}},
+                "decision_authority": "source_only_dynamic_age_post_apply_attribution",
+            }
+        ],
         "rising_missed_tp1_counterfactual_first_hit_label_rows": [
             {
                 "candidate_ts": "2026-07-02T09:00:00",
@@ -1761,6 +1777,8 @@ def test_write_outputs_renders_json_and_markdown(tmp_path):
     assert "submit_safety_source_quality_unknown_missing_field_counts" in markdown
     assert "## TP1 Counterfactual First-hit Labels" in markdown
     assert "ws_age_ms=50.0" in markdown
+    assert "## Dynamic-age Post-apply Attribution" in markdown
+    assert "horizons=1m:n=2/mfe=0.1/mae=-0.2" in markdown
 
 
 def test_profit_recovered_sell_order_is_rescue_warning_not_initial_fail(tmp_path):
@@ -3037,6 +3055,79 @@ def test_latency_false_negative_preserves_runtime_dynamic_age_provenance():
         canary_summary["latency_false_negative_runtime_dynamic_age_source_gap_count"]
         == 0
     )
+
+
+def test_dynamic_age_post_apply_attribution_uses_executable_ask_and_future_bid(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-12.jsonl"
+    rows = [
+        _event(
+            903,
+            "000903",
+            "dynamic-age-applied",
+            "scalp_entry_action_decision_snapshot",
+            {
+                "source_stage": "latency_pass",
+                "effective_venue": "KRX",
+                "ai_decision_trace_id": "dynamic-age-trace-1",
+                "latency_true_ofi_direct_canary_dynamic_age_band_applied": True,
+                "executable_buy_price": 1000,
+                "executable_sell_price": 995,
+                "actual_order_submitted": False,
+            },
+            emitted_at="2026-08-12T10:00:00+09:00",
+        ),
+        _event(
+            903,
+            "000903",
+            "dynamic-age-applied",
+            "scalp_entry_action_decision_snapshot",
+            {
+                "source_stage": "pre_submit_entry_ai_authority_guard_block",
+                "effective_venue": "KRX",
+                "ai_decision_trace_id": "dynamic-age-trace-1",
+                "latency_true_ofi_direct_canary_dynamic_age_band_applied": True,
+                "executable_buy_price": 1000,
+                "executable_sell_price": 995,
+            },
+            emitted_at="2026-08-12T10:00:02+09:00",
+        ),
+        _event(
+            903,
+            "000903",
+            "dynamic-age-applied",
+            "holding_observation",
+            {"executable_sell_price": 1012, "executable_buy_price": 1014},
+            emitted_at="2026-08-12T10:04:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    summary, _blocks, _backoffs, attribution_rows = (
+        mod._build_submit_safety_and_backoff_audit(pipeline_path)
+    )
+
+    assert summary["dynamic_age_post_apply_episode_count"] == 1
+    assert summary["dynamic_age_post_apply_latency_pass_count"] == 1
+    assert summary["dynamic_age_post_apply_actual_order_submitted_count"] == 0
+    assert summary["dynamic_age_post_apply_source_quality_pass_count"] == 1
+    assert summary["dynamic_age_post_apply_first_hit_counts"] == [
+        {"first_hit": "net_target_first", "count": 1}
+    ]
+    assert attribution_rows[0]["downstream_terminal_stage"] == (
+        "pre_submit_entry_ai_authority_guard_block"
+    )
+    assert attribution_rows[0]["horizons"]["5m"] == {
+        "event_count": 2,
+        "mfe_pct": 1.2,
+        "mae_pct": -0.5,
+    }
+    assert attribution_rows[0]["first_hit"] == "net_target_first"
+    assert attribution_rows[0]["actual_order_submitted"] is False
 
 
 def test_clean_baseline_rolling_nxt_post_block_outcomes(monkeypatch, tmp_path):

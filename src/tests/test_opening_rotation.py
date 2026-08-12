@@ -459,6 +459,126 @@ def test_opening_rotation_requires_explicit_krx_regular_scope():
     assert not is_krx_regular_scope(effective_venue="", market_session_bucket="")
 
 
+def test_opening_rotation_watch_slots_cap_two_active_promotions(monkeypatch):
+    now_ts = datetime(2026, 8, 12, 9, 10).timestamp()
+
+    def watch(code, promotion_id):
+        return {
+            "id": code,
+            "code": code,
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "scanner_promotion_id": promotion_id,
+        }
+
+    first = watch("000001", "PROMO-1")
+    second = watch("000002", "PROMO-2")
+    third = watch("000003", "PROMO-3")
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [first, second, third])
+
+    first_claim = handlers._claim_opening_rotation_watch_slot(
+        first, promotion_id="PROMO-1", now_ts=now_ts
+    )
+    second_claim = handlers._claim_opening_rotation_watch_slot(
+        second, promotion_id="PROMO-2", now_ts=now_ts
+    )
+    repeated_claim = handlers._claim_opening_rotation_watch_slot(
+        first, promotion_id="PROMO-1", now_ts=now_ts + 1
+    )
+    blocked_claim = handlers._claim_opening_rotation_watch_slot(
+        third, promotion_id="PROMO-3", now_ts=now_ts + 1
+    )
+
+    assert first_claim["newly_claimed"] is True
+    assert second_claim["newly_claimed"] is True
+    assert repeated_claim["allowed"] is True
+    assert repeated_claim["newly_claimed"] is False
+    assert blocked_claim == {
+        "allowed": False,
+        "reason": "watch_slot_capacity_full",
+        "slot_limit": 2,
+        "active_slot_count": 2,
+        "newly_claimed": False,
+    }
+
+    assert handlers._release_opening_rotation_watch_slot(first, promotion_id="PROMO-1")
+    replacement_claim = handlers._claim_opening_rotation_watch_slot(
+        third, promotion_id="PROMO-3", now_ts=now_ts + 2
+    )
+    assert replacement_claim["allowed"] is True
+    assert replacement_claim["active_slot_count"] == 2
+
+
+def test_opening_rotation_capacity_full_falls_through_without_opening_context(
+    monkeypatch,
+):
+    now_dt = datetime(2026, 8, 12, 9, 10)
+    occupied = []
+    for index in (1, 2):
+        promotion_id = f"PROMO-{index}"
+        occupied.append(
+            {
+                "id": index,
+                "code": f"00000{index}",
+                "status": "WATCHING",
+                "strategy": "SCALPING",
+                "position_tag": "SCANNER",
+                "scanner_promotion_id": promotion_id,
+                "opening_rotation_watch_slot_promotion_id": promotion_id,
+            }
+        )
+    candidate = {
+        "id": 3,
+        "code": "000003",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-3",
+        "source_signature": "PRICE_JUMP_START",
+    }
+    emitted = []
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [*occupied, candidate])
+    monkeypatch.setattr(
+        handlers,
+        "_opening_rotation_feature_packet",
+        lambda *_args, **_kwargs: pytest.fail(
+            "capacity-blocked promotion must not prepare Opening context"
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    handled = handlers._handle_watching_opening_rotation(
+        candidate,
+        "000003",
+        {"curr": 10_000, "fluctuation": 3.0},
+        {
+            "pos_tag": "SCANNER",
+            "now_ts": now_dt.timestamp(),
+            "now_dt": now_dt,
+            "fluctuation": 3.0,
+            "curr_price": 10_000,
+            "is_trigger": False,
+        },
+        {"MIN_SCALP_LIQUIDITY": 500_000_000},
+    )
+
+    assert handled is False
+    assert "opening_rotation_watch_slot_promotion_id" not in candidate
+    blocked = next(
+        fields
+        for stage, fields in emitted
+        if stage == "opening_rotation_watch_slot_capacity_blocked"
+    )
+    assert blocked["opening_rotation_watch_slot_limit"] == 2
+    assert blocked["opening_rotation_active_watch_slot_count"] == 2
+    assert blocked["actual_order_submitted"] is False
+
+
 def test_missing_target_date_runtime_policy_is_disabled(tmp_path):
     policy = load_active_runtime_policy(
         now_dt=datetime(2026, 8, 11, 8, 45),
@@ -541,6 +661,7 @@ def test_opening_rotation_ttl_drop_expires_watch_and_releases_slot(monkeypatch):
     assert stock["status"] == "EXPIRED"
     assert stock["opening_rotation_consumed_promotion_id"] == promotion_id
     assert stock["opening_rotation_watch_phase"] == "PROMOTION_TTL_EXPIRED"
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
     assert "opening_rotation_episode_phase" not in stock
     assert fake_db.updates == [({"status": "EXPIRED"}, False)]
     assert event_bus.events == [
@@ -763,6 +884,7 @@ def test_runtime_skips_opening_when_krx_regular_provenance_is_missing(monkeypatc
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
         "scanner_promotion_id": "PROMO-UNKNOWN-VENUE",
+        "opening_rotation_watch_slot_promotion_id": "PROMO-UNKNOWN-VENUE",
         "source_signature": "PRICE_JUMP_START",
     }
     runtime = {
@@ -802,6 +924,9 @@ def test_runtime_skips_opening_when_krx_regular_provenance_is_missing(monkeypatc
 
     assert handled is False
     assert runtime["is_trigger"] is False
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
+    assert emitted[0][0] == "opening_rotation_watch_slot_released"
+    assert emitted[0][1]["reason"] == "krx_regular_scope_lost"
     assert emitted[-1][0] == "opening_rotation_krx_regular_scope_skipped"
     assert emitted[-1][1]["broker_order_forbidden"] is True
 
@@ -1391,6 +1516,7 @@ def test_runtime_does_not_handoff_opening_rotation_source_quality_failure(monkey
         "status": "WATCHING",
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-SOURCE-GAP",
         "source_signature": "PRICE_JUMP_START",
         "intraday_high_price": 10_100,
     }
@@ -2321,11 +2447,22 @@ def test_runtime_branch_uses_mechanical_authority_without_pre_submit_retag(
     assert stock["opening_rotation_decision_time_bucket"] == "09:00-09:30"
     assert "scale_in_locked" not in stock
     assert "opening_rotation_1pct_live" not in stock
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
     qualified_log = next(
         fields
         for args, fields in entry_logs
         if args[2] == "opening_rotation_1pct_qualified"
     )
+    assert any(
+        args[2] == "opening_rotation_watch_slot_claimed" for args, _fields in entry_logs
+    )
+    released_log = next(
+        fields
+        for args, fields in entry_logs
+        if args[2] == "opening_rotation_watch_slot_released"
+    )
+    assert released_log["reason"] == "entry_qualified"
+    assert released_log["opening_rotation_watch_slot_released"] is True
     _, replay = rotation_backtest._canonical_replay_inputs(qualified_log)
     assert replay["missing"] == ()
     assert qualified_log["opening_rotation_window_version"] == WINDOW_VERSION
@@ -2824,6 +2961,8 @@ def test_explicit_rising_missed_class_alone_does_not_exclude_opening():
 
 
 def test_rising_missed_scout_upgrade_cannot_be_retagged_as_rotation(monkeypatch):
+    promotion_id = "PROMO-RISING-MISSED-TAKEOVER"
+    emitted = []
     stock = {
         "id": 11,
         "name": "테스트",
@@ -2831,6 +2970,8 @@ def test_rising_missed_scout_upgrade_cannot_be_retagged_as_rotation(monkeypatch)
         "position_tag": "SCANNER",
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
         "rising_missed_one_share_scout": True,
+        "scanner_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
         "opening_rotation_1pct_state": {"phase": "PULLBACK_OBSERVED"},
         "opening_rotation_mechanical_signal_strength": 0.8,
     }
@@ -2851,7 +2992,11 @@ def test_rising_missed_scout_upgrade_cannot_be_retagged_as_rotation(monkeypatch)
             AssertionError("opening feature path must not run for scout upgrade")
         ),
     )
-    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
 
     handled = handlers._handle_watching_opening_rotation(
         stock,
@@ -2866,7 +3011,14 @@ def test_rising_missed_scout_upgrade_cannot_be_retagged_as_rotation(monkeypatch)
     assert stock["position_tag"] == "SCANNER"
     assert "opening_rotation_1pct_state" not in stock
     assert "opening_rotation_mechanical_signal_strength" not in stock
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
     assert "005930" not in handlers._OPENING_ROTATION_CONTEXT_CACHE
+    released = next(
+        fields
+        for stage, fields in emitted
+        if stage == "opening_rotation_watch_slot_released"
+    )
+    assert released["reason"] == "specialist_owner_takeover"
 
 
 def test_cancel_ambiguity_consumes_new_promotion_until_reconciliation(monkeypatch):
@@ -2977,12 +3129,15 @@ def test_broker_accepted_promotion_cannot_reenter_after_unfilled_cancel(monkeypa
     assert emitted[-1][0][2] == "opening_rotation_consumed_promotion_dropped"
 
 
-def test_runtime_branch_does_not_fall_back_to_ai_after_1500_entry_window():
+def test_runtime_branch_does_not_fall_back_to_ai_after_1500_entry_window(monkeypatch):
+    promotion_id = "PROMO-AFTER-ENTRY-WINDOW"
     stock = {
         "id": 7,
         "name": "테스트",
         "position_tag": POSITION_TAG,
         "source_signature": "PRICE_JUMP_START",
+        "scanner_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
     }
     runtime = {
         "pos_tag": POSITION_TAG,
@@ -2992,6 +3147,12 @@ def test_runtime_branch_does_not_fall_back_to_ai_after_1500_entry_window():
         "curr_price": 10_000,
         "is_trigger": False,
     }
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
     handlers._OPENING_ROTATION_CONTEXT_CACHE["005930"] = {"cached_at": 1.0}
     handled = handlers._handle_watching_opening_rotation(
         stock,
@@ -3002,7 +3163,10 @@ def test_runtime_branch_does_not_fall_back_to_ai_after_1500_entry_window():
     )
     assert handled is True
     assert runtime["is_trigger"] is False
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
     assert "005930" not in handlers._OPENING_ROTATION_CONTEXT_CACHE
+    assert emitted[-1][0] == "opening_rotation_watch_slot_released"
+    assert emitted[-1][1]["reason"] == "entry_window_closed"
 
 
 def test_account_sync_does_not_attach_legacy_preset_exit_to_rotation_tag(monkeypatch):

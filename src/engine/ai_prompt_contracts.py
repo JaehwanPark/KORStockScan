@@ -632,6 +632,9 @@ DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION = (
 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION = (
     "decision_quality_v2_14_setup_risk_adjudicator"
 )
+DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION = (
+    "decision_quality_v2_15_bounded_recovery"
+)
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -1651,3 +1654,48 @@ def decision_quality_v2_14_setup_risk_adjudicator_system_prompt(stage: str) -> s
     if normalized != "entry":
         raise ValueError("decision-quality V2.14 currently supports entry only")
     return _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
+
+
+_DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_RULES = """
+V2.15 bounded-recovery addendum:
+1. Keep the V2.14 risk-only contract and its exact ledger fact roles. The
+   response has no runtime or broker authority. It cannot turn a hard blocker
+   into positive edge or authorize a full entry.
+2. supporting_fact_ids may contain only exact positive_facts IDs. A hard_blocker
+   or any ID from contradicting_facts/invalidation_facts is never supporting
+   evidence. contradicting_fact_ids may contain only exact IDs from those two
+   adverse ledger arrays. Copy the exact token; never paraphrase it.
+3. For setup_state=INVALID, still return VETO and cite an invalidation_facts ID.
+   The deterministic offline composer may retain only a no_supported_setup-only
+   distribution episode as WAIT/recovery_required when fresh liquidity is
+   supportive and supportive micro tape conflicts with fresh program selling.
+   This is a fresh-recheck candidate, not a declaration that the setup is valid.
+4. For setup_state=WAIT_CONFIRMATION, use CAUTION rather than VETO when the
+   recovery-confirmation ledger has both liquidity_supportive and tape_supportive,
+   has no invalidation fact, and only a fresh trigger recheck remains. Cite both
+   positive facts. A current large-sell exhaustion recheck stays recheck-only.
+5. Every other INVALID or WAIT_CONFIRMATION row remains non-exposure. In
+   particular, failed structure, large sell print, extreme/unusable liquidity,
+   source-quality gap, distribution risk, and overextension are not recoverable
+   merely because one positive fact exists.
+6. A retained bounded-recovery row maps only to WAIT/recovery_required and an
+   offline passive one-share probe arm. A fresh downstream quote/tape recheck,
+   submit guard, account/order/quantity/cooldown guards, post-probe direction
+   check, and hard/protect/emergency exits remain mandatory.
+7. Do not use outcomes, future prices, stock identity, thresholds, order price,
+   quantity, provider/model changes, broker behavior, or bot state. Return the
+   V2.14 JSON object only.
+""".strip()
+
+
+def decision_quality_v2_15_bounded_recovery_system_prompt(stage: str) -> str:
+    """Return the offline V2.15 bounded-recovery risk prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.15 currently supports entry only")
+    return (
+        _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
+        + "\n\n"
+        + _DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_RULES
+    )
