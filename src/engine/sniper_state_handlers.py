@@ -52460,6 +52460,11 @@ def _claim_opening_rotation_watch_slot(
             stock.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or ""
         ).strip()
         if current_slot_promotion_id == normalized_promotion_id:
+            if (
+                _safe_float(stock.get(_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY), 0.0)
+                <= 0.0
+            ):
+                stock[_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY] = float(now_ts)
             active_slot_count = sum(
                 1
                 for target in (ACTIVE_TARGETS or [])
@@ -53625,6 +53630,25 @@ def _handle_watching_opening_rotation(stock, code, ws_data, runtime, config) -> 
     )
     if not candidate:
         return bool(direct_position)
+
+    watch_slot_claimed_at = _safe_float(
+        stock.get(_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY), 0.0
+    )
+    if (
+        _opening_rotation_watch_slot_owned(stock, current_promotion_id)
+        and watch_slot_claimed_at > 0.0
+        and now_ts - watch_slot_claimed_at > entry_config.promotion_ttl_sec
+    ):
+        _expire_opening_rotation_ttl_promotion(
+            stock,
+            code,
+            promotion_id=current_promotion_id,
+            now_ts=float(now_ts),
+        )
+        # Keep the exact promotion under deterministic Opening ownership even
+        # when DB reconciliation prevents immediate expiration.  Falling
+        # through here could leak a stale promotion into the general AI path.
+        return True
 
     promotion_price_fields = _scanner_promotion_price_consistency_fields(
         stock,
