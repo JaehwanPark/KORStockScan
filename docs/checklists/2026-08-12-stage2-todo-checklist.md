@@ -43,9 +43,9 @@
 
 - [ ] `[WidgetAutoTradeContractAdapterDeploy0812] 두산·한화 계약 어댑터 및 Telegram owner 분리 런타임 반영` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 10:15~10:35`, `Track: ScalpingLogic`)
   - Source: [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [notifications.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/notifications.py), [doosan notifier](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_telegram_notify.py), [hanwha notifier](/home/ubuntu/KORStockScan/src/engine/monitoring/hanwha_ocean_widget_telegram_notify.py)
-  - 현재 판정: 한화오션 실제 진입 후 scale-in 검증에서 삼성 `snapshot_observed_at`과 두산·한화 `snapshot_time` 계약 차이가 `TypeError`를 발생시켜 자동매매기가 재시작 루프에 진입했다. 검증 전 수정 코드 자동반영을 막기 위해 서비스를 중지했으며, 기존 한화오션 SOR 익절 주문 `0025694`는 `90,700원` 1주 미체결 상태로 broker 조회가 정상이다.
+  - 현재 판정: `runtime_reflected_no_new_entry_sample`. 한화오션 실제 진입 후 scale-in 검증에서 확인된 삼성 `snapshot_observed_at`과 두산·한화 `snapshot_time` 계약 차이를 보완하고 `2026-08-12 10:33:42 KST` 두산 수집기 PID `136837`, 한화 수집기 PID `136841`, 자동매매기 PID `136844`로 반영했다. 재기동 후 `TypeError` 재발 없이 PID가 유지되고 삼성 기존 TP는 체결 완료로 reconciliation됐으며, 한화오션 SOR 익절 주문 `0025694`는 `90,700원` 1주 미체결 상태로 broker 조회가 정상이다. 과거 한화 매수 접수 알림은 5분 freshness 계약에 따라 `stale_action_not_notified`로 소급발송하지 않았다.
   - 구현/리뷰: validator signature adapter는 두 계약명을 캐시해 fail-closed 호출하고, 자동매매 진입 알림 대상은 `005930/034020/042660`으로 통합했다. 두산·한화 수집기는 진입 Telegram을 억제하되 EXIT Telegram은 유지하고 동일 entry event 반복 저장을 금지한다. 전체 위젯 회귀 `280 passed`, 실제 두산·한화 snapshot 계약 smoke, Black/Ruff/compile/`git diff --check`를 통과했고 미해결 코드 finding은 `0`이다.
-  - 완료 기준: 사용자 재기동 지시 후 자동매매기와 두 저가종목 수집기의 새 PID를 확인하고, `TypeError` 재발 없음, 기존 한화 주문 reconciliation, 신규 매수 액션 Telegram의 실행정책·주문번호 포함 및 수집기 ENTRY 중복 미발송을 post-apply로 확인한다.
+  - 완료 기준: 다음 자연 신규 매수 표본에서 자동매매 액션 Telegram에 실행정책·주문번호가 포함되고 수집기 ENTRY 중복 메시지가 없으며, 이후 EXIT 수집기 메시지는 유지되는지 확인해 `runtime_reflected_valid_sample` 또는 `rollback_required`로 닫는다.
   - 금지: 기존 한화 익절 주문 취소, 신규 수량·TP·scale-in threshold 변경, hard safety·broker/account/order/quantity guard 우회는 허용하지 않는다.
 
 - [x] `[SamsungWidgetTelegramOwnerSplit0812] 진입·청산 텔레그램 발생주체 분리` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 08:20~09:10`, `Track: ScalpingLogic`)
