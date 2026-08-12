@@ -85,11 +85,96 @@ def test_widget_payload_parser_accepts_positive_current_price():
     )
 
     assert quote.current_price == 71200
+    assert quote.holding_status == "UNAVAILABLE"
+    assert quote.holding_quantity is None
     assert quote.day_low_delta == 400
     assert quote.minute_trend == "up"
     assert quote.minute_trend_3m == "flat"
     assert quote.minute_trend_5m == "down"
     assert quote.minute_chart[-1] == ("10:01", 70500)
+
+
+def test_widget_payload_parser_accepts_display_only_position():
+    now = datetime.now().astimezone()
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 231_000,
+            "minute_chart": [],
+            "position": {
+                "status": "OK",
+                "symbol": "005930",
+                "quantity": 5,
+                "average_price": 229_750,
+                "observed_at_kst": now.isoformat(),
+                "token_mode": "shared_cache_only",
+                "account_query_read_only": True,
+                "authority": "widget_account_position_display_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "position_data_used_for_order_quantity": False,
+            },
+        },
+        received_at=now,
+    )
+
+    assert quote.holding_status == "OK"
+    assert quote.holding_quantity == 5
+    assert quote.holding_average_price == 229_750
+
+
+def test_widget_payload_parser_does_not_display_malformed_position():
+    now = datetime.now().astimezone()
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 231_000,
+            "minute_chart": [],
+            "position": {
+                "status": "OK",
+                "quantity": 5,
+                "average_price": None,
+                "observed_at_kst": now.isoformat(),
+                "token_mode": "shared_cache_only",
+                "account_query_read_only": True,
+                "authority": "widget_account_position_display_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "position_data_used_for_order_quantity": False,
+            },
+        },
+        received_at=now,
+    )
+
+    assert quote.holding_status == "UNAVAILABLE"
+    assert quote.holding_quantity is None
+
+
+def test_widget_payload_parser_does_not_display_stale_position():
+    now = datetime.now().astimezone()
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 231_000,
+            "minute_chart": [],
+            "position": {
+                "status": "OK",
+                "symbol": "005930",
+                "quantity": 5,
+                "average_price": 229_750,
+                "observed_at_kst": (now - timedelta(seconds=46)).isoformat(),
+                "token_mode": "shared_cache_only",
+                "account_query_read_only": True,
+                "authority": "widget_account_position_display_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "position_data_used_for_order_quantity": False,
+            },
+        },
+        received_at=now,
+    )
+
+    assert quote.holding_status == "UNAVAILABLE"
 
 
 def test_widget_payload_parser_keeps_legacy_trend_response_compatible():

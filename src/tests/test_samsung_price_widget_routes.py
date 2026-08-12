@@ -22,6 +22,7 @@ class _MissingReturnCodeResponse(_FakeResponse):
 
 
 def _client(monkeypatch):
+    routes._reset_position_cache_for_test()
     monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ACCESS_KEY", "widget-secret")
     monkeypatch.setenv(
         "KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH",
@@ -92,6 +93,18 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
             {"url": url, "headers": headers, "json": json, "timeout": timeout}
         )
         response = _FakeResponse()
+        if headers["api-id"] == "kt00018":
+            response.json = lambda: {
+                "return_code": 0,
+                "acnt_evlt_remn_indv_tot": [
+                    {
+                        "stk_cd": "A005930",
+                        "stk_nm": "삼성전자",
+                        "rmnd_qty": "000000000003",
+                        "pur_pric": "000000231500",
+                    }
+                ],
+            }
         if headers["api-id"] == "ka10080":
             response.json = lambda: {
                 "return_code": 0,
@@ -126,7 +139,27 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
     assert captured["calls"][0]["headers"]["authorization"] == "Bearer TOKEN"
     assert captured["calls"][0]["json"] == {"stk_cd": "005930"}
     assert captured["calls"][0]["timeout"] == 5
-    assert len(captured["calls"]) == 1
+    assert len(captured["calls"]) == 3
+    assert [call["headers"]["api-id"] for call in captured["calls"]] == [
+        "ka10001",
+        "kt00018",
+        "kt00018",
+    ]
+    assert [call["url"] for call in captured["calls"][1:]] == [
+        "https://api.example.test/api/dostk/acnt",
+        "https://api.example.test/api/dostk/acnt",
+    ]
+    assert [call["json"] for call in captured["calls"][1:]] == [
+        {"qry_tp": "1", "dmst_stex_tp": "KRX"},
+        {"qry_tp": "1", "dmst_stex_tp": "NXT"},
+    ]
+    assert all(
+        call["headers"]["cont-yn"] == "N" and call["headers"]["next-key"] == ""
+        for call in captured["calls"][1:]
+    )
+    assert response.get_json()["position"]["quantity"] == 3
+    assert response.get_json()["position"]["average_price"] == 231500
+    assert response.get_json()["position"]["runtime_effect"] is False
     assert response.get_json()["advisory"]["state"] == "DATA_WAIT"
     assert response.get_json()["advisory"]["session"] == "KRX_REGULAR"
     assert response.get_json()["advisory"]["runtime_effect"] is False
@@ -149,6 +182,11 @@ def test_samsung_widget_uses_nxt_route_after_krx_close(monkeypatch):
     def fake_post(url, *, headers, json, timeout):
         captured.append({"headers": headers, "json": json})
         response = _FakeResponse()
+        if headers["api-id"] == "kt00018":
+            response.json = lambda: {
+                "return_code": 0,
+                "acnt_evlt_remn_indv_tot": [],
+            }
         if headers["api-id"] == "ka10080":
             response.json = lambda: {
                 "return_code": 0,
@@ -172,7 +210,11 @@ def test_samsung_widget_uses_nxt_route_after_krx_close(monkeypatch):
     assert response.get_json()["market_session"] == "nxt_aftermarket"
     assert response.get_json()["quote_request_code"] == "005930_NX"
     assert response.get_json()["advisory"]["session"] == "NXT_AFTERMARKET"
-    assert [call["json"]["stk_cd"] for call in captured] == ["005930_NX"]
+    assert [
+        call["json"]["stk_cd"]
+        for call in captured
+        if call["headers"]["api-id"] == "ka10001"
+    ] == ["005930_NX"]
 
 
 def test_samsung_widget_uses_nxt_route_during_premarket(monkeypatch):
@@ -190,6 +232,11 @@ def test_samsung_widget_uses_nxt_route_during_premarket(monkeypatch):
     def fake_post(url, *, headers, json, timeout):
         captured.append({"headers": headers, "json": json})
         response = _FakeResponse()
+        if headers["api-id"] == "kt00018":
+            response.json = lambda: {
+                "return_code": 0,
+                "acnt_evlt_remn_indv_tot": [],
+            }
         if headers["api-id"] == "ka10080":
             response.json = lambda: {
                 "return_code": 0,
@@ -214,10 +261,14 @@ def test_samsung_widget_uses_nxt_route_during_premarket(monkeypatch):
     assert response.get_json()["market_session"] == "krx_like_premarket"
     assert response.get_json()["quote_request_code"] == "005930_NX"
     assert response.get_json()["advisory"]["session"] == "NXT_PREMARKET"
-    assert [call["json"]["stk_cd"] for call in captured] == ["005930_NX"]
+    assert [
+        call["json"]["stk_cd"]
+        for call in captured
+        if call["headers"]["api-id"] == "ka10001"
+    ] == ["005930_NX"]
 
 
-def test_samsung_widget_serves_fresh_collector_snapshot_without_token_call(
+def test_samsung_widget_serves_fresh_collector_snapshot_with_position_overlay(
     monkeypatch, tmp_path
 ):
     client = _client(monkeypatch)
@@ -257,11 +308,19 @@ def test_samsung_widget_serves_fresh_collector_snapshot_without_token_call(
     )
     monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH", str(snapshot_path))
 
-    def fail_if_token_read(*args, **kwargs):
-        raise AssertionError("fresh collector snapshot must not read a token")
-
     monkeypatch.setattr(
-        routes.kiwoom_utils, "get_cached_kiwoom_token", fail_if_token_read
+        routes.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
+    )
+    monkeypatch.setattr(
+        routes,
+        "_cached_samsung_position",
+        lambda token, observed_at: routes._position_contract_payload(
+            status="OK",
+            observed_at=observed_at,
+            quantity=7,
+            average_price=232_000,
+            source_exchanges=["KRX", "NXT"],
+        ),
     )
     response = client.get(
         "/api/widget/samsung-price",
@@ -269,6 +328,7 @@ def test_samsung_widget_serves_fresh_collector_snapshot_without_token_call(
     )
     assert response.status_code == 200
     assert response.get_json()["advisory"]["state"] == "ENTRY_READY"
+    assert response.get_json()["position"]["quantity"] == 7
 
 
 def test_samsung_widget_rejects_snapshot_with_expired_inner_advisory(
@@ -360,6 +420,101 @@ def test_samsung_widget_rejects_snapshot_with_runtime_exit_authority(
     monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH", str(snapshot_path))
 
     assert routes._fresh_collector_snapshot(now) is None
+
+
+def test_samsung_position_uses_krx_first_and_deduplicates_nxt(monkeypatch):
+    now = datetime(2026, 8, 12, 10, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+    calls = []
+
+    def fake_post(token, *, path, api_id, payload):
+        calls.append((path, api_id, payload))
+        return {
+            "return_code": 0,
+            "acnt_evlt_remn_indv_tot": [
+                {
+                    "stk_cd": "A005930",
+                    "rmnd_qty": "000000000004",
+                    "pur_pric": "000000230125",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(routes, "_kiwoom_post", fake_post)
+
+    position = routes._load_samsung_position("TOKEN", now)
+
+    assert position["status"] == "OK"
+    assert position["quantity"] == 4
+    assert position["average_price"] == 230125
+    assert position["source_exchanges"] == ["KRX", "NXT"]
+    assert [call[2]["dmst_stex_tp"] for call in calls] == ["KRX", "NXT"]
+    assert all(call[2]["qry_tp"] == "1" for call in calls)
+
+
+def test_samsung_position_fails_closed_on_venue_conflict(monkeypatch):
+    now = datetime(2026, 8, 12, 10, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    def fake_post(token, *, path, api_id, payload):
+        quantity = "3" if payload["dmst_stex_tp"] == "KRX" else "4"
+        return {
+            "return_code": 0,
+            "acnt_evlt_remn_indv_tot": [
+                {"stk_cd": "005930", "rmnd_qty": quantity, "pur_pric": "230000"}
+            ],
+        }
+
+    monkeypatch.setattr(routes, "_kiwoom_post", fake_post)
+
+    position = routes._load_samsung_position("TOKEN", now)
+
+    assert position["status"] == "UNAVAILABLE"
+    assert position["quantity"] is None
+    assert position["reason"] == "venue_position_conflict"
+
+
+def test_samsung_position_does_not_treat_duplicate_rows_as_zero(monkeypatch):
+    now = datetime(2026, 8, 12, 10, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    def fake_post(token, *, path, api_id, payload):
+        return {
+            "return_code": 0,
+            "acnt_evlt_remn_indv_tot": [
+                {"stk_cd": "005930", "rmnd_qty": "2", "pur_pric": "230000"},
+                {"stk_cd": "A005930", "rmnd_qty": "1", "pur_pric": "229000"},
+            ],
+        }
+
+    monkeypatch.setattr(routes, "_kiwoom_post", fake_post)
+
+    position = routes._load_samsung_position("TOKEN", now)
+
+    assert position["status"] == "UNAVAILABLE"
+    assert position["quantity"] is None
+    assert position["reason"] == "position_contract_invalid"
+
+
+def test_samsung_position_cache_limits_account_calls(monkeypatch):
+    routes._reset_position_cache_for_test()
+    now = datetime(2026, 8, 12, 10, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+    calls = []
+
+    def fake_load(token, observed_at):
+        calls.append((token, observed_at))
+        return routes._position_contract_payload(
+            status="OK",
+            observed_at=observed_at,
+            quantity=1,
+            average_price=229500,
+            source_exchanges=["KRX"],
+        )
+
+    monkeypatch.setattr(routes, "_load_samsung_position", fake_load)
+
+    first = routes._cached_samsung_position("TOKEN", now)
+    second = routes._cached_samsung_position("TOKEN", now + timedelta(seconds=10))
+
+    assert first["quantity"] == second["quantity"] == 1
+    assert len(calls) == 1
 
 
 def test_quote_route_uses_nxt_only_during_nxt_premarket():

@@ -24,7 +24,8 @@ from tkinter import messagebox
 APP_NAME = "SamsungPriceWidget"
 POLL_INTERVAL_MS = 10_000
 LOCAL_ADVISORY_MAX_AGE_SEC = 25
-WINDOW_SIZE = "190x190"
+LOCAL_POSITION_MAX_AGE_SEC = 45
+WINDOW_SIZE = "190x204"
 ACCESS_KEY_HEADER = "X-KORStockScan-Widget-Key"
 ORDER_KEY_HEADER = "X-KORStockScan-Widget-Order-Key"
 MAX_MANUAL_ORDER_QTY = 100
@@ -119,6 +120,9 @@ def order_endpoint_url(endpoint_url: str) -> str:
 @dataclass(frozen=True)
 class Quote:
     current_price: int
+    holding_quantity: int | None
+    holding_average_price: int | None
+    holding_status: str
     day_low_delta: int | None
     day_low_delta_pct: float | None
     minute_trend: str
@@ -235,6 +239,57 @@ def parse_quote_payload(
         raise ValueError("invalid_price") from exc
     if price <= 0:
         raise ValueError("invalid_price")
+    holding_quantity = None
+    holding_average_price = None
+    holding_status = "UNAVAILABLE"
+    position_payload = payload.get("position")
+    if isinstance(position_payload, dict) and (
+        position_payload.get("authority") == "widget_account_position_display_only"
+        and position_payload.get("symbol") == "005930"
+        and position_payload.get("token_mode") == "shared_cache_only"
+        and position_payload.get("account_query_read_only") is True
+        and position_payload.get("runtime_effect") is False
+        and position_payload.get("actual_order_submitted") is False
+        and position_payload.get("position_data_used_for_order_quantity") is False
+    ):
+        candidate_status = str(position_payload.get("status") or "UNAVAILABLE").strip()
+        if candidate_status == "OK":
+            try:
+                position_observed_at = _aware_datetime(
+                    position_payload.get("observed_at_kst"),
+                    field="position_observed_at_kst",
+                )
+                position_received_at = received_at or datetime.now().astimezone()
+                position_received_at = position_received_at.astimezone(
+                    position_observed_at.tzinfo
+                )
+                position_age_sec = (
+                    position_received_at - position_observed_at
+                ).total_seconds()
+                candidate_quantity = int(position_payload.get("quantity"))
+                average_raw = position_payload.get("average_price")
+                candidate_average = (
+                    int(average_raw) if average_raw is not None else None
+                )
+            except (TypeError, ValueError):
+                position_age_sec = LOCAL_POSITION_MAX_AGE_SEC + 1
+                candidate_quantity = -1
+                candidate_average = None
+            if (
+                -2 <= position_age_sec <= LOCAL_POSITION_MAX_AGE_SEC
+                and candidate_quantity >= 0
+                and (
+                    (candidate_quantity == 0 and candidate_average is None)
+                    or (
+                        candidate_quantity > 0
+                        and candidate_average is not None
+                        and candidate_average > 0
+                    )
+                )
+            ):
+                holding_status = "OK"
+                holding_quantity = candidate_quantity
+                holding_average_price = candidate_average
     low_delta = payload.get("day_low_delta")
     try:
         low_delta = int(low_delta) if low_delta is not None else None
@@ -490,6 +545,9 @@ def parse_quote_payload(
         )
     return Quote(
         current_price=price,
+        holding_quantity=holding_quantity,
+        holding_average_price=holding_average_price,
+        holding_status=holding_status,
         day_low_delta=low_delta,
         day_low_delta_pct=low_delta_pct,
         minute_trend=trends["1m"],
@@ -622,8 +680,8 @@ class SamsungPriceWidget:
 
         root.title("삼성전자 10초")
         root.geometry(WINDOW_SIZE)
-        root.minsize(190, 190)
-        root.maxsize(190, 190)
+        root.minsize(190, 204)
+        root.maxsize(190, 204)
         root.attributes("-topmost", True)
         root.configure(bg="#1e2430")
         root.protocol("WM_DELETE_WINDOW", root.destroy)
@@ -647,6 +705,15 @@ class SamsungPriceWidget:
             anchor="w",
         )
         self.price_label.pack(fill="x", pady=(2, 0))
+        self.position_label = tk.Label(
+            frame,
+            text="보유: 확인 대기",
+            fg="#dfe7f3",
+            bg="#1e2430",
+            font=("Malgun Gothic", 8, "bold"),
+            anchor="w",
+        )
+        self.position_label.pack(fill="x")
         self.low_label = tk.Label(
             frame,
             text="오늘 저가 대비: —",
@@ -791,6 +858,18 @@ class SamsungPriceWidget:
         previous = self.previous_price
         self.previous_price = current_price
         self.price_label.configure(text=f"{current_price:,}원")
+        if quote.holding_status != "OK" or quote.holding_quantity is None:
+            self.position_label.configure(text="보유: 확인불가", fg="#ffb86c")
+        elif quote.holding_quantity == 0:
+            self.position_label.configure(text="보유: 0주 · 평단 —", fg="#aab7c8")
+        else:
+            self.position_label.configure(
+                text=(
+                    f"보유: {quote.holding_quantity:,}주 · "
+                    f"평단 {quote.holding_average_price:,}원"
+                ),
+                fg="#dfe7f3",
+            )
         if quote.day_low_delta is None or quote.day_low_delta_pct is None:
             self.low_label.configure(text="오늘 저가 대비: —", fg="#aab7c8")
         else:

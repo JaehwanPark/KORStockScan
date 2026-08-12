@@ -1,9 +1,10 @@
 # Samsung Price Widget for Windows
 
-`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 190
+`samsung_price_widget.py` is a small always-on-top Windows widget (190 x 204
 pixels) that shows Samsung Electronics (`005930`) current price, the difference
-from the previous successful 10-second query, today's low-price distance, and
-the completed-close direction over 1-, 3-, and 5-minute horizons. The former
+from the previous successful 10-second query, the broker account's current
+Samsung quantity and average purchase price, today's low-price distance, and the
+completed-close direction over 1-, 3-, and 5-minute horizons. The former
 20-minute graph has been removed. A compact advisory line remains, followed by
 an operator-entered quantity and explicit `매수`/`매도` real-order buttons.
 
@@ -20,11 +21,15 @@ widget status line shows `PRE`. During the NXT aftermarket
 
 It calls the KORStockScan AWS endpoints, not Kiwoom directly. The AWS server
 uses only the existing `data/runtime/kiwoom_token_cache.json` shared cache and
-never issues, refreshes, revokes, exports, or logs a Kiwoom bearer token. It
-does not query holdings, orderable cash, or an account before an operator
-order, and it does not restart/control the bot. Quote and order authority use
-separate keys. Without the order key, quote/advisory display continues while
-both order buttons remain disabled.
+never issues, refreshes, revokes, exports, or logs a Kiwoom bearer token. The
+quote route overlays only Samsung quantity and average purchase price from
+read-only `kt00018`, using a 30-second process-local cache. It does not query
+orderable cash or use this display data to size or authorize an operator order,
+and it does not restart/control the bot. Invalid, partial, or conflicting
+KRX/NXT position responses show `보유: 확인불가` without hiding price/advisory
+data. Quote and order authority use separate keys. Without the order key,
+quote/advisory/position display continues while both order buttons remain
+disabled.
 
 Manual order contract:
 
@@ -154,10 +159,12 @@ sudo systemctl enable --now korstockscan-samsung-widget-evaluation.timer
 
 The route is `GET /api/widget/samsung-price` and requires the matching
 `X-KORStockScan-Widget-Key` request header. The quote-only fallback uses `POST
-/api/dostk/stkinfo`, `api-id: ka10001`. The collector uses read-only
-market-data TRs `ka10001`, `ka10003`, `ka10004`, `ka10064`, `ka10080`,
-`ka10081`, `ka20001`, `ka20005`, and `ka90008`; it never calls auth, account, order,
-cancel, or bot-control endpoints.
+/api/dostk/stkinfo`, `api-id: ka10001`. The route adds a display-only account
+overlay with `/api/dostk/acnt`, `api-id: kt00018`, and returns only the Samsung
+row's `rmnd_qty` and `pur_pric`; the full account response is neither returned
+nor persisted. The collector itself uses read-only market-data TRs `ka10001`,
+`ka10003`, `ka10004`, `ka10064`, `ka10080`, `ka10081`, `ka20001`, `ka20005`, and
+`ka90008`; it never calls auth, account, order, cancel, or bot-control endpoints.
 The separate `POST /api/widget/samsung-order` endpoint requires
 `X-KORStockScan-Widget-Order-Key` and is the only widget HTTP path allowed to
 call `kt10000`/`kt10001` through the shared-token order gateway.

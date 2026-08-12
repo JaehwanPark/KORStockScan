@@ -1,9 +1,10 @@
 """Samsung quote endpoint and separately authenticated operator order endpoint.
 
 Both paths consume only the AWS server's existing shared Kiwoom token cache.
-The quote path is read-only. The order path requires a distinct key and an
-explicit Windows-widget action; neither path issues tokens, queries account
-cash, or controls a bot process.
+The quote path is read-only and may attach a display-only Samsung position
+snapshot. The order path requires a distinct key and an explicit Windows-widget
+action; neither path issues tokens, queries account cash, or controls a bot
+process.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ from __future__ import annotations
 import hmac
 import math
 import os
+import threading
+import time
 from datetime import datetime, time as datetime_time
 from pathlib import Path
 from statistics import median
@@ -47,6 +50,18 @@ _NXT_AFTERMARKET_START = datetime_time(hour=15, minute=40)
 _NXT_AFTERMARKET_END = datetime_time(hour=20)
 _MANUAL_ORDER_SNAPSHOT_MAX_AGE_SEC = 15
 _MANUAL_ORDER_EXECUTOR: ManualWidgetOrderExecutor | None = None
+_POSITION_CACHE_TTL_SEC = 30
+_POSITION_FAILURE_CACHE_TTL_SEC = 10
+_POSITION_AUTHORITY = "widget_account_position_display_only"
+_POSITION_CACHE_LOCK = threading.Lock()
+_POSITION_CACHE: tuple[float, dict] | None = None
+
+# Official Kiwoom reference gate evidence (retrieved 2026-08-12T13:55:33+09:00):
+# upstream SHA 69642586f7d84ba9fd8a6faf1f1537c7fda6568b
+# - kiwoom_docs/계좌.md: kt00018 request/response contract
+# - kiwoom/_data/kiwoom_api_spec.json: kt00018 fields/examples
+# - examples/국내주식/계좌/get_domestic_account_evaluation_balance.py
+_KIWOOM_POSITION_REFERENCE_SHA = "69642586f7d84ba9fd8a6faf1f1537c7fda6568b"
 
 
 def _parse_positive_price(value: object) -> int | None:
@@ -216,16 +231,22 @@ def _classify_minute_trend(completed: list[tuple[str, int]]) -> tuple[str, str |
 
 
 def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
-    if (path, api_id) != ("/api/dostk/stkinfo", "ka10001"):
+    if (path, api_id) not in {
+        ("/api/dostk/stkinfo", "ka10001"),
+        ("/api/dostk/acnt", "kt00018"),
+    }:
         return None
+    headers = {
+        "Content-Type": "application/json;charset=UTF-8",
+        "authorization": f"Bearer {token}",
+        "api-id": api_id,
+    }
+    if api_id == "kt00018":
+        headers.update({"cont-yn": "N", "next-key": ""})
     try:
         response = requests.post(
             kiwoom_utils.get_api_url(path),
-            headers={
-                "Content-Type": "application/json;charset=UTF-8",
-                "authorization": f"Bearer {token}",
-                "api-id": api_id,
-            },
+            headers=headers,
             json=payload,
             timeout=_REQUEST_TIMEOUT_SEC,
         )
@@ -240,6 +261,155 @@ def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
     return response_payload
+
+
+def _position_contract_payload(
+    *,
+    status: str,
+    observed_at: datetime,
+    quantity: int | None = None,
+    average_price: int | None = None,
+    source_exchanges: list[str] | None = None,
+    reason: str | None = None,
+) -> dict:
+    payload = {
+        "status": status,
+        "symbol": _SAMSUNG_CODE,
+        "quantity": quantity,
+        "average_price": average_price,
+        "observed_at_kst": observed_at.isoformat(),
+        "source": "kiwoom_kt00018_shared_cache",
+        "source_exchanges": source_exchanges or [],
+        "cache_ttl_sec": _POSITION_CACHE_TTL_SEC,
+        "token_mode": "shared_cache_only",
+        "account_query_read_only": True,
+        "authority": _POSITION_AUTHORITY,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "position_data_used_for_order_quantity": False,
+        "official_reference_sha": _KIWOOM_POSITION_REFERENCE_SHA,
+    }
+    if reason:
+        payload["reason"] = reason
+    return payload
+
+
+def _position_row(payload: dict) -> tuple[int, int] | None:
+    rows = payload.get("acnt_evlt_remn_indv_tot")
+    if not isinstance(rows, list):
+        raise ValueError("invalid_position_rows")
+    matched: list[tuple[int, int]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("invalid_position_row")
+        raw_code = str(row.get("stk_cd") or "").strip().upper()
+        code = raw_code[1:] if raw_code.startswith("A") else raw_code
+        if code != _SAMSUNG_CODE:
+            continue
+        try:
+            quantity = int(str(row.get("rmnd_qty") or "0").strip())
+            average_price = int(str(row.get("pur_pric") or "0").strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_position_row") from exc
+        if quantity < 0 or (quantity > 0 and average_price <= 0):
+            raise ValueError("invalid_position_row")
+        matched.append((quantity, average_price if quantity > 0 else 0))
+    if len(matched) > 1:
+        raise ValueError("duplicate_position_rows")
+    return matched[0] if matched else None
+
+
+def _load_samsung_position(token: str, observed_at: datetime) -> dict:
+    successful_exchanges: list[str] = []
+    invalid_exchanges: list[str] = []
+    found: dict[str, tuple[int, int]] = {}
+    for exchange in ("KRX", "NXT"):
+        response_payload = _kiwoom_post(
+            token,
+            path="/api/dostk/acnt",
+            api_id="kt00018",
+            payload={"qry_tp": "1", "dmst_stex_tp": exchange},
+        )
+        if response_payload is None:
+            continue
+        try:
+            row = _position_row(response_payload)
+        except ValueError:
+            invalid_exchanges.append(exchange)
+            continue
+        successful_exchanges.append(exchange)
+        if row is not None:
+            found[exchange] = row
+
+    if found:
+        distinct = set(found.values())
+        if len(distinct) > 1:
+            return _position_contract_payload(
+                status="UNAVAILABLE",
+                observed_at=observed_at,
+                source_exchanges=successful_exchanges,
+                reason="venue_position_conflict",
+            )
+        quantity, average_price = found.get("KRX") or found["NXT"]
+        return _position_contract_payload(
+            status="OK",
+            observed_at=observed_at,
+            quantity=quantity,
+            average_price=average_price if quantity > 0 else None,
+            source_exchanges=successful_exchanges,
+        )
+    if len(successful_exchanges) == 2:
+        return _position_contract_payload(
+            status="OK",
+            observed_at=observed_at,
+            quantity=0,
+            average_price=None,
+            source_exchanges=successful_exchanges,
+        )
+    return _position_contract_payload(
+        status="UNAVAILABLE",
+        observed_at=observed_at,
+        source_exchanges=successful_exchanges,
+        reason=(
+            "position_contract_invalid"
+            if invalid_exchanges
+            else (
+                "position_query_failed"
+                if not successful_exchanges
+                else "position_query_partial_without_holding"
+            )
+        ),
+    )
+
+
+def _cached_samsung_position(token: str | None, observed_at: datetime) -> dict:
+    global _POSITION_CACHE
+    if not token:
+        return _position_contract_payload(
+            status="UNAVAILABLE",
+            observed_at=observed_at,
+            reason="shared_token_unavailable",
+        )
+    with _POSITION_CACHE_LOCK:
+        now_monotonic = time.monotonic()
+        if _POSITION_CACHE is not None:
+            cached_at, cached_payload = _POSITION_CACHE
+            cache_ttl = (
+                _POSITION_CACHE_TTL_SEC
+                if cached_payload.get("status") == "OK"
+                else _POSITION_FAILURE_CACHE_TTL_SEC
+            )
+            if now_monotonic - cached_at < cache_ttl:
+                return dict(cached_payload)
+        payload = _load_samsung_position(token, observed_at)
+        _POSITION_CACHE = (now_monotonic, payload)
+        return dict(payload)
+
+
+def _reset_position_cache_for_test() -> None:
+    global _POSITION_CACHE
+    with _POSITION_CACHE_LOCK:
+        _POSITION_CACHE = None
 
 
 def _authorized_request() -> bool:
@@ -467,14 +637,17 @@ def _fallback_exit_advisory(observed_at: datetime, market_session: str) -> dict:
 
 @samsung_price_widget_bp.get("/api/widget/samsung-price")
 def get_samsung_price():
-    """Return the fresh collector snapshot or a quote-only safe fallback."""
+    """Return quote/advisory data plus a best-effort display-only position."""
     if not _authorized_request():
         return _error_response("unauthorized", 401)
 
     observed_at = _now_kst()
     collector_snapshot = _fresh_collector_snapshot(observed_at)
     if collector_snapshot is not None:
-        result = jsonify(collector_snapshot)
+        token = kiwoom_utils.get_cached_kiwoom_token(CONF)
+        response_payload = dict(collector_snapshot)
+        response_payload["position"] = _cached_samsung_position(token, observed_at)
+        result = jsonify(response_payload)
         result.headers["Cache-Control"] = "no-store"
         return result
 
@@ -560,6 +733,7 @@ def get_samsung_price():
             "quote_request_code": request_code,
             "source": f"kiwoom_ka10001_{market_venue.lower()}_quote_only_fallback",
             "token_mode": "shared_cache_only",
+            "position": _cached_samsung_position(token, observed_at),
             "advisory": _fallback_advisory(
                 observed_at,
                 samsung_widget_contract.session_context(observed_at).name,
