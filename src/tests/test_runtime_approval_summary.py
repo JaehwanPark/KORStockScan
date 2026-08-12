@@ -123,7 +123,18 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert "WAIT 구간" in report["scalping"][0]["description"]
     assert (
         report["scalping"][0]["current_application"]
-        == "PREOPEN env 적용: 당일 runtime 변경 대상"
+        == "현재 target-date PREOPEN env 적용: selected family"
+    )
+    assert report["scalping"][0]["current_runtime_selected"] is True
+    assert report["scalping"][0]["current_runtime_enabled"] is None
+    assert (
+        report["scalping"][0]["selected_auto_bounded_live_semantics"]
+        == "compatibility_alias_of_current_runtime_selected"
+    )
+    assert report["summary"]["target_date_runtime_selected_family_count_total"] == 1
+    assert (
+        report["summary"]["scalping_reported_family_current_runtime_selected_count"]
+        == 1
     )
     assert report["scalping"][0]["gate_review_class"] == "entry_unlock_probe"
     assert report["scalping"][0]["legacy_hard_gate_risk"] == "no_unreviewed_hard_gate"
@@ -145,6 +156,157 @@ def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypa
     assert "판정 해석" in markdown
     assert "## Swing" in markdown
     assert "swing_model_floor" in markdown
+
+
+def test_runtime_approval_separates_current_operator_lock_from_postclose_hold(
+    tmp_path, monkeypatch
+):
+    apply_manifest = tmp_path / "threshold_apply_2026-08-12.json"
+    apply_manifest.write_text(
+        json.dumps(
+            {
+                "auto_apply_selected": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "selected": True,
+                        "decision_reason": (
+                            "operator_runtime_env_lock_preserved:score_probe_lock"
+                        ),
+                        "preopen_selection_state": "selected_for_runtime_env",
+                        "selection_change_class": "operator_lock_preserved",
+                        "env_overrides": {
+                            "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED": "true"
+                        },
+                        "operator_runtime_env_lock": {"lock_id": "score_probe_lock"},
+                    },
+                    {
+                        "family": "entry_split_order_plan",
+                        "selected": True,
+                        "decision_reason": "deterministic_policy_handoff",
+                        "preopen_selection_state": "selected_for_runtime_env",
+                        "selection_change_class": "policy_refreshed",
+                        "env_overrides": {
+                            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true"
+                        },
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    ev_report = {
+        "date": "2026-08-12",
+        "runtime_apply": {
+            "apply_manifest": str(apply_manifest),
+            "selected_families": [
+                "score65_74_recovery_probe",
+                "entry_split_order_plan",
+            ],
+        },
+        "calibration_outcome": {
+            "decisions": [
+                {
+                    "family": "score65_74_recovery_probe",
+                    "calibration_state": "hold",
+                    "sample_count": 189,
+                    "sample_floor": 20,
+                },
+                {
+                    "family": "entry_split_order_plan",
+                    "calibration_state": "adjust_up",
+                    "sample_count": 1010,
+                    "sample_floor": 20,
+                },
+            ]
+        },
+    }
+    calibration_report = {
+        "calibration_candidates": [
+            {
+                "family": "score65_74_recovery_probe",
+                "calibration_state": "hold",
+                "recommended_value": False,
+                "allowed_runtime_apply": True,
+            },
+            {
+                "family": "entry_split_order_plan",
+                "calibration_state": "adjust_up",
+                "recommended_value": True,
+                "allowed_runtime_apply": True,
+            },
+        ]
+    }
+
+    rows = mod._scalping_rows(ev_report, calibration_report)
+    score = next(row for row in rows if row["family"] == "score65_74_recovery_probe")
+    split = next(row for row in rows if row["family"] == "entry_split_order_plan")
+
+    assert score["current_runtime_selected"] is True
+    assert score["current_runtime_enabled"] is True
+    assert score["postclose_calibration_state"] == "hold"
+    assert score["postclose_recommended_value"] is False
+    assert score["next_preopen_candidate_state"] == "hold_no_next_preopen_change"
+    assert score["current_runtime_operator_lock_id"] == "score_probe_lock"
+    assert "operator runtime lock 유지" in score["current_application"]
+    assert "현재 runtime을 즉시 끄지 않는다" in score["state_interpretation"]
+
+    assert split["current_runtime_selected"] is True
+    assert split["current_runtime_enabled"] is True
+    assert split["postclose_calibration_state"] == "adjust_up"
+    assert split["next_preopen_candidate_state"] == "eligible_pending_preopen_selection"
+    assert "calibrated policy" in split["current_application"]
+
+
+def test_runtime_selection_rejects_stale_manifest_detail_but_keeps_selected_fallback(
+    tmp_path,
+):
+    apply_manifest = tmp_path / "threshold_apply_2026-08-11.json"
+    apply_manifest.write_text(
+        json.dumps(
+            {
+                "target_date": "2026-08-11",
+                "auto_apply_selected": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "selected": True,
+                        "decision_reason": "stale_reason_must_not_leak",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    mod._JSON_LOAD_DIAGNOSTICS.clear()
+
+    selections = mod._runtime_selection_by_family(
+        {
+            "date": "2026-08-12",
+            "runtime_apply": {
+                "apply_manifest": str(apply_manifest),
+                "selected_families": ["score65_74_recovery_probe"],
+            },
+        }
+    )
+
+    assert selections["score65_74_recovery_probe"]["selection_provenance"] == (
+        "runtime_apply_selected_families_fallback"
+    )
+    assert selections["score65_74_recovery_probe"].get("decision_reason") is None
+    assert mod._JSON_LOAD_DIAGNOSTICS[-1]["status"] == "target_date_mismatch"
+
+
+def test_runtime_enabled_is_unknown_for_mixed_enable_overrides():
+    assert (
+        mod._runtime_enabled_from_selection(
+            {
+                "env_overrides": {
+                    "KORSTOCKSCAN_PRIMARY_ENABLED": "true",
+                    "KORSTOCKSCAN_SECONDARY_ENABLED": "false",
+                }
+            }
+        )
+        is None
+    )
 
 
 def test_runtime_approval_summary_surfaces_microstructure_source_only_context(
@@ -881,14 +1043,16 @@ def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(
         if row["family"] == "latency_classifier_runtime_profile"
     )
     assert latency["state"] == "hold_sample"
-    assert latency["selected_auto_bounded_live"] is False
+    assert latency["selected_auto_bounded_live"] is True
+    assert latency["current_runtime_selected"] is True
     assert latency["previous_selected_auto_bounded_live"] is True
     assert latency["allowed_runtime_apply"] is False
     assert (
         latency["current_application"]
-        == "보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음"
+        == "현재 target-date PREOPEN env 적용: selected family"
     )
-    assert report["summary"]["scalping_selected_auto_bounded_live"] == 0
+    assert latency["next_preopen_candidate_state"] == "not_in_postclose_calibration"
+    assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
 
 
 def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypatch):

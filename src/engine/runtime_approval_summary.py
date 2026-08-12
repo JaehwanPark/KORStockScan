@@ -430,9 +430,20 @@ def _description(family: str) -> str:
     return _FAMILY_DESCRIPTIONS.get(family, "설명 미등록")
 
 
-def _current_application(family: str, state: str, selected: bool) -> str:
+def _current_application(
+    family: str,
+    state: str,
+    selected: bool,
+    selection: dict[str, Any] | None = None,
+) -> str:
     if selected:
-        return "PREOPEN env 적용: 당일 runtime 변경 대상"
+        selection = selection or {}
+        decision_reason = str(selection.get("decision_reason") or "").strip()
+        if decision_reason.startswith("operator_runtime_env_lock_preserved:"):
+            return "현재 target-date PREOPEN env 적용: operator runtime lock 유지"
+        if decision_reason == "deterministic_policy_handoff":
+            return "현재 target-date PREOPEN env 적용: calibrated policy"
+        return "현재 target-date PREOPEN env 적용: selected family"
     if state == "approval_contract_missing":
         return "계약 미준비: approval artifact를 만들어도 live 반영 불가"
     baseline = _BASELINE_APPLICATION.get(family)
@@ -445,9 +456,28 @@ def _current_application(family: str, state: str, selected: bool) -> str:
     return "기존 상태 유지: runtime 변경 없음"
 
 
-def _state_interpretation(state: str, selected: bool) -> str:
+def _state_interpretation(
+    state: str,
+    selected: bool,
+    selection: dict[str, Any] | None = None,
+) -> str:
     if selected:
-        return "threshold-cycle guard 통과로 당일 PREOPEN env에 반영됨"
+        selection = selection or {}
+        decision_reason = str(selection.get("decision_reason") or "").strip()
+        if state in {"hold", "hold_no_edge", "hold_sample", "freeze"}:
+            if decision_reason.startswith("operator_runtime_env_lock_preserved:"):
+                return (
+                    "현재 target-date runtime은 operator lock으로 활성 상태다. "
+                    "장후 calibration 상태는 다음 PREOPEN 변경 판단이며 현재 runtime을 즉시 끄지 않는다."
+                )
+            return (
+                "현재 target-date runtime 선택과 장후 calibration 유지/보류 판정을 분리한다. "
+                "장후 판정은 다음 PREOPEN 변경 후보이지 현재 runtime 상태가 아니다."
+            )
+        return (
+            "현재 target-date PREOPEN env에 반영된 선택이다. "
+            "장후 calibration은 별도의 다음 PREOPEN 후보로 판정한다."
+        )
     return _STATE_INTERPRETATIONS.get(state, "판정 해석 미등록")
 
 
@@ -674,6 +704,155 @@ def _candidate_by_family(items: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def _runtime_selection_by_family(
+    ev_report: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    runtime_apply = (
+        ev_report.get("runtime_apply")
+        if isinstance(ev_report.get("runtime_apply"), dict)
+        else {}
+    )
+    selected_families = {
+        str(item or "").strip()
+        for item in (runtime_apply.get("selected_families") or [])
+        if str(item or "").strip()
+    }
+    apply_manifest_path = str(runtime_apply.get("apply_manifest") or "").strip()
+    apply_manifest = (
+        _load_json(Path(apply_manifest_path)) if apply_manifest_path else {}
+    )
+    expected_target_date = str(ev_report.get("date") or "").strip()
+    manifest_target_date = str(apply_manifest.get("target_date") or "").strip()
+    if (
+        apply_manifest
+        and expected_target_date
+        and manifest_target_date
+        and manifest_target_date != expected_target_date
+    ):
+        _JSON_LOAD_DIAGNOSTICS.append(
+            {
+                "path": apply_manifest_path,
+                "status": "target_date_mismatch",
+                "expected_target_date": expected_target_date,
+                "actual_target_date": manifest_target_date,
+            }
+        )
+        apply_manifest = {}
+    result: dict[str, dict[str, Any]] = {}
+    for item in apply_manifest.get("auto_apply_selected") or []:
+        if not isinstance(item, dict) or not item.get("selected"):
+            continue
+        family = str(item.get("family") or "").strip()
+        if not family:
+            continue
+        result[family] = {
+            **item,
+            "selection_provenance": "target_date_apply_manifest",
+            "apply_manifest": apply_manifest_path,
+        }
+    for family in selected_families:
+        result.setdefault(
+            family,
+            {
+                "family": family,
+                "selected": True,
+                "preopen_selection_state": "selected_for_runtime_env",
+                "selection_provenance": "runtime_apply_selected_families_fallback",
+                "apply_manifest": apply_manifest_path or None,
+            },
+        )
+    return result
+
+
+def _runtime_enabled_from_selection(selection: dict[str, Any]) -> bool | None:
+    env_overrides = (
+        selection.get("env_overrides")
+        if isinstance(selection.get("env_overrides"), dict)
+        else {}
+    )
+    enabled_values: list[bool] = []
+    for key, value in env_overrides.items():
+        if not str(key).endswith("_ENABLED"):
+            continue
+        normalized = str(value).strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            enabled_values.append(True)
+        elif normalized in {"false", "0", "no", "off"}:
+            enabled_values.append(False)
+    if not enabled_values:
+        return None
+    if all(enabled_values):
+        return True
+    if not any(enabled_values):
+        return False
+    return None
+
+
+def _next_preopen_candidate_state(candidate: dict[str, Any]) -> str:
+    if not candidate:
+        return "not_in_postclose_calibration"
+    state = str(candidate.get("calibration_state") or "").strip()
+    if state == "adjust_up" and bool(candidate.get("allowed_runtime_apply")):
+        return "eligible_pending_preopen_selection"
+    if state in {"hold", "hold_no_edge", "hold_sample", "freeze"}:
+        return "hold_no_next_preopen_change"
+    if not bool(candidate.get("allowed_runtime_apply")):
+        return "not_runtime_apply_eligible"
+    return "pending_preopen_review"
+
+
+def _attach_runtime_selection_contract(
+    row: dict[str, Any],
+    *,
+    candidate: dict[str, Any],
+    selection: dict[str, Any],
+) -> None:
+    current_selected = bool(selection.get("selected"))
+    current_enabled = (
+        _runtime_enabled_from_selection(selection) if current_selected else False
+    )
+    row["selected_auto_bounded_live"] = current_selected
+    row["current_runtime_selected"] = current_selected
+    row["current_runtime_enabled"] = current_enabled
+    row["current_runtime_selection_state"] = (
+        selection.get("preopen_selection_state")
+        if current_selected
+        else "not_selected_for_target_date_runtime"
+    )
+    row["current_runtime_selection_reason"] = (
+        selection.get("decision_reason") if current_selected else None
+    )
+    row["current_runtime_selection_change_class"] = (
+        selection.get("selection_change_class") if current_selected else None
+    )
+    row["current_runtime_selection_provenance"] = (
+        selection.get("selection_provenance") if current_selected else None
+    )
+    operator_lock = (
+        selection.get("operator_runtime_env_lock")
+        if isinstance(selection.get("operator_runtime_env_lock"), dict)
+        else {}
+    )
+    row["current_runtime_operator_lock_id"] = operator_lock.get("lock_id")
+    row["postclose_calibration_state"] = row.get("state")
+    row["postclose_recommended_value"] = candidate.get("recommended_value")
+    row["postclose_recommended_values"] = candidate.get("recommended_values")
+    row["next_preopen_candidate_state"] = _next_preopen_candidate_state(candidate)
+    row["selected_auto_bounded_live_semantics"] = (
+        "compatibility_alias_of_current_runtime_selected"
+    )
+    if current_selected:
+        row["current_application"] = _current_application(
+            str(row.get("family") or ""),
+            str(row.get("state") or ""),
+            True,
+            selection,
+        )
+        row["state_interpretation"] = _state_interpretation(
+            str(row.get("state") or ""), True, selection
+        )
+
+
 def _hold_sample_reasons(item: dict[str, Any]) -> list[str]:
     sample_count = _as_int(item.get("sample_count"))
     source_sample_count = _as_int(item.get("source_sample_count"))
@@ -724,6 +903,7 @@ def _scalping_rows(
         outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
     )
     candidates = _candidate_by_family(calibration_report.get("calibration_candidates"))
+    runtime_selections = _runtime_selection_by_family(ev_report)
     selected = set(
         (ev_report.get("runtime_apply") or {}).get("selected_families") or []
     )
@@ -1040,6 +1220,13 @@ def _scalping_rows(
             _gate_review("scalping", "scalp_sim_overnight_ai_carry", ["observe_only"])
         )
         rows.append(row)
+    for row in rows:
+        family = str(row.get("family") or "").strip()
+        _attach_runtime_selection_contract(
+            row,
+            candidate=candidates.get(family, {}),
+            selection=runtime_selections.get(family, {}),
+        )
     return rows
 
 
@@ -2632,6 +2819,35 @@ def build_runtime_approval_summary(
             "scalping_selected_auto_bounded_live": sum(
                 1 for row in scalping_rows if row["selected_auto_bounded_live"]
             ),
+            "target_date_runtime_selected_family_count_total": len(
+                {
+                    str(family or "").strip()
+                    for family in (
+                        (ev_report.get("runtime_apply") or {}).get("selected_families")
+                        or []
+                    )
+                    if str(family or "").strip()
+                }
+            ),
+            "scalping_reported_family_current_runtime_selected_count": sum(
+                1 for row in scalping_rows if row.get("current_runtime_selected")
+            ),
+            "scalping_reported_family_current_runtime_enabled_count": sum(
+                1 for row in scalping_rows if row.get("current_runtime_enabled") is True
+            ),
+            "scalping_reported_family_current_selected_postclose_hold_count": sum(
+                1
+                for row in scalping_rows
+                if row.get("current_runtime_selected")
+                and row.get("postclose_calibration_state")
+                in {"hold", "hold_no_edge", "hold_sample", "freeze"}
+            ),
+            "scalping_reported_family_next_preopen_candidate_count": sum(
+                1
+                for row in scalping_rows
+                if row.get("next_preopen_candidate_state")
+                == "eligible_pending_preopen_selection"
+            ),
             "scalping_legacy_hard_gate_risk_counts": _count_field(
                 scalping_rows, "legacy_hard_gate_risk"
             ),
@@ -2907,18 +3123,18 @@ def build_runtime_approval_summary(
 
 def _render_rows(rows: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| 항목 | 설명 | 현재 적용 | 상태 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |",
-        "| --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- |",
+        "| 항목 | 설명 | 현재 적용 | 현재 runtime 선택/활성 | 장후 상태 | 다음 PREOPEN 후보 | Gate 분류 | 튜닝 경로 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- |",
     ]
     if not rows:
-        lines.append("| - | - | - | - | - | - | - | - | - | - |")
+        lines.append("| - | - | - | - | - | - | - | - | - | - | - | - |")
         return lines
     for row in rows:
         contract_status = row.get("approval_contract_status") or "-"
         if row.get("approval_live_ready") is True:
             contract_status = "ready"
         lines.append(
-            f"| `{row.get('family')}` | {row.get('description') or '-'} | {row.get('current_application') or '-'} | `{row.get('state')}` | `{row.get('gate_review_class') or '-'}` | {row.get('tuning_route') or '-'} | {row.get('state_interpretation') or '-'} | {row.get('score_label')} | `{contract_status}` | {row.get('reason_label')} |"
+            f"| `{row.get('family')}` | {row.get('description') or '-'} | {row.get('current_application') or '-'} | `{row.get('current_runtime_selected')}` / `{row.get('current_runtime_enabled')}` | `{row.get('postclose_calibration_state') or row.get('state')}` | `{row.get('next_preopen_candidate_state') or '-'}` | `{row.get('gate_review_class') or '-'}` | {row.get('tuning_route') or '-'} | {row.get('state_interpretation') or '-'} | {row.get('score_label')} | `{contract_status}` | {row.get('reason_label')} |"
         )
     return lines
 
@@ -3015,7 +3231,10 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "",
         "- 목적: 스캘핑 threshold-cycle 판정과 스윙 runtime approval 판정을 한 화면에서 보는 읽기 전용 요약이다.",
         "- runtime_mutation_allowed: `False`",
-        f"- scalping_items/selected: `{summary.get('scalping_items')}` / `{summary.get('scalping_selected_auto_bounded_live')}`",
+        f"- target_date_runtime_selected_family_count_total: `{summary.get('target_date_runtime_selected_family_count_total')}`",
+        f"- scalping_reported_items/current_selected/current_enabled: `{summary.get('scalping_items')}` / `{summary.get('scalping_reported_family_current_runtime_selected_count')}` / `{summary.get('scalping_reported_family_current_runtime_enabled_count')}`",
+        f"- scalping_reported_current_selected_postclose_hold/next_preopen_candidate: `{summary.get('scalping_reported_family_current_selected_postclose_hold_count')}` / `{summary.get('scalping_reported_family_next_preopen_candidate_count')}`",
+        "- selected_auto_bounded_live: compatibility alias of current target-date runtime selection; it is not the postclose next-PREOPEN recommendation.",
         f"- scalping_legacy_hard_gate_risk_counts: `{summary.get('scalping_legacy_hard_gate_risk_counts')}`",
         f"- swing_blocked/requested/approved: `{summary.get('swing_blocked')}` / `{summary.get('swing_requested')}` / `{summary.get('swing_approved')}`",
         f"- swing_legacy_archive/phase0_ignored: `{summary.get('swing_legacy_archive')}` / `{summary.get('swing_legacy_phase0_ignored')}`",
