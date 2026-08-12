@@ -30,19 +30,24 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT,
     OFFICIAL_REFERENCE,
     Bar,
+    DayContext,
     ResearchError,
+    SpotCandidate,
     _atomic_write,
+    baseline_candidate,
     build_day_contexts,
+    evaluate_candidate,
     fetch_sor_history,
     select_profile_spot,
 )
 from src.trading.low_price_two_leg.profiles import PROFILES as LIVE_PROFILES
+from src.trading.low_price_two_leg.policy_runtime import load_applied_profile_policy
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
-REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v4"
+REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v5"
 REPORT_TYPE = "low_price_two_leg_expanded_candidate_research"
 AUTHORITY = "lower_price_machine_candidate_recommendation_only"
 OUTPUT_DIR = DATA_DIR / "report" / "low_price_two_leg_expanded_candidate_research"
@@ -113,6 +118,8 @@ METRIC_CONTRACT = {
         "bounded_carry_rate_and_mark_to_market_drawdown",
         "latest_close_at_or_below_100000_krw",
         "existing_symbol_lane_excludes_active_symbol_session_pairs",
+        "target_date_counterfactual_requires_cumulative_holdout_selected_candidate",
+        "target_date_candidate_only_signal_completed_target_and_zero_held_legs",
     ],
     "forbidden_uses": [
         "automatic_machine_implementation_or_service_start",
@@ -124,6 +131,7 @@ METRIC_CONTRACT = {
         "stop_loss_or_forced_exit_creation",
         "active_unrealized_merged_into_completed_ev",
         "risk_budget_diagnostic_as_standalone_live_authority",
+        "single_target_date_near_miss_as_standalone_recommendation_authority",
     ],
 }
 
@@ -259,6 +267,7 @@ def _dynamic_candidate_symbols(
 
 def _research_inventory(
     candidate_symbols: dict[str, str],
+    applied_policy_snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, ResearchProfile], dict[str, ResearchProfile]]:
     new_profiles = _new_symbol_profiles(candidate_symbols)
     return (
@@ -266,7 +275,9 @@ def _research_inventory(
         {
             **new_profiles,
             **EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
-            **EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES,
+            **_existing_symbol_logic_improvement_profiles(
+                applied_policy_snapshots=applied_policy_snapshots
+            ),
         },
     )
 
@@ -289,10 +300,15 @@ def _existing_symbol_time_extension_profiles() -> dict[str, ResearchProfile]:
     return result
 
 
-def _existing_symbol_logic_improvement_profiles() -> dict[str, ResearchProfile]:
+def _existing_symbol_logic_improvement_profiles(
+    *, applied_policy_snapshots: dict[str, dict[str, Any]] | None = None
+) -> dict[str, ResearchProfile]:
     result: dict[str, ResearchProfile] = {}
     for live_profile_id, live_profile in LIVE_PROFILES.items():
         policy = live_profile.policy
+        snapshot = (applied_policy_snapshots or {}).get(live_profile_id) or {}
+        applied = snapshot.get("policy")
+        use_applied = snapshot.get("status") == "ready" and isinstance(applied, dict)
         profile_id = f"logic_{live_profile_id}"
         result[profile_id] = ResearchProfile(
             profile_id=profile_id,
@@ -302,12 +318,30 @@ def _existing_symbol_logic_improvement_profiles() -> dict[str, ResearchProfile]:
             policy=ResearchPolicy(
                 policy.scan_start,
                 policy.scan_last_bar,
-                lookback_bars=policy.lookback_bars,
-                rolling_high_drawdown_pct=policy.rolling_high_drawdown_pct,
-                rolling_low_proximity_pct=policy.rolling_low_proximity_pct,
+                lookback_bars=(
+                    int(applied["lookback_bars"])
+                    if use_applied
+                    else policy.lookback_bars
+                ),
+                rolling_high_drawdown_pct=(
+                    float(applied["rolling_high_drawdown_pct"])
+                    if use_applied
+                    else policy.rolling_high_drawdown_pct
+                ),
+                rolling_low_proximity_pct=(
+                    float(applied["rolling_low_proximity_pct"])
+                    if use_applied
+                    else policy.rolling_low_proximity_pct
+                ),
                 entry_offsets_ticks=tuple(policy.entry_offsets_ticks),
-                entry_valid_completed_bars=policy.entry_valid_completed_bars,
-                target_ticks=policy.target_ticks,
+                entry_valid_completed_bars=(
+                    int(applied["entry_valid_completed_bars"])
+                    if use_applied
+                    else policy.entry_valid_completed_bars
+                ),
+                target_ticks=(
+                    int(applied["target_ticks"]) if use_applied else policy.target_ticks
+                ),
             ),
             discovery_lane="existing_symbol_logic_improvement",
         )
@@ -390,6 +424,11 @@ def _recommendation_rows(
             and (profile.symbol, profile.session) in ACTIVE_SYMBOL_SESSIONS
         ):
             raise ResearchError("existing_symbol_lane_active_session_conflict")
+        if profile.discovery_lane == "existing_symbol_logic_improvement" and (
+            item.get("baseline_policy_source") != "target_date_applied_policy"
+            or not item.get("baseline_policy_hash")
+        ):
+            continue
         meta = source_meta.get(str(item.get("symbol") or ""), {})
         latest_close = int(meta.get("latest_close_price", 0) or 0)
         if latest_close <= 0 or latest_close > MAX_LATEST_CLOSE_PRICE:
@@ -436,6 +475,8 @@ def _recommendation_rows(
                 ),
                 "notional_weighted_ev_pct": candidate_ev,
                 "baseline_notional_weighted_ev_pct": baseline_ev,
+                "baseline_policy_source": item.get("baseline_policy_source"),
+                "baseline_policy_hash": item.get("baseline_policy_hash"),
                 "ev_uplift_pct_point": (
                     round(candidate_ev - baseline_ev, 6)
                     if baseline_ev is not None
@@ -458,6 +499,137 @@ def _recommendation_rows(
     return rows
 
 
+def _spot_candidate_from_public(parameters: dict[str, Any]) -> SpotCandidate:
+    try:
+        start = datetime.strptime(str(parameters["scan_start"]), "%H:%M").time()
+        end = datetime.strptime(str(parameters["scan_end"]), "%H:%M").time()
+        offsets = tuple(int(value) for value in parameters["entry_offsets_ticks"])
+        if len(offsets) != 2:
+            raise ValueError("invalid_offsets")
+        return SpotCandidate(
+            start.hour * 60 + start.minute,
+            end.hour * 60 + end.minute,
+            int(parameters["lookback_bars"]),
+            float(parameters["rolling_high_drawdown_pct"]),
+            float(parameters["rolling_low_proximity_pct"]),
+            offsets,
+            int(parameters["entry_valid_completed_bars"]),
+            int(parameters["target_ticks"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ResearchError("logic_recommendation_parameters_invalid") from exc
+
+
+def _target_date_logic_attribution(
+    *,
+    profiles: dict[str, dict[str, Any]],
+    contexts_by_symbol: dict[str, dict[date, DayContext]],
+    target_date: date,
+    applied_policy_snapshots: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attribute cumulative logic candidates on the latest untouched day only."""
+
+    rows: list[dict[str, Any]] = []
+    for profile_id, research_profile in sorted(
+        EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES.items()
+    ):
+        item = profiles.get(profile_id) or {}
+        context = (contexts_by_symbol.get(research_profile.symbol) or {}).get(
+            target_date
+        )
+        row: dict[str, Any] = {
+            "profile_id": profile_id,
+            "active_profile_id": profile_id.removeprefix("logic_"),
+            "symbol": research_profile.symbol,
+            "name": research_profile.name,
+            "session": research_profile.session,
+            "cumulative_decision": item.get("decision"),
+            "decision": "not_recommended",
+            "reason": "cumulative_holdout_candidate_unavailable",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        policy_snapshot = applied_policy_snapshots.get(row["active_profile_id"]) or {}
+        row["applied_policy_status"] = policy_snapshot.get("status")
+        row["applied_policy_reason"] = policy_snapshot.get("reason")
+        row["applied_policy_hash"] = policy_snapshot.get("policy_hash")
+        if not isinstance(context, DayContext):
+            row["reason"] = "target_date_context_unavailable"
+            rows.append(row)
+            continue
+        if item.get("decision") != "holdout_pass_source_only_early_candidate":
+            rows.append(row)
+            continue
+        applied_policy = policy_snapshot.get("policy")
+        if policy_snapshot.get("status") != "ready" or not isinstance(
+            applied_policy, dict
+        ):
+            row["reason"] = "target_date_applied_policy_unavailable"
+            rows.append(row)
+            continue
+        parameters = item.get("recommended_spot")
+        if not isinstance(parameters, dict):
+            raise ResearchError("logic_recommendation_parameters_missing")
+        live_profile = LIVE_PROFILES[row["active_profile_id"]]
+        compiled_baseline = baseline_candidate(live_profile)
+        try:
+            baseline = SpotCandidate(
+                compiled_baseline.scan_start_minute,
+                compiled_baseline.scan_end_minute,
+                int(applied_policy["lookback_bars"]),
+                float(applied_policy["rolling_high_drawdown_pct"]),
+                float(applied_policy["rolling_low_proximity_pct"]),
+                compiled_baseline.entry_offsets_ticks,
+                int(applied_policy["entry_valid_completed_bars"]),
+                int(applied_policy["target_ticks"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ResearchError("target_date_applied_policy_invalid") from exc
+        candidate = _spot_candidate_from_public(parameters)
+        contexts = {target_date: context}
+        baseline_result = evaluate_candidate(
+            baseline, contexts, [target_date], include_episodes=True
+        )
+        candidate_result = evaluate_candidate(
+            candidate, contexts, [target_date], include_episodes=True
+        )
+        row.update(
+            {
+                "baseline_parameters": baseline.public(),
+                "candidate_parameters": candidate.public(),
+                "baseline_target_date": baseline_result,
+                "candidate_target_date": candidate_result,
+            }
+        )
+        candidate_only_signal = bool(
+            baseline_result["signal_episodes"] == 0
+            and candidate_result["signal_episodes"] == 1
+        )
+        completed_rebound = bool(
+            candidate_result["completed_legs"] >= 1
+            and candidate_result["held_legs"] == 0
+            and candidate_result["notional_weighted_ev_pct"] is not None
+            and float(candidate_result["notional_weighted_ev_pct"]) > 0.0
+        )
+        if candidate_only_signal and completed_rebound:
+            row.update(
+                {
+                    "decision": "recommend_cumulative_logic_candidate_review",
+                    "reason": (
+                        "cumulative_holdout_pass_and_target_date_candidate_only_"
+                        "completed_rebound"
+                    ),
+                }
+            )
+        elif not candidate_only_signal:
+            row["reason"] = "target_date_not_candidate_only_signal"
+        else:
+            row["reason"] = "target_date_rebound_or_carry_gate_failed"
+        rows.append(row)
+    return rows
+
+
 def build_report(
     *,
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
@@ -466,6 +638,7 @@ def build_report(
     candidate_symbols: dict[str, str] | None = None,
     research_profiles: dict[str, ResearchProfile] | None = None,
     dynamic_universe_source_date: date | None = None,
+    applied_policy_snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
         raise ValueError("research_window_must_start_at_clean_baseline")
@@ -473,7 +646,8 @@ def build_report(
     calibration_days = len(expected_dates) - HOLDOUT_DAYS
     selected_candidate_symbols = candidate_symbols or CANDIDATE_SYMBOLS
     selected_new_profiles, default_profiles = _research_inventory(
-        selected_candidate_symbols
+        selected_candidate_symbols,
+        applied_policy_snapshots=applied_policy_snapshots,
     )
     selected_profiles = research_profiles or default_profiles
     selected_symbols = frozenset(selected_candidate_symbols) | frozenset(
@@ -492,7 +666,7 @@ def build_report(
             "research_profile_active_symbol_session_conflict:"
             + ",".join(sorted(conflicting_profiles))
         )
-    contexts_by_symbol: dict[str, dict[date, Any]] = {}
+    contexts_by_symbol: dict[str, dict[date, DayContext]] = {}
     source_meta: dict[str, dict[str, Any]] = {}
     source_quarantine: dict[str, str] = {}
     for symbol in selected_symbols:
@@ -548,6 +722,18 @@ def build_report(
             profile.symbol,
             profile.session,
         ) in ACTIVE_SYMBOL_SESSIONS
+        if profile.discovery_lane == "existing_symbol_logic_improvement":
+            active_profile_id = profile.profile_id.removeprefix("logic_")
+            policy_snapshot = (applied_policy_snapshots or {}).get(
+                active_profile_id
+            ) or {}
+            selected["baseline_policy_source"] = (
+                "target_date_applied_policy"
+                if policy_snapshot.get("status") == "ready"
+                else "compiled_profile_baseline_not_recommendable"
+            )
+            selected["baseline_policy_hash"] = policy_snapshot.get("policy_hash")
+            selected["baseline_policy_reason"] = policy_snapshot.get("reason")
         profiles[profile_id] = selected
     recommendations = _recommendation_rows(
         profiles, source_meta, research_profiles=selected_profiles
@@ -565,6 +751,21 @@ def build_report(
         for row in recommendations
         if row["discovery_lane"] == "existing_symbol_logic_improvement"
     ]
+    target_date_logic_attribution = _target_date_logic_attribution(
+        profiles=profiles,
+        contexts_by_symbol=contexts_by_symbol,
+        target_date=end_date,
+        applied_policy_snapshots=applied_policy_snapshots or {},
+    )
+    cumulative_logic_ids = {
+        row["profile_id"] for row in existing_symbol_logic_improvement_recommendations
+    }
+    postclose_logic_recommendations = [
+        row
+        for row in target_date_logic_attribution
+        if row["decision"] == "recommend_cumulative_logic_candidate_review"
+        and row["profile_id"] in cumulative_logic_ids
+    ]
     return {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
@@ -581,7 +782,7 @@ def build_report(
         "metric_contract": METRIC_CONTRACT,
         "candidate_universe_source": (
             "reviewed_new_symbols_plus_latest_completed_daily_recommendations_"
-            "and_existing_symbol_missing_sessions_and_logic_v4"
+            "and_existing_symbol_missing_sessions_and_logic_v5"
         ),
         "dynamic_universe_source_date": (
             dynamic_universe_source_date.isoformat()
@@ -629,6 +830,10 @@ def build_report(
         "existing_symbol_logic_improvement_recommendation_count": len(
             existing_symbol_logic_improvement_recommendations
         ),
+        "target_date_logic_attribution": target_date_logic_attribution,
+        "target_date_logic_attribution_count": len(target_date_logic_attribution),
+        "postclose_logic_recommendations": postclose_logic_recommendations,
+        "postclose_logic_recommendation_count": len(postclose_logic_recommendations),
         "status": (
             "recommendations_ready"
             if recommendations
@@ -672,7 +877,7 @@ def build_source_quality_blocked_report(
         "metric_contract": METRIC_CONTRACT,
         "candidate_universe_source": (
             "reviewed_new_symbols_plus_latest_completed_daily_recommendations_"
-            "and_existing_symbol_missing_sessions_and_logic_v4"
+            "and_existing_symbol_missing_sessions_and_logic_v5"
         ),
         "dynamic_universe_source_date": None,
         "candidate_universe_size": len(CANDIDATE_SYMBOLS),
@@ -710,6 +915,10 @@ def build_source_quality_blocked_report(
         "existing_symbol_time_extension_recommendation_count": 0,
         "existing_symbol_logic_improvement_recommendations": [],
         "existing_symbol_logic_improvement_recommendation_count": 0,
+        "target_date_logic_attribution": [],
+        "target_date_logic_attribution_count": 0,
+        "postclose_logic_recommendations": [],
+        "postclose_logic_recommendation_count": 0,
         "status": "source_quality_blocked",
         "source_quality_reasons": [str(reason)],
         "decision": "source_quality_blocked_no_recommendation",
@@ -800,6 +1009,21 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{item['decision']} | {spot} | {holdout['signal_episodes']} | "
             f"{holdout['completed_legs']} | {holdout['held_legs']} | "
             f"{candidate_ev} | {baseline_ev} |"
+        )
+    lines.extend(["", "## Target-date cumulative logic attribution", ""])
+    postclose_rows = report.get("postclose_logic_recommendations") or []
+    if not postclose_rows:
+        lines.append(
+            "No cumulative holdout candidate added a completed target-date rebound."
+        )
+    for row in postclose_rows:
+        outcome = row["candidate_target_date"]
+        episode = outcome["episodes"][0]
+        lines.append(
+            f"- `{row['active_profile_id']}`: candidate-only signal "
+            f"`{episode['signal_at']}`; completed `{outcome['completed_legs']}` leg; "
+            f"held `{outcome['held_legs']}`; EV "
+            f"`{outcome['notional_weighted_ev_pct']}`%."
         )
     lines.extend(
         [
@@ -893,6 +1117,25 @@ def build_telegram_message(report: dict[str, Any]) -> str:
         if len(lane_rows) > MAX_RECOMMENDATIONS_PER_LANE:
             lines.append(
                 f"외 {len(lane_rows) - MAX_RECOMMENDATIONS_PER_LANE}개 프로필은 보고서 참조"
+            )
+    postclose_logic_rows = list(report.get("postclose_logic_recommendations") or [])
+    if postclose_logic_rows:
+        lines.append("[당일 반등까지 확인된 누적 로직후보]")
+        for row in postclose_logic_rows[:MAX_RECOMMENDATIONS_PER_LANE]:
+            outcome = row["candidate_target_date"]
+            episode = outcome["episodes"][0]
+            params = row["candidate_parameters"]
+            lines.extend(
+                [
+                    f"- {row['name']}({row['symbol']}) {row['session']} "
+                    f"{str(episode['signal_at'])[11:16]}",
+                    (
+                        f"  DD{params['rolling_high_drawdown_pct']} "
+                        f"NL{params['rolling_low_proximity_pct']} / 완료 "
+                        f"{outcome['completed_legs']}leg·보유 {outcome['held_legs']} / "
+                        f"EV {outcome['notional_weighted_ev_pct']:+.4f}%"
+                    ),
+                ]
             )
     lines.extend(
         [
@@ -1023,6 +1266,12 @@ class CandidateRecommendationNotifier:
             == len(
                 report.get("existing_symbol_logic_improvement_recommendations") or []
             )
+            and isinstance(report.get("target_date_logic_attribution"), list)
+            and report.get("target_date_logic_attribution_count")
+            == len(report.get("target_date_logic_attribution") or [])
+            and isinstance(report.get("postclose_logic_recommendations"), list)
+            and report.get("postclose_logic_recommendation_count")
+            == len(report.get("postclose_logic_recommendations") or [])
             and int(report.get("eligible_source_symbol_count", -1))
             + int(report.get("quarantined_source_symbol_count", -1))
             == int(report.get("source_symbol_count", -1))
@@ -1102,7 +1351,12 @@ class CandidateRecommendationNotifier:
         except ValueError:
             return False
         if report.get("status") == "source_quality_blocked":
-            return not recommendations and bool(report.get("source_quality_reasons"))
+            return bool(
+                not recommendations
+                and not report.get("target_date_logic_attribution")
+                and not report.get("postclose_logic_recommendations")
+                and report.get("source_quality_reasons")
+            )
         if bool(recommendations) != (report.get("status") == "recommendations_ready"):
             return False
         profile_ids = [str(row.get("profile_id") or "") for row in recommendations]
@@ -1132,6 +1386,44 @@ class CandidateRecommendationNotifier:
             != expected_logic
             or report.get("existing_symbol_logic_improvement_recommendation_count")
             != len(expected_logic)
+        ):
+            return False
+        logic_recommendation_ids = {
+            str(row.get("profile_id") or "") for row in expected_logic
+        }
+        logic_policy_hashes = {
+            str(row.get("profile_id") or ""): str(row.get("baseline_policy_hash") or "")
+            for row in expected_logic
+        }
+        attribution = report.get("target_date_logic_attribution") or []
+        postclose_logic = report.get("postclose_logic_recommendations") or []
+        expected_postclose_logic = [
+            row
+            for row in attribution
+            if row.get("decision") == "recommend_cumulative_logic_candidate_review"
+            and str(row.get("profile_id") or "") in logic_recommendation_ids
+        ]
+        if (
+            report.get("target_date_logic_attribution_count")
+            != len(EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES)
+            or postclose_logic != expected_postclose_logic
+        ):
+            return False
+        if not all(
+            isinstance(row, dict)
+            and row.get("profile_id") in EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+            and row.get("active_profile_id") in LIVE_PROFILES
+            and row.get("runtime_effect") is False
+            and row.get("actual_order_submitted") is False
+            and row.get("broker_order_forbidden") is True
+            for row in attribution
+        ):
+            return False
+        if not all(
+            _valid_postclose_logic_recommendation(row)
+            and str(row.get("applied_policy_hash") or "")
+            == logic_policy_hashes.get(str(row.get("profile_id") or ""))
+            for row in postclose_logic
         ):
             return False
         return all(
@@ -1166,6 +1458,13 @@ class CandidateRecommendationNotifier:
             and row.get("implementation_status")
             == "source_only_requires_review_and_user_approval"
             and row.get("runtime_effect") is False
+            and (
+                row.get("discovery_lane") != "existing_symbol_logic_improvement"
+                or (
+                    row.get("baseline_policy_source") == "target_date_applied_policy"
+                    and bool(str(row.get("baseline_policy_hash") or ""))
+                )
+            )
             for row in recommendations
         )
 
@@ -1231,6 +1530,28 @@ def write_report(
     return json_path, markdown_path
 
 
+def _valid_postclose_logic_recommendation(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    baseline = row.get("baseline_target_date")
+    candidate = row.get("candidate_target_date")
+    if not isinstance(baseline, dict) or not isinstance(candidate, dict):
+        return False
+    try:
+        return bool(
+            row.get("applied_policy_status") == "ready"
+            and row.get("applied_policy_reason") == "ready"
+            and str(row.get("applied_policy_hash") or "")
+            and int(baseline.get("signal_episodes", -1)) == 0
+            and int(candidate.get("signal_episodes", -1)) == 1
+            and int(candidate.get("completed_legs", -1)) >= 1
+            and int(candidate.get("held_legs", -1)) == 0
+            and float(candidate.get("notional_weighted_ev_pct")) > 0.0
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date")
@@ -1269,7 +1590,21 @@ def main(argv: list[str] | None = None) -> int:
             raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
         dynamic_source_date, dynamic_symbols = _dynamic_candidate_snapshot(target_date)
         candidate_symbols = {**CANDIDATE_SYMBOLS, **dynamic_symbols}
-        _, research_profiles = _research_inventory(candidate_symbols)
+        applied_policy_snapshots: dict[str, dict[str, Any]] = {}
+        for profile_id in sorted(LIVE_PROFILES):
+            policy, applied_hash, reason = load_applied_profile_policy(
+                profile_id, target_date=target_date
+            )
+            applied_policy_snapshots[profile_id] = {
+                "status": "ready" if policy is not None else "unavailable",
+                "reason": reason,
+                "policy_hash": applied_hash or None,
+                "policy": policy,
+            }
+        _, research_profiles = _research_inventory(
+            candidate_symbols,
+            applied_policy_snapshots=applied_policy_snapshots,
+        )
         allowlist = frozenset(candidate_symbols) | frozenset(IMPLEMENTED_SYMBOLS)
         sources: dict[str, tuple[list[Bar], dict[str, Any]]] = {}
         fetch_failures: dict[str, str] = {}
@@ -1300,6 +1635,7 @@ def main(argv: list[str] | None = None) -> int:
             candidate_symbols=candidate_symbols,
             research_profiles=research_profiles,
             dynamic_universe_source_date=dynamic_source_date,
+            applied_policy_snapshots=applied_policy_snapshots,
         )
         if fetch_failures:
             report["source_quarantine"].update(fetch_failures)
@@ -1350,6 +1686,9 @@ def main(argv: list[str] | None = None) -> int:
                     ],
                     "existing_symbol_time_extension_recommendation_count": report[
                         "existing_symbol_time_extension_recommendation_count"
+                    ],
+                    "postclose_logic_recommendation_count": report[
+                        "postclose_logic_recommendation_count"
                     ],
                     "telegram_status": report["telegram_status"],
                     "json_path": str(paths[0]) if paths[0] else None,

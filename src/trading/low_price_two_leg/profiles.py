@@ -14,8 +14,22 @@ MIRAE_ASSET_MORNING_WINDOW = (time(9, 35), time(9, 44))
 JEJU_SEMICONDUCTOR_MORNING_WINDOW = (time(9, 10), time(9, 49))
 DOOSAN_ENERBILITY_MORNING_WINDOW = (time(9, 20), time(9, 49))
 HANWHA_OCEAN_LATE_MORNING_WINDOW = (time(10, 5), time(10, 24))
+KAKAO_MORNING_WINDOW = (time(9, 20), time(9, 39))
+KAKAO_LATE_MORNING_WINDOW = (time(10, 5), time(10, 34))
+SK_ETERNIX_MORNING_WINDOW = (time(9, 50), time(9, 59))
+MIRAE_ASSET_MIDDAY_WINDOW = (time(13, 15), time(13, 24))
+KEPCO_AFTERNOON_WINDOW = (time(14, 0), time(14, 29))
 ALLOWED_SYMBOLS = frozenset(
-    {"006800", "010140", "034020", "042660", "080220", "475150"}
+    {
+        "006800",
+        "010140",
+        "015760",
+        "034020",
+        "035720",
+        "042660",
+        "080220",
+        "475150",
+    }
 )
 SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
     {
@@ -26,6 +40,11 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         JEJU_SEMICONDUCTOR_MORNING_WINDOW,
         DOOSAN_ENERBILITY_MORNING_WINDOW,
         HANWHA_OCEAN_LATE_MORNING_WINDOW,
+        KAKAO_MORNING_WINDOW,
+        KAKAO_LATE_MORNING_WINDOW,
+        SK_ETERNIX_MORNING_WINDOW,
+        MIRAE_ASSET_MIDDAY_WINDOW,
+        KEPCO_AFTERNOON_WINDOW,
     }
 )
 
@@ -290,6 +309,72 @@ PROFILES = {
             near_low_pct=0.10,
             target_ticks=4,
             runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
+        ),
+        _profile(
+            "kakao_morning",
+            "035720",
+            "카카오",
+            "morning",
+            window=KAKAO_MORNING_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=0.75,
+            near_low_pct=0.35,
+            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
+        ),
+        _profile(
+            "kepco_afternoon",
+            "015760",
+            "한국전력",
+            "afternoon",
+            window=KEPCO_AFTERNOON_WINDOW,
+            lookback_bars=60,
+            drawdown_pct=0.50,
+            near_low_pct=0.75,
+            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
+        ),
+        _profile(
+            "kakao_late_morning",
+            "035720",
+            "카카오",
+            "late_morning",
+            window=KAKAO_LATE_MORNING_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=0.50,
+            near_low_pct=0.35,
+            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
+        ),
+        _profile(
+            "sk_eternix_morning",
+            "475150",
+            "SK이터닉스",
+            "morning",
+            window=SK_ETERNIX_MORNING_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=1.50,
+            near_low_pct=0.75,
+            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
+        ),
+        _profile(
+            "mirae_asset_midday",
+            "006800",
+            "미래에셋증권",
+            "midday",
+            window=MIRAE_ASSET_MIDDAY_WINDOW,
+            lookback_bars=45,
+            drawdown_pct=1.00,
+            near_low_pct=0.50,
+            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
+        ),
+        _profile(
+            "sk_eternix_afternoon",
+            "475150",
+            "SK이터닉스",
+            "afternoon",
+            window=AFTERNOON_WINDOW,
+            lookback_bars=45,
+            drawdown_pct=2.50,
+            near_low_pct=0.50,
+            runtime_policy_source="clean_baseline_32d_calibration_16d_holdout_expanded_selected_v1",
         ),
     )
 }

@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 SYSTEMD_DIR="$SCRIPT_DIR/systemd"
 TARGET_DIR="/etc/systemd/system"
 UNITS=(
@@ -21,6 +23,18 @@ UNITS=(
   korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
+  korstockscan-low-price-two-leg-kakao-morning-preflight.timer
+  korstockscan-low-price-two-leg-kakao-morning.timer
+  korstockscan-low-price-two-leg-kepco-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-kepco-afternoon.timer
+  korstockscan-low-price-two-leg-kakao-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-kakao-late-morning.timer
+  korstockscan-low-price-two-leg-sk-eternix-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-morning.timer
+  korstockscan-low-price-two-leg-mirae-asset-midday-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-midday.timer
+  korstockscan-low-price-two-leg-sk-eternix-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-afternoon.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -37,6 +51,18 @@ TIMERS=(
   korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
+  korstockscan-low-price-two-leg-kakao-morning-preflight.timer
+  korstockscan-low-price-two-leg-kakao-morning.timer
+  korstockscan-low-price-two-leg-kepco-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-kepco-afternoon.timer
+  korstockscan-low-price-two-leg-kakao-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-kakao-late-morning.timer
+  korstockscan-low-price-two-leg-sk-eternix-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-morning.timer
+  korstockscan-low-price-two-leg-mirae-asset-midday-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-midday.timer
+  korstockscan-low-price-two-leg-sk-eternix-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-afternoon.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -68,7 +94,22 @@ for unit in "${UNITS[@]}"; do
   /usr/bin/install -m 0644 "$SYSTEMD_DIR/$unit" "$TARGET_DIR/$unit"
 done
 /bin/systemctl daemon-reload
+PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" - <<'PY'
+from src.engine.risk.manual_control_exclusion import (
+    add_manual_control_exclusion_code,
+    manual_control_operator_exclusion_source,
+)
+
+owners = {
+    "035720": "kakao_low_price_two_leg_owner",
+    "015760": "kepco_low_price_two_leg_owner",
+}
+for code, owner in owners.items():
+    add_manual_control_exclusion_code(code, comment=f"manual_operator {owner}")
+    if manual_control_operator_exclusion_source(code) != "manual_operator":
+        raise SystemExit(f"failed to activate low-price manual owner for {code}")
+PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed seven lower-price profile timers; retired Daewoo units were removed"
+echo "installed thirteen lower-price profile timers; retired Daewoo units were removed"

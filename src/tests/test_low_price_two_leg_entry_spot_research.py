@@ -270,7 +270,7 @@ def test_profile_selection_uses_calibration_then_requires_untouched_holdout(
 ):
     candidate = SpotCandidate(13 * 60 + 20, 13 * 60 + 29, 30, 1.50, 0.10)
     monkeypatch.setattr(research, "candidate_grid", lambda profile: (candidate,))
-    profile = RESEARCH_PROFILES["candidate_015760_midday"]
+    profile = RESEARCH_PROFILES["candidate_007660_midday"]
 
     passed = select_profile_spot(profile, _contexts(holdout_candidate_net=0.20))
     assert passed["calibration_winner"]["parameters"] == candidate.public()
@@ -290,7 +290,7 @@ def test_profile_selection_expands_calibration_and_keeps_16_day_holdout(
     monkeypatch.setattr(research, "candidate_grid", lambda profile: (candidate,))
 
     result = select_profile_spot(
-        RESEARCH_PROFILES["candidate_015760_midday"],
+        RESEARCH_PROFILES["candidate_007660_midday"],
         _contexts(
             holdout_candidate_net=0.20,
             total_days=47,
@@ -310,7 +310,7 @@ def test_profile_selection_requires_strict_holdout_improvement(monkeypatch):
     monkeypatch.setattr(research, "candidate_grid", lambda profile: (candidate,))
 
     result = select_profile_spot(
-        RESEARCH_PROFILES["candidate_015760_midday"],
+        RESEARCH_PROFILES["candidate_007660_midday"],
         _contexts(holdout_candidate_net=0.10, baseline_net=0.10),
     )
 
@@ -328,7 +328,7 @@ def test_profile_selection_exposes_best_failed_calibration_candidate(monkeypatch
             context.outcome_cache[1]["legs"][0]["net_profit_pct"] = -0.10
             context.outcome_cache[1]["legs"][1]["net_profit_pct"] = -0.10
 
-    result = select_profile_spot(RESEARCH_PROFILES["candidate_015760_midday"], contexts)
+    result = select_profile_spot(RESEARCH_PROFILES["candidate_007660_midday"], contexts)
 
     assert result["decision"] == "no_robust_calibration_candidate_do_not_promote"
     assert result["recommended_action"] == "do_not_activate_profile_from_this_evidence"

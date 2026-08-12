@@ -25,6 +25,18 @@ LEGACY_V1_PROFILE_IDS = frozenset(
 )
 LEGACY_V1_LAST_SOURCE_DATE = date(2026, 8, 11)
 LEGACY_APPLIED_LAST_TARGET_DATE = date(2026, 8, 12)
+PRE_EXPANDED_V2_PROFILE_IDS = frozenset(
+    {
+        "samsung_heavy_midday",
+        "samsung_heavy_afternoon",
+        "sk_eternix_midday",
+        "mirae_asset_morning",
+        "jeju_semiconductor_morning",
+        "doosan_enerbility_morning",
+        "hanwha_ocean_late_morning",
+    }
+)
+PRE_EXPANDED_V2_LAST_SOURCE_DATE = date(2026, 8, 12)
 SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
@@ -204,12 +216,15 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
     if same_stage_guard["mutation_present"] and payload.get("policy_mutations"):
         return False, "candidate_same_stage_owner_conflict"
     profiles = payload.get("profiles")
-    expected_profile_ids = (
-        LEGACY_V1_PROFILE_IDS
-        if payload.get("schema") == "low_price_two_leg_policy_candidate_v1"
-        else frozenset(BASELINE_POLICIES)
-    )
-    if not isinstance(profiles, dict) or set(profiles) != set(expected_profile_ids):
+    allowed_profile_sets = {frozenset(BASELINE_POLICIES)}
+    if payload.get("schema") == "low_price_two_leg_policy_candidate_v1":
+        allowed_profile_sets = {LEGACY_V1_PROFILE_IDS}
+    elif source_date <= PRE_EXPANDED_V2_LAST_SOURCE_DATE:
+        allowed_profile_sets.add(PRE_EXPANDED_V2_PROFILE_IDS)
+    if (
+        not isinstance(profiles, dict)
+        or frozenset(profiles) not in allowed_profile_sets
+    ):
         return False, "candidate_profile_set_invalid"
     if any(
         str(item.get("profile_id") or "") not in profiles

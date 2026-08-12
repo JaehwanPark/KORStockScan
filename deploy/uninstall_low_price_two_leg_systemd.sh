@@ -21,6 +21,18 @@ TIMERS=(
   korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
+  korstockscan-low-price-two-leg-kakao-morning-preflight.timer
+  korstockscan-low-price-two-leg-kakao-morning.timer
+  korstockscan-low-price-two-leg-kepco-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-kepco-afternoon.timer
+  korstockscan-low-price-two-leg-kakao-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-kakao-late-morning.timer
+  korstockscan-low-price-two-leg-sk-eternix-morning-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-morning.timer
+  korstockscan-low-price-two-leg-mirae-asset-midday-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-midday.timer
+  korstockscan-low-price-two-leg-sk-eternix-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-sk-eternix-afternoon.timer
 )
 SERVICES=(
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
@@ -41,6 +53,18 @@ SERVICES=(
   korstockscan-low-price-two-leg-preflight@jeju_semiconductor_morning.service
   korstockscan-low-price-two-leg-preflight@doosan_enerbility_morning.service
   korstockscan-low-price-two-leg-preflight@hanwha_ocean_late_morning.service
+  korstockscan-low-price-two-leg@kakao_morning.service
+  korstockscan-low-price-two-leg@kepco_afternoon.service
+  korstockscan-low-price-two-leg@kakao_late_morning.service
+  korstockscan-low-price-two-leg@sk_eternix_morning.service
+  korstockscan-low-price-two-leg@mirae_asset_midday.service
+  korstockscan-low-price-two-leg@sk_eternix_afternoon.service
+  korstockscan-low-price-two-leg-preflight@kakao_morning.service
+  korstockscan-low-price-two-leg-preflight@kepco_afternoon.service
+  korstockscan-low-price-two-leg-preflight@kakao_late_morning.service
+  korstockscan-low-price-two-leg-preflight@sk_eternix_morning.service
+  korstockscan-low-price-two-leg-preflight@mirae_asset_midday.service
+  korstockscan-low-price-two-leg-preflight@sk_eternix_afternoon.service
 )
 FILES=(
   korstockscan-low-price-two-leg@.service

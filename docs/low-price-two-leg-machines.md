@@ -2,7 +2,7 @@
 
 ## Scope
 
-Seven independent regular-session profiles implement the user-selected active
+Thirteen independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -15,6 +15,12 @@ authority artifact, and exact broker-order ledger.
 | `jeju_semiconductor_morning` | 제주반도체 `080220` | SOR regular | 09:10 through 09:49 |
 | `doosan_enerbility_morning` | 두산에너빌리티 `034020` | SOR regular | 09:20 through 09:49 |
 | `hanwha_ocean_late_morning` | 한화오션 `042660` | SOR regular | 10:05 through 10:24 |
+| `kakao_morning` | 카카오 `035720` | SOR regular | 09:20 through 09:39 |
+| `kakao_late_morning` | 카카오 `035720` | SOR regular | 10:05 through 10:34 |
+| `sk_eternix_morning` | SK이터닉스 `475150` | SOR regular | 09:50 through 09:59 |
+| `mirae_asset_midday` | 미래에셋증권 `006800` | SOR regular | 13:15 through 13:24 |
+| `kepco_afternoon` | 한국전력 `015760` | SOR regular | 14:00 through 14:29 |
+| `sk_eternix_afternoon` | SK이터닉스 `475150` | SOR regular | 14:00 through 14:40 |
 
 The 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -37,6 +43,34 @@ execution proxy requires one-tick penetration beyond both entry and target:
 | `doosan_enerbility_morning` | 15 | 2.00% | 0.50% | close/-1 tick | 5 | +4 ticks |
 | `hanwha_ocean_late_morning` | 20 | 1.25% | 0.10% | close/-1 tick | 5 | +4 ticks |
 
+The six 2026-08-12 postclose selections use all 48 clean-baseline trading
+dates, split into 32 calibration dates and the latest 16 untouched holdout
+dates. They are exactly the three new-symbol and three existing-symbol
+time-extension rows shown in the admin Telegram notice, rather than every
+hidden report recommendation:
+
+Their deployable preflight input is the tracked
+`data/config/low_price_two_leg_expanded_profile_evidence_2026-08-12.json`
+projection. It binds the original v5 report canonical SHA, the exact six
+recommendation rows, both calibration halves, holdout/full metrics, and the
+user-approved scope. The ignored 3.7MB runtime report is audit/source evidence,
+not a deployment dependency.
+
+| Profile | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---:|---:|---:|---|---:|---:|
+| `kakao_morning` | 15 | 0.75% | 0.35% | close/-1 tick | 5 | +2 ticks |
+| `kepco_afternoon` | 60 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `kakao_late_morning` | 15 | 0.50% | 0.35% | close/-1 tick | 5 | +2 ticks |
+| `sk_eternix_morning` | 15 | 1.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
+| `mirae_asset_midday` | 45 | 1.00% | 0.50% | close/-1 tick | 5 | +2 ticks |
+| `sk_eternix_afternoon` | 45 | 2.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+
+KEPCO afternoon had 16 completed holdout legs and two held legs (11.11% of
+filled legs), with completed-only notional EV `+0.064355%` and held mark
+`-1.297293%`. This is accepted only within the reviewed source-only carry
+budget of at most 25% held/fill and at least `-3%` held mark. It does not add a
+stop, timeout, forced sale, or unrealized PnL to completed EV.
+
 The Doosan Enerbility and Hanwha Ocean episode profiles are parallel to their
 widget auto-trading owners. Neither owner reads the other's state, position
 quantity, or order numbers, and neither may cancel or sell the other's orders
@@ -57,8 +91,11 @@ exact profile and date:
 - the endpoint is `https://api.kiwoom.com`, the route is SOR, and each order is
   exactly one share.
 
-Activation uses protected `manual_operator` markers for all six symbols in
-`data/config/manual_control_excluded_codes.txt`. This excludes the symbols from
+Activation uses protected `manual_operator` markers for all eight symbols in
+`data/config/manual_control_excluded_codes.txt`. The reviewed installer adds
+the new Kakao and KEPCO markers immediately before enabling the new timers, so
+source implementation alone does not partially transfer their runtime owner.
+This excludes the symbols from
 the primary bot while leaving the Doosan/Hanwha widget owners and episode
 owners mutually independent. Timer installation remains a separate reviewed
 operator action:
@@ -93,7 +130,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all seven profiles and the existing Samsung regular machines, at most one
+Across all thirteen profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity, each
@@ -107,14 +144,23 @@ and install timers. The installer also removes any legacy Daewoo timer files and
 stops their exact service instances without deleting state or held-position
 evidence.
 
+The 2026-08-12 postclose tuning candidate predates the six-profile expansion.
+For the 2026-08-13 PREOPEN transition only, its exact seven-profile v2 policy is
+validated first and the six newly approved profiles are added at their frozen
+baselines. From the next postclose cycle onward the candidate and applied-policy
+inventory must contain all thirteen profiles; a partial or stale inventory fails
+closed.
+
 ## Daily implementation-candidate recommendation
 
 The 20:10 postclose chain runs `low_price_two_leg_expanded_candidate_research`
 after the actual-profile tuning step. It uses every KRX trading date from the
 clean baseline (`2026-06-05`) through the target date. The latest 16 dates remain
 untouched holdout evidence; every earlier clean-baseline date forms an expanding
-calibration window. The reviewed new-symbol universe contains nine symbols, with
-midday and afternoon evaluated separately.
+calibration window. The reviewed new-symbol universe combines the fixed seed
+set with up to five source-qualified dynamic seeds from the latest completed
+daily recommendation snapshot, with all four supported regular-session lanes
+evaluated separately.
 
 A separate existing-symbol time-extension lane evaluates only supported
 midday/afternoon sessions that have no active profile for that symbol. Active
@@ -125,8 +171,8 @@ separate time-extension lane.
 
 Only profiles with matching source-qualified trading dates, positive
 notional-weighted holdout EV, the required calibration/holdout sample floors,
-zero held legs, and a latest close at or below KRW 100,000 enter the ranked
-recommendation list. The JSON and Markdown report are atomically written before
+the bounded no-stop carry budget, and a latest close at or below KRW 100,000
+enter the ranked recommendation list. The JSON and Markdown report are atomically written before
 an `ADMIN_ONLY` Telegram message is attempted. Delivery retries up to three
 times, and a target-date state file prevents duplicate notices during postclose
 recovery. Missing Telegram configuration, exhausted delivery retries, or a

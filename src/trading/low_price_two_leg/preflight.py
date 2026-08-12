@@ -47,9 +47,38 @@ EPISODE_RESEARCH_PROFILE_IDS = frozenset(
         "hanwha_ocean_late_morning",
     }
 )
+EXPANDED_RESEARCH_REPORT_PATH = (
+    DATA_DIR / "config" / "low_price_two_leg_expanded_profile_evidence_2026-08-12.json"
+)
+EXPANDED_RESEARCH_REPORT_SHA256 = (
+    "80741f569d0949d042d94fb07022fe843fa931052ccc9073b9f26c7ed23fb2a1"
+)
+EXPANDED_SOURCE_REPORT_SHA256 = (
+    "bec92085a26c70a0a488ecd447530db96fe0119f9b36e2763e13a46ac37bf7f3"
+)
+EXPANDED_RESEARCH_PROFILE_MAP = {
+    "kakao_morning": "candidate_035720_morning",
+    "kepco_afternoon": "candidate_015760_afternoon",
+    "kakao_late_morning": "candidate_035720_late_morning",
+    "sk_eternix_morning": "existing_475150_morning",
+    "mirae_asset_midday": "existing_006800_midday",
+    "sk_eternix_afternoon": "existing_475150_afternoon",
+}
 
 
 def _research_evidence_contract(profile: MachineProfile) -> dict:
+    expanded_profile_id = EXPANDED_RESEARCH_PROFILE_MAP.get(profile.profile_id)
+    if expanded_profile_id:
+        return {
+            "path": EXPANDED_RESEARCH_REPORT_PATH,
+            "sha256": EXPANDED_RESEARCH_REPORT_SHA256,
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v1",
+            "start_date": "2026-06-05",
+            "end_date": "2026-08-12",
+            "trading_date_count": 48,
+            "window": "2026-06-05_through_2026-08-12_48_trading_days",
+            "report_profile_id": expanded_profile_id,
+        }
     if profile.profile_id in EPISODE_RESEARCH_PROFILE_IDS:
         return {
             "path": EPISODE_RESEARCH_REPORT_PATH,
@@ -59,6 +88,7 @@ def _research_evidence_contract(profile: MachineProfile) -> dict:
             "end_date": "2026-08-11",
             "trading_date_count": 47,
             "window": "2026-06-05_through_2026-08-11_47_trading_days",
+            "report_profile_id": profile.profile_id,
         }
     return {
         "path": RESEARCH_REPORT_PATH,
@@ -68,6 +98,7 @@ def _research_evidence_contract(profile: MachineProfile) -> dict:
         "end_date": "2026-08-10",
         "trading_date_count": 46,
         "window": "2026-06-05_through_2026-08-10_46_trading_days",
+        "report_profile_id": profile.profile_id,
     }
 
 
@@ -129,10 +160,12 @@ def validate_research_evidence(
     if schema not in {
         "low_price_two_leg_entry_spot_research_v1",
         "low_price_two_leg_episode_policy_research_v1",
+        "low_price_two_leg_user_approved_profile_evidence_v1",
     }:
         return False, "research_report_schema_invalid"
     source = (payload.get("source_meta") or {}).get(profile.symbol)
-    result = (payload.get("profiles") or {}).get(profile.profile_id)
+    report_profile_id = str(contract["report_profile_id"])
+    result = (payload.get("profiles") or {}).get(report_profile_id)
     if not isinstance(source, dict) or not isinstance(result, dict):
         return False, "research_profile_result_missing"
     policy = profile.policy
@@ -150,7 +183,7 @@ def validate_research_evidence(
             "holdout_pass_source_only_early_candidate",
             "holdout_positive_not_better_keep_baseline",
         }
-    else:
+    elif schema == "low_price_two_leg_episode_policy_research_v1":
         expected_policy = {
             **expected_spot,
             "entry_offsets_ticks": list(policy.entry_offsets_ticks),
@@ -183,6 +216,70 @@ def validate_research_evidence(
             and len(third_ev) == 3
             and all(float(value) > 0.0 for value in third_ev)
         )
+    else:
+        source_report = payload.get("source_report")
+        if (
+            not isinstance(source_report, dict)
+            or source_report.get("schema")
+            != "low_price_two_leg_expanded_candidate_research_v5"
+            or source_report.get("canonical_sha256") != EXPANDED_SOURCE_REPORT_SHA256
+        ):
+            return False, "research_source_report_provenance_invalid"
+        expected_policy = {
+            **expected_spot,
+            "entry_offsets_ticks": list(policy.entry_offsets_ticks),
+            "entry_valid_completed_bars": policy.entry_valid_completed_bars,
+            "target_ticks": policy.target_ticks,
+        }
+        holdout = (result.get("selected") or {}).get("holdout")
+        calibration = (result.get("selected") or {}).get("calibration")
+        full = (result.get("selected") or {}).get("full")
+        recommendations = {
+            str(row.get("profile_id") or ""): row
+            for row in payload.get("recommendations") or []
+            if isinstance(row, dict)
+        }
+        recommendation = recommendations.get(report_profile_id)
+        first_half = (result.get("selected") or {}).get("calibration_first_half")
+        second_half = (result.get("selected") or {}).get("calibration_second_half")
+        result_policy_matches = result.get("recommended_spot") == expected_policy
+        decision_ready = bool(
+            result.get("decision") == "holdout_pass_source_only_early_candidate"
+            and isinstance(recommendation, dict)
+            and recommendation.get("symbol") == profile.symbol
+            and recommendation.get("session") == profile.session
+            and recommendation.get("recommended_spot") == expected_policy
+            and recommendation.get("implementation_status")
+            == "source_only_requires_review_and_user_approval"
+            and recommendation.get("runtime_effect") is False
+            and isinstance(first_half, dict)
+            and float(first_half.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+            and isinstance(second_half, dict)
+            and float(second_half.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+            and isinstance(calibration, dict)
+            and int(calibration.get("signal_episodes", 0) or 0) >= 6
+            and int(calibration.get("completed_legs", 0) or 0) >= 8
+            and float(calibration.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+            and isinstance(full, dict)
+            and int(full.get("completed_legs", 0) or 0) >= 10
+            and float(full.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+        )
+        if isinstance(holdout, dict):
+            held_rate = float(holdout.get("held_leg_rate_per_filled_leg", 0.0) or 0.0)
+            held_mark = holdout.get("active_unrealized_notional_weighted_pct")
+            decision_ready = bool(
+                decision_ready
+                and 0.0 <= held_rate <= 0.25
+                and (held_mark is None or float(held_mark) >= -3.0)
+                and isinstance(recommendation, dict)
+                and int(recommendation.get("holdout_held_legs", -1) or 0)
+                == int(holdout.get("held_legs", -2) or 0)
+                and float(
+                    recommendation.get("holdout_held_leg_rate_per_filled_leg", -1.0)
+                    or 0.0
+                )
+                == held_rate
+            )
     if (
         source.get("source_quality_status") != "PASS"
         or int(source.get("trading_date_count", 0) or 0)
@@ -194,7 +291,10 @@ def validate_research_evidence(
         or not isinstance(holdout, dict)
         or int(holdout.get("signal_episodes", 0) or 0) < 3
         or int(holdout.get("completed_legs", 0) or 0) < 4
-        or int(holdout.get("held_legs", 0) or 0) != 0
+        or (
+            schema != "low_price_two_leg_user_approved_profile_evidence_v1"
+            and int(holdout.get("held_legs", 0) or 0) != 0
+        )
         or float(holdout.get("notional_weighted_ev_pct", 0.0) or 0.0) <= 0.0
     ):
         return False, "research_profile_result_not_eligible"
@@ -304,7 +404,10 @@ def build_authority_artifact(
         "metric_role": "operator_runtime_authority_gate",
         "decision_authority": "explicit_user_directed_low_price_two_leg_live_implementation",
         "window_policy": "target_date_profile_once_then_terminal_or_held",
-        "sample_floor": "explicit_user_selected_clean_baseline_46_day_source_replay",
+        "sample_floor": (
+            "explicit_user_selected_"
+            f"{research['trading_date_count']}_trading_day_clean_baseline_source_replay"
+        ),
         "primary_decision_metric": "runtime_contract_and_profile_evidence_ready",
         "source_quality_gate": "PASS",
         "runtime_effect": True,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -9,7 +10,9 @@ from src.engine.monitoring import (
     low_price_two_leg_expanded_candidate_research as expanded,
 )
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
+    Bar,
     ResearchError,
+    build_day_contexts,
     fetch_sor_history,
 )
 from src.trading.low_price_two_leg.profiles import PROFILES
@@ -27,8 +30,14 @@ class FakeResponse:
 
 
 def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():
-    assert len(expanded.NEW_SYMBOL_PROFILES) == 20
-    assert len(expanded.RESEARCH_PROFILES) == 44
+    assert len(expanded.NEW_SYMBOL_PROFILES) == (
+        len(expanded.CANDIDATE_SYMBOLS) * len(expanded.SESSION_WINDOWS)
+    )
+    assert len(expanded.RESEARCH_PROFILES) == (
+        len(expanded.NEW_SYMBOL_PROFILES)
+        + len(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES)
+        + len(expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES)
+    )
     assert set(expanded.CANDIDATE_SYMBOLS).isdisjoint(
         profile.symbol for profile in PROFILES.values()
     )
@@ -40,13 +49,16 @@ def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions()
         for symbol in expanded.CANDIDATE_SYMBOLS
         for session in ("morning", "late_morning", "midday", "afternoon")
     }
-    assert len(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES) == 17
+    assert len(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES) == (
+        len(expanded.IMPLEMENTED_SYMBOLS) * len(expanded.SESSION_WINDOWS)
+        - len(expanded.ACTIVE_SYMBOL_SESSIONS)
+    )
     assert len(expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES) == len(PROFILES)
     assert set(expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES) == {
         f"logic_{profile_id}" for profile_id in PROFILES
     }
     existing_profile = expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES[
-        "existing_475150_afternoon"
+        "existing_475150_late_morning"
     ]
     assert existing_profile.discovery_lane == "existing_symbol_time_extension"
     assert (existing_profile.symbol, existing_profile.session) not in (
@@ -55,6 +67,7 @@ def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions()
 
 
 def test_fetch_expanded_symbol_requires_explicit_research_allowlist():
+    symbol = next(iter(expanded.CANDIDATE_SYMBOLS))
     started = date(2026, 6, 5)
     dates = [started + timedelta(days=index) for index in range(46)]
     rows = [
@@ -79,7 +92,7 @@ def test_fetch_expanded_symbol_requires_explicit_research_allowlist():
 
     with pytest.raises(ValueError, match="symbol_not_in_selected_profile_allowlist"):
         fetch_sor_history(
-            symbol="015760",
+            symbol=symbol,
             token="TOKEN",
             start_date=started,
             end_date=dates[-1],
@@ -87,12 +100,12 @@ def test_fetch_expanded_symbol_requires_explicit_research_allowlist():
         )
 
     bars, meta = fetch_sor_history(
-        symbol="015760",
+        symbol=symbol,
         token="TOKEN",
         start_date=started,
         end_date=dates[-1],
         post=lambda *args, **kwargs: FakeResponse(rows),
-        allowed_symbols=frozenset({"015760"}),
+        allowed_symbols=frozenset({symbol}),
     )
     assert len(bars) == 46
     assert meta["source_quality_status"] == "PASS"
@@ -158,8 +171,12 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     assert report["trading_date_count"] == 47
     assert report["calibration_trading_day_count"] == 31
     assert report["holdout_trading_day_count"] == 16
-    assert report["existing_symbol_time_extension_profile_count"] == 17
-    assert report["existing_symbol_logic_improvement_profile_count"] == 7
+    assert report["existing_symbol_time_extension_profile_count"] == len(
+        expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES
+    )
+    assert report["existing_symbol_logic_improvement_profile_count"] == len(
+        expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES
+    )
     assert report["recommendation_count"] == 0
     assert report["runtime_effect"] is False
 
@@ -342,6 +359,8 @@ def _profile_result(
         "symbol": symbol,
         "name": name,
         "session": session,
+        "baseline_policy_source": "target_date_applied_policy",
+        "baseline_policy_hash": "test-applied-policy-hash",
         "decision": "holdout_pass_source_only_early_candidate",
         "recommended_spot": {
             "scan_start": "14:15",
@@ -445,12 +464,118 @@ def test_recommendation_accepts_manageable_carry_and_rejects_excess_carry():
     assert rows[0]["holdout_held_leg_rate_per_filled_leg"] == pytest.approx(0.20)
 
 
+def test_target_date_logic_recommendation_requires_cumulative_candidate_and_rebound():
+    kst = ZoneInfo("Asia/Seoul")
+    target_date = date(2026, 8, 12)
+    start = datetime(2026, 8, 12, 12, 52, tzinfo=kst)
+    bars = [
+        Bar(
+            start + timedelta(minutes=index),
+            22_000,
+            22_100 if index < 30 else 22_000,
+            21_950,
+            21_950 if index >= 29 else 22_000,
+        )
+        for index in range(33)
+    ]
+    bars[31] = Bar(bars[31].timestamp, 21_950, 22_000, 21_950, 22_000)
+    bars[32] = Bar(bars[32].timestamp, 22_000, 22_050, 21_950, 22_050)
+    contexts = build_day_contexts(bars)
+    profile_id = "logic_samsung_heavy_midday"
+    profiles = {
+        profile_id: {
+            "decision": "holdout_pass_source_only_early_candidate",
+            "recommended_spot": {
+                "scan_start": "13:20",
+                "scan_end": "13:29",
+                "lookback_bars": 30,
+                "rolling_high_drawdown_pct": 0.5,
+                "rolling_low_proximity_pct": 0.35,
+                "entry_offsets_ticks": [0, -1],
+                "entry_valid_completed_bars": 5,
+                "target_ticks": 2,
+            },
+        }
+    }
+
+    rows = expanded._target_date_logic_attribution(
+        profiles=profiles,
+        contexts_by_symbol={"010140": contexts},
+        target_date=target_date,
+        applied_policy_snapshots={
+            "samsung_heavy_midday": {
+                "status": "ready",
+                "reason": "ready",
+                "policy_hash": "test-policy-hash",
+                "policy": {
+                    "rolling_high_drawdown_pct": 0.75,
+                    "rolling_low_proximity_pct": 0.35,
+                    "lookback_bars": 30,
+                    "entry_valid_completed_bars": 5,
+                    "quantity": 2,
+                    "target_ticks": 2,
+                },
+            }
+        },
+    )
+    row = next(item for item in rows if item["profile_id"] == profile_id)
+
+    assert row["decision"] == "recommend_cumulative_logic_candidate_review"
+    assert row["applied_policy_status"] == "ready"
+    assert row["applied_policy_hash"] == "test-policy-hash"
+    assert row["baseline_target_date"]["signal_episodes"] == 0
+    assert row["candidate_target_date"]["signal_episodes"] == 1
+    assert row["candidate_target_date"]["completed_legs"] == 1
+    assert row["candidate_target_date"]["no_fill_legs"] == 1
+    assert row["candidate_target_date"]["held_legs"] == 0
+    assert row["candidate_target_date"]["notional_weighted_ev_pct"] > 0
+
+    unavailable_rows = expanded._target_date_logic_attribution(
+        profiles=profiles,
+        contexts_by_symbol={"010140": contexts},
+        target_date=target_date,
+        applied_policy_snapshots={},
+    )
+    unavailable = next(
+        item for item in unavailable_rows if item["profile_id"] == profile_id
+    )
+    assert unavailable["decision"] == "not_recommended"
+    assert unavailable["reason"] == "target_date_applied_policy_unavailable"
+
+
+def test_logic_research_inventory_uses_target_date_applied_policy_as_baseline():
+    snapshots = {
+        "samsung_heavy_midday": {
+            "status": "ready",
+            "reason": "ready",
+            "policy_hash": "applied-hash",
+            "policy": {
+                "rolling_high_drawdown_pct": 1.0,
+                "rolling_low_proximity_pct": 0.25,
+                "lookback_bars": 30,
+                "entry_valid_completed_bars": 5,
+                "quantity": 2,
+                "target_ticks": 2,
+            },
+        }
+    }
+
+    _, profiles = expanded._research_inventory(
+        expanded.CANDIDATE_SYMBOLS,
+        applied_policy_snapshots=snapshots,
+    )
+    policy = profiles["logic_samsung_heavy_midday"].policy
+
+    assert policy.rolling_high_drawdown_pct == 1.0
+    assert policy.rolling_low_proximity_pct == 0.25
+
+
 def test_existing_symbol_time_extension_recommendation_preserves_active_profile_lineage():
     profiles = {
-        "existing_475150_afternoon": _profile_result(
+        "existing_475150_late_morning": _profile_result(
             symbol="475150",
             name="SK이터닉스",
-            session="afternoon",
+            session="late_morning",
             candidate_ev=0.08,
             baseline_ev=0.01,
         )
@@ -462,7 +587,11 @@ def test_existing_symbol_time_extension_recommendation_preserves_active_profile_
 
     assert len(rows) == 1
     assert rows[0]["discovery_lane"] == "existing_symbol_time_extension"
-    assert rows[0]["active_profile_ids_for_symbol"] == ["sk_eternix_midday"]
+    assert rows[0]["active_profile_ids_for_symbol"] == sorted(
+        profile_id
+        for profile_id, profile in PROFILES.items()
+        if profile.symbol == "475150"
+    )
     assert (rows[0]["symbol"], rows[0]["session"]) not in (
         expanded.ACTIVE_SYMBOL_SESSIONS
     )
@@ -480,6 +609,23 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         row
         for row in rows
         if row.get("discovery_lane") == "existing_symbol_logic_improvement"
+    ]
+    attribution_rows = [
+        {
+            "profile_id": profile_id,
+            "active_profile_id": profile_id.removeprefix("logic_"),
+            "symbol": profile.symbol,
+            "name": profile.name,
+            "session": profile.session,
+            "decision": "not_recommended",
+            "reason": "cumulative_holdout_candidate_unavailable",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        for profile_id, profile in (
+            expanded.EXISTING_SYMBOL_LOGIC_IMPROVEMENT_PROFILES.items()
+        )
     ]
     return {
         "schema": expanded.REPORT_SCHEMA,
@@ -526,6 +672,10 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         "existing_symbol_time_extension_recommendation_count": len(existing_rows),
         "existing_symbol_logic_improvement_recommendations": logic_rows,
         "existing_symbol_logic_improvement_recommendation_count": len(logic_rows),
+        "target_date_logic_attribution": attribution_rows,
+        "target_date_logic_attribution_count": len(attribution_rows),
+        "postclose_logic_recommendations": [],
+        "postclose_logic_recommendation_count": 0,
         "metric_contract": expanded.METRIC_CONTRACT,
         "recommendation_only": True,
         "machine_created": False,
@@ -577,10 +727,10 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
                 candidate_ev=0.08,
                 baseline_ev=0.01,
             ),
-            "existing_475150_afternoon": _profile_result(
+            "existing_475150_late_morning": _profile_result(
                 symbol="475150",
                 name="SK이터닉스",
-                session="afternoon",
+                session="late_morning",
                 candidate_ev=0.07,
                 baseline_ev=0.01,
             ),
@@ -692,6 +842,18 @@ def test_telegram_transport_requires_explicit_ok_response(monkeypatch):
 
     with pytest.raises(RuntimeError, match="telegram_send_not_ok"):
         expanded._send_telegram("token", "admin", "message")
+
+
+def test_malformed_postclose_logic_recommendation_is_rejected_without_error():
+    assert not expanded._valid_postclose_logic_recommendation(
+        {
+            "applied_policy_status": "ready",
+            "applied_policy_reason": "ready",
+            "applied_policy_hash": "hash",
+            "baseline_target_date": {},
+            "candidate_target_date": {"notional_weighted_ev_pct": None},
+        }
+    )
 
 
 def test_daily_network_failure_becomes_source_quality_admin_artifact(
