@@ -30,6 +30,45 @@ RESEARCH_REPORT_PATH = (
 RESEARCH_REPORT_SHA256 = (
     "cff37627ad294efce6dbbe6e5a95f763aa5fbf75fb21164818d4430fd1061105"
 )
+EPISODE_RESEARCH_REPORT_PATH = (
+    DATA_DIR
+    / "report"
+    / "low_price_two_leg_episode_policy_research"
+    / "low_price_two_leg_episode_policy_research_2026-08-11.json"
+)
+EPISODE_RESEARCH_REPORT_SHA256 = (
+    "1ee1626d4c5e9d0beabcec537aea4ec6714c6913ab29e5cfea7365d11529b469"
+)
+EPISODE_RESEARCH_PROFILE_IDS = frozenset(
+    {
+        "mirae_asset_morning",
+        "jeju_semiconductor_morning",
+        "doosan_enerbility_morning",
+        "hanwha_ocean_late_morning",
+    }
+)
+
+
+def _research_evidence_contract(profile: MachineProfile) -> dict:
+    if profile.profile_id in EPISODE_RESEARCH_PROFILE_IDS:
+        return {
+            "path": EPISODE_RESEARCH_REPORT_PATH,
+            "sha256": EPISODE_RESEARCH_REPORT_SHA256,
+            "schema": "low_price_two_leg_episode_policy_research_v1",
+            "start_date": "2026-06-05",
+            "end_date": "2026-08-11",
+            "trading_date_count": 47,
+            "window": "2026-06-05_through_2026-08-11_47_trading_days",
+        }
+    return {
+        "path": RESEARCH_REPORT_PATH,
+        "sha256": RESEARCH_REPORT_SHA256,
+        "schema": "low_price_two_leg_entry_spot_research_v1",
+        "start_date": "2026-06-05",
+        "end_date": "2026-08-10",
+        "trading_date_count": 46,
+        "window": "2026-06-05_through_2026-08-10_46_trading_days",
+    }
 
 
 def default_authority_path(profile: MachineProfile) -> Path:
@@ -60,12 +99,15 @@ class PreflightDecision:
 
 def validate_research_evidence(
     profile: MachineProfile,
-    path: Path = RESEARCH_REPORT_PATH,
+    path: Path | None = None,
     *,
-    expected_sha256: str = RESEARCH_REPORT_SHA256,
+    expected_sha256: str | None = None,
 ) -> tuple[bool, str]:
+    contract = _research_evidence_contract(profile)
+    report_path = Path(path or contract["path"])
+    expected_digest = str(expected_sha256 or contract["sha256"])
     try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return False, f"research_report_unreadable:{type(exc).__name__}"
     if not isinstance(payload, dict):
@@ -74,16 +116,21 @@ def validate_research_evidence(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
     if (
-        payload.get("schema") != "low_price_two_leg_entry_spot_research_v1"
-        or payload.get("start_date") != "2026-06-05"
-        or payload.get("end_date") != "2026-08-10"
-        or canonical_sha256 != expected_sha256
+        payload.get("start_date") != contract["start_date"]
+        or payload.get("end_date") != contract["end_date"]
+        or canonical_sha256 != expected_digest
         or payload.get("runtime_effect") is not False
         or payload.get("allowed_runtime_apply") is not False
         or payload.get("actual_order_submitted") is not False
         or payload.get("broker_order_forbidden") is not True
     ):
         return False, "research_report_provenance_invalid"
+    schema = str(payload.get("schema") or "")
+    if schema not in {
+        "low_price_two_leg_entry_spot_research_v1",
+        "low_price_two_leg_episode_policy_research_v1",
+    }:
+        return False, "research_report_schema_invalid"
     source = (payload.get("source_meta") or {}).get(profile.symbol)
     result = (payload.get("profiles") or {}).get(profile.profile_id)
     if not isinstance(source, dict) or not isinstance(result, dict):
@@ -96,18 +143,54 @@ def validate_research_evidence(
         "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
         "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
     }
-    holdout = (result.get("selected") or {}).get("holdout")
-    if (
-        source.get("source_quality_status") != "PASS"
-        or int(source.get("trading_date_count", 0) or 0) != 46
-        or int(source.get("invalid_row_count", 0) or 0) != 0
-        or int(source.get("duplicate_row_count", 0) or 0) != 0
-        or result.get("recommended_spot") != expected_spot
-        or result.get("decision")
-        not in {
+    if schema == "low_price_two_leg_entry_spot_research_v1":
+        holdout = (result.get("selected") or {}).get("holdout")
+        result_policy_matches = result.get("recommended_spot") == expected_spot
+        decision_ready = result.get("decision") in {
             "holdout_pass_source_only_early_candidate",
             "holdout_positive_not_better_keep_baseline",
         }
+    else:
+        expected_policy = {
+            **expected_spot,
+            "entry_offsets_ticks": list(policy.entry_offsets_ticks),
+            "entry_valid_completed_bars": policy.entry_valid_completed_bars,
+            "target_ticks": policy.target_ticks,
+            "quantity": policy.quantity,
+            "route": policy.route,
+        }
+        result_policy = dict(result.get("policy") or {})
+        holdout = result.get("holdout")
+        calibration = result.get("calibration")
+        full = result.get("full")
+        half_ev = result.get("calibration_half_ev_pct")
+        third_ev = result.get("calibration_third_ev_pct")
+        result_policy_matches = result_policy == expected_policy
+        decision_ready = bool(
+            result.get("decision") == "holdout_pass_user_approved_live_profile"
+            and isinstance(calibration, dict)
+            and int(calibration.get("signal_episodes", 0) or 0) >= 6
+            and int(calibration.get("completed_legs", 0) or 0) >= 8
+            and int(calibration.get("held_legs", 0) or 0) == 0
+            and float(calibration.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
+            and isinstance(full, dict)
+            and int(full.get("completed_legs", 0) or 0) >= 10
+            and int(full.get("held_legs", 0) or 0) == 0
+            and isinstance(half_ev, list)
+            and len(half_ev) == 2
+            and all(float(value) > 0.0 for value in half_ev)
+            and isinstance(third_ev, list)
+            and len(third_ev) == 3
+            and all(float(value) > 0.0 for value in third_ev)
+        )
+    if (
+        source.get("source_quality_status") != "PASS"
+        or int(source.get("trading_date_count", 0) or 0)
+        != int(contract["trading_date_count"])
+        or int(source.get("invalid_row_count", 0) or 0) != 0
+        or int(source.get("duplicate_row_count", 0) or 0) != 0
+        or not result_policy_matches
+        or not decision_ready
         or not isinstance(holdout, dict)
         or int(holdout.get("signal_episodes", 0) or 0) < 3
         or int(holdout.get("completed_legs", 0) or 0) < 4
@@ -169,7 +252,11 @@ def _policy_contract(
         "name": profile.name,
         "session": profile.session,
         "quantity": 2,
-        "allocation": "one_share_signal_close_and_one_share_minus_1tick",
+        "allocation": {
+            "leg_quantity": 1,
+            "entry_offsets_ticks": list(policy.entry_offsets_ticks),
+            "leg_ids": list(policy.entry_leg_ids),
+        },
         "market": "SOR_regular_integrated",
         "scan_start": policy.scan_start.isoformat(),
         "scan_last_bar": policy.scan_last_bar.isoformat(),
@@ -196,6 +283,7 @@ def build_authority_artifact(
     if not decision.ready:
         raise ValueError("preflight_not_ready")
     observed_at = observed_at.astimezone(KST)
+    research = _research_evidence_contract(profile)
     return {
         "schema": AUTHORITY_SCHEMA,
         "status": "ready",
@@ -207,9 +295,10 @@ def build_authority_artifact(
         "decision": asdict(decision),
         "policy": _policy_contract(profile, applied_policy, applied_policy_hash),
         "evidence": {
-            "path": str(RESEARCH_REPORT_PATH),
-            "report_sha256": RESEARCH_REPORT_SHA256,
-            "window": "2026-06-05_through_2026-08-10_46_trading_days",
+            "path": str(research["path"]),
+            "report_sha256": str(research["sha256"]),
+            "schema": str(research["schema"]),
+            "window": str(research["window"]),
             "cost_pct": 0.20,
         },
         "metric_role": "operator_runtime_authority_gate",
@@ -302,9 +391,13 @@ def validate_authority(
     if payload.get("policy") != _policy_contract(profile, applied_policy, applied_hash):
         return False, "authority_policy_mismatch"
     evidence = payload.get("evidence")
+    research = _research_evidence_contract(profile)
     if (
         not isinstance(evidence, dict)
-        or evidence.get("report_sha256") != RESEARCH_REPORT_SHA256
+        or evidence.get("path") != str(research["path"])
+        or evidence.get("report_sha256") != research["sha256"]
+        or evidence.get("schema") != research["schema"]
+        or evidence.get("window") != research["window"]
     ):
         return False, "authority_evidence_mismatch"
     if any(

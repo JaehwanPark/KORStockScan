@@ -27,7 +27,7 @@ class FakeResponse:
 
 
 def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():
-    assert len(expanded.NEW_SYMBOL_PROFILES) == 18
+    assert len(expanded.NEW_SYMBOL_PROFILES) == 10
     assert len(expanded.RESEARCH_PROFILES) == 19
     assert set(expanded.CANDIDATE_SYMBOLS).isdisjoint(
         profile.symbol for profile in PROFILES.values()
@@ -41,7 +41,15 @@ def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions()
         for session in ("midday", "afternoon")
     }
     assert set(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES) == {
-        "existing_475150_afternoon"
+        "existing_006800_midday",
+        "existing_006800_afternoon",
+        "existing_034020_midday",
+        "existing_034020_afternoon",
+        "existing_042660_midday",
+        "existing_042660_afternoon",
+        "existing_080220_midday",
+        "existing_080220_afternoon",
+        "existing_475150_afternoon",
     }
     existing_profile = expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES[
         "existing_475150_afternoon"
@@ -154,7 +162,7 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     assert report["trading_date_count"] == 47
     assert report["calibration_trading_day_count"] == 31
     assert report["holdout_trading_day_count"] == 16
-    assert report["existing_symbol_time_extension_profile_count"] == 1
+    assert report["existing_symbol_time_extension_profile_count"] == 9
     assert report["recommendation_count"] == 0
     assert report["runtime_effect"] is False
 
@@ -207,7 +215,7 @@ def _profile_result(
 
 def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
     profiles = {
-        "candidate_080220_afternoon": _profile_result(
+        "existing_080220_afternoon": _profile_result(
             symbol="080220",
             name="제주반도체",
             session="afternoon",
@@ -238,7 +246,7 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
     rows = expanded._recommendation_rows(profiles, source_meta)
 
     assert [row["profile_id"] for row in rows] == [
-        "candidate_080220_afternoon",
+        "existing_080220_afternoon",
         "candidate_017670_midday",
     ]
     assert rows[0]["price_band"] == "under_50000_krw"
@@ -347,10 +355,10 @@ def test_admin_notifier_retries_sends_once_and_never_creates_machine(tmp_path):
 def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes():
     rows = expanded._recommendation_rows(
         {
-            "candidate_080220_afternoon": _profile_result(
-                symbol="080220",
-                name="제주반도체",
-                session="afternoon",
+            "candidate_017670_midday": _profile_result(
+                symbol="017670",
+                name="SK텔레콤",
+                session="midday",
                 candidate_ev=0.08,
                 baseline_ev=0.01,
             ),
@@ -363,7 +371,7 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
             ),
         },
         {
-            "080220": {"latest_close_price": 24_000},
+            "017670": {"latest_close_price": 65_000},
             "475150": {"latest_close_price": 25_000},
         },
     )
@@ -372,7 +380,7 @@ def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes
 
     assert "[신규 종목]" in message
     assert "[기존 종목·신규 시간대]" in message
-    assert "제주반도체(080220)" in message
+    assert "SK텔레콤(017670)" in message
     assert "SK이터닉스(475150)" in message
 
 

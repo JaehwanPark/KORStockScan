@@ -1,0 +1,225 @@
+{
+  "schema": "low_price_two_leg_episode_policy_research_v1",
+  "report_type": "low_price_two_leg_episode_policy_research",
+  "generated_at_kst": "2026-08-12T12:50:13+09:00",
+  "start_date": "2026-06-05",
+  "end_date": "2026-08-11",
+  "trading_date_count": 47,
+  "calibration_trading_day_count": 31,
+  "holdout_trading_day_count": 16,
+  "cost_pct": 0.2,
+  "market": "KRX_NXT_integrated_SOR_regular",
+  "source_request": {
+    "api_id": "ka10080",
+    "request_code_format": "{symbol}_AL",
+    "tick_scope": "1",
+    "adjusted_price_type": "1",
+    "normalized_source_bundle_sha256": "9f1717bdee31930704abd2ebf9157f3ff4f52b400f6f8efb5fe82bce181fb6f8"
+  },
+  "official_reference": {
+    "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+    "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+    "retrieved_at_kst": "2026-08-11T21:27:49+09:00",
+    "inspected_paths": [
+      "kiwoom_docs/차트.md",
+      "kiwoom_docs/주문.md",
+      "kiwoom_docs/계좌.md",
+      "kiwoom/_data/kiwoom_api_spec.json",
+      "kiwoom/specs.py",
+      "kiwoom/core",
+      "postman/kiwoom-openapi.postman_collection.json"
+    ]
+  },
+  "execution_proxy": {
+    "entry_fill": "completed_bar_low_at_or_below_one_tick_below_limit_price",
+    "target_fill": "strictly_later_completed_bar_high_at_or_above_one_tick_above_target_price",
+    "same_bar_fill_and_target": false,
+    "stop_loss": "none",
+    "unfilled_target": "HELD",
+    "candidate_selection_data": "first_31_trading_days_only",
+    "holdout_use": "final_gate_only"
+  },
+  "metric_contract": {
+    "metric_role": "profile_specific_live_episode_policy_research",
+    "decision_authority": "explicit_user_approved_profile_implementation_evidence",
+    "window_policy": "clean_baseline_31_day_calibration_latest_16_day_holdout",
+    "sample_floor": {
+      "calibration_signal_episodes": 6,
+      "calibration_completed_legs": 8,
+      "each_calibration_half_completed_legs": 3,
+      "holdout_signal_episodes": 3,
+      "holdout_completed_legs": 4,
+      "full_window_completed_legs": 10
+    },
+    "primary_decision_metric": "notional_weighted_ev_pct",
+    "source_quality_gate": [
+      "official_ka10080_success",
+      "47_matching_clean_baseline_trading_dates",
+      "valid_unique_completed_sor_regular_ohlc",
+      "positive_calibration_halves_and_thirds",
+      "positive_holdout_ev",
+      "calibration_holdout_and_full_held_legs_zero"
+    ],
+    "forbidden_uses": [
+      "cross_profile_outcome_pooling",
+      "touch_proxy_as_real_fill_evidence",
+      "widget_state_order_position_or_quantity_ownership",
+      "stop_loss_target_timeout_or_forced_exit_creation",
+      "quantity_above_two_or_leg_quantity_above_one",
+      "provider_bot_cap_or_broker_guard_change"
+    ]
+  },
+  "source_meta": {
+    "006800": {
+      "name": "미래에셋증권",
+      "request_code": "006800_AL",
+      "page_count": 37,
+      "bar_count": 17657,
+      "trading_date_count": 47,
+      "oldest_source_date": "2026-06-05",
+      "latest_source_date": "2026-08-11",
+      "latest_close_price": 35600,
+      "invalid_row_count": 0,
+      "duplicate_row_count": 0,
+      "source_quality_status": "PASS"
+    },
+    "080220": {
+      "name": "제주반도체",
+      "request_code": "080220_AL",
+      "page_count": 21,
+      "bar_count": 17746,
+      "trading_date_count": 47,
+      "oldest_source_date": "2026-06-05",
+      "latest_source_date": "2026-08-11",
+      "latest_close_price": 90400,
+      "invalid_row_count": 0,
+      "duplicate_row_count": 0,
+      "source_quality_status": "PASS"
+    },
+    "034020": {
+      "name": "두산에너빌리티",
+      "request_code": "034020_AL",
+      "page_count": 37,
+      "bar_count": 17657,
+      "trading_date_count": 47,
+      "oldest_source_date": "2026-06-05",
+      "latest_source_date": "2026-08-11",
+      "latest_close_price": 78100,
+      "invalid_row_count": 0,
+      "duplicate_row_count": 0,
+      "source_quality_status": "PASS"
+    },
+    "042660": {
+      "name": "한화오션",
+      "request_code": "042660_AL",
+      "page_count": 37,
+      "bar_count": 17657,
+      "trading_date_count": 47,
+      "oldest_source_date": "2026-06-05",
+      "latest_source_date": "2026-08-11",
+      "latest_close_price": 89200,
+      "invalid_row_count": 0,
+      "duplicate_row_count": 0,
+      "source_quality_status": "PASS"
+    }
+  },
+  "profiles": {
+    "mirae_asset_morning": {
+      "symbol": "006800",
+      "name": "미래에셋증권",
+      "session": "morning",
+      "decision": "holdout_pass_user_approved_live_profile",
+      "policy": {
+        "scan_start": "09:35",
+        "scan_end": "09:44",
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 1.75,
+        "rolling_low_proximity_pct": 0.5,
+        "entry_offsets_ticks": [-1, -2],
+        "entry_valid_completed_bars": 5,
+        "target_ticks": 4,
+        "quantity": 2,
+        "route": "SOR"
+      },
+      "calibration": {"signal_episodes": 8, "attempted_legs": 16, "completed_legs": 14, "no_fill_legs": 2, "held_legs": 0, "notional_weighted_ev_pct": 0.281042},
+      "calibration_half_ev_pct": [0.354401, 0.229411],
+      "calibration_third_ev_pct": [0.401052, 0.221633, 0.245081],
+      "holdout": {"signal_episodes": 4, "attempted_legs": 8, "completed_legs": 4, "no_fill_legs": 4, "held_legs": 0, "notional_weighted_ev_pct": 0.195075},
+      "full": {"signal_episodes": 12, "attempted_legs": 24, "completed_legs": 18, "no_fill_legs": 6, "held_legs": 0, "notional_weighted_ev_pct": 0.256946, "target_latency_median_minutes": 1, "target_latency_p90_minutes": 46, "target_latency_max_minutes": 73, "mae_max_pct": 1.812689}
+    },
+    "jeju_semiconductor_morning": {
+      "symbol": "080220",
+      "name": "제주반도체",
+      "session": "morning",
+      "decision": "holdout_pass_user_approved_live_profile",
+      "policy": {
+        "scan_start": "09:10",
+        "scan_end": "09:49",
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 2.5,
+        "rolling_low_proximity_pct": 0.1,
+        "entry_offsets_ticks": [0, -1],
+        "entry_valid_completed_bars": 3,
+        "target_ticks": 4,
+        "quantity": 2,
+        "route": "SOR"
+      },
+      "calibration": {"signal_episodes": 16, "attempted_legs": 32, "completed_legs": 29, "no_fill_legs": 3, "held_legs": 0, "notional_weighted_ev_pct": 0.186259},
+      "calibration_half_ev_pct": [0.179057, 0.194715],
+      "calibration_third_ev_pct": [0.194672, 0.170644, 0.199674],
+      "holdout": {"signal_episodes": 6, "attempted_legs": 12, "completed_legs": 8, "no_fill_legs": 4, "held_legs": 0, "notional_weighted_ev_pct": 0.264243},
+      "full": {"signal_episodes": 22, "attempted_legs": 44, "completed_legs": 37, "no_fill_legs": 7, "held_legs": 0, "notional_weighted_ev_pct": 0.202154, "target_latency_median_minutes": 5, "target_latency_p90_minutes": 30, "target_latency_max_minutes": 65, "mae_max_pct": 3.896104}
+    },
+    "doosan_enerbility_morning": {
+      "symbol": "034020",
+      "name": "두산에너빌리티",
+      "session": "morning",
+      "decision": "holdout_pass_user_approved_live_profile",
+      "policy": {
+        "scan_start": "09:20",
+        "scan_end": "09:49",
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 2.0,
+        "rolling_low_proximity_pct": 0.5,
+        "entry_offsets_ticks": [0, -1],
+        "entry_valid_completed_bars": 5,
+        "target_ticks": 4,
+        "quantity": 2,
+        "route": "SOR"
+      },
+      "calibration": {"signal_episodes": 13, "attempted_legs": 26, "completed_legs": 22, "no_fill_legs": 4, "held_legs": 0, "notional_weighted_ev_pct": 0.223798},
+      "calibration_half_ev_pct": [0.219414, 0.227998],
+      "calibration_third_ev_pct": [0.212058, 0.204967, 0.263067],
+      "holdout": {"signal_episodes": 5, "attempted_legs": 10, "completed_legs": 10, "no_fill_legs": 0, "held_legs": 0, "notional_weighted_ev_pct": 0.375457},
+      "full": {"signal_episodes": 18, "attempted_legs": 36, "completed_legs": 32, "no_fill_legs": 4, "held_legs": 0, "notional_weighted_ev_pct": 0.259811, "target_latency_median_minutes": 3, "target_latency_p90_minutes": 53, "target_latency_max_minutes": 165, "mae_max_pct": 2.333333}
+    },
+    "hanwha_ocean_late_morning": {
+      "symbol": "042660",
+      "name": "한화오션",
+      "session": "late_morning",
+      "decision": "holdout_pass_user_approved_live_profile",
+      "policy": {
+        "scan_start": "10:05",
+        "scan_end": "10:24",
+        "lookback_bars": 20,
+        "rolling_high_drawdown_pct": 1.25,
+        "rolling_low_proximity_pct": 0.1,
+        "entry_offsets_ticks": [0, -1],
+        "entry_valid_completed_bars": 5,
+        "target_ticks": 4,
+        "quantity": 2,
+        "route": "SOR"
+      },
+      "calibration": {"signal_episodes": 14, "attempted_legs": 28, "completed_legs": 22, "no_fill_legs": 6, "held_legs": 0, "notional_weighted_ev_pct": 0.149825},
+      "calibration_half_ev_pct": [0.154767, 0.146509],
+      "calibration_third_ev_pct": [0.152786, 0.157066, 0.14067],
+      "holdout": {"signal_episodes": 5, "attempted_legs": 10, "completed_legs": 9, "no_fill_legs": 1, "held_legs": 0, "notional_weighted_ev_pct": 0.235306},
+      "full": {"signal_episodes": 19, "attempted_legs": 38, "completed_legs": 31, "no_fill_legs": 7, "held_legs": 0, "notional_weighted_ev_pct": 0.169929, "target_latency_median_minutes": 6, "target_latency_p90_minutes": 182, "target_latency_max_minutes": 297, "mae_max_pct": 2.222222}
+    }
+  },
+  "decision": "four_profile_policy_evidence_ready_for_explicit_user_directed_implementation",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true
+}

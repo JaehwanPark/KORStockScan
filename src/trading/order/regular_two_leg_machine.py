@@ -100,6 +100,10 @@ class SamsungRegularTwoLegMachine:
         self.gateway = gateway
         self.state_path = Path(state_path)
         self.policy = policy
+        policy_leg_ids = tuple(getattr(policy, "entry_leg_ids", self.LEG_IDS))
+        if len(policy_leg_ids) != 2 or len(set(policy_leg_ids)) != 2:
+            raise ValueError("policy_leg_identity_contract_invalid")
+        self.leg_ids = policy_leg_ids
         self.strategy_name = strategy_name
         self.schema = schema
         self.legacy_schema = legacy_schema
@@ -337,7 +341,7 @@ class SamsungRegularTwoLegMachine:
             if any(not isinstance(leg, dict) for leg in legs):
                 self._block(now, "state_leg_payload_invalid")
                 return False
-            if {leg.get("leg_id") for leg in legs} != set(self.LEG_IDS):
+            if {leg.get("leg_id") for leg in legs} != set(self.leg_ids):
                 self._block(now, "state_leg_identity_invalid")
                 return False
             leg_order_nos: list[str] = []

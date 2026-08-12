@@ -2,7 +2,7 @@
 
 ## Scope
 
-Three independent regular-session profiles implement the user-selected active
+Seven independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -11,6 +11,10 @@ authority artifact, and exact broker-order ledger.
 | `samsung_heavy_midday` | 삼성중공업 `010140` | SOR regular | 13:20 through 13:29 |
 | `samsung_heavy_afternoon` | 삼성중공업 `010140` | SOR regular | 14:00 through 14:40 |
 | `sk_eternix_midday` | SK이터닉스 `475150` | SOR regular | 13:30 through 13:54 |
+| `mirae_asset_morning` | 미래에셋증권 `006800` | SOR regular | 09:35 through 09:44 |
+| `jeju_semiconductor_morning` | 제주반도체 `080220` | SOR regular | 09:10 through 09:49 |
+| `doosan_enerbility_morning` | 두산에너빌리티 `034020` | SOR regular | 09:20 through 09:49 |
+| `hanwha_ocean_late_morning` | 한화오션 `042660` | SOR regular | 10:05 through 10:24 |
 
 The 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -22,6 +26,22 @@ one-minute bars.  Each confirmed fill owns one +2-tick limit target.  There is n
 stop loss, target timeout, forced sale, or target cancellation; an unclosed
 position remains held.
 
+The four 2026-08-12 additions use the full clean-baseline 47-date window with
+31 calibration dates and the latest 16 dates as holdout. Their conservative
+execution proxy requires one-tick penetration beyond both entry and target:
+
+| Profile | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
+|---|---:|---:|---:|---|---:|---:|
+| `mirae_asset_morning` | 15 | 1.75% | 0.50% | -1/-2 ticks | 5 | +4 ticks |
+| `jeju_semiconductor_morning` | 20 | 2.50% | 0.10% | close/-1 tick | 3 | +4 ticks |
+| `doosan_enerbility_morning` | 15 | 2.00% | 0.50% | close/-1 tick | 5 | +4 ticks |
+| `hanwha_ocean_late_morning` | 20 | 1.25% | 0.10% | close/-1 tick | 5 | +4 ticks |
+
+The Doosan Enerbility and Hanwha Ocean episode profiles are parallel to their
+widget auto-trading owners. Neither owner reads the other's state, position
+quantity, or order numbers, and neither may cancel or sell the other's orders
+or quantity. Both may independently submit orders for the same symbol.
+
 ## Runtime authority and isolation
 
 The live service is fail-closed unless all of the following are true for the
@@ -32,16 +52,15 @@ exact profile and date:
 - the shared cached Kiwoom token is available;
 - the main bot process is active;
 - the symbol has an explicit `manual_operator` exclusion from the primary bot;
-- the 2026-06-05 through 2026-08-10 source replay and profile result pass;
+- the profile-bound frozen clean-baseline source replay and result pass;
 - the exact-date PREOPEN policy artifact and same-day authority artifact pass;
 - the endpoint is `https://api.kiwoom.com`, the route is SOR, and each order is
   exactly one share.
 
-Activation adds only `010140` and `475150` to
-`data/config/manual_control_excluded_codes.txt` with the protected
-`manual_operator` marker, after the account inventory and unfinished-order
-checks are clear. This transfers those symbols from the primary bot to these
-independent profile ledgers. Timer installation remains a separate reviewed
+Activation uses protected `manual_operator` markers for all six symbols in
+`data/config/manual_control_excluded_codes.txt`. This excludes the symbols from
+the primary bot while leaving the Doosan/Hanwha widget owners and episode
+owners mutually independent. Timer installation remains a separate reviewed
 operator action:
 
 ```bash
@@ -74,11 +93,11 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all three profiles and the existing Samsung regular machines, at most one
+Across all seven profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
-invalid, the lower-price family carries all policies forward.  Quantity, 50:50
-legs, target ticks, entry validity, route, stop/hold
+invalid, the lower-price family carries all policies forward. Quantity, each
+profile's frozen 50:50 entry offsets, target ticks, entry validity, route, stop/hold
 behavior, provider, bot, cap, and broker guards are immutable.  Each preflight
 first materializes or reuses the exact-date applied policy and binds its hash to
 the profile authority artifact.
@@ -100,8 +119,9 @@ midday and afternoon evaluated separately.
 A separate existing-symbol time-extension lane evaluates only supported
 midday/afternoon sessions that have no active profile for that symbol. Active
 symbol/session pairs are excluded rather than retuned through this discovery
-producer. With the current three configured active profiles, this lane contains only
-SK Eternix afternoon; Samsung Heavy already has both supported sessions.
+producer. Active symbol/session pairs are excluded, while unimplemented
+midday/afternoon windows for the newly added symbols remain eligible for the
+separate time-extension lane.
 
 Only profiles with matching source-qualified trading dates, positive
 notional-weighted holdout EV, the required calibration/holdout sample floors,

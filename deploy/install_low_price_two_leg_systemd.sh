@@ -13,6 +13,14 @@ UNITS=(
   korstockscan-low-price-two-leg-samsung-heavy-afternoon.timer
   korstockscan-low-price-two-leg-sk-eternix-midday-preflight.timer
   korstockscan-low-price-two-leg-sk-eternix-midday.timer
+  korstockscan-low-price-two-leg-mirae-asset-morning-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-morning.timer
+  korstockscan-low-price-two-leg-jeju-semiconductor-morning-preflight.timer
+  korstockscan-low-price-two-leg-jeju-semiconductor-morning.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-morning-preflight.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
+  korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -21,6 +29,14 @@ TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-afternoon.timer
   korstockscan-low-price-two-leg-sk-eternix-midday-preflight.timer
   korstockscan-low-price-two-leg-sk-eternix-midday.timer
+  korstockscan-low-price-two-leg-mirae-asset-morning-preflight.timer
+  korstockscan-low-price-two-leg-mirae-asset-morning.timer
+  korstockscan-low-price-two-leg-jeju-semiconductor-morning-preflight.timer
+  korstockscan-low-price-two-leg-jeju-semiconductor-morning.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-morning-preflight.timer
+  korstockscan-low-price-two-leg-doosan-enerbility-morning.timer
+  korstockscan-low-price-two-leg-hanwha-ocean-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-hanwha-ocean-late-morning.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -55,4 +71,4 @@ done
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed three lower-price profile timers; retired Daewoo units were removed"
+echo "installed seven lower-price profile timers; retired Daewoo units were removed"

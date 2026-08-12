@@ -18,6 +18,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
     applied_path,
     atomic_write_json,
     baseline_applied_payload,
+    candidate_policies_with_current_baselines,
     policy_hash,
     policy_mutations_between,
     validate_applied,
@@ -46,10 +47,7 @@ def _latest_prior_candidate(candidate_dir: Path, target_date: date) -> Path | No
 
 
 def _candidate_policies(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        profile_id: dict(payload["profiles"][profile_id]["policy"])
-        for profile_id in BASELINE_POLICIES
-    }
+    return candidate_policies_with_current_baselines(payload)
 
 
 def build_applied_policy(
@@ -114,9 +112,14 @@ def build_applied_policy(
         "profiles": {
             profile_id: {
                 "selection_status": str(
-                    candidate["profiles"][profile_id].get("selection_status") or ""
+                    (candidate.get("profiles") or {})
+                    .get(profile_id, {})
+                    .get("selection_status")
+                    or "baseline_added_during_profile_universe_expansion"
                 ),
-                "selected_axis": candidate["profiles"][profile_id].get("selected_axis"),
+                "selected_axis": (candidate.get("profiles") or {})
+                .get(profile_id, {})
+                .get("selected_axis"),
                 "policy": policy,
             }
             for profile_id, policy in policies.items()

@@ -10,12 +10,22 @@ from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_tick
 SAMSUNG_HEAVY_MIDDAY_WINDOW = (time(13, 20), time(13, 29))
 AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
 SK_ETERNIX_MIDDAY_WINDOW = (time(13, 30), time(13, 54))
-ALLOWED_SYMBOLS = frozenset({"010140", "475150"})
+MIRAE_ASSET_MORNING_WINDOW = (time(9, 35), time(9, 44))
+JEJU_SEMICONDUCTOR_MORNING_WINDOW = (time(9, 10), time(9, 49))
+DOOSAN_ENERBILITY_MORNING_WINDOW = (time(9, 20), time(9, 49))
+HANWHA_OCEAN_LATE_MORNING_WINDOW = (time(10, 5), time(10, 24))
+ALLOWED_SYMBOLS = frozenset(
+    {"006800", "010140", "034020", "042660", "080220", "475150"}
+)
 SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
     {
         SAMSUNG_HEAVY_MIDDAY_WINDOW,
         AFTERNOON_WINDOW,
         SK_ETERNIX_MIDDAY_WINDOW,
+        MIRAE_ASSET_MORNING_WINDOW,
+        JEJU_SEMICONDUCTOR_MORNING_WINDOW,
+        DOOSAN_ENERBILITY_MORNING_WINDOW,
+        HANWHA_OCEAN_LATE_MORNING_WINDOW,
     }
 )
 
@@ -49,7 +59,7 @@ class RegularTwoLegPolicy:
     lookback_bars: int = 30
     rolling_high_drawdown_pct: float = 1.25
     rolling_low_proximity_pct: float = 0.20
-    entry_offset_ticks: int = 1
+    entry_offsets_ticks: tuple[int, int] = (0, -1)
     entry_valid_completed_bars: int = 5
     target_ticks: int = 2
     max_source_lag_minutes: int = 2
@@ -69,7 +79,6 @@ class RegularTwoLegPolicy:
             min(
                 self.rolling_high_drawdown_pct,
                 self.rolling_low_proximity_pct,
-                self.entry_offset_ticks,
                 self.entry_valid_completed_bars,
                 self.target_ticks,
                 self.max_source_lag_minutes,
@@ -77,6 +86,17 @@ class RegularTwoLegPolicy:
             <= 0
         ):
             raise ValueError("invalid_regular_two_leg_policy")
+        if (
+            len(self.entry_offsets_ticks) != 2
+            or len(set(self.entry_offsets_ticks)) != 2
+            or any(
+                not isinstance(offset, int)
+                or isinstance(offset, bool)
+                or not -10 <= offset <= 0
+                for offset in self.entry_offsets_ticks
+            )
+        ):
+            raise ValueError("invalid_entry_offsets_ticks")
 
     def evaluate(self, bars: list[MinuteBar]) -> RegularSignal | None:
         if len(bars) < self.lookback_bars:
@@ -107,7 +127,7 @@ class RegularTwoLegPolicy:
             rolling_low=rolling_low,
             drawdown_pct=drawdown_pct,
             near_low_pct=near_low_pct,
-            entry_price=move_price_by_ticks(close, -self.entry_offset_ticks),
+            entry_price=move_price_by_ticks(close, self.entry_offsets_ticks[0]),
         )
 
     def target_price(self, fill_price: int) -> int:
@@ -116,20 +136,27 @@ class RegularTwoLegPolicy:
         return move_price_by_ticks(fill_price, self.target_ticks)
 
     @staticmethod
-    def entry_legs(signal_close: int) -> list[dict]:
+    def _leg_id(offset_ticks: int) -> str:
+        if offset_ticks == 0:
+            return "signal_close"
+        suffix = "tick" if abs(offset_ticks) == 1 else "ticks"
+        direction = "minus" if offset_ticks < 0 else "plus"
+        return f"signal_close_{direction}_{abs(offset_ticks)}{suffix}"
+
+    def entry_legs(self, signal_close: int) -> list[dict]:
         executable_close = clamp_price_to_tick(signal_close)
         return [
             {
-                "leg_id": "signal_close",
-                "price_role": "aggressive_50pct",
-                "entry_price": executable_close,
-            },
-            {
-                "leg_id": "signal_close_minus_1tick",
-                "price_role": "conservative_50pct",
-                "entry_price": move_price_by_ticks(executable_close, -1),
-            },
+                "leg_id": self._leg_id(offset),
+                "price_role": f"entry_offset_{offset}_ticks_50pct",
+                "entry_price": move_price_by_ticks(executable_close, offset),
+            }
+            for offset in self.entry_offsets_ticks
         ]
+
+    @property
+    def entry_leg_ids(self) -> tuple[str, str]:
+        return tuple(self._leg_id(offset) for offset in self.entry_offsets_ticks)
 
 
 @dataclass(frozen=True)
@@ -153,6 +180,10 @@ def _profile(
     lookback_bars: int,
     drawdown_pct: float,
     near_low_pct: float,
+    entry_offsets_ticks: tuple[int, int] = (0, -1),
+    entry_valid_completed_bars: int = 5,
+    target_ticks: int = 2,
+    runtime_policy_source: str = "clean_baseline_30d_calibration_16d_holdout_selected_v2",
 ) -> MachineProfile:
     upper = profile_id.upper()
     return MachineProfile(
@@ -167,7 +198,10 @@ def _profile(
             lookback_bars=lookback_bars,
             rolling_high_drawdown_pct=drawdown_pct,
             rolling_low_proximity_pct=near_low_pct,
-            runtime_policy_source="clean_baseline_30d_calibration_16d_holdout_selected_v2",
+            entry_offsets_ticks=entry_offsets_ticks,
+            entry_valid_completed_bars=entry_valid_completed_bars,
+            target_ticks=target_ticks,
+            runtime_policy_source=runtime_policy_source,
         ),
         enable_env=f"KORSTOCKSCAN_LOW_PRICE_TWO_LEG_{upper}_ENABLED",
         live_confirmation=f"{symbol}_{session.upper()}_TWO_LEG_LIVE",
@@ -206,6 +240,56 @@ PROFILES = {
             lookback_bars=20,
             drawdown_pct=2.00,
             near_low_pct=0.75,
+        ),
+        _profile(
+            "mirae_asset_morning",
+            "006800",
+            "미래에셋증권",
+            "morning",
+            window=MIRAE_ASSET_MORNING_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=1.75,
+            near_low_pct=0.50,
+            entry_offsets_ticks=(-1, -2),
+            target_ticks=4,
+            runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
+        ),
+        _profile(
+            "jeju_semiconductor_morning",
+            "080220",
+            "제주반도체",
+            "morning",
+            window=JEJU_SEMICONDUCTOR_MORNING_WINDOW,
+            lookback_bars=20,
+            drawdown_pct=2.50,
+            near_low_pct=0.10,
+            entry_valid_completed_bars=3,
+            target_ticks=4,
+            runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
+        ),
+        _profile(
+            "doosan_enerbility_morning",
+            "034020",
+            "두산에너빌리티",
+            "morning",
+            window=DOOSAN_ENERBILITY_MORNING_WINDOW,
+            lookback_bars=15,
+            drawdown_pct=2.00,
+            near_low_pct=0.50,
+            target_ticks=4,
+            runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
+        ),
+        _profile(
+            "hanwha_ocean_late_morning",
+            "042660",
+            "한화오션",
+            "late_morning",
+            window=HANWHA_OCEAN_LATE_MORNING_WINDOW,
+            lookback_bars=20,
+            drawdown_pct=1.25,
+            near_low_pct=0.10,
+            target_ticks=4,
+            runtime_policy_source="clean_baseline_31d_calibration_16d_holdout_penetration_selected_v1",
         ),
     )
 }

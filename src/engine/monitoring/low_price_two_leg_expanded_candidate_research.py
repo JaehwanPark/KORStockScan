@@ -55,7 +55,7 @@ SESSION_WINDOWS = {
     "midday": MIDDAY_WINDOW,
     "afternoon": AFTERNOON_WINDOW,
 }
-CANDIDATE_SYMBOLS = {
+REVIEWED_SYMBOLS = {
     "006800": "미래에셋증권",
     "007660": "이수페타시스",
     "015760": "한국전력",
@@ -68,6 +68,11 @@ CANDIDATE_SYMBOLS = {
 }
 IMPLEMENTED_SYMBOLS = {
     profile.symbol: profile.name for profile in LIVE_PROFILES.values()
+}
+CANDIDATE_SYMBOLS = {
+    symbol: name
+    for symbol, name in REVIEWED_SYMBOLS.items()
+    if symbol not in IMPLEMENTED_SYMBOLS
 }
 ACTIVE_SYMBOL_SESSIONS = frozenset(
     (profile.symbol, profile.session) for profile in LIVE_PROFILES.values()

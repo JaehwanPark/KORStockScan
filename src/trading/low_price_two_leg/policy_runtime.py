@@ -16,7 +16,15 @@ from src.trading.low_price_two_leg.profiles import PROFILES
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
-CANDIDATE_SCHEMA = "low_price_two_leg_policy_candidate_v1"
+CANDIDATE_SCHEMA = "low_price_two_leg_policy_candidate_v2"
+SUPPORTED_CANDIDATE_SCHEMAS = frozenset(
+    {"low_price_two_leg_policy_candidate_v1", CANDIDATE_SCHEMA}
+)
+LEGACY_V1_PROFILE_IDS = frozenset(
+    {"samsung_heavy_midday", "samsung_heavy_afternoon", "sk_eternix_midday"}
+)
+LEGACY_V1_LAST_SOURCE_DATE = date(2026, 8, 11)
+LEGACY_APPLIED_LAST_TARGET_DATE = date(2026, 8, 12)
 SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
@@ -155,7 +163,10 @@ def validate_profile_policy(profile_id: str, policy: Any) -> tuple[bool, str]:
 
 
 def validate_candidate(payload: Any) -> tuple[bool, str]:
-    if not isinstance(payload, dict) or payload.get("schema") != CANDIDATE_SCHEMA:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") not in SUPPORTED_CANDIDATE_SCHEMAS
+    ):
         return False, "candidate_schema_invalid"
     try:
         source_date = date.fromisoformat(str(payload.get("source_date") or ""))
@@ -163,6 +174,11 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
         return False, "candidate_source_date_invalid"
     if source_date < date.fromisoformat(CLEAN_BASELINE_DATE):
         return False, "candidate_source_date_precedes_clean_baseline"
+    if (
+        payload.get("schema") == "low_price_two_leg_policy_candidate_v1"
+        and source_date > LEGACY_V1_LAST_SOURCE_DATE
+    ):
+        return False, "candidate_legacy_schema_after_profile_expansion"
     if (
         payload.get("runtime_effect") is not False
         or payload.get("allowed_runtime_apply") is not False
@@ -188,8 +204,19 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
     if same_stage_guard["mutation_present"] and payload.get("policy_mutations"):
         return False, "candidate_same_stage_owner_conflict"
     profiles = payload.get("profiles")
-    if not isinstance(profiles, dict) or set(profiles) != set(BASELINE_POLICIES):
+    expected_profile_ids = (
+        LEGACY_V1_PROFILE_IDS
+        if payload.get("schema") == "low_price_two_leg_policy_candidate_v1"
+        else frozenset(BASELINE_POLICIES)
+    )
+    if not isinstance(profiles, dict) or set(profiles) != set(expected_profile_ids):
         return False, "candidate_profile_set_invalid"
+    if any(
+        str(item.get("profile_id") or "") not in profiles
+        for item in payload.get("policy_mutations") or []
+        if isinstance(item, dict)
+    ):
+        return False, "candidate_mutation_profile_not_in_candidate"
     policies: dict[str, Any] = {}
     for profile_id, item in profiles.items():
         if not isinstance(item, dict):
@@ -203,6 +230,22 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
     if payload.get("policy_hash") != policy_hash(policies):
         return False, "candidate_policy_hash_mismatch"
     return True, "valid"
+
+
+def candidate_policies_with_current_baselines(
+    payload: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Normalize a validated candidate across additive profile expansion."""
+    valid, reason = validate_candidate(payload)
+    if not valid:
+        raise ValueError(reason)
+    return {
+        profile_id: dict(
+            (payload.get("profiles") or {}).get(profile_id, {}).get("policy")
+            or baseline
+        )
+        for profile_id, baseline in BASELINE_POLICIES.items()
+    }
 
 
 def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
@@ -225,8 +268,20 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
     if not valid:
         return False, reason
     profiles = payload.get("profiles")
-    if not isinstance(profiles, dict) or set(profiles) != set(BASELINE_POLICIES):
+    if not isinstance(profiles, dict):
         return False, "applied_profile_set_invalid"
+    profile_ids = frozenset(profiles)
+    allowed_profile_ids = {frozenset(BASELINE_POLICIES)}
+    if target_date <= LEGACY_APPLIED_LAST_TARGET_DATE:
+        allowed_profile_ids.add(LEGACY_V1_PROFILE_IDS)
+    if profile_ids not in allowed_profile_ids:
+        return False, "applied_profile_set_invalid"
+    if any(
+        str(item.get("profile_id") or "") not in profiles
+        for item in payload.get("policy_mutations") or []
+        if isinstance(item, dict)
+    ):
+        return False, "applied_mutation_profile_not_in_applied"
     policies: dict[str, Any] = {}
     for profile_id, item in profiles.items():
         if not isinstance(item, dict):

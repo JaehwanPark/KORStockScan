@@ -23,6 +23,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
+    candidate_policies_with_current_baselines,
     policy_hash,
     policy_mutations_between,
     validate_candidate,
@@ -255,16 +256,34 @@ def extract_profile_row(
         reasons.append("legs_invalid")
     legs = [_sanitize_leg(leg, cost_pct) for leg in raw_legs if isinstance(leg, dict)]
     if attempted:
-        if len(legs) != 2 or {leg["leg_id"] for leg in legs} != {
-            "signal_close",
-            "signal_close_minus_1tick",
-        }:
+        if len(legs) != 2 or {leg["leg_id"] for leg in legs} != set(
+            profile.policy.entry_leg_ids
+        ):
             reasons.append("two_leg_identity_contract_invalid")
         if any(
             leg["quantity"] != 1 or leg["status"] not in KNOWN_LEG_STATUSES
             for leg in legs
         ):
             reasons.append("leg_quantity_or_status_invalid")
+        signal_close = _as_int(features.get("signal_close"))
+        if signal_close <= 0:
+            reasons.append("signal_close_missing_or_invalid")
+        else:
+            expected_entries = {
+                str(plan["leg_id"]): int(plan["entry_price"])
+                for plan in profile.policy.entry_legs(signal_close)
+            }
+            if any(
+                expected_entries.get(leg["leg_id"]) != leg["entry_price"]
+                for leg in legs
+            ):
+                reasons.append("leg_entry_price_profile_contract_invalid")
+        if any(
+            leg["fill_price"] > 0
+            and leg["target_price"] != profile.policy.target_price(leg["fill_price"])
+            for leg in legs
+        ):
+            reasons.append("leg_target_price_profile_contract_invalid")
         if any(not leg["contract_valid"] for leg in legs):
             reasons.append("leg_execution_contract_invalid")
         if any(not leg["terminal"] for leg in legs):
@@ -404,10 +423,7 @@ def _latest_prior_policies(candidate_dir: Path, target_date: str) -> dict[str, d
         valid, reason = validate_candidate(payload)
         if not valid:
             raise ValueError(f"latest_prior_candidate_{reason}")
-        return {
-            profile_id: dict(payload["profiles"][profile_id]["policy"])
-            for profile_id in PROFILES
-        }
+        return candidate_policies_with_current_baselines(payload)
     return {
         profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()
     }

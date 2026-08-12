@@ -1,6 +1,8 @@
 950160 # auto_open_loss KRX_OPEN profit=-29.72% stop=-5.00%
 005930 # manual_operator samsung_electronics
-034020 # manual_operator doosan_enerbility_widget_auto_trade_owner
-042660 # manual_operator hanwha_ocean
+034020 # manual_operator doosan_widget_and_episode_independent_owners
+042660 # manual_operator hanwha_widget_and_episode_independent_owners
 010140 # manual_operator samsung_heavy_low_price_two_leg_owner
 475150 # manual_operator sk_eternix_low_price_two_leg_owner
+006800 # manual_operator mirae_asset_low_price_two_leg_owner
+080220 # manual_operator jeju_semiconductor_low_price_two_leg_owner

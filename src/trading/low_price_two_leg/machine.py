@@ -45,3 +45,43 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             live_enabled=live_enabled,
             ownership_source=ownership_source,
         )
+
+    def _validate_state_contract(self, now) -> bool:
+        if not super()._validate_state_contract(now):
+            return False
+        legs = self._state.get("legs") or []
+        if not legs:
+            return True
+        try:
+            signal_close = int(self._state.get("signal_close", 0) or 0)
+            expected_entries = {
+                str(plan["leg_id"]): int(plan["entry_price"])
+                for plan in self.policy.entry_legs(signal_close)
+            }
+        except (TypeError, ValueError):
+            self._block(now, "state_signal_close_or_entry_plan_invalid")
+            return False
+        if signal_close <= 0 or any(
+            int(leg.get("entry_price", 0) or 0)
+            != expected_entries.get(str(leg.get("leg_id") or ""))
+            for leg in legs
+        ):
+            self._block(now, "state_leg_entry_policy_mismatch")
+            return False
+        for leg in legs:
+            try:
+                fill_price = int(leg.get("fill_price", 0) or 0)
+                target_price = int(leg.get("target_price", 0) or 0)
+            except (TypeError, ValueError):
+                self._block(now, "state_leg_target_price_invalid")
+                return False
+            if target_price < 0 or (
+                target_price > 0
+                and (
+                    fill_price <= 0
+                    or target_price != self.policy.target_price(fill_price)
+                )
+            ):
+                self._block(now, "state_leg_target_policy_mismatch")
+                return False
+        return True
