@@ -114,9 +114,7 @@ def test_websocket_price_comparison_rejects_stale_0b(monkeypatch, tmp_path):
     assert comparison["reason"] == "samsung_0b_stale"
 
 
-def test_websocket_price_comparison_rejects_unknown_samsung_item(
-    monkeypatch, tmp_path
-):
+def test_websocket_price_comparison_rejects_unknown_samsung_item(monkeypatch, tmp_path):
     now = datetime(2026, 8, 13, 9, 20, tzinfo=ZoneInfo("Asia/Seoul"))
     snapshot_path = tmp_path / "ws.json"
     snapshot_path.write_text(
