@@ -472,6 +472,12 @@ def test_entry_sizing_persists_venue_resolution_with_allocator_event_fields():
     assert state_handlers._scalping_sizing_state_fields(stock)[
         "venue_resolution"
     ].startswith("consistent_explicit:")
+    sizing_fields = state_handlers._scalping_sizing_state_fields(stock)
+    assert sizing_fields["sizing_venue_at_allocation"] == "KRX"
+    assert sizing_fields["sizing_venue_resolution_at_allocation"].startswith(
+        "consistent_explicit:"
+    )
+    assert sizing_fields["sizing_tier_reason_at_allocation"] == fields["tier_reason"]
 
 
 def _fresh_holding_score_fields(score=30, *, now_ts=None):
@@ -15138,6 +15144,9 @@ def test_entry_receipt_seeds_holding_ai_score_from_submit_order(monkeypatch):
             pass
 
         def start(self):
+            return None
+
+        def join(self):
             return None
 
     monkeypatch.setattr(receipts.threading, "Thread", _NoopThread)

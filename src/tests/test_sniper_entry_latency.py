@@ -607,6 +607,30 @@ def test_early_accel_strong_bundle_recheck_failure_class_is_canonical():
     )
 
 
+def test_entry_ai_recheck_provenance_marks_missing_call_as_not_evaluated():
+    fields = state_handlers._entry_ai_recheck_result_provenance_fields(
+        {
+            "recheck_action": "not_evaluated",
+            "recheck_score": "not_evaluated",
+        },
+        trigger_reason="ai_numeric_consistency_recheck",
+    )
+
+    assert fields["ai_result_source"] == "not_evaluated"
+    assert fields["ai_decision_evaluation_status"] == "not_evaluated_no_ai_call"
+    assert fields["ai_decision_trace_id"] == "-"
+
+    malformed_result = state_handlers._entry_ai_recheck_result_provenance_fields(
+        {"recheck_action": "WAIT", "recheck_score": 70},
+        trigger_reason="ai_numeric_consistency_recheck",
+    )
+    assert malformed_result["ai_result_source"] == "unknown"
+    assert (
+        malformed_result["ai_decision_evaluation_status"]
+        == "not_evaluated_provider_or_preflight"
+    )
+
+
 def test_early_accel_strong_bundle_recheck_revokes_older_probe_on_blocking_risk():
     assert state_handlers._early_accel_strong_bundle_recheck_revokes_probe_intent(
         {

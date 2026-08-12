@@ -2911,21 +2911,71 @@ def _reviewed_unknown_reason_for_stage_field(
         )
 
     def _is_reviewed_sizing_unknown_venue_fallback() -> bool:
-        if str(key or "") not in {"tier_reason", "venue"}:
+        if str(key or "") not in {
+            "sizing_venue_at_allocation",
+            "tier_reason",
+            "venue",
+        }:
             return False
         if _field_text("tier_reason") != "unknown_venue_fallback":
             return False
         resolved_venue = _field_text("venue").upper()
         effective_venue = _field_text("effective_venue").upper()
-        venue_contract = resolved_venue == "UNKNOWN" or (
-            resolved_venue == "PREMARKET_KRX_LIKE"
-            and effective_venue == "PREMARKET_KRX_LIKE"
+        sizing_venue = _field_text("sizing_venue_at_allocation").upper()
+        current_supported_venue = (
+            resolved_venue in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            and effective_venue == resolved_venue
+        )
+        historical_conservative_fallback = (
+            not sizing_venue
+            and stage
+            in {
+                "rising_missed_one_share_entry",
+                "scalping_scanner_watching_runtime_skip",
+            }
+            and current_supported_venue
+            and _is_falseish("actual_order_submitted")
+        )
+        venue_contract = (
+            resolved_venue == "UNKNOWN"
+            or sizing_venue == "UNKNOWN"
+            or historical_conservative_fallback
+            or (
+                resolved_venue == "PREMARKET_KRX_LIKE"
+                and effective_venue == "PREMARKET_KRX_LIKE"
+            )
         )
         return (
             venue_contract
             and _field_text("formula_version") == "entry_type_5stage_cap25_v1"
             and _field_text("tier") == "1"
             and _field_text("reference_time") not in {"", "-", "missing"}
+        )
+
+    def _is_reviewed_recheck_result_not_evaluated() -> bool:
+        if str(key or "") != "ai_result_source":
+            return False
+        if str(value or "").strip().lower() != "unknown":
+            return False
+        if stage not in {
+            "ai_numeric_consistency_recheck_evaluated",
+            "ai_numeric_consistency_recheck_skipped",
+            "early_accel_strong_bundle_recheck_evaluated",
+            "early_accel_strong_bundle_recheck_allowed",
+            "early_accel_strong_bundle_recheck_skipped",
+        }:
+            return False
+        return (
+            _field_text("decision_authority")
+            == "operator_runtime_decision_recheck_only"
+            and _field_text("ai_decision_evaluation_status")
+            == "not_evaluated_provider_or_preflight"
+            and _field_text("ai_decision_trace_id") in {"", "-"}
+            and _field_text("recheck_action") == "not_evaluated"
+            and _field_text("recheck_score") == "not_evaluated"
+            and _is_falseish("allowed_runtime_apply")
+            and _is_falseish("actual_order_submitted")
+            and _is_trueish("broker_order_forbidden")
         )
 
     def _is_reviewed_observation_only_venue_not_available() -> bool:
@@ -3232,10 +3282,17 @@ def _reviewed_unknown_reason_for_stage_field(
                 == "real_scalping_scanner_runtime_watchlist_handoff_only"
                 and venue_resolution == "missing_tradable_explicit_venue"
             )
-        if stage == "scalping_scanner_ws_prewarm_selected":
+        if stage in {
+            "scalping_scanner_ws_prewarm_filtered",
+            "scalping_scanner_ws_prewarm_selected",
+        }:
+            expected_authority = (
+                "scanner_ws_prewarm_source_filter_no_entry_authority"
+                if stage == "scalping_scanner_ws_prewarm_filtered"
+                else "scanner_ws_prewarm_observation_only_no_entry_authority"
+            )
             return (
-                _field_text("decision_authority")
-                == "scanner_ws_prewarm_observation_only_no_entry_authority"
+                _field_text("decision_authority") == expected_authority
                 and venue_resolution
                 == "scanner_session_clock:outside_supported_session"
                 and _field_text("market_session_bucket") == "outside_supported_session"
@@ -3642,6 +3699,8 @@ def _reviewed_unknown_reason_for_stage_field(
         return "reviewed_probe_terminal_failure_signature_source_gap"
     if _is_reviewed_sizing_unknown_venue_fallback():
         return "reviewed_explicit_sizing_unknown_venue_fallback"
+    if _is_reviewed_recheck_result_not_evaluated():
+        return "reviewed_recheck_result_not_evaluated"
     if _is_reviewed_observation_only_venue_not_available():
         return "reviewed_observation_only_venue_not_available"
     if _is_reviewed_scanner_stale_backoff_route_not_available():

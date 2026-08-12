@@ -7810,3 +7810,108 @@ def test_observation_source_quality_reviews_terminal_causal_and_route_provenance
     assert reviewed["scalp_fast_exit_claimed"]["fast_exit_ws_0d_route"] == (
         "reviewed_legacy_fast_exit_route_provenance"
     )
+
+
+def test_observation_source_quality_reviews_explicit_no_call_and_venue_provenance(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    no_call_fields = {
+        "ai_result_source": "unknown",
+        "ai_decision_evaluation_status": "not_evaluated_provider_or_preflight",
+        "ai_decision_trace_id": "-",
+        "recheck_action": "not_evaluated",
+        "recheck_score": "not_evaluated",
+        "decision_authority": "operator_runtime_decision_recheck_only",
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    historical_sizing_fields = {
+        "tier_reason": "unknown_venue_fallback",
+        "formula_version": "entry_type_5stage_cap25_v1",
+        "tier": 1,
+        "reference_time": "2026-08-12T09:04:00+09:00",
+        "venue": "KRX",
+        "effective_venue": "KRX",
+        "actual_order_submitted": False,
+    }
+    explicit_sizing_fields = {
+        **historical_sizing_fields,
+        "sizing_venue_at_allocation": "UNKNOWN",
+        "sizing_venue_resolution_at_allocation": ("missing_tradable_explicit_venue"),
+    }
+    _write_events(
+        tmp_path,
+        "2026-08-12",
+        [
+            _event(
+                "ai_numeric_consistency_recheck_evaluated",
+                no_call_fields,
+                record_id=1,
+            ),
+            _event(
+                "early_accel_strong_bundle_recheck_allowed",
+                no_call_fields,
+                record_id=2,
+            ),
+            _event(
+                "scalping_scanner_watching_runtime_skip",
+                explicit_sizing_fields,
+                record_id=3,
+            ),
+            _event(
+                "rising_missed_one_share_entry",
+                historical_sizing_fields,
+                record_id=4,
+            ),
+            _event(
+                "scalping_scanner_ws_prewarm_filtered",
+                {
+                    "venue": "UNKNOWN",
+                    "effective_venue": "UNKNOWN",
+                    "venue_resolution": (
+                        "scanner_session_clock:outside_supported_session"
+                    ),
+                    "market_session_bucket": "outside_supported_session",
+                    "decision_authority": (
+                        "scanner_ws_prewarm_source_filter_no_entry_authority"
+                    ),
+                    "runtime_effect": True,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=5,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-08-12")
+
+    assert report["unknown_token_findings"] == []
+    reviewed = {
+        item["stage"]: {
+            field["field"]: field["reviewed_reason"] for field in item["fields"]
+        }
+        for item in report["reviewed_unknown_token_findings"]
+    }
+    assert reviewed["ai_numeric_consistency_recheck_evaluated"] == {
+        "ai_result_source": "reviewed_recheck_result_not_evaluated"
+    }
+    assert reviewed["early_accel_strong_bundle_recheck_allowed"] == {
+        "ai_result_source": "reviewed_recheck_result_not_evaluated"
+    }
+    assert reviewed["scalping_scanner_watching_runtime_skip"] == {
+        "sizing_venue_at_allocation": (
+            "reviewed_explicit_sizing_unknown_venue_fallback"
+        ),
+        "tier_reason": "reviewed_explicit_sizing_unknown_venue_fallback",
+    }
+    assert reviewed["rising_missed_one_share_entry"] == {
+        "tier_reason": "reviewed_explicit_sizing_unknown_venue_fallback"
+    }
+    assert reviewed["scalping_scanner_ws_prewarm_filtered"] == {
+        "effective_venue": "reviewed_scanner_venue_fail_closed_provenance",
+        "venue": "reviewed_scanner_venue_fail_closed_provenance",
+    }

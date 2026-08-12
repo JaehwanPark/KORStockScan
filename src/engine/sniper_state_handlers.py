@@ -12331,6 +12331,21 @@ def _scalping_sizing_state_fields(stock: dict | None) -> dict[str, Any]:
         for state_key, event_key in _SCALPING_SIZING_STATE_FIELD_MAP.items()
         if stock.get(state_key) not in (None, "")
     }
+    # Generic ``venue`` is overwritten by the current scanner venue later in
+    # the pipeline-event merge. Preserve the immutable allocator-time venue so
+    # a later KRX/NXT resolution cannot make a conservative UNKNOWN tier look
+    # internally inconsistent in source-quality reports.
+    event_fields.update(
+        {
+            "sizing_venue_at_allocation": event_fields.get("venue") or "UNKNOWN",
+            "sizing_venue_resolution_at_allocation": event_fields.get(
+                "venue_resolution"
+            )
+            or "not_available_pre_contract",
+            "sizing_tier_reason_at_allocation": event_fields.get("tier_reason")
+            or "not_available_pre_contract",
+        }
+    )
     event_fields["strategy"] = normalize_strategy(stock.get("strategy"))
     source_signature = stock.get("source_signature") or stock.get(
         "scanner_source_signature"
@@ -42810,7 +42825,16 @@ def _entry_ai_recheck_result_provenance_fields(
     """Publish a lightweight exact-trace result contract for retry consumers."""
 
     source = ai_decision if isinstance(ai_decision, dict) else {}
-    result_source = str(source.get("ai_result_source") or "unknown").strip().lower()
+    reported_result_source = str(source.get("ai_result_source") or "").strip().lower()
+    explicit_no_call = bool(
+        not reported_result_source
+        and str(source.get("recheck_action") or "").strip().lower() == "not_evaluated"
+        and str(source.get("recheck_score") or "").strip().lower() == "not_evaluated"
+        and not str(source.get("ai_decision_trace_id") or "").strip()
+    )
+    result_source = reported_result_source or (
+        "not_evaluated" if explicit_no_call else "unknown"
+    )
     transport_timeout = result_source == "timeout" or bool(
         source.get("openai_timeout_like")
         or source.get("openai_http_timeout_budget_exhausted")
@@ -42821,7 +42845,11 @@ def _entry_ai_recheck_result_provenance_fields(
         else (
             "evaluated"
             if result_source in {"live", "prior_valid"}
-            else "not_evaluated_provider_or_preflight"
+            else (
+                "not_evaluated_no_ai_call"
+                if result_source == "not_evaluated"
+                else "not_evaluated_provider_or_preflight"
+            )
         )
     )
     return {
