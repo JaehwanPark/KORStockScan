@@ -27,6 +27,7 @@ from src.engine.monitoring.samsung_widget_advisory import (
 from src.engine.monitoring.samsung_widget_contract import KST, SessionContext
 
 RELATIVE_MAX_AGE_SEC = 120
+FOREIGN_DELAYED_ESTIMATE_MAX_AGE_SEC = 3600
 EXTERNAL_THRESHOLDS = {"USDKRW": 0.25}
 
 
@@ -35,6 +36,8 @@ class WidgetAuxiliaryProfile:
     symbol: str
     peer_symbol: str
     peer_name: str
+    market_index_code: str
+    market_index_name: str
     context_version: str
 
 
@@ -42,6 +45,8 @@ DOOSAN_AUXILIARY_PROFILE = WidgetAuxiliaryProfile(
     symbol="034020",
     peer_symbol="267260",
     peer_name="HD현대일렉트릭",
+    market_index_code="001",
+    market_index_name="KOSPI_001",
     context_version="doosan_krx_auxiliary_context_v1",
 )
 
@@ -49,8 +54,56 @@ HANWHA_OCEAN_AUXILIARY_PROFILE = WidgetAuxiliaryProfile(
     symbol="042660",
     peer_symbol="010140",
     peer_name="삼성중공업",
+    market_index_code="001",
+    market_index_name="KOSPI_001",
     context_version="hanwha_ocean_krx_auxiliary_context_v1",
 )
+
+MIRAE_ASSET_AUXILIARY_PROFILE = WidgetAuxiliaryProfile(
+    symbol="006800",
+    peer_symbol="005940",
+    peer_name="NH투자증권",
+    market_index_code="001",
+    market_index_name="KOSPI_001",
+    context_version="mirae_asset_krx_auxiliary_context_v1",
+)
+
+SAMSUNG_HEAVY_AUXILIARY_PROFILE = WidgetAuxiliaryProfile(
+    symbol="010140",
+    peer_symbol="042660",
+    peer_name="한화오션",
+    market_index_code="001",
+    market_index_name="KOSPI_001",
+    context_version="samsung_heavy_krx_auxiliary_context_v1",
+)
+
+JEJU_SEMICONDUCTOR_AUXILIARY_PROFILE = WidgetAuxiliaryProfile(
+    symbol="080220",
+    peer_symbol="000660",
+    peer_name="SK하이닉스",
+    market_index_code="101",
+    market_index_name="KOSDAQ_101",
+    context_version="jeju_semiconductor_krx_auxiliary_context_v1",
+)
+
+SK_ETERNIX_AUXILIARY_PROFILE = WidgetAuxiliaryProfile(
+    symbol="475150",
+    peer_symbol="322000",
+    peer_name="HD현대에너지솔루션",
+    market_index_code="001",
+    market_index_name="KOSPI_001",
+    context_version="sk_eternix_krx_auxiliary_context_v1",
+)
+
+WIDGET_SYMBOL_AUXILIARY_PROFILES = {
+    profile.symbol: profile
+    for profile in (
+        MIRAE_ASSET_AUXILIARY_PROFILE,
+        SAMSUNG_HEAVY_AUXILIARY_PROFILE,
+        JEJU_SEMICONDUCTOR_AUXILIARY_PROFILE,
+        SK_ETERNIX_AUXILIARY_PROFILE,
+    )
+}
 
 
 def _session_return(bars: list[MinuteBar]) -> float | None:
@@ -93,7 +146,26 @@ def _flow_component_status(flow: dict[str, Any], component: str) -> str:
         return "UNAVAILABLE"
     if age < 0:
         return "TIME_CONFLICT"
-    return "OBSERVED" if age <= FLOW_STALE_SEC else "STALE"
+    if age <= FLOW_STALE_SEC:
+        return "OBSERVED"
+    if component == "foreign" and age <= FOREIGN_DELAYED_ESTIMATE_MAX_AGE_SEC:
+        return "DELAYED_ESTIMATE"
+    return "STALE"
+
+
+def _combined_flow_status(foreign_status: str, program_status: str) -> str:
+    statuses = {foreign_status, program_status}
+    if statuses == {"OBSERVED"}:
+        return "OBSERVED"
+    if "OBSERVED" in statuses:
+        return "OBSERVED_PARTIAL"
+    if "DELAYED_ESTIMATE" in statuses:
+        return "DELAYED_ESTIMATE"
+    if "TIME_CONFLICT" in statuses:
+        return "TIME_CONFLICT"
+    if "STALE" in statuses:
+        return "STALE"
+    return "UNAVAILABLE"
 
 
 def _neutral_relative_context(
@@ -130,6 +202,7 @@ class WidgetAuxiliaryContextCollector:
         profile: WidgetAuxiliaryProfile,
         *,
         external_provider: ExternalMarketProvider | None = None,
+        flow_fetch_interval_sec: int = 60,
     ) -> None:
         self.profile = profile
         self.external_provider = (
@@ -140,6 +213,7 @@ class WidgetAuxiliaryContextCollector:
             if external_provider is None
             else external_provider
         )
+        self.flow_fetch_interval_sec = max(60, int(flow_fetch_interval_sec))
         self.reset()
 
     def reset(self) -> None:
@@ -216,7 +290,7 @@ class WidgetAuxiliaryContextCollector:
         aligned["same_window_aliases"] = {
             "samsung": self.profile.symbol,
             "sk_hynix": self.profile.peer_symbol,
-            "kospi": "KOSPI_001",
+            "kospi": self.profile.market_index_name,
         }
         aligned["same_window_generic"] = {
             "peer": _generic_aligned_windows(
@@ -256,9 +330,12 @@ class WidgetAuxiliaryContextCollector:
         observed_at: datetime,
         context: SessionContext,
         primary_bars: list[MinuteBar],
+        market_payload: dict[str, Any] | None = None,
+        external_points: dict[str, ExternalPoint] | None = None,
+        inherited_gaps: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         now = _as_kst(observed_at)
-        gaps: list[dict[str, str]] = []
+        gaps: list[dict[str, str]] = list(inherited_gaps or [])
         minute_key = now.strftime("%Y%m%d%H%M")
         if minute_key != self._last_relative_minute:
             peer_payload = self._optional_post(
@@ -272,13 +349,19 @@ class WidgetAuxiliaryContextCollector:
                 },
                 gaps,
             )
-            kospi_payload = self._optional_post(
-                client,
-                "/api/dostk/chart",
-                "ka20005",
-                {"inds_cd": "001", "tic_scope": "1"},
-                gaps,
-            )
+            if market_payload is None:
+                kospi_payload = self._optional_post(
+                    client,
+                    "/api/dostk/chart",
+                    "ka20005",
+                    {
+                        "inds_cd": self.profile.market_index_code,
+                        "tic_scope": "1",
+                    },
+                    gaps,
+                )
+            else:
+                kospi_payload = market_payload
             peer_bars = completed_session_bars(
                 peer_payload.get("stk_min_pole_chart_qry"),
                 observed_at=now,
@@ -300,7 +383,10 @@ class WidgetAuxiliaryContextCollector:
             self._last_relative_minute = minute_key
 
         epoch = now.timestamp()
-        if epoch - self._last_flow_fetch >= 60 or not self._flow:
+        if (
+            epoch - self._last_flow_fetch >= self.flow_fetch_interval_sec
+            or not self._flow
+        ):
             investor_payload = self._optional_post(
                 client,
                 "/api/dostk/chart",
@@ -332,7 +418,11 @@ class WidgetAuxiliaryContextCollector:
             )
             self._last_flow_fetch = epoch
 
-        if epoch - self._last_external_fetch >= 60 or not self._external_points:
+        if external_points is not None:
+            if external_points:
+                self._external_points = external_points
+            self._last_external_fetch = epoch
+        elif epoch - self._last_external_fetch >= 60 or not self._external_points:
             try:
                 external_points = self.external_provider.fetch(now)
             except Exception as exc:
@@ -355,15 +445,31 @@ class WidgetAuxiliaryContextCollector:
             else "LIMITED"
         )
         relative_status = str(relative.get("status") or "UNAVAILABLE")
-        flow_status = str(self._flow.get("status") or "UNAVAILABLE")
         foreign_flow_status = _flow_component_status(self._flow, "foreign")
         program_flow_status = _flow_component_status(self._flow, "program")
+        raw_flow_status = str(self._flow.get("status") or "UNAVAILABLE")
+        flow_status = _combined_flow_status(foreign_flow_status, program_flow_status)
+        positive_promotion_ready = bool(
+            relative_status == "OBSERVED"
+            and foreign_flow_status == "OBSERVED"
+            and program_flow_status == "OBSERVED"
+            and external_status == "OBSERVED"
+        )
+        negative_veto_ready = bool(
+            relative_status == "OBSERVED"
+            or foreign_flow_status == "OBSERVED"
+            or program_flow_status == "OBSERVED"
+        )
         auxiliary_status = (
             "OBSERVED"
-            if relative_status == "OBSERVED"
-            and flow_status == "OBSERVED"
-            and external_status == "OBSERVED"
-            else "LIMITED"
+            if positive_promotion_ready
+            else (
+                "OBSERVED_PARTIAL"
+                if relative_status == "OBSERVED"
+                and flow_status == "OBSERVED_PARTIAL"
+                and external_status == "OBSERVED"
+                else "LIMITED"
+            )
         )
         return {
             "relative": relative,
@@ -374,13 +480,17 @@ class WidgetAuxiliaryContextCollector:
                 "status": auxiliary_status,
                 "relative_status": relative_status,
                 "flow_status": flow_status,
+                "raw_flow_status": raw_flow_status,
                 "foreign_flow_status": foreign_flow_status,
                 "program_flow_status": program_flow_status,
+                "positive_promotion_ready": positive_promotion_ready,
+                "negative_veto_ready": negative_veto_ready,
                 "external_status": external_status,
                 "primary_symbol": self.profile.symbol,
                 "peer_symbol": self.profile.peer_symbol,
                 "peer_name": self.profile.peer_name,
-                "market_index": "KOSPI_001",
+                "market_index": self.profile.market_index_name,
+                "market_index_code": self.profile.market_index_code,
                 "external_keys": ["USDKRW"],
                 "context_version": self.profile.context_version,
                 "optional_gaps": gaps,
@@ -414,10 +524,15 @@ def attach_auxiliary_summary(
     flow = flow if isinstance(flow, dict) else {}
     if summary.get("flow_status") != "OBSERVED":
         if summary.get("program_flow_status") == "OBSERVED":
+            foreign_suffix = (
+                "FOREIGN_DELAYED"
+                if summary.get("foreign_flow_status") == "DELAYED_ESTIMATE"
+                else "FOREIGN_LIMITED"
+            )
             flow_signal = (
-                "PROGRAM_NONWORSENING_FOREIGN_LIMITED"
+                f"PROGRAM_NONWORSENING_{foreign_suffix}"
                 if flow.get("program_nonworsening")
-                else "PROGRAM_DETERIORATING_FOREIGN_LIMITED"
+                else f"PROGRAM_DETERIORATING_{foreign_suffix}"
             )
         elif summary.get("foreign_flow_status") == "OBSERVED":
             flow_signal = (
@@ -449,9 +564,19 @@ def attach_auxiliary_summary(
         reasons = [value for value in reasons if value != "relative_strength_not_weak"]
         if "relative_strength_unavailable" not in unmet:
             unmet.append("relative_strength_unavailable")
-    if attached_summary.get("flow_status") != "OBSERVED":
+    if attached_summary.get("flow_status") not in {
+        "OBSERVED",
+        "OBSERVED_PARTIAL",
+    }:
         if "regular_flow_unavailable" not in unmet:
             unmet.append("regular_flow_unavailable")
+    else:
+        unmet = [value for value in unmet if value != "regular_flow_unavailable"]
+        if (
+            attached_summary.get("foreign_flow_status") == "DELAYED_ESTIMATE"
+            and "foreign_flow_delayed_estimate" not in unmet
+        ):
+            unmet.append("foreign_flow_delayed_estimate")
     if attached_summary.get("external_status") != "OBSERVED":
         if "external_context_data_limited" not in unmet:
             unmet.append("external_context_data_limited")

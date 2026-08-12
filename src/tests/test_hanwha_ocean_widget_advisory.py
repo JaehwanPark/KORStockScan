@@ -60,6 +60,7 @@ def _base_advisory(
             "relative_status": "OBSERVED",
             "flow_status": "OBSERVED",
             "external_status": "OBSERVED",
+            "positive_promotion_ready": True,
         },
         "external_risk": {"level": "CLEAR"},
         "flow": {
@@ -195,6 +196,7 @@ def test_hanwha_ocean_deteriorating_flow_requires_recent_resistance_reclaim():
 @pytest.mark.parametrize(
     "flow_signal",
     [
+        "PROGRAM_DETERIORATING_FOREIGN_DELAYED",
         "PROGRAM_DETERIORATING_FOREIGN_LIMITED",
         "FOREIGN_DETERIORATING_PROGRAM_LIMITED",
     ],

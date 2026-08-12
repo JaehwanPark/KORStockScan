@@ -36,7 +36,7 @@ METRIC_CONTRACT = {
     "primary_decision_metric": "none_operator_advisory",
     "source_quality_gate": (
         "exact_date_verified_policy;fresh_quote_and_bbo;completed_contiguous_1m;"
-        "same_symbol_KRX_provenance"
+        "same_symbol_KRX_provenance;auxiliary_component_freshness_provenance"
     ),
     "forbidden_uses": [
         "cross_symbol_signal_transfer",
@@ -45,6 +45,8 @@ METRIC_CONTRACT = {
         "token_issue_or_refresh",
         "provider_or_bot_control",
         "automatic_policy_promotion",
+        "delayed_foreign_estimate_positive_promotion",
+        "uncalibrated_auxiliary_entry_veto",
     ],
 }
 

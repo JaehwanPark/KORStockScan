@@ -37,7 +37,7 @@ POLICY_PREFIX = "widget_symbol_runtime_policy"
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-12T12:09:57+09:00",
+    "retrieved_at_kst": "2026-08-12T15:12:22+09:00",
     "inspected_paths": [
         "kiwoom_docs/종목정보.md",
         "kiwoom_docs/시세.md",
@@ -50,7 +50,10 @@ OFFICIAL_REFERENCE = {
     "request_contracts": [
         "POST /api/dostk/stkinfo; api-id=ka10001",
         "POST /api/dostk/mrkcond; api-id=ka10004",
+        "POST /api/dostk/chart; api-id=ka10064",
         "POST /api/dostk/chart; api-id=ka10080",
+        "POST /api/dostk/chart; api-id=ka20005",
+        "POST /api/dostk/mrkcond; api-id=ka90008",
     ],
 }
 

@@ -64,6 +64,7 @@ ACTIONABLE_ENTRY_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
 DETERIORATING_FLOW_SIGNALS = frozenset(
     {
         "DETERIORATING",
+        "PROGRAM_DETERIORATING_FOREIGN_DELAYED",
         "PROGRAM_DETERIORATING_FOREIGN_LIMITED",
         "FOREIGN_DETERIORATING_PROGRAM_LIMITED",
     }
@@ -119,8 +120,11 @@ def apply_hanwha_ocean_entry_policy(
     auxiliary_context = auxiliary_context if isinstance(auxiliary_context, dict) else {}
     flow_signal = str(auxiliary_context.get("flow_signal") or "DATA_LIMITED")
     deteriorating_flow_observed = flow_signal in DETERIORATING_FLOW_SIGNALS
-    auxiliary_observed = auxiliary_context.get("status") == "OBSERVED"
-    auxiliary_high_ready = bool(auxiliary_observed and base_state == "ENTRY_READY")
+    auxiliary_high_ready = bool(
+        auxiliary_context.get("status") == "OBSERVED"
+        and auxiliary_context.get("positive_promotion_ready") is True
+        and base_state == "ENTRY_READY"
+    )
     tier = "HIGH" if high_confidence_structure and auxiliary_high_ready else "STANDARD"
     policy = {
         "strategy_profile": contract.STRATEGY_PROFILE,

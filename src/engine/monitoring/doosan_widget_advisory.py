@@ -102,8 +102,11 @@ def apply_doosan_entry_policy(
     base_state = str(result.get("raw_state") or result.get("state") or "DATA_WAIT")
     auxiliary_context = result.get("auxiliary_context")
     auxiliary_context = auxiliary_context if isinstance(auxiliary_context, dict) else {}
-    auxiliary_observed = auxiliary_context.get("status") == "OBSERVED"
-    auxiliary_high_ready = bool(auxiliary_observed and base_state == "ENTRY_READY")
+    auxiliary_high_ready = bool(
+        auxiliary_context.get("status") == "OBSERVED"
+        and auxiliary_context.get("positive_promotion_ready") is True
+        and base_state == "ENTRY_READY"
+    )
     tier = (
         "HIGH"
         if price_structure_tier == "HIGH" and auxiliary_high_ready

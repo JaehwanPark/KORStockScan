@@ -733,6 +733,28 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   calibration side. This source-only lane has no token mutation, account,
   order, runtime, provider, bot, cap, or broker-guard authority.
 
+### 2026-08-12 Widget auxiliary-flow freshness gate
+
+- Rechecked at `2026-08-12T15:12:22+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/차트.md` for `ka10064` and `ka20005`,
+  `kiwoom_docs/시세.md`, `kiwoom/_data/kiwoom_api_spec.json`,
+  `kiwoom/specs.py`, `kiwoom/core`, and Postman. Official `ka10064` provides
+  each estimate's `tm` but does not guarantee a refresh interval. Official
+  `ka20005` identifies `001` as KOSPI composite and `101` as KOSDAQ composite.
+- Widget collectors therefore preserve `ka10064.tm` as the foreign-estimate
+  source time and never replace it with REST receipt time. More than five and
+  at most sixty minutes is labeled `DELAYED_ESTIMATE`; older, conflicting, or
+  missing values remain stale/unavailable. A fresh `ka90008` program component
+  may produce `OBSERVED_PARTIAL`, but the delayed foreign estimate cannot grant
+  positive promotion or be presented as real-time flow.
+- Doosan, Hanwha Ocean, Mirae Asset Securities, Samsung Heavy Industries, Jeju
+  Semiconductor, and SK Eternix keep quote/BBO/minute-bar hard source quality
+  separate from this auxiliary component quality. The four prospective symbol
+  collectors store peer, market-index, foreign estimate, program, and USD/KRW
+  provenance as observation-only data without account, order, quantity, token
+  issue/refresh, provider, bot, threshold, or broker-guard authority.
+
 ## String And Sign Parsing
 
 - Price and quantity fields are normalized as unsigned magnitude unless a

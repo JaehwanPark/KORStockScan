@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, time as clock_time, timedelta
 from pathlib import Path
 from statistics import median
@@ -15,13 +15,17 @@ from typing import Any
 import requests
 
 from src.engine.monitoring.samsung_widget_advisory import (
+    ExternalPoint,
     KiwoomReadOnlyClient,
     MinuteBar,
     ReadOnlyRequestBudget,
+    YahooExternalMarketProvider,
     _as_kst,
     _parse_bbo,
     _positive_int,
+    _relative_quality_assessment,
     completed_session_bars,
+    evaluate_external_risk,
 )
 from src.engine.monitoring.samsung_widget_contract import ADVISORY_AUTHORITY, KST
 from src.engine.monitoring.widget_symbol_runtime_contract import (
@@ -29,6 +33,11 @@ from src.engine.monitoring.widget_symbol_runtime_contract import (
     DEFAULT_OBSERVATION_DIR,
     METRIC_CONTRACT,
     SNAPSHOT_SCHEMA_VERSION,
+)
+from src.engine.monitoring.widget_auxiliary_context import (
+    WIDGET_SYMBOL_AUXILIARY_PROFILES,
+    WidgetAuxiliaryContextCollector,
+    attach_auxiliary_summary,
 )
 from src.engine.monitoring.widget_symbol_runtime_policy import (
     OFFICIAL_REFERENCE,
@@ -250,6 +259,22 @@ class WidgetSymbolRuntimeCollector:
         self._policies: dict[str, dict[str, Any]] = {}
         self._minute_cache: dict[str, tuple[str, dict[str, Any]]] = {}
         self._bbo_cache: dict[str, tuple[str, dict[str, Any], datetime]] = {}
+        self._quote_cache: dict[str, tuple[str, dict[str, Any], datetime]] = {}
+        self._market_cache: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._external_points: dict[str, ExternalPoint] = {}
+        self._last_external_fetch = 0.0
+        self._external_provider = YahooExternalMarketProvider(
+            tickers={"USDKRW": "KRW=X"},
+            thread_name_prefix="widget-symbol-shared-yahoo",
+        )
+        self._auxiliary_collectors = {
+            symbol: WidgetAuxiliaryContextCollector(
+                profile,
+                external_provider=self._external_provider,
+                flow_fetch_interval_sec=120,
+            )
+            for symbol, profile in WIDGET_SYMBOL_AUXILIARY_PROFILES.items()
+        }
         self._episodes: dict[str, EpisodeState] = {}
         self._last_record_key: dict[str, str] = {}
 
@@ -263,6 +288,12 @@ class WidgetSymbolRuntimeCollector:
         )
         self._minute_cache.clear()
         self._bbo_cache.clear()
+        self._quote_cache.clear()
+        self._market_cache.clear()
+        self._external_points = {}
+        self._last_external_fetch = 0.0
+        for collector in self._auxiliary_collectors.values():
+            collector.reset()
         self._episodes = {}
         for symbol, policy in self._policies.items():
             snapshot = CONTRACTS[symbol].load_snapshot()
@@ -308,6 +339,62 @@ class WidgetSymbolRuntimeCollector:
             session_end=context.end,
             limit=400,
         )
+
+    def _quote(
+        self,
+        *,
+        client: KiwoomReadOnlyClient,
+        symbol: str,
+        observed_at: datetime,
+    ) -> tuple[dict[str, Any], float]:
+        bucket = observed_at.strftime("%Y%m%d%H%M") + str(observed_at.second // 30)
+        cached = self._quote_cache.get(symbol)
+        if cached is None or cached[0] != bucket:
+            payload = client.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": symbol})
+            self._quote_cache[symbol] = (bucket, payload, observed_at)
+        cached = self._quote_cache[symbol]
+        return dict(cached[1]), max(0.0, (observed_at - cached[2]).total_seconds())
+
+    def _shared_market_payload(
+        self,
+        *,
+        client: KiwoomReadOnlyClient,
+        index_code: str,
+        observed_at: datetime,
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        minute_key = observed_at.strftime("%Y%m%d%H%M")
+        cached = self._market_cache.get(index_code)
+        if cached is not None and cached[0] == minute_key:
+            return cached[1], []
+        try:
+            payload = client.post(
+                "/api/dostk/chart",
+                "ka20005",
+                {"inds_cd": index_code, "tic_scope": "1"},
+                optional=True,
+            )
+        except Exception as exc:
+            return {}, [{"source": "ka20005", "error": type(exc).__name__}]
+        self._market_cache[index_code] = (minute_key, payload)
+        return payload, []
+
+    def _shared_external_points(
+        self, observed_at: datetime
+    ) -> tuple[dict[str, ExternalPoint], list[dict[str, str]]]:
+        epoch = observed_at.timestamp()
+        if epoch - self._last_external_fetch < 60 and self._external_points:
+            return self._external_points, []
+        try:
+            points = self._external_provider.fetch(observed_at)
+        except Exception as exc:
+            self._last_external_fetch = epoch
+            return self._external_points, [
+                {"source": "USDKRW", "error": type(exc).__name__}
+            ]
+        if points:
+            self._external_points = points
+        self._last_external_fetch = epoch
+        return self._external_points, []
 
     def _bbo(
         self,
@@ -470,7 +557,9 @@ class WidgetSymbolRuntimeCollector:
             }
             _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
             return payload
-        quote = client.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": symbol})
+        quote, quote_age_sec = self._quote(
+            client=client, symbol=symbol, observed_at=observed_at
+        )
         current_price = _positive_int(quote.get("cur_prc"))
         if current_price is None:
             raise RuntimeError(f"{symbol}_quote_price_missing")
@@ -484,6 +573,42 @@ class WidgetSymbolRuntimeCollector:
         latest = bars[-1] if bars else None
         source_quality, source_quality_reasons = _source_quality(
             latest=latest, bbo=bbo, observed_at=observed_at
+        )
+        auxiliary_collector = self._auxiliary_collectors[symbol]
+        profile = WIDGET_SYMBOL_AUXILIARY_PROFILES[symbol]
+        market_payload, market_gaps = self._shared_market_payload(
+            client=client,
+            index_code=profile.market_index_code,
+            observed_at=observed_at,
+        )
+        external_points, external_gaps = self._shared_external_points(observed_at)
+        auxiliary = auxiliary_collector.collect(
+            client=client,
+            observed_at=observed_at,
+            context=context,
+            primary_bars=bars,
+            market_payload=market_payload,
+            external_points=external_points,
+            inherited_gaps=[*market_gaps, *external_gaps],
+        )
+        _relative_ok, _relative_issues, relative_assessment = (
+            _relative_quality_assessment(auxiliary["relative"], context)
+        )
+        external_risk = evaluate_external_risk(
+            auxiliary["external_points"],
+            thresholds=auxiliary["external_thresholds"],
+        )
+        auxiliary_advisory = attach_auxiliary_summary(
+            {
+                "reasons": [],
+                "unmet_conditions": [],
+                "source_quality": {"status": source_quality, "issues": []},
+                "provenance": {},
+                "flow": auxiliary["flow"],
+                "relative_assessment": relative_assessment,
+                "external_risk": external_risk,
+            },
+            auxiliary["summary"],
         )
         previous_snapshot = contract.load_snapshot()
         same_policy_snapshot = previous_snapshot.get("policy_id") == policy["policy_id"]
@@ -604,7 +729,13 @@ class WidgetSymbolRuntimeCollector:
                 "source_quality": {
                     "status": source_quality,
                     "reasons": list(source_quality_reasons),
+                    "auxiliary_status": auxiliary["summary"]["status"],
                 },
+                "auxiliary_context": auxiliary_advisory["auxiliary_context"],
+                "auxiliary_unmet_conditions": auxiliary_advisory["unmet_conditions"],
+                "auxiliary_decision_authority": (
+                    "observation_only_no_entry_veto_or_positive_promotion"
+                ),
                 "metric_contract": METRIC_CONTRACT,
                 "strategy_profile": contract.STRATEGY_PROFILE,
                 "authority": ADVISORY_AUTHORITY,
@@ -626,6 +757,17 @@ class WidgetSymbolRuntimeCollector:
                 else None
             ),
             "bbo": bbo,
+            "quote_provenance": {
+                "source": "kiwoom_ka10001_response_received_time",
+                "age_sec": round(quote_age_sec, 3),
+            },
+            "relative_strength": auxiliary["relative"],
+            "flow": auxiliary["flow"],
+            "external_points": {
+                key: asdict(point)
+                for key, point in auxiliary["external_points"].items()
+            },
+            "external_risk": external_risk,
             "token_mode": "shared_cache_only_no_issue_no_refresh",
             "actual_order_submitted": False,
             "broker_order_forbidden": True,

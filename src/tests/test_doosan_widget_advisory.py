@@ -11,7 +11,10 @@ from src.engine.monitoring.samsung_widget_advisory import (
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.monitoring.widget_auxiliary_context import (
     DOOSAN_AUXILIARY_PROFILE,
+    MIRAE_ASSET_AUXILIARY_PROFILE,
     WidgetAuxiliaryContextCollector,
+    _combined_flow_status,
+    _flow_component_status,
     attach_auxiliary_summary,
 )
 
@@ -58,6 +61,7 @@ def _base_advisory(
             "relative_status": "OBSERVED",
             "flow_status": "OBSERVED",
             "external_status": "OBSERVED",
+            "positive_promotion_ready": True,
         },
         "external_risk": {"level": "CLEAR"},
         "flow": {
@@ -388,6 +392,137 @@ def test_auxiliary_summary_preserves_fresh_program_when_foreign_source_is_stale(
         "PROGRAM_NONWORSENING_FOREIGN_LIMITED"
     )
     assert "regular_flow_unavailable" in result["unmet_conditions"]
+
+
+def test_auxiliary_classifies_delayed_foreign_separately_from_fresh_program():
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    primary_bars = _bars(
+        [10_000 + index for index in range(60)],
+        start=datetime(2026, 8, 5, 9, 0, tzinfo=KST),
+    )
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, _path, api_id, payload, *, optional=False):
+            self.calls.append((api_id, payload, optional))
+            if api_id == "ka10080":
+                return {
+                    "stk_min_pole_chart_qry": [
+                        {
+                            "cntr_tm": bar.source_time,
+                            "open_pric": str(bar.open),
+                            "high_pric": str(bar.high),
+                            "low_pric": str(bar.low),
+                            "cur_prc": str(bar.close),
+                            "trde_qty": str(bar.volume),
+                        }
+                        for bar in primary_bars
+                    ]
+                }
+            if api_id == "ka10064":
+                return {
+                    "opmr_invsr_trde_chart": [
+                        {"tm": "092900", "frgnr_invsr": "-100"},
+                        {"tm": "093000", "frgnr_invsr": "-50"},
+                    ]
+                }
+            if api_id == "ka90008":
+                return {
+                    "stk_tm_prm_trde_trnsn": [
+                        {
+                            "tm": "100000",
+                            "prm_netprps_amt": "10",
+                            "prm_netprps_amt_irds": "5",
+                        }
+                    ]
+                }
+            raise AssertionError(api_id)
+
+    market_payload = {
+        "inds_min_pole_qry": [
+            {
+                "cntr_tm": bar.source_time,
+                "open_pric": str(bar.open),
+                "high_pric": str(bar.high),
+                "low_pric": str(bar.low),
+                "cur_prc": str(bar.close),
+                "trde_qty": str(bar.volume),
+            }
+            for bar in primary_bars
+        ]
+    }
+    external = {
+        "USDKRW": ExternalPoint(
+            "USDKRW",
+            "KRW=X",
+            1400.0,
+            0.0,
+            now.isoformat(),
+            now.isoformat(),
+            0.0,
+            "test",
+            "BEST_EFFORT_DELAYED",
+            "OPEN",
+        )
+    }
+    client = Client()
+    collector = WidgetAuxiliaryContextCollector(MIRAE_ASSET_AUXILIARY_PROFILE)
+    result = collector.collect(
+        client=client,
+        observed_at=now,
+        context=contract.session_context(now),
+        primary_bars=primary_bars,
+        market_payload=market_payload,
+        external_points=external,
+    )
+
+    assert result["summary"]["status"] == "OBSERVED_PARTIAL"
+    assert result["summary"]["flow_status"] == "OBSERVED_PARTIAL"
+    assert result["summary"]["foreign_flow_status"] == "DELAYED_ESTIMATE"
+    assert result["summary"]["program_flow_status"] == "OBSERVED"
+    assert result["summary"]["positive_promotion_ready"] is False
+    assert result["summary"]["negative_veto_ready"] is True
+    assert result["summary"]["market_index"] == "KOSPI_001"
+    assert {api_id for api_id, _, _ in client.calls} == {
+        "ka10080",
+        "ka10064",
+        "ka90008",
+    }
+
+    advisory = attach_auxiliary_summary(
+        {
+            "reasons": [],
+            "unmet_conditions": ["regular_flow_unavailable"],
+            "source_quality": {"status": "PASS", "issues": []},
+            "provenance": {},
+            "flow": result["flow"],
+            "external_risk": {"level": "CLEAR"},
+        },
+        result["summary"],
+    )
+    assert advisory["auxiliary_context"]["flow_signal"] == (
+        "PROGRAM_NONWORSENING_FOREIGN_DELAYED"
+    )
+    assert "regular_flow_unavailable" not in advisory["unmet_conditions"]
+    assert "foreign_flow_delayed_estimate" in advisory["unmet_conditions"]
+
+
+def test_delayed_foreign_without_a_fresh_component_cannot_look_observed():
+    assert (
+        _flow_component_status(
+            {"foreign_available": True, "foreign_source_age_sec": 1800}, "foreign"
+        )
+        == "DELAYED_ESTIMATE"
+    )
+    assert (
+        _flow_component_status(
+            {"foreign_available": True, "foreign_source_age_sec": 3601}, "foreign"
+        )
+        == "STALE"
+    )
+    assert _combined_flow_status("DELAYED_ESTIMATE", "STALE") == ("DELAYED_ESTIMATE")
 
 
 def test_entry_linked_exit_uses_target_or_completed_close_not_intrabar_low():

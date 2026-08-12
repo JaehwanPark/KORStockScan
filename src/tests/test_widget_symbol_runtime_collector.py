@@ -3,12 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from src.engine.monitoring.samsung_widget_advisory import MinuteBar
+from src.engine.monitoring.samsung_widget_advisory import ExternalPoint
 from src.engine.monitoring.samsung_widget_contract import KST
+from src.engine.monitoring import widget_symbol_runtime_contract as runtime_contract
 from src.engine.monitoring.widget_symbol_runtime_collector import (
     EpisodeState,
     WidgetSymbolRuntimeCollector,
     _advance_support_break_count,
     _source_quality,
+)
+from src.engine.monitoring.widget_auxiliary_context import (
+    WIDGET_SYMBOL_AUXILIARY_PROFILES,
 )
 
 
@@ -128,3 +133,168 @@ def test_source_quality_blocks_stale_completed_bar_or_missing_bbo():
     )
     assert status == "BLOCKED"
     assert set(reasons) == {"completed_1m_stale", "bbo_invalid", "bbo_stale"}
+
+
+def test_all_new_widget_symbols_have_market_specific_auxiliary_profiles():
+    assert set(WIDGET_SYMBOL_AUXILIARY_PROFILES) == {
+        "006800",
+        "010140",
+        "080220",
+        "475150",
+    }
+    assert WIDGET_SYMBOL_AUXILIARY_PROFILES["080220"].market_index_code == "101"
+    assert WIDGET_SYMBOL_AUXILIARY_PROFILES["080220"].market_index_name == (
+        "KOSDAQ_101"
+    )
+    assert all(
+        profile.peer_symbol != symbol
+        for symbol, profile in WIDGET_SYMBOL_AUXILIARY_PROFILES.items()
+    )
+
+
+def test_shared_market_payload_fetches_each_index_only_once_per_minute():
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, path, api_id, payload, *, optional=False):
+            self.calls.append((path, api_id, payload, optional))
+            return {"inds_min_pole_qry": []}
+
+    collector = WidgetSymbolRuntimeCollector()
+    client = Client()
+    now = datetime(2026, 8, 12, 11, 30, 5, tzinfo=KST)
+
+    collector._shared_market_payload(client=client, index_code="001", observed_at=now)
+    collector._shared_market_payload(
+        client=client, index_code="001", observed_at=now + timedelta(seconds=20)
+    )
+    collector._shared_market_payload(
+        client=client, index_code="101", observed_at=now + timedelta(seconds=20)
+    )
+
+    assert [call[2]["inds_cd"] for call in client.calls] == ["001", "101"]
+    assert all(call[1] == "ka20005" and call[3] is True for call in client.calls)
+
+
+def test_new_symbol_snapshot_records_partial_flow_without_granting_signal_authority(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        runtime_contract, "DEFAULT_SNAPSHOT_DIR", tmp_path / "snapshots"
+    )
+    now = datetime(2026, 8, 12, 11, 30, 5, tzinfo=KST)
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, _path, api_id, payload, *, optional=False):
+            self.calls.append((api_id, payload, optional))
+            if api_id == "ka10001":
+                return {"cur_prc": "10000"}
+            if api_id == "ka10004":
+                return {
+                    "buy_fpr_bid": "9990",
+                    "sel_fpr_bid": "10000",
+                    "buy_fpr_req": "1000",
+                    "sel_fpr_req": "900",
+                }
+            if api_id in {"ka10080", "ka20005"}:
+                key = (
+                    "stk_min_pole_chart_qry"
+                    if api_id == "ka10080"
+                    else "inds_min_pole_qry"
+                )
+                return {
+                    key: [
+                        {
+                            "cntr_tm": (
+                                datetime(2026, 8, 12, 11, 0, tzinfo=KST)
+                                + timedelta(minutes=index)
+                            ).strftime("%Y%m%d%H%M%S"),
+                            "open_pric": "10000",
+                            "high_pric": "10010",
+                            "low_pric": "9990",
+                            "cur_prc": str(10000 + index),
+                            "trde_qty": "1000",
+                        }
+                        for index in range(30)
+                    ]
+                }
+            if api_id == "ka10064":
+                return {
+                    "opmr_invsr_trde_chart": [
+                        {"tm": "105900", "frgnr_invsr": "-100"},
+                        {"tm": "110000", "frgnr_invsr": "-50"},
+                    ]
+                }
+            if api_id == "ka90008":
+                return {
+                    "stk_tm_prm_trde_trnsn": [
+                        {
+                            "tm": "113000",
+                            "prm_netprps_amt": "10",
+                            "prm_netprps_amt_irds": "5",
+                        }
+                    ]
+                }
+            raise AssertionError(api_id)
+
+    collector = WidgetSymbolRuntimeCollector(observation_dir=tmp_path / "observations")
+    collector._active_date = now.date().isoformat()
+    collector._episodes["080220"] = EpisodeState(trade_date=now.date().isoformat())
+    point = ExternalPoint(
+        "USDKRW",
+        "KRW=X",
+        1400.0,
+        0.0,
+        now.isoformat(),
+        now.isoformat(),
+        0.0,
+        "test",
+        "BEST_EFFORT_DELAYED",
+        "OPEN",
+    )
+    monkeypatch.setattr(
+        collector,
+        "_shared_external_points",
+        lambda _observed_at: ({"USDKRW": point}, []),
+    )
+    policy = {
+        "policy_id": "POLICY",
+        "effective_date": now.date().isoformat(),
+        "signal_policy": {
+            "segment_start_time": "13:30:00",
+            "segment_end_time": "15:00:00",
+            "lookback_bars": 15,
+            "drawdown_pct": 1.0,
+            "near_low_pct": 0.5,
+            "reclaim_ticks": 1,
+            "target_bps": 50,
+            "setup_valid_bars": 5,
+            "reentry_cooldown_bars": 10,
+        },
+    }
+
+    payload = collector._collect_symbol(
+        symbol="080220", policy=policy, client=Client(), observed_at=now
+    )
+
+    auxiliary = payload["advisory"]["auxiliary_context"]
+    assert payload["status"] == "ok"
+    assert payload["advisory"]["source_quality"]["status"] == "PASS"
+    assert auxiliary["status"] == "OBSERVED_PARTIAL"
+    assert auxiliary["market_index"] == "KOSDAQ_101"
+    assert auxiliary["foreign_flow_status"] == "DELAYED_ESTIMATE"
+    assert auxiliary["program_flow_status"] == "OBSERVED"
+    assert auxiliary["flow_signal"] == "PROGRAM_NONWORSENING_FOREIGN_DELAYED"
+    assert (
+        "foreign_flow_delayed_estimate"
+        in payload["advisory"]["auxiliary_unmet_conditions"]
+    )
+    assert payload["advisory"]["auxiliary_decision_authority"] == (
+        "observation_only_no_entry_veto_or_positive_promotion"
+    )
+    assert payload["actual_order_submitted"] is False
+    assert payload["broker_order_forbidden"] is True
