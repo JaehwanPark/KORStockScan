@@ -228,12 +228,14 @@ def test_daily_window_expands_from_clean_baseline_and_keeps_latest_16_holdout():
 
 def test_dynamic_universe_adds_ranked_under_100000_symbols_only(tmp_path):
     path = tmp_path / "daily.csv"
+    (tmp_path / expanded.DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH.name).write_text(
+        '{"latest_date":"2026-08-11","selected_count":3}', encoding="utf-8"
+    )
     path.write_text(
         "date,code,name,close,score_rank\n"
         "2026-08-11,000990,DB하이텍,93200,2\n"
         "2026-08-11,042700,고가종목,213000,1\n"
-        "2026-08-11,017670,기존검토종목,86000,3\n"
-        "2026-08-10,123456,전일종목,10000,1\n",
+        "2026-08-11,017670,기존검토종목,86000,3\n",
         encoding="utf-8",
     )
 
@@ -244,20 +246,35 @@ def test_dynamic_universe_adds_ranked_under_100000_symbols_only(tmp_path):
 
 def test_dynamic_universe_uses_latest_completed_snapshot_not_after_target(tmp_path):
     path = tmp_path / "daily.csv"
+    diagnostic_path = tmp_path / "completion.json"
+    diagnostic_path.write_text(
+        '{"latest_date":"2026-08-11","selected_count":1}', encoding="utf-8"
+    )
     path.write_text(
-        "date,code,name,close,score_rank\n"
-        "2026-08-10,123456,전일종목,10000,1\n"
-        "2026-08-11,000990,DB하이텍,93200,2\n"
-        "2026-08-13,654321,미래종목,20000,1\n",
+        "date,code,name,close,score_rank\n" "2026-08-11,000990,DB하이텍,93200,2\n",
         encoding="utf-8",
     )
 
     source_date, result = expanded._dynamic_candidate_snapshot(
-        date(2026, 8, 12), path=path
+        date(2026, 8, 12), path=path, diagnostic_path=diagnostic_path
     )
 
     assert source_date == date(2026, 8, 11)
     assert result == {"000990": "DB하이텍"}
+
+    diagnostic_path.write_text(
+        '{"latest_date":"2026-08-13","selected_count":1}', encoding="utf-8"
+    )
+    assert expanded._dynamic_candidate_snapshot(
+        date(2026, 8, 12), path=path, diagnostic_path=diagnostic_path
+    ) == (None, {})
+
+    diagnostic_path.write_text(
+        '{"latest_date":"2026-08-11","selected_count":2}', encoding="utf-8"
+    )
+    assert expanded._dynamic_candidate_snapshot(
+        date(2026, 8, 12), path=path, diagnostic_path=diagnostic_path
+    ) == (None, {})
 
 
 def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypatch):
@@ -305,6 +322,8 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
     assert expanded.CandidateRecommendationNotifier._valid_report(report)
 
     report["dynamic_universe_source_date"] = "2026-08-12"
+    assert not expanded.CandidateRecommendationNotifier._valid_report(report)
+    report["dynamic_universe_source_date"] = None
     assert not expanded.CandidateRecommendationNotifier._valid_report(report)
 
 

@@ -50,6 +50,9 @@ DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "low_price_two_leg_candidate_telegram_state.json"
 )
 DEFAULT_DYNAMIC_UNIVERSE_PATH = DATA_DIR / "daily_recommendations_v2.csv"
+DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH = (
+    DATA_DIR / "daily_recommendations_v2_diagnostics.json"
+)
 MAX_DYNAMIC_SYMBOLS_PER_DAY = 5
 MIN_RESEARCH_DAYS = CALIBRATION_DAYS + HOLDOUT_DAYS
 MAX_RECOMMENDATIONS_PER_LANE = 3
@@ -172,23 +175,48 @@ def _dynamic_candidate_snapshot(
     target_date: date,
     *,
     path: Path = DEFAULT_DYNAMIC_UNIVERSE_PATH,
+    diagnostic_path: Path | None = None,
 ) -> tuple[date | None, dict[str, str]]:
+    completion_marker = diagnostic_path or path.with_name(
+        DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH.name
+    )
+    try:
+        diagnostic = json.loads(completion_marker.read_text(encoding="utf-8"))
+        completed_source_date = date.fromisoformat(
+            str(diagnostic.get("latest_date") or "")
+        )
+        completed_selected_count = int(diagnostic.get("selected_count", -1))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None, {}
+    if (
+        not (CLEAN_BASELINE_DATE <= completed_source_date <= target_date)
+        or completed_selected_count < 0
+    ):
+        return None, {}
     try:
         handle = path.open(encoding="utf-8-sig", newline="")
     except OSError:
         return None, {}
     with handle:
         rows_by_date: dict[date, list[dict[str, str]]] = {}
+        observed_row_count = 0
+        date_contract_mismatch = False
         for raw_row in csv.DictReader(handle):
+            observed_row_count += 1
             try:
                 row_date = date.fromisoformat(str(raw_row.get("date") or ""))
             except ValueError:
+                date_contract_mismatch = True
                 continue
-            if CLEAN_BASELINE_DATE <= row_date <= target_date:
+            if row_date == completed_source_date:
                 rows_by_date.setdefault(row_date, []).append(raw_row)
-        if not rows_by_date:
+            else:
+                date_contract_mismatch = True
+        if date_contract_mismatch or observed_row_count != completed_selected_count:
             return None, {}
-        source_date = max(rows_by_date)
+        if not rows_by_date:
+            return completed_source_date, {}
+        source_date = completed_source_date
         ranked_by_symbol: dict[str, tuple[int, str, str]] = {}
         for row in rows_by_date[source_date]:
             raw_symbol = str(row.get("code") or "").strip()
@@ -966,6 +994,9 @@ class CandidateRecommendationNotifier:
                 for symbol, name in candidate_symbols.items()
             )
             and report.get("candidate_universe_size") == len(candidate_symbols)
+            and set(CANDIDATE_SYMBOLS).issubset(candidate_symbols)
+            and len(set(candidate_symbols) - set(CANDIDATE_SYMBOLS))
+            <= MAX_DYNAMIC_SYMBOLS_PER_DAY
             and set(candidate_symbols).isdisjoint(IMPLEMENTED_SYMBOLS)
             and report.get("existing_symbol_universe_size") == len(IMPLEMENTED_SYMBOLS)
             and report.get("source_symbol_count")
@@ -1048,7 +1079,14 @@ class CandidateRecommendationNotifier:
             or not is_krx_trading_day(target_date)
             or (
                 dynamic_source_date is not None
-                and not (CLEAN_BASELINE_DATE <= dynamic_source_date <= target_date)
+                and (
+                    not (CLEAN_BASELINE_DATE <= dynamic_source_date <= target_date)
+                    or not is_krx_trading_day(dynamic_source_date)
+                )
+            )
+            or (
+                bool(set(candidate_symbols) - set(CANDIDATE_SYMBOLS))
+                and dynamic_source_date is None
             )
         ):
             return False
