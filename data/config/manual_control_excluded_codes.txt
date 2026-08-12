@@ -6,3 +6,5 @@
 475150 # manual_operator sk_eternix_low_price_two_leg_owner
 006800 # manual_operator mirae_asset_low_price_two_leg_owner
 080220 # manual_operator jeju_semiconductor_low_price_two_leg_owner
+035720 # manual_operator kakao_low_price_two_leg_owner
+015760 # manual_operator kepco_low_price_two_leg_owner

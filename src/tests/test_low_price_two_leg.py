@@ -308,19 +308,17 @@ def test_expanded_profile_timers_bind_exact_instance_and_start_time(
     assert f"Unit=korstockscan-low-price-two-leg@{profile_id}.service" in service
 
 
-def test_current_profile_symbols_have_explicit_or_install_time_manual_ownership():
+def test_current_profile_symbols_have_explicit_manual_ownership():
     install_script = (
         Path(__file__).resolve().parents[2]
         / "deploy"
         / "install_low_price_two_leg_systemd.sh"
     ).read_text(encoding="utf-8")
-    pending_install_symbols = {"015760", "035720"}
+    install_time_symbols = {"015760", "035720"}
+    for symbol in install_time_symbols:
+        assert f'"{symbol}":' in install_script
     for symbol in {profile.symbol for profile in PROFILES.values()}:
-        if symbol in pending_install_symbols:
-            assert f'"{symbol}":' in install_script
-            assert manual_control_operator_exclusion_source(symbol) == ""
-        else:
-            assert manual_control_operator_exclusion_source(symbol) == "manual_operator"
+        assert manual_control_operator_exclusion_source(symbol) == "manual_operator"
 
 
 @pytest.mark.parametrize("profile_id", sorted(PROFILES))
