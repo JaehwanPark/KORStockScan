@@ -53,6 +53,19 @@ class FakeSamsungContractWithoutTopLevelProfile:
         return isinstance(advisory, dict) and advisory.get("valid") is True
 
 
+class FakeSnapshotTimeContract(FakeContract):
+    """Mirror the Doosan/Hanwha snapshot-time keyword contract."""
+
+    @staticmethod
+    def advisory_contract_is_valid(advisory, *, snapshot_time, context, evaluated_at):
+        return bool(
+            isinstance(advisory, dict)
+            and advisory.get("valid") is True
+            and snapshot_time <= evaluated_at
+            and context.name == "KRX_REGULAR"
+        )
+
+
 @dataclass
 class FakeRecorder:
     events: list
@@ -350,6 +363,65 @@ def _fill(gateway, order_no, qty=1, price=1000):
     gateway.snapshots[order_no] = ExecutionSnapshot(
         True, True, qty, 0, qty, fill_price=price
     )
+
+
+def test_low_symbol_snapshot_time_contract_keeps_scale_in_loop_alive(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    payload = _payload(now, entry_id="ENTRY-LOW-1")
+    payload["current_price"] = 100_000
+    payload["advisory"] = {
+        "valid": True,
+        "source_quality": {"status": "PASS"},
+    }
+    box = {"payload": payload}
+    policy = _dated_policy(force_flat=False, target_bps=150)
+    policy["add_trigger_bps_from_initial_fill"] = (-50, -100)
+    spec = WidgetSpec(
+        code="999999",
+        name="low-symbol-test",
+        snapshot_path=Path("unused.json"),
+        contract=FakeSnapshotTimeContract,
+        event_based=True,
+    )
+    gateway = FakeGateway()
+    monkeypatch.setattr(
+        engine,
+        "evaluate_manual_control_exclusion",
+        lambda code: SimpleNamespace(excluded=True, source="test"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "manual_control_operator_exclusion_source",
+        lambda code: "manual_operator",
+    )
+    monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
+    trader = WidgetSignalAutoTrader(
+        gateway=gateway,
+        specs=(spec,),
+        state_path=tmp_path / "low-symbol-state.json",
+        event_recorder=FakeRecorder([]),
+        snapshot_loader=lambda path: box["payload"],
+        policy_loader=FakeDatedPolicyLoader({"999999": {"KRX_REGULAR": policy}}),
+        entry_qty=1,
+        enabled=True,
+    )
+
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == [("999999", 1, "SOR", 101_500)]
+
+    next_observation = now.replace(second=1)
+    box["payload"] = {
+        **payload,
+        "observed_at_kst": next_observation.isoformat(),
+        "current_price": 99_500,
+    }
+    trader.run_once(next_observation)
+
+    assert gateway.cancel_calls == [("999999", "L2", 1, "SOR")]
 
 
 def test_one_order_per_entry_episode_and_rearms_only_after_final_exit(

@@ -169,12 +169,14 @@ class HanwhaOceanWidgetTelegramNotifier:
         sender: Sender = _send_telegram,
         retry_sec: int = DEFAULT_RETRY_SEC,
         enabled: bool | None = None,
+        entry_messages_enabled: bool = True,
     ) -> None:
         self.state_file = state_file
         self.config_loader = config_loader
         self.sender = sender
         self.retry_sec = max(1, int(retry_sec))
         self.enabled = _env_enabled() if enabled is None else bool(enabled)
+        self.entry_messages_enabled = bool(entry_messages_enabled)
         self._state = _load_state(state_file)
 
     @staticmethod
@@ -298,13 +300,35 @@ class HanwhaOceanWidgetTelegramNotifier:
                     observed_at=observed_at,
                 ),
             }
-        return {
-            "entry": self._observe_event(
+        entry_event = payload.get("entry_event")
+        if not self.entry_messages_enabled and self._valid_event(
+            payload,
+            entry_event,
+            expected_type="ENTRY",
+            observed_at=observed_at,
+        ):
+            event_id = str(entry_event.get("event_id") or "")
+            if event_id != self._state.get("last_observed_entry_event_id"):
+                self._state.update(
+                    {
+                        "last_observed_entry_event_id": event_id,
+                        "entry_telegram_suppressed": True,
+                        "entry_telegram_owner": (
+                            "widget_auto_trade_accepted_buy_action"
+                        ),
+                    }
+                )
+                self._save()
+            entry_result = "entry_observed_no_telegram"
+        else:
+            entry_result = self._observe_event(
                 payload,
-                payload.get("entry_event"),
+                entry_event,
                 expected_type="ENTRY",
                 observed_at=observed_at,
-            ),
+            )
+        return {
+            "entry": entry_result,
             "exit": self._observe_event(
                 payload,
                 exit_event,
