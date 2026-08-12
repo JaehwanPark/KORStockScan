@@ -26,6 +26,7 @@ if ! [[ "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
+  batch_rc=0
   if nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
     --date "$TARGET_DATE" \
@@ -34,6 +35,12 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
     --predecessor-wait-sec "$PREDECESSOR_WAIT_SEC" \
     --write; then
     exit 0
+  else
+    batch_rc=$?
+  fi
+  if [ "$batch_rc" -eq 3 ]; then
+    echo "[ERROR] offline candidate batch predecessor timeout; not retrying target_date=$TARGET_DATE"
+    exit 1
   fi
   if ((attempt < MAX_ATTEMPTS)); then
     echo "[WARN] offline candidate batch failed; retrying valid-result checkpoint attempt=$attempt"

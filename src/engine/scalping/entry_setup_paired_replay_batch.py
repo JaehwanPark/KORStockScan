@@ -121,8 +121,6 @@ def _wait_for_predecessor(
         state = str(status.get("status") or "missing").lower()
         if state == "succeeded":
             return True, status
-        if state in {"failed", "error", "blocked"}:
-            return False, status
         if time.monotonic() >= deadline:
             return False, status
         time.sleep(max(1, min(int(interval_sec), 60)))
@@ -314,7 +312,7 @@ def run_batch(
             "pass": predecessor_pass,
         }
         if not predecessor_pass:
-            report["status"] = "blocked_predecessor_not_succeeded"
+            report["status"] = "blocked_predecessor_timeout"
             report["finished_at"] = datetime.now(quality.KST).isoformat()
             if write:
                 _atomic_write_json(path, report)
@@ -416,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
         write=args.write,
     )
     print(json.dumps(report, ensure_ascii=False))
+    if report["status"] == "blocked_predecessor_timeout":
+        return 3
     return (
         0
         if report["status"]

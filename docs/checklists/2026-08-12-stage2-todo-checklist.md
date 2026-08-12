@@ -16,6 +16,20 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## AI 판단 품질 개선
+
+- [x] `[EntrySetupV214PredecessorRecoveryAndReplay0812] tail-repair predecessor 대기 복구 및 8월 11일 Exact V2 replay 실행` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 16:15~16:40`, `Track: AIPrompt`)
+  - Source: [batch producer](/home/ubuntu/KORStockScan/src/engine/scalping/entry_setup_paired_replay_batch.py), [late runner](/home/ubuntu/KORStockScan/deploy/run_ai_entry_setup_paired_replay_postclose.sh), [batch result](/home/ubuntu/KORStockScan/data/report/ai_entry_setup_paired_replay_batch/ai_entry_setup_paired_replay_batch_2026-08-11.json), [KRX detailed replay](/home/ubuntu/KORStockScan/data/report/ai_prompt_detailed_paired_replay/ai_prompt_detailed_paired_replay_2026-08-11_decision_quality_v2_14_setup_risk_adjudicator_venue_krx_session_krx_regular.json), [NXT detailed replay](/home/ubuntu/KORStockScan/data/report/ai_prompt_detailed_paired_replay/ai_prompt_detailed_paired_replay_2026-08-11_decision_quality_v2_14_setup_risk_adjudicator_venue_nxt_session_nxt_aftermarket.json)
+  - 판정: 21:05 runner가 predecessor의 일시적 `failed/error/blocked/missing`을 즉시 종료하던 결함을 보완해 최대 4시간 안의 `succeeded` 복구를 기다리게 했다. `blocked_predecessor_timeout`은 전용 종료코드로 닫아 wrapper의 3회 재시도가 전체 대기를 12시간으로 늘리지 않게 했다. 8월 11일 postclose `succeeded`를 사용한 수동 재실행은 KRX/NXT 각 30건, provider failure·`provider=none` 0건으로 `completed_offline_only`를 기록했다.
+  - 판단품질: KRX는 29건 comparable, `WAIT 17/DROP 12/BUY 0`, probe arm 16건·15종목이지만 실제 candidate exposure 0, target-first 포착 0이다. `067290` 한 건은 모델이 `hard_blocker:large_sell_print_present`를 supporting fact로 잘못 인용해 schema reject됐다. KRX probe-arm의 unprotected-path severe-tail은 6/16, catastrophic `<-5%`는 1건이며 승격 artifact는 `detailed_promotion_integrity_not_passed`로 차단됐다. NXT는 30건 comparable, 유일한 BUY 1건이 adverse-first이고 비용조정 EV `-0.660348%`여서 별도 NXT control을 유지한다.
+  - 안전/리뷰: 모든 replay artifact는 `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`다. bot/PID, live prompt, provider route, threshold, 가격·수량·주문·hard safety를 변경하지 않았다. batch/live-policy/wrapper 회귀 72건, shell syntax, compile, checklist parser, `git diff --check`를 통과했고 최종 재리뷰 finding은 0이다.
+
+- [ ] `[EntryPromptV215BoundedRecoveryRedesign0812] V2.14 비노출·fact-id 결함 기반 bounded recovery Candidate 재설계` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 16:40~18:30`, `Track: AIPrompt`)
+  - Source: [KRX detailed replay](/home/ubuntu/KORStockScan/data/report/ai_prompt_detailed_paired_replay/ai_prompt_detailed_paired_replay_2026-08-11_decision_quality_v2_14_setup_risk_adjudicator_venue_krx_session_krx_regular.json), [AI prompt contracts](/home/ubuntu/KORStockScan/src/engine/ai_prompt_contracts.py), [decision quality producer](/home/ubuntu/KORStockScan/src/engine/scalping/ai_decision_quality.py)
+  - 판정 기준: V2.15는 hard blocker를 supporting edge로 인용할 수 없게 fact-id 역할을 고정하고, KRX `target_first 30건`의 최초 blocker인 deterministic invalid 17건·wait confirmation 13건을 독립 episode와 비용 반영 probe 기준으로 재검토한다. 즉시 full BUY가 아니라 `WAIT/recovery_required -> fresh recheck -> passive one-share probe`를 후보 노출로 평가하며 후단 submit guard와 hard safety를 유지한다.
+  - 완료 기준: 동일 Exact V2 payload·venue/session·outcome으로 replay하고 schema reject와 `provider=none` 0건, positive cost-adjusted exposure EV, missed-upside value 개선, severe-tail 비악화 및 action collapse 해소를 함께 판정한다. 통과하지 않으면 `prompt_redesign_required`로 유지하며 live 승격하지 않는다.
+  - 금지: V2.14 결과의 사후 payload 변경, outcome을 prompt 입력이나 request selection에 사용, threshold/가격/수량/provider/bot 변경, broker·stale·hard safety 우회, NXT 결과의 KRX 승격 근거 사용은 허용하지 않는다.
+
 ## 독립시간대 매매기계
 
 - [x] `[EpisodeMachinePostcloseOpportunityExpansion0812] 에피소드 기계 장후 종목·시간·로직·보유위험 탐색 보완` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 14:15~14:45`, `Track: ScalpingLogic`)

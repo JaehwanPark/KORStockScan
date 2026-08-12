@@ -27,6 +27,79 @@ def test_batch_waits_for_full_day_maturity_without_provider_or_artifact(monkeypa
     assert report["broker_order_forbidden"] is True
 
 
+def test_predecessor_wait_treats_failed_as_recoverable_until_succeeded(monkeypatch):
+    observed = iter(
+        [
+            {"status": "failed", "reason": "tail_repair_pending"},
+            {"status": "failed", "reason": "tail_repair_running"},
+            {"status": "succeeded", "reason": "tail_repair_done_reconciliation"},
+        ]
+    )
+    clock = {"now": 0.0}
+
+    monkeypatch.setattr(batch, "_read_json", lambda _path: next(observed))
+    monkeypatch.setattr(batch.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        batch.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+
+    passed, predecessor = batch._wait_for_predecessor(
+        target_date="2026-08-11",
+        wait_sec=120,
+        interval_sec=30,
+    )
+
+    assert passed is True
+    assert predecessor["status"] == "succeeded"
+    assert clock["now"] == 60
+
+
+def test_predecessor_wait_closes_failed_state_only_after_timeout(monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setattr(
+        batch,
+        "_read_json",
+        lambda _path: {"status": "failed", "reason": "tail_repair_pending"},
+    )
+    monkeypatch.setattr(batch.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        batch.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+
+    passed, predecessor = batch._wait_for_predecessor(
+        target_date="2026-08-11",
+        wait_sec=60,
+        interval_sec=30,
+    )
+
+    assert passed is False
+    assert predecessor["status"] == "failed"
+    assert clock["now"] == 60
+
+
+def test_main_uses_distinct_exit_code_for_predecessor_timeout(monkeypatch):
+    monkeypatch.setattr(
+        batch,
+        "run_batch",
+        lambda **_kwargs: {"status": "blocked_predecessor_timeout"},
+    )
+
+    exit_code = batch.main(
+        [
+            "--date",
+            "2026-08-11",
+            "--predecessor-wait-sec",
+            "0",
+        ]
+    )
+
+    assert exit_code == 3
+
+
 def test_batch_runs_krx_and_nxt_as_separate_outcome_blind_cohorts(
     monkeypatch, tmp_path
 ):

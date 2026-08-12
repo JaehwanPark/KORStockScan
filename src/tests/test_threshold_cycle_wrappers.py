@@ -744,6 +744,8 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "--write" in runner
     assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
     assert 'MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"' in runner
+    assert 'if [ "$batch_rc" -eq 3 ]' in runner
+    assert "predecessor timeout; not retrying" in runner
     assert "sleep 15" in runner
     assert "run_bot.sh" not in runner
     assert "tmux" not in runner
