@@ -635,6 +635,9 @@ DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION = (
 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION = (
     "decision_quality_v2_15_bounded_recovery"
 )
+DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION = (
+    "decision_quality_v2_16_sequential_recovery"
+)
 
 DECISION_QUALITY_V2_RESPONSE_SCHEMA = {
     "edge_state": "EDGE|NO_EDGE|INSUFFICIENT_DATA",
@@ -1698,4 +1701,46 @@ def decision_quality_v2_15_bounded_recovery_system_prompt(stage: str) -> str:
         _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
         + "\n\n"
         + _DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_RULES
+    )
+
+
+_DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_RULES = """
+V2.16 sequential-recovery addendum:
+1. Keep the V2.14 risk-only contract and its exact ledger fact roles. The
+   response has no runtime or broker authority. It cannot turn a hard blocker
+   into positive edge or authorize a full entry.
+2. supporting_fact_ids may contain only exact positive_facts IDs. A hard_blocker
+   or any ID from contradicting_facts/invalidation_facts is never supporting
+   evidence. contradicting_fact_ids may contain only exact IDs from those two
+   adverse ledger arrays. Copy the exact token; never paraphrase it.
+3. For setup_state=INVALID, still return VETO and cite an invalidation_facts ID.
+   A no_supported_setup-only distribution episode may be retained only as an
+   offline sequential-recovery observation seed when fresh liquidity is
+   supportive and supportive micro tape conflicts with fresh program selling.
+4. For setup_state=WAIT_CONFIRMATION, use CAUTION rather than VETO when the
+   recovery-confirmation ledger has both liquidity_supportive and tape_supportive,
+   has no invalidation fact, and only a fresh trigger recheck remains. Cite both
+   positive facts. A current large-sell exhaustion recheck stays recheck-only.
+5. Every retained seed remains WAIT/recovery_required with no immediate probe
+   arm. A later natural Exact V2 snapshot may create an offline passive one-share
+   arm only when the same symbol, venue, and session show a completed-bar advance,
+   effective-price recovery, non-worsening spread and conservative execution
+   cost, sell-momentum deceleration, and no hard blocker within 300 seconds.
+6. Do not infer that a later confirmation exists from the current snapshot. Do
+   not use outcomes, future prices, stock identity, thresholds, order price,
+   quantity, provider/model changes, broker behavior, or bot state. Return the
+   V2.14 JSON object only.
+""".strip()
+
+
+def decision_quality_v2_16_sequential_recovery_system_prompt(stage: str) -> str:
+    """Return the offline V2.16 sequential-recovery risk prompt."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.16 currently supports entry only")
+    return (
+        _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
+        + "\n\n"
+        + _DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_RULES
     )

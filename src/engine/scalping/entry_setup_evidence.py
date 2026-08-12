@@ -18,7 +18,9 @@ ENTRY_DECISION_COMPOSER_SCHEMA = "entry_decision_composer_v1"
 ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v9"
 ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v8"
 ENTRY_DECISION_COMPOSER_V2_15_VERSION = "entry_decision_composer_policy_v9"
+ENTRY_DECISION_COMPOSER_V2_16_VERSION = "entry_decision_composer_policy_v10"
 ENTRY_BOUNDED_RECOVERY_POLICY_VERSION = "entry_bounded_recovery_policy_v1"
+ENTRY_SEQUENTIAL_RECOVERY_POLICY_VERSION = "entry_sequential_recovery_policy_v1"
 STRUCTURE_PHASE_POLICY_VERSION = "entry_completed_bar_structure_phase_v2"
 ENTRY_RISK_ADJUDICATION_REPAIR_VERSION = (
     "entry_setup_risk_fail_closed_invalidation_citation_v1"
@@ -1113,8 +1115,12 @@ def compose_entry_decision(
     setup_evidence: Any,
     risk_adjudication: Any,
     bounded_recovery_policy: bool = False,
+    sequential_recovery_policy: bool = False,
 ) -> dict[str, Any]:
     """Compose an offline legacy-compatible action without order authority."""
+
+    if bounded_recovery_policy and sequential_recovery_policy:
+        raise ValueError("entry_recovery_policy_modes_are_mutually_exclusive")
 
     setup = _as_dict(setup_evidence)
     risk = _as_dict(risk_adjudication)
@@ -1150,7 +1156,8 @@ def compose_entry_decision(
         "pass",
     }
     bounded_recovery_path = None
-    if bounded_recovery_policy and source_fresh and not contract_errors:
+    recovery_seed_policy = bounded_recovery_policy or sequential_recovery_policy
+    if recovery_seed_policy and source_fresh and not contract_errors:
         if (
             state == "INVALID"
             and invalidation_facts == {"no_supported_setup"}
@@ -1173,6 +1180,7 @@ def compose_entry_decision(
     )
     bounded_wait_probe_intent = bool(
         recheck_intent
+        and not sequential_recovery_policy
         and "LARGE_SELL_EXHAUSTION_RECHECK" not in recheck_reasons
         and (
             bounded_recovery_path is not None
@@ -1195,8 +1203,12 @@ def compose_entry_decision(
         if bounded_recovery_path is not None:
             action = "WAIT"
             edge_state = "EDGE"
-            probe_intent = True
-            reason = "entry_setup_bounded_recovery_recheck_probe"
+            probe_intent = not sequential_recovery_policy
+            reason = (
+                "entry_setup_sequential_recovery_observation"
+                if sequential_recovery_policy
+                else "entry_setup_bounded_recovery_recheck_probe"
+            )
         else:
             action = "DROP"
             edge_state = "NO_EDGE"
@@ -1217,18 +1229,18 @@ def compose_entry_decision(
         probe_intent = False
         reason = "entry_ai_veto_corroborated"
     elif verdict == "PASS":
-        action = "WAIT" if bounded_recovery_policy else "BUY"
+        action = "WAIT" if recovery_seed_policy else "BUY"
         edge_state = "EDGE"
-        probe_intent = not bounded_recovery_policy
+        probe_intent = not recovery_seed_policy
         reason = (
             "entry_setup_ready_outside_bounded_recovery_cohort"
-            if bounded_recovery_policy
+            if recovery_seed_policy
             else "entry_setup_ready_ai_pass"
         )
     else:
         action = "WAIT"
         edge_state = "EDGE"
-        probe_intent = False if bounded_recovery_policy else True
+        probe_intent = False if recovery_seed_policy else True
         reason = (
             "entry_ai_veto_uncorroborated_recheck"
             if verdict == "VETO"
@@ -1258,9 +1270,13 @@ def compose_entry_decision(
     result = {
         "schema": ENTRY_DECISION_COMPOSER_SCHEMA,
         "composer_version": (
-            ENTRY_DECISION_COMPOSER_V2_15_VERSION
-            if bounded_recovery_policy
-            else ENTRY_DECISION_COMPOSER_VERSION
+            ENTRY_DECISION_COMPOSER_V2_16_VERSION
+            if sequential_recovery_policy
+            else (
+                ENTRY_DECISION_COMPOSER_V2_15_VERSION
+                if bounded_recovery_policy
+                else ENTRY_DECISION_COMPOSER_VERSION
+            )
         ),
         "action": action,
         "score": score,
@@ -1333,6 +1349,14 @@ def compose_entry_decision(
         ),
         "entry_bounded_recovery_eligible": bounded_recovery_path is not None,
         "entry_bounded_recovery_path": bounded_recovery_path,
+        "entry_sequential_recovery_policy_version": (
+            ENTRY_SEQUENTIAL_RECOVERY_POLICY_VERSION
+            if sequential_recovery_policy
+            else None
+        ),
+        "entry_sequential_recovery_seed_eligible": bool(
+            sequential_recovery_policy and bounded_recovery_path is not None
+        ),
         "entry_tail_risk_state": str(
             _as_dict(setup.get("tail_risk_assessment")).get("state") or "not_observed"
         ),

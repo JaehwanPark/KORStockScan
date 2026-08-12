@@ -5654,7 +5654,10 @@ def test_paired_report_requires_diverse_candidate_exposure_sample():
             {
                 **requests[0],
                 "candidate": {
-                    "prompt_version": "candidate-a",
+                    "prompt_version": (
+                        quality.DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
+                        + "_entry"
+                    ),
                     "system_prompt_sha256": "prompt-a",
                     "response_schema_sha256": "schema",
                     "contract_sha256": "tampered",
@@ -7095,6 +7098,119 @@ def test_probe_arm_continuity_finds_ready_followup_deferred_by_ai_budget():
         "ready-followup-trace"
     )
     assert report["entry_recheck_attribution"]["candidate_recheck_intent_count"] == 0
+
+
+def test_sequential_recovery_arms_only_after_all_next_exact_conditions_pass():
+    seed = {
+        "decision_trace_id": "seed-trace",
+        "decision_ts": "2026-08-12T10:00:00+09:00",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "entry_structure_phase_bar_end": "2026-08-12T09:59:00+09:00",
+        "reference_price": 100.0,
+        "conservative_spread_bp": 20.0,
+        "conservative_execution_cost_pct": 0.12,
+    }
+    comparison = {
+        "decision_trace_id": "confirmed-trace",
+        "stock_code": "005930",
+        "outcome_return_pct": 1.2,
+        "conservative_execution_cost_pct": 0.10,
+        "entry_path_first_hit": "target_first",
+        "probe_severe_tail_adverse": False,
+        "probe_worst_loss_pct": -0.2,
+    }
+    observations = [
+        {
+            "decision_trace_id": "same-bar-trace",
+            "decision_ts": "2026-08-12T10:00:30+09:00",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "structure_phase_bar_end": "2026-08-12T09:59:00+09:00",
+            "reference_price": 101.0,
+            "spread_bp": 18.0,
+            "conservative_execution_cost_pct": 0.10,
+            "sell_momentum_decelerating": True,
+            "hard_blockers": [],
+            "source_quality_status": "fresh_consistent",
+            "candidate_evaluated": False,
+        },
+        {
+            "decision_trace_id": "confirmed-trace",
+            "decision_ts": "2026-08-12T10:01:10+09:00",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "structure_phase_bar_end": "2026-08-12T10:00:00+09:00",
+            "reference_price": 100.5,
+            "spread_bp": 19.0,
+            "conservative_execution_cost_pct": 0.10,
+            "sell_momentum_decelerating": True,
+            "hard_blockers": [],
+            "source_quality_status": "fresh_consistent",
+            "candidate_evaluated": True,
+            "comparison_row": comparison,
+        },
+    ]
+
+    summary = quality._attach_sequential_recovery_transitions(
+        seed_rows=[seed], observations=observations
+    )
+
+    assert seed["entry_sequential_recovery_probe_armed"] is True
+    assert seed["entry_sequential_recovery_followup_trace_id"] == "confirmed-trace"
+    assert summary["confirmed_arm_count"] == 1
+    assert summary["outcome_joined_arm_count"] == 1
+    assert summary["probe_cost_adjusted_ev_pct"] == pytest.approx(1.1)
+    assert summary["target_first_count"] == 1
+    assert summary["runtime_effect"] is False
+    assert summary["broker_order_forbidden"] is True
+
+
+def test_sequential_recovery_rejects_worse_cost_or_hard_blocker():
+    seed = {
+        "decision_trace_id": "seed-trace",
+        "decision_ts": "2026-08-12T10:00:00+09:00",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "entry_structure_phase_bar_end": "2026-08-12T09:59:00+09:00",
+        "reference_price": 100.0,
+        "conservative_spread_bp": 20.0,
+        "conservative_execution_cost_pct": 0.12,
+    }
+    observations = [
+        {
+            "decision_trace_id": "blocked-trace",
+            "decision_ts": "2026-08-12T10:01:10+09:00",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "structure_phase_bar_end": "2026-08-12T10:00:00+09:00",
+            "reference_price": 101.0,
+            "spread_bp": 21.0,
+            "conservative_execution_cost_pct": 0.13,
+            "sell_momentum_decelerating": True,
+            "hard_blockers": ["large_sell_print_present"],
+            "source_quality_status": "fresh_consistent",
+            "candidate_evaluated": False,
+        }
+    ]
+
+    summary = quality._attach_sequential_recovery_transitions(
+        seed_rows=[seed], observations=observations
+    )
+
+    assert seed["entry_sequential_recovery_probe_armed"] is False
+    assert summary["confirmed_arm_count"] == 0
+    assert summary["status_counts"] == {"followup_observed_not_confirmed": 1}
+    assert set(summary["confirmation_failure_counts"]) == {
+        "spread_worsened_or_missing",
+        "execution_cost_worsened_or_missing",
+        "hard_blocker_present",
+    }
 
 
 def test_entry_lifecycle_replay_separates_path_proxy_from_natural_realized_pnl(

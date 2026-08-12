@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_RISK_ADJUDICATION_SCHEMA,
@@ -1273,6 +1275,118 @@ def test_v2_15_recovery_confirmation_requires_liquidity_and_tape_support():
     assert not_eligible["action"] == "WAIT"
     assert not_eligible["entry_probe_intent"] is False
     assert not_eligible["entry_bounded_recovery_eligible"] is False
+
+
+def test_v2_16_retains_recovery_seed_without_arming_initial_probe():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(recovery=True),
+    )
+    evidence.update(
+        {
+            "setup_family": "RECOVERY_CONFIRMATION",
+            "setup_state": "WAIT_CONFIRMATION",
+            "structure_phase": "recovery_continuation",
+            "execution_readiness_state": "WAIT_CONFIRMATION",
+            "positive_facts": ["liquidity_supportive", "tape_supportive"],
+            "contradicting_facts": ["trigger_confirmation_missing"],
+            "invalidation_facts": [],
+            "corroborated_risk_codes": ["CONFIRMATION_MISSING"],
+            "recheck_reasons": ["TRIGGER_CONFIRMATION_RECHECK"],
+            "source_quality": {
+                "status": "fresh_consistent",
+                "source_mode": "fresh_dual",
+                "completed_bar_count": 20,
+            },
+        }
+    )
+    evidence["evidence_sha256"] = quality._sha256(
+        {key: value for key, value in evidence.items() if key != "evidence_sha256"}
+    )
+
+    candidate = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=_risk(
+            "CAUTION",
+            ["CONFIRMATION_MISSING"],
+            support=["liquidity_supportive", "tape_supportive"],
+            contradict=["trigger_confirmation_missing"],
+        ),
+        sequential_recovery_policy=True,
+    )
+
+    assert candidate["action"] == "WAIT"
+    assert candidate["entry_probe_intent"] is False
+    assert candidate["entry_recheck_intent"] is True
+    assert candidate["entry_sequential_recovery_seed_eligible"] is True
+    assert candidate["entry_sequential_recovery_policy_version"] == (
+        "entry_sequential_recovery_policy_v1"
+    )
+    assert candidate["composer_version"] == "entry_decision_composer_policy_v10"
+    assert candidate["actual_order_submitted"] is False
+
+
+def test_recovery_composer_rejects_ambiguous_policy_modes():
+    with pytest.raises(
+        ValueError, match="entry_recovery_policy_modes_are_mutually_exclusive"
+    ):
+        compose_entry_decision(
+            setup_evidence={},
+            risk_adjudication={},
+            bounded_recovery_policy=True,
+            sequential_recovery_policy=True,
+        )
+
+
+def test_v2_16_preparation_uses_sequential_prompt_and_offline_composer(monkeypatch):
+    exact_payload = {"current": {"price": 10000}}
+    monkeypatch.setattr(
+        quality,
+        "build_exact_payload_analysis_v1",
+        lambda *_args, **_kwargs: {
+            **_exact_analysis(),
+            "analysis_sha256": "exact-analysis-hash",
+        },
+    )
+    monkeypatch.setattr(
+        quality,
+        "build_v2_13_recovery_confirmation_analysis_v1",
+        lambda *_args, **_kwargs: {
+            **_recovery_analysis(recovery=True),
+            "analysis_sha256": "recovery-analysis-hash",
+        },
+    )
+
+    request = quality.prepare_detailed_paired_replay_requests(
+        [
+            {
+                "paired_replay_id": "pair-v2-16",
+                "decision_trace_id": "trace-v2-16",
+                "stage": "entry",
+                "stock_code": "000001",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "payload_sha256": quality._sha256(exact_payload),
+                "exact_payload": exact_payload,
+                "control": {"provider": "openai", "model": "gpt-5.4-nano"},
+                "candidate": {"provider": "openai", "model": "gpt-5.4-nano"},
+                "sample_floor": {"pass": True},
+                **quality.OFFLINE_CONTRACT,
+            }
+        ],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
+        ),
+    )[0]
+
+    assert request["candidate"]["system_prompt"].isascii()
+    assert "no immediate probe" in request["candidate"]["system_prompt"]
+    assert request["candidate"]["entry_decision_composer_version"] == (
+        "entry_decision_composer_policy_v10"
+    )
+    assert request["runtime_effect"] is False
+    assert request["broker_order_forbidden"] is True
 
 
 def test_v2_14_cumulative_learning_counts_wait_probe_and_separates_contract(

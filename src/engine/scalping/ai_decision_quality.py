@@ -35,6 +35,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
@@ -49,6 +50,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_v2_15_bounded_recovery_system_prompt,
+    decision_quality_v2_16_sequential_recovery_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.engine.scalping.ai_decision_trace import replay_source_input
@@ -62,6 +64,7 @@ from src.engine.scalping.entry_candidate_lifecycle_state import (
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_DECISION_COMPOSER_V2_15_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_16_VERSION,
     ENTRY_RISK_ADJUDICATION_SCHEMA,
     ENTRY_RISK_ADJUDICATION_REPAIR_VERSION,
     ENTRY_SETUP_EVIDENCE_SCHEMA,
@@ -6913,6 +6916,16 @@ def execute_openai_prompt_v2_candidate(
                     "both liquidity_supportive and tape_supportive should cite both "
                     "positive facts and use CAUTION when no hard blocker exists"
                 )
+            if candidate_prompt_version == (
+                f"{DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION}_entry"
+            ):
+                correction_rules.append(
+                    "For V2.16, never cite a contradiction or invalidation as a "
+                    "supporting fact. Retained recovery evidence creates only a "
+                    "WAIT/recovery_required observation seed. Do not claim that a "
+                    "later completed-bar, price, spread, cost, or sell-momentum "
+                    "confirmation already exists in the current snapshot"
+                )
             if (
                 "entry_risk_invalid_setup_invalidation_fact_required"
                 in correction_errors
@@ -7613,6 +7626,7 @@ def prepare_detailed_paired_replay_requests(
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
         DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
     }
     if candidate_prompt_version not in supported_prompt_versions:
         raise ValueError("unsupported_detailed_candidate_prompt_version")
@@ -7659,11 +7673,13 @@ def prepare_detailed_paired_replay_requests(
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
         }:
             if candidate_prompt_version in {
                 DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
             }:
                 anticipatory_analysis = build_v2_13_recovery_confirmation_analysis_v1(
                     exact_payload,
@@ -7685,6 +7701,11 @@ def prepare_detailed_paired_replay_requests(
                 anticipatory_analysis
             )
             if (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
+            ):
+                prompt = decision_quality_v2_16_sequential_recovery_system_prompt(stage)
+            elif (
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
             ):
@@ -7745,6 +7766,7 @@ def prepare_detailed_paired_replay_requests(
         if candidate_prompt_version in {
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
         }:
             entry_setup_evidence = build_entry_setup_evidence(
                 exact_payload=exact_payload,
@@ -7773,10 +7795,15 @@ def prepare_detailed_paired_replay_requests(
                     ),
                     "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
                     "entry_decision_composer_version": (
-                        ENTRY_DECISION_COMPOSER_V2_15_VERSION
+                        ENTRY_DECISION_COMPOSER_V2_16_VERSION
                         if candidate_prompt_version
-                        == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
-                        else ENTRY_DECISION_COMPOSER_VERSION
+                        == DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
+                        else (
+                            ENTRY_DECISION_COMPOSER_V2_15_VERSION
+                            if candidate_prompt_version
+                            == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+                            else ENTRY_DECISION_COMPOSER_VERSION
+                        )
                     ),
                     "entry_structure_phase_policy_version": (
                         STRUCTURE_PHASE_POLICY_VERSION
@@ -7832,6 +7859,7 @@ def prepare_detailed_paired_replay_requests(
                         in {
                             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                             DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                            DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
                         }
                         else (
                             BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
@@ -7864,6 +7892,7 @@ def prepare_detailed_paired_replay_requests(
             elif candidate_prompt_version in {
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
             }:
                 candidate["semantic_repair_version"] = (
                     ENTRY_RISK_ADJUDICATION_REPAIR_VERSION
@@ -7899,6 +7928,7 @@ def prepare_detailed_paired_replay_requests(
             if candidate_prompt_version in {
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
             }:
                 sample_floor["promotion_evidence_floor"] = {
                     "candidate_exposure_decision_rows": (
@@ -8120,6 +8150,12 @@ def run_paired_replay(
                             (request.get("candidate") or {}).get("prompt_version") or ""
                         )
                         == f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry"
+                    ),
+                    sequential_recovery_policy=(
+                        str(
+                            (request.get("candidate") or {}).get("prompt_version") or ""
+                        )
+                        == f"{DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION}_entry"
                     ),
                 ),
                 "entry_risk_adjudication": risk_adjudication_response,
@@ -8614,6 +8650,20 @@ def _prepared_entry_transition_observations(
         seen.add(dedupe_key)
         comparison = comparison_by_trace.get(trace_id)
         states = prepared_state_sets.get(dedupe_key) or set()
+        setup_evidence = request.get("entry_setup_evidence")
+        setup_evidence = setup_evidence if isinstance(setup_evidence, dict) else {}
+        source_quality = setup_evidence.get("source_quality")
+        source_quality = source_quality if isinstance(source_quality, dict) else {}
+        recovery_analysis = request.get("anticipatory_reversal_analysis")
+        recovery_analysis = (
+            recovery_analysis if isinstance(recovery_analysis, dict) else {}
+        )
+        spread = recovery_analysis.get("spread")
+        spread = spread if isinstance(spread, dict) else {}
+        execution_cost = recovery_analysis.get("execution_cost")
+        execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
+        precursors = recovery_analysis.get("precursors")
+        precursors = precursors if isinstance(precursors, dict) else {}
         observations.append(
             {
                 "decision_trace_id": trace_id,
@@ -8625,7 +8675,23 @@ def _prepared_entry_transition_observations(
                     next(iter(states)) if len(states) == 1 else "CONFLICT"
                 ),
                 "prepared_setup_state_conflict": len(states) > 1,
+                "reference_price": request.get("reference_price"),
+                "best_bid": request.get("best_bid"),
+                "best_ask": request.get("best_ask"),
+                "structure_phase_bar_end": setup_evidence.get(
+                    "structure_phase_bar_end"
+                ),
+                "source_quality_status": source_quality.get("status"),
+                "spread_bp": spread.get("spread_bp"),
+                "conservative_execution_cost_pct": execution_cost.get(
+                    "conservative_execution_cost_pct"
+                ),
+                "sell_momentum_decelerating": precursors.get(
+                    "sell_momentum_decelerating"
+                ),
+                "hard_blockers": list(recovery_analysis.get("hard_blockers") or []),
                 "candidate_evaluated": comparison is not None,
+                "comparison_row": comparison,
                 "candidate_action": (
                     comparison.get("candidate_action") if comparison else None
                 ),
@@ -8649,6 +8715,269 @@ def _prepared_entry_transition_observations(
             seen.add(dedupe_key)
             observations.append(dict(row, candidate_evaluated=True))
     return observations
+
+
+def _attach_sequential_recovery_transitions(
+    *,
+    seed_rows: list[dict[str, Any]],
+    observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Arm an offline probe only after a later exact recovery confirmation."""
+
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for observation in observations:
+        grouped[
+            (
+                _normalize_stock_code(observation.get("stock_code")),
+                _venue(observation.get("effective_venue")),
+                _session(observation.get("session_bucket")),
+            )
+        ].append(observation)
+    for route_rows in grouped.values():
+        route_rows.sort(
+            key=lambda row: _parse_ts(row.get("decision_ts"))
+            or datetime.max.replace(tzinfo=KST)
+        )
+
+    comparison_by_trace = {
+        str(row.get("decision_trace_id") or "").strip(): row.get("comparison_row")
+        for row in observations
+        if row.get("candidate_evaluated") is True
+        and isinstance(row.get("comparison_row"), dict)
+        and row.get("decision_trace_id")
+    }
+    used_followup_trace_ids: set[str] = set()
+    arm_rows: list[dict[str, Any]] = []
+    transition_rows: list[dict[str, Any]] = []
+    for seed in sorted(
+        seed_rows,
+        key=lambda row: _parse_ts(row.get("decision_ts"))
+        or datetime.max.replace(tzinfo=KST),
+    ):
+        route_key = (
+            _normalize_stock_code(seed.get("stock_code")),
+            _venue(seed.get("effective_venue")),
+            _session(seed.get("session_bucket")),
+        )
+        decision_ts = _parse_ts(seed.get("decision_ts"))
+        initial_bar_end = _parse_ts(seed.get("entry_structure_phase_bar_end"))
+        initial_price = _number(seed.get("best_ask")) or _number(
+            seed.get("reference_price")
+        )
+        initial_spread = _number(seed.get("conservative_spread_bp"))
+        initial_cost = _number(seed.get("conservative_execution_cost_pct"))
+        current_trace_id = str(seed.get("decision_trace_id") or "").strip()
+        followups: list[tuple[float, dict[str, Any], list[str]]] = []
+        if decision_ts is not None:
+            for candidate in grouped.get(route_key, []):
+                candidate_trace_id = str(
+                    candidate.get("decision_trace_id") or ""
+                ).strip()
+                if not candidate_trace_id or candidate_trace_id == current_trace_id:
+                    continue
+                candidate_ts = _parse_ts(candidate.get("decision_ts"))
+                if candidate_ts is None:
+                    continue
+                delay_sec = (candidate_ts - decision_ts).total_seconds()
+                if not 0 < delay_sec <= ENTRY_RECHECK_MAX_WAIT_SEC:
+                    continue
+                failures: list[str] = []
+                candidate_bar_end = _parse_ts(candidate.get("structure_phase_bar_end"))
+                candidate_price = _number(candidate.get("best_ask")) or _number(
+                    candidate.get("reference_price")
+                )
+                candidate_spread = _number(candidate.get("spread_bp"))
+                candidate_cost = _number(
+                    candidate.get("conservative_execution_cost_pct")
+                )
+                if (
+                    initial_bar_end is None
+                    or candidate_bar_end is None
+                    or candidate_bar_end <= initial_bar_end
+                ):
+                    failures.append("completed_bar_not_advanced")
+                if (
+                    initial_price is None
+                    or candidate_price is None
+                    or candidate_price < initial_price
+                ):
+                    failures.append("effective_price_not_recovered")
+                if (
+                    initial_spread is None
+                    or candidate_spread is None
+                    or candidate_spread > initial_spread
+                ):
+                    failures.append("spread_worsened_or_missing")
+                if (
+                    initial_cost is None
+                    or candidate_cost is None
+                    or candidate_cost > initial_cost
+                ):
+                    failures.append("execution_cost_worsened_or_missing")
+                if candidate.get("sell_momentum_decelerating") is not True:
+                    failures.append("sell_momentum_not_decelerating")
+                if candidate.get("hard_blockers"):
+                    failures.append("hard_blocker_present")
+                if str(candidate.get("source_quality_status") or "").lower() not in {
+                    "fresh",
+                    "fresh_consistent",
+                    "pass",
+                }:
+                    failures.append("source_quality_not_fresh")
+                followups.append((delay_sec, candidate, failures))
+
+        selected = next(
+            (
+                item
+                for item in followups
+                if not item[2]
+                and str(item[1].get("decision_trace_id") or "").strip()
+                not in used_followup_trace_ids
+            ),
+            None,
+        )
+        diagnostic = selected or (followups[0] if followups else None)
+        if decision_ts is None:
+            status = "decision_time_missing"
+        elif selected is not None:
+            status = "sequential_confirmation_observed"
+        elif followups:
+            status = "followup_observed_not_confirmed"
+        else:
+            status = "no_followup_within_window"
+        selected_trace_id = (
+            str(selected[1].get("decision_trace_id") or "").strip()
+            if selected is not None
+            else ""
+        )
+        if selected_trace_id:
+            used_followup_trace_ids.add(selected_trace_id)
+            selected_comparison = comparison_by_trace.get(selected_trace_id)
+            if selected_comparison is not None:
+                arm_rows.append(selected_comparison)
+        seed["entry_sequential_recovery_transition_status"] = status
+        seed["entry_sequential_recovery_followup_count"] = len(followups)
+        seed["entry_sequential_recovery_followup_trace_id"] = (
+            diagnostic[1].get("decision_trace_id") if diagnostic is not None else None
+        )
+        seed["entry_sequential_recovery_followup_delay_sec"] = (
+            diagnostic[0] if diagnostic is not None else None
+        )
+        seed["entry_sequential_recovery_confirmation_failures"] = (
+            list(diagnostic[2]) if diagnostic is not None else []
+        )
+        seed["entry_sequential_recovery_probe_armed"] = selected is not None
+        seed["entry_sequential_recovery_outcome_joined"] = bool(
+            selected_trace_id and selected_trace_id in comparison_by_trace
+        )
+        transition_rows.append(seed)
+
+    arm_values = [
+        outcome - cost
+        for row in arm_rows
+        if (outcome := _number(row.get("outcome_return_pct"))) is not None
+        and (cost := _number(row.get("conservative_execution_cost_pct"))) is not None
+    ]
+    severe_tail_count = sum(
+        row.get("probe_severe_tail_adverse") is True for row in arm_rows
+    )
+    catastrophic_count = sum(
+        (loss := _number(row.get("probe_worst_loss_pct"))) is not None
+        and loss < PAIRED_CANDIDATE_CATASTROPHIC_LOSS_PCT
+        for row in arm_rows
+    )
+    arm_count = sum(
+        row.get("entry_sequential_recovery_probe_armed") is True
+        for row in transition_rows
+    )
+    unique_symbols = len(
+        {
+            _normalize_stock_code(row.get("stock_code"))
+            for row in transition_rows
+            if row.get("entry_sequential_recovery_probe_armed") is True
+        }
+    )
+    floor_pass = bool(
+        arm_count >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+        and unique_symbols >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+    )
+    return {
+        "schema": "entry_sequential_recovery_replay_v1",
+        "contract_version": "entry_next_exact_sequential_recovery_v1",
+        "metric_role": "ai_entry_sequential_recovery_quality_observation",
+        "decision_authority": "offline_counterfactual_passive_probe_only",
+        "window_policy": (
+            "same_symbol_venue_session_natural_exact_snapshot_within_300s"
+        ),
+        "sample_floor": {
+            "required_arm_rows": PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS,
+            "required_unique_symbols": PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS,
+            "observed_arm_rows": arm_count,
+            "observed_unique_symbols": unique_symbols,
+            "pass": floor_pass,
+        },
+        "primary_decision_metric": "probe_cost_adjusted_ev_pct",
+        "source_quality_gate": (
+            "exact_v2_same_route_completed_bar_advanced_fresh_conflict_free"
+        ),
+        "seed_count": len(transition_rows),
+        "followup_observed_count": sum(
+            int(row.get("entry_sequential_recovery_followup_count") or 0) > 0
+            for row in transition_rows
+        ),
+        "confirmed_arm_count": arm_count,
+        "outcome_joined_arm_count": len(arm_rows),
+        "probe_cost_adjusted_ev_pct": fmean(arm_values) if arm_values else None,
+        "target_first_count": sum(
+            row.get("entry_path_first_hit") == "target_first" for row in arm_rows
+        ),
+        "adverse_first_count": sum(
+            row.get("entry_path_first_hit") == "adverse_first" for row in arm_rows
+        ),
+        "severe_tail_count": severe_tail_count,
+        "catastrophic_loss_count": catastrophic_count,
+        "status_counts": dict(
+            Counter(
+                str(row.get("entry_sequential_recovery_transition_status") or "unknown")
+                for row in transition_rows
+            )
+        ),
+        "confirmation_failure_counts": dict(
+            Counter(
+                failure
+                for row in transition_rows
+                for failure in row.get(
+                    "entry_sequential_recovery_confirmation_failures"
+                )
+                or []
+            )
+        ),
+        "development_quality_gate_pass": (
+            bool(
+                floor_pass
+                and len(arm_values) == arm_count
+                and fmean(arm_values) > 0
+                and catastrophic_count == 0
+                and severe_tail_count / arm_count * 100.0
+                <= PAIRED_CANDIDATE_MAX_SEVERE_TAIL_RATE_PCT
+            )
+            if arm_count
+            else False
+        ),
+        "prospective_validation_required": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "same_sample_live_promotion",
+            "treat_initial_wait_as_probe",
+            "treat_arm_as_submitted_order",
+            "provider_model_threshold_price_quantity_or_cap_change",
+            "broker_or_safety_guard_bypass",
+            "bot_restart",
+        ],
+    }
 
 
 def _attach_wait_transition_continuity(
@@ -10039,6 +10368,8 @@ def build_paired_replay_report(
         )
         execution_cost = anticipatory_analysis.get("execution_cost")
         execution_cost = execution_cost if isinstance(execution_cost, dict) else {}
+        spread = anticipatory_analysis.get("spread")
+        spread = spread if isinstance(spread, dict) else {}
         clean_continuation = anticipatory_analysis.get("clean_continuation_probe")
         clean_continuation = (
             clean_continuation if isinstance(clean_continuation, dict) else {}
@@ -10204,6 +10535,10 @@ def build_paired_replay_report(
                 "control_execution_cost_pct": control_execution_cost_pct,
                 "candidate_execution_cost_pct": candidate_execution_cost_pct,
                 "conservative_execution_cost_pct": conservative_execution_cost_pct,
+                "conservative_spread_bp": _number(spread.get("spread_bp")),
+                "reference_price": _number(request.get("reference_price")),
+                "best_bid": _number(request.get("best_bid")),
+                "best_ask": _number(request.get("best_ask")),
                 "candidate_execution_cost_adjusted_decision_value_pct": (
                     candidate_execution_cost_adjusted_value
                 ),
@@ -10309,6 +10644,15 @@ def build_paired_replay_report(
                 "entry_bounded_recovery_path": candidate_response.get(
                     "entry_bounded_recovery_path"
                 ),
+                "entry_sequential_recovery_policy_version": candidate_response.get(
+                    "entry_sequential_recovery_policy_version"
+                ),
+                "entry_sequential_recovery_seed_eligible": candidate_response.get(
+                    "entry_sequential_recovery_seed_eligible"
+                ),
+                "entry_structure_phase_bar_end": candidate_response.get(
+                    "entry_structure_phase_bar_end"
+                ),
                 "entry_tail_risk_state": candidate_response.get(
                     "entry_tail_risk_state"
                 ),
@@ -10339,6 +10683,14 @@ def build_paired_replay_report(
     transition_observations = _prepared_entry_transition_observations(
         prepared_requests=all_prepared_requests,
         comparable_rows=comparable_rows,
+    )
+    sequential_recovery_summary = _attach_sequential_recovery_transitions(
+        seed_rows=[
+            row
+            for row in comparable_rows
+            if row.get("entry_sequential_recovery_seed_eligible") is True
+        ],
+        observations=transition_observations,
     )
     waiting_probe_arm_rows = [
         row
@@ -11196,6 +11548,41 @@ def build_paired_replay_report(
         if len(candidate_prompt_versions) == 1
         else DECISION_QUALITY_V2_9_ANTICIPATORY_PROMPT_VERSION
     )
+    if (
+        cumulative_candidate_prompt_version
+        == DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
+        and results
+        and not rejected
+        and not missing_result_count
+        and not candidate_contract_integrity_rejected_count
+        and promotion_cohort_isolated
+        and promotion_contract_isolated
+        and status
+        in {
+            "paired_replay_complete_exposure_drought_review_required",
+            "paired_replay_complete_hold_sample_offline_only",
+            "paired_replay_complete_candidate_quality_pass_offline_only",
+            "paired_replay_complete_candidate_quality_rejected",
+        }
+    ):
+        sequential_arm_count = int(
+            sequential_recovery_summary.get("confirmed_arm_count") or 0
+        )
+        sequential_floor_pass = bool(
+            (sequential_recovery_summary.get("sample_floor") or {}).get("pass") is True
+        )
+        if not sequential_arm_count:
+            status = (
+                "paired_replay_complete_sequential_confirmation_sample_keep_collecting"
+            )
+        elif not sequential_floor_pass:
+            status = "paired_replay_complete_sequential_hold_sample_offline_only"
+        elif sequential_recovery_summary.get("development_quality_gate_pass") is True:
+            status = (
+                "paired_replay_complete_sequential_quality_pass_prospective_required"
+            )
+        else:
+            status = "paired_replay_complete_sequential_prompt_redesign_required"
     entry_recheck_rows = [
         row for row in comparable_rows if row.get("entry_recheck_intent") is True
     ]
@@ -11522,6 +11909,7 @@ def build_paired_replay_report(
         "clean_continuation_probe_summary": clean_continuation_probe_summary,
         "selective_recovery_probe_summary": selective_recovery_probe_summary,
         "recovery_confirmation_probe_summary": (recovery_confirmation_probe_summary),
+        "entry_sequential_recovery": sequential_recovery_summary,
         "entry_opportunity_funnel": entry_opportunity_funnel,
         "entry_lifecycle_replay": entry_lifecycle_replay,
         "entry_setup_adjudicator_summary": {
@@ -14999,6 +15387,7 @@ def main(argv: list[str] | None = None) -> int:
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
         ),
         default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     )
@@ -15738,6 +16127,7 @@ def main(argv: list[str] | None = None) -> int:
                     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
                 }:
                     report["supplemental_analysis_schema"] = (
                         ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
@@ -15745,6 +16135,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.detailed_candidate_version in {
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
                 }:
                     report["entry_setup_evidence_schema"] = ENTRY_SETUP_EVIDENCE_SCHEMA
                     report["entry_risk_adjudication_schema"] = (
