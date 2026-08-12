@@ -659,14 +659,19 @@ class WidgetSignalAutoTrader:
             if (dated_sessions or spec.dated_policy_required)
             and execution_policy is None
             else (
-                "entry_blocked_execution_policy_venue"
+                "entry_blocked_cumulative_research_gate"
                 if execution_policy is not None
-                and (
-                    context.name not in execution_policy["allowed_entry_sessions"]
-                    or context.market_venue
-                    not in execution_policy["allowed_entry_venues"]
+                and execution_policy.get("new_entry_runtime_eligible") is False
+                else (
+                    "entry_blocked_execution_policy_venue"
+                    if execution_policy is not None
+                    and (
+                        context.name not in execution_policy["allowed_entry_sessions"]
+                        or context.market_venue
+                        not in execution_policy["allowed_entry_venues"]
+                    )
+                    else None
                 )
-                else None
             )
         )
         if spec.event_based:
@@ -1840,6 +1845,31 @@ class WidgetSignalAutoTrader:
                 trigger=advisory.get("trigger"),
                 intraday_regime=advisory.get("intraday_regime"),
                 recent_resistance_reclaimed=derived.get("recent_resistance_reclaimed"),
+                new_entry_runtime_eligible=(
+                    entry_policy.get("new_entry_runtime_eligible")
+                    if entry_policy
+                    else None
+                ),
+                research_accumulation_start_date=(
+                    entry_policy.get("research_accumulation_start_date")
+                    if entry_policy
+                    else None
+                ),
+                research_qualified_observation_date_count=(
+                    entry_policy.get("research_qualified_observation_date_count")
+                    if entry_policy
+                    else None
+                ),
+                research_minimum_qualified_observation_dates=(
+                    entry_policy.get("research_minimum_qualified_observation_dates")
+                    if entry_policy
+                    else None
+                ),
+                research_accumulation_gate_status=(
+                    entry_policy.get("research_accumulation_gate_status")
+                    if entry_policy
+                    else None
+                ),
             )
             return
         if signal_id == symbol_state.get("entry_signal_id"):

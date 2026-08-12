@@ -10,6 +10,7 @@ from src.trading.widget_auto_trade.policy import (
     POLICY_SCHEMA,
     WidgetAutoTradePolicyLoader,
 )
+from src.utils.market_day import is_krx_trading_day
 
 
 def _policy(*, effective_date: str = "2026-08-12") -> dict:
@@ -96,6 +97,79 @@ def test_loader_selects_newest_effective_verified_policy(tmp_path: Path) -> None
     assert policy["policy_id"] == "test-policy-v2"
     assert policy["overnight_forbidden"] is True
     assert policy["force_exit_time"] == "15:18:00"
+    assert policy["new_entry_runtime_eligible"] is False
+    assert (
+        policy["new_entry_runtime_block_reason"]
+        == "cumulative_research_40_qualified_dates_incomplete"
+    )
+
+
+def test_loader_allows_low_symbol_only_after_verified_40_date_gate(
+    tmp_path: Path,
+) -> None:
+    qualified_dates = []
+    candidate = date(2026, 8, 12)
+    while len(qualified_dates) < 40:
+        if is_krx_trading_day(candidate):
+            qualified_dates.append(candidate.isoformat())
+        candidate = date.fromordinal(candidate.toordinal() + 1)
+    source_target_date = qualified_dates[-1]
+    effective = date.fromordinal(date.fromisoformat(source_target_date).toordinal() + 1)
+    while not is_krx_trading_day(effective):
+        effective = date.fromordinal(effective.toordinal() + 1)
+    payload = _policy(effective_date=effective.isoformat())
+    payload["source_target_date"] = source_target_date
+    session = payload["symbols"]["034020"]["sessions"]["KRX_REGULAR"]
+    session.update(
+        {
+            "research_accumulation_start_date": "2026-08-12",
+            "research_qualified_observation_date_count": 40,
+            "research_minimum_qualified_observation_dates": 40,
+            "research_accumulation_gate_status": "ready",
+        }
+    )
+    policy_path = tmp_path / f"widget_auto_trade_policy_{effective.isoformat()}.json"
+    report_path = tmp_path / f"report_{source_target_date}.json"
+    report = {
+        "status": "complete",
+        "source_quality_status": "PASS",
+        "target_date": source_target_date,
+        "effective_date": effective.isoformat(),
+        "symbols": {
+            "034020": {
+                "sessions": {
+                    "KRX_REGULAR": {
+                        "research_accumulation": {
+                            "status": "ready",
+                            "start_date": "2026-08-12",
+                            "minimum_qualified_observation_dates": 40,
+                            "qualified_observation_date_count": 40,
+                            "qualified_observation_dates": qualified_dates,
+                            "qualification_contract": (
+                                "KRX_trading_date;KRX_REGULAR/KRX;"
+                                "source_quality_PASS_rows>=300;"
+                                "first_PASS_observation<=09:30;"
+                                "last_PASS_observation>=15:20"
+                            ),
+                            "runtime_eligible": True,
+                        }
+                    }
+                }
+            }
+        },
+        "policy_verification": {
+            "status": "pass",
+            "policy_path": str(policy_path),
+        },
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    payload["evidence_report_path"] = str(report_path)
+    session["evidence_artifact"] = str(report_path)
+    policy_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = WidgetAutoTradePolicyLoader(tmp_path).resolve_all(observed_date=effective)
+
+    assert loaded["034020"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is True
 
 
 def test_loader_rejects_same_day_evidence_and_unsafe_contract(tmp_path: Path) -> None:

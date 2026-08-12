@@ -5,12 +5,14 @@ from datetime import date, datetime
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.monitoring.widget_auto_trade_policy_calibration import (
     SessionSpec,
+    _research_accumulation,
     _simulate_day,
     _summary,
     build_policy,
     write_outputs,
 )
 from src.engine.monitoring import widget_auto_trade_policy_calibration as calibration
+from src.utils.market_day import is_krx_trading_day
 
 
 def _row(
@@ -149,3 +151,82 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
     assert report_path.exists()
     assert policy_path.exists()
     assert verification["status"] == "pass"
+
+
+def test_low_symbol_research_gate_requires_40_full_krx_dates() -> None:
+    spec = calibration.SPECS[1]
+    session = spec.sessions[0]
+    rows = []
+    trade_dates = []
+    candidate = date(2026, 8, 12)
+    while len(trade_dates) < 39:
+        if is_krx_trading_day(candidate):
+            trade_dates.append(candidate)
+        candidate = date.fromordinal(candidate.toordinal() + 1)
+    for trade_date in trade_dates:
+        for index in range(300):
+            minute = round(index * 389 / 299)
+            observed_at = datetime.combine(
+                trade_date,
+                datetime.min.time(),
+                tzinfo=KST,
+            ).replace(hour=9) + calibration.timedelta(minutes=minute)
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "observed_at": observed_at,
+                    "session": session.session,
+                    "venue": session.venue,
+                    "source_quality_status": "PASS",
+                }
+            )
+
+    accumulation = _research_accumulation(spec, session, rows)
+
+    assert accumulation["status"] == "accumulating"
+    assert accumulation["qualified_observation_date_count"] == 39
+    assert accumulation["runtime_eligible"] is False
+
+    fortieth_date = candidate
+    while not is_krx_trading_day(fortieth_date):
+        fortieth_date = date.fromordinal(fortieth_date.toordinal() + 1)
+    for index in range(300):
+        minute = round(index * 389 / 299)
+        observed_at = datetime.combine(
+            fortieth_date,
+            datetime.min.time(),
+            tzinfo=KST,
+        ).replace(hour=9) + calibration.timedelta(minutes=minute)
+        rows.append(
+            {
+                "trade_date": fortieth_date,
+                "observed_at": observed_at,
+                "session": session.session,
+                "venue": session.venue,
+                "source_quality_status": "PASS",
+            }
+        )
+
+    ready = _research_accumulation(spec, session, rows)
+
+    assert ready["status"] == "ready"
+    assert ready["qualified_observation_date_count"] == 40
+    assert ready["runtime_eligible"] is True
+
+
+def test_low_symbol_research_gate_records_fully_missing_trading_dates() -> None:
+    spec = calibration.SPECS[1]
+    session = spec.sessions[0]
+
+    accumulation = _research_accumulation(
+        spec,
+        session,
+        [],
+        target_date=date(2026, 8, 12),
+    )
+
+    assert accumulation["qualified_observation_date_count"] == 0
+    assert (
+        "no_valid_krx_regular_rows"
+        in accumulation["excluded_observation_dates"]["2026-08-12"]
+    )

@@ -65,10 +65,22 @@
   - 롤백: policy/report 검증 실패, 누적 source-quality-adjusted EV `<=0`, forced-flat 미해결, worst trade `<-2%`, 전일 widget-owned 수량 잔존 시 해당 session policy를 로드하지 않고 신규 진입을 차단한다. hard safety·토큰·provider·메인봇·계좌/주문가능현금 계약은 변경하지 않는다.
   - 리뷰/검증: producer/loader/report atomic order, same-bar lookahead, runtime cooldown, policy/event provenance, force-flat 주문귀속과 SOR, missing policy/report fail-closed를 2-pass 리뷰했다. 위젯 관련 회귀 `276 passed`, Black/Ruff/compile/systemd verify/checklist parser/`git diff --check`, 설치 unit 일치를 통과했고 최종 미해결 finding은 `0`이다.
 
-- [ ] `[WidgetAutoTradeNextDayPolicyApply0813] postclose 산출물과 다음 거래일 3종목 runtime 귀속 확인` (`Due: 2026-08-13`, `Slot: PREOPEN`, `TimeWindow: 07:50~08:10`, `Track: ScalpingLogic`)
+- [x] `[LowSymbol40DayResearchGate0812] 두산·한화 40거래일 누적 연구 게이트 및 자동개방 계약` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 11:35~12:20`, `Track: ScalpingLogic`)
+  - Source: [calibration producer](/home/ubuntu/KORStockScan/src/engine/monitoring/widget_auto_trade_policy_calibration.py), [policy loader](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/policy.py), [auto-trader](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py)
+  - 판정: 두산에너빌리티·한화오션 신규 자동진입은 `2026-08-12`부터 유효한 KRX 거래일 40일의 누적 분석이 끝날 때까지 닫는다. 수집기와 EXIT 관측은 계속 가동하고 삼성전자 실행권한은 변경하지 않는다.
+  - 누적일 계약: 날짜별 KRX 정규장 `source_quality=PASS` row가 300건 이상이고 첫 관측 `09:30` 이전·마지막 관측 `15:20` 이후인 날만 1일로 인정한다. 결측·부분수집일은 제외 사유와 함께 남기며 40일 카운트에 포함하지 않는다.
+  - 자동개방 계약: 40일 충족만으로 무조건 개방하지 않는다. 장후 누적 replay의 EV 양수, 고정익절 표본, forced-flat 전량해소, worst trade `>=-2%`, source-quality/policy round-trip PASS를 함께 통과한 session만 다음 거래일 dated policy로 생성하며 runtime loader가 보고서의 40일 증거를 다시 검증한 뒤 신규진입을 허용한다.
+  - 현재 적용: 기존 2026-08-12 두산·한화 dated policy는 40일 증거가 없어 `new_entry_runtime_eligible=false`로 fail-closed한다. `11:49 KST` 자동매매기 PID `180222`에 반영했으며 두산은 보유·미체결 0이다. 한화는 반영 전 `11:45`에 체결된 1주와 기존 익절 주문 `0040442`의 안전한 사후관리만 유지하고, 해당 episode 종료 후 신규진입은 동일 40일 gate로 차단한다. 과거 정책 파일 존재나 정책 ID만으로 신규진입을 재개할 수 없다.
+
+- [ ] `[LowSymbol40DayAutoOpenVerification1014] 두산·한화 40일 누적 분석 및 next-PREOPEN 자동개방 검증` (`Due: 2026-10-14`, `Slot: PREOPEN`, `TimeWindow: 07:50~08:10`, `Track: ScalpingLogic`)
+  - Source: [calibration reports](/home/ubuntu/KORStockScan/data/report/widget_auto_trade_policy_calibration), [dated policies](/home/ubuntu/KORStockScan/data/runtime/widget_auto_trade_policy), [runtime state](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
+  - 판정 기준: 모든 예정 거래일이 적격이면 40번째 관측일은 `2026-10-13`, 최초 적용 가능일은 `2026-10-14`다. 제외일이 있으면 자동으로 뒤로 밀린다. 각 종목의 `qualified_observation_date_count>=40`, `research_accumulation_gate_status=ready`, 기존 EV·forced-flat·worst-loss·source-quality guard PASS, runtime의 `new_entry_runtime_eligible=true`를 분리 확인한다.
+  - 금지: 40일 미달·부분수집일 포함·보고서/정책 불일치·EV/forced-flat 결함 상태에서 수동 env 또는 과거 policy로 신규진입을 우회하지 않는다.
+
+- [ ] `[WidgetAutoTradeNextDayPolicyApply0813] postclose 산출물과 삼성 정책·두산/한화 누적차단 runtime 귀속 확인` (`Due: 2026-08-13`, `Slot: PREOPEN`, `TimeWindow: 07:50~08:10`, `Track: ScalpingLogic`)
   - Source: [policy directory](/home/ubuntu/KORStockScan/data/runtime/widget_auto_trade_policy), [calibration report](/home/ubuntu/KORStockScan/data/report/widget_auto_trade_policy_calibration), [widget auto-trade state](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
-  - 판정 기준: 20:10 postclose가 당일 완료일 report와 다음 거래일 dated policy를 `policy_verification=pass`로 만들었는지, 거래일 전환 후 runtime state의 symbol/session policy id가 일치하는지, 두산·한화의 prior-day inventory와 unresolved order가 0인지 확인한다.
-  - 금지: 현재 거래일 관측을 같은 날 policy로 소급 적용하거나 report/policy 결손을 legacy 저가종목 실행으로 대체하지 않는다.
+  - 판정 기준: 20:10 postclose가 당일 완료일 report와 다음 거래일 삼성 dated policy를 `policy_verification=pass`로 만들었는지 확인한다. 두산·한화는 `research_accumulation_incomplete`, 적격일 진행률과 제외일 사유, 신규진입 runtime 비적격을 확인하며 prior-day inventory와 unresolved order가 있으면 기존 안전관리와 신규진입 차단을 분리한다.
+  - 금지: 현재 거래일 관측을 같은 날 policy로 소급 적용하거나 40일 미달·report/policy 결손을 legacy 저가종목 실행으로 대체하지 않는다.
   - 다음 액션: `policy_loaded_verified`, `policy_session_withheld`, `source_quality_blocked`, `prior_inventory_blocked`, `postclose_generation_failed` 중 하나로 닫는다.
 
 - [x] `[SamsungWidgetManualOrderUI0812] Windows 위젯 수동 분할매수·세션별 매도 버튼 구현` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 07:30~08:20`, `Track: ScalpingLogic`)

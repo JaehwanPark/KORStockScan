@@ -14,11 +14,19 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import PROJECT_ROOT
+from src.utils.market_day import is_krx_trading_day
 
 POLICY_SCHEMA = "widget_auto_trade_policy_v1"
 POLICY_AUTHORITY = "postclose_widget_auto_trade_calibration_v1"
 POLICY_FILE_PREFIX = "widget_auto_trade_policy"
 DEFAULT_POLICY_DIR = PROJECT_ROOT / "data/runtime/widget_auto_trade_policy"
+CUMULATIVE_RESEARCH_GATE_SYMBOLS = frozenset({"034020", "042660"})
+CUMULATIVE_RESEARCH_START_DATE = date(2026, 8, 12)
+CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES = 40
+CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT = (
+    "KRX_trading_date;KRX_REGULAR/KRX;source_quality_PASS_rows>=300;"
+    "first_PASS_observation<=09:30;last_PASS_observation>=15:20"
+)
 SUPPORTED_SESSIONS = frozenset({"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET"})
 SUPPORTED_VENUES = frozenset({"KRX", "NXT"})
 SUPPORTED_ENTRY_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
@@ -68,6 +76,7 @@ def _validated_session_policy(
     source_target_date: date,
     policy_path: Path,
     evidence_report_path: str,
+    research_gate: dict[str, Any],
 ) -> dict[str, Any] | None:
     if not isinstance(payload, dict) or payload.get("enabled") is not True:
         return None
@@ -131,6 +140,25 @@ def _validated_session_policy(
         or payload.get("broker_guard_bypass") is not False
     ):
         return None
+    research_fields_match = True
+    if symbol in CUMULATIVE_RESEARCH_GATE_SYMBOLS:
+        research_fields_match = all(
+            (
+                str(payload.get("research_accumulation_start_date") or "")
+                == str(research_gate.get("start_date") or ""),
+                _positive_int(payload.get("research_qualified_observation_date_count"))
+                == research_gate.get("qualified_observation_date_count"),
+                _positive_int(
+                    payload.get("research_minimum_qualified_observation_dates")
+                )
+                == research_gate.get("minimum_qualified_observation_dates"),
+                str(payload.get("research_accumulation_gate_status") or "")
+                == str(research_gate.get("status") or ""),
+            )
+        )
+    new_entry_runtime_eligible = symbol not in CUMULATIVE_RESEARCH_GATE_SYMBOLS or (
+        research_fields_match and research_gate.get("runtime_eligible") is True
+    )
     return {
         "policy_id": policy_id,
         "symbol": symbol,
@@ -159,6 +187,79 @@ def _validated_session_policy(
         "source_target_date": source_target_date.isoformat(),
         "policy_path": str(policy_path),
         "authority": POLICY_AUTHORITY,
+        "new_entry_runtime_eligible": new_entry_runtime_eligible,
+        "new_entry_runtime_block_reason": (
+            None
+            if new_entry_runtime_eligible
+            else "cumulative_research_40_qualified_dates_incomplete"
+        ),
+        "research_accumulation_start_date": research_gate.get("start_date"),
+        "research_qualified_observation_date_count": research_gate.get(
+            "qualified_observation_date_count"
+        ),
+        "research_minimum_qualified_observation_dates": research_gate.get(
+            "minimum_qualified_observation_dates"
+        ),
+        "research_accumulation_gate_status": research_gate.get("status"),
+    }
+
+
+def _research_gate_from_evidence(
+    evidence: dict[str, Any],
+    *,
+    symbol: str,
+    session: str,
+    source_target_date: date,
+) -> dict[str, Any]:
+    if symbol not in CUMULATIVE_RESEARCH_GATE_SYMBOLS:
+        return {"status": "not_required", "runtime_eligible": True}
+    try:
+        accumulation = evidence["symbols"][symbol]["sessions"][session][
+            "research_accumulation"
+        ]
+    except (KeyError, TypeError):
+        accumulation = None
+    if not isinstance(accumulation, dict):
+        return {
+            "status": "missing",
+            "start_date": CUMULATIVE_RESEARCH_START_DATE.isoformat(),
+            "qualified_observation_date_count": 0,
+            "minimum_qualified_observation_dates": (
+                CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES
+            ),
+            "runtime_eligible": False,
+        }
+    qualified_dates = accumulation.get("qualified_observation_dates")
+    qualified_dates = qualified_dates if isinstance(qualified_dates, list) else []
+    try:
+        parsed_dates = [date.fromisoformat(str(value)) for value in qualified_dates]
+        count = int(accumulation.get("qualified_observation_date_count"))
+        minimum = int(accumulation.get("minimum_qualified_observation_dates"))
+    except (TypeError, ValueError):
+        parsed_dates = []
+        count = 0
+        minimum = 0
+    start_date = str(accumulation.get("start_date") or "")
+    status = str(accumulation.get("status") or "")
+    qualification_contract = str(accumulation.get("qualification_contract") or "")
+    runtime_eligible = bool(
+        start_date == CUMULATIVE_RESEARCH_START_DATE.isoformat()
+        and minimum == CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES
+        and count == len(set(parsed_dates))
+        and count >= minimum
+        and all(value >= CUMULATIVE_RESEARCH_START_DATE for value in parsed_dates)
+        and all(value <= source_target_date for value in parsed_dates)
+        and all(is_krx_trading_day(value) for value in parsed_dates)
+        and status == "ready"
+        and accumulation.get("runtime_eligible") is True
+        and qualification_contract == CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT
+    )
+    return {
+        "status": status or "invalid",
+        "start_date": start_date or CUMULATIVE_RESEARCH_START_DATE.isoformat(),
+        "qualified_observation_date_count": count,
+        "minimum_qualified_observation_dates": minimum,
+        "runtime_eligible": runtime_eligible,
     }
 
 
@@ -233,6 +334,12 @@ def _validated_payload(
         if not isinstance(sessions, dict):
             continue
         for session, session_payload in sessions.items():
+            research_gate = _research_gate_from_evidence(
+                evidence,
+                symbol=str(symbol),
+                session=str(session),
+                source_target_date=source_target_date,
+            )
             session_policy = _validated_session_policy(
                 session_payload,
                 symbol=str(symbol),
@@ -242,6 +349,7 @@ def _validated_payload(
                 source_target_date=source_target_date,
                 policy_path=policy_path,
                 evidence_report_path=evidence_path_text,
+                research_gate=research_gate,
             )
             if session_policy is not None:
                 validated.setdefault(str(symbol), {})[str(session)] = session_policy

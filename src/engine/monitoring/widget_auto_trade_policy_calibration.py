@@ -36,6 +36,10 @@ from src.engine.monitoring.samsung_widget_contract import (
     previous_krx_trading_date,
 )
 from src.trading.widget_auto_trade.policy import (
+    CUMULATIVE_RESEARCH_GATE_SYMBOLS,
+    CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES,
+    CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT,
+    CUMULATIVE_RESEARCH_START_DATE,
     DEFAULT_POLICY_DIR,
     POLICY_AUTHORITY,
     POLICY_FILE_PREFIX,
@@ -56,7 +60,8 @@ METRIC_CONTRACT = {
     "window_policy": "clean_baseline_cumulative_completed_dates_prior_to_effective_date",
     "sample_floor": (
         "two_source_qualified_signal_dates_and_two_non_overlapping_trades;"
-        "small_samples_remain_bounded_initial"
+        "small_samples_remain_bounded_initial;Doosan_and_Hanwha_require_40_"
+        "qualified_KRX_observation_dates_from_2026-08-12"
     ),
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
@@ -99,6 +104,8 @@ class SymbolSpec:
     max_entries_values: tuple[int, ...]
     minimum_signal_dates: int
     minimum_trades: int
+    analysis_start_date: date
+    minimum_qualified_observation_dates: int
 
 
 SPECS = (
@@ -133,6 +140,8 @@ SPECS = (
         max_entries_values=(2, 3),
         minimum_signal_dates=2,
         minimum_trades=2,
+        analysis_start_date=CLEAN_BASELINE_DATE,
+        minimum_qualified_observation_dates=0,
     ),
     SymbolSpec(
         symbol=DOOSAN_CODE,
@@ -162,6 +171,8 @@ SPECS = (
         max_entries_values=(2, 3),
         minimum_signal_dates=2,
         minimum_trades=2,
+        analysis_start_date=CUMULATIVE_RESEARCH_START_DATE,
+        minimum_qualified_observation_dates=CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES,
     ),
     SymbolSpec(
         symbol=HANWHA_OCEAN_CODE,
@@ -191,6 +202,8 @@ SPECS = (
         max_entries_values=(2, 3),
         minimum_signal_dates=2,
         minimum_trades=2,
+        analysis_start_date=CUMULATIVE_RESEARCH_START_DATE,
+        minimum_qualified_observation_dates=CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES,
     ),
 )
 
@@ -245,7 +258,7 @@ def _load_rows(
             source_date = datetime.strptime(raw_date, "%Y%m%d").date()
         except ValueError:
             continue
-        if source_date < CLEAN_BASELINE_DATE or source_date > target_date:
+        if source_date < spec.analysis_start_date or source_date > target_date:
             continue
         source_paths.append(str(path))
         with path.open(encoding="utf-8") as handle:
@@ -523,11 +536,90 @@ def _candidate_ready(
     return True, "bounded_cumulative_candidate_ready"
 
 
+def _research_accumulation(
+    spec: SymbolSpec,
+    session: SessionSpec,
+    rows: Sequence[dict[str, Any]],
+    *,
+    target_date: date | None = None,
+) -> dict[str, Any]:
+    if spec.symbol not in CUMULATIVE_RESEARCH_GATE_SYMBOLS:
+        return {
+            "status": "not_required",
+            "start_date": spec.analysis_start_date.isoformat(),
+            "minimum_qualified_observation_dates": 0,
+            "qualified_observation_date_count": 0,
+            "qualified_observation_dates": [],
+            "excluded_observation_dates": {},
+            "runtime_eligible": True,
+        }
+    rows_by_date: dict[date, list[dict[str, Any]]] = {}
+    for row in rows:
+        if (
+            row["session"] == session.session
+            and row["venue"] == session.venue
+            and row["trade_date"] >= spec.analysis_start_date
+            and is_krx_trading_day(row["trade_date"])
+        ):
+            rows_by_date.setdefault(row["trade_date"], []).append(row)
+    qualified_dates: list[str] = []
+    excluded_dates: dict[str, list[str]] = {}
+    accumulation_end_date = target_date or max(
+        rows_by_date, default=spec.analysis_start_date
+    )
+    expected_dates: list[date] = []
+    candidate_date = spec.analysis_start_date
+    while candidate_date <= accumulation_end_date:
+        if is_krx_trading_day(candidate_date):
+            expected_dates.append(candidate_date)
+        candidate_date += timedelta(days=1)
+    for source_date in expected_dates:
+        day_rows = rows_by_date.get(source_date, [])
+        pass_rows = [row for row in day_rows if row["source_quality_status"] == "PASS"]
+        reasons: list[str] = []
+        if not day_rows:
+            reasons.append("no_valid_krx_regular_rows")
+        if len(pass_rows) < 300:
+            reasons.append("pass_row_count_below_300")
+        if not pass_rows or min(row["observed_at"].time() for row in pass_rows) > time(
+            9, 30
+        ):
+            reasons.append("opening_coverage_missing_after_0930")
+        if not pass_rows or max(row["observed_at"].time() for row in pass_rows) < time(
+            15, 20
+        ):
+            reasons.append("closing_coverage_missing_before_1520")
+        if reasons:
+            excluded_dates[source_date.isoformat()] = reasons
+        else:
+            qualified_dates.append(source_date.isoformat())
+    minimum = spec.minimum_qualified_observation_dates
+    ready = len(qualified_dates) >= minimum
+    return {
+        "status": "ready" if ready else "accumulating",
+        "start_date": spec.analysis_start_date.isoformat(),
+        "minimum_qualified_observation_dates": minimum,
+        "qualified_observation_date_count": len(qualified_dates),
+        "qualified_observation_dates": qualified_dates,
+        "excluded_observation_dates": excluded_dates,
+        "qualification_contract": CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT,
+        "runtime_eligible": ready,
+    }
+
+
 def _calibrate_session(
     spec: SymbolSpec,
     session: SessionSpec,
     rows: Sequence[dict[str, Any]],
+    *,
+    target_date: date | None = None,
 ) -> dict[str, Any]:
+    research_accumulation = _research_accumulation(
+        spec,
+        session,
+        rows,
+        target_date=target_date,
+    )
     rows_by_date: dict[date, list[dict[str, Any]]] = {}
     for row in rows:
         if row["session"] == session.session and row["venue"] == session.venue:
@@ -597,21 +689,32 @@ def _calibrate_session(
     selected = max(candidates, key=rank) if candidates else None
     if selected is None:
         return {
-            "decision": "no_candidate_rows",
+            "decision": (
+                "research_accumulation_incomplete"
+                if research_accumulation["runtime_eligible"] is False
+                else "no_candidate_rows"
+            ),
             "selected_policy": None,
             "candidate_count": 0,
+            "research_accumulation": research_accumulation,
         }
     selected_dates = selected["summary"]["signal_dates"]
     holdout_dates = selected_dates[-1:] if len(selected_dates) >= 2 else []
     holdout = _summary(
         [row for row in selected["trades"] if row["trade_date"] in holdout_dates]
     )
+    provisional_decision = (
+        "widget_auto_trade_policy_candidate_ready"
+        if selected["ready"]
+        else selected["reason"]
+    )
     return {
         "decision": (
-            "widget_auto_trade_policy_candidate_ready"
-            if selected["ready"]
-            else selected["reason"]
+            "research_accumulation_incomplete"
+            if research_accumulation["runtime_eligible"] is False
+            else provisional_decision
         ),
+        "provisional_candidate_decision": provisional_decision,
         "candidate_count": len(candidates),
         "selected_policy": {
             key: selected[key]
@@ -634,6 +737,7 @@ def _calibrate_session(
             "worst trade < -2%; source-quality/policy verification failure; or "
             "prior-day widget-owned inventory remains"
         ),
+        "research_accumulation": research_accumulation,
     }
 
 
@@ -647,13 +751,19 @@ def build_report(*, target_date: date) -> dict[str, Any]:
         rows, paths = _load_rows(spec, target_date=target_date)
         source_paths.extend(paths)
         sessions = {
-            session.session: _calibrate_session(spec, session, rows)
+            session.session: _calibrate_session(
+                spec,
+                session,
+                rows,
+                target_date=target_date,
+            )
             for session in spec.sessions
         }
         symbol_reports[spec.symbol] = {
             "name": spec.name,
             "source_row_count": len(rows),
             "source_dates": sorted({row["trade_date"].isoformat() for row in rows}),
+            "analysis_start_date": spec.analysis_start_date.isoformat(),
             "sessions": sessions,
         }
     ready_count = sum(
@@ -692,6 +802,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 continue
             selected = calibration["selected_policy"]
             session_spec = session_specs[session_name]
+            research_accumulation = calibration["research_accumulation"]
             sessions[session_name] = {
                 "enabled": True,
                 "market_venue": session_spec.venue,
@@ -714,7 +825,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                     f"equal_share_{selected['add_trigger_bps_from_initial_fill']}_"
                     f"tp{selected['target_bps']}_multi"
                 ),
-                "evidence_window": (f"{CLEAN_BASELINE_DATE.isoformat()}_{target_date}"),
+                "evidence_window": (
+                    f"{spec.analysis_start_date.isoformat()}_{target_date}"
+                ),
                 "evidence_artifact": (
                     "data/report/widget_auto_trade_policy_calibration/"
                     f"widget_auto_trade_policy_calibration_{target_date}.json"
@@ -723,6 +836,14 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 "rollback_condition": calibration["rollback_condition"],
                 "actual_order_submitted": False,
                 "broker_guard_bypass": False,
+                "research_accumulation_start_date": research_accumulation["start_date"],
+                "research_qualified_observation_date_count": (
+                    research_accumulation["qualified_observation_date_count"]
+                ),
+                "research_minimum_qualified_observation_dates": (
+                    research_accumulation["minimum_qualified_observation_dates"]
+                ),
+                "research_accumulation_gate_status": research_accumulation["status"],
             }
         if sessions:
             policy_symbols[spec.symbol] = {"name": spec.name, "sessions": sessions}
