@@ -102,6 +102,80 @@ def test_risk_schema_forces_empty_fact_arrays_when_ledger_has_no_matching_facts(
     assert schema["properties"]["contradicting_fact_ids"]["maxItems"] == 0
 
 
+def test_invalid_risk_schema_requires_an_exact_invalidation_fact():
+    schema = entry_risk_adjudication_openai_schema(
+        {
+            "setup_state": "INVALID",
+            "positive_facts": ["liquidity_supportive"],
+            "contradicting_facts": ["trigger_confirmation_missing"],
+            "invalidation_facts": ["no_supported_setup"],
+        }
+    )
+
+    contradicting = schema["properties"]["contradicting_fact_ids"]
+    assert contradicting["minItems"] == 1
+    assert contradicting["items"]["enum"] == ["no_supported_setup"]
+
+
+def test_wait_risk_schema_requires_a_ledger_backed_adverse_fact():
+    schema = entry_risk_adjudication_openai_schema(
+        {
+            "setup_state": "WAIT_CONFIRMATION",
+            "positive_facts": ["liquidity_supportive"],
+            "contradicting_facts": ["trigger_confirmation_missing"],
+            "invalidation_facts": [],
+        }
+    )
+
+    contradicting = schema["properties"]["contradicting_fact_ids"]
+    assert contradicting["minItems"] == 1
+    assert contradicting["items"]["enum"] == ["trigger_confirmation_missing"]
+
+
+def test_offline_candidate_schema_enforces_exact_fact_roles_per_request():
+    setup = {
+        "positive_facts": ["liquidity_supportive"],
+        "contradicting_facts": ["program_flow_net_and_delta_sell"],
+        "invalidation_facts": ["no_supported_setup"],
+    }
+
+    schema = quality._candidate_openai_schema(
+        stage="entry",
+        candidate={
+            "semantic_validator_version": (
+                quality.ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+            )
+        },
+        setup_evidence=setup,
+    )
+
+    assert schema["properties"]["supporting_fact_ids"]["items"]["enum"] == [
+        "liquidity_supportive"
+    ]
+    assert schema["properties"]["contradicting_fact_ids"]["items"]["enum"] == [
+        "program_flow_net_and_delta_sell",
+        "no_supported_setup",
+    ]
+
+
+def test_response_schema_instance_hash_does_not_split_prompt_contract():
+    base = {
+        "prompt_version": "decision_quality_v2_15_bounded_recovery_entry",
+        "system_prompt_sha256": "prompt-hash",
+        "response_schema_sha256": "template-hash",
+        "response_schema_instance_policy": "exact_fact_role_enum_v1",
+    }
+
+    first = quality._candidate_contract_sha256(
+        {**base, "response_schema_instance_sha256": "fact-ledger-a"}
+    )
+    second = quality._candidate_contract_sha256(
+        {**base, "response_schema_instance_sha256": "fact-ledger-b"}
+    )
+
+    assert first == second
+
+
 def test_setup_evidence_is_symbol_agnostic_and_ready_for_clean_continuation():
     evidence = build_entry_setup_evidence(
         exact_payload={"current": {"price": 10000}, "symbol": "005930"},
@@ -968,6 +1042,237 @@ def test_v2_14_detailed_replay_composes_risk_only_response(monkeypatch):
     )
     assert report["paired_comparisons"][0]["entry_composed_action"] == "BUY"
     assert report["runtime_effect"] is False
+
+
+def test_v2_15_soft_distribution_keeps_only_bounded_recovery_probe():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+    evidence.update(
+        {
+            "setup_family": "NO_VALID_SETUP",
+            "setup_state": "INVALID",
+            "structure_phase": "distribution",
+            "execution_readiness_state": "INVALID",
+            "positive_facts": ["liquidity_supportive", "volume_confirmed"],
+            "contradicting_facts": ["supportive_micro_tape_vs_program_net_sell"],
+            "invalidation_facts": ["no_supported_setup"],
+            "corroborated_risk_codes": ["STRUCTURE_INVALIDATED"],
+            "recheck_reasons": [],
+            "source_quality": {
+                "status": "fresh_consistent",
+                "source_mode": "fresh_dual",
+                "completed_bar_count": 20,
+            },
+        }
+    )
+    evidence["evidence_sha256"] = quality._sha256(
+        {key: value for key, value in evidence.items() if key != "evidence_sha256"}
+    )
+    risk = _risk(
+        "VETO",
+        ["STRUCTURE_INVALIDATED"],
+        support=["liquidity_supportive"],
+        contradict=["no_supported_setup"],
+    )
+
+    legacy = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=risk,
+    )
+    candidate = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=risk,
+        bounded_recovery_policy=True,
+    )
+
+    assert legacy["action"] == "DROP"
+    assert candidate["action"] == "WAIT"
+    assert candidate["entry_probe_intent"] is True
+    assert candidate["entry_recheck_intent"] is True
+    assert candidate["entry_bounded_recovery_eligible"] is True
+    assert candidate["entry_bounded_recovery_path"] == (
+        "soft_distribution_micro_program_divergence"
+    )
+    assert candidate["composer_version"] == "entry_decision_composer_policy_v9"
+    assert candidate["actual_order_submitted"] is False
+
+
+def test_v2_15_preparation_uses_constrained_schema_and_offline_composer(monkeypatch):
+    exact_payload = {"current": {"price": 10000}}
+    monkeypatch.setattr(
+        quality,
+        "build_exact_payload_analysis_v1",
+        lambda *_args, **_kwargs: {
+            **_exact_analysis(),
+            "analysis_sha256": "exact-analysis-hash",
+        },
+    )
+    monkeypatch.setattr(
+        quality,
+        "build_v2_13_recovery_confirmation_analysis_v1",
+        lambda *_args, **_kwargs: {
+            **_recovery_analysis(clean=True),
+            "analysis_sha256": "recovery-analysis-hash",
+        },
+    )
+
+    request = quality.prepare_detailed_paired_replay_requests(
+        [
+            {
+                "paired_replay_id": "pair-v2-15",
+                "decision_trace_id": "trace-v2-15",
+                "stage": "entry",
+                "stock_code": "000001",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "payload_sha256": quality._sha256(exact_payload),
+                "exact_payload": exact_payload,
+                "control": {"provider": "openai", "model": "gpt-5.4-nano"},
+                "candidate": {"provider": "openai", "model": "gpt-5.4-nano"},
+                "sample_floor": {"pass": True},
+                **quality.OFFLINE_CONTRACT,
+            }
+        ],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+        ),
+    )[0]
+
+    candidate = request["candidate"]
+    evidence = request["entry_setup_evidence"]
+    assert candidate["system_prompt"].isascii()
+    assert candidate["entry_decision_composer_version"] == (
+        "entry_decision_composer_policy_v9"
+    )
+    instance_schema = quality._candidate_openai_schema(
+        stage="entry",
+        candidate=candidate,
+        setup_evidence=evidence,
+    )
+    assert (
+        instance_schema["properties"]["supporting_fact_ids"]["items"]["enum"]
+        == evidence["positive_facts"]
+    )
+    assert candidate["response_schema_sha256"] == quality._sha256(
+        candidate["response_schema"]
+    )
+    assert candidate["response_schema_instance_sha256"] == quality._sha256(
+        instance_schema
+    )
+    assert candidate["response_schema_instance_policy"] == "exact_fact_role_enum_v1"
+    assert request["runtime_effect"] is False
+    assert request["actual_order_submitted"] is False
+
+
+def test_v2_15_hard_blocker_never_becomes_bounded_recovery_support():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+    evidence.update(
+        {
+            "setup_family": "NO_VALID_SETUP",
+            "setup_state": "INVALID",
+            "structure_phase": "distribution",
+            "execution_readiness_state": "INVALID",
+            "positive_facts": ["liquidity_supportive", "tape_supportive"],
+            "contradicting_facts": ["supportive_micro_tape_vs_program_net_sell"],
+            "invalidation_facts": ["hard_blocker:large_sell_print_present"],
+            "corroborated_risk_codes": ["STRUCTURE_INVALIDATED"],
+            "recheck_reasons": [],
+            "source_quality": {
+                "status": "fresh_consistent",
+                "source_mode": "fresh_dual",
+                "completed_bar_count": 20,
+            },
+        }
+    )
+    evidence["evidence_sha256"] = quality._sha256(
+        {key: value for key, value in evidence.items() if key != "evidence_sha256"}
+    )
+
+    result = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=_risk(
+            "VETO",
+            ["STRUCTURE_INVALIDATED"],
+            support=["liquidity_supportive"],
+            contradict=["hard_blocker:large_sell_print_present"],
+        ),
+        bounded_recovery_policy=True,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["entry_probe_intent"] is False
+    assert result["entry_bounded_recovery_eligible"] is False
+
+
+def test_v2_15_recovery_confirmation_requires_liquidity_and_tape_support():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(recovery=True),
+    )
+    evidence.update(
+        {
+            "setup_family": "RECOVERY_CONFIRMATION",
+            "setup_state": "WAIT_CONFIRMATION",
+            "structure_phase": "recovery_continuation",
+            "execution_readiness_state": "WAIT_CONFIRMATION",
+            "positive_facts": ["liquidity_supportive", "tape_supportive"],
+            "contradicting_facts": ["trigger_confirmation_missing"],
+            "invalidation_facts": [],
+            "corroborated_risk_codes": ["CONFIRMATION_MISSING"],
+            "recheck_reasons": ["TRIGGER_CONFIRMATION_RECHECK"],
+            "source_quality": {
+                "status": "fresh_consistent",
+                "source_mode": "fresh_dual",
+                "completed_bar_count": 20,
+            },
+        }
+    )
+    evidence["evidence_sha256"] = quality._sha256(
+        {key: value for key, value in evidence.items() if key != "evidence_sha256"}
+    )
+    risk = _risk(
+        "CAUTION",
+        ["CONFIRMATION_MISSING"],
+        support=["liquidity_supportive", "tape_supportive"],
+        contradict=["trigger_confirmation_missing"],
+    )
+
+    eligible = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=risk,
+        bounded_recovery_policy=True,
+    )
+    assert eligible["action"] == "WAIT"
+    assert eligible["entry_probe_intent"] is True
+    assert eligible["entry_bounded_recovery_path"] == (
+        "recovery_liquidity_tape_confirmation"
+    )
+
+    evidence["positive_facts"] = ["liquidity_supportive"]
+    evidence["evidence_sha256"] = quality._sha256(
+        {key: value for key, value in evidence.items() if key != "evidence_sha256"}
+    )
+    not_eligible = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=_risk(
+            "CAUTION",
+            ["CONFIRMATION_MISSING"],
+            support=["liquidity_supportive"],
+            contradict=["trigger_confirmation_missing"],
+        ),
+        bounded_recovery_policy=True,
+    )
+    assert not_eligible["action"] == "WAIT"
+    assert not_eligible["entry_probe_intent"] is False
+    assert not_eligible["entry_bounded_recovery_eligible"] is False
 
 
 def test_v2_14_cumulative_learning_counts_wait_probe_and_separates_contract(

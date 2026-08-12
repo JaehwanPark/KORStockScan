@@ -7097,7 +7097,14 @@ def test_probe_arm_continuity_finds_ready_followup_deferred_by_ai_budget():
     assert report["entry_recheck_attribution"]["candidate_recheck_intent_count"] == 0
 
 
-def test_entry_lifecycle_replay_separates_path_proxy_from_natural_realized_pnl():
+def test_entry_lifecycle_replay_separates_path_proxy_from_natural_realized_pnl(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        quality,
+        "_entry_lifecycle_source_inventory",
+        lambda _target_date: [],
+    )
     request = {
         "decision_trace_id": "lifecycle-trace",
         "paired_replay_id": "lifecycle-pair",

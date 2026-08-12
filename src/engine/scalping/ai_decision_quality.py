@@ -34,6 +34,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
     DECISION_QUALITY_V2_REASON_CODES,
@@ -47,6 +48,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_12_selective_recovery_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
+    decision_quality_v2_15_bounded_recovery_system_prompt,
     decision_quality_v2_system_prompt,
 )
 from src.engine.scalping.ai_decision_trace import replay_source_input
@@ -59,6 +61,7 @@ from src.engine.scalping.entry_candidate_lifecycle_state import (
 )
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_VERSION,
     ENTRY_RISK_ADJUDICATION_SCHEMA,
     ENTRY_RISK_ADJUDICATION_REPAIR_VERSION,
     ENTRY_SETUP_EVIDENCE_SCHEMA,
@@ -6354,7 +6357,7 @@ def _prompt_v2_openai_schema(stage: str) -> dict[str, Any]:
 
 
 def _candidate_openai_schema(
-    *, stage: str, candidate: dict[str, Any]
+    *, stage: str, candidate: dict[str, Any], setup_evidence: Any = None
 ) -> dict[str, Any]:
     if (
         str(candidate.get("semantic_validator_version") or "")
@@ -6362,7 +6365,7 @@ def _candidate_openai_schema(
     ):
         if str(stage or "").strip().lower() != "entry":
             raise ValueError("entry setup-risk schema supports entry only")
-        return entry_risk_adjudication_openai_schema()
+        return entry_risk_adjudication_openai_schema(setup_evidence)
     return _prompt_v2_openai_schema(stage)
 
 
@@ -6372,6 +6375,10 @@ def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
         "system_prompt_sha256": candidate.get("system_prompt_sha256"),
         "response_schema_sha256": candidate.get("response_schema_sha256"),
     }
+    if candidate.get("response_schema_instance_policy") is not None:
+        contract["response_schema_instance_policy"] = candidate.get(
+            "response_schema_instance_policy"
+        )
     if candidate.get("analysis_schema") is not None:
         contract["analysis_schema"] = candidate.get("analysis_schema")
         contract["analysis_schema_sha256"] = candidate.get("analysis_schema_sha256")
@@ -6883,7 +6890,7 @@ def execute_openai_prompt_v2_candidate(
             )
         if setup_risk_candidate:
             correction_rules.append(
-                "Return only the V2.14 risk adjudication schema. Copy fact IDs "
+                "Return only the setup-risk adjudication schema. Copy fact IDs "
                 "verbatim from entry_setup_evidence_v1, use PASS only with "
                 "NO_BLOCKING_RISK, and do not add action, score, price, quantity, "
                 "or invented evidence. READY permits PASS/CAUTION/VETO; "
@@ -6895,6 +6902,17 @@ def execute_openai_prompt_v2_candidate(
                 "CONFIRMATION_MISSING are bounded CAUTION risks, not structural "
                 "blocking risks"
             )
+            if candidate_prompt_version == (
+                f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry"
+            ):
+                correction_rules.append(
+                    "For V2.15, never cite a contradiction or invalidation as a "
+                    "supporting fact. A no_supported_setup-only distribution may "
+                    "remain VETO while the deterministic composer retains only its "
+                    "fresh bounded-recovery recheck path. WAIT_CONFIRMATION with "
+                    "both liquidity_supportive and tape_supportive should cite both "
+                    "positive facts and use CAUTION when no hard blocker exists"
+                )
             if (
                 "entry_risk_invalid_setup_invalidation_fact_required"
                 in correction_errors
@@ -6929,6 +6947,20 @@ def execute_openai_prompt_v2_candidate(
         "_",
         str(candidate.get("prompt_version") or DECISION_QUALITY_V2_PROMPT_VERSION),
     )[:64]
+    response_schema = _candidate_openai_schema(
+        stage=stage,
+        candidate=candidate,
+        setup_evidence=request.get("entry_setup_evidence"),
+    )
+    response_schema_instance_sha256 = _sha256(response_schema)
+    expected_schema_instance_sha256 = str(
+        candidate.get("response_schema_instance_sha256") or ""
+    )
+    if (
+        expected_schema_instance_sha256
+        and expected_schema_instance_sha256 != response_schema_instance_sha256
+    ):
+        raise ValueError("candidate_response_schema_instance_hash_mismatch")
     response_kwargs: dict[str, Any] = {
         "model": model,
         "instructions": instructions,
@@ -6938,10 +6970,7 @@ def execute_openai_prompt_v2_candidate(
                 "type": "json_schema",
                 "name": response_schema_name,
                 "strict": True,
-                "schema": _candidate_openai_schema(
-                    stage=stage,
-                    candidate=candidate,
-                ),
+                "schema": response_schema,
             },
             "verbosity": "low",
         },
@@ -6994,6 +7023,7 @@ def execute_openai_prompt_v2_candidate(
             "store": False,
             "failback_chain": [],
             "parse_error": parse_error or None,
+            "response_schema_instance_sha256": response_schema_instance_sha256,
         },
     }
 
@@ -7582,6 +7612,7 @@ def prepare_detailed_paired_replay_requests(
         DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
     }
     if candidate_prompt_version not in supported_prompt_versions:
         raise ValueError("unsupported_detailed_candidate_prompt_version")
@@ -7627,10 +7658,12 @@ def prepare_detailed_paired_replay_requests(
             DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
         }:
             if candidate_prompt_version in {
                 DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
             }:
                 anticipatory_analysis = build_v2_13_recovery_confirmation_analysis_v1(
                     exact_payload,
@@ -7652,6 +7685,11 @@ def prepare_detailed_paired_replay_requests(
                 anticipatory_analysis
             )
             if (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+            ):
+                prompt = decision_quality_v2_15_bounded_recovery_system_prompt(stage)
+            elif (
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
             ):
@@ -7704,21 +7742,27 @@ def prepare_detailed_paired_replay_requests(
             "analysis_schema_sha256": _sha256(EXACT_PAYLOAD_ANALYSIS_SCHEMA),
         }
         entry_setup_evidence: dict[str, Any] | None = None
-        if (
-            candidate_prompt_version
-            == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-        ):
+        if candidate_prompt_version in {
+            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+        }:
             entry_setup_evidence = build_entry_setup_evidence(
                 exact_payload=exact_payload,
                 exact_analysis=analysis,
                 recovery_analysis=anticipatory_analysis,
             )
             candidate_input[ENTRY_SETUP_EVIDENCE_SCHEMA] = entry_setup_evidence
+            constrained_response_schema = entry_risk_adjudication_openai_schema(
+                entry_setup_evidence
+            )
+            response_schema_template = entry_risk_adjudication_openai_schema()
             candidate.update(
                 {
-                    "response_schema": entry_risk_adjudication_openai_schema(),
-                    "response_schema_sha256": _sha256(
-                        entry_risk_adjudication_openai_schema()
+                    "response_schema": response_schema_template,
+                    "response_schema_sha256": _sha256(response_schema_template),
+                    "response_schema_instance_policy": "exact_fact_role_enum_v1",
+                    "response_schema_instance_sha256": _sha256(
+                        constrained_response_schema
                     ),
                     "semantic_validator_version": (
                         ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
@@ -7729,7 +7773,10 @@ def prepare_detailed_paired_replay_requests(
                     ),
                     "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
                     "entry_decision_composer_version": (
-                        ENTRY_DECISION_COMPOSER_VERSION
+                        ENTRY_DECISION_COMPOSER_V2_15_VERSION
+                        if candidate_prompt_version
+                        == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+                        else ENTRY_DECISION_COMPOSER_VERSION
                     ),
                     "entry_structure_phase_policy_version": (
                         STRUCTURE_PHASE_POLICY_VERSION
@@ -7782,7 +7829,10 @@ def prepare_detailed_paired_replay_requests(
                     "semantic_validator_version": (
                         ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
                         if candidate_prompt_version
-                        == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                        in {
+                            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                        }
                         else (
                             BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
                             if candidate_prompt_version
@@ -7811,10 +7861,10 @@ def prepare_detailed_paired_replay_requests(
                 candidate["semantic_repair_version"] = (
                     ANTICIPATORY_SEMANTIC_REPAIR_VERSION
                 )
-            elif (
-                candidate_prompt_version
-                == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-            ):
+            elif candidate_prompt_version in {
+                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            }:
                 candidate["semantic_repair_version"] = (
                     ENTRY_RISK_ADJUDICATION_REPAIR_VERSION
                 )
@@ -7846,10 +7896,10 @@ def prepare_detailed_paired_replay_requests(
                 "floor_role": "cumulative_learning_update_only",
                 "promotion_authority": False,
             }
-            if (
-                candidate_prompt_version
-                == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-            ):
+            if candidate_prompt_version in {
+                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            }:
                 sample_floor["promotion_evidence_floor"] = {
                     "candidate_exposure_decision_rows": (
                         PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
@@ -8065,6 +8115,12 @@ def run_paired_replay(
                 **compose_entry_decision(
                     setup_evidence=request.get("entry_setup_evidence"),
                     risk_adjudication=risk_adjudication_response,
+                    bounded_recovery_policy=(
+                        str(
+                            (request.get("candidate") or {}).get("prompt_version") or ""
+                        )
+                        == f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry"
+                    ),
                 ),
                 "entry_risk_adjudication": risk_adjudication_response,
             }
@@ -8082,6 +8138,9 @@ def run_paired_replay(
                 "candidate_response_schema_sha256": (
                     request.get("candidate") or {}
                 ).get("response_schema_sha256"),
+                "candidate_response_schema_instance_sha256": (
+                    request.get("candidate") or {}
+                ).get("response_schema_instance_sha256"),
                 "candidate_contract_sha256": _candidate_contract_sha256(
                     request.get("candidate") or {}
                 ),
@@ -9941,6 +10000,11 @@ def build_paired_replay_report(
             or result.get("entry_setup_evidence_sha256")
             != request.get("entry_setup_evidence_sha256")
             or result.get("entry_setup_evidence_confirmed") is not True
+            or (
+                candidate_contract.get("response_schema_instance_sha256")
+                and result.get("candidate_response_schema_instance_sha256")
+                != candidate_contract.get("response_schema_instance_sha256")
+            )
         ):
             candidate_contract_integrity_rejected_count += 1
             continue
@@ -10235,6 +10299,15 @@ def build_paired_replay_report(
                 "entry_recheck_intent": candidate_response.get("entry_recheck_intent"),
                 "entry_recheck_reasons": list(
                     candidate_response.get("entry_recheck_reasons") or []
+                ),
+                "entry_bounded_recovery_policy_version": candidate_response.get(
+                    "entry_bounded_recovery_policy_version"
+                ),
+                "entry_bounded_recovery_eligible": candidate_response.get(
+                    "entry_bounded_recovery_eligible"
+                ),
+                "entry_bounded_recovery_path": candidate_response.get(
+                    "entry_bounded_recovery_path"
                 ),
                 "entry_tail_risk_state": candidate_response.get(
                     "entry_tail_risk_state"
@@ -14925,6 +14998,7 @@ def main(argv: list[str] | None = None) -> int:
             DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
         ),
         default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     )
@@ -15492,6 +15566,13 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         or {}
                     ).get("contract_sha256")
+                    and row.get("candidate_response_schema_instance_sha256")
+                    == (
+                        request_by_pair[str(row.get("paired_replay_id") or "")].get(
+                            "candidate"
+                        )
+                        or {}
+                    ).get("response_schema_instance_sha256")
                     and row.get("candidate_input_sha256")
                     == request_by_pair[str(row.get("paired_replay_id") or "")].get(
                         "candidate_input_sha256"
@@ -15656,14 +15737,15 @@ def main(argv: list[str] | None = None) -> int:
                     DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
                     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
                 }:
                     report["supplemental_analysis_schema"] = (
                         ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
                     )
-                if (
-                    args.detailed_candidate_version
-                    == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-                ):
+                if args.detailed_candidate_version in {
+                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                }:
                     report["entry_setup_evidence_schema"] = ENTRY_SETUP_EVIDENCE_SCHEMA
                     report["entry_risk_adjudication_schema"] = (
                         ENTRY_RISK_ADJUDICATION_SCHEMA

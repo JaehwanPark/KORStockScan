@@ -17,6 +17,8 @@ ENTRY_RISK_ADJUDICATION_SCHEMA = "entry_setup_risk_adjudication_v1"
 ENTRY_DECISION_COMPOSER_SCHEMA = "entry_decision_composer_v1"
 ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v9"
 ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v8"
+ENTRY_DECISION_COMPOSER_V2_15_VERSION = "entry_decision_composer_policy_v9"
+ENTRY_BOUNDED_RECOVERY_POLICY_VERSION = "entry_bounded_recovery_policy_v1"
 STRUCTURE_PHASE_POLICY_VERSION = "entry_completed_bar_structure_phase_v2"
 ENTRY_RISK_ADJUDICATION_REPAIR_VERSION = (
     "entry_setup_risk_fail_closed_invalidation_citation_v1"
@@ -789,12 +791,16 @@ def entry_risk_adjudication_openai_schema(
         return schema
 
     setup = _as_dict(setup_evidence)
+    invalidation_facts = list(setup.get("invalidation_facts") or [])
+    contradicting_facts = list(setup.get("contradicting_facts") or [])
+    setup_state = str(setup.get("setup_state") or "").strip().upper()
     fact_fields = {
         "supporting_fact_ids": list(setup.get("positive_facts") or []),
-        "contradicting_fact_ids": [
-            *list(setup.get("contradicting_facts") or []),
-            *list(setup.get("invalidation_facts") or []),
-        ],
+        "contradicting_fact_ids": (
+            invalidation_facts
+            if setup_state == "INVALID" and invalidation_facts
+            else [*contradicting_facts, *invalidation_facts]
+        ),
     }
     for response_field, raw_values in fact_fields.items():
         allowed_values = list(
@@ -805,6 +811,11 @@ def entry_risk_adjudication_openai_schema(
         field_schema = schema["properties"][response_field]
         if allowed_values:
             field_schema["items"]["enum"] = allowed_values
+            if response_field == "contradicting_fact_ids" and setup_state in {
+                "INVALID",
+                "WAIT_CONFIRMATION",
+            }:
+                field_schema["minItems"] = 1
         else:
             field_schema["maxItems"] = 0
     return schema
@@ -1101,6 +1112,7 @@ def compose_entry_decision(
     *,
     setup_evidence: Any,
     risk_adjudication: Any,
+    bounded_recovery_policy: bool = False,
 ) -> dict[str, Any]:
     """Compose an offline legacy-compatible action without order authority."""
 
@@ -1128,11 +1140,45 @@ def compose_entry_decision(
         setup_evidence=setup,
     )
     recheck_reasons = [str(value) for value in setup.get("recheck_reasons") or []]
-    recheck_intent = bool(not contract_errors and state == "WAIT_CONFIRMATION")
+    positive_facts = set(map(str, setup.get("positive_facts") or []))
+    contradicting_facts = set(map(str, setup.get("contradicting_facts") or []))
+    invalidation_facts = set(map(str, setup.get("invalidation_facts") or []))
+    source_quality = _as_dict(setup.get("source_quality"))
+    source_fresh = str(source_quality.get("status") or "").lower() in {
+        "fresh",
+        "fresh_consistent",
+        "pass",
+    }
+    bounded_recovery_path = None
+    if bounded_recovery_policy and source_fresh and not contract_errors:
+        if (
+            state == "INVALID"
+            and invalidation_facts == {"no_supported_setup"}
+            and str(setup.get("structure_phase") or "") == "distribution"
+            and "liquidity_supportive" in positive_facts
+            and "supportive_micro_tape_vs_program_net_sell" in contradicting_facts
+        ):
+            bounded_recovery_path = "soft_distribution_micro_program_divergence"
+        elif (
+            state == "WAIT_CONFIRMATION"
+            and family == "RECOVERY_CONFIRMATION"
+            and not invalidation_facts
+            and recheck_reasons == ["TRIGGER_CONFIRMATION_RECHECK"]
+            and {"liquidity_supportive", "tape_supportive"}.issubset(positive_facts)
+        ):
+            bounded_recovery_path = "recovery_liquidity_tape_confirmation"
+    recheck_intent = bool(
+        not contract_errors
+        and (state == "WAIT_CONFIRMATION" or bounded_recovery_path is not None)
+    )
     bounded_wait_probe_intent = bool(
         recheck_intent
         and "LARGE_SELL_EXHAUSTION_RECHECK" not in recheck_reasons
-        and not set(map(str, setup.get("invalidation_facts") or []))
+        and (
+            bounded_recovery_path is not None
+            if bounded_recovery_policy
+            else not invalidation_facts
+        )
     )
 
     if contract_errors:
@@ -1146,10 +1192,16 @@ def compose_entry_decision(
         probe_intent = False
         reason = "entry_setup_or_ai_insufficient"
     elif state == "INVALID":
-        action = "DROP"
-        edge_state = "NO_EDGE"
-        probe_intent = False
-        reason = "entry_setup_invalid"
+        if bounded_recovery_path is not None:
+            action = "WAIT"
+            edge_state = "EDGE"
+            probe_intent = True
+            reason = "entry_setup_bounded_recovery_recheck_probe"
+        else:
+            action = "DROP"
+            edge_state = "NO_EDGE"
+            probe_intent = False
+            reason = "entry_setup_invalid"
     elif state == "WAIT_CONFIRMATION":
         action = "WAIT"
         edge_state = "EDGE"
@@ -1165,14 +1217,18 @@ def compose_entry_decision(
         probe_intent = False
         reason = "entry_ai_veto_corroborated"
     elif verdict == "PASS":
-        action = "BUY"
+        action = "WAIT" if bounded_recovery_policy else "BUY"
         edge_state = "EDGE"
-        probe_intent = True
-        reason = "entry_setup_ready_ai_pass"
+        probe_intent = not bounded_recovery_policy
+        reason = (
+            "entry_setup_ready_outside_bounded_recovery_cohort"
+            if bounded_recovery_policy
+            else "entry_setup_ready_ai_pass"
+        )
     else:
         action = "WAIT"
         edge_state = "EDGE"
-        probe_intent = True
+        probe_intent = False if bounded_recovery_policy else True
         reason = (
             "entry_ai_veto_uncorroborated_recheck"
             if verdict == "VETO"
@@ -1201,7 +1257,11 @@ def compose_entry_decision(
     }.get(family, "no_setup")
     result = {
         "schema": ENTRY_DECISION_COMPOSER_SCHEMA,
-        "composer_version": ENTRY_DECISION_COMPOSER_VERSION,
+        "composer_version": (
+            ENTRY_DECISION_COMPOSER_V2_15_VERSION
+            if bounded_recovery_policy
+            else ENTRY_DECISION_COMPOSER_VERSION
+        ),
         "action": action,
         "score": score,
         "score_authority": "legacy_response_shape_only_not_a_decision_gate",
@@ -1268,6 +1328,11 @@ def compose_entry_decision(
         ),
         "entry_recheck_intent_authority": "offline_observation_only",
         "entry_recheck_intent_actual_order_submitted": False,
+        "entry_bounded_recovery_policy_version": (
+            ENTRY_BOUNDED_RECOVERY_POLICY_VERSION if bounded_recovery_policy else None
+        ),
+        "entry_bounded_recovery_eligible": bounded_recovery_path is not None,
+        "entry_bounded_recovery_path": bounded_recovery_path,
         "entry_tail_risk_state": str(
             _as_dict(setup.get("tail_risk_assessment")).get("state") or "not_observed"
         ),
