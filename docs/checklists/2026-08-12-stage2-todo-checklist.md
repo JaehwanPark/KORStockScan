@@ -277,6 +277,13 @@
   - 금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
 
+- [x] `[SmoothingRollingDecisionConsumer0812] exact-path rolling consumer 최초 산출물 검증·코드리뷰` (`Due: 2026-08-12`, `Slot: POSTCLOSE`, `TimeWindow: 21:00~21:20`, `Track: TuningAutomation`)
+  - Source: [daily report](/home/ubuntu/KORStockScan/data/report/threshold_cycle_2026-08-12.json), [cumulative report](/home/ubuntu/KORStockScan/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_2026-08-12.json), [postclose verifier](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-08-12.json)
+  - 판정: soft-stop 10건·OFI 20건 floor에 대해 rolling 5/10/20일 모두 `hold_sample`이다. soft-stop은 grace 관측 47건이 있었지만 confirmation 시작·만료·soft-stop 완료가 0건이라 exact-path terminal opportunity가 없었고, OFI는 pre-smoothing hard guard 1건 외 applied/debounce/confirm이 0건이라 smoothing 대안 대상이 없었다. 두 family의 journal arm·exact complete path는 모두 0건이며 90초 EV와 downside p10은 아직 산출할 수 없다.
+  - 권한/리뷰: verifier의 journal 및 rolling decision contract는 `pass`다. `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`를 유지하며 runtime/PREOPEN env를 변경하지 않았다. producer·consumer·verifier·runtime hook 리뷰에서 0표본 승격, pre-smoothing/hard/emergency guard 우회, runtime 권한 누출은 발견되지 않았다.
+  - 검증: smoothing journal/daily/verifier pytest=`305 passed`, Ruff/Black/compile/checklist parser/`git diff --check`=`pass`, 최종 미해결 finding=`0`이다.
+  - 다음 액션: 자연 유효기회를 계속 수집한다. 이후 source terminal opportunity나 OFI alternative opportunity가 발생했는데 journal arm이 0이면 `instrumentation_gap`; arm이 생겼지만 exact horizon이 결손이면 exclusion/source-quality 사유로 닫고, 표본·90초 EV·downside가 완성되기 전에는 bounded-canary 검토를 열지 않는다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
 
