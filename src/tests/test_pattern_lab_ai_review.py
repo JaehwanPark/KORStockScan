@@ -3407,9 +3407,7 @@ def test_pattern_lab_ai_review_resolves_ldm_policy_floor_alias_with_collection_p
         "warnings": ["all_stage_policy_entries_below_sample_floor"],
     }
     context = {
-        "sources": {
-            "lifecycle_decision_matrix": {"summary": mod._summary_for(payload)}
-        }
+        "sources": {"lifecycle_decision_matrix": {"summary": mod._summary_for(payload)}}
     }
     item = {
         "review_id": "lifecycle_decision_matrix_all_policy_entries_below_sample_floor",

@@ -4637,7 +4637,9 @@ def main(argv: list[str] | None = None) -> int:
     collector = SamsungWidgetCollector(
         snapshot_path=args.snapshot_path,
         observation_dir=args.observation_dir,
-        entry_notifier=SamsungWidgetEntryTelegramNotifier(),
+        # Collector ENTRY states only arm the collector-linked EXIT episode.
+        # Accepted BUY actions are notified by widget_auto_trade instead.
+        entry_notifier=SamsungWidgetEntryTelegramNotifier(entry_messages_enabled=False),
     )
     if args.once:
         collector.collect_once()

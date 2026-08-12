@@ -596,7 +596,7 @@ def test_exit_ready_sends_one_notice_and_suppresses_conflicting_entry(tmp_path):
     assert len(sent) == 2
     assert "삼성전자 청산 알림" in sent[1][2]
     assert "231,500원" in sent[1][2]
-    assert "진입 알림 연계 관측용" in sent[1][2]
+    assert "수집기 진입 에피소드 연계 관측용" in sent[1][2]
     state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert state["last_telegram_event_type"] == "samsung_widget_exit_advisory"
     assert state["last_exit_reference_price"] == 231_500
@@ -716,9 +716,67 @@ def test_invalid_or_stale_exit_advisory_never_sends(tmp_path):
 def test_exit_message_is_entry_linked_and_has_no_order_authority():
     message = build_exit_message(_exit_payload())
 
-    assert "진입 알림 연계 관측용" in message
+    assert "수집기 진입 에피소드 연계 관측용" in message
     assert "자동매도/주문 아님" in message
     assert "이탈 지지: 232,000원" in message
+
+
+def test_collector_entry_message_can_be_suppressed_while_exit_remains_enabled(
+    tmp_path,
+):
+    sent = []
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+        entry_messages_enabled=False,
+    )
+    now = datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
+
+    assert notifier.observe(_payload(observed_at=now), now) == (
+        "entry_observed_no_telegram"
+    )
+    assert sent == []
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert state["active"] is True
+    assert state["entry_telegram_suppressed"] is True
+    assert state["entry_telegram_owner"] == "widget_auto_trade_accepted_buy_action"
+
+    assert (
+        notifier.observe(
+            _exit_payload(now + timedelta(seconds=10)),
+            now + timedelta(seconds=10),
+        )
+        == "exit_sent"
+    )
+    assert len(sent) == 1
+    assert "삼성전자 청산 알림" in sent[0][2]
+
+
+def test_entry_specific_env_does_not_disable_collector_exit_delivery(
+    tmp_path, monkeypatch
+):
+    sent = []
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ENTRY_TELEGRAM_ENABLED", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_TELEGRAM_ENABLED", "true")
+    notifier = SamsungWidgetEntryTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *_args: sent.append(_args),
+    )
+    now = datetime(2026, 8, 4, 14, 33, 20, tzinfo=KST)
+
+    assert (
+        notifier.observe(_payload(observed_at=now), now) == "entry_observed_no_telegram"
+    )
+    assert (
+        notifier.observe(
+            _exit_payload(now + timedelta(seconds=10)),
+            now + timedelta(seconds=10),
+        )
+        == "exit_sent"
+    )
+    assert len(sent) == 1
 
 
 def test_local_peak_exit_message_does_not_claim_support_was_broken():

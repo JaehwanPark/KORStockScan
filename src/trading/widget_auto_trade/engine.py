@@ -7,7 +7,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -27,6 +27,7 @@ from src.trading.widget_auto_trade.gateway import (
     SubmitResult,
     resolve_widget_broker_route,
 )
+from src.trading.widget_auto_trade.policy import WidgetAutoTradePolicyLoader
 from src.utils.constants import PROJECT_ROOT
 
 EXECUTION_AUTHORITY = "operator_directed_widget_auto_trade_v1"
@@ -64,6 +65,13 @@ SAMSUNG_DAILY_EQUAL_SHARE_POLICY = {
     "take_profit_bps_from_equal_share_average": 50,
     "allowed_entry_sessions": ("KRX_REGULAR",),
     "allowed_entry_venues": ("KRX",),
+    "allowed_entry_states": ("ENTRY_CAUTION", "ENTRY_READY"),
+    "max_completed_entries_per_day": 3,
+    "reentry_cooldown_minutes": 10,
+    "new_entry_cutoff_time": "15:00:00",
+    "force_flat_at_session_end": False,
+    "force_exit_time": None,
+    "overnight_forbidden": False,
     "additional_leg_window": "original_entry_session_only",
     "source_final_exit_action": "observe_only_no_forced_sell",
     "unhit_policy": "daily_reset_unmanaged_overnight_inventory",
@@ -121,6 +129,18 @@ class OrderGateway(Protocol):
     ) -> ExecutionSnapshot: ...
 
 
+class EntryActionNotifier(Protocol):
+    def notify_order_accepted(
+        self,
+        *,
+        symbol: str,
+        name: str,
+        order: dict[str, Any],
+        execution_policy_id: str | None,
+        observed_at: datetime,
+    ) -> str: ...
+
+
 @dataclass(frozen=True)
 class WidgetSpec:
     code: str
@@ -130,6 +150,7 @@ class WidgetSpec:
     event_based: bool
     structural_execution_qualification: bool = False
     execution_policy_id: str | None = None
+    dated_policy_required: bool = False
 
 
 DEFAULT_WIDGET_SPECS = (
@@ -147,6 +168,7 @@ DEFAULT_WIDGET_SPECS = (
         doosan_contract.DEFAULT_SNAPSHOT_PATH,
         doosan_contract,
         True,
+        dated_policy_required=True,
     ),
     WidgetSpec(
         hanwha_contract.HANWHA_OCEAN_CODE,
@@ -154,6 +176,7 @@ DEFAULT_WIDGET_SPECS = (
         hanwha_contract.DEFAULT_SNAPSHOT_PATH,
         hanwha_contract,
         True,
+        dated_policy_required=True,
     ),
 )
 
@@ -192,7 +215,7 @@ def _take_profit_price(fill_price: int, *, profit_bps: int = TAKE_PROFIT_BPS) ->
     return move_price_up_by_bps(clean_fill, clean_bps)
 
 
-def _execution_policy(spec: WidgetSpec) -> dict[str, Any] | None:
+def _legacy_execution_policy(spec: WidgetSpec) -> dict[str, Any] | None:
     if spec.code != samsung_contract.SAMSUNG_CODE or not spec.execution_policy_id:
         return None
     if spec.execution_policy_id != SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID:
@@ -256,6 +279,8 @@ class WidgetSignalAutoTrader:
         state_path: Path = DEFAULT_STATE_PATH,
         event_recorder: WidgetTradeEventRecorder | None = None,
         snapshot_loader: SnapshotLoader = _load_json,
+        entry_action_notifier: EntryActionNotifier | None = None,
+        policy_loader: WidgetAutoTradePolicyLoader | None = None,
         entry_qty: int = 1,
         enabled: bool = False,
     ) -> None:
@@ -267,21 +292,56 @@ class WidgetSignalAutoTrader:
         self.state_path = state_path
         self.event_recorder = event_recorder or WidgetTradeEventRecorder()
         self.snapshot_loader = snapshot_loader
+        self.entry_action_notifier = entry_action_notifier
+        self.policy_loader = policy_loader or WidgetAutoTradePolicyLoader()
         self.entry_qty = qty
         self.enabled = bool(enabled)
-        self._configured_execution_policies = {
-            spec.code: spec.execution_policy_id
-            for spec in specs
-            if spec.execution_policy_id
-        }
+        self._policy_date = _now_kst().date()
+        self._dated_execution_policies = self.policy_loader.resolve_all(
+            observed_date=self._policy_date
+        )
+        self._configured_execution_policies = self._policy_manifest()
         for spec in specs:
-            policy = _execution_policy(spec)
-            if policy is not None and qty != int(policy["leg_quantity_each"]):
-                raise ValueError(
-                    "widget_execution_policy_entry_qty_mismatch:"
-                    f"{spec.code}:expected={policy['leg_quantity_each']}:actual={qty}"
-                )
+            policies = list(self._dated_execution_policies.get(spec.code, {}).values())
+            legacy = _legacy_execution_policy(spec)
+            if not policies and legacy is not None:
+                policies = [legacy]
+            for policy in policies:
+                if qty != int(policy["leg_quantity_each"]):
+                    raise ValueError(
+                        "widget_execution_policy_entry_qty_mismatch:"
+                        f"{spec.code}:expected={policy['leg_quantity_each']}:actual={qty}"
+                    )
         self._state = self._load_state()
+
+    def _policy_manifest(self) -> dict[str, Any]:
+        manifest: dict[str, Any] = {}
+        for spec in self.specs:
+            sessions = self._dated_execution_policies.get(spec.code)
+            if sessions:
+                manifest[spec.code] = {
+                    session: policy["policy_id"]
+                    for session, policy in sorted(sessions.items())
+                }
+            elif spec.execution_policy_id:
+                manifest[spec.code] = spec.execution_policy_id
+        return manifest
+
+    def _execution_policy(
+        self,
+        spec: WidgetSpec,
+        *,
+        session: str | None = None,
+        symbol_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if symbol_state is not None and symbol_state.get("entry_episode_open"):
+            episode_policy = symbol_state.get("entry_execution_policy")
+            if isinstance(episode_policy, dict):
+                return episode_policy
+        dated_sessions = self._dated_execution_policies.get(spec.code)
+        if dated_sessions:
+            return dated_sessions.get(str(session or ""))
+        return _legacy_execution_policy(spec)
 
     def _load_state(self) -> dict[str, Any]:
         state = _load_json(self.state_path)
@@ -409,11 +469,26 @@ class WidgetSignalAutoTrader:
                     "overnight_policy": "no_action_daily_reset",
                 }
             )
+        self._policy_date = observed_at.date()
+        self._dated_execution_policies = self.policy_loader.resolve_all(
+            observed_date=self._policy_date
+        )
+        self._configured_execution_policies = self._policy_manifest()
+        new_symbols: dict[str, dict[str, Any]] = {}
+        for spec in self.specs:
+            symbol_state = self._empty_symbol_state(spec)
+            prior_state = prior_symbols.get(spec.code)
+            if isinstance(prior_state, dict):
+                symbol_state["prior_day_unmanaged_qty"] = self._open_qty(prior_state)
+                symbol_state["prior_day_unresolved_order_count"] = sum(
+                    1
+                    for order in prior_state.get("orders") or []
+                    if order.get("status") in ACTIVE_ORDER_STATUSES
+                )
+            new_symbols[spec.code] = symbol_state
         self._state = {
             "active_date": day,
-            "symbols": {
-                spec.code: self._empty_symbol_state(spec) for spec in self.specs
-            },
+            "symbols": new_symbols,
             "history": history[-30:],
         }
         self._save()
@@ -421,7 +496,17 @@ class WidgetSignalAutoTrader:
     def _event(
         self, event_type: str, spec: WidgetSpec, now: datetime, **fields: Any
     ) -> None:
-        execution_policy = _execution_policy(spec)
+        policy_session = str(fields.pop("execution_policy_session", "") or "")
+        if not policy_session:
+            policy_session = str(spec.contract.session_context(now).name or "")
+        symbol_state = (self._state.get("symbols") or {}).get(spec.code)
+        symbol_state = symbol_state if isinstance(symbol_state, dict) else None
+        execution_policy = self._execution_policy(
+            spec,
+            session=policy_session,
+            symbol_state=symbol_state,
+        )
+        explicit_policy_id = fields.get("execution_policy_id")
         payload = {
             "event_type": event_type,
             "observed_at": now.isoformat(),
@@ -435,7 +520,8 @@ class WidgetSignalAutoTrader:
             "cash_precheck_performed": False,
             "token_mode": "shared_cache_only_no_issue_no_refresh",
             "execution_policy_id": (
-                execution_policy["policy_id"] if execution_policy else None
+                explicit_policy_id
+                or (execution_policy["policy_id"] if execution_policy else None)
             ),
             "execution_policy_research_arm": (
                 execution_policy["research_arm"] if execution_policy else None
@@ -502,22 +588,29 @@ class WidgetSignalAutoTrader:
         spec: WidgetSpec,
         payload: dict[str, Any],
         now: datetime,
-    ) -> tuple[str, str, str | None] | None:
+    ) -> tuple[str, str, str | None, dict[str, Any] | None] | None:
         context, snapshot_at = self._validated_context(spec, payload, now)
         if context is None or snapshot_at is None:
             return None
         advisory = payload.get("advisory")
         if not isinstance(advisory, dict):
             return None
-        execution_policy = _execution_policy(spec)
+        dated_sessions = self._dated_execution_policies.get(spec.code)
+        execution_policy = self._execution_policy(spec, session=context.name)
         policy_block_reason = (
-            "entry_blocked_execution_policy_venue"
-            if execution_policy is not None
-            and (
-                context.name not in execution_policy["allowed_entry_sessions"]
-                or context.market_venue not in execution_policy["allowed_entry_venues"]
+            "entry_blocked_execution_policy_session_unavailable"
+            if (dated_sessions or spec.dated_policy_required)
+            and execution_policy is None
+            else (
+                "entry_blocked_execution_policy_venue"
+                if execution_policy is not None
+                and (
+                    context.name not in execution_policy["allowed_entry_sessions"]
+                    or context.market_venue
+                    not in execution_policy["allowed_entry_venues"]
+                )
+                else None
             )
-            else None
         )
         if spec.event_based:
             event = payload.get("entry_event")
@@ -530,8 +623,16 @@ class WidgetSignalAutoTrader:
             state = str(event.get("state") or "")
             event_id = str(event.get("event_id") or "")
             return (
-                (event_id, state, policy_block_reason)
-                if event_id and state in ACTIONABLE_ENTRY_STATES
+                (event_id, state, policy_block_reason, execution_policy)
+                if event_id
+                and state
+                in (
+                    execution_policy.get(
+                        "allowed_entry_states", ACTIONABLE_ENTRY_STATES
+                    )
+                    if execution_policy
+                    else ACTIONABLE_ENTRY_STATES
+                )
                 else None
             )
         if not spec.contract.advisory_contract_is_valid(
@@ -542,7 +643,12 @@ class WidgetSignalAutoTrader:
         ):
             return None
         state = str(advisory.get("state") or "")
-        if state not in ACTIONABLE_ENTRY_STATES:
+        allowed_states = (
+            execution_policy.get("allowed_entry_states", ACTIONABLE_ENTRY_STATES)
+            if execution_policy
+            else ACTIONABLE_ENTRY_STATES
+        )
+        if state not in allowed_states:
             return None
         block_reason = policy_block_reason
         if (
@@ -575,6 +681,7 @@ class WidgetSignalAutoTrader:
             f"{advisory.get('observed_at')}",
             state,
             block_reason,
+            execution_policy,
         )
 
     def _exit_signal(
@@ -636,6 +743,7 @@ class WidgetSignalAutoTrader:
         limit_price: int | None = None,
         parent_entry_signal_id: str | None = None,
         scale_in_leg_index: int | None = None,
+        execution_policy_id: str | None = None,
     ) -> dict[str, Any]:
         broker_route = resolve_widget_broker_route(route)
         return {
@@ -651,6 +759,7 @@ class WidgetSignalAutoTrader:
             "limit_price": limit_price,
             "parent_entry_signal_id": parent_entry_signal_id,
             "scale_in_leg_index": scale_in_leg_index,
+            "execution_policy_id": execution_policy_id,
             "order_date": now.date().isoformat(),
             "intent_created_at": now.isoformat(),
             "status": "SUBMITTING",
@@ -660,6 +769,69 @@ class WidgetSignalAutoTrader:
             "fill_price": None,
             "broker_accepted": False,
         }
+
+    def _notify_pending_buy_actions(
+        self,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        """Best-effort notify accepted BUY actions without affecting execution."""
+        if self.entry_action_notifier is None:
+            return
+        for order in symbol_state.get("orders") or []:
+            if (
+                order.get("side") != "BUY"
+                or order.get("broker_accepted") is not True
+                or order.get("order_role")
+                not in {ORDER_ROLE_ENTRY_BUY, ORDER_ROLE_SCALE_IN_BUY}
+                or order.get("entry_telegram_status") == "sent"
+            ):
+                continue
+            try:
+                result = self.entry_action_notifier.notify_order_accepted(
+                    symbol=spec.code,
+                    name=spec.name,
+                    order=order,
+                    execution_policy_id=(
+                        str(order.get("execution_policy_id") or "") or None
+                    ),
+                    observed_at=now,
+                )
+            except Exception as exc:
+                result = "notifier_error_isolated"
+                error = type(exc).__name__
+            else:
+                error = None
+            normalized = "sent" if result in {"sent", "duplicate"} else result
+            if (
+                order.get("entry_telegram_status") == normalized
+                and order.get("entry_telegram_error") == error
+            ):
+                continue
+            order["entry_telegram_status"] = normalized
+            order["entry_telegram_last_observed_at"] = now.isoformat()
+            order["entry_telegram_error"] = error
+            if normalized == "sent":
+                order["entry_telegram_sent_at"] = now.isoformat()
+            self._save()
+            try:
+                self._event(
+                    "entry_action_telegram_delivery",
+                    spec,
+                    now,
+                    order_no=order.get("order_no"),
+                    order_role=order.get("order_role"),
+                    requested_qty=order.get("requested_qty"),
+                    signal_id=order.get("signal_id"),
+                    delivery_status=normalized,
+                    delivery_error=error,
+                    actual_order_submitted=True,
+                )
+            except Exception:
+                # Delivery audit is subordinate to the already-persisted order
+                # and must not stop reconciliation or protective-order work.
+                pass
 
     def _submit(
         self,
@@ -686,6 +858,9 @@ class WidgetSignalAutoTrader:
             limit_price=limit_price,
             parent_entry_signal_id=parent_entry_signal_id,
             scale_in_leg_index=scale_in_leg_index,
+            execution_policy_id=(
+                str(symbol_state.get("execution_policy_id") or "") or None
+            ),
         )
         symbol_state.setdefault("orders", []).append(order)
         self._save()  # crash-before/after-submit ambiguity guard
@@ -739,6 +914,7 @@ class WidgetSignalAutoTrader:
                 ),
                 "broker_accepted": result.accepted,
                 "submitted_at": now.isoformat(),
+                "source_advisory_state": symbol_state.get("entry_source_state"),
             }
         )
         self._save()
@@ -1009,6 +1185,10 @@ class WidgetSignalAutoTrader:
             return False
         symbol_state["entry_episode_open"] = False
         symbol_state["take_profit_completed_at"] = now.isoformat()
+        symbol_state["last_episode_completed_at"] = now.isoformat()
+        symbol_state["completed_entry_count"] = (
+            _positive_int(symbol_state.get("completed_entry_count")) + 1
+        )
         symbol_state["scale_in_requested"] = False
         self._save()
         self._event(
@@ -1030,7 +1210,7 @@ class WidgetSignalAutoTrader:
         payload: dict[str, Any],
         now: datetime,
     ) -> None:
-        policy = _execution_policy(spec)
+        policy = self._execution_policy(spec, symbol_state=symbol_state)
         if policy is None or not symbol_state.get("entry_episode_open"):
             return
         entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
@@ -1268,7 +1448,7 @@ class WidgetSignalAutoTrader:
         route = str(symbol_state.get("entry_route") or "").upper()
         if route not in {"KRX", "NXT"}:
             return
-        policy = _execution_policy(spec)
+        policy = self._execution_policy(spec, symbol_state=symbol_state)
         take_profit_bps = (
             int(policy["take_profit_bps_from_equal_share_average"])
             if policy is not None
@@ -1395,6 +1575,18 @@ class WidgetSignalAutoTrader:
             return
         qty = self._open_qty(symbol_state)
         if qty <= 0:
+            completed_signal_id = str(symbol_state.get("entry_signal_id") or "")
+            if (
+                symbol_state.get("entry_episode_open")
+                and completed_signal_id
+                and symbol_state.get("last_completed_entry_signal_id")
+                != completed_signal_id
+            ):
+                symbol_state["completed_entry_count"] = (
+                    _positive_int(symbol_state.get("completed_entry_count")) + 1
+                )
+                symbol_state["last_completed_entry_signal_id"] = completed_signal_id
+                symbol_state["last_episode_completed_at"] = now.isoformat()
             symbol_state["entry_episode_open"] = False
             symbol_state["exit_requested"] = False
             symbol_state["exit_completed_at"] = now.isoformat()
@@ -1439,6 +1631,50 @@ class WidgetSignalAutoTrader:
             order_role=ORDER_ROLE_FINAL_EXIT,
         )
 
+    def _maybe_request_policy_force_exit(
+        self,
+        spec: WidgetSpec,
+        symbol_state: dict[str, Any],
+        now: datetime,
+    ) -> None:
+        policy = self._execution_policy(spec, symbol_state=symbol_state)
+        if (
+            policy is None
+            or not symbol_state.get("entry_episode_open")
+            or symbol_state.get("exit_requested")
+            or policy.get("force_flat_at_session_end") is not True
+        ):
+            return
+        force_exit_time = str(policy.get("force_exit_time") or "")
+        try:
+            cutoff = datetime_time.fromisoformat(force_exit_time)
+        except ValueError:
+            return
+        if now.time().replace(tzinfo=None) < cutoff:
+            return
+        entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
+        symbol_state.update(
+            {
+                "exit_signal_id": (
+                    f"{spec.code}:{now.date().isoformat()}:POLICY_FORCE_FLAT:"
+                    f"{force_exit_time}"
+                ),
+                "exit_requested": True,
+                "exit_route": str(symbol_state.get("entry_route") or ""),
+                "exit_requested_at": now.isoformat(),
+            }
+        )
+        self._save()
+        self._event(
+            "policy_force_flat_requested",
+            spec,
+            now,
+            signal_id=entry_signal_id,
+            force_exit_time=force_exit_time,
+            current_day_open_qty=self._open_qty(symbol_state),
+            execution_policy_id=policy["policy_id"],
+        )
+
     def process_payload(
         self, spec: WidgetSpec, payload: dict[str, Any], now: datetime
     ) -> None:
@@ -1447,21 +1683,14 @@ class WidgetSignalAutoTrader:
         if self._close_completed_take_profit_episode(spec, symbol_state, now):
             return
 
+        self._maybe_request_policy_force_exit(spec, symbol_state, now)
         exit_signal_id = self._exit_signal(spec, payload, now)
-        execution_policy = _execution_policy(spec)
-        if execution_policy is not None and symbol_state.get("exit_requested"):
-            pending_final_exit = any(
-                order.get("order_role") == ORDER_ROLE_FINAL_EXIT
-                and order.get("status") in ACTIVE_ORDER_STATUSES
-                for order in symbol_state.get("orders") or []
-            )
-            if pending_final_exit:
-                return
-            symbol_state["exit_requested"] = False
-            symbol_state["exit_signal_id"] = None
-            symbol_state["sell_attempt_count"] = 0
-            symbol_state["last_sell_attempt_at"] = None
-            self._save()
+        current_context = spec.contract.session_context(now)
+        execution_policy = self._execution_policy(
+            spec,
+            session=current_context.name,
+            symbol_state=symbol_state,
+        )
         source_exit_observed = bool(exit_signal_id and execution_policy is not None)
         if source_exit_observed:
             if symbol_state.get(
@@ -1518,7 +1747,7 @@ class WidgetSignalAutoTrader:
         entry_signal = self._entry_signal(spec, payload, now)
         if entry_signal is None or symbol_state.get("entry_episode_open"):
             return
-        signal_id, source_state, structural_block_reason = entry_signal
+        signal_id, source_state, structural_block_reason, entry_policy = entry_signal
         if structural_block_reason:
             advisory = payload.get("advisory")
             advisory = advisory if isinstance(advisory, dict) else {}
@@ -1552,6 +1781,71 @@ class WidgetSignalAutoTrader:
             return
         if signal_id == symbol_state.get("entry_signal_id"):
             return
+        if entry_policy is not None:
+            cutoff_text = str(entry_policy.get("new_entry_cutoff_time") or "")
+            try:
+                cutoff = datetime_time.fromisoformat(cutoff_text)
+            except ValueError:
+                self._record_entry_block_once(
+                    spec=spec,
+                    symbol_state=symbol_state,
+                    signal_id=signal_id,
+                    reason="entry_blocked_execution_policy_cutoff_invalid",
+                    now=now,
+                )
+                return
+            if now.time().replace(tzinfo=None) > cutoff:
+                self._record_entry_block_once(
+                    spec=spec,
+                    symbol_state=symbol_state,
+                    signal_id=signal_id,
+                    reason="entry_blocked_execution_policy_cutoff",
+                    now=now,
+                    new_entry_cutoff_time=cutoff_text,
+                )
+                return
+            if _positive_int(symbol_state.get("completed_entry_count")) >= int(
+                entry_policy.get("max_completed_entries_per_day", 1)
+            ):
+                self._record_entry_block_once(
+                    spec=spec,
+                    symbol_state=symbol_state,
+                    signal_id=signal_id,
+                    reason="entry_blocked_daily_entry_limit",
+                    now=now,
+                    completed_entry_count=symbol_state.get("completed_entry_count"),
+                )
+                return
+            last_completed_at = _timestamp(
+                symbol_state.get("last_episode_completed_at")
+            )
+            if (
+                last_completed_at is not None
+                and (now - last_completed_at).total_seconds()
+                < int(entry_policy["reentry_cooldown_minutes"]) * 60
+            ):
+                self._record_entry_block_once(
+                    spec=spec,
+                    symbol_state=symbol_state,
+                    signal_id=signal_id,
+                    reason="entry_blocked_reentry_cooldown",
+                    now=now,
+                    reentry_cooldown_minutes=entry_policy["reentry_cooldown_minutes"],
+                )
+                return
+            if (
+                entry_policy.get("overnight_forbidden") is True
+                and _positive_int(symbol_state.get("prior_day_unmanaged_qty")) > 0
+            ):
+                self._record_entry_block_once(
+                    spec=spec,
+                    symbol_state=symbol_state,
+                    signal_id=signal_id,
+                    reason="entry_blocked_prior_day_widget_inventory",
+                    now=now,
+                    prior_day_unmanaged_qty=symbol_state.get("prior_day_unmanaged_qty"),
+                )
+                return
         route = self._route(payload)
         if route not in {"KRX", "NXT"}:
             return
@@ -1601,8 +1895,9 @@ class WidgetSignalAutoTrader:
                 "entry_session": spec.contract.session_context(now).name,
                 "entry_consumed_at": now.isoformat(),
                 "execution_policy_id": (
-                    execution_policy["policy_id"] if execution_policy else None
+                    entry_policy["policy_id"] if entry_policy else None
                 ),
+                "entry_execution_policy": deepcopy(entry_policy),
                 "take_profit_failure_count": 0,
                 "last_take_profit_attempt_at": None,
             }
@@ -1612,7 +1907,11 @@ class WidgetSignalAutoTrader:
             spec=spec,
             symbol_state=symbol_state,
             side="BUY",
-            qty=self.entry_qty,
+            qty=(
+                int(entry_policy["leg_quantity_each"])
+                if entry_policy is not None
+                else self.entry_qty
+            ),
             route=route,
             signal_id=signal_id,
             now=now,
@@ -1628,6 +1927,9 @@ class WidgetSignalAutoTrader:
             payload = self.snapshot_loader(spec.snapshot_path)
             if payload:
                 self.process_payload(spec, payload, now)
+            self._notify_pending_buy_actions(
+                spec, self._state["symbols"][spec.code], now
+            )
         last_cycle_at = _timestamp(self._state.get("last_cycle_at"))
         if (
             last_cycle_at is None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -94,6 +94,16 @@ class FakeGateway:
         return self.snapshots.get(order_no, ExecutionSnapshot(True, False, 0, 0, 0))
 
 
+class FakeEntryActionNotifier:
+    def __init__(self, result="sent"):
+        self.result = result
+        self.calls = []
+
+    def notify_order_accepted(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.result
+
+
 def _at(day: int, hour: int = 10, minute: int = 0, second: int = 0):
     return datetime(2026, 8, day, hour, minute, second, tzinfo=KST)
 
@@ -157,7 +167,81 @@ def _trader(tmp_path, monkeypatch, payload_box, *, qty=1):
     return trader, gateway, recorder
 
 
-def _samsung_policy_trader(tmp_path, monkeypatch, payload_box):
+class FakeDatedPolicyLoader:
+    def __init__(self, policies):
+        self.policies = policies
+        self.observed_dates = []
+
+    def resolve_all(self, *, observed_date):
+        self.observed_dates.append(observed_date)
+        return self.policies
+
+
+def _dated_policy(*, force_flat=True, cutoff="14:30:00", target_bps=100):
+    return {
+        "policy_id": "dated-policy-v1",
+        "symbol": "999999",
+        "session": "KRX_REGULAR",
+        "market_venue": "KRX",
+        "allowed_entry_sessions": ("KRX_REGULAR",),
+        "allowed_entry_venues": ("KRX",),
+        "allowed_entry_states": ("ENTRY_CAUTION", "ENTRY_READY"),
+        "leg_quantity_each": 1,
+        "add_trigger_bps_from_initial_fill": (),
+        "take_profit_bps_from_equal_share_average": target_bps,
+        "max_completed_entries_per_day": 2,
+        "reentry_cooldown_minutes": 5,
+        "new_entry_cutoff_time": cutoff,
+        "force_flat_at_session_end": force_flat,
+        "force_exit_time": "15:18:00" if force_flat else None,
+        "overnight_forbidden": force_flat,
+        "source_final_exit_action": "observe_only_no_forced_sell",
+        "research_arm": "test",
+        "evidence_window": "2026-06-05_2026-08-11",
+        "evidence_artifact": "test.json",
+    }
+
+
+def _dated_policy_trader(tmp_path, monkeypatch, payload_box, *, policy=None):
+    spec = WidgetSpec(
+        code="999999",
+        name="test",
+        snapshot_path=Path("unused.json"),
+        contract=FakeContract,
+        event_based=True,
+    )
+    gateway = FakeGateway()
+    recorder = FakeRecorder([])
+    monkeypatch.setattr(
+        engine,
+        "evaluate_manual_control_exclusion",
+        lambda code: SimpleNamespace(excluded=True, source="test"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "manual_control_operator_exclusion_source",
+        lambda code: "manual_operator",
+    )
+    monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
+    loader = FakeDatedPolicyLoader(
+        {"999999": {"KRX_REGULAR": policy or _dated_policy()}}
+    )
+    trader = WidgetSignalAutoTrader(
+        gateway=gateway,
+        specs=(spec,),
+        state_path=tmp_path / "dated-state.json",
+        event_recorder=recorder,
+        snapshot_loader=lambda path: payload_box["payload"],
+        policy_loader=loader,
+        entry_qty=1,
+        enabled=True,
+    )
+    return trader, gateway, recorder
+
+
+def _samsung_policy_trader(
+    tmp_path, monkeypatch, payload_box, *, entry_action_notifier=None
+):
     spec = WidgetSpec(
         code="005930",
         name="Samsung",
@@ -186,10 +270,72 @@ def _samsung_policy_trader(tmp_path, monkeypatch, payload_box):
         state_path=tmp_path / "state.json",
         event_recorder=recorder,
         snapshot_loader=lambda path: payload_box["payload"],
+        entry_action_notifier=entry_action_notifier,
         entry_qty=1,
         enabled=True,
     )
     return trader, gateway, recorder
+
+
+def test_samsung_entry_telegram_follows_accepted_machine_action_only(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    notifier = FakeEntryActionNotifier()
+    trader, gateway, recorder = _samsung_policy_trader(
+        tmp_path,
+        monkeypatch,
+        box,
+        entry_action_notifier=notifier,
+    )
+
+    trader.run_once(now)
+    trader.run_once(now.replace(second=1))
+
+    assert gateway.buy_calls == [("005930", 1, "SOR")]
+    assert len(notifier.calls) == 1
+    notified = notifier.calls[0]
+    assert notified["order"]["broker_accepted"] is True
+    assert notified["order"]["order_role"] == engine.ORDER_ROLE_ENTRY_BUY
+    assert notified["order"]["source_advisory_state"] == "ENTRY_CAUTION"
+    assert notified["order"]["order_no"] == "B1"
+    assert (
+        trader._state["symbols"]["005930"]["orders"][0]["entry_telegram_status"]
+        == "sent"
+    )
+    assert recorder.events[-1]["event_type"] == "entry_action_telegram_delivery"
+    assert recorder.events[-1]["actual_order_submitted"] is True
+
+
+def test_nxt_collector_entry_block_creates_no_machine_action_telegram(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _samsung_policy_payload(now)}
+    box["payload"]["market_venue"] = "NXT"
+    notifier = FakeEntryActionNotifier()
+    monkeypatch.setattr(
+        FakeContract,
+        "session_context",
+        staticmethod(
+            lambda observed_at: SimpleNamespace(
+                active=True, market_venue="NXT", name="NXT_PREMARKET"
+            )
+        ),
+    )
+    trader, gateway, recorder = _samsung_policy_trader(
+        tmp_path,
+        monkeypatch,
+        box,
+        entry_action_notifier=notifier,
+    )
+
+    trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert notifier.calls == []
+    assert recorder.events[-1]["event_type"] == ("entry_blocked_execution_policy_venue")
 
 
 def _samsung_policy_payload(now, *, entry_id="ENTRY-1", exit_id=None, price=100_000):
@@ -521,6 +667,102 @@ def test_samsung_runtime_policy_matches_selected_research_arm():
     assert policy["take_profit_bps_from_equal_share_average"] == 50
     assert policy["allowed_entry_sessions"] == ("KRX_REGULAR",)
     assert policy["allowed_entry_venues"] == ("KRX",)
+
+
+def test_dated_policy_controls_target_and_observes_source_exit(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="DATED-ENTRY")}
+    trader, gateway, recorder = _dated_policy_trader(
+        tmp_path,
+        monkeypatch,
+        box,
+        policy=_dated_policy(force_flat=False, target_bps=70),
+    )
+
+    trader.run_once(now)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(now.replace(second=1))
+    assert gateway.limit_sell_calls == [
+        ("999999", 1, "SOR", engine._take_profit_price(100_000, profit_bps=70))
+    ]
+
+    box["payload"] = _payload(now.replace(second=2), exit_id="SOURCE-EXIT")
+    trader.run_once(now.replace(second=2))
+    assert gateway.sell_calls == []
+    assert recorder.events[-1]["event_type"] == (
+        "source_final_exit_observed_without_forced_sell"
+    )
+
+
+def test_dated_policy_force_flat_cancels_target_and_sells_owned_quantity(
+    tmp_path, monkeypatch
+):
+    entry_at = _at(10)
+    box = {"payload": _payload(entry_at, entry_id="DATED-ENTRY")}
+    trader, gateway, recorder = _dated_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(entry_at)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(entry_at.replace(second=1))
+
+    force_at = _at(10, hour=15, minute=18)
+    box["payload"] = _payload(force_at)
+    trader.run_once(force_at)
+    assert gateway.cancel_calls == [("999999", "L2", 1, "SOR")]
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 1)
+    trader.run_once(force_at.replace(second=1))
+    assert gateway.sell_calls == [("999999", 1, "SOR")]
+    assert any(
+        event["event_type"] == "policy_force_flat_requested"
+        for event in recorder.events
+    )
+
+
+def test_dated_policy_blocks_new_entry_after_cutoff(tmp_path, monkeypatch):
+    now = _at(10, hour=14, minute=31)
+    box = {"payload": _payload(now, entry_id="LATE-ENTRY")}
+    trader, gateway, recorder = _dated_policy_trader(tmp_path, monkeypatch, box)
+
+    trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert recorder.events[-1]["event_type"] == (
+        "entry_blocked_execution_policy_cutoff"
+    )
+
+
+def test_required_dated_policy_fails_closed_when_artifact_is_missing(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="NO-POLICY")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    trader.specs = (replace(trader.specs[0], dated_policy_required=True),)
+
+    trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert recorder.events[-1]["event_type"] == (
+        "entry_blocked_execution_policy_session_unavailable"
+    )
+
+
+def test_overnight_forbidden_policy_blocks_new_day_exposure(tmp_path, monkeypatch):
+    day_one = _at(10)
+    box = {"payload": _payload(day_one, entry_id="DAY1")}
+    trader, gateway, recorder = _dated_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(day_one)
+    _fill(gateway, "B1", price=100_000)
+    trader.run_once(day_one.replace(second=1))
+
+    day_two = _at(11)
+    box["payload"] = _payload(day_two, entry_id="DAY2")
+    state = trader.run_once(day_two)
+
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+    assert state["symbols"]["999999"]["prior_day_unmanaged_qty"] == 1
+    assert recorder.events[-1]["event_type"] == (
+        "entry_blocked_prior_day_widget_inventory"
+    )
 
 
 def test_samsung_policy_change_fails_closed_with_same_day_open_quantity(
@@ -1388,7 +1630,10 @@ def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
     ).read_text(encoding="utf-8")
 
     assert "WantedBy=multi-user.target" not in service
-    assert 'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS=005930"' in service
+    assert (
+        'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS=005930,034020,042660"'
+        in service
+    )
     assert (
         'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY='
         'SAMSUNG_EQUAL_1_ADD0P5_ADD1P0_TP0P5_V1"' in service
@@ -1398,3 +1643,14 @@ def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
     assert "AccuracySec=1s" in timer
     assert "Unit=korstockscan-widget-signal-auto-trader.service" in timer
     assert "WantedBy=timers.target" in timer
+
+
+def test_postclose_widget_evaluation_writes_next_day_execution_policy():
+    service = Path(
+        "deploy/systemd/korstockscan-samsung-widget-evaluation.service"
+    ).read_text(encoding="utf-8")
+
+    assert "src.engine.monitoring.widget_advisory_calibration --write" in service
+    assert (
+        "src.engine.monitoring.widget_auto_trade_policy_calibration --write" in service
+    )

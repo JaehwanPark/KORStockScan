@@ -100,6 +100,12 @@ _EXIT_REASON_LABELS = {
 
 def _env_enabled() -> bool:
     return str(
+        os.getenv("KORSTOCKSCAN_SAMSUNG_WIDGET_TELEGRAM_ENABLED", "true")
+    ).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _entry_env_enabled() -> bool:
+    return str(
         os.getenv("KORSTOCKSCAN_SAMSUNG_WIDGET_ENTRY_TELEGRAM_ENABLED", "true")
     ).strip().lower() not in {"0", "false", "no", "off"}
 
@@ -276,7 +282,7 @@ def build_exit_message(payload: dict[str, Any]) -> str:
             f"세션: {advisory.get('session') or '-'} / "
             f"venue={payload.get('market_venue') or '-'}"
         ),
-        "권한: 진입 알림 연계 관측용 · 자동매도/주문 아님",
+        "권한: 수집기 진입 에피소드 연계 관측용 · 자동매도/주문 아님",
     ]
     return "\n".join(lines)
 
@@ -299,6 +305,7 @@ class SamsungWidgetEntryTelegramNotifier:
         rearm_sec: int = DEFAULT_REARM_SEC,
         retry_sec: int = DEFAULT_RETRY_SEC,
         enabled: bool | None = None,
+        entry_messages_enabled: bool | None = None,
         audit_directory: Path | None = None,
     ) -> None:
         self.state_file = state_file
@@ -307,6 +314,11 @@ class SamsungWidgetEntryTelegramNotifier:
         self.rearm_sec = max(0, int(rearm_sec))
         self.retry_sec = max(1, int(retry_sec))
         self.enabled = _env_enabled() if enabled is None else bool(enabled)
+        self.entry_messages_enabled = (
+            _entry_env_enabled()
+            if entry_messages_enabled is None
+            else bool(entry_messages_enabled)
+        )
         self.audit_directory = (
             audit_directory
             if audit_directory is not None
@@ -761,6 +773,53 @@ class SamsungWidgetEntryTelegramNotifier:
         ):
             return "rearm_wait"
 
+        episode_id = f"{scope}:{now.isoformat()}"
+        episode_state = {
+            "active": True,
+            "active_state": state,
+            "entry_episode_status": "open",
+            "entry_episode_id": episode_id,
+            "entry_episode_opened_at": now.isoformat(),
+            "entry_episode_opened_session": advisory.get("session"),
+            "entry_episode_opened_bar": self._latest_completed_bar(payload).get(
+                "source_time"
+            ),
+            "entry_episode_invalidation_price": _positive_int(
+                advisory.get("invalidation_price")
+            ),
+            "entry_episode_closed_at": None,
+            "entry_episode_close_reason": None,
+            "entry_episode_close_reference_price": None,
+            "entry_episode_closed_session": None,
+            "entry_episode_peak_price": None,
+            "non_actionable_since": None,
+            "last_current_price": _positive_int(payload.get("current_price")),
+            "last_entry_price_low": _positive_int(advisory.get("entry_price_low")),
+            "last_entry_price_high": _positive_int(advisory.get("entry_price_high")),
+            "last_invalidation_price": _positive_int(
+                advisory.get("invalidation_price")
+            ),
+            "last_valid_until": advisory.get("valid_until"),
+        }
+        if not self.entry_messages_enabled:
+            self._state.update(
+                {
+                    **episode_state,
+                    "entry_episode_source": "collector_actionable_advisory",
+                    "entry_telegram_suppressed": True,
+                    "entry_telegram_owner": "widget_auto_trade_accepted_buy_action",
+                }
+            )
+            self._save()
+            self._append_delivery_audit(
+                payload=payload,
+                observed_at=now,
+                event_type="ENTRY",
+                status="suppressed_action_owner",
+                episode_key=episode_id,
+            )
+            return "entry_observed_no_telegram"
+
         last_attempt_at = _parse_timestamp(self._state.get("last_attempt_at"))
         if (
             self._state.get("last_attempt_status") in {"failed", "missing_config"}
@@ -779,7 +838,7 @@ class SamsungWidgetEntryTelegramNotifier:
                 observed_at=now,
                 event_type="ENTRY",
                 status="missing_config",
-                episode_key=f"{scope}:{now.isoformat()}",
+                episode_key=episode_id,
             )
             return "missing_config"
 
@@ -795,30 +854,13 @@ class SamsungWidgetEntryTelegramNotifier:
                 observed_at=now,
                 event_type="ENTRY",
                 status="failed",
-                episode_key=f"{scope}:{now.isoformat()}",
+                episode_key=episode_id,
             )
             return "send_failed"
 
         self._state.update(
             {
-                "active": True,
-                "active_state": state,
-                "entry_episode_status": "open",
-                "entry_episode_id": f"{scope}:{now.isoformat()}",
-                "entry_episode_opened_at": now.isoformat(),
-                "entry_episode_opened_session": advisory.get("session"),
-                "entry_episode_opened_bar": self._latest_completed_bar(payload).get(
-                    "source_time"
-                ),
-                "entry_episode_invalidation_price": _positive_int(
-                    advisory.get("invalidation_price")
-                ),
-                "entry_episode_closed_at": None,
-                "entry_episode_close_reason": None,
-                "entry_episode_close_reference_price": None,
-                "entry_episode_closed_session": None,
-                "entry_episode_peak_price": None,
-                "non_actionable_since": None,
+                **episode_state,
                 "last_sent_at": now.isoformat(),
                 "last_sent_state": state,
                 "last_attempt_status": "sent",
@@ -829,15 +871,6 @@ class SamsungWidgetEntryTelegramNotifier:
                 "telegram_audience": "ADMIN_ONLY",
                 "telegram_event_type": "samsung_widget_entry_advisory",
                 "last_telegram_event_type": "samsung_widget_entry_advisory",
-                "last_current_price": _positive_int(payload.get("current_price")),
-                "last_entry_price_low": _positive_int(advisory.get("entry_price_low")),
-                "last_entry_price_high": _positive_int(
-                    advisory.get("entry_price_high")
-                ),
-                "last_invalidation_price": _positive_int(
-                    advisory.get("invalidation_price")
-                ),
-                "last_valid_until": advisory.get("valid_until"),
             }
         )
         self._save()

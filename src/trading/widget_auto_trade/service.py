@@ -15,6 +15,9 @@ from src.trading.widget_auto_trade.engine import (
     WidgetSpec,
     WidgetSignalAutoTrader,
 )
+from src.trading.widget_auto_trade.notifications import (
+    WidgetAutoTradeEntryTelegramNotifier,
+)
 
 
 def _env_enabled() -> bool:
@@ -107,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         entry_qty=_env_qty(),
         enabled=_env_enabled(),
         specs=_env_specs(),
+        entry_action_notifier=WidgetAutoTradeEntryTelegramNotifier(),
     )
     if args.once:
         trader.run_once()

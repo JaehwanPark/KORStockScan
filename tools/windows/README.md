@@ -216,20 +216,24 @@ current session close, whichever arrives first, and never later than 20:00 KST.
 order button. Real orders are created only by the separate operator button,
 quantity input, confirmation dialog, and dedicated order-key path.
 
-The AWS collector also sends a plain-text Telegram notice only to the configured
-`ADMIN_ID` when a displayed advisory first becomes `ENTRY_CAUTION` or
-`ENTRY_READY`.  A direct `ENTRY_CAUTION -> ENTRY_READY` upgrade produces one
-additional notice.  Repeated 10-second observations are deduplicated, and a
-non-actionable interval of at least 120 seconds is required before a new episode
-can notify again.  Telegram failures are isolated from quote collection and do
-not change advisory state, trading runtime, accounts, or orders.  Set
-`KORSTOCKSCAN_SAMSUNG_WIDGET_ENTRY_TELEGRAM_ENABLED=false` on the collector
-service to disable this admin-only notification path. The same path also sends
-holding-independent `EXIT_READY` notices once per confirmed exit episode.
-Entry and exit retries/deduplication are independent, and an active
-`EXIT_READY` suppresses a contradictory entry notice. Exit notices remain
-observation-only with no account, holding, sell-order, or trading-runtime
-authority.
+Telegram ownership is split by evidence type. The collector observes actionable
+`ENTRY_CAUTION`/`ENTRY_READY` states only to open the collector-linked episode;
+it does not send an entry message. A Samsung entry message is sent by the
+separate widget auto-trader only after Kiwoom accepts an `ENTRY_BUY` or
+`SCALE_IN_BUY` and returns an order number. The message says `매수 주문 접수`
+and does not claim a fill. Venue/policy blocks, broker rejection, and ambiguous
+responses do not create an entry message. Accepted actions older than five
+minutes are not backfilled as new notices after a service restart, and delivery
+is deduplicated by trade date, symbol, order role, and broker order number. Set
+`KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_TELEGRAM_ENABLED=true` only on the
+auto-trader service that owns this delivery.
+
+The collector continues to send one admin-only `EXIT_READY` notice per
+confirmed collector entry/exit episode. It remains observation-only and does
+not imply a sell order or a holding check. Telegram failures are isolated from
+both quote collection and order execution. Thus an NXT advisory blocked by the
+KRX-only execution policy can arm later collector exit observation, but cannot
+produce an entry-order Telegram notice.
 
 Only those two actionable states can display a recommended price range. `WATCH`
 and `DATA_WAIT` show `가격대기`, `NO_CHASE` shows `범위이탈`, and `AVOID` shows

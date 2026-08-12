@@ -1309,8 +1309,7 @@ def _source_maturity_resolution(
             and "all_stage_policy_entries_below_sample_floor" in warnings
             and _safe_int(summary.get("total_rows")) > 0
             and (
-                review_id
-                == "lifecycle_decision_matrix_all_stage_below_sample_floor"
+                review_id == "lifecycle_decision_matrix_all_stage_below_sample_floor"
                 or (
                     _safe_int(maturity.get("policy_entry_count")) > 0
                     and _safe_int(maturity.get("policy_pass_count")) == 0
@@ -1332,12 +1331,8 @@ def _source_maturity_resolution(
                     "joined_sample_floor": _safe_int(
                         maturity.get("joined_sample_floor")
                     ),
-                    "policy_entry_count": _safe_int(
-                        maturity.get("policy_entry_count")
-                    ),
-                    "policy_pass_count": _safe_int(
-                        maturity.get("policy_pass_count")
-                    ),
+                    "policy_entry_count": _safe_int(maturity.get("policy_entry_count")),
+                    "policy_pass_count": _safe_int(maturity.get("policy_pass_count")),
                     "collection_priority": maturity.get("collection_priority") or [],
                     "window_policy": maturity.get("window_policy"),
                     "root_cause_closure_status": "evidence_collection_open",

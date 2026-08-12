@@ -18,6 +18,29 @@
 
 ## 삼성전자 위젯 자동매매 정책
 
+- [x] `[SamsungWidgetTelegramOwnerSplit0812] 진입·청산 텔레그램 발생주체 분리` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 08:20~09:10`, `Track: ScalpingLogic`)
+  - Source: [samsung_widget_entry_notify.py](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_widget_entry_notify.py), [notifications.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/notifications.py), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py)
+  - 판정: 수집기 `ENTRY_CAUTION/ENTRY_READY`는 청산 에피소드 연결용으로만 관찰하고 진입 텔레그램을 보내지 않는다. 진입 텔레그램은 위젯 자동매매기가 브로커 주문번호를 받은 `ENTRY_BUY/SCALE_IN_BUY` 접수 액션에만 발송하며, 수집기 `EXIT_READY` 청산 텔레그램은 기존 관측 경로를 유지한다.
+  - 안전 경계: venue/policy 차단, broker 거절·ambiguous 응답, 수동 Windows 주문에는 자동매매 진입 메시지를 만들지 않는다. 메시지는 주문 `접수`와 `체결`을 구분하고, 5분 초과 과거 주문의 재기동 소급발송을 금지하며 주문번호 단위로 중복방지한다. Telegram 실패는 수집과 실주문 처리를 변경하거나 중단하지 않는다.
+  - 현재 PID 귀속: `2026-08-12 08:56 KST` 삼성 수집기 PID `71103`, 위젯 자동매매 PID `71111`로 재기동했고 자동매매 env의 `ENTRY_TELEGRAM_ENABLED=true`를 확인했다. 재기동 직전 active order·당일 widget-owned 수량은 모두 0이었다.
+  - 롤백: 자동매매기의 `KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_TELEGRAM_ENABLED=false`로 액션 알림을 중지하고, 필요할 때만 수집기 notifier의 `entry_messages_enabled=true`를 명시적으로 복원한다. 주문·수량·정책·venue/SOR 라우팅에는 영향이 없다.
+  - 리뷰/검증: collector ENTRY suppression과 EXIT 유지, accepted initial/scale-in BUY 중복방지·실패 재시도·5분 freshness, rejected/ambiguous/NXT policy-block 미발송을 포함한 targeted test `206 passed`; Black/Ruff/compile/systemd verify/checklist parser/`git diff --check`를 통과했고 최종 미해결 finding은 `0`이다.
+
+- [x] `[WidgetAutoTradeCumulativePolicyCalibration0812] 삼성 세션확대·두산/한화 당일청산 누적 calibration 및 next-day policy bridge 구현` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 08:55~10:30`, `Track: ScalpingLogic`)
+  - Source: [widget_auto_trade_policy_calibration.py](/home/ubuntu/KORStockScan/src/engine/monitoring/widget_auto_trade_policy_calibration.py), [policy.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/policy.py), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [postclose unit](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-samsung-widget-evaluation.service)
+  - 판정: clean baseline 이후 완료일 누적 관측을 같은 symbol/session 안에서만 replay하고, source-quality-adjusted net EV로 다음 거래일 dated policy를 생성하는 bridge를 구현했다. 삼성은 KRX·NXT 애프터를 별도 정책으로 선정하고 오버나이트를 허용한다. 두산·한화는 KRX에서 다회 진입·최대 2개 scale-in 후보·고정 TP·15:18/15:23/15:28 중 calibration된 preclose 시장가 청산을 적용하며 오버나이트를 금지한다.
+  - 안전 경계: 현재가 관측으로 실제 도달한 scale-in만 인정하고, 진입 이전 확정봉 고가를 TP 도달로 쓰지 않는다. dated policy는 완료된 report와 loader round-trip `pass`가 함께 있어야 로드되며, 장중 hot reload 없이 거래일 경계에서만 선택한다. 두산·한화는 dated policy 결손, 전일 widget-owned 미청산 수량, source freshness/contract, manual_operator 제외, global BUY pause, broker/order/quantity guard 중 하나라도 실패하면 신규 진입을 차단한다.
+  - 초기 누적 판정: 2026-08-11 완료일까지 삼성 KRX `TP +0.8%/일 최대 3회`, 삼성 NXT 애프터 `TP +0.8%/일 최대 2회`, 두산 KRX `TP +1.0%/일 최대 2회/15:18 force-flat`, 한화 KRX `-0.5%/-1.0% 각 1주 scale-in/TP +1.5%/일 최대 2회/15:23 force-flat`가 ready다. 삼성 NXT 프리마켓은 2일·2건 중 fixed-target 완료 1건이라 `insufficient_target_completions`로 보류한다. 모든 TP는 gross 기준이며 replay EV는 왕복비용 0.20% 차감값이다.
+  - 현재 PID 귀속: 최초 배포에서는 당일 policy를 소급 생성하지 않았으나, 사용자가 두산·한화 장중 적용을 명시해 전일 완료 데이터만 사용하는 low-symbol bounded override를 생성했다. `09:16 KST` PID `84434`의 execution policy manifest에 두산·한화 KRX dated policy가 반영됐고 삼성은 기존 legacy policy를 유지한다. 적용 직전·직후 세 종목의 widget-owned 수량·미체결·열린 에피소드는 모두 0이다. 오늘 20:10 postclose는 2026-08-12 완료 데이터를 포함한 2026-08-13 policy를 다시 생성한다.
+  - 롤백: policy/report 검증 실패, 누적 source-quality-adjusted EV `<=0`, forced-flat 미해결, worst trade `<-2%`, 전일 widget-owned 수량 잔존 시 해당 session policy를 로드하지 않고 신규 진입을 차단한다. hard safety·토큰·provider·메인봇·계좌/주문가능현금 계약은 변경하지 않는다.
+  - 리뷰/검증: producer/loader/report atomic order, same-bar lookahead, runtime cooldown, policy/event provenance, force-flat 주문귀속과 SOR, missing policy/report fail-closed를 2-pass 리뷰했다. 위젯 관련 회귀 `276 passed`, Black/Ruff/compile/systemd verify/checklist parser/`git diff --check`, 설치 unit 일치를 통과했고 최종 미해결 finding은 `0`이다.
+
+- [ ] `[WidgetAutoTradeNextDayPolicyApply0813] postclose 산출물과 다음 거래일 3종목 runtime 귀속 확인` (`Due: 2026-08-13`, `Slot: PREOPEN`, `TimeWindow: 07:50~08:10`, `Track: ScalpingLogic`)
+  - Source: [policy directory](/home/ubuntu/KORStockScan/data/runtime/widget_auto_trade_policy), [calibration report](/home/ubuntu/KORStockScan/data/report/widget_auto_trade_policy_calibration), [widget auto-trade state](/home/ubuntu/KORStockScan/data/runtime/widget_signal_auto_trade_state.json)
+  - 판정 기준: 20:10 postclose가 당일 완료일 report와 다음 거래일 dated policy를 `policy_verification=pass`로 만들었는지, 거래일 전환 후 runtime state의 symbol/session policy id가 일치하는지, 두산·한화의 prior-day inventory와 unresolved order가 0인지 확인한다.
+  - 금지: 현재 거래일 관측을 같은 날 policy로 소급 적용하거나 report/policy 결손을 legacy 저가종목 실행으로 대체하지 않는다.
+  - 다음 액션: `policy_loaded_verified`, `policy_session_withheld`, `source_quality_blocked`, `prior_inventory_blocked`, `postclose_generation_failed` 중 하나로 닫는다.
+
 - [x] `[SamsungWidgetManualOrderUI0812] Windows 위젯 수동 분할매수·세션별 매도 버튼 구현` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 07:30~08:20`, `Track: ScalpingLogic`)
   - Source: [samsung_price_widget.py](/home/ubuntu/KORStockScan/tools/windows/samsung_price_widget.py), [samsung_price_widget_routes.py](/home/ubuntu/KORStockScan/src/web/samsung_price_widget_routes.py), [manual_orders.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/manual_orders.py), [korstockscan-gunicorn-widget.conf](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-gunicorn-widget.conf)
   - 판정: 20분 그래프를 제거하고 운영자 입력 수량의 수동 실주문 버튼을 추가했다. 매수는 버튼 시점의 fresh server price에 `ceil(qty/2)`, -0.5% tick-normalized 가격에 `floor(qty/2)`를 지정가 제출하며 1주는 현재가 leg만 제출한다. 매도는 KRX 정규장 `SOR` 시장가, NXT 프리/애프터마켓 `NXT` 현재가 지정가다.
