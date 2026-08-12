@@ -23,6 +23,7 @@ DEFAULT_RETRY_SEC = 30
 DEFAULT_ACTION_MAX_AGE_SEC = 300
 MAX_DELIVERY_ROWS = 200
 SUPPORTED_BUY_ROLES = frozenset({"ENTRY_BUY", "SCALE_IN_BUY"})
+DEFAULT_ALLOWED_SYMBOLS = frozenset({"005930", "034020", "042660"})
 
 ConfigLoader = Callable[[], tuple[str, str]]
 Sender = Callable[[str, str, str], None]
@@ -129,7 +130,7 @@ def build_buy_action_message(
 
 
 class WidgetAutoTradeEntryTelegramNotifier:
-    """Deliver each accepted Samsung BUY order once, with bounded retries."""
+    """Deliver each accepted widget BUY order once, with bounded retries."""
 
     def __init__(
         self,
@@ -140,7 +141,7 @@ class WidgetAutoTradeEntryTelegramNotifier:
         retry_sec: int = DEFAULT_RETRY_SEC,
         action_max_age_sec: int = DEFAULT_ACTION_MAX_AGE_SEC,
         enabled: bool | None = None,
-        allowed_symbols: frozenset[str] = frozenset({"005930"}),
+        allowed_symbols: frozenset[str] = DEFAULT_ALLOWED_SYMBOLS,
     ) -> None:
         self.state_path = state_path
         self.config_loader = config_loader

@@ -8,6 +8,8 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, time as datetime_time
+from functools import lru_cache
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -195,6 +197,61 @@ def _timestamp(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         return None
     return parsed.astimezone(KST)
+
+
+@lru_cache(maxsize=32)
+def _validator_snapshot_keyword(validator: Callable[..., Any]) -> str | None:
+    """Return the snapshot-time keyword supported by an advisory contract.
+
+    Samsung's original contract calls the field ``snapshot_observed_at`` while
+    the lower-price widget contracts expose the same boundary as
+    ``snapshot_time``.  Resolve that adapter once per validator instead of
+    letting a keyword mismatch terminate the live execution loop.
+    """
+    try:
+        parameters = signature(validator).parameters
+    except (TypeError, ValueError):
+        return None
+    if "snapshot_observed_at" in parameters:
+        return "snapshot_observed_at"
+    if "snapshot_time" in parameters:
+        return "snapshot_time"
+    if any(item.kind is Parameter.VAR_KEYWORD for item in parameters.values()):
+        return "snapshot_observed_at"
+    return None
+
+
+def _contract_advisory_is_valid(
+    contract: Any,
+    validator_name: str,
+    advisory: object,
+    *,
+    snapshot_at: datetime,
+    context: Any,
+    evaluated_at: datetime,
+) -> bool:
+    """Invoke a symbol contract through its declared snapshot-time keyword."""
+    validator = getattr(contract, validator_name, None)
+    if not callable(validator):
+        return False
+    snapshot_keyword = _validator_snapshot_keyword(validator)
+    if snapshot_keyword is None:
+        return False
+    try:
+        return bool(
+            validator(
+                advisory,
+                **{
+                    snapshot_keyword: snapshot_at,
+                    "context": context,
+                    "evaluated_at": evaluated_at,
+                },
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        # Contract failures are a fail-closed signal-quality result, never a
+        # reason to terminate reconciliation for already accepted orders.
+        return False
 
 
 def _positive_int(value: object) -> int:
@@ -635,9 +692,11 @@ class WidgetSignalAutoTrader:
                 )
                 else None
             )
-        if not spec.contract.advisory_contract_is_valid(
+        if not _contract_advisory_is_valid(
+            spec.contract,
+            "advisory_contract_is_valid",
             advisory,
-            snapshot_observed_at=snapshot_at,
+            snapshot_at=snapshot_at,
             context=context,
             evaluated_at=now,
         ):
@@ -706,9 +765,11 @@ class WidgetSignalAutoTrader:
         if (
             not isinstance(exit_advisory, dict)
             or exit_advisory.get("state") != FINAL_EXIT_STATE
-            or not spec.contract.exit_advisory_contract_is_valid(
+            or not _contract_advisory_is_valid(
+                spec.contract,
+                "exit_advisory_contract_is_valid",
                 exit_advisory,
-                snapshot_observed_at=snapshot_at,
+                snapshot_at=snapshot_at,
                 context=context,
                 evaluated_at=now,
             )
@@ -1258,9 +1319,11 @@ class WidgetSignalAutoTrader:
         advisory = payload.get("advisory")
         advisory = advisory if isinstance(advisory, dict) else {}
         advisory_validator = getattr(spec.contract, "advisory_contract_is_valid", None)
-        if callable(advisory_validator) and not advisory_validator(
+        if callable(advisory_validator) and not _contract_advisory_is_valid(
+            spec.contract,
+            "advisory_contract_is_valid",
             advisory,
-            snapshot_observed_at=snapshot_at,
+            snapshot_at=snapshot_at,
             context=validated_context,
             evaluated_at=now,
         ):

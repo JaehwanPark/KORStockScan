@@ -1306,7 +1306,7 @@ def main(argv: list[str] | None = None) -> int:
     collector = HanwhaOceanWidgetCollector(
         snapshot_path=args.snapshot_path,
         observation_dir=args.observation_dir,
-        notifier=HanwhaOceanWidgetTelegramNotifier(),
+        notifier=HanwhaOceanWidgetTelegramNotifier(entry_messages_enabled=False),
     )
     if args.once:
         collector.collect_once()

@@ -81,6 +81,36 @@ def test_accepted_buy_action_sends_once_and_does_not_claim_fill(tmp_path):
     assert delivery["telegram_audience"] == "ADMIN_ONLY"
 
 
+def test_default_action_owner_sends_for_all_enabled_widget_symbols(tmp_path):
+    sent = []
+    notifier = WidgetAutoTradeEntryTelegramNotifier(
+        state_path=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda token, admin, message: sent.append((token, admin, message)),
+        enabled=True,
+    )
+    now = datetime(2026, 8, 12, 10, 3, 4, tzinfo=KST)
+
+    for symbol, name in (
+        ("005930", "삼성전자"),
+        ("034020", "두산에너빌리티"),
+        ("042660", "한화오션"),
+    ):
+        assert (
+            notifier.notify_order_accepted(
+                symbol=symbol,
+                name=name,
+                order=_accepted_order(signal_id=f"{symbol}:ENTRY"),
+                execution_policy_id="POLICY_V1",
+                observed_at=now,
+            )
+            == "sent"
+        )
+
+    assert len(sent) == 3
+    assert all("자동매매 매수 주문 접수" in row[2] for row in sent)
+
+
 def test_rejected_ambiguous_sell_and_unsupported_symbol_never_send(tmp_path):
     sent = []
     notifier = WidgetAutoTradeEntryTelegramNotifier(

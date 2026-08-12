@@ -175,3 +175,40 @@ def test_valid_exit_event_suppresses_unsent_entry_event(tmp_path):
     assert result == {"entry": "exit_event_conflict", "exit": "sent"}
     assert len(sent) == 1
     assert "청산 신호" in sent[0][2]
+
+
+def test_collector_entry_is_suppressed_but_exit_remains_enabled(tmp_path):
+    now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    sent = []
+    notifier = HanwhaOceanWidgetTelegramNotifier(
+        state_file=tmp_path / "state.json",
+        config_loader=lambda: ("TOKEN", "ADMIN"),
+        sender=lambda *args: sent.append(args),
+        entry_messages_enabled=False,
+    )
+    payload = _event_payload(now)
+
+    assert notifier.observe(payload, now) == {
+        "entry": "entry_observed_no_telegram",
+        "exit": "no_event",
+    }
+    first_state_mtime = (tmp_path / "state.json").stat().st_mtime_ns
+    assert notifier.observe(payload, now + timedelta(seconds=1)) == {
+        "entry": "entry_observed_no_telegram",
+        "exit": "no_event",
+    }
+    assert (tmp_path / "state.json").stat().st_mtime_ns == first_state_mtime
+    assert sent == []
+
+    payload["exit_event"] = {
+        **payload["entry_event"],
+        "event_id": "042660:2026-08-05:EXIT:100025",
+        "event_type": "EXIT",
+        "reason": "hanwha_ocean_target_1pct_reached",
+        "reference_exit_price": 68_900,
+    }
+    result = notifier.observe(payload, now + timedelta(seconds=20))
+
+    assert result == {"entry": "exit_event_conflict", "exit": "sent"}
+    assert len(sent) == 1
+    assert "청산 신호" in sent[0][2]
