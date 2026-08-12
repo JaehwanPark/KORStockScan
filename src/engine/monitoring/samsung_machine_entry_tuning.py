@@ -1,4 +1,4 @@
-"""Postclose entry-quality ledger for the three independent Samsung machines.
+"""Postclose entry-quality ledger for independent Samsung machine episodes.
 
 This producer deliberately reads only the target-date durable machine states and
 previous reports written by this module.  It never queries market history and it
@@ -31,9 +31,13 @@ from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "samsung_machine_entry_tuning"
-REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v3"
+REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v4"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
-    {"samsung_machine_entry_tuning_report_v2", REPORT_SCHEMA}
+    {
+        "samsung_machine_entry_tuning_report_v2",
+        "samsung_machine_entry_tuning_report_v3",
+        REPORT_SCHEMA,
+    }
 )
 CLEAN_BASELINE_DATE = date.fromisoformat("2026-06-05")
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
@@ -42,11 +46,13 @@ AUTO_MIN_COMPLETED_LEGS = 20
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 MACHINE_FILES = {
     "morning": "samsung_morning_one_share_state.json",
+    "morning_reentry": "samsung_morning_sor_reentry_state.json",
     "midday": "samsung_midday_one_share_state.json",
     "afternoon": "samsung_afternoon_one_share_state.json",
 }
 EXPECTED_SCHEMAS = {
     "morning": "samsung_morning_two_leg_state_v2",
+    "morning_reentry": "samsung_morning_sor_reentry_two_leg_state_v1",
     "midday": "samsung_midday_two_leg_state_v2",
     "afternoon": "samsung_afternoon_two_leg_state_v2",
 }
@@ -54,6 +60,9 @@ LEGACY_SCHEMAS = {
     "morning": "samsung_morning_one_share_state_v1",
     "midday": "samsung_midday_one_share_state_v1",
     "afternoon": "samsung_afternoon_one_share_state_v1",
+}
+MACHINE_EFFECTIVE_DATES = {
+    "morning_reentry": date(2026, 8, 13),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {
@@ -197,6 +206,22 @@ def _empty_machine_row(machine: str, target_date: str, reason: str) -> dict[str,
         "legs": [],
         "summary": _summarize_legs(False, []),
     }
+
+
+def _pre_effective_machine_row(machine: str, target_date: str) -> dict[str, Any]:
+    row = _empty_machine_row(machine, target_date, "machine_not_yet_effective")
+    row.update(
+        {
+            "cohort": "pre_effective_not_applicable",
+            "source_quality": "not_applicable",
+            "state_status": "NOT_EFFECTIVE",
+        }
+    )
+    return row
+
+
+def _machine_effective(machine: str, target_date: date) -> bool:
+    return target_date >= MACHINE_EFFECTIVE_DATES.get(machine, CLEAN_BASELINE_DATE)
 
 
 def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
@@ -368,6 +393,20 @@ def _sanitize_signal_features(machine: str, raw: Any) -> dict[str, Any]:
             "scan_last_bar": str(raw.get("scan_last_bar") or ""),
         }
     )
+    if machine == "morning_reentry":
+        common.update(
+            {
+                "family": str(raw.get("family") or ""),
+                "confirmation_bars": _as_int(raw.get("confirmation_bars")),
+                "reclaim_ticks": _as_int(raw.get("reclaim_ticks")),
+                "entry_offset_ticks": _as_int(raw.get("entry_offset_ticks")),
+                "prerequisite": (
+                    dict(raw.get("prerequisite"))
+                    if isinstance(raw.get("prerequisite"), dict)
+                    else {}
+                ),
+            }
+        )
     return common
 
 
@@ -379,9 +418,32 @@ def _signal_feature_contract_valid(machine: str, features: dict[str, Any]) -> bo
         or len({item.get("leg_id") for item in entry_legs}) != 2
         or any(_as_int(item.get("entry_price")) <= 0 for item in entry_legs)
         or _as_int(features.get("target_ticks")) <= 0
-        or features.get("runtime_policy_source") != "preopen_applied_policy"
         or len(str(features.get("runtime_policy_hash") or "")) != 64
     ):
+        return False
+    if machine == "morning_reentry":
+        prerequisite = features.get("prerequisite")
+        return bool(
+            features.get("schema") == "samsung_morning_sor_reentry_signal_features_v1"
+            and features.get("strategy") == "morning_sor_reentry"
+            and features.get("source") == "kiwoom_ka10080_005930_AL_completed_1m"
+            and features.get("runtime_policy_source")
+            == "user_approved_sor_reentry_2026-08-12"
+            and features.get("runtime_policy_hash")
+            == "6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a"
+            and features.get("family") == "low_hold_reclaim_passive_split"
+            and _as_int(features.get("lookback_bars")) == 15
+            and _as_int(features.get("confirmation_bars")) == 2
+            and _as_int(features.get("reclaim_ticks")) == 1
+            and _as_int(features.get("entry_offset_ticks")) == 1
+            and _as_int(features.get("entry_valid_completed_bars")) == 3
+            and _as_int(features.get("target_ticks")) == 2
+            and isinstance(prerequisite, dict)
+            and prerequisite.get("first_episode_status") == "COMPLETE"
+            and _as_int(prerequisite.get("required_completed_leg_count")) == 2
+            and prerequisite.get("first_episode_completed_at")
+        )
+    if features.get("runtime_policy_source") != "preopen_applied_policy":
         return False
     if machine == "morning":
         routes = features.get("routes")
@@ -435,7 +497,7 @@ def extract_machine_row(
         row = _empty_machine_row(machine, target_date, "state_trade_date_mismatch")
         row.update({"observed_state_date": state_date, "observed_schema": schema})
         return row
-    if schema == LEGACY_SCHEMAS[machine]:
+    if schema == LEGACY_SCHEMAS.get(machine):
         row = _empty_machine_row(machine, target_date, "legacy_one_leg_archive_only")
         row.update(
             {
@@ -544,7 +606,8 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         else None
     )
     source_gaps = sum(
-        row.get("cohort") != "legacy_one_leg_archive_only"
+        row.get("cohort")
+        not in {"legacy_one_leg_archive_only", "pre_effective_not_applicable"}
         and row.get("source_quality") != "pass"
         for row in rows
     )
@@ -625,6 +688,21 @@ def _axis_observations(
             }
             for (route, drawdown_policy), group in sorted(segments.items())
         ]
+
+    if machine == "morning_reentry":
+        return (
+            [
+                {
+                    "axis": "fixed_user_approved_reentry_policy",
+                    "outcome": _aggregate_rows(attempted),
+                    "interpretation": (
+                        "actual_outcome_observation_only_no_automatic_policy_mutation"
+                    ),
+                }
+            ]
+            if attempted
+            else []
+        )
 
     if not attempted:
         return []
@@ -888,6 +966,7 @@ def _load_prior_daily_rows(
                     machine, filename_date, "prior_report_missing_or_invalid_json"
                 )
                 for machine in MACHINE_FILES
+                if _machine_effective(machine, report_date)
             }
             continue
         try:
@@ -907,6 +986,7 @@ def _load_prior_daily_rows(
                     machine, filename_date, "prior_report_contract_mismatch"
                 )
                 for machine in MACHINE_FILES
+                if _machine_effective(machine, report_date)
             }
             continue
         machines = payload.get("daily", {}).get("machines", {})
@@ -920,6 +1000,7 @@ def _load_prior_daily_rows(
                     )
                 )
                 for machine in MACHINE_FILES
+                if _machine_effective(machine, report_date)
             }
         else:
             by_date[filename_date] = {
@@ -927,6 +1008,7 @@ def _load_prior_daily_rows(
                     machine, filename_date, "prior_report_machine_map_invalid"
                 )
                 for machine in MACHINE_FILES
+                if _machine_effective(machine, report_date)
             }
     return by_date
 
@@ -945,11 +1027,15 @@ def build_report(
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
         raise ValueError("cost_pct_must_be_finite_percentage")
     daily_machines = {
-        machine: extract_machine_row(
-            machine=machine,
-            state_path=state_dir / filename,
-            target_date=target_date,
-            cost_pct=cost_pct,
+        machine: (
+            extract_machine_row(
+                machine=machine,
+                state_path=state_dir / filename,
+                target_date=target_date,
+                cost_pct=cost_pct,
+            )
+            if _machine_effective(machine, parsed_date)
+            else _pre_effective_machine_row(machine, target_date)
         )
         for machine, filename in MACHINE_FILES.items()
     }
@@ -958,6 +1044,8 @@ def build_report(
     )
     if not source_quality_preflight["tuning_input_allowed"]:
         for row in daily_machines.values():
+            if row.get("cohort") == "pre_effective_not_applicable":
+                continue
             row["eligible_for_cumulative_tuning"] = False
             row["source_quality"] = "gap"
             reasons = list(row.get("source_quality_reasons") or [])
@@ -977,7 +1065,12 @@ def build_report(
     windows: dict[str, dict[str, Any]] = {CLEAN_WINDOW_NAME: {}}
     for machine in MACHINE_FILES:
         rows = [history[day].get(machine) for day in ordered_dates]
-        clean_rows = [row for row in rows if isinstance(row, dict)]
+        clean_rows = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("cohort") != "pre_effective_not_applicable"
+        ]
         windows[CLEAN_WINDOW_NAME][machine] = {
             "summary": _aggregate_rows(clean_rows),
             "entry_axis_observations": _axis_observations(clean_rows, machine),
@@ -986,7 +1079,9 @@ def build_report(
     for machine in MACHINE_FILES:
         clean_cumulative = windows[CLEAN_WINDOW_NAME][machine]["summary"]
         status = str(clean_cumulative["candidate_status"])
-        if (
+        if daily_machines[machine].get("cohort") == "pre_effective_not_applicable":
+            status = "not_effective"
+        elif (
             not source_quality_preflight["tuning_input_allowed"]
             or daily_machines[machine].get("source_quality") != "pass"
         ):

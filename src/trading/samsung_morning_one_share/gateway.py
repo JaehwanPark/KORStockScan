@@ -8,20 +8,22 @@ constructor authority and are hard-limited to one share of 005930.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import requests
 
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.order.tick_utils import get_tick_size
+from src.trading.samsung_morning_one_share.policy import MinuteBar
 from src.utils import kiwoom_utils
 
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-11T11:43:54+09:00",
+    "retrieved_at_kst": "2026-08-12T10:05:25+09:00",
     "inspected_paths": [
         "kiwoom_docs/주문.md",
         "kiwoom_docs/계좌.md",
@@ -32,6 +34,7 @@ OFFICIAL_REFERENCE = {
     ],
     "request_scope": ["ka10080", "kt10000", "kt10001", "kt10003", "kt00007"],
 }
+KST = ZoneInfo("Asia/Seoul")
 
 TokenLoader = Callable[[], str | None]
 
@@ -61,6 +64,13 @@ class OpenPriceSnapshot:
     source_ok: bool
     price: int | None = None
     source_timestamp: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class MinuteBarsSnapshot:
+    source_ok: bool
+    bars: tuple[MinuteBar, ...] = ()
     error: str = ""
 
 
@@ -235,7 +245,70 @@ class KiwoomOneShareGateway:
             return OpenPriceSnapshot(False, error="invalid_session_open_price")
         return OpenPriceSnapshot(True, price, timestamp)
 
-    def submit_limit_buy(self, *, route: str, price: int) -> SubmitResult:
+    def completed_sor_minute_bars(
+        self, *, trade_date: date, now: datetime
+    ) -> MinuteBarsSnapshot:
+        try:
+            response, body = self._post(
+                endpoint="/api/dostk/chart",
+                api_id="ka10080",
+                payload={"stk_cd": "005930_AL", "tic_scope": "1", "upd_stkpc_tp": "1"},
+            )
+        except Exception as exc:
+            return MinuteBarsSnapshot(False, error=type(exc).__name__)
+        code = str(body.get("return_code", body.get("rt_cd", "")))
+        if response.status_code != 200 or code != "0":
+            return MinuteBarsSnapshot(
+                False,
+                error=str(body.get("return_msg") or f"HTTP_{response.status_code}"),
+            )
+        rows = body.get("stk_min_pole_chart_qry")
+        if not isinstance(rows, list):
+            return MinuteBarsSnapshot(False, error="minute_bar_rows_contract_invalid")
+        minute_floor = now.astimezone(KST).replace(second=0, microsecond=0)
+        parsed: dict[datetime, MinuteBar] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                return MinuteBarsSnapshot(
+                    False, error="minute_bar_row_contract_invalid"
+                )
+            raw_timestamp = str(row.get("cntr_tm") or "").strip()[:14]
+            try:
+                timestamp = datetime.strptime(raw_timestamp, "%Y%m%d%H%M%S").replace(
+                    tzinfo=KST
+                )
+            except ValueError:
+                return MinuteBarsSnapshot(False, error="minute_bar_timestamp_invalid")
+            if (
+                timestamp.date() != trade_date
+                or not time(9, 0) <= timestamp.time() < time(15, 30)
+                or timestamp >= minute_floor
+            ):
+                continue
+            bar = MinuteBar(
+                timestamp,
+                _positive_int(row.get("open_pric")),
+                _positive_int(row.get("high_pric")),
+                _positive_int(row.get("low_pric")),
+                _positive_int(row.get("cur_prc")),
+            )
+            if (
+                min(bar.open_price, bar.high_price, bar.low_price, bar.close_price) <= 0
+                or bar.high_price < max(bar.open_price, bar.close_price, bar.low_price)
+                or bar.low_price > min(bar.open_price, bar.close_price, bar.high_price)
+            ):
+                return MinuteBarsSnapshot(False, error="invalid_minute_bar_contract")
+            if timestamp in parsed and parsed[timestamp] != bar:
+                return MinuteBarsSnapshot(
+                    False, error="conflicting_duplicate_minute_bar"
+                )
+            parsed[timestamp] = bar
+        bars = tuple(parsed[key] for key in sorted(parsed))
+        if not bars:
+            return MinuteBarsSnapshot(True, error="completed_sor_bars_unavailable")
+        return MinuteBarsSnapshot(True, bars)
+
+    def submit_limit_buy(self, *, price: int, route: str = "SOR") -> SubmitResult:
         self._require_write_authority()
         route = self._validate_route(route)
         price = self._validate_price(price)
@@ -255,7 +328,7 @@ class KiwoomOneShareGateway:
         )
         return self._submit_result(response, body)
 
-    def submit_limit_sell(self, *, route: str, price: int) -> SubmitResult:
+    def submit_limit_sell(self, *, price: int, route: str = "SOR") -> SubmitResult:
         self._require_write_authority()
         route = self._validate_route(route)
         price = self._validate_price(price)
@@ -291,8 +364,11 @@ class KiwoomOneShareGateway:
         )
         return self._submit_result(response, body)
 
+    def cancel_buy(self, *, order_no: str) -> SubmitResult:
+        return self.cancel(route="SOR", order_no=order_no)
+
     def execution_snapshot(
-        self, *, route: str, order_no: str, order_date: str
+        self, *, order_no: str, order_date: str, route: str = "SOR"
     ) -> ExecutionSnapshot:
         route = self._validate_route(route)
         clean_order_no = _clean_order_no(order_no)
@@ -338,6 +414,10 @@ class KiwoomOneShareGateway:
             next_key = str(response.headers.get("next-key", "") or "").strip()
             if cont_yn != "Y" or not next_key:
                 break
+        if cont_yn == "Y" and next_key:
+            return ExecutionSnapshot(
+                False, False, 0, 0, 0, error="execution_continuation_limit_exceeded"
+            )
         matches = [
             row
             for page in pages

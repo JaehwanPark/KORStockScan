@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 import pytest
 
@@ -8,6 +8,7 @@ from src.trading.samsung_morning_one_share import gateway as gateway_module
 from src.trading.samsung_morning_one_share.gateway import (
     ExecutionSnapshot,
     KiwoomOneShareGateway,
+    MinuteBarsSnapshot,
     OpenPriceSnapshot,
     SubmitResult,
 )
@@ -36,11 +37,11 @@ class FakeGateway:
         price = self.opens.get(route)
         return OpenPriceSnapshot(bool(price), price, f"{trade_date:%Y%m%d}080000")
 
-    def submit_limit_buy(self, *, route, price):
+    def submit_limit_buy(self, *, price, route="SOR"):
         self.buy_calls.append((route, price))
         return self._accepted("B")
 
-    def submit_limit_sell(self, *, route, price):
+    def submit_limit_sell(self, *, price, route="SOR"):
         self.limit_sell_calls.append((route, price))
         return self._accepted("T")
 
@@ -48,7 +49,10 @@ class FakeGateway:
         self.cancel_calls.append((route, order_no))
         return self._accepted("C")
 
-    def execution_snapshot(self, *, route, order_no, order_date):
+    def cancel_buy(self, *, order_no):
+        return self.cancel(route="SOR", order_no=order_no)
+
+    def execution_snapshot(self, *, order_no, order_date, route="SOR"):
         return self.snapshots.get(order_no, ExecutionSnapshot(True, True, 0, 1, 1))
 
 
@@ -428,7 +432,7 @@ def test_gateway_supports_sor_regular_limit_orders(monkeypatch):
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
-    result = gateway.submit_limit_buy(route="SOR", price=297_500)
+    result = gateway.submit_limit_buy(price=297_500)
     assert result.accepted is True
     assert session.calls[0][1]["json"]["dmst_stex_tp"] == "SOR"
 
@@ -484,6 +488,54 @@ def test_gateway_open_price_uses_only_official_ka10080_fields():
     assert snapshot.price == 300_000
     assert session.calls[0][1]["json"] == {
         "stk_cd": "005930_NX",
+        "tic_scope": "1",
+        "upd_stkpc_tp": "1",
+    }
+
+
+def test_gateway_completed_sor_bars_uses_official_al_code_and_excludes_current_bar():
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "return_code": 0,
+                    "stk_min_pole_chart_qry": [
+                        {
+                            "cntr_tm": "20260811091800",
+                            "open_pric": "+100200",
+                            "high_pric": "+100400",
+                            "low_pric": "+100100",
+                            "cur_prc": "+100300",
+                        },
+                        {
+                            "cntr_tm": "20260811091700",
+                            "open_pric": "+100100",
+                            "high_pric": "+100300",
+                            "low_pric": "+100000",
+                            "cur_prc": "+100200",
+                        },
+                    ],
+                }
+            )
+        ]
+    )
+    gateway = KiwoomOneShareGateway(
+        request_session=session,
+        token_loader=lambda: "token",
+        base_url="https://api.kiwoom.com",
+    )
+
+    snapshot = gateway.completed_sor_minute_bars(
+        trade_date=date(2026, 8, 11), now=_at(11, 9, 18)
+    )
+
+    assert isinstance(snapshot, MinuteBarsSnapshot)
+    assert snapshot.source_ok is True
+    assert len(snapshot.bars) == 1
+    assert snapshot.bars[0].timestamp == _at(11, 9, 17)
+    assert session.calls[0][1]["headers"]["api-id"] == "ka10080"
+    assert session.calls[0][1]["json"] == {
+        "stk_cd": "005930_AL",
         "tic_scope": "1",
         "upd_stkpc_tp": "1",
     }
@@ -569,9 +621,75 @@ def test_live_service_fails_closed_without_exact_date_applied_policy(monkeypatch
     assert result == 5
 
 
+def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch):
+    calls = []
+
+    class FakeFirstMachine:
+        def __init__(self, **kwargs):
+            calls.append("first_initialized")
+
+        def run_until_terminal(self, *, interval_sec):
+            calls.append("first_complete")
+            return {"status": "COMPLETE"}
+
+    class FakeReentryMachine:
+        def __init__(self, **kwargs):
+            calls.append("reentry_initialized")
+
+        def run_until_terminal(self, *, interval_sec):
+            calls.append("reentry_terminal")
+            return {"status": "NO_TRADE"}
+
+    monkeypatch.setenv(service_module.ENABLE_ENV, "true")
+    monkeypatch.setattr(
+        service_module, "validate_authority", lambda path: (True, "ready")
+    )
+    monkeypatch.setattr(
+        service_module,
+        "runtime_ledgers_allow_service_start",
+        lambda **kwargs: (True, "clear"),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "load_applied_machine_policy",
+        lambda machine, target_date: (
+            {"nxt_drawdown_pct": 3.0, "sor_drawdown_pct": 0.75},
+            "policy-hash",
+            "ready",
+        ),
+    )
+    monkeypatch.setattr(service_module, "_acquire_lock", lambda path: object())
+    monkeypatch.setattr(
+        service_module, "KiwoomOneShareGateway", lambda **kwargs: object()
+    )
+    monkeypatch.setattr(
+        service_module, "SamsungMorningOneShareMachine", FakeFirstMachine
+    )
+    monkeypatch.setattr(
+        service_module, "SamsungMorningSORReentryMachine", FakeReentryMachine
+    )
+
+    result = service_module.main(
+        ["--live", "--confirm", service_module.LIVE_CONFIRMATION]
+    )
+
+    assert result == 0
+    assert calls == [
+        "first_initialized",
+        "first_complete",
+        "reentry_initialized",
+        "reentry_terminal",
+    ]
+
+
 def test_systemd_live_unit_uses_exact_two_leg_confirmation():
     project_root = Path(__file__).resolve().parents[2]
+    preflight_unit = (
+        project_root / "deploy/systemd/korstockscan-samsung-one-share-preflight.service"
+    ).read_text(encoding="utf-8")
     live_unit = (
         project_root / "deploy/systemd/korstockscan-samsung-morning-one-share.service"
     ).read_text(encoding="utf-8")
+    assert "PrivateTmp=true" not in preflight_unit
+    assert "PrivateTmp=true" in live_unit
     assert service_module.LIVE_CONFIRMATION in live_unit

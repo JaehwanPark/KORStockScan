@@ -16,7 +16,37 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 독립시간대 매매기계
+
+- [x] `[SamsungMorningSORReentryLive0812] 삼성전자 morning 두 번째 SOR episode 실기계 반영 및 익일 예약` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 10:00~11:15`, `Track: ScalpingLogic`)
+  - Source: [reentry state machine](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/reentry.py), [policy](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/policy.py), [service](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/service.py), [preflight](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/preflight.py), [systemd unit](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-samsung-morning-one-share.service)
+  - 판정: 사용자 승인에 따라 첫 episode 두 leg의 목표 체결 완료 후에만 `low_hold_reclaim_passive_split` SOR episode를 하루 최대 1회 추가한다. 15봉·하락 0.75%·저가근접 0.35%·저가 2봉 유지·+1호가 회복·10:00 종료, 확인종가 -1/-2호가 각 1주, 3개 완료봉 유효, 체결가 +2호가를 고정했다.
+  - 독립/보유 경계: 첫 episode와 추가 episode는 별도 상태파일과 주문번호 ledger를 사용한다. 추가 episode 목표에는 손절·시간청산·강제매도가 없으며 종료 미체결은 `HELD`다. 전일 추가 episode 보유, 열린 주문, 모호한 write가 남으면 다음 날 첫 episode부터 차단하고 widget·다른 독립기계 주문은 조회·취소·매도하지 않는다. 장후 tuning v4에는 `morning_reentry` 실제결과 관찰 cohort만 추가하고 기존 threshold 자동변경 축에는 섞지 않는다.
+  - 기동: authority schema를 `samsung_morning_two_episode_authority_v5`, live confirmation을 `005930_MORNING_TWO_EPISODE_LIVE`로 올렸다. 리뷰 종료 후 설치 unit 갱신·daemon-reload를 마쳤고 source/설치본 일치와 두 timer enabled를 확인했다. 오늘 service는 소급 시작하지 않아 `inactive`이며, 2026-08-13 07:57 PREOPEN과 07:59 service 예약으로 처음 적용한다.
+  - 공식 계약: Kiwoom upstream `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, `kiwoom_docs/차트.md`, 주문·계좌 문서, `kiwoom/specs.py`, `kiwoom/core`, Postman을 2026-08-12 10:05:25 KST에 대조했다. `ka10080`의 `005930_AL` 완료 1분봉과 기존 SOR 주문·취소·체결조회 필드만 사용한다.
+  - 리뷰/검증: review gate에서 09:00 전 SOR API 과다호출, 같은 날/전일 손상 장부의 신규 첫 episode 우회, 장후 실제결과 누락과 tuning report schema consumer 결손을 보완했다. 삼성 독립기계 회귀 `159 passed`, 장후 tuning/policy `21 passed`, Black, Ruff, compile, shell syntax, systemd verify, checklist parser, `git diff --check`를 통과했고 최종 finding은 0이다.
+
+- [x] `[SamsungMorningSORReentryResearch0812] 삼성전자 morning KRX/SOR 추가 episode 반복 탐색` (`Due: 2026-08-12`, `Slot: INTRADAY_RESEARCH`, `TimeWindow: 09:30~10:20`, `Track: ScalpingLogic`)
+  - Source: [research producer](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_morning_reentry_research.py), [frozen report](/home/ubuntu/KORStockScan/data/report/samsung_morning_reentry_research/samsung_morning_reentry_research_2026-08-10.json), [운영 문서](/home/ubuntu/KORStockScan/docs/samsung-morning-one-share-machine.md)
+  - 판정: 직접 저점진입과 회복 확인 종가분할은 마지막 16일에서 각각 `HELD` 3leg·4leg로 탈락했다. 세 번째 `low_hold_reclaim_passive_split`은 15봉 고가 대비 -0.75%·저가 근접 0.35%, 저가 2봉 유지, setup 종가 대비 +1호가 회복, 10:00까지 탐색, 확인종가 -1/-2호가 2leg, 3봉 유효, leg별 +2호가 조건으로 source-only 후보가 됐다.
+  - 근거: 28일 보정은 17 episode·34 시도·32 완료·2 미체결·0 보유·비용 차감 EV `+0.113550%`, 마지막 16일은 12 episode·24 시도·19 완료·5 미체결·0 보유·EV `+0.170116%`다. clean baseline 46일 KRX/NXT 세션 커버리지와 파일 SHA256은 PASS이며, 공통 opening-anchor 44일만 사용했다.
+  - 안전 경계: 첫 episode가 두 leg 모두 완료된 뒤 하루 최대 1회 추가 탐색하는 연구계약이며 손절·강제청산을 만들지 않는다. 분봉 touch는 실제 체결 증거가 아니고 동일 holdout을 세 계열이 순차 사용했으므로 연구 산출물 자체는 `runtime_effect=false`, `allowed_runtime_apply=false`, `broker_order_forbidden=true`다. 연구 종료 시점에는 실기계를 변경하지 않았고 이후 별도 사용자 승인과 `[SamsungMorningSORReentryLive0812]` 계약으로만 실주문 권한을 열었다.
+  - 리뷰/검증: source/consumer와 권한 누출을 검토해 하위 family 판정의 구형 `runtime_candidate` 명칭을 source-only 재진입 후보 명칭으로 보완했다. 연구 단독 `7 passed`, 현재 오전 실기계 포함 회귀 `33 passed`, Black, Ruff, compile, checklist parser, `git diff --check`를 통과했고 최종 finding은 0이다.
+
+- [x] `[IndependentTimeMachineStartupFix0812] 독립시간대 매매기계 6개 장전 기동계약 보완` (`Due: 2026-08-12`, `Slot: PREOPEN`, `TimeWindow: 07:50~08:10`, `Track: RuntimeStability`)
+  - Source: [korstockscan-samsung-one-share-preflight.service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-samsung-one-share-preflight.service), [korstockscan-samsung-morning-one-share.service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-samsung-morning-one-share.service), [samsung-morning-one-share-machine.md](/home/ubuntu/KORStockScan/docs/samsung-morning-one-share-machine.md)
+  - 판정: 설치된 삼성전자 morning/midday/afternoon 서비스의 구형 1주 confirmation을 저장소의 2-leg confirmation으로 교체했다. 오전 preflight는 사용자 tmux 소켓을 볼 수 있도록 `PrivateTmp` 격리를 제거하고, 실매매 서비스의 `PrivateTmp=true`는 유지했다.
+  - 안전 경계: 수량 2주, leg당 1주, 목표 +2호가, 무손절·미청산 보유, 독립 주문원장, provider/bot/cap/broker guard는 변경하지 않았다. 서비스 임의 선행기동 없이 timer 예약과 당일 authority를 통해서만 기동한다.
+  - 리뷰/검증: 삼성전자 세 시간대 targeted test `116 passed`, systemd verify, checklist parser, `git diff --check`, 설치본 8개 일치를 확인했다. 07:59:32 오전 authority가 `ready=true`로 닫혔고 07:59:33 서비스가 새 confirmation으로 기동한 뒤 08:00 NXT 두 leg를 각각 1주 주문해 `BUY_OPEN` 상태임을 확인했다. 저가 종목 3개는 오늘자 applied policy와 authority 검증이 모두 통과했고, 삼성전자 midday/afternoon은 13:12/13:57 preflight 전이라 예약·설치계약까지만 확인했다. 최종 미해결 finding은 `0`이다.
+
 ## 삼성전자 위젯 자동매매 정책
+
+- [ ] `[WidgetAutoTradeContractAdapterDeploy0812] 두산·한화 계약 어댑터 및 Telegram owner 분리 런타임 반영` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 10:15~10:35`, `Track: ScalpingLogic`)
+  - Source: [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py), [notifications.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/notifications.py), [doosan notifier](/home/ubuntu/KORStockScan/src/engine/monitoring/doosan_widget_telegram_notify.py), [hanwha notifier](/home/ubuntu/KORStockScan/src/engine/monitoring/hanwha_ocean_widget_telegram_notify.py)
+  - 현재 판정: 한화오션 실제 진입 후 scale-in 검증에서 삼성 `snapshot_observed_at`과 두산·한화 `snapshot_time` 계약 차이가 `TypeError`를 발생시켜 자동매매기가 재시작 루프에 진입했다. 검증 전 수정 코드 자동반영을 막기 위해 서비스를 중지했으며, 기존 한화오션 SOR 익절 주문 `0025694`는 `90,700원` 1주 미체결 상태로 broker 조회가 정상이다.
+  - 구현/리뷰: validator signature adapter는 두 계약명을 캐시해 fail-closed 호출하고, 자동매매 진입 알림 대상은 `005930/034020/042660`으로 통합했다. 두산·한화 수집기는 진입 Telegram을 억제하되 EXIT Telegram은 유지하고 동일 entry event 반복 저장을 금지한다. 전체 위젯 회귀 `280 passed`, 실제 두산·한화 snapshot 계약 smoke, Black/Ruff/compile/`git diff --check`를 통과했고 미해결 코드 finding은 `0`이다.
+  - 완료 기준: 사용자 재기동 지시 후 자동매매기와 두 저가종목 수집기의 새 PID를 확인하고, `TypeError` 재발 없음, 기존 한화 주문 reconciliation, 신규 매수 액션 Telegram의 실행정책·주문번호 포함 및 수집기 ENTRY 중복 미발송을 post-apply로 확인한다.
+  - 금지: 기존 한화 익절 주문 취소, 신규 수량·TP·scale-in threshold 변경, hard safety·broker/account/order/quantity guard 우회는 허용하지 않는다.
 
 - [x] `[SamsungWidgetTelegramOwnerSplit0812] 진입·청산 텔레그램 발생주체 분리` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 08:20~09:10`, `Track: ScalpingLogic`)
   - Source: [samsung_widget_entry_notify.py](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_widget_entry_notify.py), [notifications.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/notifications.py), [engine.py](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/engine.py)

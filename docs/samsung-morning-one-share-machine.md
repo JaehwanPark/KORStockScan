@@ -3,7 +3,7 @@
 ## 결정
 
 - 기존 KORStockScan 진입·보유·청산·ADM/LDM·AI·수량결정 로직과 분리한 전용 상태기계를 사용한다.
-- 하루 신규 매수 episode는 `005930` 1회이며, 각각 1주인 두 주문으로 고정한다. NXT PREMARKET이 우선이고 각 NXT leg의 취소·미체결이 계좌조회로 확인된 뒤에만 그 leg의 09:00 SOR 통합 주문을 허용한다. 기존 package/unit 파일명은 호환성을 위해 유지한다.
+- 하루 신규 매수 episode는 `005930` 최대 2회이며 각 episode는 각각 1주인 두 주문으로 고정한다. 첫 episode는 NXT PREMARKET이 우선이고 각 NXT leg의 취소·미체결이 계좌조회로 확인된 뒤에만 그 leg의 09:00 SOR 통합 주문을 허용한다. 두 leg가 모두 목표 청산된 경우에만 09:00~10:00 KRX 정규장 SOR 추가 episode를 최대 1회 허용한다. 기존 package/unit 파일명은 호환성을 위해 유지한다.
 - 사용자의 2026-08-12 실운용 지시에 따라 전용 systemd timer로 예약한다. 기존 widget 자동매매는 중지·필터링·재기동하지 않고 자체 판단으로 계속 거래한다.
 
 고정 정책은 다음과 같다.
@@ -12,6 +12,7 @@
 |---:|---|---|---|---|
 | 1 | NXT PREMARKET | 08:00 첫 1분봉 시가 | 1주: 기준가 대비 -3.0% base, 1주: base +1호가 | 08:10 |
 | 2 | SOR 정규장 | KRX 09:00 첫 1분봉 시가를 가격 기준점으로 사용 | NXT 미체결 leg별 1주: -0.75% base 또는 base +1호가 | 09:30 |
+| 3 | SOR 정규장 추가 episode | 첫 episode 두 leg 목표 청산 후 15봉 저점 유지·회복 신호의 확인종가 | 1주: 확인종가 -1호가, 1주: 확인종가 -2호가 | 신호 후 완료봉 3개 |
 
 각 leg 체결 후 그 실제 체결가에서 +2호가 1주 지정가 매도를 별도로 낸다. 목표 주문에는 시간청산과 손절이 없다. 주문이 열려 있는 동안 계속 체결을 확인하고, 브로커에서 미체결 종료된 것이 확인되면 해당 1주를 그대로 보유한다. 하나만 체결되거나 하나만 목표 청산돼도 다른 leg의 주문·보유 귀속은 독립적으로 유지한다. 목표 주문 취소, 최우선 지정가 강제매도, 다음 날 자동 목표 재주문, 보유 중 신규 episode는 하지 않는다.
 
@@ -45,6 +46,23 @@
 - `source_quality_gate`: valid unique completed 1-minute OHLCV, exact NXT 08:00 and KRX 09:00 anchors, next-bar-or-later exit label
 - `forbidden_uses`: queue-fill or SOR-routing proof, real execution-quality approval, pre-baseline live promotion, provider/bot/cap/hard-safety change
 
+## KRX/SOR 추가 진입 episode 연구
+
+2026-06-05~2026-08-10 clean baseline의 기존 KRX·NXT 1분봉만 사용해, 현재 NXT 우선/SOR fallback 첫 episode의 두 leg가 모두 목표 청산된 날에 한해 SOR 추가 episode를 탐색했다. 원천 46거래일은 시장별 세션 커버리지를 통과했고, NXT 08:00·KRX 09:00 기준점이 모두 있는 공통 44일 중 첫 episode 완료일은 35일이다. 과거 시세를 다시 조회하거나 broker·token·runtime에는 접근하지 않았다.
+
+직접 저점진입 계열과 회복 확인 종가분할 계열은 마지막 16일 평가에서 각각 `HELD` 3leg, 4leg가 생겨 탈락했다. 세 번째 수동적 분할가 계열은 다음 source-only 후보를 만들었다.
+
+- 첫 episode 두 leg가 모두 `COMPLETE`인 뒤에만 1회 탐색한다.
+- 최근 연속 15개 완료봉의 고가 대비 종가 하락률이 0.75% 이상이고, 저가 대비 종가 거리가 0.35% 이하여야 한다.
+- setup 저가를 다음 완료봉 2개가 깨지 않고, 두 번째 확인봉 종가가 setup 종가보다 1호가 이상 회복해야 한다. 신호 탐색 종료는 10:00이다.
+- 주문 기준점은 두 번째 확인봉 종가다. 1주는 기준점 -1호가, 1주는 -2호가에 놓고 다음 완료봉부터 3개 봉까지만 체결 가능성을 판정한다. 체결 leg별 목표는 +2호가이며 손절·시간청산은 없고, 목표 미청산은 그대로 보유한다.
+
+28일 보정 구간은 17 episode·34 주문시도 중 완료 32leg, 미체결 2leg, 보유 0leg, 비용 0.20% 차감 `notional_weighted_ev_pct +0.113550%`였다. 마지막 16일은 12 episode·24 주문시도 중 완료 19leg, 미체결 5leg, 보유 0leg, `notional_weighted_ev_pct +0.170116%`였다. 전체 44일은 29 episode·58 주문시도 중 완료 51leg, 미체결 7leg, 보유 0leg다.
+
+연구 산출물 자체는 [research producer](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_morning_reentry_research.py)와 [frozen report](/home/ubuntu/KORStockScan/data/report/samsung_morning_reentry_research/samsung_morning_reentry_research_2026-08-10.json)의 `source_only_no_runtime_or_order_authority` 계약에 계속 한정된다. 분봉 저가 touch는 실제 체결 증거가 아니고, 세 후보 계열이 같은 마지막 16일을 순차 평가했으므로 단일 계열의 완전 미사용 holdout으로 해석하지 않는다.
+
+사용자가 2026-08-12 별도 실기계 반영을 승인해 [reentry state machine](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share/reentry.py)과 same-day PREOPEN authority v5를 구현했다. 연구 report SHA256 `6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a`를 고정 provenance로 사용하며, 첫 episode와 추가 episode는 서로 다른 상태파일·주문번호 ledger를 소유한다. 추가 episode가 `HELD`, 열린 주문, 모호한 broker write로 남으면 다음 거래일 첫 episode도 차단한다. 2026-08-13 07:57 PREOPEN이 새 authority를 생성하고 07:59 timer가 service를 시작한 이후부터 적용한다.
+
 ## 독립성과 안전 경계
 
 전용 구현은 [package](/home/ubuntu/KORStockScan/src/trading/samsung_morning_one_share) 아래에 있다. 기존 전략에서 공유하는 것은 전략 판단이 아니라 다음 인프라·안전 경계뿐이다.
@@ -54,32 +72,36 @@
 - 전역 신규매수 중단 veto.
 - `005930`이 메인 봇의 명시적 `manual_operator` 제외 대상인지 확인한다. 이는 메인 봇과의 주문권 경계이며 독립 widget 자동매매를 막지 않는다.
 
-전용 기계와 widget은 같은 계좌에서 동시에 `005930`을 거래할 수 있지만 서로의 장부를 공유하지 않는다. 전용 기계는 자기 상태 파일의 leg별 broker 주문번호만 조회하고 해당 체결수량 1주만 매도·취소한다. 두 leg 사이에도 주문번호·체결·목표가·보유수량을 합치지 않는다. widget 역시 자기 episode/order ledger만 소유한다. 계좌의 삼성전자 총보유수량이나 상대 전략의 주문은 어느 한쪽의 매도수량·취소대상이 아니며, 상대 주문의 존재를 신규진입 차단 사유로 쓰지 않는다.
+전용 기계와 widget은 같은 계좌에서 동시에 `005930`을 거래할 수 있지만 서로의 장부를 공유하지 않는다. 전용 기계는 자기 상태 파일의 leg별 broker 주문번호만 조회하고 해당 체결수량 1주만 매도·취소한다. 첫 episode, 추가 episode, 각 episode의 두 leg 사이에도 주문번호·체결·목표가·보유수량을 합치지 않는다. widget 역시 자기 episode/order ledger만 소유한다. 계좌의 삼성전자 총보유수량이나 상대 전략의 주문은 어느 한쪽의 매도수량·취소대상이 아니며, 상대 주문의 존재를 신규진입 차단 사유로 쓰지 않는다.
 
 모든 broker write 전에 intent를 원자적으로 기록한다. 호출 중 프로세스가 끊긴 상태에서는 자동 재주문하지 않고 `broker_write_interrupted`로 차단한다. 전일 목표 주문이나 보유 1주가 남아 있으면 다음 날 신규매수를 금지한다. 목표 주문이 전일 이후에도 브로커에서 열려 있으면 원주문일 기준으로 계속 조회하고, 미체결 종료가 확인되면 자동 매도 없이 `HELD`로 닫는다.
 
-키움 공식 참조는 `Kiwoom-Securities/Kiwoom-REST-API` commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`이며, `kiwoom_docs/주문.md`, `계좌.md`, `차트.md`, `kiwoom/specs.py`, API spec, Postman을 2026-08-11 15:30:19 KST에 다시 대조했다. 공식 `kt10000/kt10001/kt10003/kt00007` 계약의 `dmst_stex_tp`가 `SOR`를 지원함을 확인했다. 사용 API는 `ka10080`, `kt10000`, `kt10001`, `kt10003`, `kt00007`뿐이다.
+키움 공식 참조는 `Kiwoom-Securities/Kiwoom-REST-API` commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`이며, `kiwoom_docs/차트.md`, `주문.md`, `계좌.md`, `kiwoom/specs.py`, `kiwoom/core`, API spec, Postman을 2026-08-12 10:05:25 KST에 다시 대조했다. 공식 `ka10080`의 `/api/dostk/chart`, `005930_AL`, 1분봉 OHLC·`cntr_tm` 계약과 `kt10000/kt10001/kt10003/kt00007`의 SOR 주문·조회 계약을 확인했다. 사용 API는 `ka10080`, `kt10000`, `kt10001`, `kt10003`, `kt00007`뿐이다.
 
-## 2026-08-12 기동 설정
+## 2026-08-13 기동 설정
 
 실주문은 다음 네 조건이 동시에 있어야 코드상 가능하다.
 
 1. `KORSTOCKSCAN_SAMSUNG_MORNING_ONE_SHARE_ENABLED=true`
-2. CLI `--live --confirm 005930_MORNING_TWO_LEG_LIVE`
+2. CLI `--live --confirm 005930_MORNING_TWO_EPISODE_LIVE`
 3. `005930`의 명시적 `manual_operator` 제외 소유권
 4. 당일 07:57 PREOPEN 점검에서 생성한 `data/runtime/samsung_morning_one_share_authority.json`
 
-`korstockscan-samsung-one-share-preflight.timer`는 평일 07:57에 메인 봇 tmux, 공유 캐시 토큰, 메인 봇 제외 소유권을 확인한다. 통과한 당일에만 `korstockscan-samsung-morning-one-share.timer`가 07:59부터 전용 기계를 시작한다. 두 timer는 `Persistent=false`라 설치 시각에 이미 지난 당일 작업을 소급 실행하지 않는다.
+`korstockscan-samsung-one-share-preflight.timer`는 평일 07:57에 메인 봇 tmux, 공유 캐시 토큰, 메인 봇 제외 소유권, 전일 추가 episode 주문·보유 해소를 확인한다. 통과한 당일에만 `korstockscan-samsung-morning-one-share.timer`가 07:59부터 전용 기계를 시작한다. service는 첫 episode가 `COMPLETE`이면 추가 episode의 terminal 상태까지 계속 custody하고, 첫 episode가 `NO_TRADE`, `HELD`, `BLOCKED`이면 추가 매수를 열지 않고 종료한다. 두 timer는 `Persistent=false`라 설치 시각에 이미 지난 당일 작업을 소급 실행하지 않는다.
+
+preflight 서비스는 메인 봇의 사용자 tmux 소켓을 확인해야 하므로 `PrivateTmp` 격리를 사용하지 않는다. 실매매 서비스는 별도 임시 디렉터리 격리인 `PrivateTmp=true`를 유지한다.
 
 전용 기계는 `COMPLETE`, `NO_TRADE`, `HELD`, `BLOCKED`에서 종료한다. `HELD`는 하나 이상의 목표가 매도가 체결되지 않아 해당 leg를 그대로 보유하는 정상 종결 상태다. 실패 재시작도 당일 권한 artifact와 원자적 write-intent 상태를 다시 검증하므로 모호한 broker write를 반복하지 않는다. active legacy 1주 상태와 leg 간 주문번호 충돌은 자동 이관하지 않고 차단한다. 전용 기계 문제가 생기면 다음 unit만 중지하며 widget unit에는 손대지 않는다.
 
-이번 변경은 source와 배포 unit 정의만 갱신했다. 기존 설치 unit은 새 confirmation 계약과 다르므로 자동으로 재기동하지 않으며, 코드리뷰 종료 후 별도 명시적 설치·기동 단계가 필요하다.
+2026-08-12 장전 점검에서 설치 unit의 구형 1주 confirmation과 오전 preflight의 tmux 소켓 격리를 보완했다. 검증된 unit을 설치하고 daemon-reload한 뒤, timer 예약 흐름에서 당일 authority와 서비스 기동을 다시 확인한다.
 
 ## 장후 진입 기준 누적 관찰
 
 라이브 episode가 arm될 때 state의 `signal_features`에 NXT/SOR route, 실제 opening price, 적용 drawdown, 진입창, 두 leg 지정가와 +2호가 정책을 고정한다. 20:10 `samsung_machine_entry_tuning` report는 당일 state와 자기 이전 일별 report만 읽으며 시세나 과거 원천을 재조회하지 않는다. 실제 주문·체결·목표 결과만 leg별로 누적하고 주문번호와 audit는 복사하지 않는다. 오전은 route별 현재 drawdown 정책의 실제 결과만 관찰하며, 신호가 없던 날의 미관측 가격을 이용한 완화 threshold 반사실은 만들지 않는다.
 
 report 자체는 `runtime_effect=false`, `allowed_runtime_apply=false`이고, clean v2 complete episode/leg 표본, source-quality preflight, rolling/cumulative EV, `HELD`·열린 주문 guard를 통과한 결과만 다음 PREOPEN candidate로 넘긴다. 오전은 관찰된 대안 정책이 없으므로 현재 NXT 3.0%·SOR 0.75% baseline만 carry-forward한다.
+
+2026-08-13부터 `samsung_machine_entry_tuning_report_v4`는 추가 episode 상태를 `morning_reentry` cohort로 별도 수집한다. 실제 제출·체결·목표·`HELD`만 누적하고 첫 episode나 다른 시간대 표본과 합치지 않는다. 이 cohort의 fixed user-approved 정책은 관찰 전용이며 기존 morning/midday/afternoon threshold 자동변경 후보에 섞지 않는다.
 
 preflight wrapper는 정확일자 applied artifact를 먼저 생성하고 service는 schema/hash가 검증된 오전 policy만 읽는다. 후보 없음/기간 만료는 baseline으로 닫고, 최신 후보 또는 이미 생성된 당일 artifact가 손상되면 broker gateway 생성 전에 기동을 차단한다. 당일 유효 artifact는 덮어쓰지 않고 재사용한다. 무손절·미청산 보유, leg별 1주 두 개, +2호가, 독립 주문원장, provider/bot/cap/broker guard는 튜닝 축이 아니다.
 

@@ -1,0 +1,3951 @@
+{
+  "actual_order_submitted": false,
+  "allowed_runtime_apply": false,
+  "broker_order_forbidden": true,
+  "cost_pct": 0.2,
+  "decision": "holdout_pass_source_only_reentry_candidate",
+  "end_date": "2026-08-10",
+  "execution_contract": {
+    "allocation": "one_share_entry_anchor_plus_offset_and_one_share_one_tick_lower",
+    "maximum_additional_episodes_per_day": 1,
+    "quantity": 2,
+    "stop_loss": "none",
+    "target_ticks": 2,
+    "unfilled_target": "hold_without_forced_exit"
+  },
+  "first_episode_reconstruction": {
+    "common_date_count": 44,
+    "complete_date_count": 35,
+    "route_policy": "NXT_0800_0810_then_unfilled_leg_SOR_0900_0930"
+  },
+  "generated_at_kst": "2026-08-12T09:53:12+09:00",
+  "metric_contract": {
+    "decision_authority": "source_only_no_runtime_or_order_authority",
+    "forbidden_uses": [
+      "holdout_outcome_used_for_candidate_selection",
+      "price_touch_as_real_fill_evidence",
+      "same_bar_fill_then_target_assumption",
+      "real_order_submission",
+      "account_token_or_broker_api",
+      "runtime_policy_or_quantity_mutation",
+      "provider_bot_cap_or_broker_guard_change",
+      "stop_loss_forced_exit_or_target_timeout_creation"
+    ],
+    "metric_role": "samsung_morning_second_episode_offline_research",
+    "primary_decision_metric": "notional_weighted_ev_pct",
+    "sample_floor": {
+      "calibration_and_holdout_held_legs": 0,
+      "calibration_completed_legs": 8,
+      "calibration_signal_episodes": 6,
+      "each_calibration_half_completed_legs": 3,
+      "holdout_completed_legs": 4,
+      "holdout_signal_episodes": 3
+    },
+    "source_quality_gate": [
+      "clean_baseline_manifest_pass_and_sha256_match",
+      "valid_unique_completed_krx_and_nxt_ohlcv",
+      "44_common_dates_with_nxt_0800_and_krx_0900_anchors",
+      "current_first_episode_completed_before_reentry",
+      "same_bar_fill_then_target_forbidden",
+      "calibration_and_holdout_held_legs_zero"
+    ],
+    "window_policy": "first_28_common_dates_per_family_calibration_then_last_16_holdout;sequential_family_iteration_disclosed"
+  },
+  "runtime_effect": false,
+  "schema": "samsung_morning_reentry_research_v1",
+  "selection": {
+    "calibration_gate_counts": {
+      "direct_low_proximity": {
+        "inventory_clear": 2617,
+        "sample_ready": 4119
+      },
+      "low_hold_reclaim_close_split": {
+        "inventory_clear": 3567,
+        "sample_ready": 7310
+      },
+      "low_hold_reclaim_passive_split": {
+        "inventory_clear": 4943,
+        "sample_ready": 6621
+      }
+    },
+    "calibration_ready_candidate_count": 10010,
+    "candidate": {
+      "calibration": {
+        "attempted_legs": 34,
+        "completed_legs": 32,
+        "held_legs": 0,
+        "no_fill_legs": 2,
+        "notional_weighted_ev_pct": 0.11355,
+        "signal_episodes": 17
+      },
+      "calibration_first_half": {
+        "attempted_legs": 14,
+        "completed_legs": 14,
+        "held_legs": 0,
+        "no_fill_legs": 0,
+        "notional_weighted_ev_pct": 0.108472,
+        "signal_episodes": 7
+      },
+      "calibration_second_half": {
+        "attempted_legs": 20,
+        "completed_legs": 18,
+        "held_legs": 0,
+        "no_fill_legs": 2,
+        "notional_weighted_ev_pct": 0.117347,
+        "signal_episodes": 10
+      },
+      "full": {
+        "attempted_legs": 58,
+        "completed_legs": 51,
+        "episodes": [
+          {
+            "date": "2026-06-05",
+            "entry_anchor_price": 328000,
+            "first_episode_completed_at": "2026-06-05T09:09:00",
+            "legs": [
+              {
+                "entry_price": 327500,
+                "fill_at": "2026-06-05T09:28:00",
+                "net_profit_pct": 0.105344,
+                "status": "COMPLETE",
+                "target_at": "2026-06-05T09:29:00",
+                "target_price": 328500
+              },
+              {
+                "entry_price": 327000,
+                "fill_at": "2026-06-05T09:28:00",
+                "net_profit_pct": 0.10581,
+                "status": "COMPLETE",
+                "target_at": "2026-06-05T09:29:00",
+                "target_price": 328000
+              }
+            ],
+            "observed_drawdown_pct": 0.762195,
+            "observed_near_low_pct": 0.153846,
+            "setup_at": "2026-06-05T09:25:00",
+            "setup_close": 325500,
+            "signal_at": "2026-06-05T09:27:00"
+          },
+          {
+            "date": "2026-06-09",
+            "entry_anchor_price": 306000,
+            "first_episode_completed_at": "2026-06-09T09:06:00",
+            "legs": [
+              {
+                "entry_price": 305500,
+                "fill_at": "2026-06-09T09:25:00",
+                "net_profit_pct": 0.127332,
+                "status": "COMPLETE",
+                "target_at": "2026-06-09T09:26:00",
+                "target_price": 306500
+              },
+              {
+                "entry_price": 305000,
+                "fill_at": "2026-06-09T09:25:00",
+                "net_profit_pct": 0.127869,
+                "status": "COMPLETE",
+                "target_at": "2026-06-09T09:26:00",
+                "target_price": 306000
+              }
+            ],
+            "observed_drawdown_pct": 0.811688,
+            "observed_near_low_pct": 0.163934,
+            "setup_at": "2026-06-09T09:23:00",
+            "setup_close": 305500,
+            "signal_at": "2026-06-09T09:24:00"
+          },
+          {
+            "date": "2026-06-10",
+            "entry_anchor_price": 311500,
+            "first_episode_completed_at": "2026-06-10T08:01:00",
+            "legs": [
+              {
+                "entry_price": 311000,
+                "fill_at": "2026-06-10T09:23:00",
+                "net_profit_pct": 0.121543,
+                "status": "COMPLETE",
+                "target_at": "2026-06-10T09:24:00",
+                "target_price": 312000
+              },
+              {
+                "entry_price": 310500,
+                "fill_at": "2026-06-10T09:25:00",
+                "net_profit_pct": 0.122061,
+                "status": "COMPLETE",
+                "target_at": "2026-06-10T09:27:00",
+                "target_price": 311500
+              }
+            ],
+            "observed_drawdown_pct": 0.642055,
+            "observed_near_low_pct": 0.161812,
+            "setup_at": "2026-06-10T09:20:00",
+            "setup_close": 309500,
+            "signal_at": "2026-06-10T09:22:00"
+          },
+          {
+            "date": "2026-06-11",
+            "entry_anchor_price": 292500,
+            "first_episode_completed_at": "2026-06-11T08:04:00",
+            "legs": [
+              {
+                "entry_price": 292000,
+                "fill_at": "2026-06-11T09:39:00",
+                "net_profit_pct": 0.142466,
+                "status": "COMPLETE",
+                "target_at": "2026-06-11T09:42:00",
+                "target_price": 293000
+              },
+              {
+                "entry_price": 291500,
+                "fill_at": "2026-06-11T09:39:00",
+                "net_profit_pct": 0.143053,
+                "status": "COMPLETE",
+                "target_at": "2026-06-11T09:42:00",
+                "target_price": 292500
+              }
+            ],
+            "observed_drawdown_pct": 1.186441,
+            "observed_near_low_pct": 0.171821,
+            "setup_at": "2026-06-11T09:36:00",
+            "setup_close": 291500,
+            "signal_at": "2026-06-11T09:38:00"
+          },
+          {
+            "date": "2026-06-16",
+            "entry_anchor_price": 339000,
+            "first_episode_completed_at": "2026-06-16T09:24:00",
+            "legs": [
+              {
+                "entry_price": 338500,
+                "fill_at": "2026-06-16T09:42:00",
+                "net_profit_pct": 0.095421,
+                "status": "COMPLETE",
+                "target_at": "2026-06-16T11:08:00",
+                "target_price": 339500
+              },
+              {
+                "entry_price": 338000,
+                "fill_at": "2026-06-16T09:43:00",
+                "net_profit_pct": 0.095858,
+                "status": "COMPLETE",
+                "target_at": "2026-06-16T10:41:00",
+                "target_price": 339000
+              }
+            ],
+            "observed_drawdown_pct": 0.663228,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-06-16T09:39:00",
+            "setup_close": 337000,
+            "signal_at": "2026-06-16T09:41:00"
+          },
+          {
+            "date": "2026-06-23",
+            "entry_anchor_price": 343000,
+            "first_episode_completed_at": "2026-06-23T09:26:00",
+            "legs": [
+              {
+                "entry_price": 342500,
+                "fill_at": "2026-06-23T09:59:00",
+                "net_profit_pct": 0.091971,
+                "status": "COMPLETE",
+                "target_at": "2026-06-23T10:00:00",
+                "target_price": 343500
+              },
+              {
+                "entry_price": 342000,
+                "fill_at": "2026-06-23T09:59:00",
+                "net_profit_pct": 0.092398,
+                "status": "COMPLETE",
+                "target_at": "2026-06-23T10:00:00",
+                "target_price": 343000
+              }
+            ],
+            "observed_drawdown_pct": 1.440922,
+            "observed_near_low_pct": 0.293255,
+            "setup_at": "2026-06-23T09:56:00",
+            "setup_close": 342000,
+            "signal_at": "2026-06-23T09:58:00"
+          },
+          {
+            "date": "2026-06-25",
+            "entry_anchor_price": 354500,
+            "first_episode_completed_at": "2026-06-25T09:03:00",
+            "legs": [
+              {
+                "entry_price": 354000,
+                "fill_at": "2026-06-25T09:50:00",
+                "net_profit_pct": 0.082486,
+                "status": "COMPLETE",
+                "target_at": "2026-06-25T09:51:00",
+                "target_price": 355000
+              },
+              {
+                "entry_price": 353500,
+                "fill_at": "2026-06-25T09:50:00",
+                "net_profit_pct": 0.082885,
+                "status": "COMPLETE",
+                "target_at": "2026-06-25T09:51:00",
+                "target_price": 354500
+              }
+            ],
+            "observed_drawdown_pct": 1.603905,
+            "observed_near_low_pct": 0.213068,
+            "setup_at": "2026-06-25T09:47:00",
+            "setup_close": 352750,
+            "signal_at": "2026-06-25T09:49:00"
+          },
+          {
+            "date": "2026-06-26",
+            "entry_anchor_price": 343500,
+            "first_episode_completed_at": "2026-06-26T09:17:00",
+            "legs": [
+              {
+                "entry_price": 343000,
+                "fill_at": "2026-06-26T09:36:00",
+                "net_profit_pct": 0.091545,
+                "status": "COMPLETE",
+                "target_at": "2026-06-26T09:37:00",
+                "target_price": 344000
+              },
+              {
+                "entry_price": 342500,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.010101,
+            "observed_near_low_pct": 0.292398,
+            "setup_at": "2026-06-26T09:33:00",
+            "setup_close": 343000,
+            "signal_at": "2026-06-26T09:35:00"
+          },
+          {
+            "date": "2026-06-29",
+            "entry_anchor_price": 321500,
+            "first_episode_completed_at": "2026-06-29T09:11:00",
+            "legs": [
+              {
+                "entry_price": 321000,
+                "fill_at": "2026-06-29T09:34:00",
+                "net_profit_pct": 0.111526,
+                "status": "COMPLETE",
+                "target_at": "2026-06-29T09:36:00",
+                "target_price": 322000
+              },
+              {
+                "entry_price": 320500,
+                "fill_at": "2026-06-29T09:34:00",
+                "net_profit_pct": 0.112012,
+                "status": "COMPLETE",
+                "target_at": "2026-06-29T09:36:00",
+                "target_price": 321500
+              }
+            ],
+            "observed_drawdown_pct": 1.457055,
+            "observed_near_low_pct": 0.234009,
+            "setup_at": "2026-06-29T09:31:00",
+            "setup_close": 321250,
+            "signal_at": "2026-06-29T09:33:00"
+          },
+          {
+            "date": "2026-07-01",
+            "entry_anchor_price": 327500,
+            "first_episode_completed_at": "2026-07-01T09:15:00",
+            "legs": [
+              {
+                "entry_price": 327000,
+                "fill_at": "2026-07-01T09:47:00",
+                "net_profit_pct": 0.10581,
+                "status": "COMPLETE",
+                "target_at": "2026-07-01T09:51:00",
+                "target_price": 328000
+              },
+              {
+                "entry_price": 326500,
+                "fill_at": "2026-07-01T09:48:00",
+                "net_profit_pct": 0.106279,
+                "status": "COMPLETE",
+                "target_at": "2026-07-01T09:51:00",
+                "target_price": 327500
+              }
+            ],
+            "observed_drawdown_pct": 0.758725,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-07-01T09:44:00",
+            "setup_close": 327000,
+            "signal_at": "2026-07-01T09:46:00"
+          },
+          {
+            "date": "2026-07-02",
+            "entry_anchor_price": 290000,
+            "first_episode_completed_at": "2026-07-02T08:05:00",
+            "legs": [
+              {
+                "entry_price": 289500,
+                "fill_at": "2026-07-02T09:20:00",
+                "net_profit_pct": 0.145423,
+                "status": "COMPLETE",
+                "target_at": "2026-07-02T09:21:00",
+                "target_price": 290500
+              },
+              {
+                "entry_price": 289000,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.857633,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-07-02T09:17:00",
+            "setup_close": 289000,
+            "signal_at": "2026-07-02T09:19:00"
+          },
+          {
+            "date": "2026-07-06",
+            "entry_anchor_price": 320500,
+            "first_episode_completed_at": "2026-07-06T09:04:00",
+            "legs": [
+              {
+                "entry_price": 320000,
+                "fill_at": "2026-07-06T09:57:00",
+                "net_profit_pct": 0.1125,
+                "status": "COMPLETE",
+                "target_at": "2026-07-06T10:01:00",
+                "target_price": 321000
+              },
+              {
+                "entry_price": 319500,
+                "fill_at": "2026-07-06T09:58:00",
+                "net_profit_pct": 0.112989,
+                "status": "COMPLETE",
+                "target_at": "2026-07-06T09:59:00",
+                "target_price": 320500
+              }
+            ],
+            "observed_drawdown_pct": 0.928793,
+            "observed_near_low_pct": 0.156495,
+            "setup_at": "2026-07-06T09:55:00",
+            "setup_close": 320000,
+            "signal_at": "2026-07-06T09:56:00"
+          },
+          {
+            "date": "2026-07-07",
+            "entry_anchor_price": 298000,
+            "first_episode_completed_at": "2026-07-07T09:05:00",
+            "legs": [
+              {
+                "entry_price": 297500,
+                "fill_at": "2026-07-07T09:44:00",
+                "net_profit_pct": 0.136134,
+                "status": "COMPLETE",
+                "target_at": "2026-07-07T09:45:00",
+                "target_price": 298500
+              },
+              {
+                "entry_price": 297000,
+                "fill_at": "2026-07-07T09:44:00",
+                "net_profit_pct": 0.1367,
+                "status": "COMPLETE",
+                "target_at": "2026-07-07T09:45:00",
+                "target_price": 298000
+              }
+            ],
+            "observed_drawdown_pct": 1.655629,
+            "observed_near_low_pct": 0.168634,
+            "setup_at": "2026-07-07T09:41:00",
+            "setup_close": 297000,
+            "signal_at": "2026-07-07T09:43:00"
+          },
+          {
+            "date": "2026-07-08",
+            "entry_anchor_price": 292000,
+            "first_episode_completed_at": "2026-07-08T09:02:00",
+            "legs": [
+              {
+                "entry_price": 291500,
+                "fill_at": "2026-07-08T09:38:00",
+                "net_profit_pct": 0.143053,
+                "status": "COMPLETE",
+                "target_at": "2026-07-08T09:39:00",
+                "target_price": 292500
+              },
+              {
+                "entry_price": 291000,
+                "fill_at": "2026-07-08T09:38:00",
+                "net_profit_pct": 0.143643,
+                "status": "COMPLETE",
+                "target_at": "2026-07-08T09:39:00",
+                "target_price": 292000
+              }
+            ],
+            "observed_drawdown_pct": 0.687285,
+            "observed_near_low_pct": 0.17331,
+            "setup_at": "2026-07-08T09:35:00",
+            "setup_close": 289000,
+            "signal_at": "2026-07-08T09:37:00"
+          },
+          {
+            "date": "2026-07-09",
+            "entry_anchor_price": 289000,
+            "first_episode_completed_at": "2026-07-09T09:02:00",
+            "legs": [
+              {
+                "entry_price": 288500,
+                "fill_at": "2026-07-09T09:30:00",
+                "net_profit_pct": 0.14662,
+                "status": "COMPLETE",
+                "target_at": "2026-07-09T09:31:00",
+                "target_price": 289500
+              },
+              {
+                "entry_price": 288000,
+                "fill_at": "2026-07-09T09:31:00",
+                "net_profit_pct": 0.147222,
+                "status": "COMPLETE",
+                "target_at": "2026-07-09T09:46:00",
+                "target_price": 289000
+              }
+            ],
+            "observed_drawdown_pct": 0.692042,
+            "observed_near_low_pct": 0.17452,
+            "setup_at": "2026-07-09T09:27:00",
+            "setup_close": 287000,
+            "signal_at": "2026-07-09T09:29:00"
+          },
+          {
+            "date": "2026-07-10",
+            "entry_anchor_price": 283500,
+            "first_episode_completed_at": "2026-07-10T09:04:00",
+            "legs": [
+              {
+                "entry_price": 283000,
+                "fill_at": "2026-07-10T09:27:00",
+                "net_profit_pct": 0.153357,
+                "status": "COMPLETE",
+                "target_at": "2026-07-10T09:29:00",
+                "target_price": 284000
+              },
+              {
+                "entry_price": 282500,
+                "fill_at": "2026-07-10T09:27:00",
+                "net_profit_pct": 0.153982,
+                "status": "COMPLETE",
+                "target_at": "2026-07-10T09:28:00",
+                "target_price": 283500
+              }
+            ],
+            "observed_drawdown_pct": 1.225919,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-07-10T09:24:00",
+            "setup_close": 282000,
+            "signal_at": "2026-07-10T09:26:00"
+          },
+          {
+            "date": "2026-07-13",
+            "entry_anchor_price": 277000,
+            "first_episode_completed_at": "2026-07-13T09:03:00",
+            "legs": [
+              {
+                "entry_price": 276500,
+                "fill_at": "2026-07-13T09:56:00",
+                "net_profit_pct": 0.161664,
+                "status": "COMPLETE",
+                "target_at": "2026-07-13T10:02:00",
+                "target_price": 277500
+              },
+              {
+                "entry_price": 276000,
+                "fill_at": "2026-07-13T09:56:00",
+                "net_profit_pct": 0.162319,
+                "status": "COMPLETE",
+                "target_at": "2026-07-13T10:01:00",
+                "target_price": 277000
+              }
+            ],
+            "observed_drawdown_pct": 1.426025,
+            "observed_near_low_pct": 0.181159,
+            "setup_at": "2026-07-13T09:53:00",
+            "setup_close": 276500,
+            "signal_at": "2026-07-13T09:55:00"
+          },
+          {
+            "date": "2026-07-16",
+            "entry_anchor_price": 257000,
+            "first_episode_completed_at": "2026-07-16T08:01:00",
+            "legs": [
+              {
+                "entry_price": 256500,
+                "fill_at": "2026-07-16T09:50:00",
+                "net_profit_pct": 0.189864,
+                "status": "COMPLETE",
+                "target_at": "2026-07-16T09:52:00",
+                "target_price": 257500
+              },
+              {
+                "entry_price": 256000,
+                "fill_at": "2026-07-16T09:50:00",
+                "net_profit_pct": 0.190625,
+                "status": "COMPLETE",
+                "target_at": "2026-07-16T09:51:00",
+                "target_price": 257000
+              }
+            ],
+            "observed_drawdown_pct": 1.156069,
+            "observed_near_low_pct": 0.195312,
+            "setup_at": "2026-07-16T09:47:00",
+            "setup_close": 256500,
+            "signal_at": "2026-07-16T09:49:00"
+          },
+          {
+            "date": "2026-07-23",
+            "entry_anchor_price": 270500,
+            "first_episode_completed_at": "2026-07-23T08:01:00",
+            "legs": [
+              {
+                "entry_price": 270000,
+                "fill_at": "2026-07-23T09:27:00",
+                "net_profit_pct": 0.17037,
+                "status": "COMPLETE",
+                "target_at": "2026-07-23T09:28:00",
+                "target_price": 271000
+              },
+              {
+                "entry_price": 269500,
+                "fill_at": "2026-07-23T09:28:00",
+                "net_profit_pct": 0.171058,
+                "status": "COMPLETE",
+                "target_at": "2026-07-23T09:45:00",
+                "target_price": 270500
+              }
+            ],
+            "observed_drawdown_pct": 1.282051,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-07-23T09:24:00",
+            "setup_close": 269500,
+            "signal_at": "2026-07-23T09:26:00"
+          },
+          {
+            "date": "2026-07-24",
+            "entry_anchor_price": 261000,
+            "first_episode_completed_at": "2026-07-24T09:02:00",
+            "legs": [
+              {
+                "entry_price": 260500,
+                "fill_at": "2026-07-24T09:22:00",
+                "net_profit_pct": 0.183877,
+                "status": "COMPLETE",
+                "target_at": "2026-07-24T09:23:00",
+                "target_price": 261500
+              },
+              {
+                "entry_price": 260000,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.886792,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-07-24T09:19:00",
+            "setup_close": 260000,
+            "signal_at": "2026-07-24T09:21:00"
+          },
+          {
+            "date": "2026-07-27",
+            "entry_anchor_price": 253000,
+            "first_episode_completed_at": "2026-07-27T09:04:00",
+            "legs": [
+              {
+                "entry_price": 252500,
+                "fill_at": "2026-07-27T09:22:00",
+                "net_profit_pct": 0.19604,
+                "status": "COMPLETE",
+                "target_at": "2026-07-27T09:23:00",
+                "target_price": 253500
+              },
+              {
+                "entry_price": 252000,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.956947,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-07-27T09:19:00",
+            "setup_close": 250500,
+            "signal_at": "2026-07-27T09:21:00"
+          },
+          {
+            "date": "2026-07-28",
+            "entry_anchor_price": 231000,
+            "first_episode_completed_at": "2026-07-28T09:08:00",
+            "legs": [
+              {
+                "entry_price": 230500,
+                "fill_at": "2026-07-28T09:26:00",
+                "net_profit_pct": 0.233839,
+                "status": "COMPLETE",
+                "target_at": "2026-07-28T09:28:00",
+                "target_price": 231500
+              },
+              {
+                "entry_price": 230000,
+                "fill_at": "2026-07-28T09:27:00",
+                "net_profit_pct": 0.234783,
+                "status": "COMPLETE",
+                "target_at": "2026-07-28T09:28:00",
+                "target_price": 231000
+              }
+            ],
+            "observed_drawdown_pct": 2.742616,
+            "observed_near_low_pct": 0.0,
+            "setup_at": "2026-07-28T09:23:00",
+            "setup_close": 230500,
+            "signal_at": "2026-07-28T09:25:00"
+          },
+          {
+            "date": "2026-07-29",
+            "entry_anchor_price": 229750,
+            "first_episode_completed_at": "2026-07-29T08:12:00",
+            "legs": [
+              {
+                "entry_price": 229000,
+                "fill_at": "2026-07-29T09:28:00",
+                "net_profit_pct": 0.236681,
+                "status": "COMPLETE",
+                "target_at": "2026-07-29T09:29:00",
+                "target_price": 230000
+              },
+              {
+                "entry_price": 228500,
+                "fill_at": "2026-07-29T09:28:00",
+                "net_profit_pct": 0.237637,
+                "status": "COMPLETE",
+                "target_at": "2026-07-29T09:29:00",
+                "target_price": 229500
+              }
+            ],
+            "observed_drawdown_pct": 2.564103,
+            "observed_near_low_pct": 0.21978,
+            "setup_at": "2026-07-29T09:25:00",
+            "setup_close": 228000,
+            "signal_at": "2026-07-29T09:27:00"
+          },
+          {
+            "date": "2026-07-30",
+            "entry_anchor_price": 208000,
+            "first_episode_completed_at": "2026-07-30T09:08:00",
+            "legs": [
+              {
+                "entry_price": 207500,
+                "fill_at": "2026-07-30T09:37:00",
+                "net_profit_pct": 0.281928,
+                "status": "COMPLETE",
+                "target_at": "2026-07-30T09:53:00",
+                "target_price": 208500
+              },
+              {
+                "entry_price": 207000,
+                "fill_at": "2026-07-30T09:37:00",
+                "net_profit_pct": 0.283092,
+                "status": "COMPLETE",
+                "target_at": "2026-07-30T09:51:00",
+                "target_price": 208000
+              }
+            ],
+            "observed_drawdown_pct": 2.823529,
+            "observed_near_low_pct": 0.242718,
+            "setup_at": "2026-07-30T09:34:00",
+            "setup_close": 206500,
+            "signal_at": "2026-07-30T09:36:00"
+          },
+          {
+            "date": "2026-08-03",
+            "entry_anchor_price": 240750,
+            "first_episode_completed_at": "2026-08-03T08:01:00",
+            "legs": [
+              {
+                "entry_price": 240000,
+                "fill_at": "2026-08-03T09:31:00",
+                "net_profit_pct": 0.216667,
+                "status": "COMPLETE",
+                "target_at": "2026-08-03T09:32:00",
+                "target_price": 241000
+              },
+              {
+                "entry_price": 239500,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 2.642276,
+            "observed_near_low_pct": 0.209205,
+            "setup_at": "2026-08-03T09:28:00",
+            "setup_close": 239500,
+            "signal_at": "2026-08-03T09:30:00"
+          },
+          {
+            "date": "2026-08-04",
+            "entry_anchor_price": 232500,
+            "first_episode_completed_at": "2026-08-04T09:03:00",
+            "legs": [
+              {
+                "entry_price": 232000,
+                "fill_at": "2026-08-04T09:39:00",
+                "net_profit_pct": 0.231034,
+                "status": "COMPLETE",
+                "target_at": "2026-08-04T09:40:00",
+                "target_price": 233000
+              },
+              {
+                "entry_price": 231500,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 3.534304,
+            "observed_near_low_pct": 0.215983,
+            "setup_at": "2026-08-04T09:35:00",
+            "setup_close": 232000,
+            "signal_at": "2026-08-04T09:37:00"
+          },
+          {
+            "date": "2026-08-05",
+            "entry_anchor_price": 249500,
+            "first_episode_completed_at": "2026-08-05T09:01:00",
+            "legs": [
+              {
+                "entry_price": 249000,
+                "fill_at": "2026-08-05T09:23:00",
+                "net_profit_pct": 0.201606,
+                "status": "COMPLETE",
+                "target_at": "2026-08-05T09:24:00",
+                "target_price": 250000
+              },
+              {
+                "entry_price": 248500,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.485149,
+            "observed_near_low_pct": 0.100604,
+            "setup_at": "2026-08-05T09:20:00",
+            "setup_close": 248750,
+            "signal_at": "2026-08-05T09:22:00"
+          },
+          {
+            "date": "2026-08-06",
+            "entry_anchor_price": 241750,
+            "first_episode_completed_at": "2026-08-06T09:02:00",
+            "legs": [
+              {
+                "entry_price": 241000,
+                "fill_at": "2026-08-06T09:21:00",
+                "net_profit_pct": 0.214938,
+                "status": "COMPLETE",
+                "target_at": "2026-08-06T09:23:00",
+                "target_price": 242000
+              },
+              {
+                "entry_price": 240500,
+                "fill_at": "2026-08-06T09:21:00",
+                "net_profit_pct": 0.2158,
+                "status": "COMPLETE",
+                "target_at": "2026-08-06T09:22:00",
+                "target_price": 241500
+              }
+            ],
+            "observed_drawdown_pct": 2.235772,
+            "observed_near_low_pct": 0.208333,
+            "setup_at": "2026-08-06T09:18:00",
+            "setup_close": 240500,
+            "signal_at": "2026-08-06T09:20:00"
+          },
+          {
+            "date": "2026-08-10",
+            "entry_anchor_price": 234500,
+            "first_episode_completed_at": "2026-08-10T09:06:00",
+            "legs": [
+              {
+                "entry_price": 234000,
+                "fill_at": "2026-08-10T09:24:00",
+                "net_profit_pct": 0.22735,
+                "status": "COMPLETE",
+                "target_at": "2026-08-10T09:27:00",
+                "target_price": 235000
+              },
+              {
+                "entry_price": 233500,
+                "fill_at": "2026-08-10T09:24:00",
+                "net_profit_pct": 0.228266,
+                "status": "COMPLETE",
+                "target_at": "2026-08-10T09:27:00",
+                "target_price": 234500
+              }
+            ],
+            "observed_drawdown_pct": 1.781971,
+            "observed_near_low_pct": 0.106838,
+            "setup_at": "2026-08-10T09:21:00",
+            "setup_close": 234250,
+            "signal_at": "2026-08-10T09:23:00"
+          }
+        ],
+        "held_legs": 0,
+        "no_fill_legs": 7,
+        "notional_weighted_ev_pct": 0.133543,
+        "signal_episodes": 29
+      },
+      "holdout": {
+        "attempted_legs": 24,
+        "completed_legs": 19,
+        "held_legs": 0,
+        "no_fill_legs": 5,
+        "notional_weighted_ev_pct": 0.170116,
+        "signal_episodes": 12
+      },
+      "parameters": {
+        "confirmation_bars": 2,
+        "confirmation_low_hold_required": true,
+        "entry_anchor": "confirmation_close",
+        "entry_offset_ticks": -1,
+        "entry_valid_completed_bars": 3,
+        "family": "low_hold_reclaim_passive_split",
+        "lookback_bars": 15,
+        "reclaim_ticks": 1,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.35,
+        "scan_end": "10:00"
+      },
+      "robust_calibration_score": 0.07593
+    },
+    "date_split": {
+      "calibration_end": "2026-07-15",
+      "calibration_start": "2026-06-05",
+      "calibration_trading_day_count": 28,
+      "holdout_end": "2026-08-10",
+      "holdout_start": "2026-07-16",
+      "holdout_trading_day_count": 16
+    },
+    "decision": "holdout_pass_source_only_reentry_candidate",
+    "family_iteration_count": 3,
+    "family_results": {
+      "direct_low_proximity": {
+        "calibration_ready_candidate_count": 2507,
+        "candidate": {
+          "calibration": {
+            "attempted_legs": 40,
+            "completed_legs": 38,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.111188,
+            "signal_episodes": 20
+          },
+          "calibration_first_half": {
+            "attempted_legs": 18,
+            "completed_legs": 18,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.103413,
+            "signal_episodes": 9
+          },
+          "calibration_second_half": {
+            "attempted_legs": 22,
+            "completed_legs": 20,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.11815,
+            "signal_episodes": 11
+          },
+          "full": {
+            "attempted_legs": 68,
+            "completed_legs": 60,
+            "episodes": [
+              {
+                "date": "2026-06-05",
+                "entry_anchor_price": 328000,
+                "first_episode_completed_at": "2026-06-05T09:09:00",
+                "legs": [
+                  {
+                    "entry_price": 327500,
+                    "fill_at": "2026-06-05T09:14:00",
+                    "net_profit_pct": 0.105344,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-05T09:15:00",
+                    "target_price": 328500
+                  },
+                  {
+                    "entry_price": 327000,
+                    "fill_at": "2026-06-05T09:17:00",
+                    "net_profit_pct": 0.10581,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-05T09:19:00",
+                    "target_price": 328000
+                  }
+                ],
+                "observed_drawdown_pct": 1.204819,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-05T09:13:00",
+                "setup_close": 328000,
+                "signal_at": "2026-06-05T09:13:00"
+              },
+              {
+                "date": "2026-06-09",
+                "entry_anchor_price": 307500,
+                "first_episode_completed_at": "2026-06-09T09:06:00",
+                "legs": [
+                  {
+                    "entry_price": 307000,
+                    "fill_at": "2026-06-09T09:21:00",
+                    "net_profit_pct": 0.125733,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-09T09:27:00",
+                    "target_price": 308000
+                  },
+                  {
+                    "entry_price": 306500,
+                    "fill_at": "2026-06-09T09:21:00",
+                    "net_profit_pct": 0.126264,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-09T09:27:00",
+                    "target_price": 307500
+                  }
+                ],
+                "observed_drawdown_pct": 0.485437,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-09T09:20:00",
+                "setup_close": 307500,
+                "signal_at": "2026-06-09T09:20:00"
+              },
+              {
+                "date": "2026-06-10",
+                "entry_anchor_price": 308000,
+                "first_episode_completed_at": "2026-06-10T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 307500,
+                    "fill_at": "2026-06-10T09:33:00",
+                    "net_profit_pct": 0.125203,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-10T09:34:00",
+                    "target_price": 308500
+                  },
+                  {
+                    "entry_price": 307000,
+                    "fill_at": "2026-06-10T09:37:00",
+                    "net_profit_pct": 0.125733,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-10T09:38:00",
+                    "target_price": 308000
+                  }
+                ],
+                "observed_drawdown_pct": 0.96463,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-10T09:32:00",
+                "setup_close": 308000,
+                "signal_at": "2026-06-10T09:32:00"
+              },
+              {
+                "date": "2026-06-11",
+                "entry_anchor_price": 289000,
+                "first_episode_completed_at": "2026-06-11T08:04:00",
+                "legs": [
+                  {
+                    "entry_price": 288500,
+                    "fill_at": "2026-06-11T09:03:00",
+                    "net_profit_pct": 0.14662,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-11T09:05:00",
+                    "target_price": 289500
+                  },
+                  {
+                    "entry_price": 288000,
+                    "fill_at": "2026-06-11T09:04:00",
+                    "net_profit_pct": 0.147222,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-11T09:05:00",
+                    "target_price": 289000
+                  }
+                ],
+                "observed_drawdown_pct": 1.70068,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-11T09:02:00",
+                "setup_close": 289000,
+                "signal_at": "2026-06-11T09:02:00"
+              },
+              {
+                "date": "2026-06-15",
+                "entry_anchor_price": 338750,
+                "first_episode_completed_at": "2026-06-15T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 338000,
+                    "fill_at": "2026-06-15T09:36:00",
+                    "net_profit_pct": 0.095858,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-15T09:43:00",
+                    "target_price": 339000
+                  },
+                  {
+                    "entry_price": 337500,
+                    "fill_at": "2026-06-15T09:38:00",
+                    "net_profit_pct": 0.096296,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-15T09:39:00",
+                    "target_price": 338500
+                  }
+                ],
+                "observed_drawdown_pct": 0.367647,
+                "observed_near_low_pct": 0.073855,
+                "setup_at": "2026-06-15T09:33:00",
+                "setup_close": 338750,
+                "signal_at": "2026-06-15T09:33:00"
+              },
+              {
+                "date": "2026-06-16",
+                "entry_anchor_price": 338250,
+                "first_episode_completed_at": "2026-06-16T09:24:00",
+                "legs": [
+                  {
+                    "entry_price": 337500,
+                    "fill_at": "2026-06-16T09:39:00",
+                    "net_profit_pct": 0.096296,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-16T09:41:00",
+                    "target_price": 338500
+                  },
+                  {
+                    "entry_price": 337000,
+                    "fill_at": "2026-06-16T09:39:00",
+                    "net_profit_pct": 0.096736,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-16T09:40:00",
+                    "target_price": 338000
+                  }
+                ],
+                "observed_drawdown_pct": 0.368189,
+                "observed_near_low_pct": 0.073964,
+                "setup_at": "2026-06-16T09:38:00",
+                "setup_close": 338250,
+                "signal_at": "2026-06-16T09:38:00"
+              },
+              {
+                "date": "2026-06-19",
+                "entry_anchor_price": 365000,
+                "first_episode_completed_at": "2026-06-19T08:03:00",
+                "legs": [
+                  {
+                    "entry_price": 364500,
+                    "fill_at": "2026-06-19T09:17:00",
+                    "net_profit_pct": 0.074348,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-19T09:18:00",
+                    "target_price": 365500
+                  },
+                  {
+                    "entry_price": 364000,
+                    "fill_at": "2026-06-19T09:17:00",
+                    "net_profit_pct": 0.074725,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-19T09:18:00",
+                    "target_price": 365000
+                  }
+                ],
+                "observed_drawdown_pct": 0.815217,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-19T09:16:00",
+                "setup_close": 365000,
+                "signal_at": "2026-06-19T09:16:00"
+              },
+              {
+                "date": "2026-06-23",
+                "entry_anchor_price": 344000,
+                "first_episode_completed_at": "2026-06-23T09:26:00",
+                "legs": [
+                  {
+                    "entry_price": 343500,
+                    "fill_at": "2026-06-23T09:52:00",
+                    "net_profit_pct": 0.091121,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-23T09:53:00",
+                    "target_price": 344500
+                  },
+                  {
+                    "entry_price": 343000,
+                    "fill_at": "2026-06-23T09:55:00",
+                    "net_profit_pct": 0.091545,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-23T09:57:00",
+                    "target_price": 344000
+                  }
+                ],
+                "observed_drawdown_pct": 0.721501,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-23T09:51:00",
+                "setup_close": 344000,
+                "signal_at": "2026-06-23T09:51:00"
+              },
+              {
+                "date": "2026-06-25",
+                "entry_anchor_price": 355000,
+                "first_episode_completed_at": "2026-06-25T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 354500,
+                    "fill_at": "2026-06-25T09:08:00",
+                    "net_profit_pct": 0.082087,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-25T09:09:00",
+                    "target_price": 355500
+                  },
+                  {
+                    "entry_price": 354000,
+                    "fill_at": "2026-06-25T09:08:00",
+                    "net_profit_pct": 0.082486,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-25T09:09:00",
+                    "target_price": 355000
+                  }
+                ],
+                "observed_drawdown_pct": 0.97629,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-25T09:07:00",
+                "setup_close": 355000,
+                "signal_at": "2026-06-25T09:07:00"
+              },
+              {
+                "date": "2026-06-26",
+                "entry_anchor_price": 346000,
+                "first_episode_completed_at": "2026-06-26T09:17:00",
+                "legs": [
+                  {
+                    "entry_price": 345500,
+                    "fill_at": "2026-06-26T09:30:00",
+                    "net_profit_pct": 0.089436,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-26T09:31:00",
+                    "target_price": 346500
+                  },
+                  {
+                    "entry_price": 345000,
+                    "fill_at": "2026-06-26T09:31:00",
+                    "net_profit_pct": 0.089855,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-26T09:37:00",
+                    "target_price": 346000
+                  }
+                ],
+                "observed_drawdown_pct": 0.71736,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-26T09:26:00",
+                "setup_close": 346000,
+                "signal_at": "2026-06-26T09:26:00"
+              },
+              {
+                "date": "2026-06-29",
+                "entry_anchor_price": 325000,
+                "first_episode_completed_at": "2026-06-29T09:11:00",
+                "legs": [
+                  {
+                    "entry_price": 324500,
+                    "fill_at": "2026-06-29T09:22:00",
+                    "net_profit_pct": 0.108166,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-29T09:23:00",
+                    "target_price": 325500
+                  },
+                  {
+                    "entry_price": 324000,
+                    "fill_at": "2026-06-29T09:22:00",
+                    "net_profit_pct": 0.108642,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-29T09:23:00",
+                    "target_price": 325000
+                  }
+                ],
+                "observed_drawdown_pct": 0.763359,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-29T09:16:00",
+                "setup_close": 325000,
+                "signal_at": "2026-06-29T09:16:00"
+              },
+              {
+                "date": "2026-07-01",
+                "entry_anchor_price": 329000,
+                "first_episode_completed_at": "2026-07-01T09:15:00",
+                "legs": [
+                  {
+                    "entry_price": 328500,
+                    "fill_at": "2026-07-01T09:20:00",
+                    "net_profit_pct": 0.104414,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-01T09:21:00",
+                    "target_price": 329500
+                  },
+                  {
+                    "entry_price": 328000,
+                    "fill_at": "2026-07-01T09:21:00",
+                    "net_profit_pct": 0.104878,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-01T09:22:00",
+                    "target_price": 329000
+                  }
+                ],
+                "observed_drawdown_pct": 0.903614,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-01T09:19:00",
+                "setup_close": 329000,
+                "signal_at": "2026-07-01T09:19:00"
+              },
+              {
+                "date": "2026-07-02",
+                "entry_anchor_price": 290500,
+                "first_episode_completed_at": "2026-07-02T08:05:00",
+                "legs": [
+                  {
+                    "entry_price": 290000,
+                    "fill_at": "2026-07-02T09:15:00",
+                    "net_profit_pct": 0.144828,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-02T09:20:00",
+                    "target_price": 291000
+                  },
+                  {
+                    "entry_price": 289500,
+                    "fill_at": "2026-07-02T09:17:00",
+                    "net_profit_pct": 0.145423,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-02T09:18:00",
+                    "target_price": 290500
+                  }
+                ],
+                "observed_drawdown_pct": 1.692047,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-02T09:14:00",
+                "setup_close": 290500,
+                "signal_at": "2026-07-02T09:14:00"
+              },
+              {
+                "date": "2026-07-06",
+                "entry_anchor_price": 323000,
+                "first_episode_completed_at": "2026-07-06T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 322500,
+                    "fill_at": "2026-07-06T09:19:00",
+                    "net_profit_pct": 0.110078,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-06T09:20:00",
+                    "target_price": 323500
+                  },
+                  {
+                    "entry_price": 322000,
+                    "fill_at": "2026-07-06T09:20:00",
+                    "net_profit_pct": 0.110559,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-06T09:21:00",
+                    "target_price": 323000
+                  }
+                ],
+                "observed_drawdown_pct": 0.615385,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-06T09:17:00",
+                "setup_close": 323000,
+                "signal_at": "2026-07-06T09:17:00"
+              },
+              {
+                "date": "2026-07-07",
+                "entry_anchor_price": 300500,
+                "first_episode_completed_at": "2026-07-07T09:05:00",
+                "legs": [
+                  {
+                    "entry_price": 300000,
+                    "fill_at": "2026-07-07T09:11:00",
+                    "net_profit_pct": 0.133333,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-07T09:12:00",
+                    "target_price": 301000
+                  },
+                  {
+                    "entry_price": 299500,
+                    "fill_at": "2026-07-07T09:11:00",
+                    "net_profit_pct": 0.13389,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-07T09:12:00",
+                    "target_price": 300500
+                  }
+                ],
+                "observed_drawdown_pct": 1.47541,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-07T09:10:00",
+                "setup_close": 300500,
+                "signal_at": "2026-07-07T09:10:00"
+              },
+              {
+                "date": "2026-07-08",
+                "entry_anchor_price": 288000,
+                "first_episode_completed_at": "2026-07-08T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 287500,
+                    "fill_at": "2026-07-08T09:08:00",
+                    "net_profit_pct": 0.147826,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-08T09:10:00",
+                    "target_price": 288500
+                  },
+                  {
+                    "entry_price": 287000,
+                    "fill_at": "2026-07-08T09:09:00",
+                    "net_profit_pct": 0.148432,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-08T09:10:00",
+                    "target_price": 288000
+                  }
+                ],
+                "observed_drawdown_pct": 1.538462,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-08T09:07:00",
+                "setup_close": 288000,
+                "signal_at": "2026-07-08T09:07:00"
+              },
+              {
+                "date": "2026-07-09",
+                "entry_anchor_price": 290500,
+                "first_episode_completed_at": "2026-07-09T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 290000,
+                    "fill_at": "2026-07-09T09:15:00",
+                    "net_profit_pct": 0.144828,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-09T09:16:00",
+                    "target_price": 291000
+                  },
+                  {
+                    "entry_price": 289500,
+                    "fill_at": "2026-07-09T09:17:00",
+                    "net_profit_pct": 0.145423,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-09T09:22:00",
+                    "target_price": 290500
+                  }
+                ],
+                "observed_drawdown_pct": 0.343053,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-09T09:14:00",
+                "setup_close": 290500,
+                "signal_at": "2026-07-09T09:14:00"
+              },
+              {
+                "date": "2026-07-10",
+                "entry_anchor_price": 282750,
+                "first_episode_completed_at": "2026-07-10T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 282000,
+                    "fill_at": "2026-07-10T09:24:00",
+                    "net_profit_pct": 0.15461,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-10T09:25:00",
+                    "target_price": 283000
+                  },
+                  {
+                    "entry_price": 281500,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 1.136364,
+                "observed_near_low_pct": 0.088496,
+                "setup_at": "2026-07-10T09:23:00",
+                "setup_close": 282750,
+                "signal_at": "2026-07-10T09:23:00"
+              },
+              {
+                "date": "2026-07-13",
+                "entry_anchor_price": 287000,
+                "first_episode_completed_at": "2026-07-13T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 286500,
+                    "fill_at": "2026-07-13T09:08:00",
+                    "net_profit_pct": 0.14904,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-13T09:09:00",
+                    "target_price": 287500
+                  },
+                  {
+                    "entry_price": 286000,
+                    "fill_at": "2026-07-13T09:08:00",
+                    "net_profit_pct": 0.14965,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-13T09:09:00",
+                    "target_price": 287000
+                  }
+                ],
+                "observed_drawdown_pct": 1.37457,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-13T09:07:00",
+                "setup_close": 287000,
+                "signal_at": "2026-07-13T09:07:00"
+              },
+              {
+                "date": "2026-07-14",
+                "entry_anchor_price": 259000,
+                "first_episode_completed_at": "2026-07-14T08:12:00",
+                "legs": [
+                  {
+                    "entry_price": 258500,
+                    "fill_at": "2026-07-14T09:45:00",
+                    "net_profit_pct": 0.186847,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-14T09:46:00",
+                    "target_price": 259500
+                  },
+                  {
+                    "entry_price": 258000,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 1.333333,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-14T09:44:00",
+                "setup_close": 259000,
+                "signal_at": "2026-07-14T09:44:00"
+              },
+              {
+                "date": "2026-07-16",
+                "entry_anchor_price": 261500,
+                "first_episode_completed_at": "2026-07-16T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 261000,
+                    "fill_at": "2026-07-16T09:16:00",
+                    "net_profit_pct": 0.183142,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-16T14:30:00",
+                    "target_price": 262000
+                  },
+                  {
+                    "entry_price": 260500,
+                    "fill_at": "2026-07-16T09:16:00",
+                    "net_profit_pct": 0.183877,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-16T14:24:00",
+                    "target_price": 261500
+                  }
+                ],
+                "observed_drawdown_pct": 1.134216,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-16T09:15:00",
+                "setup_close": 261500,
+                "signal_at": "2026-07-16T09:15:00"
+              },
+              {
+                "date": "2026-07-21",
+                "entry_anchor_price": 252000,
+                "first_episode_completed_at": "2026-07-21T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 251500,
+                    "fill_at": "2026-07-21T09:56:00",
+                    "net_profit_pct": 0.197614,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-21T09:57:00",
+                    "target_price": 252500
+                  },
+                  {
+                    "entry_price": 251000,
+                    "fill_at": "2026-07-21T09:58:00",
+                    "net_profit_pct": 0.198406,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-21T10:04:00",
+                    "target_price": 252000
+                  }
+                ],
+                "observed_drawdown_pct": 0.591716,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-21T09:55:00",
+                "setup_close": 252000,
+                "signal_at": "2026-07-21T09:55:00"
+              },
+              {
+                "date": "2026-07-22",
+                "entry_anchor_price": 273500,
+                "first_episode_completed_at": "2026-07-22T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 273000,
+                    "fill_at": "2026-07-22T09:26:00",
+                    "net_profit_pct": 0.1663,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-22T09:27:00",
+                    "target_price": 274000
+                  },
+                  {
+                    "entry_price": 272500,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 0.364299,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-22T09:17:00",
+                "setup_close": 273500,
+                "signal_at": "2026-07-22T09:17:00"
+              },
+              {
+                "date": "2026-07-23",
+                "entry_anchor_price": 270500,
+                "first_episode_completed_at": "2026-07-23T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 270000,
+                    "fill_at": "2026-07-23T09:23:00",
+                    "net_profit_pct": 0.17037,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-23T09:27:00",
+                    "target_price": 271000
+                  },
+                  {
+                    "entry_price": 269500,
+                    "fill_at": "2026-07-23T09:24:00",
+                    "net_profit_pct": 0.171058,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-23T09:25:00",
+                    "target_price": 270500
+                  }
+                ],
+                "observed_drawdown_pct": 0.733945,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-23T09:22:00",
+                "setup_close": 270500,
+                "signal_at": "2026-07-23T09:22:00"
+              },
+              {
+                "date": "2026-07-24",
+                "entry_anchor_price": 263500,
+                "first_episode_completed_at": "2026-07-24T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 263000,
+                    "fill_at": "2026-07-24T09:06:00",
+                    "net_profit_pct": 0.180228,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-24T09:07:00",
+                    "target_price": 264000
+                  },
+                  {
+                    "entry_price": 262500,
+                    "fill_at": "2026-07-24T09:08:00",
+                    "net_profit_pct": 0.180952,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-24T09:09:00",
+                    "target_price": 263500
+                  }
+                ],
+                "observed_drawdown_pct": 0.93985,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-24T09:05:00",
+                "setup_close": 263500,
+                "signal_at": "2026-07-24T09:05:00"
+              },
+              {
+                "date": "2026-07-27",
+                "entry_anchor_price": 252250,
+                "first_episode_completed_at": "2026-07-27T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 251500,
+                    "fill_at": "2026-07-27T09:19:00",
+                    "net_profit_pct": 0.197614,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-27T09:20:00",
+                    "target_price": 252500
+                  },
+                  {
+                    "entry_price": 251000,
+                    "fill_at": "2026-07-27T09:19:00",
+                    "net_profit_pct": 0.198406,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-27T09:20:00",
+                    "target_price": 252000
+                  }
+                ],
+                "observed_drawdown_pct": 0.493097,
+                "observed_near_low_pct": 0.099206,
+                "setup_at": "2026-07-27T09:18:00",
+                "setup_close": 252250,
+                "signal_at": "2026-07-27T09:18:00"
+              },
+              {
+                "date": "2026-07-28",
+                "entry_anchor_price": 235000,
+                "first_episode_completed_at": "2026-07-28T09:08:00",
+                "legs": [
+                  {
+                    "entry_price": 234500,
+                    "fill_at": "2026-07-28T09:13:00",
+                    "status": "HELD",
+                    "target_at": null,
+                    "target_price": 235500
+                  },
+                  {
+                    "entry_price": 234000,
+                    "fill_at": "2026-07-28T09:13:00",
+                    "status": "HELD",
+                    "target_at": null,
+                    "target_price": 235000
+                  }
+                ],
+                "observed_drawdown_pct": 0.843882,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-28T09:11:00",
+                "setup_close": 235000,
+                "signal_at": "2026-07-28T09:11:00"
+              },
+              {
+                "date": "2026-07-29",
+                "entry_anchor_price": 224500,
+                "first_episode_completed_at": "2026-07-29T08:12:00",
+                "legs": [
+                  {
+                    "entry_price": 224000,
+                    "status": "NO_FILL"
+                  },
+                  {
+                    "entry_price": 223500,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 1.101322,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-29T09:34:00",
+                "setup_close": 224500,
+                "signal_at": "2026-07-29T09:34:00"
+              },
+              {
+                "date": "2026-07-30",
+                "entry_anchor_price": 211000,
+                "first_episode_completed_at": "2026-07-30T09:08:00",
+                "legs": [
+                  {
+                    "entry_price": 210500,
+                    "fill_at": "2026-07-30T09:12:00",
+                    "net_profit_pct": 0.275059,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-30T09:13:00",
+                    "target_price": 211500
+                  },
+                  {
+                    "entry_price": 210000,
+                    "fill_at": "2026-07-30T09:12:00",
+                    "net_profit_pct": 0.27619,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-30T09:13:00",
+                    "target_price": 211000
+                  }
+                ],
+                "observed_drawdown_pct": 1.631702,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-30T09:11:00",
+                "setup_close": 211000,
+                "signal_at": "2026-07-30T09:11:00"
+              },
+              {
+                "date": "2026-08-03",
+                "entry_anchor_price": 244500,
+                "first_episode_completed_at": "2026-08-03T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 244000,
+                    "fill_at": "2026-08-03T09:06:00",
+                    "net_profit_pct": 0.209836,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-03T09:15:00",
+                    "target_price": 245000
+                  },
+                  {
+                    "entry_price": 243500,
+                    "fill_at": "2026-08-03T09:06:00",
+                    "net_profit_pct": 0.210678,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-03T09:10:00",
+                    "target_price": 244500
+                  }
+                ],
+                "observed_drawdown_pct": 1.212121,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-08-03T09:05:00",
+                "setup_close": 244500,
+                "signal_at": "2026-08-03T09:05:00"
+              },
+              {
+                "date": "2026-08-04",
+                "entry_anchor_price": 239500,
+                "first_episode_completed_at": "2026-08-04T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 239000,
+                    "fill_at": "2026-08-04T09:14:00",
+                    "net_profit_pct": 0.21841,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-04T09:20:00",
+                    "target_price": 240000
+                  },
+                  {
+                    "entry_price": 238500,
+                    "fill_at": "2026-08-04T09:15:00",
+                    "net_profit_pct": 0.219287,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-04T09:19:00",
+                    "target_price": 239500
+                  }
+                ],
+                "observed_drawdown_pct": 1.440329,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-08-04T09:13:00",
+                "setup_close": 239500,
+                "signal_at": "2026-08-04T09:13:00"
+              },
+              {
+                "date": "2026-08-05",
+                "entry_anchor_price": 252000,
+                "first_episode_completed_at": "2026-08-05T09:01:00",
+                "legs": [
+                  {
+                    "entry_price": 251500,
+                    "fill_at": "2026-08-05T09:06:00",
+                    "status": "HELD",
+                    "target_at": null,
+                    "target_price": 252500
+                  },
+                  {
+                    "entry_price": 251000,
+                    "fill_at": "2026-08-05T09:06:00",
+                    "net_profit_pct": 0.198406,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-05T09:07:00",
+                    "target_price": 252000
+                  }
+                ],
+                "observed_drawdown_pct": 0.591716,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-08-05T09:05:00",
+                "setup_close": 252000,
+                "signal_at": "2026-08-05T09:05:00"
+              },
+              {
+                "date": "2026-08-06",
+                "entry_anchor_price": 243000,
+                "first_episode_completed_at": "2026-08-06T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 242500,
+                    "fill_at": "2026-08-06T09:10:00",
+                    "net_profit_pct": 0.212371,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-06T09:12:00",
+                    "target_price": 243500
+                  },
+                  {
+                    "entry_price": 242000,
+                    "fill_at": "2026-08-06T09:10:00",
+                    "net_profit_pct": 0.213223,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-06T09:12:00",
+                    "target_price": 243000
+                  }
+                ],
+                "observed_drawdown_pct": 0.816327,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-08-06T09:09:00",
+                "setup_close": 243000,
+                "signal_at": "2026-08-06T09:09:00"
+              },
+              {
+                "date": "2026-08-10",
+                "entry_anchor_price": 236500,
+                "first_episode_completed_at": "2026-08-10T09:06:00",
+                "legs": [
+                  {
+                    "entry_price": 236000,
+                    "fill_at": "2026-08-10T09:16:00",
+                    "net_profit_pct": 0.223729,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-10T09:17:00",
+                    "target_price": 237000
+                  },
+                  {
+                    "entry_price": 235500,
+                    "fill_at": "2026-08-10T09:17:00",
+                    "net_profit_pct": 0.224628,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-10T09:18:00",
+                    "target_price": 236500
+                  }
+                ],
+                "observed_drawdown_pct": 0.838574,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-08-10T09:15:00",
+                "setup_close": 236500,
+                "signal_at": "2026-08-10T09:15:00"
+              }
+            ],
+            "held_legs": 3,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.128753,
+            "signal_episodes": 34
+          },
+          "holdout": {
+            "attempted_legs": 28,
+            "completed_legs": 22,
+            "held_legs": 3,
+            "no_fill_legs": 3,
+            "notional_weighted_ev_pct": 0.160736,
+            "signal_episodes": 14
+          },
+          "parameters": {
+            "confirmation_bars": 0,
+            "confirmation_low_hold_required": false,
+            "entry_anchor": "signal_close",
+            "entry_offset_ticks": -1,
+            "entry_valid_completed_bars": 10,
+            "family": "direct_low_proximity",
+            "lookback_bars": 3,
+            "reclaim_ticks": 0,
+            "rolling_high_drawdown_pct": 0.3,
+            "rolling_low_proximity_pct": 0.1,
+            "scan_end": "10:00"
+          },
+          "robust_calibration_score": 0.07756
+        },
+        "decision": "holdout_failed_do_not_change_live_machine"
+      },
+      "low_hold_reclaim_close_split": {
+        "calibration_ready_candidate_count": 3102,
+        "candidate": {
+          "calibration": {
+            "attempted_legs": 36,
+            "completed_legs": 36,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.117965,
+            "signal_episodes": 18
+          },
+          "calibration_first_half": {
+            "attempted_legs": 18,
+            "completed_legs": 18,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.101988,
+            "signal_episodes": 9
+          },
+          "calibration_second_half": {
+            "attempted_legs": 18,
+            "completed_legs": 18,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.135727,
+            "signal_episodes": 9
+          },
+          "full": {
+            "attempted_legs": 60,
+            "completed_legs": 56,
+            "episodes": [
+              {
+                "date": "2026-06-05",
+                "entry_anchor_price": 331000,
+                "first_episode_completed_at": "2026-06-05T09:09:00",
+                "legs": [
+                  {
+                    "entry_price": 331000,
+                    "fill_at": "2026-06-05T09:16:00",
+                    "net_profit_pct": 0.102115,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-05T09:33:00",
+                    "target_price": 332000
+                  },
+                  {
+                    "entry_price": 330500,
+                    "fill_at": "2026-06-05T09:16:00",
+                    "net_profit_pct": 0.102572,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-05T09:33:00",
+                    "target_price": 331500
+                  }
+                ],
+                "observed_drawdown_pct": 0.754148,
+                "observed_near_low_pct": 0.458015,
+                "setup_at": "2026-06-05T09:14:00",
+                "setup_close": 329000,
+                "signal_at": "2026-06-05T09:15:00"
+              },
+              {
+                "date": "2026-06-09",
+                "entry_anchor_price": 306000,
+                "first_episode_completed_at": "2026-06-09T09:06:00",
+                "legs": [
+                  {
+                    "entry_price": 306000,
+                    "fill_at": "2026-06-09T09:25:00",
+                    "net_profit_pct": 0.126797,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-09T09:27:00",
+                    "target_price": 307000
+                  },
+                  {
+                    "entry_price": 305500,
+                    "fill_at": "2026-06-09T09:25:00",
+                    "net_profit_pct": 0.127332,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-09T09:26:00",
+                    "target_price": 306500
+                  }
+                ],
+                "observed_drawdown_pct": 0.811688,
+                "observed_near_low_pct": 0.163934,
+                "setup_at": "2026-06-09T09:23:00",
+                "setup_close": 305500,
+                "signal_at": "2026-06-09T09:24:00"
+              },
+              {
+                "date": "2026-06-10",
+                "entry_anchor_price": 308500,
+                "first_episode_completed_at": "2026-06-10T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 308500,
+                    "fill_at": "2026-06-10T09:35:00",
+                    "net_profit_pct": 0.124149,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-10T10:16:00",
+                    "target_price": 309500
+                  },
+                  {
+                    "entry_price": 308000,
+                    "fill_at": "2026-06-10T09:35:00",
+                    "net_profit_pct": 0.124675,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-10T09:36:00",
+                    "target_price": 309000
+                  }
+                ],
+                "observed_drawdown_pct": 0.805153,
+                "observed_near_low_pct": 0.162602,
+                "setup_at": "2026-06-10T09:33:00",
+                "setup_close": 308000,
+                "signal_at": "2026-06-10T09:34:00"
+              },
+              {
+                "date": "2026-06-11",
+                "entry_anchor_price": 295500,
+                "first_episode_completed_at": "2026-06-11T08:04:00",
+                "legs": [
+                  {
+                    "entry_price": 295500,
+                    "fill_at": "2026-06-11T09:28:00",
+                    "net_profit_pct": 0.138409,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-11T09:53:00",
+                    "target_price": 296500
+                  },
+                  {
+                    "entry_price": 295000,
+                    "fill_at": "2026-06-11T09:28:00",
+                    "net_profit_pct": 0.138983,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-11T09:53:00",
+                    "target_price": 296000
+                  }
+                ],
+                "observed_drawdown_pct": 0.84317,
+                "observed_near_low_pct": 0.170358,
+                "setup_at": "2026-06-11T09:26:00",
+                "setup_close": 294000,
+                "signal_at": "2026-06-11T09:27:00"
+              },
+              {
+                "date": "2026-06-15",
+                "entry_anchor_price": 339000,
+                "first_episode_completed_at": "2026-06-15T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 339000,
+                    "fill_at": "2026-06-15T09:09:00",
+                    "net_profit_pct": 0.094985,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-15T09:10:00",
+                    "target_price": 340000
+                  },
+                  {
+                    "entry_price": 338500,
+                    "fill_at": "2026-06-15T09:09:00",
+                    "net_profit_pct": 0.095421,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-15T09:10:00",
+                    "target_price": 339500
+                  }
+                ],
+                "observed_drawdown_pct": 1.173021,
+                "observed_near_low_pct": 0.148588,
+                "setup_at": "2026-06-15T09:07:00",
+                "setup_close": 337000,
+                "signal_at": "2026-06-15T09:08:00"
+              },
+              {
+                "date": "2026-06-16",
+                "entry_anchor_price": 336000,
+                "first_episode_completed_at": "2026-06-16T09:24:00",
+                "legs": [
+                  {
+                    "entry_price": 336000,
+                    "fill_at": "2026-06-16T09:52:00",
+                    "net_profit_pct": 0.097619,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-16T09:53:00",
+                    "target_price": 337000
+                  },
+                  {
+                    "entry_price": 335500,
+                    "fill_at": "2026-06-16T09:52:00",
+                    "net_profit_pct": 0.098063,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-16T09:53:00",
+                    "target_price": 336500
+                  }
+                ],
+                "observed_drawdown_pct": 0.886263,
+                "observed_near_low_pct": 0.149254,
+                "setup_at": "2026-06-16T09:50:00",
+                "setup_close": 335500,
+                "signal_at": "2026-06-16T09:51:00"
+              },
+              {
+                "date": "2026-06-19",
+                "entry_anchor_price": 368000,
+                "first_episode_completed_at": "2026-06-19T08:03:00",
+                "legs": [
+                  {
+                    "entry_price": 368000,
+                    "fill_at": "2026-06-19T09:14:00",
+                    "net_profit_pct": 0.071739,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-19T09:22:00",
+                    "target_price": 369000
+                  },
+                  {
+                    "entry_price": 367500,
+                    "fill_at": "2026-06-19T09:14:00",
+                    "net_profit_pct": 0.072109,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-19T09:20:00",
+                    "target_price": 368500
+                  }
+                ],
+                "observed_drawdown_pct": 1.347709,
+                "observed_near_low_pct": 0.136799,
+                "setup_at": "2026-06-19T09:12:00",
+                "setup_close": 366000,
+                "signal_at": "2026-06-19T09:13:00"
+              },
+              {
+                "date": "2026-06-23",
+                "entry_anchor_price": 343000,
+                "first_episode_completed_at": "2026-06-23T09:26:00",
+                "legs": [
+                  {
+                    "entry_price": 343000,
+                    "fill_at": "2026-06-23T09:39:00",
+                    "net_profit_pct": 0.091545,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-23T09:40:00",
+                    "target_price": 344000
+                  },
+                  {
+                    "entry_price": 342500,
+                    "fill_at": "2026-06-23T09:39:00",
+                    "net_profit_pct": 0.091971,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-23T09:40:00",
+                    "target_price": 343500
+                  }
+                ],
+                "observed_drawdown_pct": 1.014493,
+                "observed_near_low_pct": 0.146628,
+                "setup_at": "2026-06-23T09:37:00",
+                "setup_close": 341500,
+                "signal_at": "2026-06-23T09:38:00"
+              },
+              {
+                "date": "2026-06-25",
+                "entry_anchor_price": 355500,
+                "first_episode_completed_at": "2026-06-25T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 355500,
+                    "fill_at": "2026-06-25T09:10:00",
+                    "net_profit_pct": 0.081294,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-25T09:11:00",
+                    "target_price": 356500
+                  },
+                  {
+                    "entry_price": 355000,
+                    "fill_at": "2026-06-25T09:10:00",
+                    "net_profit_pct": 0.08169,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-25T09:11:00",
+                    "target_price": 356000
+                  }
+                ],
+                "observed_drawdown_pct": 0.907821,
+                "observed_near_low_pct": 0.211864,
+                "setup_at": "2026-06-25T09:08:00",
+                "setup_close": 354750,
+                "signal_at": "2026-06-25T09:09:00"
+              },
+              {
+                "date": "2026-06-29",
+                "entry_anchor_price": 328000,
+                "first_episode_completed_at": "2026-06-29T09:11:00",
+                "legs": [
+                  {
+                    "entry_price": 328000,
+                    "fill_at": "2026-06-29T09:18:00",
+                    "net_profit_pct": 0.104878,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-29T09:19:00",
+                    "target_price": 329000
+                  },
+                  {
+                    "entry_price": 327500,
+                    "fill_at": "2026-06-29T09:19:00",
+                    "net_profit_pct": 0.105344,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-29T14:42:00",
+                    "target_price": 328500
+                  }
+                ],
+                "observed_drawdown_pct": 0.763359,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-29T09:16:00",
+                "setup_close": 325000,
+                "signal_at": "2026-06-29T09:17:00"
+              },
+              {
+                "date": "2026-07-01",
+                "entry_anchor_price": 328500,
+                "first_episode_completed_at": "2026-07-01T09:15:00",
+                "legs": [
+                  {
+                    "entry_price": 328500,
+                    "fill_at": "2026-07-01T09:25:00",
+                    "net_profit_pct": 0.104414,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-01T09:26:00",
+                    "target_price": 329500
+                  },
+                  {
+                    "entry_price": 328000,
+                    "fill_at": "2026-07-01T09:25:00",
+                    "net_profit_pct": 0.104878,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-01T09:26:00",
+                    "target_price": 329000
+                  }
+                ],
+                "observed_drawdown_pct": 0.909091,
+                "observed_near_low_pct": 0.153139,
+                "setup_at": "2026-07-01T09:23:00",
+                "setup_close": 327000,
+                "signal_at": "2026-07-01T09:24:00"
+              },
+              {
+                "date": "2026-07-02",
+                "entry_anchor_price": 294000,
+                "first_episode_completed_at": "2026-07-02T08:05:00",
+                "legs": [
+                  {
+                    "entry_price": 294000,
+                    "fill_at": "2026-07-02T09:06:00",
+                    "net_profit_pct": 0.140136,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-02T09:07:00",
+                    "target_price": 295000
+                  },
+                  {
+                    "entry_price": 293500,
+                    "fill_at": "2026-07-02T09:06:00",
+                    "net_profit_pct": 0.140716,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-02T09:07:00",
+                    "target_price": 294500
+                  }
+                ],
+                "observed_drawdown_pct": 1.182432,
+                "observed_near_low_pct": 0.171233,
+                "setup_at": "2026-07-02T09:04:00",
+                "setup_close": 292500,
+                "signal_at": "2026-07-02T09:05:00"
+              },
+              {
+                "date": "2026-07-06",
+                "entry_anchor_price": 321000,
+                "first_episode_completed_at": "2026-07-06T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 321000,
+                    "fill_at": "2026-07-06T09:12:00",
+                    "net_profit_pct": 0.111526,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-06T09:13:00",
+                    "target_price": 322000
+                  },
+                  {
+                    "entry_price": 320500,
+                    "fill_at": "2026-07-06T09:12:00",
+                    "net_profit_pct": 0.112012,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-06T09:13:00",
+                    "target_price": 321500
+                  }
+                ],
+                "observed_drawdown_pct": 1.081917,
+                "observed_near_low_pct": 0.156495,
+                "setup_at": "2026-07-06T09:10:00",
+                "setup_close": 320000,
+                "signal_at": "2026-07-06T09:11:00"
+              },
+              {
+                "date": "2026-07-07",
+                "entry_anchor_price": 301000,
+                "first_episode_completed_at": "2026-07-07T09:05:00",
+                "legs": [
+                  {
+                    "entry_price": 301000,
+                    "fill_at": "2026-07-07T09:13:00",
+                    "net_profit_pct": 0.132226,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-07T09:19:00",
+                    "target_price": 302000
+                  },
+                  {
+                    "entry_price": 300500,
+                    "fill_at": "2026-07-07T09:13:00",
+                    "net_profit_pct": 0.132779,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-07T09:19:00",
+                    "target_price": 301500
+                  }
+                ],
+                "observed_drawdown_pct": 0.988468,
+                "observed_near_low_pct": 0.33389,
+                "setup_at": "2026-07-07T09:11:00",
+                "setup_close": 300500,
+                "signal_at": "2026-07-07T09:12:00"
+              },
+              {
+                "date": "2026-07-09",
+                "entry_anchor_price": 286000,
+                "first_episode_completed_at": "2026-07-09T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 286000,
+                    "fill_at": "2026-07-09T09:35:00",
+                    "net_profit_pct": 0.14965,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-09T09:36:00",
+                    "target_price": 287000
+                  },
+                  {
+                    "entry_price": 285500,
+                    "fill_at": "2026-07-09T09:35:00",
+                    "net_profit_pct": 0.150263,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-09T09:36:00",
+                    "target_price": 286500
+                  }
+                ],
+                "observed_drawdown_pct": 1.381693,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-09T09:33:00",
+                "setup_close": 285500,
+                "signal_at": "2026-07-09T09:34:00"
+              },
+              {
+                "date": "2026-07-10",
+                "entry_anchor_price": 284500,
+                "first_episode_completed_at": "2026-07-10T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 284500,
+                    "fill_at": "2026-07-10T09:12:00",
+                    "net_profit_pct": 0.151494,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-10T09:13:00",
+                    "target_price": 285500
+                  },
+                  {
+                    "entry_price": 284000,
+                    "fill_at": "2026-07-10T09:12:00",
+                    "net_profit_pct": 0.152113,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-10T09:13:00",
+                    "target_price": 285000
+                  }
+                ],
+                "observed_drawdown_pct": 1.04712,
+                "observed_near_low_pct": 0.353982,
+                "setup_at": "2026-07-10T09:10:00",
+                "setup_close": 283500,
+                "signal_at": "2026-07-10T09:11:00"
+              },
+              {
+                "date": "2026-07-13",
+                "entry_anchor_price": 287000,
+                "first_episode_completed_at": "2026-07-13T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 287000,
+                    "fill_at": "2026-07-13T09:10:00",
+                    "net_profit_pct": 0.148432,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-13T09:11:00",
+                    "target_price": 288000
+                  },
+                  {
+                    "entry_price": 286500,
+                    "fill_at": "2026-07-13T09:10:00",
+                    "net_profit_pct": 0.14904,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-13T09:11:00",
+                    "target_price": 287500
+                  }
+                ],
+                "observed_drawdown_pct": 1.376936,
+                "observed_near_low_pct": 0.350263,
+                "setup_at": "2026-07-13T09:08:00",
+                "setup_close": 286500,
+                "signal_at": "2026-07-13T09:09:00"
+              },
+              {
+                "date": "2026-07-14",
+                "entry_anchor_price": 253000,
+                "first_episode_completed_at": "2026-07-14T08:12:00",
+                "legs": [
+                  {
+                    "entry_price": 253000,
+                    "fill_at": "2026-07-14T09:10:00",
+                    "net_profit_pct": 0.195257,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-14T09:11:00",
+                    "target_price": 254000
+                  },
+                  {
+                    "entry_price": 252500,
+                    "fill_at": "2026-07-14T09:10:00",
+                    "net_profit_pct": 0.19604,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-14T09:11:00",
+                    "target_price": 253500
+                  }
+                ],
+                "observed_drawdown_pct": 0.793651,
+                "observed_near_low_pct": 0.401606,
+                "setup_at": "2026-07-14T09:08:00",
+                "setup_close": 250000,
+                "signal_at": "2026-07-14T09:09:00"
+              },
+              {
+                "date": "2026-07-16",
+                "entry_anchor_price": 259500,
+                "first_episode_completed_at": "2026-07-16T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 259500,
+                    "fill_at": "2026-07-16T09:22:00",
+                    "net_profit_pct": 0.185356,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-16T14:20:00",
+                    "target_price": 260500
+                  },
+                  {
+                    "entry_price": 259000,
+                    "fill_at": "2026-07-16T09:22:00",
+                    "net_profit_pct": 0.1861,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-16T09:25:00",
+                    "target_price": 260000
+                  }
+                ],
+                "observed_drawdown_pct": 0.767754,
+                "observed_near_low_pct": 0.38835,
+                "setup_at": "2026-07-16T09:20:00",
+                "setup_close": 258500,
+                "signal_at": "2026-07-16T09:21:00"
+              },
+              {
+                "date": "2026-07-21",
+                "entry_anchor_price": 249000,
+                "first_episode_completed_at": "2026-07-21T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 249000,
+                    "fill_at": "2026-07-21T09:18:00",
+                    "net_profit_pct": 0.201606,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-21T09:19:00",
+                    "target_price": 250000
+                  },
+                  {
+                    "entry_price": 248500,
+                    "fill_at": "2026-07-21T09:18:00",
+                    "net_profit_pct": 0.202414,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-21T09:19:00",
+                    "target_price": 249500
+                  }
+                ],
+                "observed_drawdown_pct": 1.197605,
+                "observed_near_low_pct": 0.40568,
+                "setup_at": "2026-07-21T09:16:00",
+                "setup_close": 247500,
+                "signal_at": "2026-07-21T09:17:00"
+              },
+              {
+                "date": "2026-07-23",
+                "entry_anchor_price": 270500,
+                "first_episode_completed_at": "2026-07-23T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 270500,
+                    "fill_at": "2026-07-23T09:26:00",
+                    "net_profit_pct": 0.169686,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-23T09:27:00",
+                    "target_price": 271500
+                  },
+                  {
+                    "entry_price": 270000,
+                    "fill_at": "2026-07-23T09:26:00",
+                    "net_profit_pct": 0.17037,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-23T09:27:00",
+                    "target_price": 271000
+                  }
+                ],
+                "observed_drawdown_pct": 0.919118,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-23T09:24:00",
+                "setup_close": 269500,
+                "signal_at": "2026-07-23T09:25:00"
+              },
+              {
+                "date": "2026-07-24",
+                "entry_anchor_price": 263500,
+                "first_episode_completed_at": "2026-07-24T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 263500,
+                    "fill_at": "2026-07-24T09:10:00",
+                    "status": "HELD",
+                    "target_at": null,
+                    "target_price": 264500
+                  },
+                  {
+                    "entry_price": 263000,
+                    "fill_at": "2026-07-24T09:10:00",
+                    "status": "HELD",
+                    "target_at": null,
+                    "target_price": 264000
+                  }
+                ],
+                "observed_drawdown_pct": 0.756144,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-24T09:08:00",
+                "setup_close": 262500,
+                "signal_at": "2026-07-24T09:09:00"
+              },
+              {
+                "date": "2026-07-27",
+                "entry_anchor_price": 253000,
+                "first_episode_completed_at": "2026-07-27T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 253000,
+                    "fill_at": "2026-07-27T09:12:00",
+                    "net_profit_pct": 0.195257,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-27T09:13:00",
+                    "target_price": 254000
+                  },
+                  {
+                    "entry_price": 252500,
+                    "fill_at": "2026-07-27T09:12:00",
+                    "net_profit_pct": 0.19604,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-27T09:13:00",
+                    "target_price": 253500
+                  }
+                ],
+                "observed_drawdown_pct": 0.788955,
+                "observed_near_low_pct": 0.199203,
+                "setup_at": "2026-07-27T09:10:00",
+                "setup_close": 251500,
+                "signal_at": "2026-07-27T09:11:00"
+              },
+              {
+                "date": "2026-07-28",
+                "entry_anchor_price": 234250,
+                "first_episode_completed_at": "2026-07-28T09:08:00",
+                "legs": [
+                  {
+                    "entry_price": 234000,
+                    "fill_at": "2026-07-28T09:16:00",
+                    "status": "HELD",
+                    "target_at": null,
+                    "target_price": 235000
+                  },
+                  {
+                    "entry_price": 233500,
+                    "fill_at": "2026-07-28T09:16:00",
+                    "status": "HELD",
+                    "target_at": null,
+                    "target_price": 234500
+                  }
+                ],
+                "observed_drawdown_pct": 0.849257,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-28T09:14:00",
+                "setup_close": 233500,
+                "signal_at": "2026-07-28T09:15:00"
+              },
+              {
+                "date": "2026-07-29",
+                "entry_anchor_price": 230500,
+                "first_episode_completed_at": "2026-07-29T08:12:00",
+                "legs": [
+                  {
+                    "entry_price": 230500,
+                    "fill_at": "2026-07-29T09:19:00",
+                    "net_profit_pct": 0.233839,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-29T09:20:00",
+                    "target_price": 231500
+                  },
+                  {
+                    "entry_price": 230000,
+                    "fill_at": "2026-07-29T09:19:00",
+                    "net_profit_pct": 0.234783,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-29T09:20:00",
+                    "target_price": 231000
+                  }
+                ],
+                "observed_drawdown_pct": 1.077586,
+                "observed_near_low_pct": 0.218341,
+                "setup_at": "2026-07-29T09:17:00",
+                "setup_close": 229500,
+                "signal_at": "2026-07-29T09:18:00"
+              },
+              {
+                "date": "2026-07-30",
+                "entry_anchor_price": 211500,
+                "first_episode_completed_at": "2026-07-30T09:08:00",
+                "legs": [
+                  {
+                    "entry_price": 211500,
+                    "fill_at": "2026-07-30T09:18:00",
+                    "net_profit_pct": 0.272813,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-30T09:19:00",
+                    "target_price": 212500
+                  },
+                  {
+                    "entry_price": 211000,
+                    "fill_at": "2026-07-30T09:18:00",
+                    "net_profit_pct": 0.273934,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-30T09:19:00",
+                    "target_price": 212000
+                  }
+                ],
+                "observed_drawdown_pct": 1.17096,
+                "observed_near_low_pct": 0.47619,
+                "setup_at": "2026-07-30T09:16:00",
+                "setup_close": 211000,
+                "signal_at": "2026-07-30T09:17:00"
+              },
+              {
+                "date": "2026-08-03",
+                "entry_anchor_price": 243500,
+                "first_episode_completed_at": "2026-08-03T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 243500,
+                    "fill_at": "2026-08-03T09:14:00",
+                    "net_profit_pct": 0.210678,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-03T09:15:00",
+                    "target_price": 244500
+                  },
+                  {
+                    "entry_price": 243000,
+                    "fill_at": "2026-08-03T09:14:00",
+                    "net_profit_pct": 0.211523,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-03T09:15:00",
+                    "target_price": 244000
+                  }
+                ],
+                "observed_drawdown_pct": 1.022495,
+                "observed_near_low_pct": 0.207039,
+                "setup_at": "2026-08-03T09:12:00",
+                "setup_close": 242000,
+                "signal_at": "2026-08-03T09:13:00"
+              },
+              {
+                "date": "2026-08-04",
+                "entry_anchor_price": 242000,
+                "first_episode_completed_at": "2026-08-04T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 242000,
+                    "fill_at": "2026-08-04T09:08:00",
+                    "net_profit_pct": 0.213223,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-04T09:09:00",
+                    "target_price": 243000
+                  },
+                  {
+                    "entry_price": 241500,
+                    "fill_at": "2026-08-04T09:08:00",
+                    "net_profit_pct": 0.214079,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-04T09:09:00",
+                    "target_price": 242500
+                  }
+                ],
+                "observed_drawdown_pct": 1.431493,
+                "observed_near_low_pct": 0.2079,
+                "setup_at": "2026-08-04T09:06:00",
+                "setup_close": 241000,
+                "signal_at": "2026-08-04T09:07:00"
+              },
+              {
+                "date": "2026-08-05",
+                "entry_anchor_price": 250000,
+                "first_episode_completed_at": "2026-08-05T09:01:00",
+                "legs": [
+                  {
+                    "entry_price": 250000,
+                    "fill_at": "2026-08-05T09:19:00",
+                    "net_profit_pct": 0.2,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-05T09:24:00",
+                    "target_price": 251000
+                  },
+                  {
+                    "entry_price": 249500,
+                    "fill_at": "2026-08-05T09:19:00",
+                    "net_profit_pct": 0.200802,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-05T09:24:00",
+                    "target_price": 250500
+                  }
+                ],
+                "observed_drawdown_pct": 0.795229,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-08-05T09:17:00",
+                "setup_close": 249500,
+                "signal_at": "2026-08-05T09:18:00"
+              },
+              {
+                "date": "2026-08-06",
+                "entry_anchor_price": 242000,
+                "first_episode_completed_at": "2026-08-06T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 242000,
+                    "fill_at": "2026-08-06T09:12:00",
+                    "net_profit_pct": 0.213223,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-06T09:13:00",
+                    "target_price": 243000
+                  },
+                  {
+                    "entry_price": 241500,
+                    "fill_at": "2026-08-06T09:13:00",
+                    "net_profit_pct": 0.214079,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-06T09:14:00",
+                    "target_price": 242500
+                  }
+                ],
+                "observed_drawdown_pct": 1.226994,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-08-06T09:10:00",
+                "setup_close": 241500,
+                "signal_at": "2026-08-06T09:11:00"
+              }
+            ],
+            "held_legs": 4,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.136865,
+            "signal_episodes": 30
+          },
+          "holdout": {
+            "attempted_legs": 24,
+            "completed_legs": 20,
+            "held_legs": 4,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.173184,
+            "signal_episodes": 12
+          },
+          "parameters": {
+            "confirmation_bars": 1,
+            "confirmation_low_hold_required": true,
+            "entry_anchor": "confirmation_close",
+            "entry_offset_ticks": 0,
+            "entry_valid_completed_bars": 3,
+            "family": "low_hold_reclaim_close_split",
+            "lookback_bars": 3,
+            "reclaim_ticks": 1,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.5,
+            "scan_end": "10:00"
+          },
+          "robust_calibration_score": 0.076491
+        },
+        "decision": "holdout_failed_do_not_change_live_machine"
+      },
+      "low_hold_reclaim_passive_split": {
+        "calibration_ready_candidate_count": 4401,
+        "candidate": {
+          "calibration": {
+            "attempted_legs": 34,
+            "completed_legs": 32,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.11355,
+            "signal_episodes": 17
+          },
+          "calibration_first_half": {
+            "attempted_legs": 14,
+            "completed_legs": 14,
+            "held_legs": 0,
+            "no_fill_legs": 0,
+            "notional_weighted_ev_pct": 0.108472,
+            "signal_episodes": 7
+          },
+          "calibration_second_half": {
+            "attempted_legs": 20,
+            "completed_legs": 18,
+            "held_legs": 0,
+            "no_fill_legs": 2,
+            "notional_weighted_ev_pct": 0.117347,
+            "signal_episodes": 10
+          },
+          "full": {
+            "attempted_legs": 58,
+            "completed_legs": 51,
+            "episodes": [
+              {
+                "date": "2026-06-05",
+                "entry_anchor_price": 328000,
+                "first_episode_completed_at": "2026-06-05T09:09:00",
+                "legs": [
+                  {
+                    "entry_price": 327500,
+                    "fill_at": "2026-06-05T09:28:00",
+                    "net_profit_pct": 0.105344,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-05T09:29:00",
+                    "target_price": 328500
+                  },
+                  {
+                    "entry_price": 327000,
+                    "fill_at": "2026-06-05T09:28:00",
+                    "net_profit_pct": 0.10581,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-05T09:29:00",
+                    "target_price": 328000
+                  }
+                ],
+                "observed_drawdown_pct": 0.762195,
+                "observed_near_low_pct": 0.153846,
+                "setup_at": "2026-06-05T09:25:00",
+                "setup_close": 325500,
+                "signal_at": "2026-06-05T09:27:00"
+              },
+              {
+                "date": "2026-06-09",
+                "entry_anchor_price": 306000,
+                "first_episode_completed_at": "2026-06-09T09:06:00",
+                "legs": [
+                  {
+                    "entry_price": 305500,
+                    "fill_at": "2026-06-09T09:25:00",
+                    "net_profit_pct": 0.127332,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-09T09:26:00",
+                    "target_price": 306500
+                  },
+                  {
+                    "entry_price": 305000,
+                    "fill_at": "2026-06-09T09:25:00",
+                    "net_profit_pct": 0.127869,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-09T09:26:00",
+                    "target_price": 306000
+                  }
+                ],
+                "observed_drawdown_pct": 0.811688,
+                "observed_near_low_pct": 0.163934,
+                "setup_at": "2026-06-09T09:23:00",
+                "setup_close": 305500,
+                "signal_at": "2026-06-09T09:24:00"
+              },
+              {
+                "date": "2026-06-10",
+                "entry_anchor_price": 311500,
+                "first_episode_completed_at": "2026-06-10T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 311000,
+                    "fill_at": "2026-06-10T09:23:00",
+                    "net_profit_pct": 0.121543,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-10T09:24:00",
+                    "target_price": 312000
+                  },
+                  {
+                    "entry_price": 310500,
+                    "fill_at": "2026-06-10T09:25:00",
+                    "net_profit_pct": 0.122061,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-10T09:27:00",
+                    "target_price": 311500
+                  }
+                ],
+                "observed_drawdown_pct": 0.642055,
+                "observed_near_low_pct": 0.161812,
+                "setup_at": "2026-06-10T09:20:00",
+                "setup_close": 309500,
+                "signal_at": "2026-06-10T09:22:00"
+              },
+              {
+                "date": "2026-06-11",
+                "entry_anchor_price": 292500,
+                "first_episode_completed_at": "2026-06-11T08:04:00",
+                "legs": [
+                  {
+                    "entry_price": 292000,
+                    "fill_at": "2026-06-11T09:39:00",
+                    "net_profit_pct": 0.142466,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-11T09:42:00",
+                    "target_price": 293000
+                  },
+                  {
+                    "entry_price": 291500,
+                    "fill_at": "2026-06-11T09:39:00",
+                    "net_profit_pct": 0.143053,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-11T09:42:00",
+                    "target_price": 292500
+                  }
+                ],
+                "observed_drawdown_pct": 1.186441,
+                "observed_near_low_pct": 0.171821,
+                "setup_at": "2026-06-11T09:36:00",
+                "setup_close": 291500,
+                "signal_at": "2026-06-11T09:38:00"
+              },
+              {
+                "date": "2026-06-16",
+                "entry_anchor_price": 339000,
+                "first_episode_completed_at": "2026-06-16T09:24:00",
+                "legs": [
+                  {
+                    "entry_price": 338500,
+                    "fill_at": "2026-06-16T09:42:00",
+                    "net_profit_pct": 0.095421,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-16T11:08:00",
+                    "target_price": 339500
+                  },
+                  {
+                    "entry_price": 338000,
+                    "fill_at": "2026-06-16T09:43:00",
+                    "net_profit_pct": 0.095858,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-16T10:41:00",
+                    "target_price": 339000
+                  }
+                ],
+                "observed_drawdown_pct": 0.663228,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-06-16T09:39:00",
+                "setup_close": 337000,
+                "signal_at": "2026-06-16T09:41:00"
+              },
+              {
+                "date": "2026-06-23",
+                "entry_anchor_price": 343000,
+                "first_episode_completed_at": "2026-06-23T09:26:00",
+                "legs": [
+                  {
+                    "entry_price": 342500,
+                    "fill_at": "2026-06-23T09:59:00",
+                    "net_profit_pct": 0.091971,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-23T10:00:00",
+                    "target_price": 343500
+                  },
+                  {
+                    "entry_price": 342000,
+                    "fill_at": "2026-06-23T09:59:00",
+                    "net_profit_pct": 0.092398,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-23T10:00:00",
+                    "target_price": 343000
+                  }
+                ],
+                "observed_drawdown_pct": 1.440922,
+                "observed_near_low_pct": 0.293255,
+                "setup_at": "2026-06-23T09:56:00",
+                "setup_close": 342000,
+                "signal_at": "2026-06-23T09:58:00"
+              },
+              {
+                "date": "2026-06-25",
+                "entry_anchor_price": 354500,
+                "first_episode_completed_at": "2026-06-25T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 354000,
+                    "fill_at": "2026-06-25T09:50:00",
+                    "net_profit_pct": 0.082486,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-25T09:51:00",
+                    "target_price": 355000
+                  },
+                  {
+                    "entry_price": 353500,
+                    "fill_at": "2026-06-25T09:50:00",
+                    "net_profit_pct": 0.082885,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-25T09:51:00",
+                    "target_price": 354500
+                  }
+                ],
+                "observed_drawdown_pct": 1.603905,
+                "observed_near_low_pct": 0.213068,
+                "setup_at": "2026-06-25T09:47:00",
+                "setup_close": 352750,
+                "signal_at": "2026-06-25T09:49:00"
+              },
+              {
+                "date": "2026-06-26",
+                "entry_anchor_price": 343500,
+                "first_episode_completed_at": "2026-06-26T09:17:00",
+                "legs": [
+                  {
+                    "entry_price": 343000,
+                    "fill_at": "2026-06-26T09:36:00",
+                    "net_profit_pct": 0.091545,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-26T09:37:00",
+                    "target_price": 344000
+                  },
+                  {
+                    "entry_price": 342500,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 1.010101,
+                "observed_near_low_pct": 0.292398,
+                "setup_at": "2026-06-26T09:33:00",
+                "setup_close": 343000,
+                "signal_at": "2026-06-26T09:35:00"
+              },
+              {
+                "date": "2026-06-29",
+                "entry_anchor_price": 321500,
+                "first_episode_completed_at": "2026-06-29T09:11:00",
+                "legs": [
+                  {
+                    "entry_price": 321000,
+                    "fill_at": "2026-06-29T09:34:00",
+                    "net_profit_pct": 0.111526,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-29T09:36:00",
+                    "target_price": 322000
+                  },
+                  {
+                    "entry_price": 320500,
+                    "fill_at": "2026-06-29T09:34:00",
+                    "net_profit_pct": 0.112012,
+                    "status": "COMPLETE",
+                    "target_at": "2026-06-29T09:36:00",
+                    "target_price": 321500
+                  }
+                ],
+                "observed_drawdown_pct": 1.457055,
+                "observed_near_low_pct": 0.234009,
+                "setup_at": "2026-06-29T09:31:00",
+                "setup_close": 321250,
+                "signal_at": "2026-06-29T09:33:00"
+              },
+              {
+                "date": "2026-07-01",
+                "entry_anchor_price": 327500,
+                "first_episode_completed_at": "2026-07-01T09:15:00",
+                "legs": [
+                  {
+                    "entry_price": 327000,
+                    "fill_at": "2026-07-01T09:47:00",
+                    "net_profit_pct": 0.10581,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-01T09:51:00",
+                    "target_price": 328000
+                  },
+                  {
+                    "entry_price": 326500,
+                    "fill_at": "2026-07-01T09:48:00",
+                    "net_profit_pct": 0.106279,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-01T09:51:00",
+                    "target_price": 327500
+                  }
+                ],
+                "observed_drawdown_pct": 0.758725,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-01T09:44:00",
+                "setup_close": 327000,
+                "signal_at": "2026-07-01T09:46:00"
+              },
+              {
+                "date": "2026-07-02",
+                "entry_anchor_price": 290000,
+                "first_episode_completed_at": "2026-07-02T08:05:00",
+                "legs": [
+                  {
+                    "entry_price": 289500,
+                    "fill_at": "2026-07-02T09:20:00",
+                    "net_profit_pct": 0.145423,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-02T09:21:00",
+                    "target_price": 290500
+                  },
+                  {
+                    "entry_price": 289000,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 0.857633,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-02T09:17:00",
+                "setup_close": 289000,
+                "signal_at": "2026-07-02T09:19:00"
+              },
+              {
+                "date": "2026-07-06",
+                "entry_anchor_price": 320500,
+                "first_episode_completed_at": "2026-07-06T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 320000,
+                    "fill_at": "2026-07-06T09:57:00",
+                    "net_profit_pct": 0.1125,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-06T10:01:00",
+                    "target_price": 321000
+                  },
+                  {
+                    "entry_price": 319500,
+                    "fill_at": "2026-07-06T09:58:00",
+                    "net_profit_pct": 0.112989,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-06T09:59:00",
+                    "target_price": 320500
+                  }
+                ],
+                "observed_drawdown_pct": 0.928793,
+                "observed_near_low_pct": 0.156495,
+                "setup_at": "2026-07-06T09:55:00",
+                "setup_close": 320000,
+                "signal_at": "2026-07-06T09:56:00"
+              },
+              {
+                "date": "2026-07-07",
+                "entry_anchor_price": 298000,
+                "first_episode_completed_at": "2026-07-07T09:05:00",
+                "legs": [
+                  {
+                    "entry_price": 297500,
+                    "fill_at": "2026-07-07T09:44:00",
+                    "net_profit_pct": 0.136134,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-07T09:45:00",
+                    "target_price": 298500
+                  },
+                  {
+                    "entry_price": 297000,
+                    "fill_at": "2026-07-07T09:44:00",
+                    "net_profit_pct": 0.1367,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-07T09:45:00",
+                    "target_price": 298000
+                  }
+                ],
+                "observed_drawdown_pct": 1.655629,
+                "observed_near_low_pct": 0.168634,
+                "setup_at": "2026-07-07T09:41:00",
+                "setup_close": 297000,
+                "signal_at": "2026-07-07T09:43:00"
+              },
+              {
+                "date": "2026-07-08",
+                "entry_anchor_price": 292000,
+                "first_episode_completed_at": "2026-07-08T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 291500,
+                    "fill_at": "2026-07-08T09:38:00",
+                    "net_profit_pct": 0.143053,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-08T09:39:00",
+                    "target_price": 292500
+                  },
+                  {
+                    "entry_price": 291000,
+                    "fill_at": "2026-07-08T09:38:00",
+                    "net_profit_pct": 0.143643,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-08T09:39:00",
+                    "target_price": 292000
+                  }
+                ],
+                "observed_drawdown_pct": 0.687285,
+                "observed_near_low_pct": 0.17331,
+                "setup_at": "2026-07-08T09:35:00",
+                "setup_close": 289000,
+                "signal_at": "2026-07-08T09:37:00"
+              },
+              {
+                "date": "2026-07-09",
+                "entry_anchor_price": 289000,
+                "first_episode_completed_at": "2026-07-09T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 288500,
+                    "fill_at": "2026-07-09T09:30:00",
+                    "net_profit_pct": 0.14662,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-09T09:31:00",
+                    "target_price": 289500
+                  },
+                  {
+                    "entry_price": 288000,
+                    "fill_at": "2026-07-09T09:31:00",
+                    "net_profit_pct": 0.147222,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-09T09:46:00",
+                    "target_price": 289000
+                  }
+                ],
+                "observed_drawdown_pct": 0.692042,
+                "observed_near_low_pct": 0.17452,
+                "setup_at": "2026-07-09T09:27:00",
+                "setup_close": 287000,
+                "signal_at": "2026-07-09T09:29:00"
+              },
+              {
+                "date": "2026-07-10",
+                "entry_anchor_price": 283500,
+                "first_episode_completed_at": "2026-07-10T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 283000,
+                    "fill_at": "2026-07-10T09:27:00",
+                    "net_profit_pct": 0.153357,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-10T09:29:00",
+                    "target_price": 284000
+                  },
+                  {
+                    "entry_price": 282500,
+                    "fill_at": "2026-07-10T09:27:00",
+                    "net_profit_pct": 0.153982,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-10T09:28:00",
+                    "target_price": 283500
+                  }
+                ],
+                "observed_drawdown_pct": 1.225919,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-10T09:24:00",
+                "setup_close": 282000,
+                "signal_at": "2026-07-10T09:26:00"
+              },
+              {
+                "date": "2026-07-13",
+                "entry_anchor_price": 277000,
+                "first_episode_completed_at": "2026-07-13T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 276500,
+                    "fill_at": "2026-07-13T09:56:00",
+                    "net_profit_pct": 0.161664,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-13T10:02:00",
+                    "target_price": 277500
+                  },
+                  {
+                    "entry_price": 276000,
+                    "fill_at": "2026-07-13T09:56:00",
+                    "net_profit_pct": 0.162319,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-13T10:01:00",
+                    "target_price": 277000
+                  }
+                ],
+                "observed_drawdown_pct": 1.426025,
+                "observed_near_low_pct": 0.181159,
+                "setup_at": "2026-07-13T09:53:00",
+                "setup_close": 276500,
+                "signal_at": "2026-07-13T09:55:00"
+              },
+              {
+                "date": "2026-07-16",
+                "entry_anchor_price": 257000,
+                "first_episode_completed_at": "2026-07-16T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 256500,
+                    "fill_at": "2026-07-16T09:50:00",
+                    "net_profit_pct": 0.189864,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-16T09:52:00",
+                    "target_price": 257500
+                  },
+                  {
+                    "entry_price": 256000,
+                    "fill_at": "2026-07-16T09:50:00",
+                    "net_profit_pct": 0.190625,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-16T09:51:00",
+                    "target_price": 257000
+                  }
+                ],
+                "observed_drawdown_pct": 1.156069,
+                "observed_near_low_pct": 0.195312,
+                "setup_at": "2026-07-16T09:47:00",
+                "setup_close": 256500,
+                "signal_at": "2026-07-16T09:49:00"
+              },
+              {
+                "date": "2026-07-23",
+                "entry_anchor_price": 270500,
+                "first_episode_completed_at": "2026-07-23T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 270000,
+                    "fill_at": "2026-07-23T09:27:00",
+                    "net_profit_pct": 0.17037,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-23T09:28:00",
+                    "target_price": 271000
+                  },
+                  {
+                    "entry_price": 269500,
+                    "fill_at": "2026-07-23T09:28:00",
+                    "net_profit_pct": 0.171058,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-23T09:45:00",
+                    "target_price": 270500
+                  }
+                ],
+                "observed_drawdown_pct": 1.282051,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-23T09:24:00",
+                "setup_close": 269500,
+                "signal_at": "2026-07-23T09:26:00"
+              },
+              {
+                "date": "2026-07-24",
+                "entry_anchor_price": 261000,
+                "first_episode_completed_at": "2026-07-24T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 260500,
+                    "fill_at": "2026-07-24T09:22:00",
+                    "net_profit_pct": 0.183877,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-24T09:23:00",
+                    "target_price": 261500
+                  },
+                  {
+                    "entry_price": 260000,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 1.886792,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-24T09:19:00",
+                "setup_close": 260000,
+                "signal_at": "2026-07-24T09:21:00"
+              },
+              {
+                "date": "2026-07-27",
+                "entry_anchor_price": 253000,
+                "first_episode_completed_at": "2026-07-27T09:04:00",
+                "legs": [
+                  {
+                    "entry_price": 252500,
+                    "fill_at": "2026-07-27T09:22:00",
+                    "net_profit_pct": 0.19604,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-27T09:23:00",
+                    "target_price": 253500
+                  },
+                  {
+                    "entry_price": 252000,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 1.956947,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-27T09:19:00",
+                "setup_close": 250500,
+                "signal_at": "2026-07-27T09:21:00"
+              },
+              {
+                "date": "2026-07-28",
+                "entry_anchor_price": 231000,
+                "first_episode_completed_at": "2026-07-28T09:08:00",
+                "legs": [
+                  {
+                    "entry_price": 230500,
+                    "fill_at": "2026-07-28T09:26:00",
+                    "net_profit_pct": 0.233839,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-28T09:28:00",
+                    "target_price": 231500
+                  },
+                  {
+                    "entry_price": 230000,
+                    "fill_at": "2026-07-28T09:27:00",
+                    "net_profit_pct": 0.234783,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-28T09:28:00",
+                    "target_price": 231000
+                  }
+                ],
+                "observed_drawdown_pct": 2.742616,
+                "observed_near_low_pct": 0.0,
+                "setup_at": "2026-07-28T09:23:00",
+                "setup_close": 230500,
+                "signal_at": "2026-07-28T09:25:00"
+              },
+              {
+                "date": "2026-07-29",
+                "entry_anchor_price": 229750,
+                "first_episode_completed_at": "2026-07-29T08:12:00",
+                "legs": [
+                  {
+                    "entry_price": 229000,
+                    "fill_at": "2026-07-29T09:28:00",
+                    "net_profit_pct": 0.236681,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-29T09:29:00",
+                    "target_price": 230000
+                  },
+                  {
+                    "entry_price": 228500,
+                    "fill_at": "2026-07-29T09:28:00",
+                    "net_profit_pct": 0.237637,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-29T09:29:00",
+                    "target_price": 229500
+                  }
+                ],
+                "observed_drawdown_pct": 2.564103,
+                "observed_near_low_pct": 0.21978,
+                "setup_at": "2026-07-29T09:25:00",
+                "setup_close": 228000,
+                "signal_at": "2026-07-29T09:27:00"
+              },
+              {
+                "date": "2026-07-30",
+                "entry_anchor_price": 208000,
+                "first_episode_completed_at": "2026-07-30T09:08:00",
+                "legs": [
+                  {
+                    "entry_price": 207500,
+                    "fill_at": "2026-07-30T09:37:00",
+                    "net_profit_pct": 0.281928,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-30T09:53:00",
+                    "target_price": 208500
+                  },
+                  {
+                    "entry_price": 207000,
+                    "fill_at": "2026-07-30T09:37:00",
+                    "net_profit_pct": 0.283092,
+                    "status": "COMPLETE",
+                    "target_at": "2026-07-30T09:51:00",
+                    "target_price": 208000
+                  }
+                ],
+                "observed_drawdown_pct": 2.823529,
+                "observed_near_low_pct": 0.242718,
+                "setup_at": "2026-07-30T09:34:00",
+                "setup_close": 206500,
+                "signal_at": "2026-07-30T09:36:00"
+              },
+              {
+                "date": "2026-08-03",
+                "entry_anchor_price": 240750,
+                "first_episode_completed_at": "2026-08-03T08:01:00",
+                "legs": [
+                  {
+                    "entry_price": 240000,
+                    "fill_at": "2026-08-03T09:31:00",
+                    "net_profit_pct": 0.216667,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-03T09:32:00",
+                    "target_price": 241000
+                  },
+                  {
+                    "entry_price": 239500,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 2.642276,
+                "observed_near_low_pct": 0.209205,
+                "setup_at": "2026-08-03T09:28:00",
+                "setup_close": 239500,
+                "signal_at": "2026-08-03T09:30:00"
+              },
+              {
+                "date": "2026-08-04",
+                "entry_anchor_price": 232500,
+                "first_episode_completed_at": "2026-08-04T09:03:00",
+                "legs": [
+                  {
+                    "entry_price": 232000,
+                    "fill_at": "2026-08-04T09:39:00",
+                    "net_profit_pct": 0.231034,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-04T09:40:00",
+                    "target_price": 233000
+                  },
+                  {
+                    "entry_price": 231500,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 3.534304,
+                "observed_near_low_pct": 0.215983,
+                "setup_at": "2026-08-04T09:35:00",
+                "setup_close": 232000,
+                "signal_at": "2026-08-04T09:37:00"
+              },
+              {
+                "date": "2026-08-05",
+                "entry_anchor_price": 249500,
+                "first_episode_completed_at": "2026-08-05T09:01:00",
+                "legs": [
+                  {
+                    "entry_price": 249000,
+                    "fill_at": "2026-08-05T09:23:00",
+                    "net_profit_pct": 0.201606,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-05T09:24:00",
+                    "target_price": 250000
+                  },
+                  {
+                    "entry_price": 248500,
+                    "status": "NO_FILL"
+                  }
+                ],
+                "observed_drawdown_pct": 1.485149,
+                "observed_near_low_pct": 0.100604,
+                "setup_at": "2026-08-05T09:20:00",
+                "setup_close": 248750,
+                "signal_at": "2026-08-05T09:22:00"
+              },
+              {
+                "date": "2026-08-06",
+                "entry_anchor_price": 241750,
+                "first_episode_completed_at": "2026-08-06T09:02:00",
+                "legs": [
+                  {
+                    "entry_price": 241000,
+                    "fill_at": "2026-08-06T09:21:00",
+                    "net_profit_pct": 0.214938,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-06T09:23:00",
+                    "target_price": 242000
+                  },
+                  {
+                    "entry_price": 240500,
+                    "fill_at": "2026-08-06T09:21:00",
+                    "net_profit_pct": 0.2158,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-06T09:22:00",
+                    "target_price": 241500
+                  }
+                ],
+                "observed_drawdown_pct": 2.235772,
+                "observed_near_low_pct": 0.208333,
+                "setup_at": "2026-08-06T09:18:00",
+                "setup_close": 240500,
+                "signal_at": "2026-08-06T09:20:00"
+              },
+              {
+                "date": "2026-08-10",
+                "entry_anchor_price": 234500,
+                "first_episode_completed_at": "2026-08-10T09:06:00",
+                "legs": [
+                  {
+                    "entry_price": 234000,
+                    "fill_at": "2026-08-10T09:24:00",
+                    "net_profit_pct": 0.22735,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-10T09:27:00",
+                    "target_price": 235000
+                  },
+                  {
+                    "entry_price": 233500,
+                    "fill_at": "2026-08-10T09:24:00",
+                    "net_profit_pct": 0.228266,
+                    "status": "COMPLETE",
+                    "target_at": "2026-08-10T09:27:00",
+                    "target_price": 234500
+                  }
+                ],
+                "observed_drawdown_pct": 1.781971,
+                "observed_near_low_pct": 0.106838,
+                "setup_at": "2026-08-10T09:21:00",
+                "setup_close": 234250,
+                "signal_at": "2026-08-10T09:23:00"
+              }
+            ],
+            "held_legs": 0,
+            "no_fill_legs": 7,
+            "notional_weighted_ev_pct": 0.133543,
+            "signal_episodes": 29
+          },
+          "holdout": {
+            "attempted_legs": 24,
+            "completed_legs": 19,
+            "held_legs": 0,
+            "no_fill_legs": 5,
+            "notional_weighted_ev_pct": 0.170116,
+            "signal_episodes": 12
+          },
+          "parameters": {
+            "confirmation_bars": 2,
+            "confirmation_low_hold_required": true,
+            "entry_anchor": "confirmation_close",
+            "entry_offset_ticks": -1,
+            "entry_valid_completed_bars": 3,
+            "family": "low_hold_reclaim_passive_split",
+            "lookback_bars": 15,
+            "reclaim_ticks": 1,
+            "rolling_high_drawdown_pct": 0.75,
+            "rolling_low_proximity_pct": 0.35,
+            "scan_end": "10:00"
+          },
+          "robust_calibration_score": 0.07593
+        },
+        "decision": "holdout_pass_source_only_reentry_candidate"
+      }
+    },
+    "grid_candidate_count": 31920,
+    "holdout_reuse_warning": "holdout_is_not_single-family-untouched_after_sequential_family_iteration",
+    "recommended_action": "separate_user_review_required_before_live_implementation"
+  },
+  "source": {
+    "coverage": {
+      "excluded_dates_by_venue": {
+        "KRX": [],
+        "NXT": []
+      },
+      "policy": {
+        "minimum_completed_bars_by_venue_session": {
+          "KRX": {
+            "KRX_REGULAR": 300
+          },
+          "NXT": {
+            "NXT_AFTERMARKET": 180,
+            "NXT_PREMARKET": 30,
+            "NXT_REGULAR": 300
+          }
+        },
+        "missing_bars_are_never_imputed": true
+      },
+      "qualified_dates_by_venue": {
+        "KRX": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10"
+        ],
+        "NXT": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10"
+        ]
+      }
+    },
+    "manifest": {
+      "actual_order_submitted": false,
+      "bar_count": 48796,
+      "broker_order_forbidden": true,
+      "data_sha256": "b32fccdacac84d32d2644e21054303ef19bbff627a92dc000b2d3dfa3f0968c5",
+      "end_date": "2026-08-10",
+      "metric_contract": {
+        "decision_authority": "offline_pure_market_data_backfill_only",
+        "forbidden_uses": [
+          "real_order_submission",
+          "account_or_quantity_call",
+          "token_issue_refresh_invalidation_or_replacement",
+          "trading_runtime_threshold_or_policy_apply",
+          "provider_or_bot_change",
+          "historical_bbo_or_signed_tape_imputation"
+        ],
+        "metric_role": "source_quality_and_market_data_backfill",
+        "primary_decision_metric": "source_coverage_pct",
+        "sample_floor": "requested_start_date_reached_per_requested_venue",
+        "source_quality_gate": "official_ka10080_or_ka20005_success_unique_timestamp_valid_ohlcv_and_target_date_reached",
+        "window_policy": "explicit_date_range_by_venue_with_continuation"
+      },
+      "official_reference": {
+        "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+        "inspected_paths": [
+          "kiwoom_docs/차트.md",
+          "kiwoom/_data/kiwoom_api_spec.json",
+          "kiwoom/specs.py",
+          "kiwoom/core/client.py",
+          "postman/kiwoom-openapi.postman_collection.json"
+        ],
+        "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+        "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+        "retrieved_at_kst": "2026-08-11T10:10:15+09:00"
+      },
+      "runtime_effect": false,
+      "schema": "pure_market_minute_backfill_manifest_v1",
+      "source_quality_status": "PASS",
+      "start_date": "2026-06-05",
+      "symbol": "005930",
+      "token_mutation_forbidden": true,
+      "venue_meta": [
+        {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 17269,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 96,
+          "page_count": 20,
+          "request_code": "005930",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "KRX"
+        },
+        {
+          "api_base_url": "https://api.kiwoom.com/api/dostk/chart",
+          "api_environment": "production",
+          "bar_count": 31527,
+          "continuation_exhausted": false,
+          "duplicate_row_count": 0,
+          "invalid_row_count": 0,
+          "latest_source_date": "20260810",
+          "oldest_source_date": "20260605",
+          "out_of_session_row_count": 47,
+          "page_count": 36,
+          "request_code": "005930_NX",
+          "source_quality_status": "PASS",
+          "start_date_fully_bracketed": true,
+          "target_start_date_reached": true,
+          "trading_date_count": 46,
+          "venue": "NXT"
+        }
+      ]
+    },
+    "quality": {
+      "ai_fields_consumed": false,
+      "bar_count": 48796,
+      "clean_tuning_baseline_date": "2026-06-05",
+      "conflict_count": 0,
+      "conflict_counts_by_venue": {
+        "KRX": 0,
+        "NXT": 0
+      },
+      "date_counts": {
+        "2026-06-05": 1070,
+        "2026-06-08": 1007,
+        "2026-06-09": 1070,
+        "2026-06-10": 1070,
+        "2026-06-11": 1070,
+        "2026-06-12": 1069,
+        "2026-06-15": 1070,
+        "2026-06-16": 1070,
+        "2026-06-17": 1070,
+        "2026-06-18": 1070,
+        "2026-06-19": 1069,
+        "2026-06-22": 1070,
+        "2026-06-23": 1011,
+        "2026-06-24": 1070,
+        "2026-06-25": 1070,
+        "2026-06-26": 1012,
+        "2026-06-29": 1070,
+        "2026-06-30": 1070,
+        "2026-07-01": 1070,
+        "2026-07-02": 1070,
+        "2026-07-03": 1070,
+        "2026-07-06": 1070,
+        "2026-07-07": 1009,
+        "2026-07-08": 1070,
+        "2026-07-09": 1070,
+        "2026-07-10": 1070,
+        "2026-07-13": 1012,
+        "2026-07-14": 1070,
+        "2026-07-15": 1070,
+        "2026-07-16": 1070,
+        "2026-07-20": 1070,
+        "2026-07-21": 1070,
+        "2026-07-22": 1070,
+        "2026-07-23": 1070,
+        "2026-07-24": 1070,
+        "2026-07-27": 1070,
+        "2026-07-28": 1011,
+        "2026-07-29": 1011,
+        "2026-07-30": 1070,
+        "2026-07-31": 1066,
+        "2026-08-03": 1070,
+        "2026-08-04": 1070,
+        "2026-08-05": 1070,
+        "2026-08-06": 1069,
+        "2026-08-07": 1070,
+        "2026-08-10": 1070
+      },
+      "effective_start_date": "2026-06-05",
+      "future_fields_consumed_for_decision": false,
+      "input_files": [
+        {
+          "kind": "pure_market_backfill",
+          "path": "/home/ubuntu/KORStockScan/data/market_data/pure_market_reversal/samsung_1m_krx-nxt_2026-06-05_2026-08-10.jsonl",
+          "sha256": "b32fccdacac84d32d2644e21054303ef19bbff627a92dc000b2d3dfa3f0968c5"
+        }
+      ],
+      "issue_count": 0,
+      "issues_sample": [],
+      "policy_fields_consumed": false,
+      "pre_baseline_rows_excluded": 0,
+      "requested_start_date": "2026-06-05",
+      "signal_fields_consumed": false,
+      "source_counts": {
+        "ka10080_backfill": 48796
+      },
+      "status": "PASS",
+      "trading_date_count": 46,
+      "venue_counts": {
+        "KRX": 17269,
+        "NXT": 31527
+      },
+      "venue_status": {
+        "KRX": "PASS",
+        "NXT": "PASS"
+      }
+    }
+  },
+  "start_date": "2026-06-05"
+}

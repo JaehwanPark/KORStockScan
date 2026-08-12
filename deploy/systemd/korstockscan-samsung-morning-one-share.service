@@ -1,5 +1,5 @@
 [Unit]
-Description=KORStockScan Samsung Morning One-Share Live Machine
+Description=KORStockScan Samsung Morning Two-Episode Live Machine
 After=network-online.target korstockscan-samsung-one-share-preflight.service
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -12,7 +12,7 @@ Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
 Environment="KORSTOCKSCAN_SAMSUNG_MORNING_ONE_SHARE_ENABLED=true"
-ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.samsung_morning_one_share.service --live --confirm 005930_MORNING_TWO_LEG_LIVE --interval-sec 2
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.samsung_morning_one_share.service --live --confirm 005930_MORNING_TWO_EPISODE_LIVE --interval-sec 2
 Restart=on-failure
 RestartSec=5
 UMask=0077

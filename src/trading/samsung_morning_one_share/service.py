@@ -17,6 +17,11 @@ from src.trading.samsung_morning_one_share.machine import (
     SamsungMorningOneShareMachine,
 )
 from src.trading.samsung_morning_one_share.policy import DEFAULT_POLICY
+from src.trading.samsung_morning_one_share.reentry import (
+    DEFAULT_REENTRY_STATE_PATH,
+    SamsungMorningSORReentryMachine,
+    runtime_ledgers_allow_service_start,
+)
 from src.trading.order.samsung_entry_policy import load_applied_machine_policy
 from src.trading.samsung_morning_one_share.preflight import (
     DEFAULT_AUTHORITY_PATH,
@@ -24,7 +29,7 @@ from src.trading.samsung_morning_one_share.preflight import (
 )
 
 ENABLE_ENV = "KORSTOCKSCAN_SAMSUNG_MORNING_ONE_SHARE_ENABLED"
-LIVE_CONFIRMATION = "005930_MORNING_TWO_LEG_LIVE"
+LIVE_CONFIRMATION = "005930_MORNING_TWO_EPISODE_LIVE"
 
 
 def _env_enabled() -> bool:
@@ -83,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
         if not authority_ok:
             print(f"live authority artifact blocked: {authority_reason}")
             return 4
+        rollover_ok, rollover_reason = runtime_ledgers_allow_service_start(
+            target_date=datetime.now(tz=KST).date()
+        )
+        if not rollover_ok:
+            print(f"live prior reentry state blocked: {rollover_reason}")
+            return 6
     policy = DEFAULT_POLICY
     if live_enabled:
         target_date = datetime.now(tz=KST).date()
@@ -127,8 +138,19 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(machine.run_once(), ensure_ascii=False, indent=2))
         return 0
     if live_enabled:
-        terminal = machine.run_until_terminal(interval_sec=args.interval_sec)
-        print(json.dumps(terminal, ensure_ascii=False, indent=2))
+        first_terminal = machine.run_until_terminal(interval_sec=args.interval_sec)
+        result = {"first_episode": first_terminal, "reentry_episode": None}
+        if first_terminal.get("status") == "COMPLETE":
+            reentry = SamsungMorningSORReentryMachine(
+                gateway=gateway,
+                state_path=DEFAULT_REENTRY_STATE_PATH,
+                first_episode_state_path=DEFAULT_STATE_PATH,
+                live_enabled=True,
+            )
+            result["reentry_episode"] = reentry.run_until_terminal(
+                interval_sec=args.interval_sec
+            )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     machine.run_forever(interval_sec=args.interval_sec)
     return 0

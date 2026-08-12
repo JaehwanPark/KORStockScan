@@ -14,10 +14,14 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.trading.samsung_morning_one_share.machine import KST
+from src.trading.samsung_morning_one_share.reentry import (
+    DEFAULT_REENTRY_STATE_PATH,
+    prior_reentry_allows_new_first_episode,
+)
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "samsung_morning_two_leg_authority_v4"
+AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v5"
 DEFAULT_AUTHORITY_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_one_share_authority.json"
 )
@@ -32,6 +36,7 @@ class PreflightDecision:
     operator_exclusion_source: str
     parallel_widget_trading_allowed: bool
     independent_order_ledger_required: bool
+    prior_reentry_state_clear: bool
     blockers: tuple[str, ...]
 
 
@@ -41,6 +46,7 @@ def evaluate_preflight(
     main_bot_active: bool,
     shared_token_available: bool,
     operator_exclusion_source: str,
+    prior_reentry_state_clear: bool = True,
 ) -> PreflightDecision:
     blockers: list[str] = []
     if not main_bot_active:
@@ -49,6 +55,8 @@ def evaluate_preflight(
         blockers.append("shared_token_unavailable")
     if not operator_exclusion_source:
         blockers.append("manual_operator_exclusion_missing")
+    if not prior_reentry_state_clear:
+        blockers.append("prior_reentry_order_or_position_unresolved")
     return PreflightDecision(
         ready=not blockers,
         target_date=target_date.isoformat(),
@@ -57,6 +65,7 @@ def evaluate_preflight(
         operator_exclusion_source=str(operator_exclusion_source or ""),
         parallel_widget_trading_allowed=True,
         independent_order_ledger_required=True,
+        prior_reentry_state_clear=bool(prior_reentry_state_clear),
         blockers=tuple(blockers),
     )
 
@@ -86,11 +95,21 @@ def build_authority_artifact(
             "unfilled_target": "hold_position_without_forced_exit",
             "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
             "entry_tuning_bounds": "morning_baseline_only_until_observed_alternative",
+            "maximum_episodes_per_day": 2,
+            "sor_reentry_prerequisite": "both_opening_episode_legs_complete",
+            "sor_reentry_signal": (
+                "lookback15_drawdown0p75_nearlow0p35_lowhold2_reclaim1tick_until1000"
+            ),
+            "sor_reentry_allocation": "confirmation_close_minus_1tick_and_minus_2ticks",
+            "sor_reentry_validity": "three_completed_bars",
+            "sor_reentry_research_sha256": (
+                "6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a"
+            ),
             "widget_relationship": "parallel_independent_strategy",
         },
         "metric_role": "operator_preopen_runtime_authority_gate",
-        "decision_authority": "explicit_user_directed_morning_two_leg_live_start",
-        "window_policy": "target_date_preopen_once_then_terminal_or_held",
+        "decision_authority": "explicit_user_directed_morning_two_episode_live_start",
+        "window_policy": "target_date_opening_episode_then_at_most_one_sor_reentry",
         "sample_floor": "not_applicable_operator_runtime_gate",
         "primary_decision_metric": "all_preopen_safety_contracts_ready",
         "source_quality_gate": "PASS",
@@ -161,6 +180,8 @@ def validate_authority(
         return False, "authority_parallel_widget_contract_missing"
     if decision.get("independent_order_ledger_required") is not True:
         return False, "authority_independent_ledger_contract_missing"
+    if decision.get("prior_reentry_state_clear") is not True:
+        return False, "authority_prior_reentry_state_not_clear"
     policy = payload.get("policy")
     if not isinstance(policy, dict):
         return False, "authority_policy_missing"
@@ -178,6 +199,16 @@ def validate_authority(
         "widget_relationship": "parallel_independent_strategy",
         "entry_tuning": "preopen_exact_date_bounded_policy_artifact",
         "entry_tuning_bounds": "morning_baseline_only_until_observed_alternative",
+        "maximum_episodes_per_day": 2,
+        "sor_reentry_prerequisite": "both_opening_episode_legs_complete",
+        "sor_reentry_signal": (
+            "lookback15_drawdown0p75_nearlow0p35_lowhold2_reclaim1tick_until1000"
+        ),
+        "sor_reentry_allocation": "confirmation_close_minus_1tick_and_minus_2ticks",
+        "sor_reentry_validity": "three_completed_bars",
+        "sor_reentry_research_sha256": (
+            "6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a"
+        ),
     }
     if any(policy.get(key) != value for key, value in expected.items()):
         return False, "authority_sor_policy_mismatch"
@@ -199,13 +230,21 @@ def main(argv: list[str] | None = None) -> int:
     target_date = (
         date.fromisoformat(args.target_date) if args.target_date else observed_at.date()
     )
+    prior_reentry_clear, prior_reentry_reason = prior_reentry_allows_new_first_episode(
+        DEFAULT_REENTRY_STATE_PATH, target_date=target_date
+    )
     decision = evaluate_preflight(
         target_date=target_date,
         main_bot_active=args.main_bot_active,
         shared_token_available=bool(kiwoom_utils.get_cached_kiwoom_token()),
         operator_exclusion_source=manual_control_operator_exclusion_source("005930"),
+        prior_reentry_state_clear=prior_reentry_clear,
     )
-    output = {"decision": asdict(decision), "authority_path": str(args.authority_path)}
+    output = {
+        "decision": asdict(decision),
+        "authority_path": str(args.authority_path),
+        "prior_reentry_state_reason": prior_reentry_reason,
+    }
     if decision.ready and args.write:
         artifact = build_authority_artifact(decision, observed_at=observed_at)
         _atomic_write(args.authority_path, artifact)

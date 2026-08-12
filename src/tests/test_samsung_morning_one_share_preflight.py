@@ -27,6 +27,7 @@ def test_preflight_allows_parallel_widget_with_independent_ledgers():
     assert decision.ready is True
     assert decision.parallel_widget_trading_allowed is True
     assert decision.independent_order_ledger_required is True
+    assert decision.prior_reentry_state_clear is True
     assert decision.blockers == ()
 
 
@@ -36,6 +37,10 @@ def test_preflight_allows_parallel_widget_with_independent_ledgers():
         ({"main_bot_active": False}, "main_bot_inactive"),
         ({"shared_token_available": False}, "shared_token_unavailable"),
         ({"operator_exclusion_source": ""}, "manual_operator_exclusion_missing"),
+        (
+            {"prior_reentry_state_clear": False},
+            "prior_reentry_order_or_position_unresolved",
+        ),
     ],
 )
 def test_preflight_fails_closed_when_required_contract_is_missing(overrides, blocker):
@@ -68,6 +73,11 @@ def test_authority_artifact_is_same_day_and_never_controls_widget(tmp_path):
     assert artifact["policy"]["unfilled_target"] == (
         "hold_position_without_forced_exit"
     )
+    assert artifact["policy"]["maximum_episodes_per_day"] == 2
+    assert artifact["policy"]["sor_reentry_prerequisite"] == (
+        "both_opening_episode_legs_complete"
+    )
+    assert artifact["policy"]["sor_reentry_validity"] == "three_completed_bars"
     assert "max_hold_minutes" not in artifact["policy"]
     assert (
         "use_widget_orders_or_positions_as_morning_machine_ledger"
@@ -95,6 +105,11 @@ def test_authority_rejects_other_trade_date(tmp_path):
         ({"sor_regular_fallback": "09:00_krx_only"}, "authority_sor_policy_mismatch"),
         ({"unfilled_target": "best_sell_after_12m"}, "authority_hold_policy_mismatch"),
         ({"max_hold_minutes": 12}, "authority_timeout_policy_forbidden"),
+        ({"maximum_episodes_per_day": 3}, "authority_sor_policy_mismatch"),
+        (
+            {"sor_reentry_validity": "five_completed_bars"},
+            "authority_sor_policy_mismatch",
+        ),
     ],
 )
 def test_authority_rejects_stale_or_forced_exit_policy(tmp_path, policy_change, reason):

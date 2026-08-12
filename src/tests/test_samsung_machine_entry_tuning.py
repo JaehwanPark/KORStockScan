@@ -173,6 +173,100 @@ def test_extracts_actual_two_leg_outcome_without_broker_identifiers(tmp_path: Pa
     assert row["legs"][0]["equal_weight_profit_pct"] == pytest.approx(0.085714)
 
 
+def test_extracts_morning_reentry_as_fixed_observation_cohort(tmp_path: Path):
+    state = {
+        "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+        "trade_date": "2026-08-13",
+        "status": "COMPLETE",
+        "attempt_consumed": True,
+        "signal_features": {
+            "schema": "samsung_morning_sor_reentry_signal_features_v1",
+            "strategy": "morning_sor_reentry",
+            "source": "kiwoom_ka10080_005930_AL_completed_1m",
+            "signal_bar": "2026-08-13T09:17:00+09:00",
+            "signal_close": 100300,
+            "rolling_high": 101000,
+            "rolling_low": 100000,
+            "observed_drawdown_pct": 0.792079,
+            "observed_near_low_pct": 0.2,
+            "required_drawdown_pct": 0.75,
+            "lookback_bars": 15,
+            "max_near_low_pct": 0.35,
+            "entry_valid_completed_bars": 3,
+            "scan_start": "09:00:00",
+            "scan_last_bar": "10:00:00",
+            "target_ticks": 2,
+            "runtime_policy_source": "user_approved_sor_reentry_2026-08-12",
+            "runtime_policy_hash": (
+                "6135da3fa280aa8188ade85c62463cc9f7c144cb4c911b68a89be41e9c6b909a"
+            ),
+            "family": "low_hold_reclaim_passive_split",
+            "confirmation_bars": 2,
+            "reclaim_ticks": 1,
+            "entry_offset_ticks": 1,
+            "prerequisite": {
+                "first_episode_status": "COMPLETE",
+                "first_episode_completed_at": "2026-08-13T09:00:00+09:00",
+                "required_completed_leg_count": 2,
+            },
+            "entry_legs": [
+                {
+                    "leg_id": "confirmation_close_minus_1tick",
+                    "price_role": "aggressive_50pct",
+                    "entry_price": 100200,
+                },
+                {
+                    "leg_id": "confirmation_close_minus_2ticks",
+                    "price_role": "conservative_50pct",
+                    "entry_price": 100100,
+                },
+            ],
+        },
+        "legs": [
+            {
+                "leg_id": "confirmation_close_minus_1tick",
+                "price_role": "aggressive_50pct",
+                "quantity": 1,
+                "entry_price": 100200,
+                "status": "COMPLETE",
+                "buy_order_no": "SECRET-BUY-1",
+                "fill_price": 100200,
+                "position_qty": 0,
+                "target_order_no": "SECRET-TARGET-1",
+                "target_price": 100400,
+                "target_filled_qty": 1,
+            },
+            {
+                "leg_id": "confirmation_close_minus_2ticks",
+                "price_role": "conservative_50pct",
+                "quantity": 1,
+                "entry_price": 100100,
+                "status": "NO_FILL",
+                "buy_order_no": "SECRET-BUY-2",
+                "fill_price": 0,
+                "position_qty": 0,
+                "target_order_no": "",
+                "target_price": 0,
+                "target_filled_qty": 0,
+            },
+        ],
+    }
+    state_path = tmp_path / "reentry.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    row = extract_machine_row(
+        machine="morning_reentry",
+        state_path=state_path,
+        target_date="2026-08-13",
+        cost_pct=0.20,
+    )
+
+    assert row["source_quality"] == "pass"
+    assert row["summary"]["completed_signal_episode"] is True
+    assert row["summary"]["completed_legs"] == 1
+    assert "SECRET" not in json.dumps(row)
+
+
 def test_legacy_and_date_mismatch_are_excluded(tmp_path: Path):
     legacy = tmp_path / "legacy.json"
     legacy.write_text(
