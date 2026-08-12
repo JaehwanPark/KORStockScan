@@ -1139,6 +1139,59 @@ def test_upper_limit_watch_status_surfaces_invalid_cumulative_source():
     ]
 
 
+def test_upper_limit_watch_status_accepts_explicit_invalid_prior_exclusion():
+    status = mod._upper_limit_watch_report_status(
+        _upper_limit_report(),
+        _upper_limit_counterfactual(
+            cumulative_update={
+                "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+                "prior_artifact_valid": False,
+                "prior_artifact_excluded": True,
+                "prior_exclusion_reason": "invalid_prior_counterfactual_contract",
+                "prior_row_count": 0,
+                "current_row_count": 0,
+                "rolling_row_count": 0,
+            },
+        ),
+        _upper_limit_bounded(),
+        _upper_limit_source(),
+        enabled=True,
+        target_date="2026-08-06",
+    )
+
+    assert status["status"] == "pass"
+    assert status["source_usable"] is True
+    assert status["issues"] == []
+    assert status["warnings"] == []
+
+
+def test_upper_limit_watch_status_rejects_malformed_prior_exclusion_dates():
+    status = mod._upper_limit_watch_report_status(
+        _upper_limit_report(),
+        _upper_limit_counterfactual(
+            cumulative_update={
+                "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
+                "prior_artifact_valid": False,
+                "prior_artifact_excluded": True,
+                "prior_exclusion_reason": "invalid_prior_counterfactual_contract",
+                "invalid_prior_dates_skipped": 1,
+                "prior_row_count": 0,
+                "current_row_count": 0,
+                "rolling_row_count": 0,
+            },
+        ),
+        _upper_limit_bounded(),
+        _upper_limit_source(),
+        enabled=True,
+        target_date="2026-08-06",
+    )
+
+    assert status["status"] == "fail"
+    assert (
+        "upper_limit_watch_cumulative_prior_exclusion_dates_invalid" in status["issues"]
+    )
+
+
 def test_upper_limit_watch_status_surfaces_live_auto_ready_policy():
     policy = {
         "policy_key": "single_limit_up_one_price_locked|10k_30k|pullback_reclaim",
@@ -1156,7 +1209,7 @@ def test_upper_limit_watch_status_surfaces_live_auto_ready_policy():
         _upper_limit_report(bounded_live_ready_candidate_count=1),
         _upper_limit_counterfactual(
             sample_count=1,
-            rows=[{"row_id": "2026-08-06:000001:1"}],
+            rows=[{"row_id": "2026-08-06:000001:1", "label_status": "pass"}],
             policy_cells=[policy],
             cumulative_update={
                 "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
@@ -1214,7 +1267,7 @@ def test_upper_limit_watch_status_rejects_source_blocked_runtime_candidate():
             source_quality_status="blocked",
             source_status=source_status,
             sample_count=1,
-            rows=[{"row_id": "2026-08-06:000001:1"}],
+            rows=[{"row_id": "2026-08-06:000001:1", "label_status": "pass"}],
             policy_cells=[policy],
             cumulative_update={
                 "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",

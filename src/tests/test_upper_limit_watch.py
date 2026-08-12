@@ -7,7 +7,7 @@ from src.engine.monitoring import upper_limit_watch_report as report
 from src.engine.scalping import upper_limit_watch as watch
 from src.engine import sniper_overnight_gatekeeper, sniper_state_handlers
 from src.scanners import scalping_scanner
-from src.utils import kiwoom_utils
+from src.utils import kiwoom_utils, pipeline_event_logger
 
 
 def _observation_fields(**extra):
@@ -18,6 +18,42 @@ def _observation_fields(**extra):
         "broker_order_forbidden": True,
         **extra,
     }
+
+
+def test_report_contract_accepts_pipeline_logger_boolean_strings_and_fails_closed():
+    fields = _observation_fields()
+    serialized = {key: str(value) for key, value in fields.items()}
+    assert report._event_contract_valid(fields) is True
+    assert report._event_contract_valid(serialized) is True
+    assert report._event_contract_valid({**serialized, "runtime_effect": "0"}) is False
+    assert (
+        report._event_contract_valid({**serialized, "broker_order_forbidden": "yes"})
+        is False
+    )
+
+
+def test_pipeline_logger_output_is_accepted_by_report_reader(tmp_path, monkeypatch):
+    event_path = tmp_path / "pipeline_events_2026-08-06.jsonl"
+    monkeypatch.setattr(
+        pipeline_event_logger,
+        "_event_path",
+        lambda _target_date: event_path,
+    )
+    monkeypatch.setattr(pipeline_event_logger, "_get_producer_compactor", lambda: None)
+    monkeypatch.setattr(
+        pipeline_event_logger, "threshold_family_for_stage", lambda *_args: None
+    )
+    emitted = pipeline_event_logger.emit_pipeline_event(
+        "UPPER_LIMIT_WATCH",
+        "테스트",
+        "123450",
+        "upper_limit_watch_registered",
+        fields=_observation_fields(),
+    )
+    assert emitted["fields"]["runtime_effect"] == "False"
+    assert emitted["fields"]["broker_order_forbidden"] == "True"
+    stored = json.loads(event_path.read_text(encoding="utf-8"))
+    assert report._event_contract_valid(stored["fields"]) is True
 
 
 def test_official_previous_limit_up_request_uses_updown_type_six(monkeypatch):
@@ -239,6 +275,260 @@ def test_report_one_verified_positive_path_opens_next_date_policy(
     assert next_cumulative["cumulative_update"]["prior_row_count"] == 1
     assert next_cumulative["cumulative_update"]["current_row_count"] == 1
     assert next_cumulative["sample_count"] == 2
+
+
+def test_label_uses_fresh_post_trigger_ask_and_horizon_bid():
+    start = datetime(2026, 8, 6, 9, 0)
+    label = report._label(
+        {
+            "row_id": "2026-08-06:123450:1",
+            "target_date": "2026-08-06",
+            "code": "123450",
+            "name": "테스트",
+            "cohort": "single_limit_up_intraday_traded_close_locked",
+            "price_band": "1천~5천",
+            "trigger": {
+                "at": (start + timedelta(seconds=10)).isoformat(),
+                "trigger_type": "pullback_reclaim",
+                "best_ask": 0,
+                "best_bid": 0,
+                "quote_age_sec": None,
+                "confirmation_tick_count": 2,
+            },
+            "snapshots": [
+                {
+                    "at": (start + timedelta(seconds=100)).isoformat(),
+                    "current_price": 1005,
+                }
+            ],
+            "quote_snapshots": [
+                {
+                    "at": (start + timedelta(seconds=12)).isoformat(),
+                    "best_ask": 1001,
+                    "best_bid": 1000,
+                    "quote_age_sec": 0.0,
+                },
+                {
+                    "at": (start + timedelta(seconds=192)).isoformat(),
+                    "best_ask": 1011,
+                    "best_bid": 1010,
+                    "quote_age_sec": 0.0,
+                },
+            ],
+        }
+    )
+    assert label["label_status"] == "pass"
+    assert label["entry_price"] == 1001
+    assert label["entry_price_source"] == "post_trigger_fresh_0d_ask"
+    assert label["exit_price"] == 1010
+    assert label["exit_price_source"] == "fresh_0d_bid"
+
+
+def test_label_rejects_explicitly_stale_quote_snapshots():
+    start = datetime(2026, 8, 6, 9, 0)
+    label = report._label(
+        {
+            "row_id": "2026-08-06:123450:1",
+            "target_date": "2026-08-06",
+            "code": "123450",
+            "name": "테스트",
+            "cohort": "single_limit_up_intraday_traded_close_locked",
+            "price_band": "1천~5천",
+            "trigger": {
+                "at": (start + timedelta(seconds=10)).isoformat(),
+                "trigger_type": "pullback_reclaim",
+                "best_ask": 0,
+                "best_bid": 0,
+                "quote_age_sec": None,
+                "confirmation_tick_count": 2,
+            },
+            "snapshots": [],
+            "quote_snapshots": [
+                {
+                    "at": (start + timedelta(seconds=11)).isoformat(),
+                    "best_ask": 1001,
+                    "best_bid": 1000,
+                    "quote_age_sec": 5.01,
+                },
+                {
+                    "at": (start + timedelta(seconds=191)).isoformat(),
+                    "best_ask": 1011,
+                    "best_bid": 1010,
+                    "quote_age_sec": 0.0,
+                },
+            ],
+        }
+    )
+    assert label["label_status"] == "entry_bbo_missing"
+    assert label["entry_bbo_present"] is False
+
+
+def test_label_rejects_entry_spread_above_live_cap():
+    start = datetime(2026, 8, 6, 9, 0)
+    label = report._label(
+        {
+            "row_id": "2026-08-06:123450:1",
+            "target_date": "2026-08-06",
+            "code": "123450",
+            "name": "테스트",
+            "cohort": "single_limit_up_intraday_traded_close_locked",
+            "price_band": "1천~5천",
+            "trigger": {
+                "at": (start + timedelta(seconds=10)).isoformat(),
+                "trigger_type": "pullback_reclaim",
+                "best_ask": 1000,
+                "best_bid": 980,
+                "quote_age_sec": 0.0,
+                "confirmation_tick_count": 2,
+            },
+            "snapshots": [
+                {
+                    "at": (start + timedelta(seconds=190)).isoformat(),
+                    "current_price": 1010,
+                }
+            ],
+            "quote_snapshots": [],
+        }
+    )
+    assert label["label_status"] == "entry_spread_too_wide"
+    assert label["entry_spread_pct"] == 2.0
+
+
+def test_invalid_prior_artifact_is_excluded_without_blocking_current_date(
+    tmp_path, monkeypatch
+):
+    candidate_dir = tmp_path / "candidate"
+    event_dir = tmp_path / "events"
+    report_dir = tmp_path / "report"
+    counterfactual_dir = tmp_path / "counterfactual"
+    bounded_dir = tmp_path / "bounded"
+    for path in (candidate_dir, event_dir, counterfactual_dir):
+        path.mkdir(parents=True)
+    monkeypatch.setattr(report, "CANDIDATE_DIR", candidate_dir)
+    monkeypatch.setattr(report, "EVENT_DIR", event_dir)
+    monkeypatch.setattr(report, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(report, "COUNTERFACTUAL_DIR", counterfactual_dir)
+    monkeypatch.setattr(report, "BOUNDED_DIR", bounded_dir)
+
+    prior_date = "2026-08-06"
+    (
+        counterfactual_dir / f"upper_limit_watch_counterfactual_{prior_date}.json"
+    ).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "report_type": "upper_limit_watch_counterfactual",
+                "target_date": prior_date,
+                "source_quality_status": "blocked",
+                "rows": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    target_date = "2026-08-07"
+    candidate = {
+        "schema_version": 1,
+        "report_type": "upper_limit_watch_candidate_source",
+        "target_date": target_date,
+        "status": "pass",
+        "candidate_count": 1,
+        "candidates": [
+            {
+                "code": "123450",
+                "name": "테스트",
+                "cohort": "single_limit_up_intraday_traded_close_locked",
+                "price_band": "1천~5천",
+            }
+        ],
+        "decision_authority": "upper_limit_source_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    (
+        candidate_dir / f"upper_limit_watch_candidate_source_{target_date}.json"
+    ).write_text(json.dumps(candidate), encoding="utf-8")
+    start = datetime(2026, 8, 7, 9, 0)
+    events = [
+        {
+            "pipeline": "UPPER_LIMIT_WATCH",
+            "stock_code": "123450",
+            "stock_name": "테스트",
+            "stage": "upper_limit_watch_registered",
+            "emitted_at": start.isoformat(),
+            "fields": {key: str(value) for key, value in _observation_fields().items()},
+        },
+        {
+            "pipeline": "UPPER_LIMIT_WATCH",
+            "stock_code": "123450",
+            "stock_name": "테스트",
+            "stage": "upper_limit_watch_released",
+            "emitted_at": (start + timedelta(seconds=200)).isoformat(),
+            "fields": {
+                key: str(value)
+                for key, value in _observation_fields(reason="rotation_due").items()
+            },
+        },
+    ]
+    (event_dir / f"pipeline_events_{target_date}.jsonl").write_text(
+        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    paths = report.build_artifacts(target_date)
+    cumulative = json.loads(paths["counterfactual"].read_text(encoding="utf-8"))
+    assert cumulative["status"] == "pass"
+    assert cumulative["source_quality_status"] == "pass"
+    assert cumulative["cumulative_update"]["prior_artifact_valid"] is False
+    assert cumulative["cumulative_update"]["prior_artifact_excluded"] is True
+    assert cumulative["cumulative_update"]["prior_row_count"] == 0
+    assert cumulative["cumulative_update"]["current_row_count"] == 1
+
+
+def test_prior_selection_skips_invalid_latest_and_preserves_older_valid_rows(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(report, "COUNTERFACTUAL_DIR", tmp_path)
+    valid_date = "2026-08-06"
+    valid = {
+        "schema_version": 1,
+        "report_type": "upper_limit_watch_counterfactual",
+        "target_date": valid_date,
+        "source_quality_status": "pass",
+        "rows": [
+            {
+                "row_id": f"{valid_date}:123450:1",
+                "target_date": valid_date,
+                "label_status": "pass",
+            }
+        ],
+        **report.COUNTERFACTUAL_CONTRACT,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    (tmp_path / f"upper_limit_watch_counterfactual_{valid_date}.json").write_text(
+        json.dumps(valid), encoding="utf-8"
+    )
+    invalid_date = "2026-08-07"
+    (tmp_path / f"upper_limit_watch_counterfactual_{invalid_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "report_type": "upper_limit_watch_counterfactual",
+                "target_date": invalid_date,
+                "source_quality_status": "blocked",
+                "rows": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    selected, provenance = report._select_prior("2026-08-08")
+    assert selected["target_date"] == valid_date
+    assert len(selected["rows"]) == 1
+    assert provenance["latest_seen_prior_target_date"] == invalid_date
+    assert provenance["invalid_prior_dates_skipped"] == [invalid_date]
 
 
 def test_upper_limit_submit_guard_rechecks_proximity(monkeypatch):
