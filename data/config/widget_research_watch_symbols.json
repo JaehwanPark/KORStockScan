@@ -1,0 +1,41 @@
+{
+  "actual_order_submitted": false,
+  "allowed_runtime_apply": false,
+  "authority": "operator_directed_widget_research_watch_observation_only",
+  "broker_order_forbidden": true,
+  "created_at_kst": "2026-08-12T21:52:00+09:00",
+  "effective_from": "2026-08-13",
+  "enabled": true,
+  "runtime_effect": false,
+  "schema": "widget_research_watch_config_v1",
+  "source_report": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-08-12.json",
+  "source_report_sha256": "bd72f8a1a2f416bff6e72b4f93565916041b8582a90898499fd7600a69c9d07e",
+  "source_target_date": "2026-08-12",
+  "symbols": [
+    {
+      "recommendation_tier": "research_watch",
+      "stock_code": "138080",
+      "stock_name": "오이솔루션"
+    },
+    {
+      "recommendation_tier": "research_watch",
+      "stock_code": "153890",
+      "stock_name": "져스텍"
+    },
+    {
+      "recommendation_tier": "research_watch",
+      "stock_code": "101730",
+      "stock_name": "위메이드맥스"
+    },
+    {
+      "recommendation_tier": "research_watch",
+      "stock_code": "047810",
+      "stock_name": "한국항공우주"
+    },
+    {
+      "recommendation_tier": "research_watch",
+      "stock_code": "007810",
+      "stock_name": "코리아써키트"
+    }
+  ]
+}

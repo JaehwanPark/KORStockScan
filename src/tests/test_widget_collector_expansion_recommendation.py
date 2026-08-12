@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring import widget_collector_expansion_recommendation as rec
@@ -31,7 +33,13 @@ def _replay_row(
     }
 
 
-def _payload_row(code: str, *, liquidity: float, intraday_range: float) -> dict:
+def _payload_row(
+    code: str,
+    *,
+    liquidity: float,
+    intraday_range: float,
+    spread_bp: float = 8.0,
+) -> dict:
     return {
         "schema": "ai_decision_payload_v1",
         "endpoint": "analyze_target",
@@ -47,7 +55,7 @@ def _payload_row(code: str, *, liquidity: float, intraday_range: float) -> dict:
                 "features": {
                     "entry_liquidity_score": liquidity,
                     "intraday_range_pct": intraday_range,
-                    "spread_bp": 8.0,
+                    "spread_bp": spread_bp,
                 },
                 "quote": {"quote_stale": False},
                 "entry_candle_context": {
@@ -106,7 +114,10 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     assert candidate["estimated_added_requests_per_minute"] == 13
     assert candidate["source_quality_adjusted_ev_pct"] == 0.4
     assert candidate["round_trip_cost_pct"] == 0.2
+    assert candidate["recommendation_tier"] == "research_watch"
+    assert candidate["observed_trading_date_count"] == 1
     assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
 
 
 def test_recommendation_excludes_manual_operator_symbol(tmp_path):
@@ -157,6 +168,7 @@ def test_admin_notifier_sends_once_and_never_creates_service(tmp_path):
         "widget_runtime_effect": False,
         "trading_runtime_effect": False,
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "collector_created": False,
@@ -325,3 +337,179 @@ def test_source_artifact_gate_rejects_missing_or_authority_mismatched_label(
         payload_path=payload_path,
         label_path=label_path,
     ) == ["outcome_label_contract_mismatch"]
+
+
+def test_recommendation_marks_multi_date_liquid_sample_implementation_review_ready(
+    tmp_path,
+):
+    replay_dir = tmp_path / "replay"
+    payload_dir = tmp_path / "payload"
+    replay_dir.mkdir()
+    payload_dir.mkdir()
+    dates = [date(2026, 8, 4), date(2026, 8, 5), date(2026, 8, 6)]
+    for index, trading_date in enumerate(dates):
+        rows = [
+            _replay_row("111111", hit="target_first", end_return=0.6),
+            _replay_row("111111", hit="target_first", end_return=0.4),
+        ]
+        if index == 2:
+            rows = rows[:1]
+        replay = {
+            "schema": "widget_mechanical_entry_replay_v1",
+            "target_date": trading_date.isoformat(),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "rows": rows,
+        }
+        (replay_dir / f"widget_mechanical_entry_replay_{trading_date}.json").write_text(
+            json.dumps(replay), encoding="utf-8"
+        )
+        (payload_dir / f"ai_decision_payloads_{trading_date}.jsonl").write_text(
+            json.dumps(
+                _payload_row(
+                    "111111",
+                    liquidity=85,
+                    intraday_range=4.0,
+                    spread_bp=12.0,
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    report = rec.build_recommendation_report(
+        target_date=dates[-1],
+        replay_dir=replay_dir,
+        payload_dir=payload_dir,
+        manual_excluded_codes=frozenset(),
+    )
+
+    candidate = report["recommendations"][0]
+    assert candidate["recommendation_tier"] == "implementation_review"
+    assert candidate["implementation_review_ready"] is True
+    assert candidate["implementation_review_blockers"] == []
+    assert candidate["observed_trading_date_count"] == 3
+    assert candidate["sample_count"] == 5
+    assert report["implementation_review_candidate_count"] == 1
+
+
+def test_recommendation_keeps_wide_spread_candidate_as_research_watch(tmp_path):
+    replay_dir = tmp_path / "replay"
+    payload_dir = tmp_path / "payload"
+    replay_dir.mkdir()
+    payload_dir.mkdir()
+    target_date = date(2026, 8, 6)
+    replay = {
+        "schema": "widget_mechanical_entry_replay_v1",
+        "target_date": target_date.isoformat(),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "rows": [
+            _replay_row("111111", hit="target_first", end_return=0.8),
+            _replay_row("111111", hit="target_first", end_return=0.4),
+        ],
+    }
+    (replay_dir / f"widget_mechanical_entry_replay_{target_date}.json").write_text(
+        json.dumps(replay), encoding="utf-8"
+    )
+    (payload_dir / f"ai_decision_payloads_{target_date}.jsonl").write_text(
+        json.dumps(
+            _payload_row("111111", liquidity=85, intraday_range=3.0, spread_bp=60.0)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = rec.build_recommendation_report(
+        target_date=target_date,
+        replay_dir=replay_dir,
+        payload_dir=payload_dir,
+        manual_excluded_codes=frozenset(),
+    )
+
+    candidate = report["recommendations"][0]
+    assert candidate["recommendation_tier"] == "research_watch"
+    assert "median_spread_too_wide" in candidate["implementation_review_blockers"]
+    assert report["implementation_review_candidate_count"] == 0
+    message = rec.build_telegram_message(report)
+    assert "구현검토 0개 · 연구관찰 1개" in message
+    assert "즉시 구현검토 후보는 없으며" in message
+
+
+def test_load_names_reads_archived_gzip_sentinel(monkeypatch, tmp_path):
+    replay_dir = tmp_path / "replay"
+    sentinel_dir = tmp_path / "sentinel"
+    replay_dir.mkdir()
+    sentinel_dir.mkdir()
+    replay_path = replay_dir / "widget_mechanical_entry_replay_2026-08-06.json"
+    replay_path.write_text("{}", encoding="utf-8")
+    sentinel_path = sentinel_dir / "buy_funnel_sentinel_events_2026-08-06.jsonl.gz"
+    with gzip.open(sentinel_path, "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"stock_code": "111111", "stock_name": "테스트"}))
+        handle.write("\n")
+    monkeypatch.setattr(rec, "DEFAULT_SENTINEL_DIR", sentinel_dir)
+
+    assert rec._load_names([replay_path]) == {"111111": "테스트"}
+
+
+def test_load_names_ignores_damaged_display_only_archive(monkeypatch, tmp_path):
+    replay_dir = tmp_path / "replay"
+    sentinel_dir = tmp_path / "sentinel"
+    replay_dir.mkdir()
+    sentinel_dir.mkdir()
+    replay_path = replay_dir / "widget_mechanical_entry_replay_2026-08-06.json"
+    replay_path.write_text("{}", encoding="utf-8")
+    (sentinel_dir / "buy_funnel_sentinel_events_2026-08-06.jsonl.gz").write_bytes(
+        b"not-gzip"
+    )
+    monkeypatch.setattr(rec, "DEFAULT_SENTINEL_DIR", sentinel_dir)
+
+    assert rec._load_names([replay_path]) == {}
+
+
+def test_wait_for_source_artifacts_retries_without_transient_service_failure(
+    monkeypatch, tmp_path
+):
+    calls = 0
+    clock = 0.0
+
+    def fake_issues(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return ["outcome_label_contract_mismatch"] if calls < 3 else []
+
+    def monotonic():
+        return clock
+
+    def sleeper(seconds):
+        nonlocal clock
+        clock += seconds
+
+    monkeypatch.setattr(rec, "_source_artifact_issues", fake_issues)
+
+    issues = rec._wait_for_source_artifacts(
+        target_date=date(2026, 8, 6),
+        payload_path=tmp_path / "payload",
+        label_path=tmp_path / "label",
+        wait_sec=60,
+        poll_sec=10,
+        monotonic=monotonic,
+        sleeper=sleeper,
+    )
+
+    assert issues == []
+    assert calls == 3
+    assert clock == 20.0
+
+
+def test_systemd_service_waits_for_postclose_label_contract():
+    service = Path(
+        "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
+    ).read_text(encoding="utf-8")
+
+    assert "--source-wait-sec 900 --source-poll-sec 30" in service
+    assert "TimeoutStartSec=1200" in service

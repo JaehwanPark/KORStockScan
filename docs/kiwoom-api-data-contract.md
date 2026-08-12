@@ -755,6 +755,22 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   provenance as observation-only data without account, order, quantity, token
   issue/refresh, provider, bot, threshold, or broker-guard authority.
 
+### 2026-08-12 Widget research-watch collector gate
+
+- Rechecked at `2026-08-12T21:52:00+09:00` from upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/종목정보.md` for `ka10001`,
+  `kiwoom_docs/시세.md` for `ka10004`, `kiwoom_docs/차트.md` for `ka10080`,
+  `kiwoom/specs.py`, `kiwoom/core`, and
+  `postman/kiwoom-openapi.postman_collection.json`. The collector uses only
+  KRX six-digit `stk_cd`, `tic_scope=1`, and `upd_stkpc_tp=1` with the existing
+  read-only client and response parsers.
+- The user-directed research-watch collector records current price, REST BBO
+  receipt provenance, and completed KRX one-minute OHLCV once per symbol minute.
+  It uses only the shared cached token and never issues or refreshes a token.
+  It has no account, order, advisory, entry/exit event, quantity, policy apply,
+  provider, bot, cap, broker-guard, or hard-safety authority.
+
 ## String And Sign Parsing
 
 - Price and quantity fields are normalized as unsigned magnitude unless a

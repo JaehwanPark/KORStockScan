@@ -1,0 +1,27 @@
+[Unit]
+Description=KORStockScan Widget Research-Watch Read-Only Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+ExecCondition=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_research_watch_collector --check-config
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_research_watch_collector --interval-sec 60
+Restart=on-failure
+RestartSec=5
+UMask=0077
+Nice=10
+CPUQuota=10%
+MemoryMax=256M
+TasksMax=24
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

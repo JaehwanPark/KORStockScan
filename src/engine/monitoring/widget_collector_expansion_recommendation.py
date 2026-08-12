@@ -9,8 +9,10 @@ behavior.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
+import time
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -47,12 +49,20 @@ DEFAULT_STATE_FILE = (
 )
 MAX_RECOMMENDATIONS = 5
 ROUND_TRIP_COST_PCT = 0.20
+IMPLEMENTATION_REVIEW_MIN_SAMPLES = 5
+IMPLEMENTATION_REVIEW_MIN_TRADING_DATES = 3
+IMPLEMENTATION_REVIEW_MAX_MEDIAN_SPREAD_BP = 25.0
+IMPLEMENTATION_REVIEW_MAX_MEDIAN_RANGE_PCT = 12.0
 
 METRIC_CONTRACT = {
     "metric_role": "collector_expansion_recommendation",
     "decision_authority": AUTHORITY,
     "window_policy": "all_available_clean_baseline_exact_replay_dates",
-    "sample_floor": "two_joined_rows_and_one_decisive_outcome",
+    "sample_floor": (
+        "research_watch=two_joined_rows_and_one_decisive_outcome;"
+        "implementation_review=five_rows_three_trading_dates_"
+        "median_spread_at_most_25bp_range_at_most_12pct"
+    ),
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
         "source_qualified_exact_replay_outcome_plus_fresh_entry_context_"
@@ -90,23 +100,34 @@ def _load_names(paths: list[Path]) -> dict[str, str]:
     names: dict[str, str] = {}
     for replay_path in paths:
         target_date = replay_path.stem.rsplit("_", 1)[-1]
-        sentinel_path = DEFAULT_SENTINEL_DIR / (
-            f"buy_funnel_sentinel_events_{target_date}.jsonl"
+        sentinel_paths = (
+            DEFAULT_SENTINEL_DIR / f"buy_funnel_sentinel_events_{target_date}.jsonl",
+            DEFAULT_SENTINEL_DIR / f"buy_funnel_sentinel_events_{target_date}.jsonl.gz",
         )
-        try:
-            handle = sentinel_path.open("r", encoding="utf-8")
-        except OSError:
-            continue
-        with handle:
-            for line in handle:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                code = str(row.get("stock_code") or "").strip()
-                name = str(row.get("stock_name") or "").strip()
-                if code and name:
-                    names[code] = name
+        for sentinel_path in sentinel_paths:
+            try:
+                handle = (
+                    gzip.open(sentinel_path, "rt", encoding="utf-8")
+                    if sentinel_path.suffix == ".gz"
+                    else sentinel_path.open("r", encoding="utf-8")
+                )
+            except OSError:
+                continue
+            try:
+                with handle:
+                    for line in handle:
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            continue
+                        code = str(row.get("stock_code") or "").strip()
+                        name = str(row.get("stock_name") or "").strip()
+                        if code and name:
+                            names[code] = name
+            except (OSError, EOFError):
+                # Stock names are display-only enrichment. A damaged archive
+                # must not invalidate otherwise qualified market evidence.
+                continue
     return names
 
 
@@ -231,6 +252,7 @@ def _load_replay_history(
             "end_returns": [],
             "mechanical_signal_count": 0,
             "pre_spread_candidate_count": 0,
+            "trading_dates": set(),
         }
     )
     paths = _dated_paths(
@@ -310,6 +332,7 @@ def _load_replay_history(
             except (TypeError, ValueError):
                 continue
             item["sample_count"] += 1
+            item["trading_dates"].add(report_date.isoformat())
             if first_hit == "target_first":
                 item["target_first_count"] += 1
             elif first_hit == "adverse_first":
@@ -394,6 +417,7 @@ def build_recommendation_report(
             "adverse_first_count": adverse_first,
             "decisive_sample_count": decisive,
             "equal_weight_avg_profit_pct": equal_weight_ev,
+            "trading_dates": item["trading_dates"],
         }
     features, feature_paths = _load_feature_history(
         payload_dir,
@@ -408,6 +432,7 @@ def build_recommendation_report(
         adverse_first = int(item["adverse_first_count"])
         decisive = int(item["decisive_sample_count"])
         equal_weight_ev = float(item["equal_weight_avg_profit_pct"])
+        trading_dates = sorted(str(value) for value in item["trading_dates"])
         feature_rows = features.get(code, [])
         if not feature_rows:
             exclusion_counts["liquidity_feature_missing"] += 1
@@ -429,6 +454,20 @@ def build_recommendation_report(
         source_qualified_joined_count = int(item["source_qualified_joined_count"])
         portability_ratio = portability_count / max(1, source_qualified_joined_count)
         target_share = target_first / decisive * 100
+        implementation_review_blockers: list[str] = []
+        if samples < IMPLEMENTATION_REVIEW_MIN_SAMPLES:
+            implementation_review_blockers.append("sample_floor_not_met")
+        if len(trading_dates) < IMPLEMENTATION_REVIEW_MIN_TRADING_DATES:
+            implementation_review_blockers.append("trading_date_floor_not_met")
+        if spread_bp > IMPLEMENTATION_REVIEW_MAX_MEDIAN_SPREAD_BP:
+            implementation_review_blockers.append("median_spread_too_wide")
+        if intraday_range > IMPLEMENTATION_REVIEW_MAX_MEDIAN_RANGE_PCT:
+            implementation_review_blockers.append("extreme_volatility")
+        recommendation_tier = (
+            "implementation_review"
+            if not implementation_review_blockers
+            else "research_watch"
+        )
         candidates.append(
             {
                 "stock_code": code,
@@ -442,6 +481,8 @@ def build_recommendation_report(
                     portability_ratio=portability_ratio,
                 ),
                 "sample_count": samples,
+                "observed_trading_date_count": len(trading_dates),
+                "observed_trading_dates": trading_dates,
                 "decisive_sample_count": decisive,
                 "target_first_count": target_first,
                 "adverse_first_count": adverse_first,
@@ -463,6 +504,9 @@ def build_recommendation_report(
                 "evidence_status": (
                     "early_sample" if samples < 10 else "accumulating_sample"
                 ),
+                "recommendation_tier": recommendation_tier,
+                "implementation_review_ready": not implementation_review_blockers,
+                "implementation_review_blockers": implementation_review_blockers,
                 "suggested_session": "KRX_REGULAR",
                 "estimated_added_requests_per_minute": 13,
                 "estimated_added_memory_mb": 100,
@@ -472,6 +516,7 @@ def build_recommendation_report(
         )
     candidates.sort(
         key=lambda row: (
+            row["implementation_review_ready"] is True,
             float(row["recommendation_score"]),
             int(row["sample_count"]),
             str(row["stock_code"]),
@@ -479,6 +524,9 @@ def build_recommendation_report(
         reverse=True,
     )
     recommendations = candidates[:MAX_RECOMMENDATIONS]
+    implementation_review_candidate_count = sum(
+        row["implementation_review_ready"] is True for row in candidates
+    )
     return {
         "schema": "widget_collector_expansion_recommendation_v1",
         "status": (
@@ -490,6 +538,12 @@ def build_recommendation_report(
         "recommendations": recommendations,
         "qualified_candidate_count": len(candidates),
         "reported_candidate_count": len(recommendations),
+        "implementation_review_candidate_count": (
+            implementation_review_candidate_count
+        ),
+        "research_watch_candidate_count": (
+            len(candidates) - implementation_review_candidate_count
+        ),
         "exclusion_counts": dict(sorted(exclusion_counts.items())),
         "source": {
             "market_session_scope": "KRX_REGULAR_ONLY",
@@ -504,12 +558,24 @@ def build_recommendation_report(
             "manual_excluded_codes": sorted(excluded_codes),
         },
         "metric_contract": METRIC_CONTRACT,
+        "implementation_review_contract": {
+            "minimum_sample_count": IMPLEMENTATION_REVIEW_MIN_SAMPLES,
+            "minimum_trading_date_count": (IMPLEMENTATION_REVIEW_MIN_TRADING_DATES),
+            "maximum_median_spread_bp": (IMPLEMENTATION_REVIEW_MAX_MEDIAN_SPREAD_BP),
+            "maximum_median_intraday_range_pct": (
+                IMPLEMENTATION_REVIEW_MAX_MEDIAN_RANGE_PCT
+            ),
+            "decision_authority": AUTHORITY,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "recommendation_only": True,
         "collector_created": False,
         "service_started": False,
         "widget_runtime_effect": False,
         "trading_runtime_effect": False,
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
@@ -525,6 +591,12 @@ def build_telegram_message(report: dict[str, Any]) -> str:
     if not isinstance(recommendations, list) or not recommendations:
         lines.append("오늘 기준을 통과한 신규 후보가 없습니다.")
         return "\n".join(lines)
+    lines.append(
+        "구현검토 "
+        f"{report.get('implementation_review_candidate_count', 0)}개 · "
+        "연구관찰 "
+        f"{report.get('research_watch_candidate_count', 0)}개"
+    )
     for index, row in enumerate(recommendations, start=1):
         lines.extend(
             [
@@ -533,11 +605,18 @@ def build_telegram_message(report: dict[str, Any]) -> str:
                     f"점수 {row.get('recommendation_score')}"
                 ),
                 (
+                    "   등급 "
+                    f"{row.get('recommendation_tier')}, "
+                    f"관측 {row.get('observed_trading_date_count')}일/"
+                    f"{row.get('sample_count')}건"
+                ),
+                (
                     "   target/adverse "
                     f"{row.get('target_first_count')}/{row.get('adverse_first_count')}, "
                     f"EV {row.get('source_quality_adjusted_ev_pct')}%, "
                     f"유동성 {row.get('median_entry_liquidity_score')}, "
-                    f"장중범위 {row.get('median_intraday_range_pct')}%"
+                    f"장중범위 {row.get('median_intraday_range_pct')}%, "
+                    f"스프레드 {row.get('median_spread_bp')}bp"
                 ),
                 (
                     "   예상부하 +"
@@ -546,7 +625,11 @@ def build_telegram_message(report: dict[str, Any]) -> str:
                 ),
             ]
         )
-    lines.append("사용자 승인 전에는 collector/service를 만들거나 시작하지 않습니다.")
+    if int(report.get("implementation_review_candidate_count") or 0) == 0:
+        lines.append(
+            "즉시 구현검토 후보는 없으며 연구관찰 후보는 표본을 더 축적합니다."
+        )
+    lines.append("사용자 지시 전에는 collector/service를 만들거나 시작하지 않습니다.")
     return "\n".join(lines)
 
 
@@ -605,6 +688,32 @@ def _source_artifact_issues(
     ):
         issues.append("outcome_label_contract_mismatch")
     return issues
+
+
+def _wait_for_source_artifacts(
+    *,
+    target_date: date,
+    payload_path: Path,
+    label_path: Path,
+    wait_sec: float,
+    poll_sec: float,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> list[str]:
+    """Wait boundedly for the postclose label producer to finish atomically."""
+
+    wait_sec = max(0.0, float(wait_sec))
+    poll_sec = max(0.1, float(poll_sec))
+    deadline = monotonic() + wait_sec
+    while True:
+        issues = _source_artifact_issues(
+            target_date=target_date,
+            payload_path=payload_path,
+            label_path=label_path,
+        )
+        if not issues or monotonic() >= deadline:
+            return issues
+        sleeper(min(poll_sec, max(0.0, deadline - monotonic())))
 
 
 def _load_telegram_config() -> tuple[str, str]:
@@ -666,6 +775,7 @@ class WidgetExpansionRecommendationNotifier:
             or report.get("widget_runtime_effect") is not False
             or report.get("trading_runtime_effect") is not False
             or report.get("runtime_effect") is not False
+            or report.get("allowed_runtime_apply") is not False
             or report.get("actual_order_submitted") is not False
             or report.get("broker_order_forbidden") is not True
             or report.get("collector_created") is not False
@@ -740,6 +850,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--notify", action="store_true")
+    parser.add_argument("--source-wait-sec", type=float, default=0.0)
+    parser.add_argument("--source-poll-sec", type=float, default=30.0)
     return parser
 
 
@@ -757,10 +869,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     payload_path = args.payload_dir / f"ai_decision_payloads_{target_date}.jsonl"
     label_path = args.label_dir / f"ai_decision_outcome_labels_{target_date}.json"
-    source_issues = _source_artifact_issues(
+    source_issues = _wait_for_source_artifacts(
         target_date=target_date,
         payload_path=payload_path,
         label_path=label_path,
+        wait_sec=args.source_wait_sec,
+        poll_sec=args.source_poll_sec,
     )
     if source_issues:
         raise RuntimeError(
