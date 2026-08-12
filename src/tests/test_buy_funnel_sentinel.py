@@ -440,8 +440,11 @@ def test_pre_ai_budget_events_are_not_counted_as_lineage_join_failures(
     assert lineage["lineage_join_eligible_event_count"] == 1
     assert lineage["lineage_contract_missing_event_count"] == 0
     assert lineage["parent_trace_missing_when_expected_event_count"] == 0
+    assert lineage["parent_attempt_without_trusted_result_event_count"] == 0
+    assert lineage["parent_trace_missing_without_attempt_event_count"] == 0
     assert lineage["lineage_joined_event_count"] == 1
     assert lineage["lineage_untrusted_or_stale_event_count"] == 0
+    assert lineage["lineage_untrusted_or_stale_reason_counts"] == {}
     assert lineage["exact_parent_trace_unresolved_event_count"] == 0
     assert lineage["lineage_join_coverage_pct"] == 100.0
     assert lineage["raw_event_lineage_join_coverage_pct"] == 50.0
@@ -473,7 +476,37 @@ def test_pre_ai_only_budget_lineage_is_an_expected_observation() -> None:
     assert lineage["pre_ai_parent_not_expected_event_count"] == 1
     assert lineage["lineage_join_eligible_event_count"] == 0
     assert lineage["parent_trace_missing_when_expected_event_count"] == 0
+    assert lineage["parent_attempt_without_trusted_result_event_count"] == 0
+    assert lineage["parent_trace_missing_without_attempt_event_count"] == 0
     assert lineage["lineage_contract_coverage_pct"] == 100.0
+
+
+def test_budget_lineage_splits_attempt_without_result_from_missing_attempt() -> None:
+    event = sentinel.PipelineEvent(
+        emitted_at=sentinel._parse_as_of("2026-05-11", "10:00:00"),
+        pipeline="ENTRY_PIPELINE",
+        stage="budget_pass",
+        stock_name="테스트종목",
+        stock_code="000001",
+        record_id="1",
+        fields={
+            "pre_submit_parent_ai_decision_trace_id": "-",
+            "pre_submit_parent_ai_attempt_trace_id": "attempt-1",
+            "pre_submit_parent_ai_action": "NOT_EVALUATED",
+            "pre_submit_parent_ai_result_source": (
+                "attempt_untrusted_or_not_available"
+            ),
+            "pre_submit_parent_ai_lineage_status": "missing_ai_trace",
+            "pre_submit_parent_ai_attempt_trusted": False,
+            "pre_submit_parent_ai_source_fresh": False,
+        },
+    )
+
+    lineage = sentinel._budget_ai_lineage_summary([event])
+
+    assert lineage["parent_trace_missing_when_expected_event_count"] == 1
+    assert lineage["parent_attempt_without_trusted_result_event_count"] == 1
+    assert lineage["parent_trace_missing_without_attempt_event_count"] == 0
 
 
 def test_budget_block_is_causal_only_when_parent_ai_trace_joins(monkeypatch, tmp_path):
@@ -575,6 +608,138 @@ def test_budget_block_rejects_untrusted_or_stale_parent_ai_trace(monkeypatch, tm
     assert budget_axis["evidence"]["budget_ai_lineage"]["status"] == (
         "parent_ai_trace_untrusted_or_not_exact"
     )
+    assert budget_axis["evidence"]["budget_ai_lineage"][
+        "lineage_untrusted_or_stale_reason_counts"
+    ] == {"attempt_untrusted": 1}
+
+
+def test_budget_lineage_splits_untrusted_and_stale_reasons() -> None:
+    def lineage_event(
+        trace_id: str,
+        attempt_trace_id: str,
+        *,
+        trusted: bool,
+        fresh: bool,
+    ) -> sentinel.PipelineEvent:
+        return sentinel.PipelineEvent(
+            emitted_at=sentinel._parse_as_of("2026-05-13", "10:00:00"),
+            pipeline="ENTRY_PIPELINE",
+            stage="budget_pass",
+            stock_name="테스트종목",
+            stock_code="000001",
+            record_id=trace_id,
+            fields={
+                "pre_submit_parent_ai_decision_trace_id": trace_id,
+                "pre_submit_parent_ai_attempt_trace_id": attempt_trace_id,
+                "pre_submit_parent_ai_lineage_status": (
+                    "latest_watching_ai_trace_untrusted_or_stale"
+                ),
+                "pre_submit_parent_ai_attempt_trusted": trusted,
+                "pre_submit_parent_ai_source_fresh": fresh,
+            },
+        )
+
+    lineage = sentinel._budget_ai_lineage_summary(
+        [
+            lineage_event("trace-1", "attempt-1", trusted=False, fresh=True),
+            lineage_event("trace-2", "trace-2", trusted=True, fresh=False),
+            lineage_event("trace-3", "attempt-3", trusted=False, fresh=False),
+        ]
+    )
+
+    assert lineage["lineage_untrusted_or_stale_event_count"] == 3
+    assert lineage["lineage_untrusted_or_stale_reason_counts"] == {
+        "source_stale": 1,
+        "trace_id_mismatch": 1,
+        "trace_id_mismatch_and_source_stale": 1,
+    }
+
+
+def test_budget_lineage_joins_trusted_runtime_recheck_trace() -> None:
+    trace_id = "recheck-trace-1"
+    result_event = sentinel.PipelineEvent(
+        emitted_at=sentinel._parse_as_of("2026-05-13", "10:00:00"),
+        pipeline="ENTRY_PIPELINE",
+        stage="early_accel_strong_bundle_recheck_failed",
+        stock_name="테스트종목",
+        stock_code="000001",
+        record_id="1",
+        fields={
+            "ai_decision_trace_id": trace_id,
+            "ai_result_source": "live",
+            "ai_decision_evaluation_status": "evaluated",
+            "ai_parse_ok": "True",
+            "decision_quality_contract_status": "pass",
+        },
+    )
+    budget_event = sentinel.PipelineEvent(
+        emitted_at=sentinel._parse_as_of("2026-05-13", "10:00:01"),
+        pipeline="ENTRY_PIPELINE",
+        stage="budget_pass",
+        stock_name="테스트종목",
+        stock_code="000001",
+        record_id="1",
+        fields={
+            "pre_submit_parent_ai_decision_trace_id": trace_id,
+            "pre_submit_parent_ai_attempt_trace_id": trace_id,
+            "pre_submit_parent_ai_lineage_status": ("exact_latest_watching_ai_trace"),
+            "pre_submit_parent_ai_attempt_trusted": True,
+            "pre_submit_parent_ai_source_fresh": True,
+        },
+    )
+
+    lineage = sentinel._budget_ai_lineage_summary([result_event, budget_event])
+
+    assert lineage["lineage_joined_event_count"] == 1
+    assert lineage["exact_parent_trace_unresolved_event_count"] == 0
+    assert lineage["ai_trace_source_stage_counts"] == {
+        "early_accel_strong_bundle_recheck_failed": 1
+    }
+
+
+def test_budget_lineage_rejects_untrusted_runtime_recheck_trace() -> None:
+    result_event = sentinel.PipelineEvent(
+        emitted_at=sentinel._parse_as_of("2026-05-13", "10:00:00"),
+        pipeline="ENTRY_PIPELINE",
+        stage="ai_numeric_consistency_recheck_failed",
+        stock_name="테스트종목",
+        stock_code="000001",
+        record_id="1",
+        fields={
+            "ai_decision_trace_id": "recheck-trace-2",
+            "ai_result_source": "live",
+            "ai_decision_evaluation_status": "evaluated",
+            "ai_parse_ok": "False",
+            "decision_quality_contract_status": "pass",
+        },
+    )
+
+    lineage = sentinel._budget_ai_lineage_summary([result_event])
+
+    assert lineage["ai_trace_count"] == 0
+    assert lineage["ai_trace_source_stage_counts"] == {}
+
+
+def test_runtime_recheck_trace_stage_is_kept_in_lossless_cache() -> None:
+    payload = _event(
+        "2026-05-13",
+        "10:00:00",
+        "ai_numeric_consistency_recheck_corrected",
+        fields={
+            "ai_decision_trace_id": "recheck-trace-3",
+            "ai_result_source": "live",
+            "ai_decision_evaluation_status": "evaluated",
+            "ai_parse_ok": True,
+            "decision_quality_contract_status": "pass",
+            "ai_call_trigger_reason": "ai_numeric_consistency_recheck",
+        },
+    )
+
+    row = sentinel._payload_to_cache_row(payload)
+
+    assert row is not None
+    assert row["stage"] == "ai_numeric_consistency_recheck_corrected"
+    assert row["fields"]["ai_decision_trace_id"] == "recheck-trace-3"
 
 
 def test_submit_drought_separates_price_revalidation_from_broker_receipt(

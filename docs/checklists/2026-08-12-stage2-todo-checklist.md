@@ -39,6 +39,17 @@
   - 판정: 비용반영 probe path EV 양수, target-first missed-upside value 개선, severe-tail·catastrophic 증가 없음, fact/schema/provider 결함 0과 실제 next-snapshot transition을 함께 확인한다. 미달이면 `sample_floor_keep_collecting`, 악화면 `prompt_redesign_required`; 어느 경우에도 자동 live 승격하지 않는다.
   - 금지: outcome 기반 request selection, same-sample threshold fitting, full BUY 승격, provider/model/threshold/가격/수량/bot 변경, broker·stale·hard safety 우회, bot 재기동은 허용하지 않는다.
 
+- [x] `[EntryDynamicAgeAndFunnelLineageAttribution0812] dynamic-age post-apply·Buy Funnel parent lineage 보강` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 16:45~17:20`, `Track: EntryAttribution`)
+  - Source: [Rising Missed feedback](/home/ubuntu/KORStockScan/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_2026-08-12.json), [Buy Funnel Sentinel](/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-08-12.json), [runtime producer](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정: dynamic-age 적용 이벤트를 exact AI trace와 explicit venue로 deduplicate하고 entry executable ask 대비 후행 executable bid의 1·3·5·10·20·30·60분 MFE/MAE 및 net-target/adverse first-hit으로 귀속했다. 실제 6 episode는 KRX만 존재했고 source-quality PASS 6, `net_target_first 1 / adverse_stop_first 2 / not_observed 3`, 실제 주문 0이었다. 표본이 작고 latency-pass 4건도 단기 MFE가 약해 threshold·submit guard를 완화하지 않았다.
+  - lineage: Buy Funnel은 pre-AI parent 미기대, AI attempt 후 trusted result 없음, trace 자체 누락, stale/mismatch, exact unresolved를 분리한다. 당일 join 대상 67건 중 attempt-without-result 17, missing-without-attempt 0, exact trusted 37, stale/mismatch 13, joined 36, historical exact unresolved 1이다. 신규 numeric/early-accel recheck terminal 이벤트에는 exact trace·result source·evaluation·parse·contract provenance를 기록하지만 현재 PID에는 미반영이다.
+  - 리뷰/검증: 실제 리포트 재생성에서 Markdown `horizons` 중복 포맷 인자를 발견해 보완하고 재생성했다. Rising Missed와 Buy Funnel wrapper는 각각 17:13/17:14 `DONE`, 연관 회귀 `1,706 passed`, Black, Ruff, compile, checklist parser, `git diff --check`를 통과했다. 변경은 source-only/report provenance이며 provider·threshold·가격·수량·주문·broker/hard-safety·bot 상태를 바꾸지 않았다.
+
+- [ ] `[EntryRecheckLineageRuntimeReflection0813] recheck terminal provenance·venue 누적표본 확인` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: KRX_REGULAR_NXT`, `Track: EntryAttribution`)
+  - 실행: 사용자 또는 runbook이 허용한 다음 process start 이후 자연 numeric/early-accel recheck의 terminal stage가 exact trace로 Buy Funnel에 join되는지 확인한다. dynamic-age attribution은 KRX/NXT/PREMARKET_KRX_LIKE를 혼합하지 않고 venue별 rolling sample을 누적한다.
+  - 판정: 신규 producer가 반영된 PID/commit provenance, trusted result join, historical row 비소급, executable BBO source-quality PASS, target/adverse first-hit와 실제 submit 상태를 함께 확인한다. 현재 KRX 6건만으로 live threshold나 submit guard를 변경하지 않으며 NXT/PREMARKET 무표본은 결함이 아니라 표본부족으로 남긴다.
+  - 금지: historical raw evidence backfill, mark/last price MFE 대체, AI 의미계약 변경, threshold/provider/model/가격/수량/order/broker/hard-safety 우회, 무단 bot 재기동은 허용하지 않는다.
+
 ## 독립시간대 매매기계
 
 - [x] `[OpeningRotationWatchCapacityAndTuningRepair0812] Opening Rotation 2슬롯·등락률 분석 병목 보완` (`Due: 2026-08-12`, `Slot: MAINTENANCE`, `TimeWindow: 16:30~17:30`, `Track: ScalpingLogic`)

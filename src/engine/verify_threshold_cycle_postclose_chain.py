@@ -1472,6 +1472,7 @@ def _upper_limit_watch_report_status(
         else {}
     )
     prior_artifact_valid = cumulative_update.get("prior_artifact_valid") is True
+    prior_artifact_excluded = cumulative_update.get("prior_artifact_excluded") is True
     if counterfactual and cumulative_update.get("mode") != (
         "latest_prior_rolling_rows_plus_current_dedup_by_row_id"
     ):
@@ -1480,9 +1481,30 @@ def _upper_limit_watch_report_status(
         cumulative_update.get("prior_artifact_valid"), bool
     ):
         issues.append("upper_limit_watch_cumulative_prior_validity_missing")
-    if counterfactual and not prior_artifact_valid:
+    if counterfactual and prior_artifact_excluded:
+        if cumulative_update.get("prior_exclusion_reason") != (
+            "invalid_prior_counterfactual_contract"
+        ):
+            issues.append("upper_limit_watch_cumulative_prior_exclusion_invalid")
+        invalid_prior_dates = cumulative_update.get("invalid_prior_dates_skipped")
+        if invalid_prior_dates is not None and not (
+            isinstance(invalid_prior_dates, list)
+            and invalid_prior_dates
+            and all(str(value).strip() for value in invalid_prior_dates)
+        ):
+            issues.append("upper_limit_watch_cumulative_prior_exclusion_dates_invalid")
+        invalid_prior_date_values = (
+            invalid_prior_dates if isinstance(invalid_prior_dates, list) else []
+        )
+        if str(cumulative_update.get("prior_target_date") or "") in set(
+            str(value) for value in invalid_prior_date_values
+        ):
+            issues.append("upper_limit_watch_cumulative_excluded_prior_rows_reused")
+    if counterfactual and not prior_artifact_valid and not prior_artifact_excluded:
         warnings.append("upper_limit_watch_cumulative_source_invalid")
-    observation_source_usable = bool(event_source_usable and prior_artifact_valid)
+    observation_source_usable = bool(
+        event_source_usable and (prior_artifact_valid or prior_artifact_excluded)
+    )
 
     report_status = report.get("status")
     counterfactual_status = counterfactual.get("status")
@@ -1521,7 +1543,10 @@ def _upper_limit_watch_report_status(
         bounded.get("candidates") if isinstance(bounded.get("candidates"), list) else []
     )
     if counterfactual:
-        if counterfactual.get("sample_count") != len(counterfactual_rows):
+        passed_row_count = sum(
+            1 for row in counterfactual_rows if row.get("label_status") == "pass"
+        )
+        if counterfactual.get("sample_count") != passed_row_count:
             issues.append("upper_limit_watch_counterfactual_sample_count_mismatch")
         if cumulative_update.get("rolling_row_count") != len(counterfactual_rows):
             issues.append("upper_limit_watch_cumulative_rolling_row_count_mismatch")

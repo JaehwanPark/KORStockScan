@@ -48,6 +48,13 @@ UPSTREAM_BLOCK_STAGES = {
 AI_TERMINAL_ATTRIBUTION_STAGES = {
     "ai_confirmed_terminal_no_budget",
 }
+AI_TRACE_RESULT_STAGES = {
+    "ai_confirmed",
+    "ai_numeric_consistency_recheck_corrected",
+    "ai_numeric_consistency_recheck_failed",
+    "early_accel_strong_bundle_recheck_corrected",
+    "early_accel_strong_bundle_recheck_failed",
+}
 BUDGET_BLOCKER_STAGES = {
     "auth_zero_qty",
     "blocked_zero_qty",
@@ -102,8 +109,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 6
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 8
+EVENT_CACHE_SCHEMA_VERSION = 7
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 9
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -280,7 +287,9 @@ def _payload_to_cache_row(
     stage = _safe_str(payload.get("stage"))
     raw_fields = payload.get("fields") or {}
     raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
-    if _is_early_accel_recheck_retry_fields(raw_field_dict):
+    if _is_early_accel_recheck_retry_fields(
+        raw_field_dict
+    ) and stage not in AI_TRACE_RESULT_STAGES - {"ai_confirmed"}:
         return None
     if (
         exclude_summary_stages
@@ -294,6 +303,7 @@ def _payload_to_cache_row(
         or stage in SOURCE_HANDOFF_STAGES
         or stage in PROBE_BUNDLE_LIFECYCLE_STAGES
         or stage in AI_TERMINAL_ATTRIBUTION_STAGES
+        or stage in AI_TRACE_RESULT_STAGES
         or stage in BLOCKER_STAGES
         or stage in UPSTREAM_BLOCK_STAGES
         or stage in PRICE_GUARD_STAGES
@@ -639,6 +649,29 @@ def _ai_trace_key(event: PipelineEvent) -> str:
     return _attempt_key(event)
 
 
+def _trusted_ai_trace_result(event: PipelineEvent) -> bool:
+    trace_id = _field_first(event.fields, ("ai_decision_trace_id",))
+    if trace_id in {"", "-", "unknown", "not_available"}:
+        return False
+    if event.stage == "ai_confirmed":
+        return True
+    if event.stage not in AI_TRACE_RESULT_STAGES:
+        return False
+    result_source = _field_first(event.fields, ("ai_result_source",)).lower()
+    evaluation_status = _field_first(
+        event.fields, ("ai_decision_evaluation_status",)
+    ).lower()
+    contract_status = _field_first(
+        event.fields, ("decision_quality_contract_status",)
+    ).lower()
+    return bool(
+        result_source in {"live", "prior_valid"}
+        and evaluation_status == "evaluated"
+        and contract_status == "pass"
+        and _is_truthy_text(event.fields.get("ai_parse_ok"))
+    )
+
+
 def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
     """Attribute budget outcomes only through an explicit parent AI trace.
 
@@ -647,13 +680,16 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
     therefore useful as coverage only and is not a causal budget blocker.
     """
 
+    ai_trace_result_events = [
+        event for event in events if _trusted_ai_trace_result(event)
+    ]
     ai_trace_ids = {
         _field_first(event.fields, ("ai_decision_trace_id",))
-        for event in events
-        if event.stage == "ai_confirmed"
-        and _field_first(event.fields, ("ai_decision_trace_id",))
-        not in {"", "-", "unknown", "not_available"}
+        for event in ai_trace_result_events
     }
+    ai_trace_source_stage_counts = Counter(
+        event.stage for event in ai_trace_result_events
+    )
     lineage_events = [
         event
         for event in events
@@ -699,6 +735,59 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         if _field_first(event.fields, ("pre_submit_parent_ai_decision_trace_id",))
         in ai_trace_ids
     ]
+    join_eligible_events = [
+        event for event in lineage_events if id(event) not in pre_ai_expected_ids
+    ]
+    lineage_present_ids = {id(event) for event in lineage_present}
+    exact_lineage_ids = {id(event) for event in exact_lineage}
+    parent_trace_missing_events = [
+        event for event in join_eligible_events if id(event) not in lineage_present_ids
+    ]
+    parent_attempt_without_result_events = [
+        event
+        for event in parent_trace_missing_events
+        if _field_first(event.fields, ("pre_submit_parent_ai_attempt_trace_id",))
+        not in {"", "-", "unknown", "not_available"}
+    ]
+    parent_attempt_without_result_ids = {
+        id(event) for event in parent_attempt_without_result_events
+    }
+    parent_trace_missing_without_attempt_events = [
+        event
+        for event in parent_trace_missing_events
+        if id(event) not in parent_attempt_without_result_ids
+    ]
+    untrusted_or_stale_reason_counts: Counter[str] = Counter()
+    for event in lineage_present:
+        if id(event) in exact_lineage_ids:
+            continue
+        trace_id = _field_first(
+            event.fields, ("pre_submit_parent_ai_decision_trace_id",)
+        )
+        attempt_trace_id = _field_first(
+            event.fields, ("pre_submit_parent_ai_attempt_trace_id",)
+        )
+        attempt_trusted = _is_truthy_text(
+            event.fields.get("pre_submit_parent_ai_attempt_trusted")
+        )
+        source_fresh = _is_truthy_text(
+            event.fields.get("pre_submit_parent_ai_source_fresh")
+        )
+        if trace_id != attempt_trace_id:
+            reason = (
+                "trace_id_mismatch_and_source_stale"
+                if not source_fresh
+                else "trace_id_mismatch"
+            )
+        elif not attempt_trusted and not source_fresh:
+            reason = "attempt_untrusted_and_source_stale"
+        elif not attempt_trusted:
+            reason = "attempt_untrusted"
+        elif not source_fresh:
+            reason = "source_stale"
+        else:
+            reason = "lineage_status_not_exact"
+        untrusted_or_stale_reason_counts[reason] += 1
     linked_pass = {
         _ai_trace_key(event) for event in linked if event.stage == "budget_pass"
     }
@@ -706,9 +795,6 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         _ai_trace_key(event) for event in linked if event.stage in BUDGET_BLOCKER_STAGES
     }
     stage_counts = Counter(event.stage for event in linked)
-    join_eligible_events = [
-        event for event in lineage_events if id(event) not in pre_ai_expected_ids
-    ]
     raw_coverage_pct = (
         round((len(linked) / len(lineage_events)) * 100.0, 2) if lineage_events else 0.0
     )
@@ -736,6 +822,9 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
         ),
         "raw_ai_budget_census_is_causal": False,
         "ai_trace_count": len(ai_trace_ids),
+        "ai_trace_source_stage_counts": dict(
+            sorted(ai_trace_source_stage_counts.items())
+        ),
         "budget_or_block_event_count": len(lineage_events),
         "lineage_contract_event_count": len(lineage_contract_events),
         "lineage_contract_coverage_pct": (
@@ -749,12 +838,21 @@ def _budget_ai_lineage_summary(events: list[PipelineEvent]) -> dict[str, Any]:
             len(lineage_events) - len(lineage_contract_events)
         ),
         "lineage_field_present_count": len(lineage_present),
-        "parent_trace_missing_when_expected_event_count": (
-            len(join_eligible_events) - len(lineage_present)
+        "parent_trace_missing_when_expected_event_count": len(
+            parent_trace_missing_events
+        ),
+        "parent_attempt_without_trusted_result_event_count": len(
+            parent_attempt_without_result_events
+        ),
+        "parent_trace_missing_without_attempt_event_count": len(
+            parent_trace_missing_without_attempt_events
         ),
         "lineage_exact_trusted_count": len(exact_lineage),
         "lineage_untrusted_or_stale_event_count": (
             len(lineage_present) - len(exact_lineage)
+        ),
+        "lineage_untrusted_or_stale_reason_counts": dict(
+            sorted(untrusted_or_stale_reason_counts.items())
         ),
         "lineage_joined_event_count": len(linked),
         "exact_parent_trace_unresolved_event_count": len(exact_lineage) - len(linked),

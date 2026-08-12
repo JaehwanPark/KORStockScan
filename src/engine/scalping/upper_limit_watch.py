@@ -806,6 +806,9 @@ class UpperLimitWatchManager:
                 spread=self.state.get("spread"),
                 quote_count=self.state.get("quote_count"),
                 current_price=self.state.get("current_price"),
+                last_quote_epoch=received_epoch,
+                quote_age_sec=0.0,
+                snapshot_source="raw_0d_callback_event_time",
                 actual_ws_item=self.state.get("actual_ws_item"),
                 actual_ws_route=self.state.get("actual_ws_route"),
             )

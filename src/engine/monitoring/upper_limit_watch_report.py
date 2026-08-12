@@ -127,11 +127,19 @@ def _iter_events(path: Path) -> Iterable[dict[str, Any]]:
 
 
 def _event_contract_valid(fields: dict[str, Any]) -> bool:
+    def canonical_bool(value: Any, *, expected: bool) -> bool:
+        if isinstance(value, bool):
+            return value is expected
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            return normalized == ("true" if expected else "false")
+        return False
+
     return bool(
         fields.get("decision_authority") == "upper_limit_source_observation_only"
-        and fields.get("runtime_effect") is False
-        and fields.get("actual_order_submitted") is False
-        and fields.get("broker_order_forbidden") is True
+        and canonical_bool(fields.get("runtime_effect"), expected=False)
+        and canonical_bool(fields.get("actual_order_submitted"), expected=False)
+        and canonical_bool(fields.get("broker_order_forbidden"), expected=True)
     )
 
 
@@ -240,6 +248,7 @@ def collect_visits(target_date: str) -> tuple[list[dict[str, Any]], dict[str, An
                     "registered_at": emitted.isoformat(),
                     "trigger": None,
                     "snapshots": [],
+                    "quote_snapshots": [],
                 }
                 continue
             visit = active.get(code)
@@ -269,6 +278,20 @@ def collect_visits(target_date: str) -> tuple[list[dict[str, Any]], dict[str, An
                         "low_price": _safe_int(fields.get("low_price")),
                     }
                 )
+            elif stage == "upper_limit_watch_quote_snapshot":
+                visit["quote_snapshots"].append(
+                    {
+                        "at": emitted.isoformat(),
+                        "current_price": _safe_int(fields.get("current_price")),
+                        "best_ask": _safe_int(fields.get("best_ask")),
+                        "best_bid": _safe_int(fields.get("best_bid")),
+                        "quote_age_sec": _safe_float(fields.get("quote_age_sec")),
+                        "snapshot_source": str(
+                            fields.get("snapshot_source")
+                            or "raw_0d_callback_event_time"
+                        ),
+                    }
+                )
             elif stage == "upper_limit_watch_released":
                 close(code, str(fields.get("reason") or "released"))
     except (OSError, UnicodeError):
@@ -295,6 +318,53 @@ def _label(visit: dict[str, Any]) -> dict[str, Any]:
     entry_ask = _safe_int(trigger.get("best_ask"))
     entry_bid = _safe_int(trigger.get("best_bid"))
     quote_age_sec = _safe_float(trigger.get("quote_age_sec"))
+    quotes: list[tuple[datetime, dict[str, Any]]] = []
+    for row in visit.get("quote_snapshots", []):
+        at = _parse_dt(row.get("at")) if isinstance(row, dict) else None
+        ask = _safe_int(row.get("best_ask")) if isinstance(row, dict) else 0
+        bid = _safe_int(row.get("best_bid")) if isinstance(row, dict) else 0
+        quote_age = (
+            _safe_float(row.get("quote_age_sec")) if isinstance(row, dict) else None
+        )
+        if quote_age is not None and not 0.0 <= quote_age <= 5.0:
+            continue
+        if at is not None and ask >= bid > 0:
+            normalized = dict(row)
+            normalized["quote_age_sec"] = quote_age if quote_age is not None else 0.0
+            quotes.append((at, normalized))
+    quotes.sort(key=lambda item: item[0])
+
+    entry_at = trigger_at
+    entry_price_source = "trigger_fresh_bbo"
+    if trigger_at is not None and not (
+        entry_ask >= entry_bid > 0
+        and quote_age_sec is not None
+        and 0.0 <= quote_age_sec <= 5.0
+    ):
+        post_trigger_quotes = [
+            item
+            for item in quotes
+            if 0.0 <= (item[0] - trigger_at).total_seconds() <= 5.0
+        ]
+        if post_trigger_quotes:
+            entry_at, entry_quote = post_trigger_quotes[0]
+            entry_ask = _safe_int(entry_quote.get("best_ask"))
+            entry_bid = _safe_int(entry_quote.get("best_bid"))
+            quote_age_sec = _safe_float(entry_quote.get("quote_age_sec"))
+            if quote_age_sec is None:
+                quote_age_sec = 0.0
+            entry_price_source = "post_trigger_fresh_0d_ask"
+
+    entry_bbo_present = bool(
+        entry_ask >= entry_bid > 0
+        and quote_age_sec is not None
+        and 0.0 <= quote_age_sec <= 5.0
+    )
+    entry_spread_pct = (
+        round((entry_ask - entry_bid) / entry_ask * 100.0, 6)
+        if entry_bbo_present
+        else None
+    )
     result = {
         **{
             key: visit.get(key)
@@ -302,50 +372,76 @@ def _label(visit: dict[str, Any]) -> dict[str, Any]:
         },
         "trigger_type": str(trigger.get("trigger_type") or ""),
         "label_status": "insufficient_ordered_path",
-        "entry_bbo_present": bool(
-            entry_ask >= entry_bid > 0
-            and quote_age_sec is not None
-            and 0.0 <= quote_age_sec <= 5.0
-        ),
+        "entry_bbo_present": entry_bbo_present,
+        "entry_price_source": entry_price_source if entry_bbo_present else "missing",
+        "entry_spread_pct": entry_spread_pct,
     }
     if trigger_at is None or _safe_int(trigger.get("confirmation_tick_count")) < 2:
         return result
     if not result["entry_bbo_present"]:
         result["label_status"] = "entry_bbo_missing"
         return result
-    snapshots = []
+    if entry_spread_pct is None or entry_spread_pct > MAX_ENTRY_SPREAD_PCT:
+        result["label_status"] = "entry_spread_too_wide"
+        return result
+    snapshots: list[tuple[datetime, dict[str, Any]]] = []
     for row in visit.get("snapshots", []):
         at = _parse_dt(row.get("at")) if isinstance(row, dict) else None
         if at is not None and at >= trigger_at:
             snapshots.append((at, row))
-    horizon = [
+    reference_at = entry_at or trigger_at
+    quote_horizon = [
         item
-        for item in snapshots
-        if EXIT_HORIZON_SEC
-        <= (item[0] - trigger_at).total_seconds()
+        for item in quotes
+        if reference_at is not None
+        and EXIT_HORIZON_SEC
+        <= (item[0] - reference_at).total_seconds()
         <= EXIT_HORIZON_SEC + EXIT_TOLERANCE_SEC
     ]
-    if not horizon:
+    trade_horizon = [
+        item
+        for item in snapshots
+        if reference_at is not None
+        if EXIT_HORIZON_SEC
+        <= (item[0] - reference_at).total_seconds()
+        <= EXIT_HORIZON_SEC + EXIT_TOLERANCE_SEC
+    ]
+    if not quote_horizon and not trade_horizon:
         return result
-    exit_at, exit_row = min(horizon, key=lambda item: item[0])
-    exit_price = _safe_int(exit_row.get("current_price"))
+    if quote_horizon:
+        exit_at, exit_row = quote_horizon[0]
+        exit_price = _safe_int(exit_row.get("best_bid"))
+        exit_price_source = "fresh_0d_bid"
+    else:
+        exit_at, exit_row = min(trade_horizon, key=lambda item: item[0])
+        exit_price = _safe_int(exit_row.get("current_price"))
+        exit_price_source = "ordered_0b_trade"
     path_prices = [
         _safe_int(row.get("current_price"))
         for at, row in snapshots
-        if at <= exit_at and _safe_int(row.get("current_price")) > 0
+        if reference_at <= at <= exit_at and _safe_int(row.get("current_price")) > 0
     ]
+    path_prices.extend(
+        _safe_int(row.get("best_bid"))
+        for at, row in quotes
+        if reference_at <= at <= exit_at and _safe_int(row.get("best_bid")) > 0
+    )
     if exit_price <= 0 or not path_prices:
         return result
     gross = _pct(exit_price, entry_ask)
     result.update(
         {
             "label_status": "pass",
-            "entry_at": trigger_at.isoformat(),
+            "trigger_at": trigger_at.isoformat(),
+            "entry_at": reference_at.isoformat(),
             "entry_price": entry_ask,
             "entry_bid": entry_bid,
-            "entry_spread_pct": round((entry_ask - entry_bid) / entry_ask * 100.0, 6),
+            "entry_quote_age_sec": quote_age_sec,
+            "entry_price_source": entry_price_source,
+            "entry_spread_pct": entry_spread_pct,
             "exit_at": exit_at.isoformat(),
             "exit_price": exit_price,
+            "exit_price_source": exit_price_source,
             "gross_return_pct": gross,
             "net_return_pct": round((gross or 0.0) - ROUND_TRIP_COST_PCT, 6),
             "mfe_pct": _pct(max(path_prices), entry_ask),
@@ -399,19 +495,6 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _latest_prior(target_date: str) -> dict[str, Any]:
-    target = date.fromisoformat(target_date)
-    dated: list[tuple[date, Path]] = []
-    for path in COUNTERFACTUAL_DIR.glob("upper_limit_watch_counterfactual_*.json"):
-        try:
-            artifact_date = date.fromisoformat(path.stem.rsplit("_", 1)[-1])
-        except ValueError:
-            continue
-        if CLEAN_BASELINE_DATE <= artifact_date < target:
-            dated.append((artifact_date, path))
-    return _load_json(max(dated)[1]) if dated else {}
-
-
 def _prior_counterfactual_valid(payload: dict[str, Any], target_date: str) -> bool:
     if not payload:
         return True
@@ -446,6 +529,33 @@ def _prior_counterfactual_valid(payload: dict[str, Any], target_date: str) -> bo
     )
 
 
+def _select_prior(
+    target_date: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    target = date.fromisoformat(target_date)
+    dated: list[tuple[date, Path]] = []
+    for path in COUNTERFACTUAL_DIR.glob("upper_limit_watch_counterfactual_*.json"):
+        try:
+            artifact_date = date.fromisoformat(path.stem.rsplit("_", 1)[-1])
+        except ValueError:
+            continue
+        if CLEAN_BASELINE_DATE <= artifact_date < target:
+            dated.append((artifact_date, path))
+    invalid_dates: list[str] = []
+    for artifact_date, path in sorted(dated, reverse=True):
+        payload = _load_json(path)
+        if _prior_counterfactual_valid(payload, target_date):
+            return payload, {
+                "latest_seen_prior_target_date": max(dated)[0].isoformat(),
+                "invalid_prior_dates_skipped": invalid_dates,
+            }
+        invalid_dates.append(artifact_date.isoformat())
+    return {}, {
+        "latest_seen_prior_target_date": max(dated)[0].isoformat() if dated else None,
+        "invalid_prior_dates_skipped": invalid_dates,
+    }
+
+
 def _rolling_rows(
     rows: Iterable[dict[str, Any]], target_date: str
 ) -> list[dict[str, Any]]:
@@ -467,8 +577,9 @@ def _rolling_rows(
 def build_artifacts(target_date: str) -> dict[str, Path]:
     visits, source = collect_visits(target_date)
     current = [_label(visit) for visit in visits]
-    prior = _latest_prior(target_date)
-    prior_valid = _prior_counterfactual_valid(prior, target_date)
+    prior, prior_selection = _select_prior(target_date)
+    invalid_prior_dates = prior_selection["invalid_prior_dates_skipped"]
+    prior_valid = bool(prior) or not invalid_prior_dates
     prior_rows = (
         prior.get("rows") if prior_valid and isinstance(prior.get("rows"), list) else []
     )
@@ -503,7 +614,7 @@ def build_artifacts(target_date: str) -> dict[str, Path]:
                 **metrics,
             }
         )
-    source_valid = bool(source.get("valid") and prior_valid)
+    source_valid = bool(source.get("valid"))
     counterfactual = {
         "schema_version": 1,
         "report_type": "upper_limit_watch_counterfactual",
@@ -516,7 +627,15 @@ def build_artifacts(target_date: str) -> dict[str, Path]:
         "cumulative_update": {
             "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
             "prior_target_date": prior.get("target_date"),
+            "latest_seen_prior_target_date": prior_selection[
+                "latest_seen_prior_target_date"
+            ],
             "prior_artifact_valid": prior_valid,
+            "prior_artifact_excluded": bool(invalid_prior_dates),
+            "prior_exclusion_reason": (
+                "invalid_prior_counterfactual_contract" if invalid_prior_dates else ""
+            ),
+            "invalid_prior_dates_skipped": invalid_prior_dates,
             "prior_row_count": len(prior_rows),
             "current_row_count": len(current),
             "rolling_row_count": len(rows),

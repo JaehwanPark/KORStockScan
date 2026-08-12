@@ -1477,9 +1477,134 @@ def _is_backoff_event(row: dict[str, Any]) -> bool:
     return str(fields.get("fast_precheck_result") or "") == "budget_reallocated"
 
 
+def _dynamic_age_post_apply_source_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    fields = _fields(row)
+    if str(row.get("stage") or "") != "scalp_entry_action_decision_snapshot":
+        return None
+    if not _boolish(
+        fields.get("latency_true_ofi_direct_canary_dynamic_age_band_applied")
+    ):
+        return None
+    trace_id = str(fields.get("ai_decision_trace_id") or "").strip()
+    if trace_id in {"", "-", "unknown", "not_available"}:
+        return None
+    executable_bid, executable_ask, executable_source = _event_executable_bbo(row)
+    venue = str(fields.get("effective_venue") or fields.get("venue") or "").upper()
+    spread_bps = _safe_float(fields.get("latency_spread_block_spread_bps"))
+    if (
+        spread_bps is None
+        and executable_bid is not None
+        and executable_ask is not None
+        and executable_ask + executable_bid > 0
+    ):
+        spread_bps = (
+            (executable_ask - executable_bid)
+            / ((executable_ask + executable_bid) / 2.0)
+            * 10000.0
+        )
+    return {
+        "ts": _event_ts(row),
+        "record_id": str(row.get("record_id") or "").strip(),
+        "stock_code": _event_code(row),
+        "stock_name": _event_name(row),
+        "effective_venue": venue or "UNKNOWN",
+        "ai_decision_trace_id": trace_id,
+        "dynamic_age_source_stage": fields.get("source_stage") or "unknown",
+        "downstream_terminal_stage": fields.get("source_stage") or "unknown",
+        "entry_executable_best_bid": executable_bid,
+        "entry_executable_best_ask": executable_ask,
+        "entry_executable_bbo_source": executable_source,
+        "entry_ws_age_ms": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_ws_age_ms")
+            or fields.get("pre_submit_ws_snapshot_refresh_age_ms")
+        ),
+        "entry_spread_bps": round(spread_bps, 4) if spread_bps is not None else None,
+        "entry_true_ofi_ewma": _safe_float(
+            fields.get("latency_spread_relief_micro_estimator_true_ofi_ewma")
+        ),
+        "entry_orderbook_micro_ofi_z": _safe_float(fields.get("orderbook_micro_ofi_z")),
+        "entry_signed_tape_buy_ratio": _safe_float(
+            fields.get("latency_true_ofi_direct_canary_signed_tape_buy_ratio")
+        ),
+        "actual_order_submitted": _boolish(fields.get("actual_order_submitted")),
+        "first_hit": "not_observed",
+        "first_hit_ts": None,
+        "first_hit_elapsed_sec": None,
+        "post_apply_executable_bid_event_count": 0,
+        "horizons": {
+            f"{minutes}m": {
+                "event_count": 0,
+                "mfe_pct": None,
+                "mae_pct": None,
+            }
+            for minutes in TP1_POST_BLOCK_HORIZONS_MIN
+        },
+        "decision_authority": "source_only_dynamic_age_post_apply_attribution",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _update_dynamic_age_post_apply_row(
+    item: dict[str, Any],
+    *,
+    observation_ts: datetime | None,
+    executable_bid: float | None,
+) -> None:
+    source_ts = _parse_ts(item.get("ts"))
+    entry_ask = _safe_float(item.get("entry_executable_best_ask"))
+    if (
+        source_ts is None
+        or observation_ts is None
+        or entry_ask is None
+        or entry_ask <= 0
+        or executable_bid is None
+        or executable_bid <= 0
+    ):
+        return
+    elapsed_sec = (observation_ts - source_ts).total_seconds()
+    if elapsed_sec <= 0 or elapsed_sec > max(TP1_POST_BLOCK_HORIZONS_MIN) * 60:
+        return
+    move_pct = ((executable_bid - entry_ask) / entry_ask) * 100.0
+    item["post_apply_executable_bid_event_count"] = (
+        _safe_int(item.get("post_apply_executable_bid_event_count")) + 1
+    )
+    for minutes in TP1_POST_BLOCK_HORIZONS_MIN:
+        if elapsed_sec > minutes * 60:
+            continue
+        horizon = item["horizons"][f"{minutes}m"]
+        horizon["event_count"] = _safe_int(horizon.get("event_count")) + 1
+        horizon["mfe_pct"] = (
+            round(move_pct, 4)
+            if horizon.get("mfe_pct") is None
+            else round(max(float(horizon["mfe_pct"]), move_pct), 4)
+        )
+        horizon["mae_pct"] = (
+            round(move_pct, 4)
+            if horizon.get("mae_pct") is None
+            else round(min(float(horizon["mae_pct"]), move_pct), 4)
+        )
+    if item.get("first_hit") == "not_observed":
+        if move_pct >= TP1_NET_TARGET_PCT:
+            first_hit = "net_target_first"
+        elif move_pct <= TP1_ADVERSE_STOP_PCT:
+            first_hit = "adverse_stop_first"
+        else:
+            return
+        item["first_hit"] = first_hit
+        item["first_hit_ts"] = observation_ts.isoformat()
+        item["first_hit_elapsed_sec"] = round(elapsed_sec, 3)
+
+
 def _build_submit_safety_and_backoff_audit(
     pipeline_path: Path,
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     submit_blocks: list[dict[str, Any]] = []
     open_submit_blocks_by_code: dict[str, list[dict[str, Any]]] = {}
     backoff_by_code: dict[str, dict[str, Any]] = {}
@@ -1491,6 +1616,8 @@ def _build_submit_safety_and_backoff_audit(
     source_quality_missing_field_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     latest_seen_ts: datetime | None = None
+    dynamic_age_rows_by_trace: dict[str, dict[str, Any]] = {}
+    open_dynamic_age_rows_by_code: dict[str, list[dict[str, Any]]] = {}
 
     for row in iter_jsonl(pipeline_path):
         code = _event_code(row)
@@ -1509,6 +1636,28 @@ def _build_submit_safety_and_backoff_audit(
             row
         )
         delta = _event_delta_pct(row)
+
+        for item in open_dynamic_age_rows_by_code.get(code, []):
+            _update_dynamic_age_post_apply_row(
+                item,
+                observation_ts=parsed_ts,
+                executable_bid=executable_bid,
+            )
+
+        dynamic_age_source = _dynamic_age_post_apply_source_row(row)
+        if dynamic_age_source is not None:
+            trace_id = str(dynamic_age_source["ai_decision_trace_id"])
+            existing_dynamic_age = dynamic_age_rows_by_trace.get(trace_id)
+            if existing_dynamic_age is None:
+                dynamic_age_rows_by_trace[trace_id] = dynamic_age_source
+                open_dynamic_age_rows_by_code.setdefault(code, []).append(
+                    dynamic_age_source
+                )
+            else:
+                existing_dynamic_age["downstream_terminal_stage"] = (
+                    dynamic_age_source.get("downstream_terminal_stage")
+                    or existing_dynamic_age.get("downstream_terminal_stage")
+                )
 
         for block in open_submit_blocks_by_code.get(code, []):
             if block.get("counterfactual_requires_executable_bbo"):
@@ -1648,6 +1797,16 @@ def _build_submit_safety_and_backoff_audit(
             and age_sec >= 180.0
         )
 
+    dynamic_age_rows = sorted(
+        dynamic_age_rows_by_trace.values(),
+        key=lambda item: (str(item.get("ts") or ""), str(item.get("stock_code") or "")),
+    )
+    dynamic_age_first_hit_counts = Counter(
+        str(item.get("first_hit") or "not_observed") for item in dynamic_age_rows
+    )
+    dynamic_age_venue_counts = Counter(
+        str(item.get("effective_venue") or "UNKNOWN") for item in dynamic_age_rows
+    )
     summary = {
         "submit_safety_block_count": len(submit_blocks),
         "submit_safety_executable_bbo_required_count": sum(
@@ -1707,8 +1866,42 @@ def _build_submit_safety_and_backoff_audit(
         "potential_backoff_opportunity_loss_count": sum(
             1 for item in audit_rows if item["potential_backoff_opportunity_loss"]
         ),
+        "dynamic_age_post_apply_episode_count": len(dynamic_age_rows),
+        "dynamic_age_post_apply_latency_pass_count": sum(
+            item.get("dynamic_age_source_stage") == "latency_pass"
+            for item in dynamic_age_rows
+        ),
+        "dynamic_age_post_apply_actual_order_submitted_count": sum(
+            bool(item.get("actual_order_submitted")) for item in dynamic_age_rows
+        ),
+        "dynamic_age_post_apply_executable_bbo_source_gap_count": sum(
+            _safe_float(item.get("entry_executable_best_ask")) is None
+            for item in dynamic_age_rows
+        ),
+        "dynamic_age_post_apply_venue_source_gap_count": sum(
+            item.get("effective_venue") not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            for item in dynamic_age_rows
+        ),
+        "dynamic_age_post_apply_outcome_source_gap_count": sum(
+            _safe_int(item.get("post_apply_executable_bid_event_count")) < 2
+            for item in dynamic_age_rows
+        ),
+        "dynamic_age_post_apply_source_quality_pass_count": sum(
+            _safe_float(item.get("entry_executable_best_ask")) is not None
+            and item.get("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            and _safe_int(item.get("post_apply_executable_bid_event_count")) >= 2
+            for item in dynamic_age_rows
+        ),
+        "dynamic_age_post_apply_first_hit_counts": [
+            {"first_hit": key, "count": value}
+            for key, value in dynamic_age_first_hit_counts.most_common()
+        ],
+        "dynamic_age_post_apply_venue_counts": [
+            {"effective_venue": key, "count": value}
+            for key, value in dynamic_age_venue_counts.most_common()
+        ],
     }
-    return summary, submit_blocks, audit_rows
+    return summary, submit_blocks, audit_rows, dynamic_age_rows
 
 
 def _latency_false_negative_review_bucket(block: dict[str, Any]) -> str | None:
@@ -4111,9 +4304,12 @@ def build_report(
     first_touch_source_quality_counts = _count_first_touch_source_quality(
         first_touch_rows
     )
-    submit_backoff_summary, submit_safety_rows, backoff_audit_rows = (
-        _build_submit_safety_and_backoff_audit(pipeline_path)
-    )
+    (
+        submit_backoff_summary,
+        submit_safety_rows,
+        backoff_audit_rows,
+        dynamic_age_post_apply_rows,
+    ) = _build_submit_safety_and_backoff_audit(pipeline_path)
     latency_false_negative_summary, latency_false_negative_rows = (
         _build_latency_false_negative_review(submit_safety_rows)
     )
@@ -4334,6 +4530,18 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_dynamic_age_post_apply_attribution": {
+                "metric_role": "source_only_post_apply_attribution",
+                "decision_authority": "source_only_dynamic_age_post_apply_attribution",
+                "window_policy": "same_day_1_3_5_10_20_30_60m_executable_bid_after_dynamic_age_apply",
+                "sample_floor": "1_unique_exact_trace_dynamic_age_apply_with_executable_ask",
+                "primary_decision_metric": "net_target_first_vs_adverse_stop_first_count",
+                "source_quality_gate": (
+                    "exact_ai_decision_trace_explicit_venue_entry_executable_ask_"
+                    "and_same_symbol_post_apply_executable_bid"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
             "rising_missed_tp1_counterfactual_submit_safety": {
                 "metric_role": "source_only_candidate_to_submit_safety_projection",
                 "decision_authority": "source_only_candidate_to_submit_safety_projection",
@@ -4551,6 +4759,7 @@ def build_report(
         "backoff_opportunity_audit_rows": backoff_audit_rows[:200],
         "latency_false_negative_review_rows": latency_false_negative_rows[:200],
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
+        "dynamic_age_post_apply_attribution_rows": dynamic_age_post_apply_rows[:200],
         "rising_missed_tp1_first_hit_label_rows": tp1_label_rows[:200],
         "rising_missed_tp1_counterfactual_submit_safety_rows": tp1_counterfactual_rows[
             :200
@@ -4652,6 +4861,24 @@ def write_outputs(
         f"{summary.get('latency_false_negative_runtime_dynamic_age_eligible_count')}",
         f"- latency_false_negative_runtime_dynamic_age_applied_count: "
         f"{summary.get('latency_false_negative_runtime_dynamic_age_applied_count')}",
+        f"- dynamic_age_post_apply_episode_count: "
+        f"{summary.get('dynamic_age_post_apply_episode_count')}",
+        f"- dynamic_age_post_apply_latency_pass_count: "
+        f"{summary.get('dynamic_age_post_apply_latency_pass_count')}",
+        f"- dynamic_age_post_apply_actual_order_submitted_count: "
+        f"{summary.get('dynamic_age_post_apply_actual_order_submitted_count')}",
+        f"- dynamic_age_post_apply_executable_bbo_source_gap_count: "
+        f"{summary.get('dynamic_age_post_apply_executable_bbo_source_gap_count')}",
+        f"- dynamic_age_post_apply_venue_source_gap_count: "
+        f"{summary.get('dynamic_age_post_apply_venue_source_gap_count')}",
+        f"- dynamic_age_post_apply_outcome_source_gap_count: "
+        f"{summary.get('dynamic_age_post_apply_outcome_source_gap_count')}",
+        f"- dynamic_age_post_apply_source_quality_pass_count: "
+        f"{summary.get('dynamic_age_post_apply_source_quality_pass_count')}",
+        f"- dynamic_age_post_apply_first_hit_counts: "
+        f"{summary.get('dynamic_age_post_apply_first_hit_counts')}",
+        f"- dynamic_age_post_apply_venue_counts: "
+        f"{summary.get('dynamic_age_post_apply_venue_counts')}",
         f"- rising_missed_tp1_counterfactual_submit_safety_count: "
         f"{summary.get('rising_missed_tp1_counterfactual_submit_safety_count')}",
         f"- rising_missed_tp1_counterfactual_unique_symbol_count: "
@@ -4892,6 +5119,21 @@ def write_outputs(
             "ws_age_ms={ws_age_ms} reason={canary_reason} next_action={canary_next_action} "
             "runtime_dynamic_age_state={runtime_dynamic_age_band_provenance_state} "
             "decision_authority={decision_authority}".format(**item)
+        )
+    lines.extend(["", "## Dynamic-age Post-apply Attribution", ""])
+    for item in report.get("dynamic_age_post_apply_attribution_rows") or []:
+        horizons = ";".join(
+            f"{key}:n={value.get('event_count')}/mfe={value.get('mfe_pct')}/mae={value.get('mae_pct')}"
+            for key, value in (item.get("horizons") or {}).items()
+        )
+        lines.append(
+            "- ts={ts} code={stock_code} name={stock_name} venue={effective_venue} "
+            "source_stage={dynamic_age_source_stage} terminal={downstream_terminal_stage} "
+            "entry_ask={entry_executable_best_ask} first_hit={first_hit} "
+            "first_hit_elapsed_sec={first_hit_elapsed_sec} order_submitted={actual_order_submitted} "
+            "horizons={horizons} decision_authority={decision_authority}".format_map(
+                {**item, "horizons": horizons or "-"}
+            )
         )
     lines.extend(["", "## TP1 Counterfactual First-hit Labels", ""])
     for item in (

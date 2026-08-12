@@ -25975,6 +25975,10 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(
                 "action": "WAIT",
                 "score": 72,
                 "reason": "tick_acceleration_ratio still fails < 1.10",
+                "ai_decision_trace_id": "numeric-recheck-trace-1",
+                "ai_result_source": "live",
+                "ai_parse_ok": True,
+                "decision_quality_contract_status": "pass",
                 "ai_reason_numeric_inconsistency": True,
                 "ai_reason_numeric_inconsistency_field": "tick_acceleration_ratio",
                 "ai_reason_numeric_inconsistency_reason": "tick_acceleration_pass_described_as_fail",
@@ -26069,6 +26073,14 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(
     assert any(
         stage == "ai_numeric_consistency_recheck_failed" for stage, _fields in logs
     )
+    failed_fields = next(
+        fields
+        for stage, fields in logs
+        if stage == "ai_numeric_consistency_recheck_failed"
+    )
+    assert failed_fields["ai_decision_trace_id"] == "numeric-recheck-trace-1"
+    assert failed_fields["ai_decision_evaluation_status"] == "evaluated"
+    assert failed_fields["ai_result_source"] == "live"
 
 
 def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatch):
