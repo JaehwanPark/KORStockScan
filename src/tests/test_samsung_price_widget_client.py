@@ -94,6 +94,65 @@ def test_widget_payload_parser_accepts_positive_current_price():
     assert quote.minute_chart[-1] == ("10:01", 70500)
 
 
+def test_widget_payload_parser_accepts_fresh_ws_price_comparison():
+    now = datetime.now().astimezone()
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 242_000,
+            "minute_chart": [],
+            "websocket_comparison": {
+                "status": "OK",
+                "current_price": 242_500,
+                "reference_price": 242_000,
+                "price_delta": 500,
+                "observed_at_kst": (now - timedelta(seconds=0.4)).isoformat(),
+                "market_route": "SOR",
+                "authority": "widget_ws_price_comparison_only",
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "used_for_manual_order": False,
+            },
+        },
+        received_at=now,
+    )
+
+    assert quote.websocket_status == "OK"
+    assert quote.websocket_price == 242_500
+    assert quote.websocket_price_delta == 500
+    assert quote.websocket_route == "SOR"
+    assert 390 <= quote.websocket_age_ms <= 410
+
+
+def test_widget_payload_parser_ignores_ws_comparison_with_runtime_authority():
+    now = datetime.now().astimezone()
+    quote = widget.parse_quote_payload(
+        {
+            "status": "ok",
+            "current_price": 242_000,
+            "minute_chart": [],
+            "websocket_comparison": {
+                "status": "OK",
+                "current_price": 242_500,
+                "reference_price": 242_000,
+                "price_delta": 500,
+                "observed_at_kst": now.isoformat(),
+                "market_route": "SOR",
+                "authority": "widget_ws_price_comparison_only",
+                "runtime_effect": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "used_for_manual_order": False,
+            },
+        },
+        received_at=now,
+    )
+
+    assert quote.websocket_status == "UNAVAILABLE"
+    assert quote.websocket_price is None
+
+
 def test_widget_payload_parser_accepts_display_only_position():
     now = datetime.now().astimezone()
     quote = widget.parse_quote_payload(
@@ -724,8 +783,8 @@ def test_widget_preserves_ambiguous_broker_receipt_from_http_error(monkeypatch):
     assert result["orders"][0]["order_no"] == "ORDER-1"
 
 
-def test_widget_refreshes_every_10_seconds():
-    assert widget.POLL_INTERVAL_MS == 10_000
+def test_widget_refreshes_every_2_seconds():
+    assert widget.POLL_INTERVAL_MS == 2_000
 
 
 def test_windows_installer_uses_a_resolved_ascii_shortcut_path():

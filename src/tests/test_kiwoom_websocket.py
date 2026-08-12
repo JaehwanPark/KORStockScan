@@ -53,6 +53,26 @@ def test_login_success_message_helpers():
     assert KiwoomWSManager._is_login_failure_message(failure) is True
 
 
+def test_widget_dashboard_snapshot_interval_defaults_to_one_second(monkeypatch):
+    monkeypatch.delenv(
+        kiwoom_websocket.WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV, raising=False
+    )
+    assert kiwoom_websocket._ws_dashboard_snapshot_interval_sec() == 1.0
+
+    monkeypatch.setenv(kiwoom_websocket.WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV, "0.01")
+    assert kiwoom_websocket._ws_dashboard_snapshot_interval_sec() == 0.25
+
+
+def test_pinned_widget_observation_is_limited_to_one_samsung_item(monkeypatch):
+    monkeypatch.setenv(
+        kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV,
+        "000001_AL,005930_NX,005930_AL",
+    )
+
+    assert kiwoom_websocket.pinned_ws_observation_items() == ("005930_NX",)
+    assert kiwoom_websocket.pinned_ws_observation_codes() == frozenset({"005930"})
+
+
 def test_await_login_ack_handles_ping_then_success():
     manager = KiwoomWSManager("test-token")
     ping_payload = json.dumps({"trnm": "PING", "ping_id": "abc123"})
@@ -1464,6 +1484,73 @@ def test_execute_unsubscribe_removes_registered_item_budget_state(monkeypatch):
     assert manager.subscribed_codes == set()
     assert manager._registered_items_by_code == {}
     assert "000001" not in manager.realtime_data
+
+
+def test_execute_unsubscribe_retains_widget_comparison_observation(monkeypatch):
+    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+    manager._registered_items_by_code = {"005930": ("005930_AL",)}
+    manager.realtime_data = {"005930": {"curr": 242_000}}
+
+    manager.execute_unsubscribe(["005930"])
+
+    assert manager.subscribed_codes == {"005930"}
+    assert manager._registered_items_by_code == {"005930": ("005930_AL",)}
+    assert manager.realtime_data["005930"]["curr"] == 242_000
+
+
+def test_widget_observation_item_does_not_consume_trading_item_budget(monkeypatch):
+    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    asyncio.run(manager._send_reg(["005930_AL"], enforce_item_budget=True))
+    asyncio.run(manager._send_reg(["000001"], enforce_item_budget=True))
+
+    assert manager.subscribed_codes == {"005930", "000001"}
+    assert manager._registered_items_by_code == {
+        "005930": ("005930_AL",),
+        "000001": ("000001",),
+    }
+
+
+def test_samsung_non_pinned_route_still_consumes_trading_item_budget(monkeypatch):
+    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
+    manager = KiwoomWSManager("test-token")
+    fake_ws = _FakeWS([])
+    manager.websocket = fake_ws
+    manager._session_ready.set()
+
+    asyncio.run(manager._send_reg(["000001"], enforce_item_budget=True))
+    asyncio.run(manager._send_reg(["005930"], enforce_item_budget=True))
+
+    assert manager.subscribed_codes == {"000001"}
+    assert manager._registered_items_by_code == {"000001": ("000001",)}
+
+
+def test_execute_unsubscribe_removes_samsung_non_pinned_route(monkeypatch):
+    monkeypatch.delenv(kiwoom_websocket.WS_PINNED_OBSERVATION_ITEMS_ENV, raising=False)
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+    manager._registered_items_by_code = {"005930": ("005930",)}
+    manager.realtime_data = {"005930": {"curr": 242_000}}
+
+    manager.execute_unsubscribe(["005930"])
+
+    assert manager.subscribed_codes == set()
+    assert manager._registered_items_by_code == {}
+    assert "005930" not in manager.realtime_data
 
 
 def test_send_reg_preserves_refresh_for_all_batches(monkeypatch):

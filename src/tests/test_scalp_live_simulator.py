@@ -1989,6 +1989,7 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(
                 ],
                 "hypothesis_observation_plan": {
                     "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "source_report_date": "2026-06-05",
                     "hypotheses": [
                         {
                             "soft_hypothesis_id": "ldm_hypothesis_also_matches",
@@ -2903,6 +2904,7 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(
                 "active_sim_priority_seeds": [],
                 "hypothesis_observation_plan": {
                     "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "source_report_date": "2026-06-05",
                     "hypotheses": [
                         {
                             "soft_hypothesis_id": "ldm_hypothesis_test",
@@ -3032,6 +3034,7 @@ def test_scalp_sim_policy_loader_accepts_legacy_ldm_hypothesis_forbidden_use_ali
                 "active_sim_priority_seeds": [],
                 "hypothesis_observation_plan": {
                     "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "source_report_date": "2026-06-05",
                     "hypotheses": [
                         {
                             "soft_hypothesis_id": "ldm_hypothesis_legacy_alias",
@@ -3094,6 +3097,7 @@ def test_scalp_sim_policy_loader_rejects_invalid_hypothesis_contract(
                 "active_sim_priority_seeds": [],
                 "hypothesis_observation_plan": {
                     "schema_version": "ldm_hypothesis_observation_plan_v1",
+                    "source_report_date": "2026-06-05",
                     "hypotheses": [
                         {
                             "soft_hypothesis_id": "invalid_missing_forbidden_uses",

@@ -29,6 +29,9 @@ from sqlalchemy import or_
 
 from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders, sniper_trade_utils
+from src.engine.automation.source_quality_clean_baseline import (
+    embedded_source_date_gate,
+)
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
@@ -1816,7 +1819,11 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
         if isinstance(payload.get("hypothesis_observation_plan"), dict)
         else {}
     )
-    if str(plan.get("schema_version") or "") == "ldm_hypothesis_observation_plan_v1":
+    hypothesis_plan_gate = embedded_source_date_gate(plan)
+    if (
+        str(plan.get("schema_version") or "") == "ldm_hypothesis_observation_plan_v1"
+        and hypothesis_plan_gate["allowed"]
+    ):
         for hypothesis in plan.get("hypotheses") or []:
             if _scalp_hypothesis_contract_valid(hypothesis):
                 hypotheses.append(hypothesis)
@@ -1875,6 +1882,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
                 for key, value in active_seed_ids_by_prefix.items()
             },
             "hypotheses": hypotheses,
+            "hypothesis_observation_plan_clean_baseline_gate": (hypothesis_plan_gate),
             "approved_row_count": len(rows_by_source_bucket_id)
             or len(rows_by_bucket_id),
             "active_seed_count": len(active_seeds),

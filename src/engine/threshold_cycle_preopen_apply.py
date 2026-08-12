@@ -41,6 +41,9 @@ from src.engine.automation.source_quality_hard_gate import (
     load_source_quality_preflight,
     source_quality_preflight_blocked,
 )
+from src.engine.automation.source_quality_clean_baseline import (
+    embedded_source_date_gate,
+)
 from src.engine.automation.ai_multi_timeframe_context_promotion import (
     authoritative_runtime_env as authoritative_ai_context_runtime_env,
 )
@@ -2649,6 +2652,16 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     elif catalog_payload.get("schema_version") != "scalp_sim_policy_catalog_v1":
         blocked.append("scalp_sim_policy_catalog_schema_invalid")
     else:
+        hypothesis_plan = (
+            catalog_payload.get("hypothesis_observation_plan")
+            if isinstance(catalog_payload.get("hypothesis_observation_plan"), dict)
+            else {}
+        )
+        hypothesis_plan_gate = embedded_source_date_gate(hypothesis_plan)
+        if hypothesis_plan and not hypothesis_plan_gate["allowed"]:
+            blocked.append(
+                "scalp_sim_policy_catalog_hypothesis_plan_clean_baseline_invalid"
+            )
         generated_at = _parse_dt(catalog_payload.get("generated_at"))
         generator_provenance = (
             catalog_payload.get("generator_provenance")
@@ -5021,6 +5034,42 @@ def verify_runtime_env_handoff(
             }
         )
     effective_env_overrides.update(authoritative_context_env)
+    scalp_sim_policy_file = str(
+        effective_env_overrides.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
+    ).strip()
+    if (
+        _runtime_env_enabled(
+            effective_env_overrides.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED")
+        )
+        and scalp_sim_policy_file
+    ):
+        scalp_sim_policy_payload = _load_json(Path(scalp_sim_policy_file))
+        embedded_plan = (
+            scalp_sim_policy_payload.get("hypothesis_observation_plan")
+            if isinstance(
+                scalp_sim_policy_payload.get("hypothesis_observation_plan"), dict
+            )
+            else {}
+        )
+        embedded_plan_gate = embedded_source_date_gate(embedded_plan)
+        if embedded_plan and not embedded_plan_gate["allowed"]:
+            findings.append(
+                {
+                    "family": "scalp_sim_auto_approval",
+                    "missing_env_keys": [],
+                    "severity": "runtime_policy_unusable",
+                    "detail": (
+                        "scalp sim policy embeds hypothesis evidence before the "
+                        "clean tuning baseline"
+                    ),
+                    "policy_file": scalp_sim_policy_file,
+                    "policy_reason": f"hypothesis_plan_{embedded_plan_gate['status']}",
+                    "source_report_date": embedded_plan_gate.get("source_report_date"),
+                    "clean_tuning_baseline_date": embedded_plan_gate.get(
+                        "clean_tuning_baseline_date"
+                    ),
+                }
+            )
     for family in retired_selected_families:
         findings.append(
             {

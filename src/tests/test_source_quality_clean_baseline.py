@@ -28,6 +28,34 @@ def test_clean_baseline_filters_pre_baseline_dates(monkeypatch, tmp_path):
     assert policy["allowed_runtime_apply"] is False
 
 
+def test_embedded_source_date_gate_rejects_pre_baseline_and_missing_dates():
+    policy = {
+        "enabled": True,
+        "clean_tuning_baseline_date": "2026-06-05",
+    }
+
+    rejected = baseline.embedded_source_date_gate(
+        {"source_report_date": "2026-06-01"}, policy=policy
+    )
+    missing = baseline.embedded_source_date_gate({"hypotheses": []}, policy=policy)
+    accepted = baseline.embedded_source_date_gate(
+        {"source_report_date": "2026-06-05"}, policy=policy
+    )
+
+    assert rejected["allowed"] is False
+    assert rejected["status"] == "pre_clean_baseline_archive_only"
+    assert missing["status"] == "source_date_missing"
+    assert accepted["allowed"] is True
+    assert accepted["status"] == "pass"
+
+
+def test_embedded_source_date_gate_rejects_invalid_date():
+    result = baseline.embedded_source_date_gate({"source_report_date": "not-a-date"})
+
+    assert result["allowed"] is False
+    assert result["status"] == "source_date_invalid"
+
+
 def test_report_quarantine_reasons_follow_clean_baseline_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(
         baseline, "POLICY_PATH", tmp_path / "clean_baseline_policy.json"
