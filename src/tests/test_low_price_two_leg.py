@@ -13,6 +13,7 @@ from src.engine.risk.manual_control_exclusion import (
 )
 from src.engine.monitoring.low_price_two_leg_tuning import (
     CLEAN_WINDOW_NAME,
+    PROFILE_FIRST_OPERATIONAL_DATES,
     REPORT_SCHEMA,
     build_candidate,
     build_report,
@@ -1354,6 +1355,80 @@ def test_clean_window_loads_legacy_report_and_does_not_impute_missing_dates(tmp_
     summary = second["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
     assert summary["eligible_days"] == 2
     assert summary["completed_legs"] == 4
+
+
+def test_profile_expansion_dates_do_not_create_historical_source_gaps(tmp_path):
+    report_dir = tmp_path / "reports"
+    source_quality_dir = tmp_path / "source_quality"
+    report_dir.mkdir()
+    assert set(PROFILE_FIRST_OPERATIONAL_DATES) == set(PROFILES)
+
+    def missing_row(profile_id: str, target_date: str) -> dict:
+        return {
+            "profile_id": profile_id,
+            "target_date": target_date,
+            "source_quality": "gap",
+            "source_quality_reasons": ["state_missing_or_invalid"],
+            "eligible_for_tuning": False,
+            "attempted": False,
+            "no_signal": False,
+            "state_status": "UNKNOWN",
+            "signal_features": {},
+            "legs": [],
+        }
+
+    for target_date, profile_ids in (
+        (
+            "2026-08-11",
+            {
+                "samsung_heavy_midday",
+                "samsung_heavy_afternoon",
+                "sk_eternix_midday",
+            },
+        ),
+        ("2026-08-12", set(PROFILES)),
+    ):
+        payload = {
+            "report_type": "low_price_two_leg_tuning",
+            "schema": REPORT_SCHEMA,
+            "target_date": target_date,
+            "clean_tuning_baseline_date": "2026-06-05",
+            "cost_pct": 0.20,
+            "daily": {
+                "profiles": {
+                    profile_id: missing_row(profile_id, target_date)
+                    for profile_id in profile_ids
+                }
+            },
+        }
+        (report_dir / f"low_price_two_leg_tuning_{target_date}.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    _write_source_quality_audit(source_quality_dir, "2026-08-13")
+    report = build_report(
+        target_date="2026-08-13",
+        state_dir=tmp_path / "states",
+        output_dir=report_dir,
+        source_quality_dir=source_quality_dir,
+    )
+
+    new_profile_rows = report["windows"][CLEAN_WINDOW_NAME]["kakao_morning"]["rows"]
+    assert [row.get("cohort") for row in new_profile_rows[:2]] == [
+        "pre_operational_not_applicable",
+        "pre_operational_not_applicable",
+    ]
+    new_profile_summary = report["windows"][CLEAN_WINDOW_NAME]["kakao_morning"][
+        "summary"
+    ]
+    assert new_profile_summary["pre_operational_days"] == 2
+    assert new_profile_summary["source_gap_days"] == 1
+
+    initial_profile_summary = report["windows"][CLEAN_WINDOW_NAME][
+        "samsung_heavy_midday"
+    ]["summary"]
+    assert initial_profile_summary["pre_operational_days"] == 1
+    assert initial_profile_summary["source_gap_days"] == 2
 
 
 def test_prior_report_cost_contract_mismatch_is_excluded(tmp_path):

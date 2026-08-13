@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
@@ -30,12 +31,14 @@ CANDIDATE_DIR = (
 APPLIED_DIR = DATA_DIR / "threshold_cycle" / "samsung_machine_entry_policy" / "applied"
 MAX_CANDIDATE_AGE_DAYS = 7
 CLEAN_BASELINE_DATE = "2026-06-05"
+LEGACY_TWO_SHARE_CANDIDATE_LAST_SOURCE_DATE = date(2026, 8, 13)
+LEGACY_TWO_SHARE_APPLIED_LAST_TARGET_DATE = date(2026, 8, 13)
 
 BASELINE_POLICIES: dict[str, dict[str, Any]] = {
     "morning": {
         "nxt_drawdown_pct": 3.0,
         "sor_drawdown_pct": 0.75,
-        "quantity": 2,
+        "quantity": EPISODE_TOTAL_QUANTITY,
         "target_ticks": 2,
     },
     "midday": {
@@ -43,7 +46,7 @@ BASELINE_POLICIES: dict[str, dict[str, Any]] = {
         "rolling_low_proximity_pct": 0.20,
         "lookback_bars": 30,
         "entry_valid_completed_bars": 5,
-        "quantity": 2,
+        "quantity": EPISODE_TOTAL_QUANTITY,
         "target_ticks": 2,
     },
     "afternoon": {
@@ -51,7 +54,7 @@ BASELINE_POLICIES: dict[str, dict[str, Any]] = {
         "rolling_low_proximity_pct": 0.20,
         "lookback_bars": 30,
         "entry_valid_completed_bars": 5,
-        "quantity": 2,
+        "quantity": EPISODE_TOTAL_QUANTITY,
         "target_ticks": 2,
     },
 }
@@ -125,17 +128,39 @@ def _finite_number(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def validate_machine_policy(machine: str, policy: Any) -> tuple[bool, str]:
+def validate_machine_policy(
+    machine: str,
+    policy: Any,
+    *,
+    target_date: date | None = None,
+    legacy_two_share_candidate: bool = False,
+) -> tuple[bool, str]:
     if machine not in BASELINE_POLICIES or not isinstance(policy, dict):
         return False, "machine_or_policy_invalid"
     baseline = BASELINE_POLICIES[machine]
     if set(policy) != set(baseline):
         return False, "policy_key_contract_mismatch"
+    legacy_quantity_allowed = bool(
+        policy.get("quantity") == 2
+        and (
+            legacy_two_share_candidate
+            or (
+                target_date is not None
+                and target_date <= LEGACY_TWO_SHARE_APPLIED_LAST_TARGET_DATE
+            )
+        )
+    )
     for key in ("quantity", "target_ticks"):
+        if key == "quantity" and legacy_quantity_allowed:
+            continue
         if policy.get(key) != baseline[key]:
             return False, f"immutable_{key}_mismatch"
     if machine == "morning":
-        if policy != baseline:
+        if any(
+            policy.get(key) != value
+            for key, value in baseline.items()
+            if key != "quantity"
+        ):
             return False, "morning_policy_is_baseline_only"
         return True, "valid"
     for key in ("lookback_bars", "entry_valid_completed_bars"):
@@ -185,7 +210,13 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
         if not isinstance(item, dict):
             return False, f"candidate_{machine}_invalid"
         policy = item.get("policy")
-        valid, reason = validate_machine_policy(machine, policy)
+        valid, reason = validate_machine_policy(
+            machine,
+            policy,
+            legacy_two_share_candidate=(
+                source_date <= LEGACY_TWO_SHARE_CANDIDATE_LAST_SOURCE_DATE
+            ),
+        )
         if not valid:
             return False, f"candidate_{machine}_{reason}"
         if item.get("allowed_runtime_apply") is not True:
@@ -194,6 +225,23 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
     if payload.get("policy_hash") != policy_hash(policies):
         return False, "candidate_policy_hash_mismatch"
     return True, "valid"
+
+
+def candidate_policies_with_current_baselines(
+    payload: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Validate candidate provenance, then migrate legacy quantity in memory."""
+
+    valid, reason = validate_candidate(payload)
+    if not valid:
+        raise ValueError(reason)
+    normalized: dict[str, dict[str, Any]] = {}
+    for machine, baseline in BASELINE_POLICIES.items():
+        policy = dict(payload["machines"][machine]["policy"])
+        if policy.get("quantity") == 2:
+            policy["quantity"] = baseline["quantity"]
+        normalized[machine] = policy
+    return normalized
 
 
 def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
@@ -223,7 +271,9 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
         if not isinstance(item, dict):
             return False, f"applied_{machine}_invalid"
         policy = item.get("policy")
-        valid, reason = validate_machine_policy(machine, policy)
+        valid, reason = validate_machine_policy(
+            machine, policy, target_date=target_date
+        )
         if not valid:
             return False, f"applied_{machine}_{reason}"
         policies[machine] = policy

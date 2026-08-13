@@ -24,6 +24,7 @@ from src.trading.order.samsung_entry_policy import (
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
+    candidate_policies_with_current_baselines,
     policy_hash,
     validate_candidate,
 )
@@ -541,7 +542,32 @@ def extract_machine_row(
 
     attempted = bool(state.get("attempt_consumed"))
     state_status = str(state.get("status") or "UNKNOWN")
+    blocked_reason = str(state.get("blocked_reason") or "")
     signal_features = _sanitize_signal_features(machine, state.get("signal_features"))
+    if (
+        machine == "morning_reentry"
+        and not attempted
+        and state_status == "BLOCKED"
+        and blocked_reason == "first_episode_both_legs_not_complete"
+        and state.get("legs") == []
+    ):
+        row = _empty_machine_row(
+            machine, target_date, "first_episode_both_legs_not_complete"
+        )
+        row.update(
+            {
+                "cohort": "prerequisite_not_met",
+                "eligible_for_cumulative_tuning": True,
+                "source_quality": "pass",
+                "source_quality_reasons": [],
+                "state_status": state_status,
+                "no_signal": False,
+                "prerequisite_met": False,
+                "observed_schema": schema,
+                "blocked_reason": blocked_reason,
+            }
+        )
+        return row
     reasons: list[str] = []
     if state_status == "BLOCKED":
         reasons.append("machine_state_blocked")
@@ -962,10 +988,7 @@ def write_policy_candidate(
         valid, _ = validate_candidate(prior)
         if not valid:
             raise ValueError("latest_prior_candidate_invalid")
-        prior_policies = {
-            machine: dict(prior["machines"][machine]["policy"])
-            for machine in BASELINE_POLICIES
-        }
+        prior_policies = candidate_policies_with_current_baselines(prior)
         break
     candidate = build_policy_candidate(report, prior_policies=prior_policies)
     path = candidate_dir / (

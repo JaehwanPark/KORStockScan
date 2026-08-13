@@ -18,6 +18,7 @@ from src.trading.order.samsung_entry_policy import (
     applied_path,
     atomic_write_json,
     baseline_applied_payload,
+    candidate_policies_with_current_baselines,
     policy_hash,
     policy_mutations_between,
     validate_applied,
@@ -77,10 +78,7 @@ def build_applied_policy(
         raise ValueError(reason)
     if candidate.get("source_date") != candidate_date.isoformat():
         raise ValueError("candidate_filename_payload_date_mismatch")
-    policies = {
-        machine: dict(candidate["machines"][machine]["policy"])
-        for machine in BASELINE_POLICIES
-    }
+    policies = candidate_policies_with_current_baselines(candidate)
     previous_path = _latest_prior_candidate(candidate_dir, candidate_date)
     previous_policies = {
         machine: dict(policy) for machine, policy in BASELINE_POLICIES.items()
@@ -95,10 +93,7 @@ def build_applied_policy(
         valid, reason = validate_candidate(previous)
         if not valid:
             raise ValueError(f"previous_candidate_{reason}")
-        previous_policies = {
-            machine: dict(previous["machines"][machine]["policy"])
-            for machine in BASELINE_POLICIES
-        }
+        previous_policies = candidate_policies_with_current_baselines(previous)
     expected_mutations = policy_mutations_between(previous_policies, policies)
     if candidate.get("policy_mutations") != expected_mutations:
         raise ValueError("candidate_policy_mutation_lineage_mismatch")

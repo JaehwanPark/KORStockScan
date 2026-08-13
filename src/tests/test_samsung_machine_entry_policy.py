@@ -15,6 +15,8 @@ from src.trading.order.samsung_entry_policy import (
     BASELINE_POLICIES,
     CANDIDATE_SCHEMA,
     atomic_write_json,
+    baseline_applied_payload,
+    candidate_policies_with_current_baselines,
     load_applied_machine_policy,
     policy_hash,
     policy_mutations_between,
@@ -55,7 +57,23 @@ def _candidate(source_date: str) -> dict:
     }
 
 
+def _legacy_two_share_candidate(source_date: str) -> dict:
+    payload = _candidate(source_date)
+    policies = {
+        machine: dict(item["policy"]) for machine, item in payload["machines"].items()
+    }
+    for policy in policies.values():
+        policy["quantity"] = 2
+    payload["machines"] = {
+        machine: {**payload["machines"][machine], "policy": policy}
+        for machine, policy in policies.items()
+    }
+    payload["policy_hash"] = policy_hash(policies)
+    return payload
+
+
 def test_bounded_policy_rejects_relaxation_and_immutable_changes():
+    assert {policy["quantity"] for policy in BASELINE_POLICIES.values()} == {20}
     relaxed = dict(BASELINE_POLICIES["midday"])
     relaxed["rolling_high_drawdown_pct"] = 1.0
     assert validate_machine_policy("midday", relaxed) == (
@@ -104,6 +122,60 @@ def test_candidate_accepts_current_and_legacy_tuning_report_schemas():
     ):
         current["source_report_schema"] = schema
         assert validate_candidate(current) == (True, "valid")
+
+
+def test_legacy_two_share_candidate_is_hash_validated_then_normalized():
+    legacy = _legacy_two_share_candidate("2026-08-13")
+
+    assert validate_candidate(legacy) == (True, "valid")
+    normalized = candidate_policies_with_current_baselines(legacy)
+    assert {policy["quantity"] for policy in normalized.values()} == {20}
+
+    future = _legacy_two_share_candidate("2026-08-14")
+    assert validate_candidate(future) == (
+        False,
+        "candidate_morning_immutable_quantity_mismatch",
+    )
+
+
+def test_preopen_migrates_legacy_candidate_to_current_quantity(tmp_path: Path):
+    candidate_dir = tmp_path / "candidates"
+    candidate_dir.mkdir()
+    legacy = _legacy_two_share_candidate("2026-08-13")
+    atomic_write_json(
+        candidate_dir / "samsung_machine_entry_policy_candidate_2026-08-13.json",
+        legacy,
+    )
+
+    applied, status = build_applied_policy(
+        target_date=date(2026, 8, 14), candidate_dir=candidate_dir
+    )
+
+    assert status == "candidate_applied"
+    assert applied["source_candidate_hash"] == legacy["policy_hash"]
+    assert {item["policy"]["quantity"] for item in applied["machines"].values()} == {20}
+    assert validate_applied(applied, target_date=date(2026, 8, 14)) == (
+        True,
+        "valid",
+    )
+
+
+def test_legacy_exact_date_applied_policy_remains_audit_compatible():
+    target = date(2026, 8, 13)
+    payload = baseline_applied_payload(target_date=target, reason="test")
+    policies = {}
+    for machine, item in payload["machines"].items():
+        item["policy"]["quantity"] = 2
+        policies[machine] = item["policy"]
+    payload["policy_hash"] = policy_hash(policies)
+
+    assert validate_applied(payload, target_date=target) == (True, "valid")
+    future = json.loads(json.dumps(payload))
+    future["target_date"] = "2026-08-14"
+    assert validate_applied(future, target_date=date(2026, 8, 14)) == (
+        False,
+        "applied_morning_immutable_quantity_mismatch",
+    )
 
 
 def test_missing_candidate_writes_valid_exact_date_baseline(tmp_path: Path):
