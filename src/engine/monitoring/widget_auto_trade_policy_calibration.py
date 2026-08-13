@@ -938,10 +938,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
             elif calibration["decision"] != "widget_auto_trade_policy_candidate_ready":
                 block_reason = str(calibration["decision"])
             if block_reason is not None:
-                if spec.symbol == SAMSUNG_CODE:
-                    blocked_sessions.setdefault(spec.symbol, {})[
-                        session_name
-                    ] = block_reason
+                blocked_sessions.setdefault(spec.symbol, {})[
+                    session_name
+                ] = block_reason
                 continue
             if calibration["decision"] != "widget_auto_trade_policy_candidate_ready":
                 continue
@@ -1039,16 +1038,42 @@ def verify_policy(policy: dict[str, Any], *, policy_dir: Path) -> dict[str, Any]
     loaded_sessions = {
         (symbol, session) for symbol, sessions in loaded.items() for session in sessions
     }
-    issues = (
-        []
-        if loaded_sessions == expected_sessions
-        else ["dated_policy_loader_round_trip_mismatch"]
-    )
+    issues: list[str] = []
+    if loaded_sessions != expected_sessions:
+        issues.append("dated_policy_loader_round_trip_mismatch")
+    for symbol, symbol_payload in policy.get("symbols", {}).items():
+        for session in symbol_payload.get("sessions", {}):
+            loaded_policy = loaded.get(symbol, {}).get(session)
+            if (
+                not isinstance(loaded_policy, dict)
+                or loaded_policy.get("new_entry_runtime_eligible") is not True
+            ):
+                issues.append(f"ready_session_not_runtime_eligible:{symbol}:{session}")
+    for symbol, sessions in policy.get("blocked_sessions", {}).items():
+        for session, reason in sessions.items():
+            loaded_policy = loaded.get(symbol, {}).get(session)
+            if not isinstance(loaded_policy, dict):
+                issues.append(f"blocked_session_not_loaded:{symbol}:{session}")
+                continue
+            if loaded_policy.get("new_entry_runtime_eligible") is not False:
+                issues.append(f"blocked_session_runtime_eligible:{symbol}:{session}")
+            if loaded_policy.get("new_entry_runtime_block_reason") != str(reason):
+                issues.append(f"blocked_session_reason_mismatch:{symbol}:{session}")
     return {
         "status": "pass" if not issues else "fail",
-        "issues": issues,
+        "issues": sorted(set(issues)),
         "policy_path": str(verification_path),
         "loaded_session_count": len(loaded_sessions),
+        "runtime_eligible_session_count": sum(
+            policy_payload.get("new_entry_runtime_eligible") is True
+            for sessions in loaded.values()
+            for policy_payload in sessions.values()
+        ),
+        "runtime_blocked_session_count": sum(
+            policy_payload.get("new_entry_runtime_eligible") is False
+            for sessions in loaded.values()
+            for policy_payload in sessions.values()
+        ),
     }
 
 

@@ -893,6 +893,32 @@ def test_dated_policy_blocks_new_entry_while_cumulative_research_is_incomplete(
         "entry_blocked_cumulative_research_gate"
     )
     assert recorder.events[-1]["new_entry_runtime_eligible"] is False
+    assert recorder.events[-1]["new_entry_runtime_block_reason"] == (
+        "cumulative_research_40_qualified_dates_incomplete"
+    )
+
+
+def test_dated_policy_preserves_nonresearch_runtime_block_reason(tmp_path, monkeypatch):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="SAFETY-BLOCKED")}
+    policy = {
+        **_dated_policy(),
+        "new_entry_runtime_eligible": False,
+        "new_entry_runtime_block_reason": "execution_quality_safety_veto",
+    }
+    trader, gateway, recorder = _dated_policy_trader(
+        tmp_path, monkeypatch, box, policy=policy
+    )
+
+    trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert recorder.events[-1]["event_type"] == (
+        "entry_blocked_execution_policy_ineligible"
+    )
+    assert recorder.events[-1]["new_entry_runtime_block_reason"] == (
+        "execution_quality_safety_veto"
+    )
 
 
 def test_required_dated_policy_fails_closed_when_artifact_is_missing(

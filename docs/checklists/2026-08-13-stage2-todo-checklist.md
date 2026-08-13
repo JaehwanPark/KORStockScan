@@ -171,6 +171,12 @@
 
 ## 위젯 수집·자동매매 운영 보완
 
+- [x] `[WidgetLowSymbolAutoPromotion0813] 두산·한화 장후 검증정책의 익일 자동 런타임 승격 보강` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 12:55~15:00`, `Track: RuntimeStability`)
+  - 판정/owner: 20:10 `widget_auto_trade_policy_calibration --write`가 clean-baseline 누적자료에서 두산·한화의 40 qualified KRX 관측일, calibration/chronological holdout, source quality, execution-quality safety gate를 모두 통과한 세션만 다음 영업일 exact-date 정책으로 승격한다. 07:58 service start 또는 거래일 경계 reload가 `new_entry_runtime_eligible=true`를 자동 반영하며 장중 수동 승격·재기동은 사용하지 않는다.
+  - 보완: 미승격 두산·한화 세션도 exact-date `blocked_sessions`와 research count/status/reason으로 loader·runtime에 전달하여 generic `session_unavailable` 대신 누적연구 차단 provenance를 남긴다. ready 세션은 runtime eligible, blocked 세션은 ineligible/reason 일치까지 policy round-trip verifier가 검증한다.
+  - 안전/rollback: 신규 leg 10주, KRX SOR, force-flat/overnight 금지, manual owner, stale/price/broker/order/quantity/cooldown guard는 유지한다. 정책 미생성·source/holdout/execution-quality 실패·loader mismatch는 fail-closed 관측 전용이며 rollback은 blocked-session 확장과 강화 verifier를 복원하는 것이다.
+  - 검증: producer→evidence→exact-date policy→loader temp replay는 ready 1/blocked 4 session, verification PASS였고 기존 widget 확장 회귀 `462 passed`를 확인했다. Black/Ruff/compile/systemd/checklist parser/`git diff --check`를 통과하고 review gate finding 0에서 닫는다.
+
 - [x] `[WidgetAutoTradeTenShareQty0813] 위젯 매매기계 신규 BUY leg 1주→10주 운영 변경` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 11:30~15:00`, `Track: RuntimeStability`)
   - 사용자 권한/범위: 사용자의 명시적 수량 변경 지시에 따라 위젯 자동매매 owner의 이후 신규 BUY leg만 `1→10주`로 변경한다. 기존 에피소드·접수 주문·체결·익절 잔량은 원래 수량으로 귀속하며 main bot, 독립 시간대 기계, 수동 위젯 주문은 범위 밖이다.
   - 단일 owner/노출: service env, legacy fallback, postclose exact-date producer/loader가 공통 `leg_quantity_each=10`을 사용한다. 추가매수 2개가 선택된 정책은 에피소드 최대 30주이며 기존 freshness, manual-owner, global BUY pause, 중복·미체결, broker route/체결대사/TP coverage guard를 유지한다.

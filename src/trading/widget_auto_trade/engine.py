@@ -59,6 +59,12 @@ MAX_CANCEL_ATTEMPTS = 3
 MAX_SELL_ATTEMPTS = 3
 SELL_RETRY_SEC = 5
 TAKE_PROFIT_BPS = 100
+CUMULATIVE_RESEARCH_BLOCK_REASONS = frozenset(
+    {
+        "research_accumulation_incomplete",
+        "cumulative_research_40_qualified_dates_incomplete",
+    }
+)
 SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID = "SAMSUNG_EQUAL_10_ADD0P5_ADD1P0_TP0P5_V2"
 SAMSUNG_DAILY_EQUAL_SHARE_POLICY = {
     "policy_id": SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
@@ -730,12 +736,21 @@ class WidgetSignalAutoTrader:
             return None
         dated_sessions = self._dated_execution_policies.get(spec.code)
         execution_policy = self._execution_policy(spec, session=context.name)
+        runtime_block_reason = (
+            str(execution_policy.get("new_entry_runtime_block_reason") or "")
+            if execution_policy is not None
+            else ""
+        )
         policy_block_reason = (
             "entry_blocked_execution_policy_session_unavailable"
             if (dated_sessions or spec.dated_policy_required)
             and execution_policy is None
             else (
-                "entry_blocked_cumulative_research_gate"
+                (
+                    "entry_blocked_cumulative_research_gate"
+                    if runtime_block_reason in CUMULATIVE_RESEARCH_BLOCK_REASONS
+                    else "entry_blocked_execution_policy_ineligible"
+                )
                 if execution_policy is not None
                 and execution_policy.get("new_entry_runtime_eligible") is False
                 else (
@@ -1954,6 +1969,11 @@ class WidgetSignalAutoTrader:
                 recent_resistance_reclaimed=derived.get("recent_resistance_reclaimed"),
                 new_entry_runtime_eligible=(
                     entry_policy.get("new_entry_runtime_eligible")
+                    if entry_policy
+                    else None
+                ),
+                new_entry_runtime_block_reason=(
+                    entry_policy.get("new_entry_runtime_block_reason")
                     if entry_policy
                     else None
                 ),

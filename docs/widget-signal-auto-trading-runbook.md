@@ -35,6 +35,16 @@
 - 두산에너빌리티·한화오션은 immutable `entry_event`/`exit_event`를 사용한다.
   삼성전자는 유효한 actionable advisory로 진입하고 `EXIT_READY`만 최종 청산으로
   사용한다. `EXIT_CAUTION`과 비최종 상태는 주문 권한이 없다.
+- 두산에너빌리티·한화오션의 실주문 승격은 매일 20:10 장후
+  `widget_auto_trade_policy_calibration --write`가 단독으로 소유한다. clean
+  baseline 범위 안에서 2026-08-12부터 각 종목의 40개 qualified KRX 관측일,
+  calibration/chronological holdout, source quality, execution-quality safety gate를
+  모두 통과한 세션만 다음
+  KRX 영업일 exact-date 정책에 기록된다. 자동매매기는 07:58 기동 또는 거래일
+  전환 시 그 정책을 다시 읽어 `new_entry_runtime_eligible=true`인 종목·세션을
+  자동으로 주문 적격으로 연다. 수동 정책 복사나 별도 장중 재기동은 필요하지
+  않으며, 한 조건이라도 실패하면 동일 exact-date 정책의 명시적 blocked session을
+  읽어 관측만 계속한다.
 - 같은 스냅샷에 진입과 최종 청산이 함께 있으면 청산이 우선한다.
 - KRX 매수와 NXT 매수는 최유리지정가(`trde_tp=6`)를 사용한다. 최종 매도는
   KRX 시장가(`trde_tp=3`), NXT 최유리지정가(`trde_tp=6`)를 사용한다.

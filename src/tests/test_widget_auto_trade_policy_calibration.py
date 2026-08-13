@@ -292,6 +292,100 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
         policy["new_entry_runtime_eligible"] is False
         for policy in loaded["005930"].values()
     )
+    assert (
+        loaded["034020"]["KRX_REGULAR"]["new_entry_runtime_block_reason"]
+        == "source_quality_blocked"
+    )
+    assert (
+        loaded["034020"]["KRX_REGULAR"]["research_accumulation_gate_status"]
+        == "missing"
+    )
+    assert loaded["042660"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is False
+
+
+def test_verified_low_symbol_policy_auto_promotes_on_effective_date(tmp_path) -> None:
+    qualified_dates: list[str] = []
+    candidate = date(2026, 8, 12)
+    while len(qualified_dates) < 40:
+        if is_krx_trading_day(candidate):
+            qualified_dates.append(candidate.isoformat())
+        candidate = date.fromordinal(candidate.toordinal() + 1)
+    target_date = date.fromisoformat(qualified_dates[-1])
+    effective_date = calibration._next_krx_trading_date(target_date)
+    accumulation = {
+        "status": "ready",
+        "start_date": "2026-08-12",
+        "minimum_qualified_observation_dates": 40,
+        "qualified_observation_date_count": 40,
+        "qualified_observation_dates": qualified_dates,
+        "excluded_observation_dates": {},
+        "qualification_contract": calibration.CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT,
+        "runtime_eligible": True,
+    }
+    symbols = {}
+    for spec in calibration.SPECS:
+        source = {
+            "name": spec.name,
+            "source_quality_status": "PASS",
+            "actual_evidence_start_date": spec.analysis_start_date.isoformat(),
+            "execution_quality": {
+                "status": "PASS",
+                "runtime_apply_allowed": spec.symbol == "034020",
+            },
+            "sessions": {},
+        }
+        for session in spec.sessions:
+            if spec.symbol == "034020":
+                source["sessions"][session.session] = {
+                    "decision": "widget_auto_trade_policy_candidate_ready",
+                    "selected_policy": {
+                        "add_trigger_bps_from_initial_fill": [-50, -100],
+                        "target_bps": 80,
+                        "max_completed_entries_per_day": 2,
+                        "new_entry_cutoff_time": "14:30:00",
+                        "reentry_cooldown_minutes": 10,
+                        "force_exit_time": "15:18:00",
+                    },
+                    "policy_tier": "bounded_chronological_holdout",
+                    "rollback_condition": "postclose_holdout_or_source_quality_failure",
+                    "research_accumulation": accumulation,
+                }
+            else:
+                source["sessions"][session.session] = {
+                    "decision": "execution_quality_safety_veto",
+                    "selected_policy": None,
+                    "research_accumulation": {
+                        "status": "not_required",
+                        "runtime_eligible": spec.symbol == "005930",
+                    },
+                }
+        symbols[spec.symbol] = source
+    report = {
+        "schema": "widget_auto_trade_policy_calibration_report_v1",
+        "status": "complete",
+        "target_date": target_date.isoformat(),
+        "effective_date": effective_date.isoformat(),
+        "source_quality_status": "PASS",
+        "symbols": symbols,
+        "metric_contract": calibration.METRIC_CONTRACT,
+    }
+    policy = build_policy(report)
+
+    _, _, verification = write_outputs(
+        report,
+        policy,
+        output_dir=tmp_path / "reports",
+        policy_dir=tmp_path / "policies",
+    )
+    loaded = WidgetAutoTradePolicyLoader(
+        tmp_path / "policies", include_symbol_expansion=False
+    ).resolve_all(observed_date=effective_date)
+
+    assert verification["status"] == "pass"
+    assert verification["runtime_eligible_session_count"] == 1
+    assert loaded["034020"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is True
+    assert loaded["034020"]["KRX_REGULAR"]["leg_quantity_each"] == 10
+    assert loaded["042660"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is False
 
 
 def test_low_symbol_research_gate_requires_40_full_krx_dates() -> None:

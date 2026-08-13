@@ -22,6 +22,9 @@ POLICY_FILE_PREFIX = "widget_auto_trade_policy"
 DEFAULT_POLICY_DIR = PROJECT_ROOT / "data/runtime/widget_auto_trade_policy"
 WIDGET_AUTO_TRADE_LEG_QUANTITY = 10
 CUMULATIVE_RESEARCH_GATE_SYMBOLS = frozenset({"034020", "042660"})
+STATIC_WIDGET_AUTO_TRADE_SYMBOLS = frozenset(
+    {"005930", *CUMULATIVE_RESEARCH_GATE_SYMBOLS}
+)
 CUMULATIVE_RESEARCH_START_DATE = date(2026, 8, 12)
 CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES = 40
 CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT = (
@@ -280,10 +283,14 @@ def _validated_payload(
     symbols = payload.get("symbols")
     blocked_sessions = payload.get("blocked_sessions")
     has_runtime_policy = isinstance(symbols, dict) and bool(symbols)
-    has_samsung_block = bool(
+    has_supported_block = bool(
         isinstance(blocked_sessions, dict)
-        and isinstance(blocked_sessions.get("005930"), dict)
-        and blocked_sessions["005930"]
+        and any(
+            symbol in STATIC_WIDGET_AUTO_TRADE_SYMBOLS
+            and isinstance(sessions, dict)
+            and sessions
+            for symbol, sessions in blocked_sessions.items()
+        )
     )
     source_quality_status = payload.get("source_quality_status")
     if (
@@ -305,7 +312,7 @@ def _validated_payload(
         or not isinstance(metric_contract.get("forbidden_uses"), list)
         or source_quality_status not in {"PASS", "BLOCKED"}
         or (has_runtime_policy and source_quality_status != "PASS")
-        or (source_quality_status == "BLOCKED" and not has_samsung_block)
+        or (source_quality_status == "BLOCKED" and not has_supported_block)
     ):
         return None
     try:
@@ -371,7 +378,10 @@ def _validated_payload(
     blocked_sessions = payload.get("blocked_sessions")
     if isinstance(blocked_sessions, dict):
         for symbol, sessions in blocked_sessions.items():
-            if str(symbol) != "005930" or not isinstance(sessions, dict):
+            symbol_text = str(symbol)
+            if symbol_text not in STATIC_WIDGET_AUTO_TRADE_SYMBOLS or not isinstance(
+                sessions, dict
+            ):
                 continue
             for session, reason in sessions.items():
                 session_name = str(session)
@@ -380,12 +390,18 @@ def _validated_payload(
                 if (
                     venue is None
                     or not reason_text
-                    or session_name in validated.get(str(symbol), {})
+                    or session_name in validated.get(symbol_text, {})
                 ):
                     continue
-                validated.setdefault(str(symbol), {})[session_name] = {
+                research_gate = _research_gate_from_evidence(
+                    evidence,
+                    symbol=symbol_text,
+                    session=session_name,
+                    source_target_date=source_target_date,
+                )
+                validated.setdefault(symbol_text, {})[session_name] = {
                     "policy_id": policy_id,
-                    "symbol": str(symbol),
+                    "symbol": symbol_text,
                     "session": session_name,
                     "market_venue": venue,
                     "allowed_entry_sessions": (session_name,),
@@ -394,6 +410,9 @@ def _validated_payload(
                     "leg_quantity_each": WIDGET_AUTO_TRADE_LEG_QUANTITY,
                     "new_entry_runtime_eligible": False,
                     "new_entry_runtime_block_reason": reason_text,
+                    "source_final_exit_action": "observe_only_no_forced_sell",
+                    "actual_order_submitted": False,
+                    "broker_guard_bypass": False,
                     "research_arm": "blocked_no_runtime_apply",
                     "evidence_window": (
                         f"{source_target_date.isoformat()}_{source_target_date.isoformat()}"
@@ -404,6 +423,14 @@ def _validated_payload(
                     "source_target_date": source_target_date.isoformat(),
                     "policy_path": str(policy_path),
                     "authority": POLICY_AUTHORITY,
+                    "research_accumulation_start_date": research_gate.get("start_date"),
+                    "research_qualified_observation_date_count": research_gate.get(
+                        "qualified_observation_date_count"
+                    ),
+                    "research_minimum_qualified_observation_dates": research_gate.get(
+                        "minimum_qualified_observation_dates"
+                    ),
+                    "research_accumulation_gate_status": research_gate.get("status"),
                 }
     return validated or None
 
