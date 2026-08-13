@@ -66,11 +66,15 @@ from src.engine.scalping.ai_decision_trace import (  # noqa: E402
     record_ai_decision_trace,
 )
 from src.engine.scalping.ai_decision_quality import (  # noqa: E402
+    build_entry_price_explicit_fill_value_contract,
     build_exact_payload_analysis_v1,
     build_v2_13_recovery_confirmation_analysis_v1,
+    canonicalize_entry_price_economically_equivalent_action,
+    normalize_entry_price_fill_value_ledger,
     repair_v2_13_recovery_confirmation_response,
     resolve_candidate_reason_code_conflicts,
     validate_candidate_response,
+    validate_entry_price_explicit_fill_value_response,
     validate_v2_13_recovery_confirmation_response,
 )
 from src.engine.scalping.entry_setup_evidence import (  # noqa: E402
@@ -83,6 +87,9 @@ from src.engine.scalping.entry_setup_evidence import (  # noqa: E402
 )
 from src.engine.scalping.entry_setup_live_policy import (  # noqa: E402
     resolve_live_prompt_policy,
+)
+from src.engine.scalping.entry_price_live_policy import (  # noqa: E402
+    resolve_entry_price_live_policy,
 )
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
@@ -103,6 +110,7 @@ from src.engine.ai_prompt_contracts import (
     SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_ENTRY_PRICE_PROMPT,
+    DECISION_QUALITY_ENTRY_PRICE_V2_5_LIVE_KRX_PROMPT_VERSION,
     normalize_scalping_entry_price_result,
     normalize_condition_entry_from_scalping_result,
     normalize_condition_exit_from_scalping_result,
@@ -121,6 +129,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_7_probe_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
+    decision_quality_entry_price_v2_5_live_krx_system_prompt,
 )
 
 
@@ -7020,6 +7029,26 @@ class GPTSniperEngine:
     ):
         started = time.perf_counter()
         fallback_price = int((price_ctx or {}).get("resolved_order_price", 0) or 0)
+        try:
+            entry_price_live_policy = resolve_entry_price_live_policy(candle_context)
+        except Exception as policy_error:
+            log_error(
+                "🚨 [ENTRY_PRICE] V2.5 live policy resolution failed; "
+                f"using entry_price_v1: {type(policy_error).__name__}"
+            )
+            entry_price_live_policy = {
+                "status": "control_v1_policy_resolution_error",
+                "selected_prompt_version": "entry_price_v1",
+                "rollback_prompt_version": "entry_price_v1",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "blocking_reasons": ["live_policy_resolution_error"],
+            }
+        entry_price_prompt_version = str(
+            entry_price_live_policy.get("selected_prompt_version") or "entry_price_v1"
+        )
         input_contract_fields = {
             "ai_input_schema": (
                 "entry_price_v2"
@@ -7048,6 +7077,29 @@ class GPTSniperEngine:
                 else "plain_text"
             ),
             "ai_input_build_fallback": "not_built",
+            "entry_price_live_policy_status": entry_price_live_policy.get("status"),
+            "entry_price_live_policy_prompt_version": entry_price_prompt_version,
+            "entry_price_live_policy_rollback_prompt_version": (
+                entry_price_live_policy.get("rollback_prompt_version")
+            ),
+            "entry_price_live_policy_effective_venue": (
+                entry_price_live_policy.get("effective_venue")
+            ),
+            "entry_price_live_policy_session_bucket": (
+                entry_price_live_policy.get("session_bucket")
+            ),
+            "entry_price_live_policy_runtime_effect": (
+                entry_price_live_policy.get("runtime_effect")
+            ),
+            "entry_price_live_policy_allowed_runtime_apply": (
+                entry_price_live_policy.get("allowed_runtime_apply")
+            ),
+            "entry_price_live_policy_evidence_sha256": (
+                entry_price_live_policy.get("evidence_sha256")
+            ),
+            "entry_price_live_policy_blocking_reasons": list(
+                entry_price_live_policy.get("blocking_reasons") or []
+            ),
         }
         if isinstance(candle_context, dict) and candle_context:
             input_contract_fields.update(
@@ -7102,7 +7154,7 @@ class GPTSniperEngine:
                     fallback_price=fallback_price,
                 ),
                 prompt_type="entry_price",
-                prompt_version="entry_price_v1",
+                prompt_version=entry_price_prompt_version,
                 response_ms=int((time.perf_counter() - started) * 1000),
                 parse_ok=False,
                 parse_fail=False,
@@ -7125,7 +7177,7 @@ class GPTSniperEngine:
                     fallback_price=fallback_price,
                 ),
                 prompt_type="entry_price",
-                prompt_version="entry_price_v1",
+                prompt_version=entry_price_prompt_version,
                 response_ms=int((time.perf_counter() - started) * 1000),
                 parse_ok=False,
                 parse_fail=False,
@@ -7150,7 +7202,7 @@ class GPTSniperEngine:
                         fallback_price=fallback_price,
                     ),
                     prompt_type="entry_price",
-                    prompt_version="entry_price_v1",
+                    prompt_version=entry_price_prompt_version,
                     response_ms=int((time.perf_counter() - started) * 1000),
                     parse_ok=False,
                     parse_fail=False,
@@ -7170,17 +7222,32 @@ class GPTSniperEngine:
                 price_ctx=price_ctx or {},
                 candle_context=candle_context,
             )
-            input_contract_fields = self._resolve_ai_input_contract_fields(
-                user_input,
-                default_schema=(
-                    "entry_price_v2"
-                    if bool(
-                        getattr(
-                            TRADING_RULES, "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED", False
+            input_contract_fields.update(
+                self._resolve_ai_input_contract_fields(
+                    user_input,
+                    default_schema=(
+                        "entry_price_v2"
+                        if bool(
+                            getattr(
+                                TRADING_RULES,
+                                "OPENAI_ENTRY_PRICE_V2_INPUT_ENABLED",
+                                False,
+                            )
                         )
-                    )
-                    else (
-                        "entry_price_compact_v1"
+                        else (
+                            "entry_price_compact_v1"
+                            if bool(
+                                getattr(
+                                    TRADING_RULES,
+                                    "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED",
+                                    True,
+                                )
+                            )
+                            else "entry_price_raw_v1"
+                        )
+                    ),
+                    default_mode=(
+                        "structured_json"
                         if bool(
                             getattr(
                                 TRADING_RULES,
@@ -7188,37 +7255,200 @@ class GPTSniperEngine:
                                 True,
                             )
                         )
-                        else "entry_price_raw_v1"
-                    )
-                ),
-                default_mode=(
-                    "structured_json"
-                    if bool(
-                        getattr(
-                            TRADING_RULES,
-                            "OPENAI_ENTRY_PRICE_COMPACT_INPUT_ENABLED",
-                            True,
-                        )
-                    )
-                    else "plain_text"
-                ),
+                        else "plain_text"
+                    ),
+                )
             )
             if isinstance(candle_context, dict) and candle_context:
                 input_contract_fields.update(
                     entry_candle_context_log_fields(candle_context)
                 )
+            prompt = SCALPING_ENTRY_PRICE_PROMPT
+            schema_name = "entry_price_v1"
+            exact_payload = None
+            entry_price_contract_facts = None
+            if (
+                entry_price_prompt_version
+                == DECISION_QUALITY_ENTRY_PRICE_V2_5_LIVE_KRX_PROMPT_VERSION
+            ):
+                try:
+                    exact_payload = json.loads(user_input)
+                except (TypeError, json.JSONDecodeError):
+                    exact_payload = None
+                if not isinstance(exact_payload, dict):
+                    return self._annotate_analysis_result(
+                        normalize_scalping_entry_price_result(
+                            {
+                                "action": "USE_DEFENSIVE",
+                                "order_price": fallback_price,
+                                "confidence": 0,
+                                "reason": "entry_price_v2_5_exact_payload_invalid",
+                                "max_wait_sec": 90,
+                            },
+                            fallback_price=fallback_price,
+                        ),
+                        prompt_type="entry_price",
+                        prompt_version=entry_price_prompt_version,
+                        response_ms=int((time.perf_counter() - started) * 1000),
+                        parse_ok=False,
+                        parse_fail=False,
+                        fallback_score_50=False,
+                        cache_hit=False,
+                        cache_mode="miss",
+                        result_source="input_contract_rejected",
+                        input_contract_fields=input_contract_fields,
+                    )
+                entry_price_contract_facts = (
+                    build_entry_price_explicit_fill_value_contract(
+                        exact_payload,
+                        control_selected_price=fallback_price,
+                        control_exposure_selected=True,
+                    )
+                )
+                user_input = json.dumps(
+                    {
+                        "input_schema": "entry_price_explicit_fill_value_live_v1",
+                        "exact_payload": exact_payload,
+                        "entry_price_exact_contract_facts_v1": (
+                            entry_price_contract_facts
+                        ),
+                    },
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+                prompt = decision_quality_entry_price_v2_5_live_krx_system_prompt()
+                schema_name = "entry_price_explicit_fill_value_v1"
+                input_contract_fields.update(
+                    self._resolve_ai_input_contract_fields(
+                        user_input,
+                        default_schema="entry_price_explicit_fill_value_live_v1",
+                        default_mode="structured_json",
+                    )
+                )
             result = self._call_openai_safe(
-                SCALPING_ENTRY_PRICE_PROMPT,
+                prompt,
                 user_input,
                 require_json=True,
                 context_name=f"ENTRY_PRICE:{stock_name}:{stock_code}",
                 model_override=self._get_tier2_model(),
-                schema_name="entry_price_v1",
+                schema_name=schema_name,
                 endpoint_name="entry_price",
                 symbol=stock_code,
                 metadata_extra=metadata_extra,
             )
             result = self._merge_last_transport_meta(result)
+            if entry_price_contract_facts is not None:
+                result, action_canonicalization = (
+                    canonicalize_entry_price_economically_equivalent_action(
+                        result,
+                        contract_facts=entry_price_contract_facts,
+                    )
+                )
+                result, fill_value_normalization = (
+                    normalize_entry_price_fill_value_ledger(
+                        result,
+                        contract_facts=entry_price_contract_facts,
+                    )
+                )
+                semantic_errors = validate_entry_price_explicit_fill_value_response(
+                    result,
+                    exact_payload=exact_payload,
+                    contract_facts=entry_price_contract_facts,
+                )
+                if semantic_errors:
+                    defensive = normalize_scalping_entry_price_result(
+                        {
+                            "action": "USE_DEFENSIVE",
+                            "order_price": fallback_price,
+                            "confidence": 0,
+                            "reason": "entry_price_v2_5_schema_semantic_rejected",
+                            "max_wait_sec": 90,
+                        },
+                        fallback_price=fallback_price,
+                    )
+                    self._copy_ai_transport_trace_metadata(defensive, result)
+                    defensive.update(
+                        {
+                            "entry_price_v2_5_contract_status": "rejected",
+                            "entry_price_v2_5_contract_errors": semantic_errors,
+                            **action_canonicalization,
+                            **fill_value_normalization,
+                        }
+                    )
+                    self._mark_successful_ai_call(update_last_call_time=False)
+                    return self._annotate_analysis_result(
+                        defensive,
+                        prompt_type="entry_price",
+                        prompt_version=entry_price_prompt_version,
+                        response_ms=int((time.perf_counter() - started) * 1000),
+                        parse_ok=True,
+                        parse_fail=False,
+                        fallback_score_50=False,
+                        cache_hit=False,
+                        cache_mode="miss",
+                        result_source="schema_semantic_rejected",
+                        input_contract_fields=input_contract_fields,
+                    )
+                reason_codes = [
+                    str(value)
+                    for value in (result.get("reason_codes") or [])
+                    if str(value).strip()
+                ]
+                normalized = normalize_scalping_entry_price_result(
+                    {
+                        "action": result.get("action"),
+                        "order_price": result.get("selected_price"),
+                        "confidence": result.get("confidence"),
+                        "reason": ",".join(reason_codes[:4]) or "v2_5_price_selection",
+                        "max_wait_sec": 90,
+                    },
+                    fallback_price=fallback_price,
+                )
+                normalized.update(
+                    {
+                        "entry_price_v2_5_contract_status": "pass",
+                        "entry_price_v2_5_contract_errors": [],
+                        "entry_price_v2_5_edge_state": result.get("edge_state"),
+                        "entry_price_v2_5_expected_upside_pct": result.get(
+                            "expected_upside_pct"
+                        ),
+                        "entry_price_v2_5_expected_downside_pct": result.get(
+                            "expected_downside_pct"
+                        ),
+                        "entry_price_v2_5_reason_codes": reason_codes,
+                        "entry_price_v2_5_evidence": result.get("evidence"),
+                        "entry_price_v2_5_price_basis": result.get("price_basis"),
+                        "entry_price_v2_5_fill_value": {
+                            key: result.get(key)
+                            for key in (
+                                "control_fill_probability_pct",
+                                "selected_fill_probability_pct",
+                                "incremental_fill_probability_pct",
+                                "incremental_chase_cost_pct",
+                                "fill_adjusted_edge_pct",
+                            )
+                        },
+                        **action_canonicalization,
+                        **fill_value_normalization,
+                    }
+                )
+                self._copy_ai_transport_trace_metadata(normalized, result)
+                normalized["ai_model"] = self._get_tier2_model()
+                self._mark_successful_ai_call(update_last_call_time=False)
+                return self._annotate_analysis_result(
+                    normalized,
+                    prompt_type="entry_price",
+                    prompt_version=entry_price_prompt_version,
+                    response_ms=int((time.perf_counter() - started) * 1000),
+                    parse_ok=True,
+                    parse_fail=False,
+                    fallback_score_50=False,
+                    cache_hit=False,
+                    cache_mode="miss",
+                    result_source="live",
+                    input_contract_fields=input_contract_fields,
+                )
             normalized = normalize_scalping_entry_price_result(
                 result, fallback_price=fallback_price
             )
@@ -7228,7 +7458,7 @@ class GPTSniperEngine:
             return self._annotate_analysis_result(
                 normalized,
                 prompt_type="entry_price",
-                prompt_version="entry_price_v1",
+                prompt_version=entry_price_prompt_version,
                 response_ms=int((time.perf_counter() - started) * 1000),
                 parse_ok=True,
                 parse_fail=False,
@@ -7257,7 +7487,7 @@ class GPTSniperEngine:
                     fallback_price=fallback_price,
                 ),
                 prompt_type="entry_price",
-                prompt_version="entry_price_v1",
+                prompt_version=entry_price_prompt_version,
                 response_ms=int((time.perf_counter() - started) * 1000),
                 parse_ok=False,
                 parse_fail=True,

@@ -16,13 +16,13 @@ from statistics import fmean
 from typing import Any
 
 from src.engine.ai_prompt_contracts import (
-    DECISION_QUALITY_ENTRY_PRICE_V2_4_PROMPT_VERSION,
-    DECISION_QUALITY_ENTRY_PRICE_V2_4_RESPONSE_SCHEMA,
+    DECISION_QUALITY_ENTRY_PRICE_V2_5_PROMPT_VERSION,
+    DECISION_QUALITY_ENTRY_PRICE_V2_5_RESPONSE_SCHEMA,
     DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
-    decision_quality_entry_price_v2_4_system_prompt,
+    decision_quality_entry_price_v2_5_system_prompt,
     decision_quality_holding_flow_v2_2_system_prompt,
     decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
@@ -99,6 +99,8 @@ def prepare_stage_requests(
     payloads: list[dict[str, Any]],
     eligible_trace_ids: set[str] | None = None,
     allow_approved_cache_redaction_supplemental: bool = False,
+    effective_venue: str | None = None,
+    session_bucket: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Freeze the first exact eligible rows and preserve every exclusion reason."""
 
@@ -138,6 +140,20 @@ def prepare_stage_requests(
         if str(trace.get("endpoint") or "") != endpoint:
             continue
         trace_id = str(trace.get("decision_trace_id") or "")
+        if (
+            effective_venue
+            and str(trace.get("effective_venue") or "").upper()
+            != str(effective_venue).upper()
+        ):
+            exclusions["cohort_venue_filter_excluded"] += 1
+            continue
+        if (
+            session_bucket
+            and str(trace.get("session_bucket") or "").lower()
+            != str(session_bucket).lower()
+        ):
+            exclusions["cohort_session_filter_excluded"] += 1
+            continue
         if eligible_trace_ids is not None and trace_id not in eligible_trace_ids:
             exclusions["mature_outcome_not_eligible"] += 1
             continue
@@ -192,10 +208,10 @@ def prepare_stage_requests(
         "entry": decision_quality_v2_8_detailed_system_prompt("entry"),
         "holding": decision_quality_holding_v2_3_system_prompt(),
         "holding_flow": decision_quality_holding_flow_v2_2_system_prompt(),
-        "entry_price": decision_quality_entry_price_v2_4_system_prompt(),
+        "entry_price": decision_quality_entry_price_v2_5_system_prompt(),
     }[normalized_stage]
     response_schema = (
-        DECISION_QUALITY_ENTRY_PRICE_V2_4_RESPONSE_SCHEMA
+        DECISION_QUALITY_ENTRY_PRICE_V2_5_RESPONSE_SCHEMA
         if normalized_stage == "entry_price"
         else DECISION_QUALITY_V2_RESPONSE_SCHEMA
     )
@@ -209,7 +225,7 @@ def prepare_stage_requests(
                 else (
                     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
                     if normalized_stage == "entry"
-                    else DECISION_QUALITY_ENTRY_PRICE_V2_4_PROMPT_VERSION
+                    else DECISION_QUALITY_ENTRY_PRICE_V2_5_PROMPT_VERSION
                 )
             )
         ),
@@ -311,7 +327,6 @@ def prepare_stage_requests(
             request["candidate_input"] = candidate_input
             request["candidate_input_sha256"] = quality._sha256(candidate_input)
         elif normalized_stage == "entry_price":
-            entry_price_facts = quality._entry_price_contract_facts(exact_payload)
             captured_action = str(trace.get("action") or "").strip().upper()
             control_selected_price = (
                 None
@@ -326,47 +341,10 @@ def prepare_stage_requests(
                 control_selected_price = int(control_selected_price)
             else:
                 control_selected_price = None
-            defensive_price = quality._number(
-                entry_price_facts["candidate_prices"].get("DEFENSIVE")
-            )
-            price_cost_baseline = control_selected_price or defensive_price
-            entry_price_facts["control_selected_price"] = control_selected_price
-            entry_price_facts["control_exposure_selected"] = (
-                captured_action != "SKIP" and control_selected_price is not None
-            )
-            entry_price_facts["price_cost_baseline"] = price_cost_baseline
-            entry_price_facts["price_delta_from_cost_baseline_bp"] = {
-                basis: (
-                    ((price - price_cost_baseline) / price_cost_baseline) * 10000.0
-                    if price is not None
-                    and price_cost_baseline is not None
-                    and price_cost_baseline > 0
-                    else None
-                )
-                for basis, price in entry_price_facts["candidate_prices"].items()
-            }
-            entry_price_facts["minimum_upside_for_aggressive_basis_pct"] = {
-                basis: (
-                    (delta_bp / 100.0) + 0.20
-                    if delta_bp is not None and delta_bp > 0
-                    else 0.0
-                )
-                for basis, delta_bp in entry_price_facts[
-                    "price_delta_from_cost_baseline_bp"
-                ].items()
-            }
-            entry_price_facts["economically_distinct_bases"] = [
-                basis
-                for basis, delta_bp in entry_price_facts[
-                    "price_delta_from_cost_baseline_bp"
-                ].items()
-                if delta_bp is not None and abs(delta_bp) > 1e-9
-            ]
-            entry_price_facts["max_incremental_chase_cost_bp"] = (
-                quality.ENTRY_PRICE_MAX_INCREMENTAL_CHASE_COST_BP
-            )
-            entry_price_facts["minimum_reward_risk_for_aggressive_basis"] = (
-                quality.ENTRY_PRICE_MIN_REWARD_RISK_FOR_AGGRESSIVE_BASIS
+            entry_price_facts = quality.build_entry_price_explicit_fill_value_contract(
+                exact_payload,
+                control_selected_price=control_selected_price,
+                control_exposure_selected=captured_action != "SKIP",
             )
             candidate_input = {
                 "exact_payload": exact_payload,
@@ -462,7 +440,29 @@ def execute_bedrock_candidate(
                 "strictly negative expected_downside_pct whose magnitude covers "
                 "the incremental cost. expected_upside_pct divided by absolute "
                 "expected_downside_pct must meet "
-                "minimum_reward_risk_for_aggressive_basis"
+                "minimum_reward_risk_for_aggressive_basis. For every non-SKIP "
+                "response include all five fill-value fields and reproduce the "
+                "incremental fill, chase-cost, and fill-adjusted-edge formulas "
+                "exactly. A positive chase cost requires positive incremental "
+                "fill probability and positive fill_adjusted_edge_pct"
+            )
+        aggressive_economic_errors = {
+            "entry_price_aggressive_limit_without_confirmed_edge",
+            "entry_price_aggressive_limit_insufficient_edge_buffer",
+            "entry_price_aggressive_limit_exceeds_chase_cost_bound",
+            "entry_price_aggressive_limit_requires_negative_downside",
+            "entry_price_aggressive_limit_downside_below_chase_cost",
+            "entry_price_aggressive_limit_reward_risk_below_floor",
+            "entry_price_aggressive_limit_no_fill_improvement",
+            "entry_price_aggressive_limit_nonpositive_fill_value",
+        }
+        if aggressive_economic_errors.intersection(correction_errors):
+            correction_rules.append(
+                "The prior aggressive selection failed the deterministic economic "
+                "gate. For this correction do not retry REFERENCE, RESOLVED, or "
+                "BEST_ASK. Return USE_DEFENSIVE with price_basis=DEFENSIVE and "
+                "the exact DEFENSIVE candidate price; use BEST_BID only when the "
+                "DEFENSIVE candidate is null"
             )
         prompt += (
             "\n\nCorrection retry: the prior response violated: "
@@ -490,6 +490,14 @@ def execute_bedrock_candidate(
             ),
         )
     )
+    payload, fill_value_normalization = normalize_entry_price_fill_value_ledger(
+        payload,
+        contract_facts=(
+            (request.get("candidate_input") or {}).get(
+                "entry_price_exact_contract_facts_v1"
+            )
+        ),
+    )
     selection_errors = quality._entry_price_response_errors(
         payload,
         exact_payload=request.get("exact_payload"),
@@ -499,6 +507,7 @@ def execute_bedrock_candidate(
             )
         ),
         require_fill_adjusted_distinct_limit=True,
+        require_explicit_fill_value_ledger=True,
     )
     selection_valid = not selection_errors
     provenance = result.transport_meta()
@@ -512,6 +521,7 @@ def execute_bedrock_candidate(
             "entry_price_selection_valid": selection_valid,
             "entry_price_selection_errors": selection_errors,
             **action_canonicalization,
+            **fill_value_normalization,
         }
     )
     return {
@@ -525,36 +535,21 @@ def canonicalize_entry_price_economically_equivalent_action(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Canonicalize only a label when Control, defensive, and selected prices match."""
 
-    payload = dict(response)
-    facts = contract_facts if isinstance(contract_facts, dict) else {}
-    action = str(payload.get("action") or "").strip().upper()
-    selected_price = quality._number(payload.get("selected_price"))
-    control_price = quality._number(facts.get("control_selected_price"))
-    candidate_prices = facts.get("candidate_prices") or {}
-    defensive_price = quality._number(candidate_prices.get("DEFENSIVE"))
-    raw_basis = str(payload.get("price_basis") or "").strip().upper()
-    raw_basis_price = quality._number(candidate_prices.get(raw_basis))
-    if not (
-        action in {"USE_REFERENCE", "IMPROVE_LIMIT"}
-        and selected_price is not None
-        and control_price is not None
-        and defensive_price is not None
-        and raw_basis_price is not None
-        and selected_price == control_price == defensive_price == raw_basis_price
-    ):
-        return payload, {"entry_price_action_canonicalization_applied": False}
-    payload["action"] = "USE_DEFENSIVE"
-    payload["price_basis"] = "DEFENSIVE"
-    return payload, {
-        "entry_price_action_canonicalization_applied": True,
-        "entry_price_action_canonicalization_reason": (
-            "economically_equivalent_control_defensive_price"
-        ),
-        "entry_price_raw_action": action,
-        "entry_price_raw_price_basis": raw_basis,
-        "entry_price_canonical_action": "USE_DEFENSIVE",
-        "entry_price_canonical_price_basis": "DEFENSIVE",
-    }
+    return quality.canonicalize_entry_price_economically_equivalent_action(
+        response,
+        contract_facts=contract_facts,
+    )
+
+
+def normalize_entry_price_fill_value_ledger(
+    response: dict[str, Any], *, contract_facts: dict[str, Any] | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Derive arithmetic ledger fields while preserving model probability estimates."""
+
+    return quality.normalize_entry_price_fill_value_ledger(
+        response,
+        contract_facts=contract_facts,
+    )
 
 
 def build_report(
@@ -881,6 +876,47 @@ def reusable_pass_results(
         key=lambda row: order.get(str(row.get("paired_replay_id") or ""), len(order))
     )
     return reusable
+
+
+def reusable_pass_results_from_reports(
+    *,
+    existing_reports: list[tuple[str, dict[str, Any]]],
+    requests: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Deduplicate hash-validated PASS checkpoints across replay reports."""
+
+    reusable: list[dict[str, Any]] = []
+    seen_pair_ids: set[str] = set()
+    sources: list[dict[str, Any]] = []
+    for source_path, report in existing_reports:
+        matched = reusable_pass_results(existing_report=report, requests=requests)
+        added = 0
+        for row in matched:
+            pair_id = str(row.get("paired_replay_id") or "")
+            if not pair_id or pair_id in seen_pair_ids:
+                continue
+            reusable.append(row)
+            seen_pair_ids.add(pair_id)
+            added += 1
+        sources.append(
+            {
+                "source_path": source_path,
+                "source_report_sha256": quality._sha256(report),
+                "target_date": report.get("target_date"),
+                "generated_at": report.get("generated_at"),
+                "candidate_prompt_versions": report.get("candidate_prompt_versions"),
+                "matched_pass_count": len(matched),
+                "reused_pass_count": added,
+            }
+        )
+    order = {
+        str(request.get("paired_replay_id") or ""): index
+        for index, request in enumerate(requests)
+    }
+    reusable.sort(
+        key=lambda row: order.get(str(row.get("paired_replay_id") or ""), len(order))
+    )
+    return reusable, sources
 
 
 def build_holding_flow_outcome_attribution(
@@ -1646,6 +1682,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-rows", type=int, required=True)
     parser.add_argument("--execute-candidate", action="store_true")
     parser.add_argument("--candidate-workers", type=int, default=4)
+    parser.add_argument("--effective-venue")
+    parser.add_argument("--session-bucket")
+    parser.add_argument(
+        "--reuse-report",
+        action="append",
+        type=Path,
+        default=[],
+        help=(
+            "Reuse only PASS rows whose pair, payload, candidate, and input hashes "
+            "match the current frozen cohort. May be supplied more than once."
+        ),
+    )
     parser.add_argument(
         "--mature-outcomes-only",
         action="store_true",
@@ -1685,6 +1733,12 @@ def main(argv: list[str] | None = None) -> int:
         and not args.holding_flow_checkpoint_source.is_file()
     ):
         parser.error("--holding-flow-checkpoint-source must be an existing file")
+    missing_reuse_reports = [path for path in args.reuse_report if not path.is_file()]
+    if missing_reuse_reports:
+        parser.error(
+            "--reuse-report must be an existing file: "
+            + ",".join(str(path) for path in missing_reuse_reports)
+        )
     promotion, _, _ = quality.load_promotion_for_target_date(args.source_date[0])
     control = quality._load_json(quality.control_path(args.source_date[0]))
     traces = _load_rows(quality.TRACE_DIR, "ai_decision_trace", args.source_date)
@@ -1720,12 +1774,23 @@ def main(argv: list[str] | None = None) -> int:
         allow_approved_cache_redaction_supplemental=(
             args.allow_approved_cache_redaction_supplemental
         ),
+        effective_venue=args.effective_venue,
+        session_bucket=args.session_bucket,
     )
     path = REPORT_DIR / f"ai_prompt_stage_coverage_replay_{args.date}_{args.stage}.json"
-    results = reusable_pass_results(
-        existing_report=quality._load_json(path),
+    reuse_reports: list[tuple[str, dict[str, Any]]] = [
+        (str(path), quality._load_json(path))
+    ]
+    reuse_reports.extend(
+        (str(reuse_path), quality._load_json(reuse_path))
+        for reuse_path in args.reuse_report
+        if reuse_path != path
+    )
+    results, reuse_sources = reusable_pass_results_from_reports(
+        existing_reports=reuse_reports,
         requests=requests,
     )
+    reused_pass_count = len(results)
     if args.execute_candidate:
         runner = (
             execute_bedrock_candidate
@@ -1772,6 +1837,22 @@ def main(argv: list[str] | None = None) -> int:
         requests=requests,
         results=results,
     )
+    report["candidate_checkpoint_reuse"] = {
+        "schema": "ai_prompt_stage_checkpoint_reuse_v1",
+        "policy": "same_pair_payload_candidate_input_hash_validated_pass_only",
+        "reused_pass_count": reused_pass_count,
+        "sources": reuse_sources,
+        "decision_authority": "offline_replay_cost_avoidance_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report["cohort_filter"] = {
+        "effective_venue": args.effective_venue,
+        "session_bucket": args.session_bucket,
+        "policy": "exact_match_before_frozen_cohort_limit",
+    }
     if args.mature_outcomes_only:
         report["mature_outcomes_only"] = True
         stage_endpoint = {

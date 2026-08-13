@@ -1932,6 +1932,239 @@ def test_openai_entry_price_tier2_input_escapes_non_english_payload(monkeypatch)
     assert "note" not in json.loads(captured["user_input"])["ws_data"]
 
 
+def test_entry_price_v2_5_live_policy_uses_exact_krx_contract_without_route_change(
+    monkeypatch,
+):
+    engine = _build_engine()
+    captured = {}
+    exact_payload = {
+        "stock_code": "005930",
+        "price_context": {
+            "defensive_order_price": 10000,
+            "reference_target_price": 10010,
+            "resolved_order_price": 10000,
+            "best_bid": 9990,
+            "best_ask": 10010,
+            "entry_price_guard": {},
+        },
+        "entry_context_features": {
+            "quote_stale": False,
+            "quote_fresh_for_entry": True,
+            "would_fill_now": True,
+            "spread_bp": 20,
+        },
+        "entry_candle_context": {"risk_flags": []},
+        "ai_market_snapshot_v1": {
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "ai_input_preflight_v1": {
+                "allowed": True,
+                "venue_consistent": True,
+                "blockers": [],
+            },
+        },
+    }
+    live_version = (
+        openai_module.DECISION_QUALITY_ENTRY_PRICE_V2_5_LIVE_KRX_PROMPT_VERSION
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "resolve_entry_price_live_policy",
+        lambda candle_context: {
+            "status": "active_krx_regular_v2_5",
+            "selected_prompt_version": live_version,
+            "rollback_prompt_version": "entry_price_v1",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "runtime_effect": True,
+            "allowed_runtime_apply": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "blocking_reasons": [],
+            "evidence_sha256": "a" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_build_scalping_entry_price_runtime_input",
+        lambda **kwargs: json.dumps(exact_payload),
+    )
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured.update(
+            {
+                "prompt": prompt,
+                "user_input": json.loads(user_input),
+                "kwargs": kwargs,
+            }
+        )
+        return {
+            "edge_state": "EDGE",
+            "action": "USE_DEFENSIVE",
+            "expected_upside_pct": 1.0,
+            "expected_downside_pct": -0.5,
+            "confidence": 72,
+            "reason_codes": ["edge_positive"],
+            "evidence": {
+                "trend": "supportive",
+                "liquidity": "supportive",
+                "tape": "supportive",
+                "risk": "low",
+                "uncertainty": "low",
+                "setup": "continuation",
+                "positive_edge": "moderate",
+                "adverse_risk": "low",
+                "trigger": "confirmed",
+            },
+            "selected_price": 10000,
+            "price_basis": "DEFENSIVE",
+            "control_fill_probability_pct": 70.0,
+            "selected_fill_probability_pct": 70.0,
+            "incremental_fill_probability_pct": 0.0,
+            "incremental_chase_cost_pct": 0.0,
+            "fill_adjusted_edge_pct": 0.0,
+            "provider": "bedrock",
+            "bedrock_primary_used": True,
+            "bedrock_model_family": "qwen3_32b",
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    result = engine.evaluate_scalping_entry_price(
+        "test",
+        "005930",
+        {},
+        [],
+        [],
+        {"resolved_order_price": 10000},
+        candle_context=exact_payload["ai_market_snapshot_v1"],
+    )
+
+    assert result["action"] == "USE_DEFENSIVE"
+    assert result["order_price"] == 10000
+    assert result["ai_prompt_version"] == live_version
+    assert result["entry_price_v2_5_contract_status"] == "pass"
+    assert captured["kwargs"]["schema_name"] == ("entry_price_explicit_fill_value_v1")
+    assert captured["kwargs"]["endpoint_name"] == "entry_price"
+    assert captured["kwargs"]["model_override"] == engine.model_tier2_balanced
+    assert captured["user_input"]["exact_payload"] == exact_payload
+    assert "offline" not in captured["prompt"].lower()
+
+
+def test_entry_price_v2_5_semantic_reject_closes_defensive_without_parse_failure(
+    monkeypatch,
+):
+    engine = _build_engine()
+    live_version = (
+        openai_module.DECISION_QUALITY_ENTRY_PRICE_V2_5_LIVE_KRX_PROMPT_VERSION
+    )
+    exact_payload = {
+        "price_context": {
+            "defensive_order_price": 10000,
+            "resolved_order_price": 10000,
+            "best_bid": 9990,
+            "best_ask": 10010,
+        },
+        "entry_context_features": {
+            "quote_stale": False,
+            "quote_fresh_for_entry": True,
+        },
+        "ai_market_snapshot_v1": {
+            "ai_input_preflight_v1": {
+                "allowed": True,
+                "venue_consistent": True,
+                "blockers": [],
+            }
+        },
+    }
+    monkeypatch.setattr(
+        openai_module,
+        "resolve_entry_price_live_policy",
+        lambda candle_context: {
+            "status": "active_krx_regular_v2_5",
+            "selected_prompt_version": live_version,
+            "rollback_prompt_version": "entry_price_v1",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "runtime_effect": True,
+            "allowed_runtime_apply": True,
+            "blocking_reasons": [],
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_build_scalping_entry_price_runtime_input",
+        lambda **kwargs: json.dumps(exact_payload),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: {
+            "action": "SKIP",
+            "provider": "bedrock",
+            "bedrock_primary_used": True,
+        },
+    )
+
+    result = engine.evaluate_scalping_entry_price(
+        "test",
+        "005930",
+        {},
+        [],
+        [],
+        {"resolved_order_price": 10000},
+    )
+
+    assert result["action"] == "USE_DEFENSIVE"
+    assert result["order_price"] == 10000
+    assert result["ai_result_source"] == "schema_semantic_rejected"
+    assert result["ai_parse_ok"] is True
+    assert result["ai_parse_fail"] is False
+    assert result["entry_price_v2_5_contract_status"] == "rejected"
+    assert result["entry_price_v2_5_contract_errors"]
+    assert result["provider"] == "bedrock"
+
+
+def test_entry_price_live_policy_resolution_error_falls_back_to_v1(monkeypatch):
+    engine = _build_engine()
+    ws_data, ticks, candles, price_ctx = _entry_price_compaction_sample(1)
+    captured = {}
+
+    def _raise_policy_error(candle_context):
+        raise ValueError("corrupt policy")
+
+    monkeypatch.setattr(
+        openai_module, "resolve_entry_price_live_policy", _raise_policy_error
+    )
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured.update(kwargs)
+        return {
+            "action": "USE_DEFENSIVE",
+            "order_price": price_ctx["resolved_order_price"],
+            "confidence": 70,
+            "reason": "control fallback",
+            "max_wait_sec": 30,
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    result = engine.evaluate_scalping_entry_price(
+        "test",
+        "005930",
+        ws_data,
+        ticks,
+        candles,
+        price_ctx,
+    )
+
+    assert result["ai_prompt_version"] == "entry_price_v1"
+    assert result["entry_price_live_policy_status"] == (
+        "control_v1_policy_resolution_error"
+    )
+    assert captured["schema_name"] == "entry_price_v1"
+
+
 def test_entry_price_compact_input_reduces_payload_across_large_sample(monkeypatch):
     engine = _build_engine()
     samples = [_entry_price_compaction_sample(idx) for idx in range(200)]

@@ -482,6 +482,128 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["action", "order_price", "confidence", "reason", "max_wait_sec"],
     },
+    "entry_price_explicit_fill_value_v1": {
+        "type": "object",
+        "properties": {
+            "edge_state": {
+                "type": "string",
+                "enum": ["EDGE", "NO_EDGE", "INSUFFICIENT_DATA"],
+            },
+            "action": {
+                "type": "string",
+                "enum": ["USE_DEFENSIVE", "USE_REFERENCE", "IMPROVE_LIMIT", "SKIP"],
+            },
+            "expected_upside_pct": {"type": ["number", "null"]},
+            "expected_downside_pct": {"type": ["number", "null"]},
+            "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+            "reason_codes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "evidence": {
+                "type": "object",
+                "properties": {
+                    "trend": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "liquidity": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "tape": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "risk": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "insufficient"],
+                    },
+                    "uncertainty": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                    "setup": {
+                        "type": "string",
+                        "enum": [
+                            "continuation",
+                            "pullback_recovery",
+                            "reversal",
+                            "no_setup",
+                            "not_applicable",
+                            "insufficient",
+                        ],
+                    },
+                    "positive_edge": {
+                        "type": "string",
+                        "enum": ["strong", "moderate", "weak", "none", "insufficient"],
+                    },
+                    "adverse_risk": {
+                        "type": "string",
+                        "enum": ["low", "moderate", "high", "blocking", "insufficient"],
+                    },
+                    "trigger": {
+                        "type": "string",
+                        "enum": [
+                            "confirmed",
+                            "recovery_required",
+                            "failed",
+                            "not_applicable",
+                            "insufficient",
+                        ],
+                    },
+                },
+                "required": [
+                    "trend",
+                    "liquidity",
+                    "tape",
+                    "risk",
+                    "uncertainty",
+                    "setup",
+                    "positive_edge",
+                    "adverse_risk",
+                    "trigger",
+                ],
+                "additionalProperties": False,
+            },
+            "selected_price": {"type": ["integer", "null"]},
+            "price_basis": {
+                "type": "string",
+                "enum": [
+                    "BEST_BID",
+                    "BEST_ASK",
+                    "DEFENSIVE",
+                    "REFERENCE",
+                    "RESOLVED",
+                    "NONE",
+                ],
+            },
+            "control_fill_probability_pct": {"type": ["number", "null"]},
+            "selected_fill_probability_pct": {"type": ["number", "null"]},
+            "incremental_fill_probability_pct": {"type": ["number", "null"]},
+            "incremental_chase_cost_pct": {"type": ["number", "null"]},
+            "fill_adjusted_edge_pct": {"type": ["number", "null"]},
+        },
+        "required": [
+            "edge_state",
+            "action",
+            "expected_upside_pct",
+            "expected_downside_pct",
+            "confidence",
+            "reason_codes",
+            "evidence",
+            "selected_price",
+            "price_basis",
+            "control_fill_probability_pct",
+            "selected_fill_probability_pct",
+            "incremental_fill_probability_pct",
+            "incremental_chase_cost_pct",
+            "fill_adjusted_edge_pct",
+        ],
+        "additionalProperties": False,
+    },
     "holding_exit_v1": {
         "type": "object",
         "properties": {

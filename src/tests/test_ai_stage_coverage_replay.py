@@ -488,14 +488,19 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
     request = requests[0]
     facts = request["candidate_input"]["entry_price_exact_contract_facts_v1"]
     assert request["candidate"]["prompt_version"] == (
-        "decision_quality_entry_price_v2_4_cost_aware_downside"
+        "decision_quality_entry_price_v2_5_explicit_fill_value"
     )
     assert request["candidate"]["semantic_validator_version"] == (
-        "entry_price_cost_aware_downside_semantic_v5"
+        "entry_price_explicit_fill_value_semantic_v6"
     )
     assert request["candidate"]["response_schema"]["selected_price"] == (
         "positive_integer_or_null"
     )
+    assert request["candidate"]["response_schema"]["fill_adjusted_edge_pct"] == (
+        "number_or_null"
+    )
+    assert '"control_fill_probability_pct"' in request["candidate"]["system_prompt"]
+    assert '"fill_adjusted_edge_pct"' in request["candidate"]["system_prompt"]
     assert facts["skip_permitted"] is False
     assert facts["would_fill_now"] is False
     assert facts["control_selected_price"] == 99
@@ -504,6 +509,49 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
     assert facts["minimum_reward_risk_for_aggressive_basis"] == 1.0
     assert "would_fill_now=false" in request["candidate"]["system_prompt"]
     assert "incremental chase cost" in request["candidate"]["system_prompt"]
+
+
+def test_prepare_stage_requests_filters_venue_before_frozen_limit():
+    krx_trace = _trace("analyze_target")
+    nxt_trace = {
+        **_trace("analyze_target"),
+        "decision_trace_id": "trace-analyze-target-nxt",
+        "decision_ts": "2026-07-29T12:01:00+09:00",
+        "effective_venue": "NXT",
+        "session_bucket": "nxt_aftermarket",
+        "payload_sha256": "payload-analyze-target-nxt",
+    }
+    krx_payload = _payload("analyze_target")
+    nxt_payload = json.loads(json.dumps(_payload("analyze_target")))
+    nxt_payload.update(
+        {
+            "payload_sha256": "payload-analyze-target-nxt",
+            "effective_venue": "NXT",
+            "session_bucket": "nxt_aftermarket",
+        }
+    )
+    nxt_context = nxt_payload["sanitized_user_input"]["entry_candle_context"]
+    nxt_context["venue"] = "NXT"
+    nxt_context["session"] = "nxt_aftermarket"
+
+    requests, summary = replay.prepare_stage_requests(
+        stage="entry",
+        dates=["2026-07-29"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[krx_trace, nxt_trace],
+        payloads=[krx_payload, nxt_payload],
+        eligible_trace_ids={nxt_trace["decision_trace_id"]},
+        effective_venue="NXT",
+        session_bucket="nxt_aftermarket",
+    )
+
+    assert len(requests) == 1
+    assert requests[0]["effective_venue"] == "NXT"
+    assert requests[0]["session_bucket"] == "nxt_aftermarket"
+    assert summary["cohort_venue_filter_excluded"] == 1
+    assert summary.get("mature_outcome_not_eligible", 0) == 0
 
 
 def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch():
@@ -531,7 +579,7 @@ def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch()
         },
         "candidate": {
             "semantic_validator_version": (
-                "entry_price_cost_aware_downside_semantic_v5"
+                "entry_price_explicit_fill_value_semantic_v6"
             )
         },
         "candidate_input": {
@@ -616,7 +664,7 @@ def test_entry_price_semantic_gate_rejects_action_only_relabel_and_weak_chase():
         },
         "candidate": {
             "semantic_validator_version": (
-                "entry_price_cost_aware_downside_semantic_v5"
+                "entry_price_explicit_fill_value_semantic_v6"
             )
         },
         "candidate_input": {
@@ -705,7 +753,7 @@ def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside(
         },
         "candidate": {
             "semantic_validator_version": (
-                "entry_price_cost_aware_downside_semantic_v5"
+                "entry_price_explicit_fill_value_semantic_v6"
             )
         },
         "candidate_input": {
@@ -719,6 +767,7 @@ def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside(
                 },
                 "skip_permitted": False,
                 "control_selected_price": 1000,
+                "control_exposure_selected": True,
                 "price_cost_baseline": 1000,
                 "price_delta_from_cost_baseline_bp": {
                     "DEFENSIVE": 0.0,
@@ -755,6 +804,11 @@ def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside(
         "action": "USE_REFERENCE",
         "selected_price": 1002,
         "price_basis": "REFERENCE",
+        "control_fill_probability_pct": 50.0,
+        "selected_fill_probability_pct": 90.0,
+        "incremental_fill_probability_pct": 40.0,
+        "incremental_chase_cost_pct": 0.2,
+        "fill_adjusted_edge_pct": 0.04,
     }
     assert replay.quality.validate_replay_candidate_response(request, bounded) == []
 
@@ -785,6 +839,166 @@ def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside(
     }
     assert "entry_price_aggressive_limit_exceeds_chase_cost_bound" in (
         replay.quality.validate_replay_candidate_response(request, over_bound)
+    )
+
+
+def test_entry_price_fill_value_ledger_rejects_bad_arithmetic_and_fake_value():
+    request = {
+        "stage": "entry_price",
+        "exact_payload": {
+            "price_context": {
+                "best_bid": 1000,
+                "best_ask": 1005,
+                "defensive_order_price": 1000,
+                "reference_target_price": 1002,
+                "resolved_order_price": 1003,
+            },
+            "entry_context_features": {
+                "quote_fresh_for_entry": True,
+                "quote_stale": False,
+            },
+            "ai_market_snapshot_v1": {
+                "ai_input_preflight_v1": {
+                    "allowed": True,
+                    "blockers": [],
+                    "venue_consistent": True,
+                }
+            },
+        },
+        "candidate": {
+            "semantic_validator_version": (
+                "entry_price_explicit_fill_value_semantic_v6"
+            )
+        },
+        "candidate_input": {
+            "entry_price_exact_contract_facts_v1": {
+                "control_selected_price": 1000,
+                "control_exposure_selected": True,
+                "price_cost_baseline": 1000,
+                "max_incremental_chase_cost_bp": 25.0,
+                "minimum_reward_risk_for_aggressive_basis": 1.0,
+            }
+        },
+    }
+    response = {
+        "edge_state": "EDGE",
+        "action": "USE_REFERENCE",
+        "expected_upside_pct": 0.6,
+        "expected_downside_pct": -0.3,
+        "confidence": 75,
+        "reason_codes": ["edge_positive"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "supportive",
+            "tape": "supportive",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+        "selected_price": 1002,
+        "price_basis": "REFERENCE",
+        "control_fill_probability_pct": 50.0,
+        "selected_fill_probability_pct": 90.0,
+        "incremental_fill_probability_pct": 39.0,
+        "incremental_chase_cost_pct": 0.1,
+        "fill_adjusted_edge_pct": -0.01,
+    }
+
+    errors = replay.quality.validate_replay_candidate_response(request, response)
+
+    assert "entry_price_incremental_fill_probability_mismatch" in errors
+    assert "entry_price_incremental_chase_cost_mismatch" in errors
+    assert "entry_price_fill_adjusted_edge_mismatch" in errors
+    assert "entry_price_aggressive_limit_nonpositive_fill_value" in errors
+
+
+def test_entry_price_fill_value_ledger_requires_nulls_for_skip():
+    request = {
+        "stage": "entry_price",
+        "exact_payload": {
+            "price_context": {},
+            "entry_context_features": {"quote_stale": True},
+            "ai_market_snapshot_v1": {
+                "ai_input_preflight_v1": {
+                    "allowed": False,
+                    "blockers": ["quote_stale"],
+                    "venue_consistent": True,
+                }
+            },
+        },
+        "candidate": {
+            "semantic_validator_version": (
+                "entry_price_explicit_fill_value_semantic_v6"
+            )
+        },
+    }
+    response = {
+        "edge_state": "INSUFFICIENT_DATA",
+        "action": "SKIP",
+        "expected_upside_pct": None,
+        "expected_downside_pct": None,
+        "confidence": 0,
+        "reason_codes": ["insufficient_core_data"],
+        "evidence": {
+            "trend": "insufficient",
+            "liquidity": "insufficient",
+            "tape": "insufficient",
+            "risk": "insufficient",
+            "uncertainty": "high",
+            "setup": "insufficient",
+            "positive_edge": "insufficient",
+            "adverse_risk": "insufficient",
+            "trigger": "insufficient",
+        },
+        "selected_price": None,
+        "price_basis": "NONE",
+        "control_fill_probability_pct": 0.0,
+        "selected_fill_probability_pct": None,
+        "incremental_fill_probability_pct": None,
+        "incremental_chase_cost_pct": None,
+        "fill_adjusted_edge_pct": None,
+    }
+
+    errors = replay.quality.validate_replay_candidate_response(request, response)
+
+    assert "entry_price_skip_requires_null_fill_value_ledger" in errors
+
+
+def test_entry_price_fill_value_ledger_normalizes_derived_arithmetic_only():
+    facts = {
+        "control_selected_price": 1000,
+        "control_exposure_selected": True,
+        "price_delta_from_cost_baseline_bp": {"DEFENSIVE": 0.0},
+    }
+    response = {
+        "action": "USE_DEFENSIVE",
+        "selected_price": 1000,
+        "price_basis": "DEFENSIVE",
+        "expected_upside_pct": 0.6,
+        "control_fill_probability_pct": 55.0,
+        "selected_fill_probability_pct": 75.0,
+        "incremental_fill_probability_pct": 20.0,
+        "incremental_chase_cost_pct": 0.1,
+        "fill_adjusted_edge_pct": 0.6,
+    }
+
+    normalized, provenance = replay.normalize_entry_price_fill_value_ledger(
+        response,
+        contract_facts=facts,
+    )
+
+    assert normalized["control_fill_probability_pct"] == 55.0
+    assert normalized["selected_fill_probability_pct"] == 55.0
+    assert normalized["incremental_fill_probability_pct"] == 0.0
+    assert normalized["incremental_chase_cost_pct"] == 0.0
+    assert normalized["fill_adjusted_edge_pct"] == 0.0
+    assert provenance["entry_price_fill_value_normalization_applied"] is True
+    assert (
+        provenance["entry_price_raw_fill_value_ledger"]["selected_fill_probability_pct"]
+        == 75.0
     )
 
 
@@ -1043,6 +1257,56 @@ def test_reusable_pass_results_requires_same_candidate_and_payload():
     )
 
 
+def test_reusable_pass_results_from_reports_deduplicates_valid_pair():
+    requests, _ = replay.prepare_stage_requests(
+        stage="entry",
+        dates=["2026-07-29"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[_trace("analyze_target")],
+        payloads=[_payload("analyze_target")],
+    )
+    response = {
+        "edge_state": "NO_EDGE",
+        "action": "DROP",
+        "expected_upside_pct": 0.3,
+        "expected_downside_pct": -0.4,
+        "confidence": 60,
+        "reason_codes": ["no_positive_edge"],
+        "evidence": {
+            "trend": "mixed",
+            "liquidity": "mixed",
+            "tape": "mixed",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "no_setup",
+            "positive_edge": "none",
+            "adverse_risk": "moderate",
+            "trigger": "not_applicable",
+        },
+    }
+    results = replay.quality.run_paired_replay(
+        requests,
+        control_runner=lambda _: {"action": "DROP"},
+        candidate_runner=lambda _: response,
+    )
+
+    reusable, sources = replay.reusable_pass_results_from_reports(
+        existing_reports=[
+            ("first.json", {"target_date": "first", "results": results}),
+            ("duplicate.json", {"target_date": "duplicate", "results": results}),
+        ],
+        requests=requests,
+    )
+
+    assert len(reusable) == 1
+    assert sources[0]["reused_pass_count"] == 1
+    assert len(sources[0]["source_report_sha256"]) == 64
+    assert sources[1]["matched_pass_count"] == 1
+    assert sources[1]["reused_pass_count"] == 0
+
+
 def test_bedrock_candidate_uses_qwen_only_and_no_failback():
     captured = {}
 
@@ -1138,13 +1402,17 @@ def test_bedrock_entry_price_correction_names_noncanonical_setup_code():
             "model": "qwen3_32b",
             "system_prompt": "Return JSON",
         },
-        "candidate_schema_correction_errors": ["reason_codes_invalid"],
+        "candidate_schema_correction_errors": [
+            "reason_codes_invalid",
+            "entry_price_aggressive_limit_nonpositive_fill_value",
+        ],
         **replay.CONTRACT,
     }
 
     replay.execute_bedrock_candidate(request, provider=FakeProvider())
 
     assert "evidence.setup=continuation" in captured["prompt"]
+    assert "do not retry REFERENCE, RESOLVED, or BEST_ASK" in captured["prompt"]
 
 
 def test_report_marks_action_collapse_before_outcome_comparison():

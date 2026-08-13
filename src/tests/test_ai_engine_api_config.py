@@ -11,6 +11,7 @@ def test_ai_response_schema_registry_covers_required_endpoints():
         "decision_quality_v2_7_entry",
         "entry_setup_risk_adjudication_v1",
         "entry_price_v1",
+        "entry_price_explicit_fill_value_v1",
         "holding_exit_v1",
         "holding_score_v2",
         "holding_exit_flow_v1",
@@ -50,6 +51,7 @@ def test_openai_text_format_normalizes_response_schemas_for_strict_outputs():
     for schema_name in (
         "entry_v1",
         "entry_price_v1",
+        "entry_price_explicit_fill_value_v1",
         "holding_exit_v1",
         "condition_entry_v1",
     ):

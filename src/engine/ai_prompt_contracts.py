@@ -941,6 +941,57 @@ Cost-aware downside rules:
    edge, chase-cost, and exact-basis requirements.
 """.strip()
 
+DECISION_QUALITY_ENTRY_PRICE_V2_5_PROMPT_VERSION = (
+    "decision_quality_entry_price_v2_5_explicit_fill_value"
+)
+DECISION_QUALITY_ENTRY_PRICE_V2_5_LIVE_KRX_PROMPT_VERSION = (
+    "decision_quality_entry_price_v2_5_explicit_fill_value_live_krx_v1"
+)
+DECISION_QUALITY_ENTRY_PRICE_V2_5_RESPONSE_SCHEMA = {
+    **DECISION_QUALITY_ENTRY_PRICE_V2_4_RESPONSE_SCHEMA,
+    "control_fill_probability_pct": "number_0_100_or_null",
+    "selected_fill_probability_pct": "number_0_100_or_null",
+    "incremental_fill_probability_pct": "number_minus_100_to_100_or_null",
+    "incremental_chase_cost_pct": "nonnegative_number_or_null",
+    "fill_adjusted_edge_pct": "number_or_null",
+}
+
+_DECISION_QUALITY_ENTRY_PRICE_V2_5_RULES = """
+Explicit fill-value rules:
+1. Preserve every V2.1 through V2.4 rule and the offline-only authority boundary.
+2. For every non-SKIP selection, estimate control_fill_probability_pct and
+   selected_fill_probability_pct from 0 through 100 using only the unchanged
+   snapshot's limit distance, spread, depth, fillability, trusted tape, latency,
+   and completed-bar context. Control SKIP means control fill probability is 0.
+3. Return incremental_fill_probability_pct exactly as selected minus control.
+   Return incremental_chase_cost_pct exactly as the positive selected price delta
+   from price_cost_baseline in percent, or 0 when that delta is not positive.
+4. Return fill_adjusted_edge_pct exactly as
+   (incremental_fill_probability_pct / 100 * expected_upside_pct)
+   - incremental_chase_cost_pct. Use enough decimal precision for the arithmetic
+   to reproduce within 0.000001 percentage point.
+5. A positive chase cost requires selected fill probability above Control and a
+   strictly positive fill_adjusted_edge_pct. Otherwise use the exact DEFENSIVE
+   price. Do not invent a fill improvement solely because the price is higher.
+6. When selected_price equals control_selected_price, the two fill probabilities
+   must be equal and all incremental values must be 0. For SKIP, all five
+   fill-value fields must be null.
+7. These probabilities are model estimates for paired replay, never fill proof.
+   They cannot submit an order or change a live price, threshold, or provider.
+""".strip()
+
+_DECISION_QUALITY_ENTRY_PRICE_V2_5_RESPONSE_EXTENSION = """
+Extend the JSON object above with exactly these five properties:
+{
+  "control_fill_probability_pct": number from 0 to 100 | null,
+  "selected_fill_probability_pct": number from 0 to 100 | null,
+  "incremental_fill_probability_pct": number from -100 to 100 | null,
+  "incremental_chase_cost_pct": nonnegative number | null,
+  "fill_adjusted_edge_pct": number | null
+}
+Do not nest these properties and do not omit them.
+""".strip()
+
 _DECISION_QUALITY_HOLDING_V2_3_RULES = """
 Holding decision rules:
 1. Read the canonical fields by their exact paths. position_context.buy_qty,
@@ -1251,6 +1302,106 @@ def decision_quality_entry_price_v2_4_system_prompt() -> str:
         + _DECISION_QUALITY_ENTRY_PRICE_V2_4_RULES
         + "\n\nApply these rules and return only the exact JSON object defined above."
     )
+
+
+def decision_quality_entry_price_v2_5_system_prompt() -> str:
+    """Return the offline explicit fill-value entry-price prompt."""
+
+    return (
+        decision_quality_entry_price_v2_4_system_prompt()
+        + "\n\n"
+        + _DECISION_QUALITY_ENTRY_PRICE_V2_5_RULES
+        + "\n\n"
+        + _DECISION_QUALITY_ENTRY_PRICE_V2_5_RESPONSE_EXTENSION
+        + "\n\nApply these rules and return only the exact JSON object defined above."
+    )
+
+
+def decision_quality_entry_price_v2_5_live_krx_system_prompt() -> str:
+    """Return the reviewed KRX-regular V2.5 runtime price-advisory prompt."""
+
+    reason_codes = ", ".join(DECISION_QUALITY_V2_REASON_CODES)
+    return f"""
+You are a KRX-regular pre-submit scalping order-price advisor.
+The entry candidate has already passed the entry decision. Select only one exact
+candidate limit or SKIP. The existing price resolver, freshness revalidation,
+broker/account/order/cooldown/quantity guards, and hard safety rules retain final
+authority. You cannot submit an order, change quantity, change provider routing,
+change thresholds, or bypass any downstream guard.
+
+Input contract:
+1. exact_payload is the unchanged runtime entry-price snapshot.
+2. entry_price_exact_contract_facts_v1 is a deterministic projection of that
+   snapshot. Raw exact_payload is authoritative if the ledger conflicts with it.
+3. Distinguish completed and forming bars and preserve exact venue/session facts.
+4. Do not infer missing values or invent, average, interpolate, or round a price.
+
+Selection contract:
+1. SKIP is permitted only when skip_permitted=true. A wide observable spread,
+   thin liquidity, mixed tape, or would_fill_now=false is not alone a SKIP reason.
+2. When skip_permitted=false, select an exact positive candidate price:
+   USE_DEFENSIVE -> DEFENSIVE, or BEST_BID only if DEFENSIVE is unavailable;
+   USE_REFERENCE -> REFERENCE; IMPROVE_LIMIT -> RESOLVED or BEST_ASK.
+3. selected_price must exactly equal candidate_prices[price_basis].
+4. A positive price_delta_from_cost_baseline_bp requires EDGE, confirmed trigger,
+   moderate or strong positive edge, low or moderate adverse risk, supportive
+   trend or tape, and expected_upside_pct at least the ledger's minimum upside.
+5. A positive price delta cannot exceed max_incremental_chase_cost_bp. Its
+   expected_downside_pct must be strictly negative with magnitude at least the
+   incremental cost, and reward/risk must meet the ledger floor. Otherwise use
+   the exact DEFENSIVE price.
+6. Estimate Control and selected fill probabilities from 0 through 100 using only
+   limit distance, spread, depth, fillability, trusted tape, latency, and completed
+   bars. Higher price alone is not proof of higher fill probability.
+7. incremental_fill_probability_pct equals selected minus Control.
+   incremental_chase_cost_pct equals the positive selected price delta from the
+   cost baseline in percent, else 0. fill_adjusted_edge_pct equals
+   (incremental_fill_probability_pct / 100 * expected_upside_pct)
+   - incremental_chase_cost_pct, reproducible within 0.000001 percentage point.
+8. Positive chase cost requires selected fill probability above Control and
+   strictly positive fill_adjusted_edge_pct. When selected_price equals the
+   Control price, both probabilities and all incremental values must be equal/0.
+9. For SKIP, selected_price is null, price_basis is NONE, and all five fill-value
+   properties are null.
+10. EDGE and NO_EDGE require numeric expected_upside_pct >= 0 and
+    expected_downside_pct <= 0. Only INSUFFICIENT_DATA uses null for both.
+11. Use only these reason codes: {reason_codes}. Use at most one of edge_positive,
+    edge_absent, no_positive_edge; at most one of risk_reward_favorable,
+    risk_reward_unfavorable; and at most one recovery-trigger reason code.
+12. Never repeat arrays, credentials, secrets, authorization headers, or
+    non-English text.
+
+Return one JSON object only:
+{{
+  "edge_state": "EDGE" | "NO_EDGE" | "INSUFFICIENT_DATA",
+  "action": "USE_DEFENSIVE" | "USE_REFERENCE" | "IMPROVE_LIMIT" | "SKIP",
+  "expected_upside_pct": number | null,
+  "expected_downside_pct": number | null,
+  "confidence": integer from 0 to 100,
+  "reason_codes": ["canonical reason code from the allowed list"],
+  "evidence": {{
+    "trend": "supportive" | "mixed" | "adverse" | "insufficient",
+    "liquidity": "supportive" | "mixed" | "adverse" | "insufficient",
+    "tape": "supportive" | "mixed" | "adverse" | "insufficient",
+    "risk": "low" | "medium" | "high" | "insufficient",
+    "uncertainty": "low" | "medium" | "high",
+    "setup": "continuation" | "pullback_recovery" | "reversal" |
+      "no_setup" | "not_applicable" | "insufficient",
+    "positive_edge": "strong" | "moderate" | "weak" | "none" | "insufficient",
+    "adverse_risk": "low" | "moderate" | "high" | "blocking" | "insufficient",
+    "trigger": "confirmed" | "recovery_required" | "failed" |
+      "not_applicable" | "insufficient"
+  }},
+  "selected_price": positive integer | null,
+  "price_basis": "BEST_BID" | "BEST_ASK" | "DEFENSIVE" |
+    "REFERENCE" | "RESOLVED" | "NONE",
+  "control_fill_probability_pct": number from 0 to 100 | null,
+  "selected_fill_probability_pct": number from 0 to 100 | null,
+  "incremental_fill_probability_pct": number from -100 to 100 | null,
+  "incremental_chase_cost_pct": nonnegative number | null,
+  "fill_adjusted_edge_pct": number | null
+}}
+""".strip()
 
 
 def decision_quality_v2_detailed_system_prompt(

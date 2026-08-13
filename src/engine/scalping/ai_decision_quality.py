@@ -158,7 +158,7 @@ HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
 HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION = (
     "holding_flow_bounded_defer_semantic_v1"
 )
-ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_cost_aware_downside_semantic_v5"
+ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_explicit_fill_value_semantic_v6"
 ENTRY_PRICE_MAX_INCREMENTAL_CHASE_COST_BP = 25.0
 ENTRY_PRICE_MIN_REWARD_RISK_FOR_AGGRESSIVE_BASIS = 1.0
 ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
@@ -5273,12 +5273,205 @@ def _entry_price_contract_facts(exact_payload: Any) -> dict[str, Any]:
     }
 
 
+def build_entry_price_explicit_fill_value_contract(
+    exact_payload: Any,
+    *,
+    control_selected_price: Any,
+    control_exposure_selected: bool = True,
+) -> dict[str, Any]:
+    """Build the shared V2.5 price ledger for replay and live KRX selection.
+
+    The ledger is a deterministic projection of the unchanged exact payload.
+    It has no broker, quantity, submit, provider-routing, or guard authority.
+    """
+
+    facts = _entry_price_contract_facts(exact_payload)
+    control_price = _number(control_selected_price)
+    if (
+        control_price is not None
+        and control_price > 0
+        and float(control_price).is_integer()
+    ):
+        normalized_control_price: int | None = int(control_price)
+    else:
+        normalized_control_price = None
+    defensive_price = _number(facts["candidate_prices"].get("DEFENSIVE"))
+    price_cost_baseline = normalized_control_price or defensive_price
+    facts["control_selected_price"] = normalized_control_price
+    facts["control_exposure_selected"] = bool(
+        control_exposure_selected and normalized_control_price is not None
+    )
+    facts["price_cost_baseline"] = price_cost_baseline
+    facts["price_delta_from_cost_baseline_bp"] = {
+        basis: (
+            ((price - price_cost_baseline) / price_cost_baseline) * 10000.0
+            if price is not None
+            and price_cost_baseline is not None
+            and price_cost_baseline > 0
+            else None
+        )
+        for basis, price in facts["candidate_prices"].items()
+    }
+    facts["minimum_upside_for_aggressive_basis_pct"] = {
+        basis: (
+            (delta_bp / 100.0) + 0.20 if delta_bp is not None and delta_bp > 0 else 0.0
+        )
+        for basis, delta_bp in facts["price_delta_from_cost_baseline_bp"].items()
+    }
+    facts["economically_distinct_bases"] = [
+        basis
+        for basis, delta_bp in facts["price_delta_from_cost_baseline_bp"].items()
+        if delta_bp is not None and abs(delta_bp) > 1e-9
+    ]
+    facts["max_incremental_chase_cost_bp"] = ENTRY_PRICE_MAX_INCREMENTAL_CHASE_COST_BP
+    facts["minimum_reward_risk_for_aggressive_basis"] = (
+        ENTRY_PRICE_MIN_REWARD_RISK_FOR_AGGRESSIVE_BASIS
+    )
+    return facts
+
+
+def canonicalize_entry_price_economically_equivalent_action(
+    response: dict[str, Any], *, contract_facts: dict[str, Any] | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Canonicalize a label only when its selected price is unchanged."""
+
+    payload = dict(response)
+    facts = contract_facts if isinstance(contract_facts, dict) else {}
+    action = str(payload.get("action") or "").strip().upper()
+    selected_price = _number(payload.get("selected_price"))
+    control_price = _number(facts.get("control_selected_price"))
+    candidate_prices = facts.get("candidate_prices") or {}
+    defensive_price = _number(candidate_prices.get("DEFENSIVE"))
+    raw_basis = str(payload.get("price_basis") or "").strip().upper()
+    raw_basis_price = _number(candidate_prices.get(raw_basis))
+    if not (
+        action in {"USE_REFERENCE", "IMPROVE_LIMIT"}
+        and selected_price is not None
+        and control_price is not None
+        and defensive_price is not None
+        and raw_basis_price is not None
+        and selected_price == control_price == defensive_price == raw_basis_price
+    ):
+        return payload, {"entry_price_action_canonicalization_applied": False}
+    payload["action"] = "USE_DEFENSIVE"
+    payload["price_basis"] = "DEFENSIVE"
+    return payload, {
+        "entry_price_action_canonicalization_applied": True,
+        "entry_price_action_canonicalization_reason": (
+            "economically_equivalent_control_defensive_price"
+        ),
+        "entry_price_raw_action": action,
+        "entry_price_raw_price_basis": raw_basis,
+        "entry_price_canonical_action": "USE_DEFENSIVE",
+        "entry_price_canonical_price_basis": "DEFENSIVE",
+    }
+
+
+def normalize_entry_price_fill_value_ledger(
+    response: dict[str, Any], *, contract_facts: dict[str, Any] | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Derive V2.5 arithmetic while preserving model probability estimates."""
+
+    payload = dict(response)
+    if str(payload.get("action") or "").strip().upper() == "SKIP":
+        return payload, {"entry_price_fill_value_normalization_applied": False}
+    facts = contract_facts if isinstance(contract_facts, dict) else {}
+    fields = (
+        "control_fill_probability_pct",
+        "selected_fill_probability_pct",
+        "incremental_fill_probability_pct",
+        "incremental_chase_cost_pct",
+        "fill_adjusted_edge_pct",
+    )
+    raw_ledger = {field: payload.get(field) for field in fields}
+    control_probability = _number(payload.get("control_fill_probability_pct"))
+    selected_probability = _number(payload.get("selected_fill_probability_pct"))
+    if facts.get("control_exposure_selected") is False:
+        control_probability = 0.0
+    selected_price = _number(payload.get("selected_price"))
+    control_price = _number(facts.get("control_selected_price"))
+    if (
+        selected_price is not None
+        and control_price is not None
+        and selected_price == control_price
+        and control_probability is not None
+    ):
+        selected_probability = control_probability
+    basis = str(payload.get("price_basis") or "").strip().upper()
+    selected_delta_bp = _number(
+        (facts.get("price_delta_from_cost_baseline_bp") or {}).get(basis)
+    )
+    chase_cost_pct = (
+        max(0.0, selected_delta_bp / 100.0) if selected_delta_bp is not None else None
+    )
+    incremental_probability = (
+        selected_probability - control_probability
+        if selected_probability is not None and control_probability is not None
+        else None
+    )
+    expected_upside_pct = _number(payload.get("expected_upside_pct"))
+    fill_adjusted_edge_pct = (
+        incremental_probability / 100.0 * expected_upside_pct - chase_cost_pct
+        if incremental_probability is not None
+        and expected_upside_pct is not None
+        and chase_cost_pct is not None
+        else None
+    )
+    normalized_ledger = {
+        "control_fill_probability_pct": control_probability,
+        "selected_fill_probability_pct": selected_probability,
+        "incremental_fill_probability_pct": incremental_probability,
+        "incremental_chase_cost_pct": chase_cost_pct,
+        "fill_adjusted_edge_pct": fill_adjusted_edge_pct,
+    }
+    for field, value in normalized_ledger.items():
+        if value is not None:
+            payload[field] = value
+    return payload, {
+        "entry_price_fill_value_normalization_applied": raw_ledger != normalized_ledger,
+        "entry_price_fill_value_normalization_reason": (
+            "deterministic_arithmetic_from_model_fill_probabilities"
+        ),
+        "entry_price_raw_fill_value_ledger": raw_ledger,
+        "entry_price_normalized_fill_value_ledger": normalized_ledger,
+    }
+
+
+def validate_entry_price_explicit_fill_value_response(
+    response: dict[str, Any],
+    *,
+    exact_payload: Any,
+    contract_facts: dict[str, Any],
+) -> list[str]:
+    """Validate the common V2.5 response contract without runtime authority."""
+
+    return list(
+        dict.fromkeys(
+            [
+                *validate_candidate_response(
+                    response,
+                    stage="entry_price",
+                    exact_payload=exact_payload,
+                ),
+                *_entry_price_response_errors(
+                    response,
+                    exact_payload=exact_payload,
+                    contract_facts=contract_facts,
+                    require_fill_adjusted_distinct_limit=True,
+                    require_explicit_fill_value_ledger=True,
+                ),
+            ]
+        )
+    )
+
+
 def _entry_price_response_errors(
     response: dict[str, Any],
     *,
     exact_payload: Any,
     contract_facts: dict[str, Any] | None = None,
     require_fill_adjusted_distinct_limit: bool = False,
+    require_explicit_fill_value_ledger: bool = False,
 ) -> list[str]:
     facts = _entry_price_contract_facts(exact_payload)
     if isinstance(contract_facts, dict):
@@ -5303,11 +5496,22 @@ def _entry_price_response_errors(
     basis = str(response.get("price_basis") or "").strip().upper()
     selected_price = _number(response.get("selected_price"))
     errors: list[str] = []
+    fill_value_fields = (
+        "control_fill_probability_pct",
+        "selected_fill_probability_pct",
+        "incremental_fill_probability_pct",
+        "incremental_chase_cost_pct",
+        "fill_adjusted_edge_pct",
+    )
     if action == "SKIP":
         if selected_price is not None or basis != "NONE":
             errors.append("entry_price_skip_requires_null_none")
         if not facts["skip_permitted"]:
             errors.append("entry_price_skip_without_explicit_blocker")
+        if require_explicit_fill_value_ledger and any(
+            response.get(field) is not None for field in fill_value_fields
+        ):
+            errors.append("entry_price_skip_requires_null_fill_value_ledger")
         return errors
 
     if facts["skip_permitted"]:
@@ -5399,6 +5603,97 @@ def _entry_price_response_errors(
                     errors.append(
                         "entry_price_aggressive_limit_reward_risk_below_floor"
                     )
+    if require_explicit_fill_value_ledger and selected_price is not None:
+        ledger = {field: _number(response.get(field)) for field in fill_value_fields}
+        for field, value in ledger.items():
+            if value is None:
+                errors.append(f"entry_price_{field}_missing_or_invalid")
+        control_fill_probability = ledger["control_fill_probability_pct"]
+        selected_fill_probability = ledger["selected_fill_probability_pct"]
+        incremental_fill_probability = ledger["incremental_fill_probability_pct"]
+        incremental_chase_cost = ledger["incremental_chase_cost_pct"]
+        fill_adjusted_edge = ledger["fill_adjusted_edge_pct"]
+        if control_fill_probability is not None and not (
+            0 <= control_fill_probability <= 100
+        ):
+            errors.append("entry_price_control_fill_probability_out_of_range")
+        if selected_fill_probability is not None and not (
+            0 <= selected_fill_probability <= 100
+        ):
+            errors.append("entry_price_selected_fill_probability_out_of_range")
+        if incremental_fill_probability is not None and not (
+            -100 <= incremental_fill_probability <= 100
+        ):
+            errors.append("entry_price_incremental_fill_probability_out_of_range")
+        if incremental_chase_cost is not None and incremental_chase_cost < 0:
+            errors.append("entry_price_incremental_chase_cost_negative")
+        tolerance = 0.000001
+        if (
+            control_fill_probability is not None
+            and selected_fill_probability is not None
+            and incremental_fill_probability is not None
+            and abs(
+                incremental_fill_probability
+                - (selected_fill_probability - control_fill_probability)
+            )
+            > tolerance
+        ):
+            errors.append("entry_price_incremental_fill_probability_mismatch")
+        selected_delta_bp = _number(
+            (facts.get("price_delta_from_cost_baseline_bp") or {}).get(basis)
+        )
+        expected_chase_cost = (
+            max(0.0, selected_delta_bp / 100.0)
+            if selected_delta_bp is not None
+            else 0.0
+        )
+        if (
+            incremental_chase_cost is not None
+            and abs(incremental_chase_cost - expected_chase_cost) > tolerance
+        ):
+            errors.append("entry_price_incremental_chase_cost_mismatch")
+        expected_upside_pct = _number(response.get("expected_upside_pct"))
+        if (
+            incremental_fill_probability is not None
+            and incremental_chase_cost is not None
+            and fill_adjusted_edge is not None
+            and expected_upside_pct is not None
+        ):
+            expected_fill_adjusted_edge = (
+                incremental_fill_probability / 100.0 * expected_upside_pct
+                - incremental_chase_cost
+            )
+            if abs(fill_adjusted_edge - expected_fill_adjusted_edge) > tolerance:
+                errors.append("entry_price_fill_adjusted_edge_mismatch")
+        control_exposure_selected = (contract_facts or {}).get(
+            "control_exposure_selected"
+        )
+        if not isinstance(control_exposure_selected, bool):
+            errors.append("entry_price_control_exposure_contract_missing")
+        if (
+            control_exposure_selected is False
+            and control_fill_probability is not None
+            and abs(control_fill_probability) > tolerance
+        ):
+            errors.append("entry_price_control_skip_fill_probability_not_zero")
+        control_price = _number((contract_facts or {}).get("control_selected_price"))
+        if (
+            control_price is not None
+            and int(selected_price) == int(control_price)
+            and control_fill_probability is not None
+            and selected_fill_probability is not None
+            and abs(selected_fill_probability - control_fill_probability) > tolerance
+        ):
+            errors.append("entry_price_same_price_fill_probability_mismatch")
+        if selected_delta_bp is not None and selected_delta_bp > 0:
+            if (
+                control_fill_probability is not None
+                and selected_fill_probability is not None
+                and selected_fill_probability <= control_fill_probability
+            ):
+                errors.append("entry_price_aggressive_limit_no_fill_improvement")
+            if fill_adjusted_edge is not None and fill_adjusted_edge <= 0:
+                errors.append("entry_price_aggressive_limit_nonpositive_fill_value")
     return errors
 
 
@@ -5459,6 +5754,7 @@ def validate_replay_candidate_response(
                     )
                 ),
                 require_fill_adjusted_distinct_limit=True,
+                require_explicit_fill_value_ledger=True,
             ),
         ]
     if semantic_validator_version not in {

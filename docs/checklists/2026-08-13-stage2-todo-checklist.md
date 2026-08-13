@@ -192,6 +192,12 @@
 
 ## Project/Calendar 동기화
 
+- [ ] `[EntryPriceV25KRXFirstObservation0814] KRX 정규장 entry_price V2.5 PREOPEN 반영 및 최초 자연호출 귀속` (`Due: 2026-08-14`, `Slot: PREOPEN`, `TimeWindow: 08:50~10:30`, `Track: ScalpingLogic`)
+  - Source: [KRX V2.5 cumulative replay](/home/ubuntu/KORStockScan/data/report/ai_prompt_stage_coverage_replay/ai_prompt_stage_coverage_replay_2026-08-13-v2_5-cumulative-krx_entry_price.json), [live policy](/home/ubuntu/KORStockScan/src/engine/scalping/entry_price_live_policy.py), [AI engine](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [dated operator env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-08-14.env)
+  - 판정 기준: PREOPEN 기동 PID가 reviewed commit과 dated env를 로드하고, exact_v2 preflight를 통과한 `KRX/KRX_REGULAR` 자연 `entry_price` 호출만 `decision_quality_entry_price_v2_5_explicit_fill_value_live_krx_v1`을 사용해야 한다. `provider!=none`, Bedrock Qwen3 32B→Nova Lite v2 failback 경로 불변, V2.5 의미계약 통과, selected exact price와 downstream resolver/submit 결과 귀속을 확인한다. NXT와 PREMARKET은 `entry_price_v1`이어야 한다.
+  - rollback: evidence hash·venue/session·preflight·schema/semantic 계약 결손, provider 실패, 신규 missed-upside 또는 severe-tail 증가가 확인되면 `KORSTOCKSCAN_ENTRY_PRICE_V2_5_KRX_ENABLED=false`로 `entry_price_v1`을 복원한다. 가격·수량·threshold·provider route·broker/account/order/cooldown·hard safety guard는 변경하지 않는다.
+  - 다음 액션: `krx_v2_5_first_observation_pass`, `control_v1_due_to_contract_gap`, `schema_semantic_rejected_defensive_close`, `provider_route_regression_rollback`, `post_apply_quality_rollback` 중 하나로 닫는다.
+
 - [ ] `[LatencyFalseNegativeVenueBackfill0813] clean-baseline latency false-negative venue/session rolling backfill` (`Due: 2026-08-13`, `Slot: POSTCLOSE`, `TimeWindow: 19:55~20:10`, `Track: ScalpingLogic`)
   - Source: [rising missed feedback producer](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_intraday_feedback.py), [current feedback artifact](/home/ubuntu/KORStockScan/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_2026-08-13.json), [traceability contract](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
   - 현재 판정: 최신 20개 artifact의 latency candidate 482행 중 과거 schema 470행은 explicit venue/session 결손으로 격리됐고, 2026-08-13 KRX 12행만 rolling usable이다. KRX true-OFI cohort는 11행, low-adverse 3행(`27.272727%`), ready 2행(`18.181818%`)으로 두 최소비율 `30%`에 미달하므로 `hold_no_consistent_low_adverse_edge`다.
