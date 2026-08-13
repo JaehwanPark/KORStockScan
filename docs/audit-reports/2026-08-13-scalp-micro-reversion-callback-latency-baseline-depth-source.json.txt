@@ -1,0 +1,149 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20260813T090755+0900",
+  "generated_at": "2026-08-13T09:07:55+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1010-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "depth_capture_enabled_on": false,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {"p50_ms": 0.000122, "p95_ms": 0.000127, "p99_ms": 0.000140, "max_ms": 0.009640, "mean_ms": 0.0001240970},
+    {"p50_ms": 0.000123, "p95_ms": 0.000130, "p99_ms": 0.000144, "max_ms": 0.000387, "mean_ms": 0.0001236126},
+    {"p50_ms": 0.000123, "p95_ms": 0.000129, "p99_ms": 0.000144, "max_ms": 0.000328, "mean_ms": 0.0001234604},
+    {"p50_ms": 0.000123, "p95_ms": 0.000130, "p99_ms": 0.000146, "max_ms": 0.000564, "mean_ms": 0.0001235032},
+    {"p50_ms": 0.000123, "p95_ms": 0.000131, "p99_ms": 0.000146, "max_ms": 0.025386, "mean_ms": 0.0001319040}
+  ],
+  "observer_on_runs": [
+    {
+      "p50_ms": 0.021228,
+      "p95_ms": 0.025986,
+      "p99_ms": 0.033537,
+      "max_ms": 10.215337,
+      "mean_ms": 0.0422838096,
+      "collector_internal_p95_ms": 0.024541,
+      "collector_internal_p99_ms": 0.032404,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.021508,
+      "p95_ms": 0.023547,
+      "p99_ms": 0.034547,
+      "max_ms": 23.353304,
+      "mean_ms": 0.0475806090,
+      "collector_internal_p95_ms": 0.022061,
+      "collector_internal_p99_ms": 0.032138,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.021691,
+      "p95_ms": 0.024060,
+      "p99_ms": 0.033699,
+      "max_ms": 15.431030,
+      "mean_ms": 0.0475523888,
+      "collector_internal_p95_ms": 0.022501,
+      "collector_internal_p99_ms": 0.032134,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.021795,
+      "p95_ms": 0.023782,
+      "p99_ms": 0.034324,
+      "max_ms": 14.349068,
+      "mean_ms": 0.0438498522,
+      "collector_internal_p95_ms": 0.022198,
+      "collector_internal_p99_ms": 0.031891,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.021849,
+      "p95_ms": 0.024765,
+      "p99_ms": 0.039125,
+      "max_ms": 22.757699,
+      "mean_ms": 0.0437508770,
+      "collector_internal_p95_ms": 0.023244,
+      "collector_internal_p99_ms": 0.037579,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    }
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000131,
+    "observer_off_p99_ms_max": 0.000146,
+    "observer_on_external_p95_ms_max": 0.025986,
+    "observer_on_external_p99_ms_max": 0.039125,
+    "observer_on_internal_p95_ms_max": 0.024541,
+    "observer_on_internal_p99_ms_max": 0.037579,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "depth_preflight": {
+    "callbacks": 5000,
+    "enqueued": 5000,
+    "processed": 5000,
+    "persisted": 5000,
+    "producer_callback_latency_p95_ms": 0.032856,
+    "producer_callback_latency_p99_ms": 0.079557,
+    "queue_full_count": 0,
+    "dropped_count": 0,
+    "worker_error_count": 0,
+    "writer_error_count": 0,
+    "bytes_written": 4632786,
+    "bytes_per_row": 926.56
+  },
+  "source_exclusion_preflight": {
+    "manifest_schema": "scalp_micro_reversion_source_exclusion_manifest_v1",
+    "excluded_scope_count": 7,
+    "excluded_market_stream_row_count": 196935,
+    "excluded_event_reference_count": 5689,
+    "selection_authority": false
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "benchmark_module_sha256": "b789f9308961ee94d3322fa58e0354aaebacdb398ee3576619ba8a25ecd5938f",
+  "forward_collector_sha256": "dbc9663fa7ed57821b05a7895e1e6c5b9dd0bf2b07d9c05df75946f855aec4bb",
+  "path_journal_sha256": "793d1b360723ba9fe0d31cec62e34d8187c7be2cd68f3b5b5ae49867170c8d18",
+  "path_capture_sha256": "5688253327561080077dfbecfda5e4dc7e8e14120ff77fc5c89255fc501ccda6",
+  "p2_replay_sha256": "a05dde76073801d1cfadd0a21f65f579e8a9ff2abd42ec56575935ce9f5bdff9",
+  "onset_quality_sha256": "595658610c7ba829f8f274c8ff56b64e0c1209c395724b1845c78d99640e8974",
+  "storage_maintenance_sha256": "aa7ec72ffbdb6b6d402138cf667c7bd669b10cf867c21af518acda4d3080bc27",
+  "kiwoom_websocket_sha256": "3d3d22db027078fcaf322c5fd3377236bafc3b77c6c88e08c8ce0c867b73de40",
+  "canary_guard_config_sha256": "28a1b8355003d979fd02a4d43a7e8144bc252d14698fa934068b8d56b7daabd5",
+  "source_exclusion_manifest_sha256": "f9e9c0b9cad91c9b300e818b91921f4cfae850ab0fe3666ba9e49bd686fac0f8",
+  "source_base_commit": "d692a4f5e1c5ff53dfbb0e132724d8272ef37f27",
+  "interpretation": "Exact-source synthetic 0B callback and separate 0D persistence preflights after the Samsung WebSocket observation integration and P2 exact-epoch source exclusion. Frozen 1/2ms limits remain unchanged. The preflights had zero queue drop and worker/writer errors. This artifact does not activate discovery, approve Gate B, rank P2 policies, create simulation positions, change trading runtime, or grant order authority.",
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config_and_zero_drop_error_gap_or_storage_degradation",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ]
+}

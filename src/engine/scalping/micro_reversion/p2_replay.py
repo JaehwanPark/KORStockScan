@@ -10,16 +10,32 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import re
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from .path_journal import validate_market_stream_path_provenance
 
 P2_REPLAY_SCHEMA = "scalp_micro_reversion_p2_path_replay_v2"
 P2_REPLAY_AUTHORITY = "p2_path_research_only_selection_authority_false"
+SOURCE_EXCLUSION_SCHEMA = "scalp_micro_reversion_source_exclusion_manifest_v1"
+SOURCE_EXCLUSION_SCOPE_POLICY = "exact_trade_date_venue_session_sequence_epoch"
+_SOURCE_EXCLUSION_CONTRACT_FIELDS = (
+    "metric_role",
+    "decision_authority",
+    "window_policy",
+    "sample_floor",
+    "primary_decision_metric",
+    "source_quality_gate",
+)
+DEFAULT_SOURCE_EXCLUSION_MANIFEST = (
+    Path(__file__).parents[4]
+    / "configs"
+    / "scalp_micro_reversion_source_exclusions.json.txt"
+)
 P2_REPLAY_METRIC_CONTRACT = {
     "metric_role": "primary_ev_research_candidate",
     "decision_authority": P2_REPLAY_AUTHORITY,
@@ -50,6 +66,157 @@ def _parse_iso_timestamp_ms(value: object) -> int:
     if parsed.tzinfo is None:
         raise ValueError("canonical stream timestamp must include timezone")
     return int(parsed.timestamp() * 1_000)
+
+
+def _parse_iso_timestamp(value: object) -> datetime:
+    text = str(value or "").strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise ValueError("canonical stream timestamp must include timezone")
+    return parsed
+
+
+def load_source_exclusion_manifest(
+    path: Path = DEFAULT_SOURCE_EXCLUSION_MANIFEST,
+) -> dict[str, Any]:
+    """Load the fail-closed source exclusion contract used by P2 reconstruction."""
+
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("P2 source exclusion manifest is missing or invalid") from exc
+    return _validate_source_exclusion_manifest(payload)
+
+
+def _validate_source_exclusion_manifest(payload: object) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("P2 source exclusion manifest must be an object")
+    if payload.get("schema") != SOURCE_EXCLUSION_SCHEMA:
+        raise ValueError("P2 source exclusion manifest schema is invalid")
+    if payload.get("scope_policy") != SOURCE_EXCLUSION_SCOPE_POLICY:
+        raise ValueError("P2 source exclusion manifest scope policy is invalid")
+    forbidden_uses = payload.get("forbidden_uses")
+    if any(
+        not str(payload.get(field) or "").strip()
+        for field in _SOURCE_EXCLUSION_CONTRACT_FIELDS
+    ) or not isinstance(forbidden_uses, list) or not forbidden_uses or any(
+        not str(value or "").strip() for value in forbidden_uses
+    ):
+        raise ValueError("P2 source exclusion manifest metric contract is invalid")
+    try:
+        generated_at = _parse_iso_timestamp(payload.get("generated_at"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "P2 source exclusion manifest generated_at is invalid"
+        ) from exc
+    if generated_at.tzinfo is None or not re.fullmatch(
+        r"[0-9a-f]{40}", str(payload.get("source_base_commit") or "")
+    ):
+        raise ValueError("P2 source exclusion manifest provenance is invalid")
+    if (
+        payload.get("actual_order_submitted") is not False
+        or payload.get("broker_order_forbidden") is not True
+        or payload.get("trading_runtime_effect") is not False
+        or payload.get("selection_authority") is not False
+    ):
+        raise ValueError("P2 source exclusion manifest authority contract is invalid")
+    entries = payload.get("exclusions")
+    if not isinstance(entries, list):
+        raise ValueError("P2 source exclusion manifest exclusions must be a list")
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        raise ValueError("P2 source exclusion manifest summary is invalid")
+    seen: set[tuple[str, str, str, int]] = set()
+    trade_dates: set[str] = set()
+    market_stream_row_count = 0
+    event_reference_count = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("P2 source exclusion entry must be an object")
+        try:
+            scope = (
+                str(entry.get("trade_date") or "").strip(),
+                str(entry.get("venue") or "").strip(),
+                str(entry.get("session_bucket") or "").strip(),
+                int(entry.get("sequence_epoch") or 0),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("P2 source exclusion entry scope is invalid") from exc
+        if not all(scope[:3]) or scope[3] <= 0:
+            raise ValueError("P2 source exclusion entry scope is invalid")
+        try:
+            date.fromisoformat(scope[0])
+        except ValueError as exc:
+            raise ValueError("P2 source exclusion entry date is invalid") from exc
+        if scope[1] not in {"KRX", "NXT", "SOR"} or not scope[2].startswith(
+            f"{scope[1]}_"
+        ):
+            raise ValueError("P2 source exclusion entry venue/session is invalid")
+        if scope in seen:
+            raise ValueError("P2 source exclusion entry scope is duplicated")
+        if not str(entry.get("reason_code") or "").strip():
+            raise ValueError("P2 source exclusion entry reason is missing")
+        try:
+            row_count = int(entry.get("market_stream_row_count"))
+            reference_count = int(entry.get("event_reference_count"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("P2 source exclusion entry counts are invalid") from exc
+        if row_count <= 0 or reference_count < 0:
+            raise ValueError("P2 source exclusion entry counts are invalid")
+        try:
+            window_start = _parse_iso_timestamp(entry.get("exchange_window_start"))
+            window_end = _parse_iso_timestamp(entry.get("exchange_window_end"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("P2 source exclusion entry window is invalid") from exc
+        if (
+            window_end < window_start
+            or window_start.date().isoformat() != scope[0]
+            or window_end.date().isoformat() != scope[0]
+        ):
+            raise ValueError("P2 source exclusion entry window is invalid")
+        if not str(entry.get("evidence") or "").strip():
+            raise ValueError("P2 source exclusion entry evidence is missing")
+        market_stream_row_count += row_count
+        event_reference_count += reference_count
+        seen.add(scope)
+        trade_dates.add(scope[0])
+    expected_summary = {
+        "excluded_scope_count": len(entries),
+        "excluded_market_stream_row_count": market_stream_row_count,
+        "excluded_event_reference_count": event_reference_count,
+        "trade_date_count": len(trade_dates),
+    }
+    if any(summary.get(field) != value for field, value in expected_summary.items()):
+        raise ValueError("P2 source exclusion manifest summary counts are invalid")
+    return payload
+
+
+def p2_reference_exclusion_reason(
+    reference: Mapping[str, Any],
+    *,
+    source_exclusion_manifest: Mapping[str, Any],
+) -> str | None:
+    """Return an exact date/venue/session/epoch exclusion reason, if present."""
+
+    capture_started_at = _parse_iso_timestamp(reference.get("capture_started_at"))
+    scope = (
+        capture_started_at.date().isoformat(),
+        str(reference.get("venue") or "").strip(),
+        str(reference.get("session_bucket") or "").strip(),
+        int(reference.get("sequence_epoch") or 0),
+    )
+    for entry in source_exclusion_manifest.get("exclusions") or ():
+        entry_scope = (
+            str(entry.get("trade_date") or "").strip(),
+            str(entry.get("venue") or "").strip(),
+            str(entry.get("session_bucket") or "").strip(),
+            int(entry.get("sequence_epoch") or 0),
+        )
+        if entry_scope == scope:
+            return str(entry.get("reason_code") or "source_quality_excluded")
+    return None
 
 
 def _optional_float(value: object) -> float | None:
@@ -285,7 +452,10 @@ class P2ReplayPoint:
 
 
 def load_p2_points_from_canonical_stream(
-    stream_files: Iterable[Path], *, reference: dict[str, Any]
+    stream_files: Iterable[Path],
+    *,
+    reference: dict[str, Any],
+    source_exclusion_manifest: Mapping[str, Any] | None = None,
 ) -> tuple[P2ReplayPoint, ...]:
     """Reconstruct one event window without granting discovery authority."""
 
@@ -305,6 +475,20 @@ def load_p2_points_from_canonical_stream(
     )
     if not all(scope[:3]) or scope[3] <= 0:
         raise ValueError("P2 reference stream scope is invalid")
+    exclusion_manifest = (
+        load_source_exclusion_manifest()
+        if source_exclusion_manifest is None
+        else _validate_source_exclusion_manifest(dict(source_exclusion_manifest))
+    )
+    exclusion_reason = p2_reference_exclusion_reason(
+        reference,
+        source_exclusion_manifest=exclusion_manifest,
+    )
+    if exclusion_reason is not None:
+        raise ValueError(
+            "P2 reference is excluded by source-quality manifest: "
+            f"{exclusion_reason}"
+        )
     start_ms = _parse_iso_timestamp_ms(reference.get("capture_started_at"))
     end_ms = _parse_iso_timestamp_ms(reference.get("capture_ended_at"))
     if end_ms < start_ms:

@@ -48,6 +48,7 @@ def _healthy_snapshot(**overrides):
             "producer_callback_latency_p99_ms": 0.2,
             "isolated_error_type": None,
             "canary_auto_stop_reason": None,
+            "path_exchange_timestamp_regression_exceeded_count": 0,
         }
     )
     snapshot.update(overrides)
@@ -105,7 +106,7 @@ def test_guard_stops_on_drop_leak_authority_and_latency() -> None:
     assert "producer_callback_latency_p99_exceeded" in reasons
 
 
-def test_guard_allows_bounded_timestamp_quarantine_but_stops_on_exceeded() -> None:
+def test_guard_quarantines_timestamp_regression_without_stopping_collector() -> None:
     quarantined = evaluate_canary_snapshot(
         _healthy_snapshot(
             path_exchange_timestamp_regression_count=1,
@@ -129,11 +130,16 @@ def test_guard_allows_bounded_timestamp_quarantine_but_stops_on_exceeded() -> No
 
     assert quarantined["status"] == "healthy_observer_canary"
     assert quarantined["stop_required"] is False
-    assert exceeded["status"] == "stop_required"
-    assert (
-        "nonzero_stop_metric:path_exchange_timestamp_regression_exceeded_count=1"
-        in exceeded["stop_reasons"]
+    assert exceeded["status"] == (
+        "healthy_observer_canary_with_source_row_exclusions"
     )
+    assert exceeded["stop_required"] is False
+    assert (
+        "raw_row_exclusion_required:"
+        "path_exchange_timestamp_regression_exceeded_count=1"
+        in exceeded["source_quality_row_exclusions"]
+    )
+    assert exceeded["raw_row_exclusion_required"] is True
 
 
 def test_latency_guard_warms_up_without_hiding_hard_stop() -> None:
@@ -352,6 +358,10 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
         ),
         "kiwoom_websocket_sha256": (repository_root / "src/engine/kiwoom_websocket.py"),
         "canary_guard_config_sha256": guard_path,
+        "source_exclusion_manifest_sha256": (
+            repository_root
+            / "configs/scalp_micro_reversion_source_exclusions.json.txt"
+        ),
     }
     for field, path in evidence_files.items():
         assert hashlib.sha256(path.read_bytes()).hexdigest() == baseline[field]

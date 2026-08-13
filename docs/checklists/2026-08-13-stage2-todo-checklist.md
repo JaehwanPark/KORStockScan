@@ -110,6 +110,20 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## Micro-Reversion 관찰
+
+- [x] `[MicroReversionExactSourceExclusion0813] current-source baseline·실패 epoch 제외·P2 fail-closed 소비 구현 및 리뷰` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 08:50~09:15`, `Track: ScalpingLogic`)
+  - Source: [source exclusion manifest](/home/ubuntu/KORStockScan/configs/scalp_micro_reversion_source_exclusions.json.txt), [P2 replay](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/p2_replay.py), [Gate B source-quality result](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-13-scalp-micro-reversion-gate-b-source-quality-result.md), [current-source baseline](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-13-scalp-micro-reversion-callback-latency-baseline-depth-source.json.txt)
+  - 구현 결과: 실패 범위를 `trade_date+venue+session+sequence_epoch` 7개 scope로 고정해 stream `196,935`행과 reference `5,689`건을 제외한다. P2 canonical loader는 manifest missing/invalid/authority/count drift와 제외 reference를 fail-closed하고, canonical V3 timestamp regression row를 imputation 없이 제외한다.
+  - 관찰 결과: 보존 stream `1,203,067`, unique segment `15,306`, reference coverage `100%`, complete segment `14,289` (`93.356%`)다. current-source 0B internal p95/p99 max는 `0.024541/0.037579ms`, 0D 5,000건은 drop/error 없이 전량 persist했다.
+  - 권한 경계: Gate B=`HOLD`, P2 real-data discovery/ranking·sim·trading runtime·broker order·threshold/provider/bot/quantity/cap 변경은 열지 않는다.
+
+- [ ] `[MicroReversionGateBRecheck0814] 5번째 거래일 exact-scope source-quality 및 Gate B 재판정` (`Due: 2026-08-14`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~20:25`, `Track: ScalpingLogic`)
+  - Source: [source exclusion manifest](/home/ubuntu/KORStockScan/configs/scalp_micro_reversion_source_exclusions.json.txt), [Gate B source-quality result](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-13-scalp-micro-reversion-gate-b-source-quality-result.md), [forward observations](/home/ubuntu/KORStockScan/data/observations/scalp_micro_reversion_forward)
+  - 판정 기준: 최소 5거래일, 성숙/complete segment `>=200`, required path/reference coverage `>=90%`, duplicate/gap/drop/writer/recovery 계약과 raw-row exact exclusion을 함께 확인한다. timestamp regression row는 제외하되 날짜 전체를 자동 폐기하거나 보간하지 않는다.
+  - 금지: Gate B 이전 P2 actual-path discovery/ranking, Gate B만으로 sim/live 승격, broker/order/provider/bot/threshold/quantity/cap 변경을 열지 않는다.
+  - 다음 액션: `collector_health_pass_research_data_only`, `path_coverage_insufficient`, `source_exclusion_incomplete`, `journal_degraded` 중 하나로 닫고, 통과 시에만 별도 P2 discovery policy/cohort/cost freeze 작업을 연다.
+
 
 
 ## 독립시간대 매매기계

@@ -13,9 +13,39 @@ from src.engine.scalping.micro_reversion.p2_replay import (
     P2ReplayPolicy,
     ReplayTerminalReason,
     SameTimestampPolicy,
+    load_source_exclusion_manifest,
     load_p2_points_from_canonical_stream,
     replay_path,
 )
+
+
+def _source_exclusion_manifest(**overrides):
+    payload = {
+        "schema": "scalp_micro_reversion_source_exclusion_manifest_v1",
+        "generated_at": "2026-08-13T09:00:00+09:00",
+        "source_base_commit": "a" * 40,
+        "scope_policy": "exact_trade_date_venue_session_sequence_epoch",
+        "summary": {
+            "excluded_scope_count": 0,
+            "excluded_market_stream_row_count": 0,
+            "excluded_event_reference_count": 0,
+            "trade_date_count": 0,
+        },
+        "metric_role": "source_quality_exclusion",
+        "decision_authority": "source_filter_only",
+        "window_policy": "exact_scope",
+        "sample_floor": "not_applicable",
+        "primary_decision_metric": "excluded_market_stream_row_count",
+        "source_quality_gate": "documented_failure",
+        "forbidden_uses": ["policy_selection"],
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+        "selection_authority": False,
+        "exclusions": [],
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_canonical_stream_loader_reconstructs_only_referenced_window(
@@ -72,6 +102,65 @@ def test_canonical_stream_loader_reconstructs_only_referenced_window(
     assert [point.aggressor_side for point in points] == ["SELL", "SELL"]
 
 
+def test_canonical_stream_loader_rejects_exact_excluded_epoch(
+    tmp_path: Path,
+) -> None:
+    reference = {
+        "schema": "scalp_micro_reversion_path_event_reference_v2",
+        "symbol": "000001",
+        "venue": "SOR",
+        "session_bucket": "SOR_REGULAR",
+        "sequence_epoch": 7,
+        "capture_started_at": "2026-08-11T09:00:02+09:00",
+        "capture_ended_at": "2026-08-11T09:00:05+09:00",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "trading_runtime_effect": False,
+    }
+    manifest = _source_exclusion_manifest(
+        summary={
+            "excluded_scope_count": 1,
+            "excluded_market_stream_row_count": 1,
+            "excluded_event_reference_count": 1,
+            "trade_date_count": 1,
+        },
+        exclusions=[
+            {
+                "trade_date": "2026-08-11",
+                "venue": "SOR",
+                "session_bucket": "SOR_REGULAR",
+                "sequence_epoch": 7,
+                "reason_code": "canary_auto_stop",
+                "market_stream_row_count": 1,
+                "event_reference_count": 1,
+                "exchange_window_start": "2026-08-11T09:00:02+09:00",
+                "exchange_window_end": "2026-08-11T09:00:05+09:00",
+                "evidence": "test-evidence",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="canary_auto_stop"):
+        load_p2_points_from_canonical_stream(
+            (tmp_path / "not-read.jsonl",),
+            reference=reference,
+            source_exclusion_manifest=manifest,
+        )
+
+
+def test_source_exclusion_manifest_loader_fails_closed_on_authority_leak(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "source_exclusions.json"
+    manifest_path.write_text(
+        json.dumps(_source_exclusion_manifest(selection_authority=True)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="authority contract"):
+        load_source_exclusion_manifest(manifest_path)
+
+
 def test_canonical_stream_loader_reads_post_session_gzip(tmp_path: Path) -> None:
     stream = tmp_path / "market_stream.jsonl.gz"
     row = {
@@ -118,7 +207,8 @@ def test_canonical_stream_loader_excludes_v3_path_quarantine_row(
     for sequence, second, status, eligible, regression_ms in (
         (1, 54, "accept", True, 0),
         (2, 53, "exchange_timestamp_regression_quarantined", False, 1_000),
-        (3, 54, "accept", True, 0),
+        (3, 52, "exchange_timestamp_regression_exceeded", False, 2_000),
+        (4, 54, "accept", True, 0),
     ):
         rows.append(
             {
@@ -163,7 +253,7 @@ def test_canonical_stream_loader_excludes_v3_path_quarantine_row(
 
     points = load_p2_points_from_canonical_stream((stream,), reference=reference)
 
-    assert [point.source_sequence for point in points] == [1, 3]
+    assert [point.source_sequence for point in points] == [1, 4]
 
 
 @pytest.mark.parametrize(

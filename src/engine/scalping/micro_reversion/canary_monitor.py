@@ -85,7 +85,6 @@ _ZERO_STOP_COUNTERS = (
     "duplicate_path_reference_pair_count",
     "path_duplicate_sequence_count",
     "path_out_of_order_sequence_count",
-    "path_exchange_timestamp_regression_exceeded_count",
     "path_local_receive_timestamp_regression_count",
     "unexplained_sequence_gap_count",
     "writer_queue_full_count",
@@ -250,6 +249,22 @@ def evaluate_canary_snapshot(
                 f"{p99_ms:.6f}>{guard.producer_callback_latency_p99_max_ms:.6f}"
             )
 
+    source_quality_row_exclusions = []
+    timestamp_regression_exceeded_count = _nonnegative_int(
+        snapshot.get("path_exchange_timestamp_regression_exceeded_count")
+    )
+    if timestamp_regression_exceeded_count is None:
+        reasons.append(
+            "missing_or_invalid_metric:"
+            "path_exchange_timestamp_regression_exceeded_count"
+        )
+    elif timestamp_regression_exceeded_count > 0:
+        source_quality_row_exclusions.append(
+            "raw_row_exclusion_required:"
+            "path_exchange_timestamp_regression_exceeded_count="
+            f"{timestamp_regression_exceeded_count}"
+        )
+
     auto_stop_reason = str(snapshot.get("canary_auto_stop_reason") or "").strip()
     if auto_stop_reason:
         reasons.append(f"prior_auto_stop:{auto_stop_reason}")
@@ -258,6 +273,8 @@ def evaluate_canary_snapshot(
         status = "stop_required"
     elif lifecycle == "closed":
         status = "stopped_clean"
+    elif source_quality_row_exclusions and running:
+        status = "healthy_observer_canary_with_source_row_exclusions"
     elif not latency_guard_armed:
         status = "warming_up"
     elif running:
@@ -268,6 +285,8 @@ def evaluate_canary_snapshot(
         "status": status,
         "stop_required": bool(unique_reasons),
         "stop_reasons": unique_reasons,
+        "source_quality_row_exclusions": tuple(source_quality_row_exclusions),
+        "raw_row_exclusion_required": bool(source_quality_row_exclusions),
         "latency_guard_armed": latency_guard_armed,
         "callback_sample_count": callback_count,
         "observed_latency_p95_ms": p95_ms,

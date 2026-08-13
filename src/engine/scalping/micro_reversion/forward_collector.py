@@ -60,7 +60,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_OUTPUT_ROOT = (
     REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
 )
-FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v7"
+FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v8"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
@@ -115,6 +115,24 @@ EXCHANGE_TIMESTAMP_REGRESSION_METRIC_CONTRACT = {
         "exchange_timestamp_imputation_or_reordering",
         "detector_or_path_consumption_of_quarantined_row",
         "gate_b_coverage_imputation",
+        "sim_or_live_policy_selection",
+        "broker_order_submission",
+        "threshold_provider_bot_quantity_or_cap_mutation",
+    ),
+}
+EXCHANGE_TIMESTAMP_REGRESSION_CANARY_METRIC_CONTRACT = {
+    "metric_role": "source_quality_incident_and_raw_row_exclusion",
+    "decision_authority": "observer_row_quarantine_only",
+    "window_policy": "current_process_cumulative_per_symbol_venue_session",
+    "sample_floor": "not_applicable_each_affected_row_is_excluded",
+    "primary_decision_metric": "path_exchange_timestamp_regression_exceeded_count",
+    "source_quality_gate": (
+        "affected_rows_remain_path_consumer_ineligible_and_are_skipped_by_"
+        "p2_reconstruction_without_imputation"
+    ),
+    "forbidden_uses": (
+        "detector_or_path_consumption_of_quarantined_row",
+        "p2_policy_ranking_before_gate_b",
         "sim_or_live_policy_selection",
         "broker_order_submission",
         "threshold_provider_bot_quantity_or_cap_mutation",
@@ -351,6 +369,9 @@ class ForwardCollectorSnapshot:
                 "crossed_bbo_sanitization": (CROSSED_BBO_SANITIZATION_METRIC_CONTRACT),
                 "exchange_timestamp_regression": (
                     EXCHANGE_TIMESTAMP_REGRESSION_METRIC_CONTRACT
+                ),
+                "exchange_timestamp_regression_canary": (
+                    EXCHANGE_TIMESTAMP_REGRESSION_CANARY_METRIC_CONTRACT
                 ),
             },
         }

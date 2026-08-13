@@ -1,0 +1,118 @@
+{
+  "schema": "scalp_micro_reversion_source_exclusion_manifest_v1",
+  "generated_at": "2026-08-13T09:04:00+09:00",
+  "source_base_commit": "d692a4f5e1c5ff53dfbb0e132724d8272ef37f27",
+  "scope_policy": "exact_trade_date_venue_session_sequence_epoch",
+  "summary": {
+    "trade_date_count": 4,
+    "excluded_scope_count": 7,
+    "excluded_market_stream_row_count": 196935,
+    "excluded_event_reference_count": 5689,
+    "path_consumer_ineligible_row_count": 449,
+    "exchange_timestamp_regression_exceeded_row_count": 155
+  },
+  "exclusions": [
+    {
+      "trade_date": "2026-08-10",
+      "venue": "KRX",
+      "session_bucket": "KRX_REGULAR",
+      "sequence_epoch": 1786322360935918570,
+      "reason_code": "process_window_gate_b_ineligible",
+      "market_stream_row_count": 1049,
+      "event_reference_count": 43,
+      "exchange_window_start": "2026-08-10T09:39:23+09:00",
+      "exchange_window_end": "2026-08-10T09:40:10+09:00",
+      "evidence": "docs/audit-reports/2026-08-10-scalp-micro-reversion-invalid-data-cleanup.md"
+    },
+    {
+      "trade_date": "2026-08-10",
+      "venue": "SOR",
+      "session_bucket": "SOR_REGULAR",
+      "sequence_epoch": 1786322360935918570,
+      "reason_code": "process_window_gate_b_ineligible",
+      "market_stream_row_count": 342,
+      "event_reference_count": 20,
+      "exchange_window_start": "2026-08-10T09:39:24+09:00",
+      "exchange_window_end": "2026-08-10T09:40:10+09:00",
+      "evidence": "docs/audit-reports/2026-08-10-scalp-micro-reversion-invalid-data-cleanup.md"
+    },
+    {
+      "trade_date": "2026-08-11",
+      "venue": "SOR",
+      "session_bucket": "SOR_REGULAR",
+      "sequence_epoch": 1786402515996024117,
+      "reason_code": "exchange_timestamp_regression_canary_stop",
+      "market_stream_row_count": 1679,
+      "event_reference_count": 137,
+      "exchange_window_start": "2026-08-11T09:00:02+09:00",
+      "exchange_window_end": "2026-08-11T09:00:32+09:00",
+      "evidence": "docs/audit-reports/2026-08-13-scalp-micro-reversion-gate-b-source-quality-result.md#21-정확-범위-제외-결과"
+    },
+    {
+      "trade_date": "2026-08-11",
+      "venue": "KRX",
+      "session_bucket": "KRX_REGULAR",
+      "sequence_epoch": 1786408482348143720,
+      "reason_code": "callback_latency_p99_canary_stop",
+      "market_stream_row_count": 50119,
+      "event_reference_count": 2398,
+      "exchange_window_start": "2026-08-11T09:34:44+09:00",
+      "exchange_window_end": "2026-08-11T10:35:13+09:00",
+      "evidence": "docs/audit-reports/2026-08-13-scalp-micro-reversion-gate-b-source-quality-result.md#21-정확-범위-제외-결과"
+    },
+    {
+      "trade_date": "2026-08-11",
+      "venue": "SOR",
+      "session_bucket": "SOR_REGULAR",
+      "sequence_epoch": 1786408482348143720,
+      "reason_code": "callback_latency_p99_canary_stop",
+      "market_stream_row_count": 138526,
+      "event_reference_count": 2894,
+      "exchange_window_start": "2026-08-11T09:34:44+09:00",
+      "exchange_window_end": "2026-08-11T10:35:13+09:00",
+      "evidence": "docs/audit-reports/2026-08-13-scalp-micro-reversion-gate-b-source-quality-result.md#21-정확-범위-제외-결과"
+    },
+    {
+      "trade_date": "2026-08-12",
+      "venue": "SOR",
+      "session_bucket": "SOR_REGULAR",
+      "sequence_epoch": 1786488914409000129,
+      "reason_code": "exchange_timestamp_regression_canary_stop",
+      "market_stream_row_count": 2377,
+      "event_reference_count": 110,
+      "exchange_window_start": "2026-08-12T09:00:06+09:00",
+      "exchange_window_end": "2026-08-12T09:00:33+09:00",
+      "evidence": "docs/audit-reports/2026-08-13-scalp-micro-reversion-gate-b-source-quality-result.md#21-정확-범위-제외-결과"
+    },
+    {
+      "trade_date": "2026-08-13",
+      "venue": "SOR",
+      "session_bucket": "SOR_REGULAR",
+      "sequence_epoch": 1786577221190969504,
+      "reason_code": "exchange_timestamp_regression_canary_stop",
+      "market_stream_row_count": 2843,
+      "event_reference_count": 87,
+      "exchange_window_start": "2026-08-13T09:00:03+09:00",
+      "exchange_window_end": "2026-08-13T09:00:34+09:00",
+      "evidence": "docs/audit-reports/2026-08-13-scalp-micro-reversion-gate-b-source-quality-result.md#21-정확-범위-제외-결과"
+    }
+  ],
+  "metric_role": "source_quality_exclusion_and_gate_b_input_filter",
+  "decision_authority": "p2_source_filter_only_no_policy_selection_authority",
+  "window_policy": "exact_trade_date_venue_session_sequence_epoch_only",
+  "sample_floor": "not_applicable_exact_failed_process_scope_exclusion",
+  "primary_decision_metric": "excluded_market_stream_row_count",
+  "source_quality_gate": "documented_process_window_failure_or_observer_canary_auto_stop_with_exact_sequence_epoch_scope",
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "trading_runtime_effect": false,
+  "selection_authority": false,
+  "forbidden_uses": [
+    "whole_trade_date_exclusion_when_exact_scope_is_available",
+    "excluded_row_imputation",
+    "p2_policy_ranking_before_gate_b",
+    "sim_or_live_policy_selection",
+    "broker_order_submission_or_cancel",
+    "threshold_provider_bot_quantity_or_cap_mutation"
+  ]
+}
