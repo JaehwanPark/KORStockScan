@@ -251,6 +251,89 @@ def test_opening_margin_budget_uses_broker_tier_when_cash_guard_is_zero():
     assert context["opening_rotation_margin_orderable_qty_cap"] == 120
 
 
+def test_general_entry_margin_budget_uses_broker_tier_only_on_cash_shortfall():
+    context = handlers._apply_general_entry_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "budget_source": "kt00011_min_account_deposit_cash_orderable",
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 10_000,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["general_entry_margin_one_share_authorized"] is True
+    assert context["general_entry_margin_cash_guard_bypassed"] is True
+    assert context["general_entry_margin_order_api"] == "kt10000"
+    assert context["general_entry_margin_credit_order_api_used"] is False
+    assert context["budget_base"] == 1_200_000
+    assert context["budget_source"] == "kt00011_applied_margin_orderable"
+
+
+def test_general_entry_margin_budget_preserves_exact_price_cash_authority():
+    context = handlers._apply_general_entry_margin_budget_authority(
+        {
+            "budget_base": 20_000,
+            "budget_source": "kt00011_min_account_deposit_cash_orderable",
+            "cash_orderable_amount": 20_000,
+            "cash_orderable_qty_cap": 2,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": 40,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": 10_000,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["general_entry_margin_one_share_authorized"] is False
+    assert context["general_entry_margin_authority_reason"] == (
+        "cash_one_share_capacity_available"
+    )
+    assert context["general_entry_margin_cash_guard_bypassed"] is False
+    assert context["budget_base"] == 20_000
+    assert context["cash_orderable_qty_cap"] == 2
+
+
+@pytest.mark.parametrize(
+    ("rate", "checked_price", "reason"),
+    [
+        (100, 10_000, "applied_margin_rate_not_margin_eligible"),
+        (40, 9_990, "kt00011_requested_unit_price_mismatch"),
+    ],
+)
+def test_general_entry_margin_budget_fails_closed_on_ineligible_capacity(
+    rate,
+    checked_price,
+    reason,
+):
+    context = handlers._apply_general_entry_margin_budget_authority(
+        {
+            "budget_base": 0,
+            "cash_orderable_amount": 0,
+            "cash_orderable_qty_cap": 0,
+            "kt00011_error": "",
+            "kt00011_applied_margin_rate": rate,
+            "kt00011_applied_margin_tier_recognized": True,
+            "kt00011_applied_orderable_amount": 1_200_000,
+            "kt00011_applied_orderable_qty": 120,
+            "kt00011_requested_unit_price": checked_price,
+        },
+        unit_price=10_000,
+    )
+
+    assert context["general_entry_margin_one_share_authorized"] is False
+    assert context["general_entry_margin_authority_reason"] == reason
+    assert context["budget_base"] == 0
+
+
 def test_generic_scalp_budget_keeps_cash_only_capacity_when_margin_exists(monkeypatch):
     monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
     monkeypatch.setattr(handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
@@ -2829,6 +2912,77 @@ def test_opening_rotation_first_buy_fill_persists_entry_time_cohort(monkeypatch)
     assert holding_started[-1]["opening_rotation_window_version"] == WINDOW_VERSION
 
 
+def test_general_margin_authority_promotes_from_pending_order_only_on_fill(monkeypatch):
+    events = []
+
+    class _NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+        def join(self):
+            return None
+
+    monkeypatch.setattr(sniper_execution_receipts.threading, "Thread", _NoopThread)
+    monkeypatch.setattr(
+        sniper_execution_receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: events.append((stage, fields)),
+    )
+    sniper_execution_receipts.highest_prices = {}
+    stock = {
+        "id": 8,
+        "name": "테스트",
+        "code": "005930",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "pending_entry_orders": [
+            {
+                "ord_no": "MARGIN1",
+                "qty": 1,
+                "filled_qty": 0,
+                "price": 10_000,
+                "status": "OPEN",
+                "general_entry_margin_one_share_authorized": True,
+                "general_entry_margin_authority_reason": (
+                    "kt00011_applied_margin_tier_one_share_confirmed"
+                ),
+                "general_entry_margin_order_api": "kt10000",
+                "general_entry_margin_order_leg_limit_price": 10_000,
+                "general_entry_margin_order_leg_qty": 1,
+                "general_entry_margin_credit_order_api_used": False,
+                "general_entry_margin_scale_in_allowed": False,
+                "general_entry_margin_scale_in_forbidden": True,
+            }
+        ],
+        "entry_requested_qty": 1,
+        "requested_buy_qty": 1,
+    }
+
+    assert "general_entry_margin_scale_in_forbidden" not in stock
+    sniper_execution_receipts._handle_entry_buy_execution(
+        target_id=8,
+        target_stock=stock,
+        code="005930",
+        order_no="MARGIN1",
+        exec_price=10_000,
+        exec_qty=1,
+        now=datetime(2026, 8, 13, 11, 55),
+    )
+
+    assert stock["general_entry_margin_scale_in_forbidden"] is True
+    assert stock["general_entry_margin_order_api"] == "kt10000"
+    assert stock["general_entry_margin_order_leg_qty"] == 1
+    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    holding_started = [fields for stage, fields in events if stage == "holding_started"]
+    assert holding_started[-1]["general_entry_margin_one_share_authorized"] is True
+    assert holding_started[-1]["general_entry_margin_scale_in_forbidden"] is True
+
+
 def test_rotation_tag_activation_is_strictly_after_broker_acceptance():
     watch_source = inspect.getsource(handlers._handle_watching_opening_rotation)
     submit_source = inspect.getsource(handlers._submit_watching_triggered_entry)
@@ -2870,6 +3024,52 @@ def test_margin_capacity_stays_inside_allocator_and_one_share_submit_contract():
     assert initial_allocator_index < one_share_stage_cap_index < latency_index
     assert final_margin_index < final_allocator_index < one_share_plan_index
     assert "kt10006" not in submit_source
+
+
+def test_general_margin_capacity_uses_one_share_exact_leg_and_no_residual_contract():
+    submit_source = inspect.getsource(handlers._submit_watching_triggered_entry)
+
+    initial_margin_index = submit_source.index(
+        "_apply_general_entry_margin_budget_authority"
+    )
+    initial_allocator_index = submit_source.index(
+        "sizing_decision = resolve_scalping_allocation", initial_margin_index
+    )
+    pre_submit_index = submit_source.index(
+        '"general_entry_margin_pre_submit_revalidated"'
+    )
+    final_allocator_index = submit_source.index(
+        "_revalidate_scalping_sizing_for_final_order_price", pre_submit_index
+    )
+    leg_recheck_index = submit_source.index(
+        '"general_entry_margin_order_leg_revalidated"', final_allocator_index
+    )
+    broker_send_index = submit_source.index(
+        "kiwoom_orders.send_buy_order(", leg_recheck_index
+    )
+
+    assert initial_margin_index < initial_allocator_index < pre_submit_index
+    assert pre_submit_index < final_allocator_index < leg_recheck_index
+    assert leg_recheck_index < broker_send_index
+    assert '"probe_expand_forbidden": True' in submit_source
+    assert '"entry_split_probe_residual_expand_forbidden": True' in submit_source
+    assert '"entry_split_probe_scale_in_forbidden": True' in submit_source
+    assert "if general_entry_margin_authorized" in submit_source
+    assert "effective_leg_price > 0" in submit_source
+    assert "qty == 1" in submit_source
+    assert "kt10006" not in submit_source
+
+
+def test_general_margin_position_provenance_survives_receipts_and_clears_on_revive():
+    keys = set(sniper_execution_receipts._GENERAL_ENTRY_MARGIN_POSITION_KEYS)
+
+    assert keys <= set(sniper_execution_receipts._BUY_RECEIPT_SNAPSHOT_KEYS)
+    assert keys <= set(sniper_execution_receipts._SELL_RECEIPT_SNAPSHOT_KEYS)
+    assert keys <= set(sniper_execution_receipts._SELL_REVIVE_RESET_KEYS)
+    assert keys <= set(sniper_execution_receipts._SELL_COMPLETE_RESET_KEYS)
+    assert keys.isdisjoint(
+        set(sniper_execution_receipts._FAST_EXIT_DECISION_RESET_KEYS)
+    )
 
 
 @pytest.mark.parametrize(

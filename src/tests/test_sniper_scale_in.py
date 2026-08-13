@@ -1361,6 +1361,43 @@ def stub_kt00011_orderable_lookup(monkeypatch):
     )
 
 
+def test_general_entry_margin_one_share_position_blocks_real_scale_in(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_scale_in_exit_authority_block_reason",
+        lambda _stock: "",
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: events.append((stage, fields)),
+    )
+
+    result = state_handlers.execute_scale_in_order(
+        stock={
+            "name": "테스트",
+            "strategy": "SCALPING",
+            "status": "HOLDING",
+            "general_entry_margin_scale_in_forbidden": True,
+        },
+        code="005930",
+        ws_data={},
+        action={"add_type": "PYRAMID", "reason": "continuation"},
+        admin_id="admin",
+    )
+
+    assert result == {
+        "status": "blocked",
+        "block_stage": "scale_in_margin_authority_block",
+        "reason": "general_entry_margin_one_share_position",
+        "qty": 0,
+    }
+    assert events[-1][0] == "scale_in_margin_authority_block"
+    assert events[-1][1]["actual_order_submitted"] is False
+    assert events[-1][1]["broker_order_forbidden"] is True
+
+
 def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkeypatch):
     class DummyDB:
         def get_latest_is_nxt(self, code):
