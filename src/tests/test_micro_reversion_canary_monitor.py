@@ -130,9 +130,7 @@ def test_guard_quarantines_timestamp_regression_without_stopping_collector() -> 
 
     assert quarantined["status"] == "healthy_observer_canary"
     assert quarantined["stop_required"] is False
-    assert exceeded["status"] == (
-        "healthy_observer_canary_with_source_row_exclusions"
-    )
+    assert exceeded["status"] == ("healthy_observer_canary_with_source_row_exclusions")
     assert exceeded["stop_required"] is False
     assert (
         "raw_row_exclusion_required:"
@@ -359,8 +357,7 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
         "kiwoom_websocket_sha256": (repository_root / "src/engine/kiwoom_websocket.py"),
         "canary_guard_config_sha256": guard_path,
         "source_exclusion_manifest_sha256": (
-            repository_root
-            / "configs/scalp_micro_reversion_source_exclusions.json.txt"
+            repository_root / "configs/scalp_micro_reversion_source_exclusions.json.txt"
         ),
     }
     for field, path in evidence_files.items():

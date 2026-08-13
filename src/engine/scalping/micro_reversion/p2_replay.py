@@ -98,11 +98,14 @@ def _validate_source_exclusion_manifest(payload: object) -> dict[str, Any]:
     if payload.get("scope_policy") != SOURCE_EXCLUSION_SCOPE_POLICY:
         raise ValueError("P2 source exclusion manifest scope policy is invalid")
     forbidden_uses = payload.get("forbidden_uses")
-    if any(
-        not str(payload.get(field) or "").strip()
-        for field in _SOURCE_EXCLUSION_CONTRACT_FIELDS
-    ) or not isinstance(forbidden_uses, list) or not forbidden_uses or any(
-        not str(value or "").strip() for value in forbidden_uses
+    if (
+        any(
+            not str(payload.get(field) or "").strip()
+            for field in _SOURCE_EXCLUSION_CONTRACT_FIELDS
+        )
+        or not isinstance(forbidden_uses, list)
+        or not forbidden_uses
+        or any(not str(value or "").strip() for value in forbidden_uses)
     ):
         raise ValueError("P2 source exclusion manifest metric contract is invalid")
     try:

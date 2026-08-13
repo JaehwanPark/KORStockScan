@@ -135,6 +135,12 @@
 
 ## 독립시간대 매매기계
 
+- [x] `[RepositoryBlackGate0813] PR #49 저장소 전체 Black 보호체크 보완` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 10:52~11:10`, `Track: RuntimeStability`)
+  - Source: [PR #49](https://github.com/JaehwanPark/KORStockScan/pull/49), [P2 replay](/home/ubuntu/KORStockScan/src/engine/scalping/micro_reversion/p2_replay.py), [frozen baseline](/home/ubuntu/KORStockScan/docs/audit-reports/2026-08-13-scalp-micro-reversion-callback-latency-baseline-depth-source.json.txt)
+  - 판정: 사용자 지시 변경은 로컬 Black을 통과했으나 GitHub 저장소 전체 `black --check .`가 main 선행 변경의 미포맷 파일 4개를 검출했다. 해당 파일에 기계적 포맷만 적용하고 P2 source SHA 변경은 frozen baseline에 이전/현재 hash·사유·`runtime_effect=false`로 기록한다.
+  - 금지: callback 측정값·frozen limit·Gate B HOLD·discovery/sim/trading/order/provider/bot/quantity/cap 권한 변경, baseline 재측정으로 오인, 운영 프로세스 재기동을 허용하지 않는다.
+  - 리뷰/검증: 포맷 diff는 괄호·줄바꿈·trailing comma만 바뀌어 의미 불변이다. micro-reversion/Opening/Error Detector 회귀 `215 passed`, frozen hash guard, 저장소 전체 Black `754 files unchanged`, compile, baseline JSON parse, checklist parser, `git diff --check`를 통과했다. 보완 commit push 뒤 PR 보호체크가 통과한 경우에만 main 병합한다.
+
 - [x] `[KakaoMorningTarget3Transition0813] 카카오 morning +3호가 목표의 익일 PREOPEN 전환·실소비 계약 보완` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 10:20~15:20`, `Track: RuntimeStability`)
   - Source: [policy runtime](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/policy_runtime.py), [PREOPEN apply](/home/ubuntu/KORStockScan/src/engine/automation/low_price_two_leg_policy_apply.py), [service](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/service.py), [preflight](/home/ubuntu/KORStockScan/src/trading/low_price_two_leg/preflight.py), [runbook](/home/ubuntu/KORStockScan/docs/low-price-two-leg-machines.md)
   - 구현: `2026-08-13` 카카오 morning의 +2호가 실행·귀속은 보존하고 `2026-08-14` exact-date PREOPEN 정책부터 해당 profile만 +3호가를 적용한다. 서비스는 applied target을 실제 profile에 결합하고 authority에는 baseline/effective-date/사용자 지시 provenance를 기록한다. source-only 실행계획에는 +3호가 비교축을 추가한다. 장후 evidence 검토 뒤 사용자가 명시적으로 복귀를 지시한 경우에만 다음 PREOPEN에서 +2호가로 복원하며 기존 소유 목표주문은 취소·교체하지 않는 rollback을 전환 메타데이터에 고정한다.
