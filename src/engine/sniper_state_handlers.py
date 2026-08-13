@@ -19635,9 +19635,7 @@ def _emit_stat_action_decision_snapshot(
         "scale_in_gate_reason": gate.get("reason", "-"),
         "scale_in_block_owner": gate.get("scale_in_block_owner", "-"),
         "scale_in_block_authority": gate.get("scale_in_block_authority", "-"),
-        "entry_setup_live_policy_mode": gate.get(
-            "entry_setup_live_policy_mode", "-"
-        ),
+        "entry_setup_live_policy_mode": gate.get("entry_setup_live_policy_mode", "-"),
         "rising_missed_scout_pyramid_bridge_applicable": gate.get(
             "rising_missed_scout_pyramid_bridge_applicable"
         ),
@@ -19776,8 +19774,7 @@ def _log_scale_in_arm_blocked(
         "gate_reason": gate.get("reason") or "-",
         "scale_in_block_owner": gate.get("scale_in_block_owner") or "-",
         "scale_in_block_authority": gate.get("scale_in_block_authority") or "-",
-        "entry_setup_live_policy_mode": gate.get("entry_setup_live_policy_mode")
-        or "-",
+        "entry_setup_live_policy_mode": gate.get("entry_setup_live_policy_mode") or "-",
         "rising_missed_scout_pyramid_bridge_applicable": gate.get(
             "rising_missed_scout_pyramid_bridge_applicable"
         ),
@@ -82476,9 +82473,7 @@ def can_consider_scale_in(
                 if exploration_probe_only
                 else "probe_lifecycle_scale_in_forbidden"
             ),
-            "entry_setup_live_policy_mode": stock.get(
-                "entry_setup_live_policy_mode"
-            ),
+            "entry_setup_live_policy_mode": stock.get("entry_setup_live_policy_mode"),
             "rising_missed_scout_pyramid_bridge_applicable": (
                 not exploration_probe_only
             ),
