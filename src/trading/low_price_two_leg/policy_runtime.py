@@ -43,6 +43,7 @@ SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
         "low_price_two_leg_tuning_report_v2",
+        "low_price_two_leg_tuning_report_v3",
     }
 )
 APPLIED_SCHEMA = "low_price_two_leg_policy_applied_v1"

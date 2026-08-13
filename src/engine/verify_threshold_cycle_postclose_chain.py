@@ -102,6 +102,8 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "low_price_two_leg_tuning",
     "low_price_two_leg_policy_candidate",
     "low_price_two_leg_expanded_candidate_research",
+    "samsung_machine_entry_tuning",
+    "samsung_machine_entry_policy_candidate",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = {
     "latency_classifier_runtime_profile",
@@ -151,11 +153,12 @@ def _low_price_two_leg_postclose_contract_status(
         EXISTING_SYMBOL_TIME_EXTENSION_PROFILES,
         RESEARCH_PROFILES,
     )
+    from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
     from src.trading.low_price_two_leg.policy_runtime import validate_candidate
     from src.trading.low_price_two_leg.profiles import PROFILES
 
     issues: list[str] = []
-    if tuning.get("schema") != "low_price_two_leg_tuning_report_v2":
+    if tuning.get("schema") != REPORT_SCHEMA:
         issues.append("tuning_schema_invalid")
     if tuning.get("target_date") != target_date:
         issues.append("tuning_target_date_mismatch")
@@ -211,6 +214,62 @@ def _low_price_two_leg_postclose_contract_status(
         "quarantined_source_symbol_count": int(
             expanded.get("quarantined_source_symbol_count", 0) or 0
         ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def _samsung_machine_entry_postclose_contract_status(
+    tuning: dict[str, Any],
+    policy_candidate: dict[str, Any],
+    *,
+    target_date: str,
+) -> dict[str, Any]:
+    from src.engine.monitoring.samsung_machine_entry_tuning import (
+        CLEAN_WINDOW_NAME,
+        MACHINE_FILES,
+        REPORT_SCHEMA,
+        ROLLING_WINDOWS,
+    )
+    from src.trading.order.samsung_entry_policy import validate_candidate
+
+    issues: list[str] = []
+    if tuning.get("schema") != REPORT_SCHEMA:
+        issues.append("tuning_schema_invalid")
+    if tuning.get("target_date") != target_date:
+        issues.append("tuning_target_date_mismatch")
+    daily_machines = (tuning.get("daily") or {}).get("machines") or {}
+    if set(daily_machines) != set(MACHINE_FILES):
+        issues.append("tuning_machine_inventory_mismatch")
+    windows = tuning.get("windows") or {}
+    required_windows = {CLEAN_WINDOW_NAME, *ROLLING_WINDOWS}
+    if set(windows) != required_windows or any(
+        set(windows.get(name) or {}) != set(MACHINE_FILES) for name in required_windows
+    ):
+        issues.append("tuning_window_contract_invalid")
+    if any(
+        tuning.get(key) is not expected
+        for key, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+        )
+    ):
+        issues.append("tuning_authority_contract_invalid")
+    candidate_valid, candidate_reason = validate_candidate(policy_candidate)
+    if not candidate_valid:
+        issues.append(f"policy_candidate_{candidate_reason}")
+    elif policy_candidate.get("source_date") != target_date:
+        issues.append("policy_candidate_source_date_mismatch")
+    elif policy_candidate.get("source_report_schema") != REPORT_SCHEMA:
+        issues.append("policy_candidate_report_schema_mismatch")
+    return {
+        "status": "fail" if issues else "pass",
+        "issues": issues,
+        "machine_count": len(MACHINE_FILES),
+        "required_windows": sorted(required_windows),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
@@ -1699,6 +1758,15 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "low_price_two_leg_tuning": REPORT_DIR
         / "low_price_two_leg_tuning"
         / f"low_price_two_leg_tuning_{target_date}.json",
+        "samsung_machine_entry_tuning": REPORT_DIR
+        / "samsung_machine_entry_tuning"
+        / f"samsung_machine_entry_tuning_{target_date}.json",
+        "samsung_machine_entry_policy_candidate": PROJECT_ROOT
+        / "data"
+        / "threshold_cycle"
+        / "samsung_machine_entry_policy"
+        / "candidates"
+        / f"samsung_machine_entry_policy_candidate_{target_date}.json",
         "low_price_two_leg_policy_candidate": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -6007,6 +6075,39 @@ def build_threshold_cycle_postclose_verification(
             f"low_price_two_leg_{issue}"
             for issue in low_price_two_leg_postclose["issues"]
         )
+    samsung_machine_entry_tuning = _load_json(paths["samsung_machine_entry_tuning"])
+    samsung_machine_entry_policy_candidate = _load_json(
+        paths["samsung_machine_entry_policy_candidate"]
+    )
+    samsung_machine_entry_verification_enabled = bool(
+        execution_contract_flags.get("samsung_machine_entry_tuning") is True
+        or any(
+            paths[label].exists()
+            for label in (
+                "samsung_machine_entry_tuning",
+                "samsung_machine_entry_policy_candidate",
+            )
+        )
+    )
+    samsung_machine_entry_postclose = (
+        _samsung_machine_entry_postclose_contract_status(
+            samsung_machine_entry_tuning,
+            samsung_machine_entry_policy_candidate,
+            target_date=target_date,
+        )
+        if samsung_machine_entry_verification_enabled
+        else {
+            "status": "not_enabled",
+            "issues": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    )
+    if samsung_machine_entry_postclose["status"] == "fail":
+        log_issues.extend(
+            f"samsung_machine_entry_{issue}"
+            for issue in samsung_machine_entry_postclose["issues"]
+        )
     threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
     threshold_cycle_cumulative = _load_json(paths["threshold_cycle_cumulative"])
     smoothing_source_only_path_journal = (
@@ -7666,6 +7767,7 @@ def build_threshold_cycle_postclose_verification(
         "artifact_status": artifact_status,
         "missing_required_artifacts": missing_required_artifacts,
         "low_price_two_leg_postclose": low_price_two_leg_postclose,
+        "samsung_machine_entry_postclose": samsung_machine_entry_postclose,
         "smoothing_source_only_path_journal": smoothing_source_only_path_journal,
         "limit_down_watch": limit_down_watch_status,
         "upper_limit_watch": upper_limit_watch_status,

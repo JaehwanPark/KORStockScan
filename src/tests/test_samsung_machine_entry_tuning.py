@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from src.engine.monitoring.samsung_machine_entry_tuning import (
 from src.trading.order.samsung_entry_policy import (
     BASELINE_POLICIES,
     atomic_write_json,
+    baseline_applied_payload,
     policy_hash,
     policy_mutations_between,
 )
@@ -183,6 +185,7 @@ def test_ten_share_partial_fill_uses_filled_quantity_for_notional_ev(
             "quantity": 10,
             "buy_filled_qty": 4,
             "target_filled_qty": 4,
+            "target_fill_price": 70_200,
         }
     )
     payload["legs"][1]["quantity"] = 10
@@ -214,6 +217,64 @@ def test_ten_share_partial_fill_uses_filled_quantity_for_notional_ev(
     assert (
         "attempted_episode_two_leg_quantity_contract_invalid"
         in mixed_row["source_quality_reasons"]
+    )
+
+
+def test_exact_date_applied_policy_provenance_and_broker_sell_price(tmp_path: Path):
+    applied_dir = tmp_path / "applied"
+    applied = baseline_applied_payload(
+        target_date=date.fromisoformat("2026-08-14"), reason="test_baseline"
+    )
+    atomic_write_json(
+        applied_dir / "samsung_machine_entry_policy_2026-08-14.json", applied
+    )
+    payload = _state("midday", "2026-08-14")
+    payload["signal_features"]["runtime_policy_hash"] = applied["policy_hash"]
+    payload["legs"][0].update(
+        {"quantity": 10, "buy_filled_qty": 10, "target_filled_qty": 10}
+    )
+    payload["legs"][1]["quantity"] = 10
+    payload["legs"][0]["target_fill_price"] = 70_300
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    row = extract_machine_row(
+        machine="midday",
+        state_path=state_path,
+        target_date="2026-08-14",
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+
+    assert row["source_quality"] == "pass"
+    assert row["legs"][0]["profit_price_source"] == "broker_target_fill_price"
+    assert row["legs"][0]["equal_weight_profit_pct"] == pytest.approx(0.228571)
+    payload["signal_features"]["runtime_policy_hash"] = "0" * 64
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    mismatched = extract_machine_row(
+        machine="midday",
+        state_path=state_path,
+        target_date="2026-08-14",
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+    assert (
+        "signal_feature_exact_date_applied_policy_mismatch"
+        in mismatched["source_quality_reasons"]
+    )
+    payload["signal_features"]["runtime_policy_hash"] = applied["policy_hash"]
+    payload["legs"][0]["quantity"] = 1
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    quantity_mismatch = extract_machine_row(
+        machine="midday",
+        state_path=state_path,
+        target_date="2026-08-14",
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+    assert (
+        "exact_date_applied_quantity_mismatch"
+        in quantity_mismatch["source_quality_reasons"]
     )
 
 
@@ -428,7 +489,11 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
 
     midday = second["windows"][CLEAN_WINDOW_NAME]["midday"]
     assert second["schema"] == REPORT_SCHEMA
-    assert set(second["windows"]) == {CLEAN_WINDOW_NAME}
+    assert set(second["windows"]) == {
+        CLEAN_WINDOW_NAME,
+        "rolling_10d",
+        "rolling_20d",
+    }
     coverage = second["clean_baseline_window"]
     assert coverage["available_actual_observation_dates"] == [
         "2026-08-10",
@@ -442,13 +507,17 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
     assert coverage["historical_market_replay_included"] is False
     assert midday["summary"]["report_days"] == 2
     assert midday["summary"]["held_legs"] == 1
+    assert midday["summary"]["target_price_proxy_completed_legs"] == 1
     assert midday["summary"]["candidate_status"] == "inventory_or_order_unresolved"
     assert midday["summary"]["allowed_runtime_apply"] is False
     assert second["operator_review_gate"]["midday"] == {
         "status": "inventory_or_order_unresolved",
         "clean_baseline_completed_signal_episodes": 1,
         "clean_baseline_equal_weight_avg_profit_pct": pytest.approx(0.085714),
-        "clean_baseline_notional_weighted_ev_pct": pytest.approx(0.021444),
+        "clean_baseline_notional_weighted_ev_pct": pytest.approx(0.0),
+        "rolling_10d_notional_weighted_ev_pct": pytest.approx(0.0),
+        "rolling_20d_notional_weighted_ev_pct": pytest.approx(0.0),
+        "broker_priced_completed_legs": 0,
         "allowed_runtime_apply": False,
     }
     assert any(
@@ -475,6 +544,34 @@ def test_clean_baseline_is_enforced(tmp_path: Path):
             output_dir=tmp_path / "reports",
             cost_pct=0.20,
         )
+
+
+def test_prior_date_target_completion_reconciles_to_original_machine_day(
+    tmp_path: Path,
+):
+    state_dir = tmp_path / "runtime"
+    output_dir = tmp_path / "reports"
+    source_quality_dir = tmp_path / "source-quality"
+    _write_states(state_dir, "2026-08-10")
+    _write_source_quality(source_quality_dir, "2026-08-10")
+    _write_source_quality(source_quality_dir, "2026-08-11")
+
+    report = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=output_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+    )
+
+    reconciliation = report["prior_state_reconciliations"]["midday"]
+    assert reconciliation["source_date"] == "2026-08-10"
+    assert reconciliation["state_status"] == "COMPLETE"
+    summary = report["windows"][CLEAN_WINDOW_NAME]["midday"]["summary"]
+    assert summary["completed_signal_episodes"] == 1
+    assert summary["completed_legs"] == 1
+    assert summary["held_legs"] == 0
+    assert report["daily"]["machines"]["midday"]["attempted"] is False
 
 
 def test_prior_report_contract_mismatch_is_counted_and_excluded(tmp_path: Path):
@@ -584,6 +681,7 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
             "candidate_status": "operator_review_candidate",
             "completed_signal_episodes": 20,
             "completed_legs": 20,
+            "broker_priced_completed_legs": 20,
             "notional_weighted_ev_pct": ev,
         }
 
@@ -620,7 +718,17 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
                 "morning": {"entry_axis_observations": []},
                 "midday": {"entry_axis_observations": [midday_single, midday_combined]},
                 "afternoon": {"entry_axis_observations": [afternoon_single]},
-            }
+            },
+            "rolling_10d": {
+                "morning": {"entry_axis_observations": []},
+                "midday": {"entry_axis_observations": [midday_single, midday_combined]},
+                "afternoon": {"entry_axis_observations": [afternoon_single]},
+            },
+            "rolling_20d": {
+                "morning": {"entry_axis_observations": []},
+                "midday": {"entry_axis_observations": [midday_single, midday_combined]},
+                "afternoon": {"entry_axis_observations": [afternoon_single]},
+            },
         },
     }
 
@@ -638,6 +746,21 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
     assert candidate["machines"]["midday"]["selection_status"] == (
         "carry_forward_same_stage_single_axis_guard"
     )
+
+    rolling_negative = json.loads(json.dumps(report))
+    for item in rolling_negative["windows"]["rolling_10d"]["afternoon"][
+        "entry_axis_observations"
+    ]:
+        item["outcome"]["notional_weighted_ev_pct"] = -0.01
+    rolling_blocked = build_policy_candidate(rolling_negative)
+    assert rolling_blocked["policy_mutations"] == [
+        {
+            "machine": "midday",
+            "axis": "rolling_high_drawdown_pct",
+            "before": 1.25,
+            "after": 1.5,
+        }
+    ]
 
 
 def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path: Path):

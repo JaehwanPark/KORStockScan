@@ -168,6 +168,8 @@ cannot authorize additional bypasses. Freshness/stale/conflict, final price
 drift, live limit/VI, account/order/quantity/cooldown, exact-price margin,
 greenfield/broker submit, and hard/protect/emergency safeguards remain enforced.
 
+Episode-machine postclose reports use exact-date PREOPEN policy/hash provenance from `2026-08-14` onward. Samsung candidates require positive broker-priced `notional_weighted_ev_pct` in rolling 10/20 trading-day windows and the clean-baseline cumulative window; configured target-price proxy outcomes remain diagnostic and cannot satisfy promotion floors. The decision EV uses broker-reported target fill price with the report's fixed round-trip cost percentage, so it is not represented as exact broker fee/tax settlement PnL. The lower-price consumer resolves profile target ticks from the exact-date applied policy, including the approved Kakao morning +3-tick transition. Both families persist broker `kt00007.cntr_uv` target-fill price for new reconciliations, and a later target completion in a carried durable state is re-attributed to its original trade date instead of leaving stale HELD evidence. The final postclose verifier validates the Samsung report/candidate inventory, rolling windows, schema, authority, source date, and candidate hash contract. New episodes remain two independent 10-share legs (20 shares total); legacy owned one-share state remains custody-compatible.
+
 ## 2.1 Postclose Chain Contract
 
 `deploy/run_threshold_cycle_postclose.sh`의 최신 순서는 아래 계약을 따른다.

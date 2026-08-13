@@ -190,6 +190,13 @@
   - Kiwoom 공식 참조: `Kiwoom-Securities/Kiwoom-REST-API` SHA `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, 확인시각 `2026-08-13T10:18:06+09:00`, `kiwoom_docs/시세.md`, `kiwoom_docs/차트.md`, `kiwoom_docs/종목정보.md`, `kiwoom/specs.py`, `kiwoom/core`, `kiwoom/realtime`, Postman을 재확인했다. 기존 `ka10001/ka10004/ka10064/ka10080/ka20005/ka90008` 요청 계약은 변경하지 않았다.
   - 리뷰/검증: widget consumer 확장 회귀 `271 passed`, 최종 targeted 회귀 `80 passed`, Black, Ruff, compile, checklist parser count=`30`, `git diff --check`를 통과했고 최종 미해결 finding은 `0`이다. 명시적 서비스 재기동은 수행하지 않았으나 기존 crash-loop의 systemd 자동복구가 새 collector 코드를 10:24:16 KST에 로드했고, 10:30:48까지 restart counter=`98` 고정·4종목 snapshot `PASS`를 확인했다. 장기 실행 auto-trader PID `24014`에는 provenance/dedup 보완이 아직 미반영이다.
 
+- [x] `[EpisodePostcloseTuningIntegrity0813] 에피소드 장후 튜닝 exact-policy·rolling·실체결 EV·verifier 보완` (`Due: 2026-08-13`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~22:30`, `Track: RuntimeStability`)
+  - 판정/구현: 2026-08-14 이후 저가 2-leg와 삼성 기계 attempted row는 exact-date PREOPEN applied policy/hash/entry fields를 대조한다. 카카오 morning +3호가는 compiled +2호가가 아니라 당일 applied policy로 target을 검증한다. 삼성은 clean cumulative 외 rolling 10/20 거래일 창을 생성하고 세 창의 broker-priced notional EV가 모두 양수일 때만 bounded candidate를 허용한다.
+  - 실체결/안전: 신규 target reconciliation은 공식 `kt00007.cntr_uv` 매도 체결단가를 owner state에 저장한다. 실제 broker-price 표본만 decision EV와 20-leg floor에 사용하고 기존 목표가 proxy는 별도 진단값으로 분리한다. 날짜를 넘겨 체결된 durable state는 원 거래일 row로 재귀속해 과거 HELD를 중복·영구 잔존시키지 않는다. 수량·진입·목표 정책, no-stop/HELD, provider/bot/cap, broker/account/order/cooldown guard와 owner 격리는 변경하지 않는다.
+  - chain verifier: final postclose verifier가 Samsung report/candidate schema, target date, machine inventory, cumulative·rolling10·rolling20 window, authority, candidate hash/lineage를 검증하며 wrapper의 `samsung_machine_entry_tuning=true`인데 산출물이 누락되면 fail-close한다.
+  - Kiwoom 공식 참조: upstream `Kiwoom-Securities/Kiwoom-REST-API` SHA `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, 확인시각 `2026-08-13T22:12:21+09:00`; `kiwoom_docs/계좌.md`, `kiwoom/specs.py`, `kiwoom/core`, Postman의 `kt00007`, `cntr_uv`, `ord_remnq`, 연속조회와 SOR 계약을 재확인했다.
+  - 완료 기준: 에피소드 producer/consumer/runtime-state/verifier targeted 회귀, Black/Ruff/compileall, checklist parser, `git diff --check`를 통과하고 review gate 미해결 finding 0으로 닫는다. 서비스 재기동·실주문·리포트 재생성은 수행하지 않는다.
+
 ## Project/Calendar 동기화
 
 - [ ] `[EntryPriceV25KRXFirstObservation0814] KRX 정규장 entry_price V2.5 PREOPEN 반영 및 최초 자연호출 귀속` (`Due: 2026-08-14`, `Slot: PREOPEN`, `TimeWindow: 08:50~10:30`, `Track: ScalpingLogic`)

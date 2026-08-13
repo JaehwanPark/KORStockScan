@@ -42,6 +42,8 @@ def _morning_leg(plan: dict, route: str) -> dict:
         "target_order_date": "",
         "target_quantity": 0,
         "target_filled_qty": 0,
+        "target_fill_price": 0,
+        "target_filled_at": "",
     }
 
 

@@ -99,7 +99,7 @@ preflight 서비스는 메인 봇의 사용자 tmux 소켓을 확인해야 하�
 
 ## 장후 진입 기준 누적 관찰
 
-라이브 episode가 arm될 때 state의 `signal_features`에 NXT/SOR route, 실제 opening price, 적용 drawdown, 진입창, 두 leg 지정가와 +2호가 정책을 고정한다. 20:10 `samsung_machine_entry_tuning` report는 당일 state와 자기 이전 일별 report만 읽으며 시세나 과거 원천을 재조회하지 않는다. 실제 주문·체결·목표 결과만 leg별로 누적하고 주문번호와 audit는 복사하지 않는다. 오전은 route별 현재 drawdown 정책의 실제 결과만 관찰하며, 신호가 없던 날의 미관측 가격을 이용한 완화 threshold 반사실은 만들지 않는다.
+라이브 episode가 arm될 때 state의 `signal_features`에 NXT/SOR route, 실제 opening price, 적용 drawdown, 진입창, 두 leg 지정가와 +2호가 정책을 고정한다. 20:10 `samsung_machine_entry_tuning` report는 당일 state와 자기 이전 일별 report만 읽으며 시세나 과거 원천을 재조회하지 않는다. 실제 주문·체결·목표 결과만 leg별로 누적하고 주문번호와 audit는 복사하지 않는다. 신규 목표주문 대사는 broker `kt00007.cntr_uv` 매도 체결단가를 state에 보존하며, 과거 목표가 proxy 표본은 진단용으로만 남아 후보 표본 하한을 충족하지 못한다. 오전은 route별 현재 drawdown 정책의 실제 결과만 관찰하며, 신호가 없던 날의 미관측 가격을 이용한 완화 threshold 반사실은 만들지 않는다.
 
 report 자체는 `runtime_effect=false`, `allowed_runtime_apply=false`이고, clean v2 complete episode/leg 표본, source-quality preflight, rolling/cumulative EV, `HELD`·열린 주문 guard를 통과한 결과만 다음 PREOPEN candidate로 넘긴다. 오전은 관찰된 대안 정책이 없으므로 현재 NXT 3.0%·SOR 0.75% baseline만 carry-forward한다.
 

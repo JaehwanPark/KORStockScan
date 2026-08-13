@@ -140,6 +140,13 @@ the primary metric.  Trading dates before machine observation began, or dates
 without an observation, are disclosed as coverage gaps but are not imputed as
 outcomes and are not backfilled from historical market replay.
 
+From `2026-08-14`, each attempted row must match the exact-date PREOPEN applied
+policy hash and fields. Target validation uses that applied policy, so the
+operator-approved Kakao morning +3-tick target is not compared with the compiled
++2-tick baseline. New target reconciliations persist broker `kt00007.cntr_uv`;
+only broker-priced completed legs contribute to decision EV and its 20-leg floor.
+Older configured-target proxy results remain separately labeled diagnostics.
+
 After at least 20 completed legs in that clean-baseline actual-observation window,
 positive current and candidate EV, and no held/unresolved inventory, one
 profile may propose one tightening axis for the next PREOPEN:
