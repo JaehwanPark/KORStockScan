@@ -3803,6 +3803,22 @@ def _expire_scanner_watch_target(
         return False
     if updated <= 0:
         return False
+    opening_slot_released = (
+        sniper_state_handlers.release_opening_rotation_watch_slot_for_scanner_eviction(
+            target,
+            norm_code,
+            eviction_reason=(
+                decision.get("eviction_reason") or "not_applicable_eviction_reason"
+            ),
+            now_ts=_safe_float(decision.get("observed_epoch"), time.time()),
+        )
+    )
+    fields["opening_rotation_watch_slot_released"] = opening_slot_released
+    fields["opening_rotation_watch_slot_release_reason"] = (
+        f"scanner_watch_eviction:{decision.get('eviction_reason')}"
+        if opening_slot_released
+        else "not_applicable_no_opening_watch_slot"
+    )
     for item in targets:
         if (
             item.get("id") == record_id
@@ -11469,6 +11485,24 @@ def run_sniper(is_test_mode=False):
             # =====================================================
             # WATCHING TTL / FIFO
             # =====================================================
+            if (
+                now_ts - getattr(run_sniper, "last_opening_rotation_ttl_sweep_time", 0)
+                >= 1.0
+            ):
+                opening_ttl_sweep = (
+                    sniper_state_handlers.sweep_expired_opening_rotation_watch_slots(
+                        targets,
+                        now_ts=now_ts,
+                    )
+                )
+                run_sniper.last_opening_rotation_ttl_sweep_time = now_ts
+                if opening_ttl_sweep.get("failed_count", 0) > 0:
+                    log_error(
+                        "[OPENING_ROTATION_TTL_SWEEP] expiration incomplete "
+                        f"eligible={opening_ttl_sweep.get('eligible_count', 0)} "
+                        f"expired={opening_ttl_sweep.get('expired_count', 0)} "
+                        f"failed={opening_ttl_sweep.get('failed_count', 0)}"
+                    )
             if now_ts - getattr(run_sniper, "last_fifo_time", 0) > 10:
                 watching_stocks = [t for t in targets if t.get("status") == "WATCHING"]
                 expired_ids = []

@@ -83,7 +83,7 @@ _register_pattern(
 )
 _register_pattern(
     "OPENING_ROTATION_TTL_RELEASE_ERROR",
-    r"(?:opening_rotation_ttl_release)",
+    r"(?:opening_rotation_(?:ttl_release|watch_slot_release))",
 )
 _register_pattern(
     "UNKNOWN",

@@ -52741,29 +52741,219 @@ def _release_opening_rotation_watch_slot_with_event(
     )
     if not released:
         return False
+    try:
+        _log_entry_pipeline(
+            stock,
+            code,
+            "opening_rotation_watch_slot_released",
+            reason=reason,
+            scanner_promotion_id=promotion_id,
+            opening_rotation_watch_slot_released=True,
+            metric_role="runtime_capacity_provenance",
+            decision_authority="opening_rotation_watch_lifecycle_only",
+            window_policy="same_scanner_promotion_runtime_watch_window",
+            sample_floor="not_applicable_runtime_capacity_transition",
+            primary_decision_metric="opening_rotation_watch_slot_released",
+            source_quality_gate=(
+                "exact_promotion_identity_and_runtime_owner_transition"
+            ),
+            runtime_effect=True,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            allowed_runtime_apply=False,
+            forbidden_uses=(
+                "order_submit,position_change,quantity_or_cap_change,"
+                "threshold_mutation,provider_route_change,broker_guard_bypass"
+            ),
+        )
+    except Exception as exc:
+        # Capacity/state convergence outranks provenance emission. The error
+        # detector makes the missing event visible without re-opening a slot.
+        log_error(
+            "[OPENING_ROTATION_WATCH_SLOT_RELEASE] provenance emit failed "
+            f"code={str(code or '').strip()[:6]} promotion_id={promotion_id}: {exc}"
+        )
+    return True
+
+
+def _opening_rotation_watch_slot_owner_fields(
+    stock: dict | None,
+    *,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Return exact-promotion Opening watch ownership for submit arbitration."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+    slot_promotion_id = str(
+        stock.get(_OPENING_ROTATION_WATCH_SLOT_PROMOTION_KEY) or ""
+    ).strip()
+    claimed_at = _safe_float(
+        stock.get(_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY), 0.0
+    )
+    observed_at = time.time() if now_ts is None else float(now_ts)
+    owned = bool(
+        promotion_id
+        and promotion_id == slot_promotion_id
+        and str(stock.get("status") or "").strip().upper() == "WATCHING"
+    )
+    return {
+        "opening_rotation_watch_slot_owned": owned,
+        "scanner_promotion_id": promotion_id or "-",
+        "opening_rotation_watch_slot_promotion_id": slot_promotion_id or "-",
+        "opening_rotation_watch_slot_claimed_at_epoch": (
+            round(claimed_at, 6) if claimed_at > 0.0 else "-"
+        ),
+        "opening_rotation_watch_slot_age_sec": (
+            round(max(0.0, observed_at - claimed_at), 6)
+            if claimed_at > 0.0
+            else "-"
+        ),
+    }
+
+
+def _log_opening_rotation_competing_entry_block(
+    stock: dict,
+    code: str,
+    *,
+    now_ts: float,
+    source_stage: str,
+    submit_stage: bool,
+) -> None:
+    owner_fields = _opening_rotation_watch_slot_owner_fields(stock, now_ts=now_ts)
     _log_entry_pipeline(
         stock,
         code,
-        "opening_rotation_watch_slot_released",
-        reason=reason,
-        scanner_promotion_id=promotion_id,
-        opening_rotation_watch_slot_released=True,
-        metric_role="runtime_capacity_provenance",
-        decision_authority="opening_rotation_watch_lifecycle_only",
+        (
+            "entry_submit_blocked_opening_rotation_owner_conflict"
+            if submit_stage
+            else "rising_missed_entry_blocked_opening_rotation_owner"
+        ),
+        block_reason="exact_promotion_owned_by_opening_rotation_watch_slot",
+        competing_entry_source_stage=source_stage,
+        metric_role="safety_veto",
+        decision_authority="opening_rotation_exact_promotion_entry_owner_guard",
         window_policy="same_scanner_promotion_runtime_watch_window",
-        sample_floor="not_applicable_runtime_capacity_transition",
-        primary_decision_metric="opening_rotation_watch_slot_released",
-        source_quality_gate="exact_promotion_identity_and_runtime_owner_transition",
+        sample_floor="not_applicable_entry_owner_safety_veto",
+        primary_decision_metric="opening_rotation_watch_slot_owned",
+        source_quality_gate="exact_promotion_identity_and_watching_owner_state",
         runtime_effect=True,
         actual_order_submitted=False,
         broker_order_forbidden=True,
         allowed_runtime_apply=False,
         forbidden_uses=(
-            "order_submit,position_change,quantity_or_cap_change,"
+            "opening_owner_bypass,standalone_buy,order_submit,quantity_or_cap_change,"
             "threshold_mutation,provider_route_change,broker_guard_bypass"
         ),
+        **owner_fields,
     )
+
+
+def release_opening_rotation_watch_slot_for_scanner_eviction(
+    stock: dict,
+    code: str,
+    *,
+    eviction_reason: str,
+    now_ts: float,
+) -> bool:
+    """Converge generic scanner eviction with Opening slot provenance."""
+
+    promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+    released = _release_opening_rotation_watch_slot_with_event(
+        stock,
+        code,
+        promotion_id=promotion_id,
+        reason=f"scanner_watch_eviction:{str(eviction_reason or 'unknown')}",
+    )
+    if not released:
+        return False
+    with ENTRY_LOCK:
+        _OPENING_ROTATION_CONTEXT_CACHE.pop(str(code or "").strip()[:6], None)
+        stock.update(
+            {
+                "opening_rotation_consumed_promotion_id": promotion_id,
+                "opening_rotation_watch_phase": "SCANNER_WATCH_EVICTED",
+                "opening_rotation_terminal_reason": "scanner_watch_eviction",
+                "opening_rotation_terminal_at_epoch": float(now_ts),
+            }
+        )
+        stock.pop(OPENING_ROTATION_STATE_KEY, None)
     return True
+
+
+def sweep_expired_opening_rotation_watch_slots(
+    targets: list[dict] | None = None,
+    *,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Expire Opening slots independently from candidate evaluation lanes."""
+
+    observed_at = time.time() if now_ts is None else float(now_ts)
+    owned_targets = [
+        stock
+        for stock in list(targets if targets is not None else (ACTIVE_TARGETS or []))
+        if isinstance(stock, dict)
+        and _opening_rotation_watch_slot_owner_fields(
+            stock, now_ts=observed_at
+        )["opening_rotation_watch_slot_owned"]
+    ]
+    if not owned_targets:
+        return {
+            "status": "no_active_slots",
+            "eligible_count": 0,
+            "expired_count": 0,
+            "failed_count": 0,
+        }
+    try:
+        ttl_sec = float(
+            load_active_opening_rotation_runtime_policy().entry.promotion_ttl_sec
+        )
+    except (OSError, TypeError, ValueError, AttributeError) as exc:
+        log_error(f"[OPENING_ROTATION_TTL_SWEEP] runtime policy invalid: {exc}")
+        return {
+            "status": "runtime_policy_invalid",
+            "eligible_count": 0,
+            "expired_count": 0,
+            "failed_count": 0,
+        }
+
+    eligible_count = 0
+    expired_count = 0
+    failed_count = 0
+    for stock in owned_targets:
+        claimed_at = _safe_float(
+            stock.get(_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY), 0.0
+        )
+        if claimed_at <= 0.0:
+            # A rehydrated or partially restored in-memory marker must remain
+            # bounded even when its ephemeral claim timestamp was lost.
+            # Start a fresh TTL instead of expiring from an inferred clock.
+            with ENTRY_LOCK:
+                promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+                if _opening_rotation_watch_slot_owned(stock, promotion_id):
+                    stock[_OPENING_ROTATION_WATCH_SLOT_CLAIMED_AT_KEY] = observed_at
+            continue
+        if observed_at - claimed_at <= ttl_sec:
+            continue
+        eligible_count += 1
+        promotion_id = str(stock.get("scanner_promotion_id") or "").strip()
+        if _expire_opening_rotation_ttl_promotion(
+            stock,
+            str(stock.get("code") or "").strip()[:6],
+            promotion_id=promotion_id,
+            now_ts=observed_at,
+        ):
+            expired_count += 1
+        else:
+            failed_count += 1
+
+    return {
+        "status": "pass" if failed_count == 0 else "partial_failure",
+        "eligible_count": eligible_count,
+        "expired_count": expired_count,
+        "failed_count": failed_count,
+        "promotion_ttl_sec": ttl_sec,
+    }
 
 
 _OPENING_ROTATION_FRESHNESS_RATE_LOCK = threading.Lock()
@@ -53560,33 +53750,39 @@ def _expire_opening_rotation_ttl_promotion(
                     f"code={normalized_code}: {exc}"
                 )
 
-    _log_entry_pipeline(
-        stock,
-        normalized_code,
-        "opening_rotation_promotion_ttl_released",
-        reason="promotion_ttl_expired",
-        scanner_promotion_id=normalized_promotion_id,
-        opening_rotation_watch_slot_released=watch_slot_released,
-        opening_rotation_db_status="EXPIRED",
-        opening_rotation_db_expiration_result=(
-            "idempotent_already_expired" if already_expired else "cas_applied"
-        ),
-        opening_rotation_ws_unregister_requested=ws_unregister_requested,
-        metric_role="runtime_capacity_provenance",
-        decision_authority="opening_rotation_watch_lifecycle_only",
-        window_policy="same_scanner_promotion_60_second_ttl",
-        sample_floor="not_applicable_runtime_terminal_transition",
-        primary_decision_metric="opening_rotation_watch_slot_released",
-        source_quality_gate="exact_record_code_and_promotion_identity",
-        runtime_effect=True,
-        actual_order_submitted=False,
-        broker_order_forbidden=True,
-        allowed_runtime_apply=False,
-        forbidden_uses=(
-            "order_submit,order_cancel,position_change,quantity_or_cap_change,"
-            "threshold_mutation,provider_route_change,broker_guard_bypass"
-        ),
-    )
+    try:
+        _log_entry_pipeline(
+            stock,
+            normalized_code,
+            "opening_rotation_promotion_ttl_released",
+            reason="promotion_ttl_expired",
+            scanner_promotion_id=normalized_promotion_id,
+            opening_rotation_watch_slot_released=watch_slot_released,
+            opening_rotation_db_status="EXPIRED",
+            opening_rotation_db_expiration_result=(
+                "idempotent_already_expired" if already_expired else "cas_applied"
+            ),
+            opening_rotation_ws_unregister_requested=ws_unregister_requested,
+            metric_role="runtime_capacity_provenance",
+            decision_authority="opening_rotation_watch_lifecycle_only",
+            window_policy="same_scanner_promotion_60_second_ttl",
+            sample_floor="not_applicable_runtime_terminal_transition",
+            primary_decision_metric="opening_rotation_watch_slot_released",
+            source_quality_gate="exact_record_code_and_promotion_identity",
+            runtime_effect=True,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            allowed_runtime_apply=False,
+            forbidden_uses=(
+                "order_submit,order_cancel,position_change,quantity_or_cap_change,"
+                "threshold_mutation,provider_route_change,broker_guard_bypass"
+            ),
+        )
+    except Exception as exc:
+        log_error(
+            "[OPENING_ROTATION_TTL_RELEASE] provenance emit failed "
+            f"code={normalized_code} promotion_id={normalized_promotion_id}: {exc}"
+        )
     return True
 
 
@@ -60000,6 +60196,45 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if forced_rising_missed_one_share
         else 0
     )
+    opening_owner_fields = _opening_rotation_watch_slot_owner_fields(
+        stock, now_ts=_safe_float(now_ts, time.time())
+    )
+    rising_missed_entry_attempt = bool(
+        forced_rising_missed_one_share
+        or _truthy_field(stock.get("rising_missed_one_share_entry_forced"))
+        or _truthy_field(runtime.get("rising_missed_one_share_entry_forced"))
+        or str(runtime.get("forced_entry_reason") or "").strip()
+        == RISING_MISSED_FORCED_ENTRY_REASON
+    )
+    if (
+        not opening_rotation_active
+        and opening_owner_fields["opening_rotation_watch_slot_owned"]
+    ):
+        if rising_missed_entry_attempt:
+            _mutate_stock_state(
+                stock,
+                pop_fields=[
+                    "rising_missed_one_share_entry_forced",
+                    "rising_missed_one_share_scout",
+                    "rising_missed_scout_upgrade_pending",
+                    "rising_missed_scout_upgrade_order_pending",
+                    "forced_entry_qty",
+                    "forced_entry_reason",
+                    "target_buy_price",
+                ],
+            )
+        _log_opening_rotation_competing_entry_block(
+            stock,
+            code,
+            now_ts=_safe_float(now_ts, time.time()),
+            source_stage=(
+                "rising_missed_final_submit"
+                if rising_missed_entry_attempt
+                else "general_scalping_final_submit"
+            ),
+            submit_stage=True,
+        )
+        return False
     exit_authority_conflicts = _entry_exit_authority_conflict_fields(stock)
     if exit_authority_conflicts:
         _log_entry_pipeline(
@@ -74376,10 +74611,14 @@ def handle_watching_state(
     opening_rotation_owner_conflict = _opening_rotation_yields_to_rising_missed_owner(
         stock, runtime
     )
+    opening_rotation_exact_watch_owner = _opening_rotation_watch_slot_owner_fields(
+        stock, now_ts=now_ts
+    )["opening_rotation_watch_slot_owned"]
     opening_rotation_watch_scope = bool(
         strategy == "SCALPING"
         and (
             is_opening_rotation_position(pos_tag)
+            or opening_rotation_exact_watch_owner
             or (
                 not opening_rotation_owner_conflict
                 and is_opening_rotation_watch_candidate(
@@ -74592,6 +74831,18 @@ def handle_scanner_async_rising_missed_commit(
     if strategy != "SCALPING":
         return False
     if str(stock.get("status") or "").upper() != "WATCHING":
+        return True
+    opening_owner_fields = _opening_rotation_watch_slot_owner_fields(
+        stock, now_ts=now_ts
+    )
+    if opening_owner_fields["opening_rotation_watch_slot_owned"]:
+        _log_opening_rotation_competing_entry_block(
+            stock,
+            code,
+            now_ts=now_ts,
+            source_stage="scanner_async_rising_missed_commit",
+            submit_stage=False,
+        )
         return True
     if _manual_control_exclusion_blocked(
         stock,

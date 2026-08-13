@@ -122,6 +122,21 @@ class TestLogScanner:
         assert errors == 1
         assert counter == {"OPENING_ROTATION_TTL_RELEASE_ERROR": 1}
 
+    def test_opening_rotation_slot_release_has_specific_error_type(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "sniper_state_handlers_error.log"
+            log_file.write_text(
+                "[2026-08-13 12:05:00] ERROR "
+                "[OPENING_ROTATION_WATCH_SLOT_RELEASE] provenance emit failed\n",
+                encoding="utf-8",
+            )
+            counter = __import__("collections").Counter()
+
+            errors, _new_pos, _ = LogScanner._scan_file(log_file, 0, counter)
+
+        assert errors == 1
+        assert counter == {"OPENING_ROTATION_TTL_RELEASE_ERROR": 1}
+
     def test_scan_file_ignores_error_detection_meta_alerts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "bot_main_error.log"
