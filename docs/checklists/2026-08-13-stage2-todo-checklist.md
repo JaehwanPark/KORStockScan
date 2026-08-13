@@ -162,6 +162,13 @@
 
 ## 위젯 수집·자동매매 운영 보완
 
+- [x] `[WidgetAutoTradeTenShareQty0813] 위젯 매매기계 신규 BUY leg 1주→10주 운영 변경` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 11:30~15:00`, `Track: RuntimeStability`)
+  - 사용자 권한/범위: 사용자의 명시적 수량 변경 지시에 따라 위젯 자동매매 owner의 이후 신규 BUY leg만 `1→10주`로 변경한다. 기존 에피소드·접수 주문·체결·익절 잔량은 원래 수량으로 귀속하며 main bot, 독립 시간대 기계, 수동 위젯 주문은 범위 밖이다.
+  - 단일 owner/노출: service env, legacy fallback, postclose exact-date producer/loader가 공통 `leg_quantity_each=10`을 사용한다. 추가매수 2개가 선택된 정책은 에피소드 최대 30주이며 기존 freshness, manual-owner, global BUY pause, 중복·미체결, broker route/체결대사/TP coverage guard를 유지한다.
+  - 적용/rollback: 적용 전 삼성전자 기존 원장은 BUY 1주 체결과 TP SELL 1주 미체결을 보존한다. rollback은 공통 leg 수량, service env, legacy policy를 1주 정책으로 복원하고 새 exact-date policy를 재생성한 뒤 기존 주문 대사 후 우아하게 재기동하는 것이다.
+  - Kiwoom 공식 참조: upstream SHA `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`, `kiwoom/specs.py`, `kiwoom/core`, Postman `kt10000/kt10001/kt10003/kt00007` 및 `ord_qty` 단위 계약을 `2026-08-13T11:31:37+09:00`에 재확인했다.
+  - 리뷰/검증/반영: review gate 무결함, policy temp replay verified, 기존 1주 원장 복원 회귀를 포함한 widget 확장 회귀 `460 passed`, Black/Ruff/compile/systemd/checklist parser/`git diff --check`를 통과했다. exact-date policy와 설치 unit 반영 후 PID `24014→170214`, `ENTRY_QTY=10`, legacy policy `SAMSUNG_EQUAL_10_ADD0P5_ADD1P0_TP0P5_V2`, runtime state `entry_qty=10`을 확인했다. 재기동 전 체결 BUY 1주와 TP SELL 1주 주문 `0015385`는 그대로 보존됐고 재기동 시각 이후 신규 주문 이벤트는 없다.
+
 - [x] `[WidgetRuntimeCollectorStability0813] 4종목 수집기 budget 경계·종목 격리 및 자동매매 상태 provenance 보완` (`Due: 2026-08-13`, `Slot: INTRADAY`, `TimeWindow: 10:05~10:35`, `Track: RuntimeStability`)
   - 판정: 4종목 primary/peer/2개 index/수급 호출이 rolling-minute 캐시 경계에서 36회 한도를 초과해 required `ka10080`이 실패하고 systemd 재시작한 원인을 확인했다. 계산된 경계 overlap 52회에 제한된 여유를 둔 로컬 read-only 64회 한도와 종목별 `DATA_WAIT` fail-closed 격리·순환 시작 순서·budget provenance를 추가했다. 주문·계좌·token issue/refresh·실주문 정책은 변경하지 않았다.
   - 자동매매 provenance: 동일 source exit의 invalid-policy 차단 이벤트는 signal ID별 1회만 기록하고, 정책 적격(`policy_execution_eligible_symbols`, `policy_execution_sessions`)과 현재 주문권한 적격(`execution_eligible_symbols`, `runtime_execution_policy_sessions`), `monitored_symbols`, `observation_only_symbols`를 분리했다. 기존 `enabled_symbols`는 호환 필드로 유지한다.

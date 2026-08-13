@@ -291,7 +291,7 @@ def _samsung_policy_trader(
         event_recorder=recorder,
         snapshot_loader=lambda path: payload_box["payload"],
         entry_action_notifier=entry_action_notifier,
-        entry_qty=1,
+        entry_qty=engine.WIDGET_AUTO_TRADE_LEG_QUANTITY,
         enabled=True,
     )
     return trader, gateway, recorder
@@ -313,7 +313,7 @@ def test_samsung_entry_telegram_follows_accepted_machine_action_only(
     trader.run_once(now)
     trader.run_once(now.replace(second=1))
 
-    assert gateway.buy_calls == [("005930", 1, "SOR")]
+    assert gateway.buy_calls == [("005930", 10, "SOR")]
     assert len(notifier.calls) == 1
     notified = notifier.calls[0]
     assert notified["order"]["broker_accepted"] is True
@@ -535,35 +535,35 @@ def test_samsung_equal_share_policy_cancels_targets_adds_two_and_reprices(
     trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
 
     trader.run_once(now)
-    _fill(gateway, "B1", price=100_000)
+    _fill(gateway, "B1", qty=10, price=100_000)
     trader.run_once(now)
     initial_target = engine._take_profit_price(100_000, profit_bps=50)
-    assert gateway.limit_sell_calls == [("005930", 1, "SOR", initial_target)]
+    assert gateway.limit_sell_calls == [("005930", 10, "SOR", initial_target)]
 
     box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
     trader.run_once(now.replace(second=1))
-    assert gateway.cancel_calls == [("005930", "L2", 1, "SOR")]
+    assert gateway.cancel_calls == [("005930", "L2", 10, "SOR")]
     assert len(gateway.buy_calls) == 1
 
-    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 1)
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 10)
     trader.run_once(now.replace(second=2))
-    assert gateway.buy_calls == [("005930", 1, "SOR"), ("005930", 1, "SOR")]
+    assert gateway.buy_calls == [("005930", 10, "SOR"), ("005930", 10, "SOR")]
 
-    _fill(gateway, "B4", price=99_500)
+    _fill(gateway, "B4", qty=10, price=99_500)
     trader.run_once(now.replace(second=3))
     repriced_target = engine._take_profit_price(99_750, profit_bps=50)
-    assert gateway.limit_sell_calls[-1] == ("005930", 2, "SOR", repriced_target)
+    assert gateway.limit_sell_calls[-1] == ("005930", 20, "SOR", repriced_target)
 
     box["payload"] = _samsung_policy_payload(now.replace(second=4), price=99_000)
     trader.run_once(now.replace(second=4))
     assert gateway.cancel_calls[-1][0:2] == ("005930", "L5")
-    gateway.snapshots["L5"] = ExecutionSnapshot(True, True, 0, 0, 2)
+    gateway.snapshots["L5"] = ExecutionSnapshot(True, True, 0, 0, 20)
     trader.run_once(now.replace(second=5))
-    assert gateway.buy_calls[-1] == ("005930", 1, "SOR")
-    _fill(gateway, "B7", price=99_000)
+    assert gateway.buy_calls[-1] == ("005930", 10, "SOR")
+    _fill(gateway, "B7", qty=10, price=99_000)
     trader.run_once(now.replace(second=6))
     final_target = engine._take_profit_price(99_500, profit_bps=50)
-    assert gateway.limit_sell_calls[-1] == ("005930", 3, "SOR", final_target)
+    assert gateway.limit_sell_calls[-1] == ("005930", 30, "SOR", final_target)
     state = trader._state["symbols"]["005930"]
     assert state["take_profit_bps"] == 50
     assert state["take_profit_basis_fill_price"] == 99_500
@@ -576,7 +576,7 @@ def test_samsung_equal_share_policy_observes_source_exit_without_forced_sell(
     box = {"payload": _samsung_policy_payload(now)}
     trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
     trader.run_once(now)
-    _fill(gateway, "B1", price=100_000)
+    _fill(gateway, "B1", qty=10, price=100_000)
     trader.run_once(now)
 
     box["payload"] = _samsung_policy_payload(
@@ -597,7 +597,7 @@ def test_samsung_equal_share_policy_requires_pass_source_for_add(tmp_path, monke
     box = {"payload": _samsung_policy_payload(now)}
     trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
     trader.run_once(now)
-    _fill(gateway, "B1", price=100_000)
+    _fill(gateway, "B1", qty=10, price=100_000)
     trader.run_once(now)
 
     box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
@@ -615,7 +615,7 @@ def test_samsung_equal_share_policy_requires_fresh_snapshot_for_add(
     box = {"payload": _samsung_policy_payload(now)}
     trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
     trader.run_once(now)
-    _fill(gateway, "B1", price=100_000)
+    _fill(gateway, "B1", qty=10, price=100_000)
     trader.run_once(now)
 
     stale_now = now.replace(minute=1)
@@ -633,7 +633,7 @@ def test_samsung_equal_share_policy_rechecks_global_buy_pause_before_add(
     box = {"payload": _samsung_policy_payload(now)}
     trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
     trader.run_once(now)
-    _fill(gateway, "B1", price=100_000)
+    _fill(gateway, "B1", qty=10, price=100_000)
     trader.run_once(now)
 
     monkeypatch.setattr(engine, "is_buy_side_paused", lambda: True)
@@ -652,7 +652,7 @@ def test_samsung_equal_share_policy_requires_existing_target_coverage_before_add
     box = {"payload": _samsung_policy_payload(now)}
     trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
     trader.run_once(now)
-    _fill(gateway, "B1", price=100_000)
+    _fill(gateway, "B1", qty=10, price=100_000)
     trader.run_once(now)
     target_order = trader._state["symbols"]["005930"]["orders"][-1]
     target_order["status"] = "FAILED"
@@ -677,7 +677,7 @@ def test_samsung_equal_share_policy_rechecks_manual_ownership_before_add(
     box = {"payload": _samsung_policy_payload(now)}
     trader, gateway, recorder = _samsung_policy_trader(tmp_path, monkeypatch, box)
     trader.run_once(now)
-    _fill(gateway, "B1", price=100_000)
+    _fill(gateway, "B1", qty=10, price=100_000)
     trader.run_once(now)
 
     monkeypatch.setattr(
@@ -716,7 +716,7 @@ def test_samsung_equal_share_policy_exit_vetoes_new_entry_in_same_snapshot(
     )
 
 
-def test_samsung_policy_requires_one_share_initial_leg(tmp_path):
+def test_samsung_policy_requires_ten_share_initial_leg(tmp_path):
     spec = WidgetSpec(
         code="005930",
         name="Samsung",
@@ -732,7 +732,7 @@ def test_samsung_policy_requires_one_share_initial_leg(tmp_path):
             specs=(spec,),
             state_path=tmp_path / "state.json",
             event_recorder=FakeRecorder([]),
-            entry_qty=2,
+            entry_qty=1,
             enabled=True,
         )
 
@@ -740,8 +740,8 @@ def test_samsung_policy_requires_one_share_initial_leg(tmp_path):
 def test_samsung_runtime_policy_matches_selected_research_arm():
     policy = engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY
 
-    assert policy["research_arm"] == "three_equal_add0p5_1p0_tp0p5"
-    assert policy["leg_quantity_each"] == 1
+    assert policy["research_arm"] == "three_equal_10share_add0p5_1p0_tp0p5"
+    assert policy["leg_quantity_each"] == 10
     assert policy["add_trigger_bps_from_initial_fill"] == (-50, -100)
     assert policy["take_profit_bps_from_equal_share_average"] == 50
     assert policy["allowed_entry_sessions"] == ("KRX_REGULAR",)
@@ -978,9 +978,84 @@ def test_samsung_policy_change_fails_closed_with_same_day_open_quantity(
             specs=(spec,),
             state_path=state_path,
             event_recorder=FakeRecorder([]),
-            entry_qty=1,
+            entry_qty=engine.WIDGET_AUTO_TRADE_LEG_QUANTITY,
             enabled=True,
         )
+
+
+def test_ten_share_runtime_preserves_existing_one_share_episode(tmp_path, monkeypatch):
+    now = _at(10)
+    monkeypatch.setattr(engine, "_now_kst", lambda: now)
+    state_path = tmp_path / "state.json"
+    policy = _dated_policy(force_flat=False)
+    policy.update(
+        policy_id="dated-ten-share-policy",
+        leg_quantity_each=engine.WIDGET_AUTO_TRADE_LEG_QUANTITY,
+    )
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": engine.STATE_SCHEMA_VERSION,
+                "execution_authority": engine.EXECUTION_AUTHORITY,
+                "active_date": now.date().isoformat(),
+                "execution_policies": {
+                    "999999": {"KRX_REGULAR": "dated-ten-share-policy"}
+                },
+                "symbols": {
+                    "999999": {
+                        "entry_episode_open": True,
+                        "entry_execution_policy": {
+                            **policy,
+                            "leg_quantity_each": 1,
+                        },
+                        "orders": [
+                            {
+                                "side": "BUY",
+                                "broker_accepted": True,
+                                "requested_qty": 1,
+                                "filled_qty": 1,
+                                "remaining_qty": 0,
+                                "status": "FILLED",
+                            },
+                            {
+                                "side": "SELL",
+                                "broker_accepted": True,
+                                "requested_qty": 1,
+                                "filled_qty": 0,
+                                "remaining_qty": 1,
+                                "status": "SUBMITTED",
+                            },
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = WidgetSpec(
+        code="999999",
+        name="test",
+        snapshot_path=Path("unused.json"),
+        contract=FakeContract,
+        event_based=True,
+    )
+
+    trader = WidgetSignalAutoTrader(
+        gateway=FakeGateway(),
+        specs=(spec,),
+        state_path=state_path,
+        event_recorder=FakeRecorder([]),
+        snapshot_loader=lambda path: {},
+        policy_loader=FakeDatedPolicyLoader({"999999": {"KRX_REGULAR": policy}}),
+        entry_qty=engine.WIDGET_AUTO_TRADE_LEG_QUANTITY,
+        enabled=True,
+    )
+
+    symbol_state = trader._state["symbols"]["999999"]
+    assert trader.entry_qty == 10
+    assert symbol_state["orders"][0]["requested_qty"] == 1
+    assert symbol_state["orders"][1]["remaining_qty"] == 1
+    assert symbol_state["entry_execution_policy"]["leg_quantity_each"] == 1
 
 
 def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
@@ -1893,7 +1968,11 @@ def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_
             if observed_date.isoformat() != "2026-08-13":
                 return {}
             policy = _dated_policy()
-            policy.update(symbol="888888", policy_id="dynamic-2026-08-13")
+            policy.update(
+                symbol="888888",
+                policy_id="dynamic-2026-08-13",
+                leg_quantity_each=engine.WIDGET_AUTO_TRADE_LEG_QUANTITY,
+            )
             return {"888888": {"KRX_REGULAR": policy}}
 
     trader = WidgetSignalAutoTrader(
@@ -1970,6 +2049,14 @@ def test_service_symbol_allowlist_omission_preserves_legacy_specs(monkeypatch):
     assert service_module._env_specs() == engine.DEFAULT_WIDGET_SPECS
 
 
+def test_service_entry_quantity_defaults_to_ten_and_allows_explicit_ten(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY", raising=False)
+    assert service_module._env_qty() == 10
+
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY", "10")
+    assert service_module._env_qty() == 10
+
+
 def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
     service = Path(
         "deploy/systemd/korstockscan-widget-signal-auto-trader.service"
@@ -1985,8 +2072,9 @@ def test_systemd_service_is_static_and_daily_timer_is_single_start_owner():
     )
     assert (
         'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_SAMSUNG_EXECUTION_POLICY='
-        'SAMSUNG_EQUAL_1_ADD0P5_ADD1P0_TP0P5_V1"' in service
+        'SAMSUNG_EQUAL_10_ADD0P5_ADD1P0_TP0P5_V2"' in service
     )
+    assert 'Environment="KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY=10"' in service
     assert "OnCalendar=Mon..Fri *-*-* 07:58:00 Asia/Seoul" in timer
     assert "Persistent=true" in timer
     assert "AccuracySec=1s" in timer

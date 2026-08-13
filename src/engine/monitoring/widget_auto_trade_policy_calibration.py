@@ -44,6 +44,7 @@ from src.trading.widget_auto_trade.policy import (
     POLICY_AUTHORITY,
     POLICY_FILE_PREFIX,
     POLICY_SCHEMA,
+    WIDGET_AUTO_TRADE_LEG_QUANTITY,
     WidgetAutoTradePolicyLoader,
 )
 from src.utils.market_day import is_krx_trading_day
@@ -951,7 +952,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 "enabled": True,
                 "market_venue": session_spec.venue,
                 "allowed_entry_states": sorted(ACTIONABLE_STATES),
-                "leg_quantity_each": 1,
+                "leg_quantity_each": WIDGET_AUTO_TRADE_LEG_QUANTITY,
                 "add_trigger_bps_from_initial_fill": selected[
                     "add_trigger_bps_from_initial_fill"
                 ],

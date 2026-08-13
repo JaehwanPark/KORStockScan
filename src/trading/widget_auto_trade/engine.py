@@ -32,7 +32,10 @@ from src.trading.widget_auto_trade.gateway import (
     SubmitResult,
     resolve_widget_broker_route,
 )
-from src.trading.widget_auto_trade.policy import WidgetAutoTradePolicyLoader
+from src.trading.widget_auto_trade.policy import (
+    WIDGET_AUTO_TRADE_LEG_QUANTITY,
+    WidgetAutoTradePolicyLoader,
+)
 from src.utils.constants import PROJECT_ROOT
 
 EXECUTION_AUTHORITY = "operator_directed_widget_auto_trade_v1"
@@ -56,16 +59,16 @@ MAX_CANCEL_ATTEMPTS = 3
 MAX_SELL_ATTEMPTS = 3
 SELL_RETRY_SEC = 5
 TAKE_PROFIT_BPS = 100
-SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID = "SAMSUNG_EQUAL_1_ADD0P5_ADD1P0_TP0P5_V1"
+SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID = "SAMSUNG_EQUAL_10_ADD0P5_ADD1P0_TP0P5_V2"
 SAMSUNG_DAILY_EQUAL_SHARE_POLICY = {
     "policy_id": SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID,
-    "research_arm": "three_equal_add0p5_1p0_tp0p5",
+    "research_arm": "three_equal_10share_add0p5_1p0_tp0p5",
     "evidence_window": "2026-06-05_2026-08-10",
     "evidence_artifact": (
         "data/report/pure_market_adaptive_opportunity_replay/"
         "pure_market_adaptive_opportunity_replay_2026-06-05_2026-08-10.json"
     ),
-    "leg_quantity_each": 1,
+    "leg_quantity_each": WIDGET_AUTO_TRADE_LEG_QUANTITY,
     "add_trigger_bps_from_initial_fill": (-50, -100),
     "take_profit_bps_from_equal_share_average": 50,
     "allowed_entry_sessions": ("KRX_REGULAR",),
@@ -356,7 +359,7 @@ class WidgetSignalAutoTrader:
         entry_action_notifier: EntryActionNotifier | None = None,
         policy_loader: WidgetAutoTradePolicyLoader | None = None,
         dynamic_spec_catalog: tuple[WidgetSpec, ...] = (),
-        entry_qty: int = 1,
+        entry_qty: int = WIDGET_AUTO_TRADE_LEG_QUANTITY,
         enabled: bool = False,
     ) -> None:
         qty = int(entry_qty)

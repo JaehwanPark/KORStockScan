@@ -21,13 +21,17 @@
   만들지 않는 negative execution qualification이며 두산·한화 이벤트형 신호에는
   적용하지 않는다. 동일 에피소드의 10초 스냅샷 반복이나 CAUTION에서 READY로의
   지속 상태는 중복 주문으로 보지 않는다.
-- 기본 수량은 1주이며 `KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY`로 변경한다.
-  코드상 허용 범위는 1~100주다.
+- 2026-08-13 11:31 KST 이후 신규 매수 leg의 운영 수량은 10주다.
+  `KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY`, legacy fallback 정책, 장후 생성
+  exact-date 정책의 `leg_quantity_each`가 모두 10으로 일치해야 기동한다. 기존
+  에피소드와 이미 접수된 주문은 원래 수량으로 계속 귀속한다. 정책에 2개
+  추가매수 leg가 선택되면 한 에피소드의 최대 신규 매수 노출은 30주다.
 - 주문 대상은 `KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS`의 쉼표 구분 code
   allowlist로 제한한다. 변수를 명시한 경우 빈 값이나 미등록 code는 전체 종목으로
-  되돌아가지 않고 기동을 실패시킨다. 현재 운영값은 삼성전자 `005930`만이며
-  두산에너빌리티 `034020`과 한화오션 `042660`은 수집·신호·장후 calibration은
-  유지하되 자동매매 대상에서 제외한다.
+  되돌아가지 않고 기동을 실패시킨다. 현재 service allowlist에는 삼성전자
+  `005930`, 두산에너빌리티 `034020`, 한화오션 `042660`이 있으나 exact-date
+  정책의 `new_entry_runtime_eligible=true`인 종목·세션만 실제 신규 주문이 가능하다.
+  수집·신호·장후 calibration 대상이라는 이유만으로 주문 권한을 얻지 않는다.
 - 두산에너빌리티·한화오션은 immutable `entry_event`/`exit_event`를 사용한다.
   삼성전자는 유효한 actionable advisory로 진입하고 `EXIT_READY`만 최종 청산으로
   사용한다. `EXIT_CAUTION`과 비최종 상태는 주문 권한이 없다.
@@ -96,7 +100,7 @@ korstockscan-widget-signal-auto-trader.service`는 기동 owner를 중복시키�
 
 ## 공식 Kiwoom 계약 검증
 
-2026-08-10 09:49:53 KST에 공식
+2026-08-13 11:31:37 KST에 공식
 `Kiwoom-Securities/Kiwoom-REST-API` commit
 `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`의 `kiwoom_docs/주문.md`,
 `kiwoom_docs/계좌.md`, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,

@@ -24,6 +24,7 @@ from src.trading.widget_auto_trade.engine import (
 from src.trading.widget_auto_trade.notifications import (
     WidgetAutoTradeEntryTelegramNotifier,
 )
+from src.trading.widget_auto_trade.policy import WIDGET_AUTO_TRADE_LEG_QUANTITY
 
 LEGACY_DEFAULT_SYMBOLS = frozenset({"005930", "034020", "042660"})
 
@@ -40,7 +41,10 @@ def _env_enabled() -> bool:
 
 
 def _env_qty() -> int:
-    return int(os.getenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY", "1") or "1")
+    default = str(WIDGET_AUTO_TRADE_LEG_QUANTITY)
+    return int(
+        os.getenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY", default) or default
+    )
 
 
 def _env_specs() -> tuple[WidgetSpec, ...]:

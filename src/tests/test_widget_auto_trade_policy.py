@@ -8,6 +8,7 @@ from src.engine.monitoring.samsung_widget_contract import KST
 from src.trading.widget_auto_trade.policy import (
     POLICY_AUTHORITY,
     POLICY_SCHEMA,
+    WIDGET_AUTO_TRADE_LEG_QUANTITY,
     WidgetAutoTradePolicyLoader,
 )
 from src.utils.market_day import is_krx_trading_day
@@ -41,7 +42,7 @@ def _policy(*, effective_date: str = "2026-08-12") -> dict:
                         "enabled": True,
                         "market_venue": "KRX",
                         "allowed_entry_states": ["ENTRY_CAUTION", "ENTRY_READY"],
-                        "leg_quantity_each": 1,
+                        "leg_quantity_each": WIDGET_AUTO_TRADE_LEG_QUANTITY,
                         "add_trigger_bps_from_initial_fill": [-80, -160],
                         "take_profit_bps_from_equal_share_average": 100,
                         "max_completed_entries_per_day": 2,

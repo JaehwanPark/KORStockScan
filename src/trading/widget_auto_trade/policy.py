@@ -20,6 +20,7 @@ POLICY_SCHEMA = "widget_auto_trade_policy_v1"
 POLICY_AUTHORITY = "postclose_widget_auto_trade_calibration_v1"
 POLICY_FILE_PREFIX = "widget_auto_trade_policy"
 DEFAULT_POLICY_DIR = PROJECT_ROOT / "data/runtime/widget_auto_trade_policy"
+WIDGET_AUTO_TRADE_LEG_QUANTITY = 10
 CUMULATIVE_RESEARCH_GATE_SYMBOLS = frozenset({"034020", "042660"})
 CUMULATIVE_RESEARCH_START_DATE = date(2026, 8, 12)
 CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES = 40
@@ -105,7 +106,11 @@ def _validated_session_policy(
     cooldown = _bounded_int(
         payload.get("reentry_cooldown_minutes"), minimum=1, maximum=120
     )
-    leg_qty = _bounded_int(payload.get("leg_quantity_each"), minimum=1, maximum=1)
+    leg_qty = _bounded_int(
+        payload.get("leg_quantity_each"),
+        minimum=WIDGET_AUTO_TRADE_LEG_QUANTITY,
+        maximum=WIDGET_AUTO_TRADE_LEG_QUANTITY,
+    )
     entry_cutoff = _valid_clock(payload.get("new_entry_cutoff_time"))
     force_flat = payload.get("force_flat_at_session_end") is True
     force_exit_time = _valid_clock(payload.get("force_exit_time"))
@@ -386,7 +391,7 @@ def _validated_payload(
                     "allowed_entry_sessions": (session_name,),
                     "allowed_entry_venues": (venue,),
                     "allowed_entry_states": tuple(SUPPORTED_ENTRY_STATES),
-                    "leg_quantity_each": 1,
+                    "leg_quantity_each": WIDGET_AUTO_TRADE_LEG_QUANTITY,
                     "new_entry_runtime_eligible": False,
                     "new_entry_runtime_block_reason": reason_text,
                     "research_arm": "blocked_no_runtime_apply",
