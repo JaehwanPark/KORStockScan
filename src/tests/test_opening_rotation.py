@@ -26,6 +26,7 @@ from src.engine import sniper_state_handlers as handlers
 from src.engine import sniper_execution_receipts
 from src.engine import sniper_sync
 from src.engine.scalping import opening_rotation_backtest as rotation_backtest
+from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.utils import kiwoom_utils
 
 _ORIGINAL_SCANNER_RUNTIME_EVENT_VENUE_FIELDS = (
@@ -872,6 +873,253 @@ def test_opening_rotation_claim_ttl_expires_before_stuck_async_or_price_guard(
         if stage == "opening_rotation_promotion_ttl_released"
     )
     assert release["opening_rotation_watch_slot_released"] is True
+
+
+def test_opening_rotation_ttl_sweep_expires_slot_without_watching_evaluation(
+    monkeypatch,
+):
+    now_dt = datetime(2026, 8, 13, 10, 0)
+    promotion_id = "SCANPROM-005930-SWEEP"
+    stock = {
+        "id": 505932,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": promotion_id,
+        "buy_qty": 0,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_claimed_at_epoch": now_dt.timestamp() - 61.0,
+    }
+    fake_db = _OpeningTTLDB()
+    event_bus = _OpeningTTLEventBus()
+    emitted = []
+    monkeypatch.setattr(handlers, "DB", fake_db)
+    monkeypatch.setattr(handlers, "ACTIVE_TARGETS", [stock])
+    monkeypatch.setattr(handlers, "EVENT_BUS", event_bus)
+    monkeypatch.setattr(
+        handlers, "should_retain_ws_subscription", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        handlers,
+        "should_retain_rising_missed_nxt_post_block_subscription",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    result = handlers.sweep_expired_opening_rotation_watch_slots(
+        [stock], now_ts=now_dt.timestamp()
+    )
+
+    assert result == {
+        "status": "pass",
+        "eligible_count": 1,
+        "expired_count": 1,
+        "failed_count": 0,
+        "promotion_ttl_sec": 60.0,
+    }
+    assert stock["status"] == "EXPIRED"
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
+    assert fake_db.updates == [({"status": "EXPIRED"}, False)]
+    assert [stage for stage, _fields in emitted] == [
+        "opening_rotation_promotion_ttl_released"
+    ]
+
+
+def test_opening_rotation_ttl_sweep_without_slots_skips_policy_and_db(monkeypatch):
+    monkeypatch.setattr(
+        handlers,
+        "load_active_opening_rotation_runtime_policy",
+        lambda: pytest.fail("no-slot sweep must not reload the runtime policy"),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_expire_opening_rotation_ttl_promotion",
+        lambda *_args, **_kwargs: pytest.fail("no-slot sweep must not touch DB"),
+    )
+
+    result = handlers.sweep_expired_opening_rotation_watch_slots(
+        [
+            {
+                "status": "WATCHING",
+                "scanner_promotion_id": "PROMO-1",
+                "position_tag": "SCANNER",
+            }
+        ],
+        now_ts=datetime(2026, 8, 13, 10, 0).timestamp(),
+    )
+
+    assert result == {
+        "status": "no_active_slots",
+        "eligible_count": 0,
+        "expired_count": 0,
+        "failed_count": 0,
+    }
+
+
+def test_opening_rotation_ttl_sweep_backfills_missing_claim_time(monkeypatch):
+    now_ts = datetime(2026, 8, 13, 10, 0).timestamp()
+    stock = {
+        "status": "WATCHING",
+        "scanner_promotion_id": "PROMO-MISSING-CLAIM-TIME",
+        "opening_rotation_watch_slot_promotion_id": "PROMO-MISSING-CLAIM-TIME",
+    }
+    monkeypatch.setattr(
+        handlers,
+        "_expire_opening_rotation_ttl_promotion",
+        lambda *_args, **_kwargs: pytest.fail(
+            "backfilled ownership receives a fresh TTL before expiration"
+        ),
+    )
+
+    result = handlers.sweep_expired_opening_rotation_watch_slots([stock], now_ts=now_ts)
+
+    assert result["status"] == "pass"
+    assert result["eligible_count"] == 0
+    assert result["expired_count"] == 0
+    assert stock["opening_rotation_watch_slot_claimed_at_epoch"] == now_ts
+
+
+def test_async_rising_missed_commit_cannot_preempt_owned_opening_slot(monkeypatch):
+    now_dt = datetime(2026, 8, 13, 10, 5)
+    promotion_id = "SCANPROM-005930-ASYNC-OWNER"
+    generation = ScannerGeneration(
+        code="005930",
+        promotion_id=promotion_id,
+        revision=1,
+        record_id=505933,
+        venue="KRX",
+        promotion_epoch=now_dt.timestamp() - 10.0,
+        attach_epoch=now_dt.timestamp() - 9.0,
+        observed_price=70_000,
+        source_signature="PRICE_JUMP_START",
+    )
+    stock = {
+        "id": 505933,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_claimed_at_epoch": now_dt.timestamp() - 8.0,
+        "_scanner_async_generation_id": generation.generation_id,
+        "_scanner_async_cache_key": "rising_missed:owner-race",
+    }
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_maybe_submit_rising_missed_one_share_entry",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Opening-owned promotion must not enter Rising Missed commit"
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    handled = handlers.handle_scanner_async_rising_missed_commit(
+        stock,
+        "005930",
+        {"curr": 70_000, "fluctuation": 3.0},
+        admin_id=1,
+        now_ts=now_dt.timestamp(),
+        now_dt=now_dt,
+        scanner_async_generation=generation,
+    )
+
+    assert handled is True
+    assert stock["status"] == "WATCHING"
+    assert stock["opening_rotation_watch_slot_promotion_id"] == promotion_id
+    blocked = next(
+        fields
+        for stage, fields in emitted
+        if stage == "rising_missed_entry_blocked_opening_rotation_owner"
+    )
+    assert blocked["opening_rotation_watch_slot_owned"] is True
+    assert blocked["broker_order_forbidden"] is True
+    assert blocked["actual_order_submitted"] is False
+
+
+def test_final_submit_rechecks_opening_owner_against_rising_missed_race(monkeypatch):
+    now_dt = datetime(2026, 8, 13, 10, 10)
+    promotion_id = "SCANPROM-005930-FINAL-OWNER"
+    stock = {
+        "id": 505934,
+        "code": "005930",
+        "name": "삼성전자",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_promotion_id": promotion_id,
+        "opening_rotation_watch_slot_claimed_at_epoch": now_dt.timestamp() - 8.0,
+        "rising_missed_one_share_entry_forced": True,
+        "rising_missed_one_share_scout": True,
+        "rising_missed_scout_upgrade_pending": True,
+        "forced_entry_qty": 1,
+        "forced_entry_reason": "rising_missed_one_share_entry",
+        "target_buy_price": 70_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.10,
+        "curr_price": 70_000,
+        "liquidity_value": 1_000_000_000,
+        "msg": "",
+        "now_ts": now_dt.timestamp(),
+        "now_dt": now_dt,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+        "ai_engine": None,
+        "pos_tag": "SCANNER",
+        "scout_upgrade_entry": False,
+        "forced_entry_qty": 1,
+        "rising_missed_one_share_entry_forced": True,
+    }
+    emitted = []
+    monkeypatch.setattr(
+        handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *_args, **_kwargs: pytest.fail(
+            "owner conflict must block before account or broker access"
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: emitted.append((args[2], fields)),
+    )
+
+    submitted = handlers._submit_watching_triggered_entry(
+        stock,
+        "005930",
+        {"curr": 70_000},
+        admin_id=1,
+        runtime=runtime,
+    )
+
+    assert submitted is False
+    assert stock["opening_rotation_watch_slot_promotion_id"] == promotion_id
+    assert "rising_missed_one_share_entry_forced" not in stock
+    assert "rising_missed_one_share_scout" not in stock
+    assert "target_buy_price" not in stock
+    blocked = next(
+        fields
+        for stage, fields in emitted
+        if stage == "entry_submit_blocked_opening_rotation_owner_conflict"
+    )
+    assert blocked["opening_rotation_watch_slot_owned"] is True
+    assert blocked["broker_order_forbidden"] is True
+    assert blocked["actual_order_submitted"] is False
 
 
 @pytest.mark.parametrize(
@@ -3239,7 +3487,9 @@ def test_holding_common_trailing_does_not_overwrite_an_existing_exit_owner():
     ) < (holding_source.index('exit_rule = "protect_trailing_stop"'))
 
 
-def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
+def test_exact_opening_slot_skips_preceding_rising_hook_outside_candidate_band(
+    monkeypatch,
+):
     handlers.COOLDOWNS = {}
     handlers.ALERTED_STOCKS = set()
     handlers.EVENT_BUS = None
@@ -3277,8 +3527,14 @@ def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
         "id": 9,
         "code": "005930",
         "name": "테스트",
+        "status": "WATCHING",
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROMO-EXACT-OWNER",
+        "opening_rotation_watch_slot_promotion_id": "PROMO-EXACT-OWNER",
+        "opening_rotation_watch_slot_claimed_at_epoch": datetime(
+            2026, 7, 20, 9, 19, 50
+        ).timestamp(),
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
         "rising_missed_class": "not_rising_missed",
     }
@@ -3294,7 +3550,9 @@ def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
     handlers.handle_watching_state(
         stock,
         "005930",
-        {"curr": 10_000, "fluctuation": 3.0},
+        # +7% is outside the initial Opening candidate band. Exact slot
+        # ownership must still suppress a competing pre-hook.
+        {"curr": 10_000, "fluctuation": 7.0},
         admin_id=1,
         now_ts=datetime(2026, 7, 20, 9, 20).timestamp(),
         now_dt=datetime(2026, 7, 20, 9, 20),
@@ -3302,6 +3560,34 @@ def test_opening_rotation_scope_skips_preceding_rising_missed_hook(monkeypatch):
         ai_engine=None,
     )
     assert branch_calls
+
+
+def test_opening_slot_release_converges_when_provenance_emit_fails(monkeypatch):
+    stock = {
+        "status": "WATCHING",
+        "scanner_promotion_id": "PROMO-RELEASE-FAIL",
+        "opening_rotation_watch_slot_promotion_id": "PROMO-RELEASE-FAIL",
+        "opening_rotation_watch_slot_claimed_at_epoch": 1000.0,
+    }
+    errors = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(handlers, "log_error", lambda message: errors.append(message))
+
+    released = handlers._release_opening_rotation_watch_slot_with_event(
+        stock,
+        "005930",
+        promotion_id="PROMO-RELEASE-FAIL",
+        reason="test_release",
+    )
+
+    assert released is True
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
+    assert "opening_rotation_watch_slot_claimed_at_epoch" not in stock
+    assert errors and "provenance emit failed" in errors[-1]
 
 
 def test_rising_missed_lineage_is_consumed_by_opening_before_scout_hook(monkeypatch):

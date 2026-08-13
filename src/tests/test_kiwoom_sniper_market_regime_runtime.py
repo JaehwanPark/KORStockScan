@@ -5984,6 +5984,24 @@ def test_async_commit_routes_rising_missed_before_generic_watching_handler():
     assert commit_idx < opening_adapter_idx < rising_adapter_idx < generic_handler_idx
 
 
+def test_opening_rotation_ttl_sweep_is_independent_and_precedes_general_fifo():
+    source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
+    sweep_interval_idx = source.index(
+        'getattr(run_sniper, "last_opening_rotation_ttl_sweep_time", 0)'
+    )
+    sweep_idx = source.index(
+        "sweep_expired_opening_rotation_watch_slots(", sweep_interval_idx
+    )
+    sweep_checkpoint_idx = source.index(
+        "run_sniper.last_opening_rotation_ttl_sweep_time = now_ts", sweep_idx
+    )
+    fifo_interval_idx = source.index(
+        'getattr(run_sniper, "last_fifo_time", 0) > 10', sweep_checkpoint_idx
+    )
+
+    assert sweep_interval_idx < sweep_idx < sweep_checkpoint_idx < fifo_interval_idx
+
+
 def test_opening_rotation_async_strategy_miss_handoffs_to_generic_watching_owner():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
@@ -7226,6 +7244,58 @@ def test_expire_scanner_watch_target_updates_db_and_memory_by_record_id(monkeypa
     assert emitted[-1][3]["target_status"] == "WATCHING"
     assert emitted[-1][3]["actual_order_submitted"] is False
     assert emitted[-1][3]["broker_order_forbidden"] is True
+
+
+def test_scanner_watch_eviction_releases_exact_opening_slot_with_provenance(
+    monkeypatch,
+):
+    fake_db = _ExpireDB()
+    monkeypatch.setattr(kiwoom_sniper_v2, "DB", fake_db)
+    promotion_id = "SCANPROM-123456-OPENING"
+    stock = _scanner_watch_stock(
+        scanner_promotion_id=promotion_id,
+        opening_rotation_watch_slot_promotion_id=promotion_id,
+        opening_rotation_watch_slot_claimed_at_epoch=1000.0,
+    )
+    opening_events = []
+    scanner_events = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.sniper_state_handlers,
+        "_log_entry_pipeline",
+        lambda *args, **fields: opening_events.append((args[2], fields)),
+    )
+    decision = {
+        "eviction_reason": "source_quality_unresolved",
+        "eviction_attempt_count": 2,
+        "terminal_stage": "opening_rotation_1pct_observed",
+        "terminal_reason": "stale_market_context",
+        "fresh_input_confirmed": False,
+        "observed_epoch": "1125.000",
+    }
+
+    expired = kiwoom_sniper_v2._expire_scanner_watch_target(
+        stock,
+        "123456",
+        [stock],
+        decision=decision,
+        emit_event_fn=lambda *args: scanner_events.append(args),
+    )
+
+    assert expired is True
+    assert stock["status"] == "EXPIRED"
+    assert "opening_rotation_watch_slot_promotion_id" not in stock
+    assert stock["opening_rotation_consumed_promotion_id"] == promotion_id
+    assert stock["opening_rotation_watch_phase"] == "SCANNER_WATCH_EVICTED"
+    assert opening_events[-1][0] == "opening_rotation_watch_slot_released"
+    assert (
+        opening_events[-1][1]["reason"]
+        == "scanner_watch_eviction:source_quality_unresolved"
+    )
+    assert scanner_events[-1][3]["opening_rotation_watch_slot_released"] is True
+    assert (
+        scanner_events[-1][3]["opening_rotation_watch_slot_release_reason"]
+        == "scanner_watch_eviction:source_quality_unresolved"
+    )
 
 
 def test_expire_scanner_watch_target_rejects_bought_rows_before_db(monkeypatch):
