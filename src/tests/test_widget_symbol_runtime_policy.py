@@ -31,6 +31,7 @@ def _research() -> dict:
         "near_low_pct": 0.5,
         "reclaim_ticks": 1,
         "target_bps": 50,
+        "max_completed_entries_per_day": 3,
         "setup_valid_bars": 5,
         "reentry_cooldown_bars": 10,
         "force_flat_time": "15:19:00",
@@ -90,6 +91,7 @@ def test_build_policy_promotes_only_holdout_passed_symbol():
     assert (
         policy["symbols"]["006800"]["execution_policy"]["force_exit_time"] == "15:19:00"
     )
+    assert policy["symbols"]["006800"]["execution_policy"]["leg_quantity_each"] == 10
     assert (
         policy["symbols"]["006800"]["execution_policy"][
             "add_trigger_bps_from_initial_fill"
@@ -151,6 +153,45 @@ def test_negative_holdout_is_never_promoted():
     assert policy["runtime_effect"] is False
     assert "006800" in policy["observation_symbols"]
     assert policy["observation_runtime_effect"] is True
+
+
+def test_high_daily_entry_cap_requires_positive_incremental_ev_in_every_window():
+    research = _research()
+    selected = research["symbols"]["006800"]["selected_policy"]
+    selected["max_completed_entries_per_day"] = 4
+    positive = {
+        str(cap): {
+            "incremental_ev_positive": True,
+            "incremental": {
+                "episode_count": 1,
+                "notional_weighted_ev_pct": 0.1,
+            },
+        }
+        for cap in range(1, 6)
+    }
+    research["symbols"]["006800"]["entry_cap_comparison"] = {
+        window: deepcopy(positive)
+        for window in (
+            "calibration",
+            "calibration_first_half",
+            "calibration_second_half",
+            "holdout",
+        )
+    }
+
+    promoted = runtime.build_policy(research)
+    assert (
+        promoted["symbols"]["006800"]["execution_policy"][
+            "max_completed_entries_per_day"
+        ]
+        == 4
+    )
+
+    research["symbols"]["006800"]["entry_cap_comparison"]["holdout"]["4"][
+        "incremental_ev_positive"
+    ] = False
+    blocked = runtime.build_policy(research)
+    assert "006800" not in blocked["symbols"]
 
 
 def test_integrated_sor_research_provenance_is_rejected_for_krx_runtime():

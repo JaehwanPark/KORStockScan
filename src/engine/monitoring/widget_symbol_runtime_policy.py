@@ -24,6 +24,7 @@ from src.engine.monitoring.widget_symbol_signal_policy_research import (
     SYMBOLS,
 )
 from src.engine.monitoring.samsung_widget_contract import KST
+from src.trading.order.episode_quantity import EPISODE_LEG_QUANTITY
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
@@ -107,6 +108,37 @@ def _positive_metric(payload: dict[str, Any], key: str) -> bool:
         return False
 
 
+def _high_entry_cap_evidence_valid(result: dict[str, Any], max_entries: int) -> bool:
+    if max_entries < 4:
+        return True
+    comparisons = result.get("entry_cap_comparison")
+    if not isinstance(comparisons, dict):
+        return False
+    for window in (
+        "calibration",
+        "calibration_first_half",
+        "calibration_second_half",
+        "holdout",
+    ):
+        comparison = comparisons.get(window)
+        if not isinstance(comparison, dict):
+            return False
+        for cap in range(4, max_entries + 1):
+            evidence = comparison.get(str(cap))
+            incremental = (
+                evidence.get("incremental") if isinstance(evidence, dict) else None
+            )
+            if (
+                not isinstance(evidence, dict)
+                or evidence.get("incremental_ev_positive") is not True
+                or not isinstance(incremental, dict)
+                or int(incremental.get("episode_count") or 0) < 1
+                or not _positive_metric(incremental, "notional_weighted_ev_pct")
+            ):
+                return False
+    return True
+
+
 def _payload_sha256(payload: dict[str, Any]) -> str:
     canonical = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -124,6 +156,7 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
         "near_low_pct",
         "reclaim_ticks",
         "target_bps",
+        "max_completed_entries_per_day",
         "setup_valid_bars",
         "reentry_cooldown_bars",
         "force_flat_time",
@@ -136,6 +169,7 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
         near_low = float(selected["near_low_pct"])
         reclaim_ticks = int(selected["reclaim_ticks"])
         target_bps = int(selected["target_bps"])
+        max_entries = int(selected["max_completed_entries_per_day"])
         setup_valid = int(selected["setup_valid_bars"])
         cooldown = int(selected["reentry_cooldown_bars"])
     except (TypeError, ValueError):
@@ -153,6 +187,7 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
         or not 0.2 <= near_low <= 0.75
         or reclaim_ticks not in {1, 2}
         or not 30 <= target_bps <= 100
+        or not 1 <= max_entries <= 5
         or setup_valid != 5
         or cooldown != 10
         or str(selected["force_flat_time"]) != "15:19:00"
@@ -180,10 +215,10 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
             "allowed_entry_sessions": ["KRX_REGULAR"],
             "allowed_entry_venues": ["KRX"],
             "allowed_entry_states": ["ENTRY_CAUTION", "ENTRY_READY"],
-            "leg_quantity_each": 1,
+            "leg_quantity_each": EPISODE_LEG_QUANTITY,
             "add_trigger_bps_from_initial_fill": [],
             "take_profit_bps_from_equal_share_average": target_bps,
-            "max_completed_entries_per_day": 3,
+            "max_completed_entries_per_day": max_entries,
             "reentry_cooldown_minutes": cooldown,
             "new_entry_cutoff_time": end_time,
             "force_flat_at_session_end": True,
@@ -205,6 +240,15 @@ def _validated_selected_policy(result: object) -> dict[str, Any] | None:
         isinstance(value, dict) for value in (calibration, first, second, holdout)
     ):
         return None
+    selected = result.get("selected_policy")
+    try:
+        max_entries = int(
+            selected.get("max_completed_entries_per_day")
+            if isinstance(selected, dict)
+            else 0
+        )
+    except (TypeError, ValueError):
+        max_entries = 0
     if (
         result.get("decision") != "holdout_pass_widget_signal_policy_candidate"
         or result.get("runtime_effect") is not False
@@ -214,9 +258,10 @@ def _validated_selected_policy(result: object) -> dict[str, Any] | None:
         or not _positive_metric(second, "notional_weighted_ev_pct")
         or not _positive_metric(holdout, "notional_weighted_ev_pct")
         or int(holdout.get("episode_count") or 0) < 4
+        or not _high_entry_cap_evidence_valid(result, max_entries)
     ):
         return None
-    return _normalized_selected_parameters(result.get("selected_policy"))
+    return _normalized_selected_parameters(selected)
 
 
 def _validated_observation_policy(result: object) -> dict[str, Any] | None:
@@ -296,6 +341,7 @@ def build_policy(
                     for key, value in result["holdout"].items()
                     if key != "episodes"
                 },
+                "entry_cap_comparison": result.get("entry_cap_comparison"),
             },
         }
     return {
@@ -401,18 +447,23 @@ class WidgetSymbolRuntimePolicyLoader:
             )
             selected = {
                 "selected_policy": {
-                    key: raw_signal_policy.get(key)
-                    for key in {
-                        "segment",
-                        "lookback_bars",
-                        "drawdown_pct",
-                        "near_low_pct",
-                        "reclaim_ticks",
-                        "target_bps",
-                        "setup_valid_bars",
-                        "reentry_cooldown_bars",
-                        "force_flat_time",
-                    }
+                    **{
+                        key: raw_signal_policy.get(key)
+                        for key in {
+                            "segment",
+                            "lookback_bars",
+                            "drawdown_pct",
+                            "near_low_pct",
+                            "reclaim_ticks",
+                            "target_bps",
+                            "setup_valid_bars",
+                            "reentry_cooldown_bars",
+                            "force_flat_time",
+                        }
+                    },
+                    "max_completed_entries_per_day": (
+                        value.get("execution_policy") or {}
+                    ).get("max_completed_entries_per_day"),
                 },
                 "calibration": (value.get("evidence") or {}).get("calibration"),
                 "calibration_first_half": (value.get("evidence") or {}).get(
@@ -422,6 +473,9 @@ class WidgetSymbolRuntimePolicyLoader:
                     "calibration_second_half"
                 ),
                 "holdout": (value.get("evidence") or {}).get("holdout"),
+                "entry_cap_comparison": (value.get("evidence") or {}).get(
+                    "entry_cap_comparison"
+                ),
                 "decision": "holdout_pass_widget_signal_policy_candidate",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,

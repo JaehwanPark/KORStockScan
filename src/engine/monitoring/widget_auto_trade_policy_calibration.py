@@ -55,8 +55,14 @@ DEFAULT_EXECUTION_EVENT_DIR = Path("data/report/widget_signal_auto_trade_events"
 ROUND_TRIP_COST_PCT = 0.20
 ACTIONABLE_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
 POSTCLOSE_COMPLETE_TIME = time(20, 1)
+ENTRY_CAP_VALUES = tuple(range(1, 6))
+HIGH_ENTRY_CAP_START = 4
 INCONCLUSIVE_HOLDOUT_DECISIONS = frozenset(
-    {"independent_holdout_signal_missing", "independent_holdout_target_missing"}
+    {
+        "independent_holdout_signal_missing",
+        "independent_holdout_target_missing",
+        "independent_holdout_incremental_entry_cap_missing",
+    }
 )
 RUNTIME_READY_DECISIONS = frozenset(
     {
@@ -71,6 +77,8 @@ METRIC_CONTRACT = {
     "window_policy": "clean_baseline_cumulative_completed_dates_prior_to_effective_date",
     "sample_floor": (
         "two_source_qualified_signal_dates_and_two_non_overlapping_trades;"
+        "daily_entry_caps_1_through_5_compared;caps_4_and_5_require_positive_"
+        "incremental_source_quality_adjusted_ev_in_calibration_and_holdout;"
         "small_samples_remain_bounded_initial;Doosan_and_Hanwha_require_40_"
         "qualified_KRX_observation_dates_from_2026-08-12"
     ),
@@ -149,7 +157,7 @@ SPECS = (
         ),
         add_trigger_arms=((), (-40,), (-50, -100), (-80, -160)),
         target_bps_values=(40, 50, 60, 70, 80),
-        max_entries_values=(2, 3),
+        max_entries_values=ENTRY_CAP_VALUES,
         minimum_signal_dates=2,
         minimum_trades=2,
         analysis_start_date=CLEAN_BASELINE_DATE,
@@ -180,7 +188,7 @@ SPECS = (
             (-100, -200),
         ),
         target_bps_values=tuple(range(30, 151, 10)),
-        max_entries_values=(2, 3),
+        max_entries_values=ENTRY_CAP_VALUES,
         minimum_signal_dates=2,
         minimum_trades=2,
         analysis_start_date=CUMULATIVE_RESEARCH_START_DATE,
@@ -211,7 +219,7 @@ SPECS = (
             (-100, -200),
         ),
         target_bps_values=tuple(range(30, 151, 10)),
-        max_entries_values=(2, 3),
+        max_entries_values=ENTRY_CAP_VALUES,
         minimum_signal_dates=2,
         minimum_trades=2,
         analysis_start_date=CUMULATIVE_RESEARCH_START_DATE,
@@ -261,9 +269,17 @@ def _positive_price(value: object) -> float | None:
 
 def _load_rows(
     spec: SymbolSpec, *, target_date: date
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[dict[str, Any]], list[str], dict[str, int | bool]]:
     rows: list[dict[str, Any]] = []
     source_paths: list[str] = []
+    audit_counts = {
+        "raw_line_count": 0,
+        "accepted_row_count": 0,
+        "invalid_json_or_object_count": 0,
+        "required_contract_missing_count": 0,
+        "invalid_observed_at_or_date_count": 0,
+        "invalid_price_or_bar_time_count": 0,
+    }
     for path in sorted(spec.observation_dir.glob(f"{spec.prefix}_*.jsonl")):
         raw_date = path.stem.rsplit("_", 1)[-1]
         try:
@@ -275,34 +291,50 @@ def _load_rows(
         source_paths.append(str(path))
         with path.open(encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, 1):
+                audit_counts["raw_line_count"] += 1
                 try:
                     payload = json.loads(line)
                 except ValueError:
+                    audit_counts["invalid_json_or_object_count"] += 1
                     continue
                 if not isinstance(payload, dict):
+                    audit_counts["invalid_json_or_object_count"] += 1
                     continue
                 advisory = payload.get("advisory")
                 latest_bar = payload.get("latest_completed_bar")
                 if not isinstance(advisory, dict) or not isinstance(latest_bar, dict):
+                    audit_counts["required_contract_missing_count"] += 1
                     continue
                 try:
                     observed_at = datetime.fromisoformat(
                         str(payload.get("observed_at_kst") or "")
                     ).astimezone(KST)
                 except ValueError:
+                    audit_counts["invalid_observed_at_or_date_count"] += 1
                     continue
                 if observed_at.date() != source_date:
+                    audit_counts["invalid_observed_at_or_date_count"] += 1
                     continue
                 current_price = _positive_price(payload.get("current_price"))
                 bar_low = _positive_price(latest_bar.get("low"))
                 bar_high = _positive_price(latest_bar.get("high"))
-                if current_price is None or bar_low is None or bar_high is None:
+                if (
+                    current_price is None
+                    or bar_low is None
+                    or bar_high is None
+                    or bar_low > bar_high
+                ):
+                    audit_counts["invalid_price_or_bar_time_count"] += 1
                     continue
                 try:
                     bar_at = datetime.strptime(
                         str(latest_bar.get("source_time") or ""), "%Y%m%d%H%M%S"
                     ).replace(tzinfo=KST)
                 except ValueError:
+                    audit_counts["invalid_price_or_bar_time_count"] += 1
+                    continue
+                if bar_at.date() != source_date or bar_at > observed_at:
+                    audit_counts["invalid_price_or_bar_time_count"] += 1
                     continue
                 session = str(advisory.get("session") or "")
                 venue = str(payload.get("market_venue") or "")
@@ -317,8 +349,8 @@ def _load_rows(
                             payload.get("previous_advisory_state") or ""
                         ),
                         "current_price": current_price,
-                        "low": min(bar_low, bar_high),
-                        "high": max(bar_low, bar_high),
+                        "low": bar_low,
+                        "high": bar_high,
                         "bar_at": bar_at,
                         "source_quality_status": str(
                             (advisory.get("source_quality") or {}).get("status") or ""
@@ -327,8 +359,18 @@ def _load_rows(
                         "source_line_number": line_number,
                     }
                 )
+                audit_counts["accepted_row_count"] += 1
     rows.sort(key=lambda row: row["observed_at"])
-    return rows, source_paths
+    excluded = audit_counts["raw_line_count"] - audit_counts["accepted_row_count"]
+    return (
+        rows,
+        source_paths,
+        {
+            **audit_counts,
+            "excluded_row_count": excluded,
+            "raw_row_exclusion_applied": excluded > 0,
+        },
+    )
 
 
 def _entry_indices(
@@ -387,7 +429,7 @@ def _simulate_day(
         ):
             continue
         initial_price = float(entry["current_price"])
-        entry_bar_at = entry["bar_at"]
+        last_fill_minute = entry["observed_at"].replace(second=0, microsecond=0)
         fills = [initial_price]
         next_leg_index = 0
         exit_index: int | None = None
@@ -396,7 +438,9 @@ def _simulate_day(
         path_rows = [
             (index, row)
             for index, row in enumerate(rows[entry_index + 1 :], entry_index + 1)
-            if row["session"] == session.session and row["venue"] == session.venue
+            if row["session"] == session.session
+            and row["venue"] == session.venue
+            and row["source_quality_status"] == "PASS"
         ]
         for index, row in path_rows:
             added_on_bar = False
@@ -409,12 +453,13 @@ def _simulate_day(
                 fills.append(min(float(row["current_price"]), add_price))
                 next_leg_index += 1
                 added_on_bar = True
+                last_fill_minute = row["observed_at"].replace(second=0, microsecond=0)
             average_price = statistics.fmean(fills)
             target_price = average_price * (1.0 + target_bps / 10_000.0)
             if added_on_bar:
                 continue
             if float(row["current_price"]) >= target_price or (
-                row["bar_at"] > entry_bar_at and float(row["high"]) >= target_price
+                row["bar_at"] > last_fill_minute and float(row["high"]) >= target_price
             ):
                 exit_index = index
                 exit_price = target_price
@@ -448,6 +493,7 @@ def _simulate_day(
         selected.append(
             {
                 "trade_date": entry["trade_date"].isoformat(),
+                "daily_entry_ordinal": len(selected) + 1,
                 "entry_at": entry["observed_at"].isoformat(),
                 "entry_price": initial_price,
                 "entry_state": entry["state"],
@@ -503,7 +549,7 @@ def _summary(trades: Sequence[dict[str, Any]]) -> dict[str, Any]:
             round(statistics.fmean(values), 6) if values else None
         ),
         "source_quality_adjusted_ev_pct": (
-            round(sum(values) / len(trades), 6) if trades else None
+            round(sum(values) / len(resolved), 6) if resolved else None
         ),
         "simple_sum_net_return_pct": round(sum(values), 6) if values else None,
         "diagnostic_win_rate_pct": (
@@ -518,6 +564,49 @@ def _summary(trades: Sequence[dict[str, Any]]) -> dict[str, Any]:
             else None
         ),
     }
+
+
+def _entry_cap_comparison(
+    trades: Sequence[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    comparison: dict[str, dict[str, Any]] = {}
+    for cap in ENTRY_CAP_VALUES:
+        cumulative = [
+            row for row in trades if int(row.get("daily_entry_ordinal") or 0) <= cap
+        ]
+        incremental = [
+            row for row in trades if int(row.get("daily_entry_ordinal") or 0) == cap
+        ]
+        incremental_summary = _summary(incremental)
+        incremental_ev = incremental_summary.get("source_quality_adjusted_ev_pct")
+        comparison[str(cap)] = {
+            "cumulative": _summary(cumulative),
+            "incremental": incremental_summary,
+            "incremental_ev_positive": bool(
+                incremental_summary["signal_trade_count"] > 0
+                and incremental_ev is not None
+                and float(incremental_ev) > 0.0
+            ),
+        }
+    return comparison
+
+
+def _incremental_entry_cap_ready(
+    comparison: dict[str, dict[str, Any]], cap: int
+) -> tuple[bool, str]:
+    if cap < HIGH_ENTRY_CAP_START:
+        return True, "incremental_entry_cap_not_required"
+    for incremental_cap in range(HIGH_ENTRY_CAP_START, cap + 1):
+        evidence = comparison.get(str(incremental_cap), {})
+        incremental = evidence.get("incremental")
+        if (
+            not isinstance(incremental, dict)
+            or int(incremental.get("signal_trade_count") or 0) < 1
+        ):
+            return False, f"incremental_entry_cap_{incremental_cap}_sample_missing"
+        if evidence.get("incremental_ev_positive") is not True:
+            return False, f"incremental_entry_cap_{incremental_cap}_ev_not_positive"
+    return True, "incremental_entry_cap_ev_positive"
 
 
 def _holdout_date_count(source_date_count: int) -> int:
@@ -692,7 +781,11 @@ def _calibrate_session(
     )
     rows_by_date: dict[date, list[dict[str, Any]]] = {}
     for row in rows:
-        if row["session"] == session.session and row["venue"] == session.venue:
+        if (
+            row["session"] == session.session
+            and row["venue"] == session.venue
+            and row["source_quality_status"] == "PASS"
+        ):
             rows_by_date.setdefault(row["trade_date"], []).append(row)
     ordered_dates = sorted(rows_by_date)
     holdout_count = _holdout_date_count(len(ordered_dates))
@@ -727,24 +820,33 @@ def _calibrate_session(
     candidates: list[dict[str, Any]] = []
     for add_triggers in spec.add_trigger_arms:
         for target_bps in spec.target_bps_values:
-            for max_entries in spec.max_entries_values:
-                for cutoff in session.new_entry_cutoffs:
-                    for cooldown in (5, 10, 20):
-                        force_exit_times: tuple[str | None, ...] = (
-                            session.force_exit_times if session.force_flat else (None,)
+            for cutoff in session.new_entry_cutoffs:
+                for cooldown in (5, 10, 20):
+                    force_exit_times: tuple[str | None, ...] = (
+                        session.force_exit_times if session.force_flat else (None,)
+                    )
+                    for force_exit_time in force_exit_times:
+                        all_cap_trades = simulate_dates(
+                            calibration_dates,
+                            add_triggers=add_triggers,
+                            target_bps=target_bps,
+                            max_entries=max(spec.max_entries_values),
+                            cutoff=cutoff,
+                            cooldown=cooldown,
+                            force_exit_time=force_exit_time,
                         )
-                        for force_exit_time in force_exit_times:
-                            trades = simulate_dates(
-                                calibration_dates,
-                                add_triggers=add_triggers,
-                                target_bps=target_bps,
-                                max_entries=max_entries,
-                                cutoff=cutoff,
-                                cooldown=cooldown,
-                                force_exit_time=force_exit_time,
-                            )
-                            summary = _summary(trades)
+                        entry_cap_comparison = _entry_cap_comparison(all_cap_trades)
+                        for max_entries in spec.max_entries_values:
+                            cap_evidence = entry_cap_comparison[str(max_entries)]
+                            summary = cap_evidence["cumulative"]
                             ready, reason = _candidate_ready(spec, session, summary)
+                            incremental_ready, incremental_reason = (
+                                _incremental_entry_cap_ready(
+                                    entry_cap_comparison, max_entries
+                                )
+                            )
+                            if ready and not incremental_ready:
+                                ready, reason = False, incremental_reason
                             candidates.append(
                                 {
                                     "add_trigger_bps_from_initial_fill": list(
@@ -758,7 +860,16 @@ def _calibrate_session(
                                     "summary": summary,
                                     "ready": ready,
                                     "reason": reason,
-                                    "trades": trades,
+                                    "incremental_entry_cap_decision": (
+                                        incremental_reason
+                                    ),
+                                    "entry_cap_comparison": entry_cap_comparison,
+                                    "trades": [
+                                        row
+                                        for row in all_cap_trades
+                                        if int(row["daily_entry_ordinal"])
+                                        <= max_entries
+                                    ],
                                 }
                             )
 
@@ -781,7 +892,12 @@ def _calibrate_session(
             -float(summary.get("right_censored_count") or 0),
         )
 
-    selected = max(candidates, key=rank) if candidates else None
+    base_candidates = [
+        candidate
+        for candidate in candidates
+        if int(candidate["max_completed_entries_per_day"]) < HIGH_ENTRY_CAP_START
+    ]
+    selected = max(base_candidates or candidates, key=rank) if candidates else None
     if selected is None:
         return {
             "decision": (
@@ -793,6 +909,25 @@ def _calibrate_session(
             "candidate_count": 0,
             "research_accumulation": research_accumulation,
         }
+    family_keys = (
+        "add_trigger_bps_from_initial_fill",
+        "target_bps",
+        "new_entry_cutoff_time",
+        "reentry_cooldown_minutes",
+        "force_exit_time",
+    )
+    for high_cap in range(HIGH_ENTRY_CAP_START, max(ENTRY_CAP_VALUES) + 1):
+        high_candidate = next(
+            (
+                candidate
+                for candidate in candidates
+                if int(candidate["max_completed_entries_per_day"]) == high_cap
+                and all(candidate[key] == selected[key] for key in family_keys)
+            ),
+            None,
+        )
+        if high_candidate is not None and high_candidate["ready"]:
+            selected = high_candidate
     selected_parameters = {
         key: selected[key]
         for key in (
@@ -804,32 +939,54 @@ def _calibrate_session(
             "force_exit_time",
         )
     }
-    holdout_trades = simulate_dates(
+    all_holdout_trades = simulate_dates(
         sorted(holdout_dates),
         add_triggers=tuple(selected_parameters["add_trigger_bps_from_initial_fill"]),
         target_bps=int(selected_parameters["target_bps"]),
-        max_entries=int(selected_parameters["max_completed_entries_per_day"]),
+        max_entries=max(spec.max_entries_values),
         cutoff=str(selected_parameters["new_entry_cutoff_time"]),
         cooldown=int(selected_parameters["reentry_cooldown_minutes"]),
         force_exit_time=selected_parameters["force_exit_time"],
     )
-    holdout = _summary(holdout_trades)
-    holdout_ready = bool(holdout["signal_trade_count"] >= 1)
-    holdout_reason = "independent_holdout_pass"
-    if not holdout_ready:
-        holdout_reason = "independent_holdout_signal_missing"
-    elif session.force_flat:
-        holdout_ready = bool(
-            holdout["resolved_trade_count"] == holdout["signal_trade_count"]
-            and float(holdout.get("source_quality_adjusted_ev_pct") or 0.0) > 0
-            and float(holdout.get("worst_net_return_pct") or -999.0) >= -2.0
+    holdout_entry_cap_comparison = _entry_cap_comparison(all_holdout_trades)
+
+    def holdout_status(cap: int) -> tuple[bool, str, dict[str, Any]]:
+        summary = holdout_entry_cap_comparison[str(cap)]["cumulative"]
+        ready = bool(summary["signal_trade_count"] >= 1)
+        reason = "independent_holdout_pass"
+        if not ready:
+            reason = "independent_holdout_signal_missing"
+        elif session.force_flat:
+            ready = bool(
+                summary["resolved_trade_count"] == summary["signal_trade_count"]
+                and float(summary.get("source_quality_adjusted_ev_pct") or 0.0) > 0
+                and float(summary.get("worst_net_return_pct") or -999.0) >= -2.0
+            )
+            if not ready:
+                reason = "independent_holdout_ev_or_tail_failed"
+        else:
+            ready = bool(summary["target_exit_count"] >= 1)
+            if not ready:
+                reason = "independent_holdout_target_missing"
+        incremental_ready, incremental_reason = _incremental_entry_cap_ready(
+            holdout_entry_cap_comparison, cap
         )
-        if not holdout_ready:
-            holdout_reason = "independent_holdout_ev_or_tail_failed"
-    else:
-        holdout_ready = bool(holdout["target_exit_count"] >= 1)
-        if not holdout_ready:
-            holdout_reason = "independent_holdout_target_missing"
+        if ready and not incremental_ready:
+            ready = False
+            reason = (
+                "independent_holdout_incremental_entry_cap_missing"
+                if incremental_reason.endswith("_sample_missing")
+                else "independent_holdout_incremental_entry_cap_ev_not_positive"
+            )
+        return ready, reason, summary
+
+    selected_cap = int(selected_parameters["max_completed_entries_per_day"])
+    holdout_ready, holdout_reason, holdout = holdout_status(selected_cap)
+    holdout_trades = [
+        row
+        for row in all_holdout_trades
+        if int(row["daily_entry_ordinal"]) <= selected_cap
+    ]
     provisional_decision = (
         "widget_auto_trade_policy_candidate_ready"
         if selected["ready"] and holdout_ready
@@ -838,44 +995,77 @@ def _calibrate_session(
     carry_forward_policy = _carry_forward_parameters(previous_runtime_policy)
     carry_forward_calibration_summary = None
     carry_forward_holdout_summary = None
+    carry_forward_entry_cap_comparison = None
+    carry_forward_holdout_entry_cap_comparison = None
     carry_forward_candidate_ready = False
     carry_forward_candidate_reason = "previous_verified_policy_unavailable"
     carry_forward_holdout_decision = "previous_verified_policy_unavailable"
     if carry_forward_policy is not None and not session.force_flat:
-        carry_forward_calibration_trades = simulate_dates(
+        carry_forward_cap = int(carry_forward_policy["max_completed_entries_per_day"])
+        carry_forward_all_calibration_trades = simulate_dates(
             calibration_dates,
             add_triggers=tuple(
                 carry_forward_policy["add_trigger_bps_from_initial_fill"]
             ),
             target_bps=int(carry_forward_policy["target_bps"]),
-            max_entries=int(carry_forward_policy["max_completed_entries_per_day"]),
+            max_entries=max(spec.max_entries_values),
             cutoff=str(carry_forward_policy["new_entry_cutoff_time"]),
             cooldown=int(carry_forward_policy["reentry_cooldown_minutes"]),
             force_exit_time=carry_forward_policy["force_exit_time"],
         )
-        carry_forward_calibration_summary = _summary(carry_forward_calibration_trades)
+        carry_forward_entry_cap_comparison = _entry_cap_comparison(
+            carry_forward_all_calibration_trades
+        )
+        carry_forward_calibration_summary = carry_forward_entry_cap_comparison[
+            str(carry_forward_cap)
+        ]["cumulative"]
         (
             carry_forward_candidate_ready,
             carry_forward_candidate_reason,
         ) = _candidate_ready(spec, session, carry_forward_calibration_summary)
-        carry_forward_holdout_trades = simulate_dates(
+        carry_forward_incremental_ready, carry_forward_incremental_reason = (
+            _incremental_entry_cap_ready(
+                carry_forward_entry_cap_comparison, carry_forward_cap
+            )
+        )
+        if carry_forward_candidate_ready and not carry_forward_incremental_ready:
+            carry_forward_candidate_ready = False
+            carry_forward_candidate_reason = carry_forward_incremental_reason
+        carry_forward_all_holdout_trades = simulate_dates(
             sorted(holdout_dates),
             add_triggers=tuple(
                 carry_forward_policy["add_trigger_bps_from_initial_fill"]
             ),
             target_bps=int(carry_forward_policy["target_bps"]),
-            max_entries=int(carry_forward_policy["max_completed_entries_per_day"]),
+            max_entries=max(spec.max_entries_values),
             cutoff=str(carry_forward_policy["new_entry_cutoff_time"]),
             cooldown=int(carry_forward_policy["reentry_cooldown_minutes"]),
             force_exit_time=carry_forward_policy["force_exit_time"],
         )
-        carry_forward_holdout_summary = _summary(carry_forward_holdout_trades)
+        carry_forward_holdout_entry_cap_comparison = _entry_cap_comparison(
+            carry_forward_all_holdout_trades
+        )
+        carry_forward_holdout_summary = carry_forward_holdout_entry_cap_comparison[
+            str(carry_forward_cap)
+        ]["cumulative"]
         if carry_forward_holdout_summary["signal_trade_count"] < 1:
             carry_forward_holdout_decision = "independent_holdout_signal_missing"
         elif carry_forward_holdout_summary["target_exit_count"] < 1:
             carry_forward_holdout_decision = "independent_holdout_target_missing"
         else:
             carry_forward_holdout_decision = "independent_holdout_pass"
+        (
+            carry_forward_incremental_holdout_ready,
+            carry_forward_incremental_holdout_reason,
+        ) = _incremental_entry_cap_ready(
+            carry_forward_holdout_entry_cap_comparison, carry_forward_cap
+        )
+        if not carry_forward_incremental_holdout_ready:
+            carry_forward_holdout_decision = (
+                "independent_holdout_incremental_entry_cap_missing"
+                if carry_forward_incremental_holdout_reason.endswith("_sample_missing")
+                else "independent_holdout_incremental_entry_cap_ev_not_positive"
+            )
     carry_forward_previous = bool(
         not session.force_flat
         and provisional_decision != "widget_auto_trade_policy_candidate_ready"
@@ -904,6 +1094,10 @@ def _calibrate_session(
         "carry_forward_candidate_reason": carry_forward_candidate_reason,
         "carry_forward_calibration_summary": carry_forward_calibration_summary,
         "carry_forward_holdout_summary": carry_forward_holdout_summary,
+        "carry_forward_entry_cap_comparison": carry_forward_entry_cap_comparison,
+        "carry_forward_holdout_entry_cap_comparison": (
+            carry_forward_holdout_entry_cap_comparison
+        ),
         "carry_forward_holdout_decision": carry_forward_holdout_decision,
         "carry_forward_from_policy_id": (
             str(previous_runtime_policy.get("policy_id") or "")
@@ -913,7 +1107,10 @@ def _calibrate_session(
         "candidate_count": len(candidates),
         "selected_policy": selected_parameters,
         "selected_summary": selected["summary"],
+        "entry_cap_comparison": selected["entry_cap_comparison"],
+        "incremental_entry_cap_decision": selected["incremental_entry_cap_decision"],
         "independent_holdout_summary": holdout,
+        "independent_holdout_entry_cap_comparison": holdout_entry_cap_comparison,
         "independent_holdout_decision": holdout_reason,
         "calibration_dates": [value.isoformat() for value in calibration_dates],
         "holdout_dates": [value.isoformat() for value in sorted(holdout_dates)],
@@ -930,6 +1127,7 @@ def _calibrate_session(
             if session.force_flat
             else (
                 "previous-policy cumulative target completions < 2; "
+                "daily entry-cap 4/5 incremental EV <= 0; "
                 "source-quality/policy verification failure; or terminal "
                 "order/cancel failure"
             )
@@ -963,6 +1161,8 @@ def _carry_forward_parameters(
         not add_triggers
         and previous_runtime_policy.get("add_trigger_bps_from_initial_fill") is None
     ):
+        return None
+    if max_entries not in ENTRY_CAP_VALUES:
         return None
     return {
         "add_trigger_bps_from_initial_fill": add_triggers,
@@ -1011,9 +1211,11 @@ def build_report(
     symbol_reports: dict[str, Any] = {}
     source_paths: list[str] = []
     for spec in SPECS:
-        rows, paths = _load_rows(spec, target_date=target_date)
+        rows, paths, source_load_audit = _load_rows(spec, target_date=target_date)
         source_paths.extend(paths)
         source_dates = sorted({row["trade_date"].isoformat() for row in rows})
+        pass_row_count = sum(row["source_quality_status"] == "PASS" for row in rows)
+        blocked_row_count = len(rows) - pass_row_count
         sessions = {
             session.session: _calibrate_session(
                 spec,
@@ -1029,7 +1231,10 @@ def build_report(
         symbol_reports[spec.symbol] = {
             "name": spec.name,
             "source_row_count": len(rows),
-            "source_quality_status": "PASS" if rows else "BLOCKED",
+            "source_quality_pass_row_count": pass_row_count,
+            "source_quality_blocked_row_count": blocked_row_count,
+            "source_quality_status": "PASS" if pass_row_count else "BLOCKED",
+            "source_load_audit": source_load_audit,
             "source_dates": source_dates,
             "actual_evidence_start_date": source_dates[0] if source_dates else None,
             "analysis_start_date": spec.analysis_start_date.isoformat(),

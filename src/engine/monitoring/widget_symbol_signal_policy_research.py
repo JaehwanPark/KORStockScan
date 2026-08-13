@@ -60,6 +60,8 @@ RECLAIM_TICK_GRID = (1, 2)
 TARGET_BPS_GRID = (30, 50, 75, 100)
 SETUP_VALID_BARS = 5
 REENTRY_COOLDOWN_BARS = 10
+ENTRY_CAP_VALUES = tuple(range(1, 6))
+HIGH_ENTRY_CAP_START = 4
 # ka10080 labels the completed 15:19~15:20 interval as 15:19.
 FORCE_FLAT_TIME = time(15, 19)
 MAX_RATE_LIMIT_RETRIES = 5
@@ -75,6 +77,7 @@ METRIC_CONTRACT = {
         "calibration_episodes": 10,
         "each_calibration_half_episodes": 4,
         "holdout_episodes": 4,
+        "high_entry_cap_incremental_episodes": 1,
     },
     "primary_decision_metric": "notional_weighted_ev_pct",
     "source_quality_gate": [
@@ -85,6 +88,8 @@ METRIC_CONTRACT = {
         "incomplete_trading_date_excluded_before_split",
         "next_completed_bar_entry_without_same_bar_fill_assumption",
         "chronological_calibration_selection_before_untouched_holdout",
+        "daily_entry_caps_1_through_5_compared",
+        "entry_caps_4_and_5_positive_incremental_ev_in_calibration_halves_and_holdout",
     ],
     "forbidden_uses": [
         "holdout_outcome_used_for_parameter_selection",
@@ -609,7 +614,10 @@ def evaluate_policy(
         rows = grouped[trade_date]
         index = policy.lookback_bars - 1
         cooldown_until = -1
+        daily_entry_count = 0
         while index < len(rows) - 1:
+            if daily_entry_count >= max(ENTRY_CAP_VALUES):
+                break
             bar = rows[index]
             if bar.timestamp.time() < segment_start or index < cooldown_until:
                 index += 1
@@ -640,9 +648,11 @@ def evaluate_policy(
                 support=support,
                 target_bps=policy.target_bps,
             )
+            daily_entry_count += 1
             episodes.append(
                 {
                     "trade_date": trade_date.isoformat(),
+                    "daily_entry_ordinal": daily_entry_count,
                     "setup_at": bar.timestamp.isoformat(),
                     "signal_at": rows[entry_index - 1].timestamp.isoformat(),
                     "entry_at": rows[entry_index].timestamp.isoformat(),
@@ -659,9 +669,17 @@ def evaluate_policy(
             )
             index = int(outcome["exit_index"]) + policy.reentry_cooldown_bars
             cooldown_until = index
+    result = _summarize_episodes(episodes)
+    result["entry_cap_comparison"] = _entry_cap_comparison(episodes)
+    if include_episodes:
+        result["episodes"] = episodes
+    return result
+
+
+def _summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     attempted_notional = sum(row["entry_price"] for row in episodes)
     pnl = sum(row["entry_price"] * row["net_return_pct"] / 100.0 for row in episodes)
-    result: dict[str, Any] = {
+    return {
         "episode_count": len(episodes),
         "target_count": sum(row["exit_reason"] == "target" for row in episodes),
         "adverse_exit_count": sum(
@@ -694,9 +712,29 @@ def evaluate_policy(
             for state in ("ENTRY_READY", "ENTRY_CAUTION")
         },
     }
-    if include_episodes:
-        result["episodes"] = episodes
-    return result
+
+
+def _entry_cap_comparison(
+    episodes: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    comparison: dict[str, dict[str, Any]] = {}
+    for cap in ENTRY_CAP_VALUES:
+        cumulative = [row for row in episodes if int(row["daily_entry_ordinal"]) <= cap]
+        incremental = [
+            row for row in episodes if int(row["daily_entry_ordinal"]) == cap
+        ]
+        incremental_summary = _summarize_episode_subset(incremental)
+        incremental_ev = incremental_summary.get("notional_weighted_ev_pct")
+        comparison[str(cap)] = {
+            "cumulative": _summarize_episodes(cumulative),
+            "incremental": incremental_summary,
+            "incremental_ev_positive": bool(
+                incremental_summary["episode_count"] > 0
+                and incremental_ev is not None
+                and float(incremental_ev) > 0.0
+            ),
+        }
+    return comparison
 
 
 def _summarize_episode_subset(episodes: list[dict[str, Any]]) -> dict[str, Any]:
@@ -722,6 +760,17 @@ def _positive_ev(summary: dict[str, Any]) -> bool:
 def _metric_float(summary: dict[str, Any], key: str, *, default: float) -> float:
     value = summary.get(key)
     return float(value) if value is not None else default
+
+
+def _incremental_entry_cap_ready(
+    comparison: dict[str, dict[str, Any]], cap: int
+) -> bool:
+    if cap < HIGH_ENTRY_CAP_START:
+        return True
+    return all(
+        comparison.get(str(incremental_cap), {}).get("incremental_ev_positive") is True
+        for incremental_cap in range(HIGH_ENTRY_CAP_START, cap + 1)
+    )
 
 
 def _calibration_ready(
@@ -758,12 +807,23 @@ def discover_symbol_policy(
     first_dates = calibration_dates[:split]
     second_dates = calibration_dates[split:]
     candidates: list[
-        tuple[float, SignalPolicy, dict[str, Any], dict[str, Any], dict[str, Any]]
+        tuple[
+            float,
+            SignalPolicy,
+            int,
+            dict[str, Any],
+            dict[str, Any],
+            dict[str, Any],
+            dict[str, dict[str, Any]],
+            dict[str, dict[str, Any]],
+            dict[str, dict[str, Any]],
+        ]
     ] = []
     best_diagnostic: (
         tuple[
             float,
             SignalPolicy,
+            int,
             dict[str, Any],
             dict[str, Any],
             dict[str, Any],
@@ -775,56 +835,92 @@ def discover_symbol_policy(
         "both_half_sample": 0,
         "both_half_positive": 0,
         "worst_loss_guard": 0,
+        "high_entry_cap_incremental_positive": 0,
     }
     evaluated = 0
     for policy in policy_grid():
-        full = evaluate_policy(grouped, calibration_dates, policy)
-        evaluated += 1
-        if full["episode_count"] < 10 or not _positive_ev(full):
-            continue
-        gate_counts["full_sample_positive"] += 1
-        first = evaluate_policy(grouped, first_dates, policy)
-        second = evaluate_policy(grouped, second_dates, policy)
-        if first["episode_count"] >= 4 and second["episode_count"] >= 4:
-            gate_counts["both_half_sample"] += 1
-            first_ev = _metric_float(first, "notional_weighted_ev_pct", default=-999.0)
-            second_ev = _metric_float(
-                second, "notional_weighted_ev_pct", default=-999.0
+        full_evaluation = evaluate_policy(grouped, calibration_dates, policy)
+        first_evaluation = evaluate_policy(grouped, first_dates, policy)
+        second_evaluation = evaluate_policy(grouped, second_dates, policy)
+        full_comparison = full_evaluation["entry_cap_comparison"]
+        first_comparison = first_evaluation["entry_cap_comparison"]
+        second_comparison = second_evaluation["entry_cap_comparison"]
+        for entry_cap in ENTRY_CAP_VALUES:
+            evaluated += 1
+            full = full_comparison[str(entry_cap)]["cumulative"]
+            first = first_comparison[str(entry_cap)]["cumulative"]
+            second = second_comparison[str(entry_cap)]["cumulative"]
+            if full["episode_count"] < 10 or not _positive_ev(full):
+                continue
+            gate_counts["full_sample_positive"] += 1
+            if first["episode_count"] >= 4 and second["episode_count"] >= 4:
+                gate_counts["both_half_sample"] += 1
+                first_ev = _metric_float(
+                    first, "notional_weighted_ev_pct", default=-999.0
+                )
+                second_ev = _metric_float(
+                    second, "notional_weighted_ev_pct", default=-999.0
+                )
+                diagnostic_score = (
+                    min(first_ev, second_ev)
+                    * min(first["episode_count"], second["episode_count"])
+                    / (min(first["episode_count"], second["episode_count"]) + 6.0)
+                )
+                if best_diagnostic is None or diagnostic_score > best_diagnostic[0]:
+                    best_diagnostic = (
+                        diagnostic_score,
+                        policy,
+                        entry_cap,
+                        full,
+                        first,
+                        second,
+                    )
+            if _positive_ev(first) and _positive_ev(second):
+                gate_counts["both_half_positive"] += 1
+            if _metric_float(full, "worst_episode_return_pct", default=-999.0) > -3.0:
+                gate_counts["worst_loss_guard"] += 1
+            high_cap_ready = all(
+                _incremental_entry_cap_ready(comparison, entry_cap)
+                for comparison in (
+                    full_comparison,
+                    first_comparison,
+                    second_comparison,
+                )
             )
-            diagnostic_score = (
-                min(first_ev, second_ev)
+            if high_cap_ready:
+                gate_counts["high_entry_cap_incremental_positive"] += 1
+            if not _calibration_ready(full, first, second) or not high_cap_ready:
+                continue
+            score = (
+                min(
+                    float(first["notional_weighted_ev_pct"]),
+                    float(second["notional_weighted_ev_pct"]),
+                )
                 * min(first["episode_count"], second["episode_count"])
                 / (min(first["episode_count"], second["episode_count"]) + 6.0)
             )
-            if best_diagnostic is None or diagnostic_score > best_diagnostic[0]:
-                best_diagnostic = (
-                    diagnostic_score,
+            candidates.append(
+                (
+                    score,
                     policy,
+                    entry_cap,
                     full,
                     first,
                     second,
+                    full_comparison,
+                    first_comparison,
+                    second_comparison,
                 )
-        if _positive_ev(first) and _positive_ev(second):
-            gate_counts["both_half_positive"] += 1
-        if _metric_float(full, "worst_episode_return_pct", default=-999.0) > -3.0:
-            gate_counts["worst_loss_guard"] += 1
-        if not _calibration_ready(full, first, second):
-            continue
-        score = (
-            min(
-                float(first["notional_weighted_ev_pct"]),
-                float(second["notional_weighted_ev_pct"]),
             )
-            * min(first["episode_count"], second["episode_count"])
-            / (min(first["episode_count"], second["episode_count"]) + 6.0)
-        )
-        candidates.append((score, policy, full, first, second))
     if not candidates:
         diagnostic_payload = None
         if best_diagnostic is not None:
-            diagnostic_score, policy, full, first, second = best_diagnostic
+            diagnostic_score, policy, entry_cap, full, first, second = best_diagnostic
             diagnostic_payload = {
-                "parameters": asdict(policy),
+                "parameters": {
+                    **asdict(policy),
+                    "max_completed_entries_per_day": entry_cap,
+                },
                 "calibration": full,
                 "calibration_first_half": first,
                 "calibration_second_half": second,
@@ -838,27 +934,94 @@ def discover_symbol_policy(
             "date_split": date_split,
             "runtime_effect": False,
         }
-    candidates.sort(key=lambda item: (item[0], item[2]["episode_count"]), reverse=True)
-    score, selected, calibration, first, second = candidates[0]
-    holdout = evaluate_policy(grouped, holdout_dates, selected, include_episodes=True)
-    full_window = evaluate_policy(grouped, expected_dates, selected)
-    holdout_pass = bool(
-        holdout["episode_count"] >= 4
-        and _positive_ev(holdout)
-        and _metric_float(holdout, "worst_episode_return_pct", default=-999.0) > -3.0
+    base_candidates = [
+        item for item in candidates if int(item[2]) < HIGH_ENTRY_CAP_START
+    ]
+    (base_candidates or candidates).sort(
+        key=lambda item: (item[0], item[3]["episode_count"]), reverse=True
     )
+    (
+        score,
+        selected,
+        base_entry_cap,
+        calibration,
+        first,
+        second,
+        calibration_cap_comparison,
+        first_cap_comparison,
+        second_cap_comparison,
+    ) = (base_candidates or candidates)[0]
+    calibration_selected_cap = base_entry_cap
+    for high_cap in range(HIGH_ENTRY_CAP_START, max(ENTRY_CAP_VALUES) + 1):
+        if any(
+            candidate_policy == selected and candidate_cap == high_cap
+            for (
+                _,
+                candidate_policy,
+                candidate_cap,
+                *_rest,
+            ) in candidates
+        ):
+            calibration_selected_cap = high_cap
+    holdout_evaluation = evaluate_policy(
+        grouped, holdout_dates, selected, include_episodes=True
+    )
+    holdout_cap_comparison = holdout_evaluation["entry_cap_comparison"]
+    selected_entry_cap = calibration_selected_cap
+
+    def holdout_cap_ready(cap: int) -> bool:
+        summary = holdout_cap_comparison[str(cap)]["cumulative"]
+        return bool(
+            summary["episode_count"] >= 4
+            and _positive_ev(summary)
+            and _metric_float(summary, "worst_episode_return_pct", default=-999.0)
+            > -3.0
+            and _incremental_entry_cap_ready(holdout_cap_comparison, cap)
+        )
+
+    calibration = calibration_cap_comparison[str(selected_entry_cap)]["cumulative"]
+    first = first_cap_comparison[str(selected_entry_cap)]["cumulative"]
+    second = second_cap_comparison[str(selected_entry_cap)]["cumulative"]
+    score = (
+        min(
+            float(first["notional_weighted_ev_pct"]),
+            float(second["notional_weighted_ev_pct"]),
+        )
+        * min(first["episode_count"], second["episode_count"])
+        / (min(first["episode_count"], second["episode_count"]) + 6.0)
+    )
+    holdout = dict(holdout_cap_comparison[str(selected_entry_cap)]["cumulative"])
+    holdout["episodes"] = [
+        row
+        for row in holdout_evaluation["episodes"]
+        if int(row["daily_entry_ordinal"]) <= selected_entry_cap
+    ]
+    full_window_evaluation = evaluate_policy(grouped, expected_dates, selected)
+    full_window_cap_comparison = full_window_evaluation["entry_cap_comparison"]
+    full_window = full_window_cap_comparison[str(selected_entry_cap)]["cumulative"]
+    holdout_pass = holdout_cap_ready(selected_entry_cap)
     return {
         "decision": (
             "holdout_pass_widget_signal_policy_candidate"
             if holdout_pass
             else "holdout_failed_no_widget_runtime_promotion"
         ),
-        "selected_policy": asdict(selected),
+        "selected_policy": {
+            **asdict(selected),
+            "max_completed_entries_per_day": selected_entry_cap,
+        },
         "calibration": calibration,
         "calibration_first_half": first,
         "calibration_second_half": second,
         "holdout": holdout,
         "full_window": full_window,
+        "entry_cap_comparison": {
+            "calibration": calibration_cap_comparison,
+            "calibration_first_half": first_cap_comparison,
+            "calibration_second_half": second_cap_comparison,
+            "holdout": holdout_cap_comparison,
+            "full_window": full_window_cap_comparison,
+        },
         "robust_calibration_score": round(score, 6),
         "grid_candidate_count": evaluated,
         "calibration_ready_candidate_count": len(candidates),
@@ -952,8 +1115,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "Clean-baseline completed KRX 1-minute replay; source-only, no runtime/order authority.",
         "",
-        "| Symbol | Name | Decision | Segment | Episodes(cal/hold) | EV(cal/hold) | Worst holdout |",
-        "|---|---|---|---|---:|---:|---:|",
+        "| Symbol | Name | Decision | Segment | Daily cap | Episodes(cal/hold) | EV(cal/hold) | Worst holdout |",
+        "|---|---|---|---|---:|---:|---:|---:|",
     ]
     for symbol, result in report["symbols"].items():
         diagnostic = result.get("best_diagnostic_candidate") or {}
@@ -961,11 +1124,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         calibration = result.get("calibration") or diagnostic.get("calibration") or {}
         holdout = result.get("holdout") or {}
         lines.append(
-            "| {symbol} | {name} | {decision} | {segment} | {cal}/{hold} | {cal_ev}/{hold_ev} | {worst} |".format(
+            "| {symbol} | {name} | {decision} | {segment} | {cap} | {cal}/{hold} | {cal_ev}/{hold_ev} | {worst} |".format(
                 symbol=symbol,
                 name=result["name"],
                 decision=result["decision"],
                 segment=policy.get("segment", "-"),
+                cap=policy.get("max_completed_entries_per_day", "-"),
                 cal=calibration.get("episode_count", "-"),
                 hold=holdout.get("episode_count", "-"),
                 cal_ev=calibration.get("notional_weighted_ev_pct", "-"),
