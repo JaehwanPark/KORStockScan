@@ -123,6 +123,84 @@ def test_non_force_flat_candidate_keeps_unresolved_as_diagnostic_not_hard_block(
     assert reason == "bounded_cumulative_candidate_ready"
 
 
+def test_verified_non_force_flat_policy_carries_on_inconclusive_holdout() -> None:
+    spec = calibration.SPECS[0]
+    session = spec.sessions[1]
+    rows = []
+    for day in (3, 4, 5, 6):
+        trade_date = date(2026, 8, day)
+        entry = {
+            **_row(0, state="ENTRY_READY", previous_state="WATCH"),
+            "trade_date": trade_date,
+            "observed_at": datetime(2026, 8, day, 10, 0, 10, tzinfo=KST),
+            "bar_at": datetime(2026, 8, day, 10, 0, tzinfo=KST),
+        }
+        terminal_price = 100.0 if day == 6 else 102.0
+        terminal = {
+            **_row(
+                1,
+                current=terminal_price,
+                low=terminal_price,
+                high=terminal_price,
+            ),
+            "trade_date": trade_date,
+            "observed_at": datetime(2026, 8, day, 10, 1, 10, tzinfo=KST),
+            "bar_at": datetime(2026, 8, day, 10, 1, tzinfo=KST),
+        }
+        rows.extend((entry, terminal))
+    previous = {
+        "policy_id": "verified-prior-policy",
+        "new_entry_runtime_eligible": True,
+        "add_trigger_bps_from_initial_fill": (),
+        "take_profit_bps_from_equal_share_average": 80,
+        "max_completed_entries_per_day": 3,
+        "reentry_cooldown_minutes": 5,
+        "new_entry_cutoff_time": "15:00:00",
+        "force_exit_time": None,
+    }
+
+    report = _calibrate_session(
+        spec,
+        session,
+        rows,
+        target_date=date(2026, 8, 6),
+        previous_runtime_policy=previous,
+    )
+
+    assert report["provisional_candidate_decision"] == (
+        "independent_holdout_target_missing"
+    )
+    assert report["decision"] == ("carry_forward_previous_verified_policy")
+    assert report["carry_forward_previous_policy"] is True
+    assert report["carry_forward_candidate_ready"] is True
+    assert report["carry_forward_holdout_decision"] == (
+        "independent_holdout_target_missing"
+    )
+    assert report["carry_forward_from_policy_id"] == "verified-prior-policy"
+    assert report["runtime_selected_policy"] == {
+        "add_trigger_bps_from_initial_fill": [],
+        "target_bps": 80,
+        "max_completed_entries_per_day": 3,
+        "new_entry_cutoff_time": "15:00:00",
+        "reentry_cooldown_minutes": 5,
+        "force_exit_time": None,
+    }
+
+    no_longer_ready = _calibrate_session(
+        spec,
+        session,
+        rows,
+        target_date=date(2026, 8, 6),
+        previous_runtime_policy={
+            **previous,
+            "take_profit_bps_from_equal_share_average": 300,
+        },
+    )
+    assert no_longer_ready["carry_forward_candidate_ready"] is False
+    assert no_longer_ready["carry_forward_previous_policy"] is False
+    assert no_longer_ready["decision"] == "independent_holdout_target_missing"
+
+
 def test_policy_selection_uses_chronological_holdout_not_selection_rows(
     tmp_path,
 ) -> None:

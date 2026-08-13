@@ -415,11 +415,19 @@ def _select_session_policy(
         reason = daily_report_issue
     elif adjusted_ev is not None and adjusted_ev < 0:
         selected = _bounded_step(previous_value, MAX_REQUIRED_CONFIRMATIONS)
-        decision = "tighten_confirmation"
+        decision = (
+            "tighten_confirmation"
+            if selected != previous_value
+            else "hold_confirmation_at_upper_bound_negative_ev"
+        )
         reason = "cumulative_10m_source_quality_adjusted_ev_negative"
     elif adjusted_ev is not None and adjusted_ev > 0:
         selected = _bounded_step(previous_value, MIN_REQUIRED_CONFIRMATIONS)
-        decision = "restore_responsive_confirmation"
+        decision = (
+            "restore_responsive_confirmation"
+            if selected != previous_value
+            else "hold_confirmation_at_lower_bound_positive_ev"
+        )
         reason = "cumulative_10m_source_quality_adjusted_ev_positive"
     elif adjusted_ev is not None:
         decision = "carry_forward_zero_ev"

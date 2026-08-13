@@ -163,6 +163,34 @@ def test_verified_target_dominance_restores_two_confirmations(tmp_path):
     assert selected["decision"] == "restore_responsive_confirmation"
 
 
+def test_confirmation_decision_reports_bound_hold_instead_of_false_change(tmp_path):
+    spec = _spec(tmp_path)
+    target_date = date(2026, 8, 6)
+    policy_dir = tmp_path / "policies"
+    policy_dir.mkdir()
+    previous = _policy_payload(target_date, confirmations=3)
+    (policy_dir / f"widget_advisory_policy_{target_date.isoformat()}.json").write_text(
+        json.dumps(previous), encoding="utf-8"
+    )
+    daily = _write_daily_with_hits(
+        spec,
+        target_date,
+        target_first=0,
+        adverse_first=1,
+    )
+
+    policy, _ = calibration.build_calibration_policy(
+        target_date=target_date,
+        daily_reports={spec.symbol: daily},
+        policy_dir=policy_dir,
+        specs=(spec,),
+    )
+
+    selected = policy["symbols"][spec.symbol]["sessions"]["KRX_REGULAR"]
+    assert selected["required_actionable_confirmations"] == 3
+    assert selected["decision"] == "hold_confirmation_at_upper_bound_negative_ev"
+
+
 def test_adverse_first_recovery_uses_ev_and_keeps_responsive_confirmation(tmp_path):
     spec = _spec(tmp_path)
     target_date = date(2026, 8, 6)
