@@ -197,7 +197,19 @@
   - Kiwoom 공식 참조: upstream `Kiwoom-Securities/Kiwoom-REST-API` SHA `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, 확인시각 `2026-08-13T22:12:21+09:00`; `kiwoom_docs/계좌.md`, `kiwoom/specs.py`, `kiwoom/core`, Postman의 `kt00007`, `cntr_uv`, `ord_remnq`, 연속조회와 SOR 계약을 재확인했다.
   - 완료 기준: 에피소드 producer/consumer/runtime-state/verifier targeted 회귀, Black/Ruff/compileall, checklist parser, `git diff --check`를 통과하고 review gate 미해결 finding 0으로 닫는다. 서비스 재기동·실주문·리포트 재생성은 수행하지 않는다.
 
+- [x] `[SmoothingExactPathIngestion0813] smoothing source-only exact-path 수집·partition 대사·SELL_ORDERED 관찰 보완` (`Due: 2026-08-13`, `Slot: POSTCLOSE`, `TimeWindow: 22:30~23:20`, `Track: ScalpingLogic`)
+  - 판정/구현: `smoothing_source_only_path_{armed,horizon,closed}`를 검증된 `journal_family`별 threshold partition으로 동적 라우팅하고 raw→written→partition→daily journal `source_event_counts`를 대사한다. 구형 completed checkpoint는 0→0으로 승격하지 않고 `coverage_complete=false`, 잘못된 family는 `unroutable_stage_count`로 fail-close한다. SELL_ORDERED 보유 중에는 주문 취소·교체·제출 없이 source-only 상태만 계속 관찰해 체결 대기 때문에 10/20/40/60/90초 exact horizon이 끊기지 않게 했다.
+  - 권한 경계: `runtime_effect=false`, `allowed_runtime_apply=false`, `eligible_for_live_review=false`이며 soft-stop OFF/ON, OFI smoothing ON/OFF, 매도 주문, hard/emergency stop, threshold, 수량, provider, cap, bot 상태를 변경하지 않는다.
+  - 장후 원천 재검증: postclose 표준 immutable snapshot gzip(`309,011,027` bytes)을 raw 293,908행까지 bounded 59-chunk로 재생성해 threshold row 19,491건을 기록했다. ingestion audit는 `coverage_complete=true`, `unroutable=0`, raw=written=partition이고 soft-stop armed=`2`, horizon/closed=`0`, OFI armed/horizon/closed=`0`이다. read-only daily build도 soft-stop arm=`2`, exact complete=`0`, sample floor 미달, pending/missing horizon=`10`을 동일하게 노출했다. 기존 장후 canonical report/AI review는 별도 전체 chain 재실행으로 덮어쓰지 않았다.
+  - 리뷰/검증: 2차 리뷰에서 구형 completed checkpoint와 invalid family가 0→0으로 조용히 통과할 수 있는 결함을 찾아 fail-closed coverage/unroutable 계약을 추가했다. 게시 전 재리뷰에서는 partial checkpoint도 처리분의 raw=written=partition만으로 PASS가 될 수 있는 결함을 찾아 checkpoint 완료와 immutable source 존재를 필수화했다. backfill/verifier/journal/loader/pending-sell 결합 회귀 `216 passed`, Black, py_compile, Ruff critical rule, checklist parser, `git diff --check`를 통과하고 최종 미해결 finding은 `0`이다.
+
 ## Project/Calendar 동기화
+
+- [ ] `[SmoothingPendingSellRuntimeReflection0814] reviewed smoothing pending-sell observer 최초 runtime 귀속 확인` (`Due: 2026-08-14`, `Slot: PREOPEN`, `TimeWindow: 08:50~10:30`, `Track: ScalpingLogic`)
+  - Source: [smoothing source-only observer](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [main sniper loop](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [threshold traceability](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: reviewed commit이 다음 승인된 우아한 재기동/PREOPEN 기동 PID에 반영된 뒤 자연발생 SELL_ORDERED arm에서 `observation_phase=holding` exact horizon이 기록되는지 확인한다. raw→written→partition audit PASS와 daily `source_event_counts` 일치를 함께 확인한다.
+  - 금지: 검증을 위해 매도 주문을 만들거나 취소·교체하지 않고, soft-stop/OFI runtime state, threshold, hard/emergency stop, provider, 수량, cap을 바꾸지 않는다.
+  - 다음 액션: `runtime_observation_pass`, `no_natural_arm_keep_collecting`, `source_quality_blocked`, `partition_report_mismatch`, `reviewed_code_not_loaded` 중 하나로 닫는다.
 
 - [ ] `[EntryPriceV25KRXFirstObservation0814] KRX 정규장 entry_price V2.5 PREOPEN 반영 및 최초 자연호출 귀속` (`Due: 2026-08-14`, `Slot: PREOPEN`, `TimeWindow: 08:50~10:30`, `Track: ScalpingLogic`)
   - Source: [KRX V2.5 cumulative replay](/home/ubuntu/KORStockScan/data/report/ai_prompt_stage_coverage_replay/ai_prompt_stage_coverage_replay_2026-08-13-v2_5-cumulative-krx_entry_price.json), [live policy](/home/ubuntu/KORStockScan/src/engine/scalping/entry_price_live_policy.py), [AI engine](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [dated operator env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/operator_runtime_overrides_2026-08-14.env)

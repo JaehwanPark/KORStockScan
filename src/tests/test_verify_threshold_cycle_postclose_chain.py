@@ -92,6 +92,8 @@ def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "eligible_for_live_review": False,
+        "arm_count": 1,
+        "source_event_counts": {"armed": 1, "horizon": 5, "closed": 1},
         "exclusion_reason_counts": {},
         "guarded_terminal_reason_counts": {},
         "observation_phase_summary": {
@@ -214,6 +216,85 @@ def test_smoothing_source_only_path_journal_contract_verifies_daily_rolling_line
     assert status["status"] == "pass"
     assert status["runtime_effect"] is False
     assert status["issues"] == []
+
+
+def test_smoothing_source_only_path_journal_rejects_partition_report_count_drift():
+    daily_families = {
+        "soft_stop_whipsaw_confirmation": {
+            "source_only_path_journal": _smoothing_journal(10, arm_id="soft:1")
+        },
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+    stage_counts = {
+        family: {
+            "smoothing_source_only_path_armed": 1,
+            "smoothing_source_only_path_horizon": 5,
+            "smoothing_source_only_path_closed": 1,
+        }
+        for family in daily_families
+    }
+    stage_counts["soft_stop_whipsaw_confirmation"][
+        "smoothing_source_only_path_armed"
+    ] = 2
+    daily = {
+        "date": "2026-08-13",
+        "meta": {
+            "pipeline_load": {
+                "2026-08-13": {
+                    "smoothing_source_only_ingestion": {
+                        "schema": "smoothing_source_only_partition_ingestion_audit_v1",
+                        "status": "pass",
+                        "runtime_effect": False,
+                        "checkpoint_completed": True,
+                        "checkpoint_source_exists": True,
+                        "coverage_complete": True,
+                        "unroutable_stage_count": 0,
+                        "partition_stage_counts_by_family": stage_counts,
+                    }
+                }
+            }
+        },
+        "threshold_snapshot": daily_families,
+    }
+    cumulative = {
+        "windows": {"cumulative": ["2026-08-13"]},
+        "threshold_snapshot_by_window": {"cumulative": daily_families},
+    }
+
+    status = mod._smoothing_source_only_path_journal_contract_status(daily, cumulative)
+
+    assert status["status"] == "fail"
+    assert (
+        "soft_stop_whipsaw_confirmation_partition_report_event_count_mismatch"
+        in status["issues"]
+    )
+
+
+def test_smoothing_source_only_path_journal_requires_daily_pipeline_load_meta():
+    daily_families = {
+        "soft_stop_whipsaw_confirmation": {
+            "source_only_path_journal": _smoothing_journal(10, arm_id="soft:1")
+        },
+        "holding_flow_ofi_smoothing": {
+            "source_only_path_journal": _smoothing_journal(20, arm_id="ofi:1")
+        },
+    }
+    daily = {
+        "date": "2026-08-13",
+        "meta": {},
+        "threshold_snapshot": daily_families,
+    }
+    cumulative = {
+        "windows": {"cumulative": ["2026-08-13"]},
+        "threshold_snapshot_by_window": {"cumulative": daily_families},
+    }
+
+    status = mod._smoothing_source_only_path_journal_contract_status(daily, cumulative)
+
+    assert status["status"] == "fail"
+    assert "smoothing_source_only_pipeline_load_meta_missing" in status["issues"]
 
 
 def test_smoothing_source_only_path_journal_contract_rejects_lineage_drop():

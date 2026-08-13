@@ -13107,6 +13107,21 @@ def run_sniper(is_test_mode=False):
                     continue
 
                 if status == "SELL_ORDERED":
+                    try:
+                        pending_sell_ws_data = (
+                            WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                        )
+                        sniper_state_handlers.observe_pending_sell_smoothing_source_only_paths(
+                            stock,
+                            code,
+                            pending_sell_ws_data or {},
+                            now_ts=now_ts,
+                        )
+                    except Exception as exc:
+                        log_error(
+                            "[SMOOTHING_SELL_ORDERED] source-only observer failed "
+                            f"without order effect code={code}: {exc}"
+                        )
                     handle_sell_ordered_state(stock, code)
                     continue
 

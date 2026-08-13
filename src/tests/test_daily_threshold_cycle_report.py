@@ -4480,6 +4480,11 @@ def test_smoothing_source_only_journal_builds_exact_horizon_ev_without_live_auth
     )
 
     assert journal["arm_count"] == 1
+    assert journal["source_event_counts"] == {
+        "armed": 1,
+        "horizon": 5,
+        "closed": 0,
+    }
     assert journal["exact_complete_path_count"] == 1
     assert journal["sample_floor"] == 10
     assert journal["sample_floor_met"] is False
@@ -5275,6 +5280,87 @@ def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(
         "interned_categorical_values": True,
         "runtime_effect": False,
     }
+
+
+def test_partitioned_loader_audits_smoothing_raw_written_partition_counts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    family = "soft_stop_whipsaw_confirmation"
+    stage = "smoothing_source_only_path_armed"
+    partition_dir = (
+        report_mod.THRESHOLD_CYCLE_DIR / "date=2026-08-13" / f"family={family}"
+    )
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    (partition_dir / "part-000001.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "threshold_cycle_event",
+                "family": family,
+                "stage": stage,
+                "fields": {"journal_family": family, "journal_arm_id": "arm-1"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    counts = {
+        target_family: {
+            target_stage: int(target_family == family and target_stage == stage)
+            for target_stage in (
+                "smoothing_source_only_path_armed",
+                "smoothing_source_only_path_closed",
+                "smoothing_source_only_path_horizon",
+            )
+        }
+        for target_family in (
+            "holding_flow_ofi_smoothing",
+            "soft_stop_whipsaw_confirmation",
+        )
+    }
+    checkpoint_dir = report_mod.THRESHOLD_CYCLE_DIR / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    source_path = tmp_path / "immutable-smoothing-source.jsonl.gz"
+    source_path.write_text("immutable", encoding="utf-8")
+    (checkpoint_dir / "2026-08-13.json").write_text(
+        json.dumps(
+            {
+                "completed": True,
+                "source_path": str(source_path),
+                "smoothing_source_only_ingestion": {
+                    "schema": "smoothing_source_only_ingestion_audit_v1",
+                    "status": "pass",
+                    "runtime_effect": False,
+                    "coverage_complete": True,
+                    "unroutable_stage_count": 0,
+                    "raw_stage_counts_by_family": counts,
+                    "written_stage_counts_by_family": counts,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    load_result = report_mod._default_pipeline_load_result("2026-08-13")
+
+    audit = load_result.meta["smoothing_source_only_ingestion"]
+    assert audit["status"] == "pass"
+    assert audit["checkpoint_completed"] is True
+    assert audit["checkpoint_source_exists"] is True
+    assert audit["raw_stage_counts_by_family"] == counts
+    assert audit["partition_stage_counts_by_family"] == counts
+
+    checkpoint = json.loads(
+        (checkpoint_dir / "2026-08-13.json").read_text(encoding="utf-8")
+    )
+    checkpoint["completed"] = False
+    incomplete_audit = report_mod._smoothing_partition_ingestion_audit(
+        load_result.rows, checkpoint
+    )
+
+    assert incomplete_audit["status"] == "fail"
+    assert "checkpoint_not_completed" in incomplete_audit["issues"]
 
 
 def test_daily_threshold_cycle_report_does_not_reload_same_day_for_rolling_sim_rows():

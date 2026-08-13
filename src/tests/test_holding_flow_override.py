@@ -868,6 +868,67 @@ def test_non_revive_registry_rejects_arm_count_above_bounded_cap(monkeypatch):
     handlers._SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY.clear()
 
 
+def test_pending_sell_observer_keeps_exact_horizon_before_fill(monkeypatch):
+    started_at = 10_000.0
+    state, _armed = handlers.arm_source_only_path(
+        None,
+        family="soft_stop_whipsaw_confirmation",
+        position_key="record:pending-sell",
+        trace_id="trace-pending-sell",
+        snapshot_id="snapshot-pending-sell",
+        alternative_action="HOLD",
+        control_action="EXIT",
+        now_ts=started_at,
+        effective_price=10_000,
+        effective_profit_rate=-1.5,
+        reference_buy_price=10_100,
+        effective_price_source="ws",
+        effective_price_quality="single_source",
+        runtime_family_enabled=False,
+        alternative_executed=False,
+        source_reason="soft_stop_runtime_disabled",
+    )
+    stock = {
+        "id": "pending-sell",
+        "status": "SELL_ORDERED",
+        handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY: state,
+    }
+    logs = []
+    monkeypatch.setattr(
+        handlers,
+        "_build_quote_consistency_fields",
+        lambda *_args, **_kwargs: (
+            {"quote_consistency_state": "single_source"},
+            10_060,
+            10_070,
+            10_050,
+        ),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "_log_holding_pipeline",
+        lambda _stock, _code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    handlers.observe_pending_sell_smoothing_source_only_paths(
+        stock,
+        "005930",
+        {"curr": 10_060},
+        now_ts=started_at + 10,
+    )
+
+    horizons = [
+        fields
+        for stage, fields in logs
+        if stage == "smoothing_source_only_path_horizon"
+    ]
+    assert [fields["horizon_sec"] for fields in horizons] == [10]
+    assert horizons[0]["horizon_status"] == "observed"
+    assert horizons[0]["observation_phase"] == "holding"
+    assert stock[handlers.SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY]["arms"]
+    assert stock["status"] == "SELL_ORDERED"
+
+
 def test_non_revive_registry_does_not_terminally_close_on_stale_breach_price(
     monkeypatch,
 ):

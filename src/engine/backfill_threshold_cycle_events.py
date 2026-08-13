@@ -13,7 +13,11 @@ from typing import Any
 from src.engine import system_metric_sampler
 from src.engine.daily_threshold_cycle_report import THRESHOLD_CYCLE_DIR
 from src.utils.constants import DATA_DIR
-from src.utils.threshold_cycle_registry import threshold_family_for_stage
+from src.utils.threshold_cycle_registry import (
+    SMOOTHING_SOURCE_ONLY_FAMILIES,
+    SMOOTHING_SOURCE_ONLY_PATH_STAGES,
+    threshold_family_for_stage,
+)
 
 DEFAULT_MAX_INPUT_LINES_PER_CHUNK = 20_000
 DEFAULT_MAX_COMPRESSED_INPUT_LINES_PER_CHUNK = 5_000
@@ -22,6 +26,64 @@ DEFAULT_MAX_CHUNK_READ_MB = 128.0
 DEFAULT_MAX_IOWAIT_PCT = 20.0
 DEFAULT_MAX_CPU_BUSY_PCT = 95.0
 DEFAULT_MIN_MEM_AVAILABLE_MB = 512.0
+
+
+def _nonnegative_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_smoothing_stage_counts(value: object) -> dict[str, dict[str, int]]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        family: {
+            stage: _nonnegative_int(
+                source.get(family, {}).get(stage, 0)
+                if isinstance(source.get(family), dict)
+                else 0
+            )
+            for stage in sorted(SMOOTHING_SOURCE_ONLY_PATH_STAGES)
+        }
+        for family in sorted(SMOOTHING_SOURCE_ONLY_FAMILIES)
+    }
+
+
+def _increment_smoothing_stage_count(
+    counts: dict[str, dict[str, int]], *, family: str, stage: str
+) -> None:
+    if (
+        family in SMOOTHING_SOURCE_ONLY_FAMILIES
+        and stage in SMOOTHING_SOURCE_ONLY_PATH_STAGES
+    ):
+        counts[family][stage] += 1
+
+
+def _smoothing_ingestion_audit(
+    raw_counts: dict[str, dict[str, int]],
+    written_counts: dict[str, dict[str, int]],
+    *,
+    coverage_complete: bool,
+    unroutable_stage_count: int,
+) -> dict[str, Any]:
+    issues: list[str] = []
+    if not coverage_complete:
+        issues.append("checkpoint_history_not_instrumented")
+    if unroutable_stage_count > 0:
+        issues.append("unroutable_smoothing_stage_present")
+    if raw_counts != written_counts:
+        issues.append("raw_written_smoothing_stage_count_mismatch")
+    return {
+        "schema": "smoothing_source_only_ingestion_audit_v1",
+        "coverage_complete": coverage_complete,
+        "unroutable_stage_count": unroutable_stage_count,
+        "raw_stage_counts_by_family": raw_counts,
+        "written_stage_counts_by_family": written_counts,
+        "status": "fail" if issues else "pass",
+        "issues": issues,
+        "runtime_effect": False,
+    }
 
 
 def raw_pipeline_path(target_date: str) -> Path:
@@ -311,6 +373,25 @@ def backfill_threshold_cycle_events(
     raw_line_count = int(checkpoint.get("raw_line_count", 0) or 0)
     written_total = int(checkpoint.get("written_count", 0) or 0)
     partition_state = _initial_partition_state(checkpoint)
+    prior_ingestion_audit = (
+        checkpoint.get("smoothing_source_only_ingestion")
+        if isinstance(checkpoint.get("smoothing_source_only_ingestion"), dict)
+        else {}
+    )
+    smoothing_coverage_complete = not checkpoint or (
+        prior_ingestion_audit.get("schema")
+        == "smoothing_source_only_ingestion_audit_v1"
+        and prior_ingestion_audit.get("coverage_complete") is True
+    )
+    smoothing_unroutable_stage_count = _nonnegative_int(
+        prior_ingestion_audit.get("unroutable_stage_count")
+    )
+    smoothing_raw_counts = _normalize_smoothing_stage_counts(
+        prior_ingestion_audit.get("raw_stage_counts_by_family")
+    )
+    smoothing_written_counts = _normalize_smoothing_stage_counts(
+        prior_ingestion_audit.get("written_stage_counts_by_family")
+    )
     if checkpoint and (
         checkpoint.get("completed")
         or (not source_compressed and byte_offset >= int(source_fp["source_size"]))
@@ -335,6 +416,12 @@ def backfill_threshold_cycle_events(
             "last_sample_metrics": checkpoint.get("last_sample_metrics") or {},
             "source_compressed": source_compressed,
             "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
+            "smoothing_source_only_ingestion": _smoothing_ingestion_audit(
+                smoothing_raw_counts,
+                smoothing_written_counts,
+                coverage_complete=smoothing_coverage_complete,
+                unroutable_stage_count=smoothing_unroutable_stage_count,
+            ),
             "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         _save_json(checkpoint_file, checkpoint_payload)
@@ -355,6 +442,9 @@ def backfill_threshold_cycle_events(
             "partition_root": str(THRESHOLD_CYCLE_DIR / f"date={target_date}"),
             "source_compressed": source_compressed,
             "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
+            "smoothing_source_only_ingestion": checkpoint_payload[
+                "smoothing_source_only_ingestion"
+            ],
         }
 
     before_sample = _sample_metrics()
@@ -385,14 +475,23 @@ def backfill_threshold_cycle_events(
                 continue
             if payload.get("event_type") not in (None, "", "pipeline_event"):
                 continue
-            if not threshold_family_for_stage(
-                str(payload.get("stage") or ""),
-                (
-                    payload.get("fields")
-                    if isinstance(payload.get("fields"), dict)
-                    else None
-                ),
+            stage = str(payload.get("stage") or "")
+            fields = (
+                payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+            )
+            journal_family = str(fields.get("journal_family") or "").strip()
+            if (
+                stage in SMOOTHING_SOURCE_ONLY_PATH_STAGES
+                and journal_family not in SMOOTHING_SOURCE_ONLY_FAMILIES
             ):
+                smoothing_unroutable_stage_count += 1
+            _increment_smoothing_stage_count(
+                smoothing_raw_counts,
+                family=journal_family,
+                stage=stage,
+            )
+            family = threshold_family_for_stage(stage, fields)
+            if not family:
                 continue
             wrote, reason = _write_compact_payload(
                 target_date=target_date,
@@ -407,6 +506,11 @@ def backfill_threshold_cycle_events(
                 break
             written_this_run += 1
             written_total += 1
+            _increment_smoothing_stage_count(
+                smoothing_written_counts,
+                family=family,
+                stage=stage,
+            )
 
     after_sample = _sample_metrics()
     if pause_reason is None:
@@ -448,6 +552,12 @@ def backfill_threshold_cycle_events(
         "last_sample_metrics": {"before": before_sample, "after": after_sample},
         "source_compressed": source_compressed,
         "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
+        "smoothing_source_only_ingestion": _smoothing_ingestion_audit(
+            smoothing_raw_counts,
+            smoothing_written_counts,
+            coverage_complete=smoothing_coverage_complete,
+            unroutable_stage_count=smoothing_unroutable_stage_count,
+        ),
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     _save_json(checkpoint_file, checkpoint_payload)
@@ -469,6 +579,9 @@ def backfill_threshold_cycle_events(
         "partition_root": str(THRESHOLD_CYCLE_DIR / f"date={target_date}"),
         "source_compressed": source_compressed,
         "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
+        "smoothing_source_only_ingestion": checkpoint_payload[
+            "smoothing_source_only_ingestion"
+        ],
     }
 
 

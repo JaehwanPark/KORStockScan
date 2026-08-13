@@ -47681,8 +47681,9 @@ def _observe_post_sell_smoothing_source_only_paths(
     ws_data: dict | None,
     *,
     now_ts: float,
+    observation_phase: str = "post_sell_watching",
 ) -> None:
-    """Continue exact source-only paths after a scalping sell/revive transition."""
+    """Continue exact source-only paths outside the normal HOLDING evaluator."""
 
     state = stock.get(SMOOTHING_SOURCE_ONLY_PATH_STATE_KEY)
     arms = state.get("arms") if isinstance(state, dict) else {}
@@ -47740,7 +47741,7 @@ def _observe_post_sell_smoothing_source_only_paths(
         emergency_breach=(
             effective_price_usable and effective_profit_rate <= emergency_pct
         ),
-        observation_phase="post_sell_watching",
+        observation_phase=observation_phase,
     )
     _mutate_stock_state(
         stock,
@@ -47748,6 +47749,28 @@ def _observe_post_sell_smoothing_source_only_paths(
     )
     for event in events:
         _log_holding_pipeline(stock, code, event["stage"], **event["fields"])
+
+
+def observe_pending_sell_smoothing_source_only_paths(
+    stock: dict,
+    code: str,
+    ws_data: dict | None,
+    *,
+    now_ts: float,
+) -> None:
+    """Advance source-only horizons while the owned position is SELL_ORDERED.
+
+    This observer mutates only the bounded journal state.  It does not alter,
+    cancel, replace, or submit the pending sell order.
+    """
+
+    _observe_post_sell_smoothing_source_only_paths(
+        stock,
+        code,
+        ws_data,
+        now_ts=now_ts,
+        observation_phase="holding",
+    )
 
 
 def register_non_revive_smoothing_post_sell_paths(

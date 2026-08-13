@@ -766,6 +766,15 @@ def _smoothing_source_only_path_journal_contract_status(
             local.append(f"{label}_exclusion_reason_counts_missing")
         if not isinstance(journal.get("guarded_terminal_reason_counts"), dict):
             local.append(f"{label}_guarded_terminal_reason_counts_missing")
+        source_event_counts = journal.get("source_event_counts")
+        if not isinstance(source_event_counts, dict) or not all(
+            key in source_event_counts for key in ("armed", "horizon", "closed")
+        ):
+            local.append(f"{label}_source_event_counts_missing")
+        elif _safe_int(source_event_counts.get("armed"), -1) != _safe_int(
+            journal.get("arm_count"), 0
+        ):
+            local.append(f"{label}_source_event_armed_count_inconsistent")
         phase_summary = journal.get("observation_phase_summary")
         if not isinstance(phase_summary, dict) or not all(
             isinstance(phase_summary.get(phase), dict)
@@ -959,6 +968,83 @@ def _smoothing_source_only_path_journal_contract_status(
             "issues": sorted(set(family_issues)),
         }
         issues.extend(family_issues)
+
+    daily_date = str(daily_report.get("date") or "")
+    pipeline_load = (
+        daily_report.get("meta", {}).get("pipeline_load")
+        if isinstance(daily_report.get("meta"), dict)
+        and isinstance(daily_report.get("meta", {}).get("pipeline_load"), dict)
+        else {}
+    )
+    daily_pipeline_meta = pipeline_load.get(daily_date)
+    if (
+        daily_date >= "2026-08-13"
+        and isinstance(daily_report.get("meta"), dict)
+        and not isinstance(daily_pipeline_meta, dict)
+    ):
+        issues.append("smoothing_source_only_pipeline_load_meta_missing")
+    if daily_date >= "2026-08-13" and isinstance(daily_pipeline_meta, dict):
+        ingestion = daily_pipeline_meta.get("smoothing_source_only_ingestion")
+        if not isinstance(ingestion, dict):
+            issues.append("smoothing_source_only_ingestion_audit_missing")
+        else:
+            if ingestion.get("schema") != (
+                "smoothing_source_only_partition_ingestion_audit_v1"
+            ):
+                issues.append("smoothing_source_only_ingestion_audit_schema_invalid")
+            if ingestion.get("status") != "pass":
+                issues.append("smoothing_source_only_ingestion_audit_failed")
+            if ingestion.get("runtime_effect") is not False:
+                issues.append("smoothing_source_only_ingestion_runtime_effect_invalid")
+            for field in (
+                "checkpoint_completed",
+                "checkpoint_source_exists",
+                "coverage_complete",
+            ):
+                if ingestion.get(field) is not True:
+                    issues.append(f"smoothing_source_only_ingestion_{field}_invalid")
+            if _safe_int(ingestion.get("unroutable_stage_count"), -1) != 0:
+                issues.append(
+                    "smoothing_source_only_ingestion_unroutable_stage_count_invalid"
+                )
+            partition_counts = (
+                ingestion.get("partition_stage_counts_by_family")
+                if isinstance(ingestion.get("partition_stage_counts_by_family"), dict)
+                else {}
+            )
+            count_key_by_stage = {
+                "smoothing_source_only_path_armed": "armed",
+                "smoothing_source_only_path_horizon": "horizon",
+                "smoothing_source_only_path_closed": "closed",
+            }
+            for family in families:
+                journal = journal_from(daily_snapshot, family)
+                source_counts = (
+                    journal.get("source_event_counts")
+                    if isinstance(journal, dict)
+                    and isinstance(journal.get("source_event_counts"), dict)
+                    else {}
+                )
+                family_partition_counts = (
+                    partition_counts.get(family)
+                    if isinstance(partition_counts.get(family), dict)
+                    else {}
+                )
+                mismatched = [
+                    stage
+                    for stage, count_key in count_key_by_stage.items()
+                    if _safe_int(family_partition_counts.get(stage), 0)
+                    != _safe_int(source_counts.get(count_key), 0)
+                ]
+                if mismatched:
+                    issue = f"{family}_partition_report_event_count_mismatch"
+                    issues.append(issue)
+                    family_entry = family_status.get(family)
+                    if isinstance(family_entry, dict):
+                        family_entry["status"] = "fail"
+                        family_entry["issues"] = sorted(
+                            set([*(family_entry.get("issues") or []), issue])
+                        )
 
     rolling_decision = cumulative_report.get("smoothing_source_only_rolling_decision")
     rolling_decision_required = str(cumulative_report.get("date") or "") >= (

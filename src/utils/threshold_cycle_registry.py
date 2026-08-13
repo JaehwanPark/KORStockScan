@@ -121,6 +121,20 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "swing_same_symbol_loss_reentry_cooldowns_restored": "swing_strategy_discovery_sim",
 }
 
+SMOOTHING_SOURCE_ONLY_PATH_STAGES = frozenset(
+    {
+        "smoothing_source_only_path_armed",
+        "smoothing_source_only_path_horizon",
+        "smoothing_source_only_path_closed",
+    }
+)
+SMOOTHING_SOURCE_ONLY_FAMILIES = frozenset(
+    {
+        "soft_stop_whipsaw_confirmation",
+        "holding_flow_ofi_smoothing",
+    }
+)
+
 TARGET_STAGES = frozenset(THRESHOLD_STAGE_FAMILY_MAP)
 
 
@@ -130,7 +144,15 @@ def _clean_family(value: Any) -> str:
 
 
 def threshold_family_for_stage(stage: str, fields: dict | None = None) -> str:
-    family = THRESHOLD_STAGE_FAMILY_MAP.get(str(stage or "").strip(), "")
+    normalized_stage = str(stage or "").strip()
+    if normalized_stage in SMOOTHING_SOURCE_ONLY_PATH_STAGES:
+        journal_family = _clean_family(
+            fields.get("journal_family") if isinstance(fields, dict) else None
+        )
+        return (
+            journal_family if journal_family in SMOOTHING_SOURCE_ONLY_FAMILIES else ""
+        )
+    family = THRESHOLD_STAGE_FAMILY_MAP.get(normalized_stage, "")
     if family:
         return family
     if isinstance(fields, dict):

@@ -32,7 +32,11 @@ from src.utils.constants import (
     POSTGRES_URL,
     TRADING_RULES,
 )
-from src.utils.threshold_cycle_registry import is_threshold_cycle_stage
+from src.utils.threshold_cycle_registry import (
+    SMOOTHING_SOURCE_ONLY_FAMILIES,
+    SMOOTHING_SOURCE_ONLY_PATH_STAGES,
+    is_threshold_cycle_stage,
+)
 
 REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1276,6 +1280,100 @@ def _partition_paths_for_date(target_date: str) -> list[Path]:
     )
 
 
+def _normalize_smoothing_stage_counts(value: object) -> dict[str, dict[str, int]]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        family: {
+            stage: max(
+                0,
+                _safe_int(
+                    (
+                        source.get(family, {}).get(stage, 0)
+                        if isinstance(source.get(family), dict)
+                        else 0
+                    ),
+                    0,
+                )
+                or 0,
+            )
+            for stage in sorted(SMOOTHING_SOURCE_ONLY_PATH_STAGES)
+        }
+        for family in sorted(SMOOTHING_SOURCE_ONLY_FAMILIES)
+    }
+
+
+def _smoothing_partition_ingestion_audit(
+    rows: list[dict], checkpoint: dict[str, Any]
+) -> dict[str, Any]:
+    checkpoint_audit = (
+        checkpoint.get("smoothing_source_only_ingestion")
+        if isinstance(checkpoint.get("smoothing_source_only_ingestion"), dict)
+        else {}
+    )
+    partition_counts = _normalize_smoothing_stage_counts({})
+    for row in rows:
+        stage = str(row.get("stage") or "")
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        family = str(fields.get("journal_family") or row.get("family") or "").strip()
+        if (
+            family in SMOOTHING_SOURCE_ONLY_FAMILIES
+            and stage in SMOOTHING_SOURCE_ONLY_PATH_STAGES
+        ):
+            partition_counts[family][stage] += 1
+    if checkpoint_audit.get("schema") != "smoothing_source_only_ingestion_audit_v1":
+        return {
+            "schema": "smoothing_source_only_partition_ingestion_audit_v1",
+            "status": "not_instrumented",
+            "runtime_effect": False,
+            "raw_stage_counts_by_family": _normalize_smoothing_stage_counts({}),
+            "written_stage_counts_by_family": _normalize_smoothing_stage_counts({}),
+            "partition_stage_counts_by_family": partition_counts,
+            "issues": ["checkpoint_smoothing_ingestion_audit_missing"],
+        }
+    raw_counts = _normalize_smoothing_stage_counts(
+        checkpoint_audit.get("raw_stage_counts_by_family")
+    )
+    written_counts = _normalize_smoothing_stage_counts(
+        checkpoint_audit.get("written_stage_counts_by_family")
+    )
+    checkpoint_completed = checkpoint.get("completed") is True
+    checkpoint_source_path = str(checkpoint.get("source_path") or "").strip()
+    checkpoint_source_exists = bool(
+        checkpoint_source_path and Path(checkpoint_source_path).is_file()
+    )
+    issues: list[str] = []
+    if not checkpoint_completed:
+        issues.append("checkpoint_not_completed")
+    if not checkpoint_source_exists:
+        issues.append("checkpoint_source_missing")
+    if checkpoint_audit.get("status") != "pass":
+        issues.append("checkpoint_smoothing_ingestion_audit_failed")
+    if checkpoint_audit.get("coverage_complete") is not True:
+        issues.append("checkpoint_smoothing_ingestion_coverage_incomplete")
+    if (_safe_int(checkpoint_audit.get("unroutable_stage_count"), 0) or 0) > 0:
+        issues.append("unroutable_smoothing_stage_present")
+    if raw_counts != written_counts:
+        issues.append("raw_written_smoothing_stage_count_mismatch")
+    if written_counts != partition_counts:
+        issues.append("written_partition_smoothing_stage_count_mismatch")
+    return {
+        "schema": "smoothing_source_only_partition_ingestion_audit_v1",
+        "status": "fail" if issues else "pass",
+        "runtime_effect": False,
+        "checkpoint_completed": checkpoint_completed,
+        "checkpoint_source_path": checkpoint_source_path or None,
+        "checkpoint_source_exists": checkpoint_source_exists,
+        "coverage_complete": checkpoint_audit.get("coverage_complete") is True,
+        "unroutable_stage_count": max(
+            0, _safe_int(checkpoint_audit.get("unroutable_stage_count"), 0) or 0
+        ),
+        "raw_stage_counts_by_family": raw_counts,
+        "written_stage_counts_by_family": written_counts,
+        "partition_stage_counts_by_family": partition_counts,
+        "issues": issues,
+    }
+
+
 def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | None:
     paths = _partition_paths_for_date(target_date)
     if not paths:
@@ -1289,6 +1387,7 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
         except OSError:
             continue
     checkpoint = _checkpoint_for_date(target_date)
+    smoothing_ingestion_audit = _smoothing_partition_ingestion_audit(rows, checkpoint)
     return PipelineLoadResult(
         rows=rows,
         meta={
@@ -1301,6 +1400,7 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
             ),
             "paused_reason": checkpoint.get("paused_reason") if checkpoint else None,
             "read_bytes_estimate": read_bytes,
+            "smoothing_source_only_ingestion": smoothing_ingestion_audit,
             "source_read_contract": {
                 "read_mode": "partitioned_field_projection_canonicalized",
                 "full_source_materialized": False,
@@ -9490,6 +9590,11 @@ def _build_smoothing_source_only_path_journal(
             "threshold_apply|provider_route_change|quantity_or_cap_change|bot_restart"
         ),
         "arm_count": len(arms),
+        "source_event_counts": {
+            "armed": len(arms),
+            "horizon": sum(len(items) for items in horizon_events.values()),
+            "closed": sum(len(items) for items in close_events.values()),
+        },
         "exact_complete_path_count": exact_path_count,
         "sample_floor_met": exact_path_count >= sample_floor,
         "eligible_for_live_review": False,
