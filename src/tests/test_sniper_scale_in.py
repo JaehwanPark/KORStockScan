@@ -33642,6 +33642,7 @@ def test_stage_buy_order_submission_preserves_early_fill_state(monkeypatch):
 def test_probe_fill_recovers_submit_contract_before_residual_callback(
     monkeypatch, tmp_path
 ):
+    test_now = datetime.now(tz=state_handlers._KST)
     runtime_state_path = tmp_path / "entry_split_probe_runtime_state.json"
     monkeypatch.setattr(
         entry_split_order_plan,
@@ -33651,7 +33652,7 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
     entry_split_order_plan.update_probe_runtime_bundle(
         "123456-probe-race",
         phase="probe_submitting",
-        now=datetime(2026, 8, 13),
+        now=test_now,
         code="123456",
         target_id=1,
         requested_qty=21,
@@ -33745,9 +33746,7 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
     assert recovery_event["decision_authority"] == (
         "probe_fill_submit_contract_recovery_only"
     )
-    state = entry_split_order_plan.probe_runtime_state_snapshot(
-        now=datetime(2026, 8, 13)
-    )
+    state = entry_split_order_plan.probe_runtime_state_snapshot(now=test_now)
     assert state["circuit_open"] is False
     assert state["bundles"]["123456-probe-race"]["phase"] == "probe_filled"
 

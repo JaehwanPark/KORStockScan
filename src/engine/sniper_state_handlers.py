@@ -135,6 +135,7 @@ from src.engine.scalping.micro_estimator_state import (
     estimate_orderbook_pressure,
     feature_only_fields_from_snapshot,
 )
+from src.engine.scalping.risky_micro_episode import evaluate_risky_micro_episode
 from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
@@ -32556,6 +32557,150 @@ def _rising_missed_tick_numeric_field(*sources: dict | None, key: str, aliases=N
     return value, raw
 
 
+def _evaluate_rising_missed_risky_micro_episode_source_only(
+    *,
+    stock: dict | None,
+    runtime: dict | None,
+    latency_gate: dict | None,
+    ws_data: dict | None,
+    orderbook_fields: dict | None,
+    microstructure_fields: dict | None,
+    source_stage: str,
+    source_block_reason: str,
+    rising_missed_entry_lineage: bool,
+) -> dict[str, Any]:
+    """Project a passive micro episode without changing the live entry path."""
+
+    stock = stock if isinstance(stock, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
+    ws_data = ws_data if isinstance(ws_data, dict) else {}
+    orderbook_fields = orderbook_fields if isinstance(orderbook_fields, dict) else {}
+    microstructure_fields = (
+        microstructure_fields if isinstance(microstructure_fields, dict) else {}
+    )
+    source_quality_fields = stock.get("last_watching_ai_source_quality_fields")
+    source_quality_fields = (
+        source_quality_fields if isinstance(source_quality_fields, dict) else {}
+    )
+    market_data_fields = market_data_enrichment_log_fields(ws_data)
+    sources = (
+        latency_gate,
+        microstructure_fields,
+        orderbook_fields,
+        source_quality_fields,
+        runtime,
+        ws_data,
+        stock,
+    )
+    tick_window_span_sec, _ = _rising_missed_tick_numeric_field(
+        *sources,
+        key="tick_window_span_sec",
+        aliases=("late_entry_tick_window_span_sec",),
+    )
+    tick_acceleration_ratio, _ = _rising_missed_tick_numeric_field(
+        *sources,
+        key="tick_acceleration_ratio",
+        aliases=("tick_accel", "late_entry_fresh_tick_acceleration_ratio"),
+    )
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data)
+    if best_bid <= 0:
+        best_bid = _safe_int(
+            _entry_submit_field(
+                *sources,
+                key="market_data_effective_best_bid",
+                aliases=(
+                    "pre_submit_ws_snapshot_refresh_best_bid",
+                    "pre_submit_rest_orderbook_refresh_best_bid",
+                ),
+                default=0,
+            ),
+            0,
+        )
+    if best_ask <= 0:
+        best_ask = _safe_int(
+            _entry_submit_field(
+                *sources,
+                key="market_data_effective_best_ask",
+                aliases=(
+                    "pre_submit_ws_snapshot_refresh_best_ask",
+                    "pre_submit_rest_orderbook_refresh_best_ask",
+                ),
+                default=0,
+            ),
+            0,
+        )
+    quote_age_ms = _safe_float(
+        market_data_fields.get("market_data_effective_quote_age_ms"), None
+    )
+    if quote_age_ms is None:
+        quote_age_ms = _safe_float(
+            _entry_submit_field(
+                *sources,
+                key="quote_age_ms",
+                aliases=("ws_age_ms", "pre_submit_effective_quote_age_ms"),
+                default=None,
+            ),
+            None,
+        )
+    orderbook_state = (
+        str(orderbook_fields.get("orderbook_micro_state") or "").strip().lower()
+    )
+    qi = _safe_float(orderbook_fields.get("orderbook_micro_qi"), None)
+    ofi_norm = _safe_float(orderbook_fields.get("orderbook_micro_ofi_norm"), None)
+    tp1_context = _rising_missed_tp1_observation_context_log_fields(stock)
+    tp1_true_ofi = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_true_ofi_ewma"), None
+    )
+    tp1_depth = _safe_float(
+        tp1_context.get("rising_missed_tp1_submit_context_top_depth_ratio"), None
+    )
+    large_sell_detected = any(
+        _truthy_field(source.get(key))
+        for source in (microstructure_fields, orderbook_fields, ws_data, stock)
+        for key in (
+            "large_sell_print_detected",
+            "signed_tape_sell_dominated",
+            "market_data_signed_tape_sell_dominated",
+        )
+    )
+    adverse_micro_detected = bool(
+        orderbook_state in {"bearish", "strong_bearish"}
+        or (qi is not None and qi < 0.25 and ofi_norm is not None and ofi_norm < 0.0)
+    )
+    positive_micro_support = bool(
+        not adverse_micro_detected
+        and (
+            orderbook_state == "bullish"
+            or (
+                qi is not None
+                and qi >= 0.50
+                and ofi_norm is not None
+                and ofi_norm > 0.0
+            )
+            or (
+                tp1_true_ofi is not None
+                and tp1_true_ofi > 0.0
+                and tp1_depth is not None
+                and tp1_depth >= 1.0
+            )
+        )
+    )
+    return evaluate_risky_micro_episode(
+        rising_missed_lineage=bool(rising_missed_entry_lineage),
+        source_stage=source_stage,
+        source_block_reason=source_block_reason,
+        best_bid=best_bid,
+        best_ask=best_ask,
+        quote_age_ms=quote_age_ms,
+        tick_acceleration_ratio=tick_acceleration_ratio,
+        tick_window_span_sec=tick_window_span_sec,
+        positive_micro_support=positive_micro_support,
+        adverse_micro_detected=adverse_micro_detected,
+        large_sell_detected=large_sell_detected,
+    )
+
+
 def _evaluate_rising_missed_tick_speed_entry_guard(
     *,
     stock: dict | None,
@@ -61443,6 +61588,37 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 source_block_stage="latency_block",
                 **reversal_up_volatile_recheck_fields,
             )
+        risky_micro_episode_fields = (
+            _evaluate_rising_missed_risky_micro_episode_source_only(
+                stock=stock,
+                runtime=runtime,
+                latency_gate=latency_gate,
+                ws_data=ws_data,
+                orderbook_fields=entry_orderbook_micro_fields,
+                microstructure_fields=market_data_pre_submit_fields,
+                source_stage="latency_block",
+                source_block_reason=str(
+                    latency_gate.get("effective_reason")
+                    or latency_gate.get("reason")
+                    or "latency_block"
+                ),
+                rising_missed_entry_lineage=bool(
+                    forced_rising_missed_one_share
+                    or _has_rising_missed_entry_lineage(stock, runtime)
+                    or _has_rising_missed_watch_source_marker(stock)
+                ),
+            )
+        )
+        if (
+            risky_micro_episode_fields.get("risky_micro_episode_status")
+            != "not_applicable"
+        ):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "risky_micro_episode_source_candidate_observed",
+                **risky_micro_episode_fields,
+            )
         log_info(
             f"[LATENCY_ENTRY_BLOCK] {stock.get('name')}({code}) decision={latency_gate.get('decision')} "
             f"latency={latency_gate.get('latency_state')} reason={latency_gate.get('reason')} "
@@ -62294,6 +62470,36 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         rising_missed_tick_speed_guard.update(retry_micro_fields)
     if rising_missed_tick_speed_guard.get("blocked"):
+        risky_micro_episode_fields = (
+            _evaluate_rising_missed_risky_micro_episode_source_only(
+                stock=stock,
+                runtime=runtime,
+                latency_gate=latency_gate,
+                ws_data=ws_data,
+                orderbook_fields=entry_orderbook_micro_fields,
+                microstructure_fields=microstructure_submit_log_fields,
+                source_stage="rising_missed_tick_speed_entry_block",
+                source_block_reason=str(
+                    rising_missed_tick_speed_guard.get("block_reason")
+                    or rising_missed_tick_speed_guard.get("reason")
+                    or "rising_missed_tick_speed_entry_block"
+                ),
+                rising_missed_entry_lineage=bool(
+                    forced_rising_missed_one_share
+                    or _has_rising_missed_entry_lineage(stock, runtime)
+                ),
+            )
+        )
+        if (
+            risky_micro_episode_fields.get("risky_micro_episode_status")
+            != "not_applicable"
+        ):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "risky_micro_episode_source_candidate_observed",
+                **risky_micro_episode_fields,
+            )
         tick_speed_backoff_fields = _record_rising_missed_submit_safety_backoff(
             stock,
             code,

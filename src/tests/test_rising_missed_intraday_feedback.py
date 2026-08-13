@@ -68,6 +68,61 @@ def test_tp1_label_projection_keeps_only_candidate_symbol_and_global_watermark(
     assert watermark.isoformat() == "2026-07-27T10:00:00+09:00"
 
 
+def test_risky_micro_episode_source_candidates_are_consumed_by_feedback_report(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-14.jsonl"
+    row = _event(
+        "micro-1",
+        "475560",
+        "THEBORN",
+        "risky_micro_episode_source_candidate_observed",
+        {
+            "risky_micro_episode_status": "recheck_required",
+            "risky_micro_episode_reason": "tick_acceleration_confirmation_pending",
+            "risky_micro_episode_source_stage": "latency_block",
+            "risky_micro_episode_source_block_reason": "wide_spread",
+            "risky_micro_episode_best_bid": 16_220,
+            "risky_micro_episode_best_ask": 16_310,
+            "risky_micro_episode_spread_bps": 55.487,
+            "risky_micro_episode_tick_acceleration_ratio": 0.795,
+            "risky_micro_episode_tick_window_span_sec": 5.0,
+            "risky_micro_episode_positive_micro_support": True,
+            "risky_micro_episode_adverse_micro_detected": False,
+            "risky_micro_episode_large_sell_detected": False,
+            "risky_micro_episode_hypothetical_entry_price": 16_230,
+            "risky_micro_episode_hypothetical_target_price": 16_290,
+            "risky_micro_episode_gross_target_bps": 33,
+            "risky_micro_episode_passive_ttl_sec": 3,
+            "risky_micro_episode_max_hold_sec": 20,
+            "risky_micro_episode_outcome_join_required": True,
+            "risky_micro_episode_outcome_join_status": (
+                "pending_executable_fill_and_3_10_20_30_second_path_consumer"
+            ),
+            "risky_micro_episode_quantity_owner": (
+                "position_sizing_dynamic_formula_then_existing_probe_first"
+            ),
+            "risky_micro_episode_quantity_is_tuning_axis": False,
+            "risky_micro_episode_independent_episode_or_widget_owner": False,
+        },
+        emitted_at="2026-08-14T09:10:00+09:00",
+    )
+    pipeline_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    report = mod.build_report("2026-08-14", pipeline_path=pipeline_path)
+
+    assert report["summary"]["risky_micro_episode_observation_count"] == 1
+    assert report["summary"]["risky_micro_episode_recheck_required_count"] == 1
+    candidate = report["risky_micro_episode_source_candidate_rows"][0]
+    assert candidate["stock_code"] == "475560"
+    assert candidate["hypothetical_entry_price"] == 16_230
+    assert candidate["runtime_effect"] is False
+    assert candidate["outcome_join_required"] is True
+    assert candidate["quantity_is_tuning_axis"] is False
+    assert candidate["independent_episode_or_widget_owner"] is False
+    assert report["summary"]["risky_micro_episode_executable_outcome_join_ready"] is False
+
+
 def test_tp1_label_projection_preserves_plain_counterfactual_provenance():
     row = _event(
         3,

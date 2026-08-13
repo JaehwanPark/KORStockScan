@@ -4443,6 +4443,141 @@ def _build_adverse_micro_recovery_observation(
     }, rows
 
 
+def _build_risky_micro_episode_source_candidates(
+    pipeline_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Summarize source-only passive episode projections without live authority."""
+
+    status_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    source_stage_counts: Counter[str] = Counter()
+    unique_symbols: set[str] = set()
+    seen: set[tuple[str, str, str, str]] = set()
+    rows: list[dict[str, Any]] = []
+    for row in iter_jsonl(pipeline_path):
+        if (
+            str(row.get("stage") or "")
+            != "risky_micro_episode_source_candidate_observed"
+        ):
+            continue
+        fields = _fields(row)
+        code = _event_code(row)
+        status = str(fields.get("risky_micro_episode_status") or "unknown")
+        reason = str(fields.get("risky_micro_episode_reason") or "unknown")
+        source_stage = str(fields.get("risky_micro_episode_source_stage") or "unknown")
+        dedupe_key = (
+            str(row.get("record_id") or ""),
+            code,
+            source_stage,
+            status,
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        if code:
+            unique_symbols.add(code)
+        status_counts[status] += 1
+        reason_counts[reason] += 1
+        source_stage_counts[source_stage] += 1
+        rows.append(
+            {
+                "ts": _event_ts(row),
+                "record_id": row.get("record_id"),
+                "stock_code": code,
+                "stock_name": _event_name(row),
+                "status": status,
+                "reason": reason,
+                "source_stage": source_stage,
+                "source_block_reason": fields.get(
+                    "risky_micro_episode_source_block_reason", "-"
+                ),
+                "best_bid": _safe_int(fields.get("risky_micro_episode_best_bid")),
+                "best_ask": _safe_int(fields.get("risky_micro_episode_best_ask")),
+                "spread_bps": fields.get("risky_micro_episode_spread_bps", "-"),
+                "tick_acceleration_ratio": fields.get(
+                    "risky_micro_episode_tick_acceleration_ratio", "-"
+                ),
+                "tick_window_span_sec": fields.get(
+                    "risky_micro_episode_tick_window_span_sec", "-"
+                ),
+                "positive_micro_support": _boolish(
+                    fields.get("risky_micro_episode_positive_micro_support")
+                ),
+                "adverse_micro_detected": _boolish(
+                    fields.get("risky_micro_episode_adverse_micro_detected")
+                ),
+                "large_sell_detected": _boolish(
+                    fields.get("risky_micro_episode_large_sell_detected")
+                ),
+                "hypothetical_entry_price": _safe_int(
+                    fields.get("risky_micro_episode_hypothetical_entry_price")
+                ),
+                "hypothetical_target_price": _safe_int(
+                    fields.get("risky_micro_episode_hypothetical_target_price")
+                ),
+                "gross_target_bps": _safe_int(
+                    fields.get("risky_micro_episode_gross_target_bps")
+                ),
+                "passive_ttl_sec": _safe_int(
+                    fields.get("risky_micro_episode_passive_ttl_sec")
+                ),
+                "max_hold_sec": _safe_int(
+                    fields.get("risky_micro_episode_max_hold_sec")
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "quantity_owner": fields.get(
+                    "risky_micro_episode_quantity_owner",
+                    "position_sizing_dynamic_formula_then_existing_probe_first",
+                ),
+                "quantity_is_tuning_axis": _boolish(
+                    fields.get("risky_micro_episode_quantity_is_tuning_axis")
+                ),
+                "independent_episode_or_widget_owner": _boolish(
+                    fields.get(
+                        "risky_micro_episode_independent_episode_or_widget_owner"
+                    )
+                ),
+                "outcome_join_required": _boolish(
+                    fields.get("risky_micro_episode_outcome_join_required")
+                ),
+                "outcome_join_status": fields.get(
+                    "risky_micro_episode_outcome_join_status",
+                    "pending_executable_fill_and_3_10_20_30_second_path_consumer",
+                ),
+            }
+        )
+    return {
+        "risky_micro_episode_observation_count": len(rows),
+        "risky_micro_episode_unique_symbol_count": len(unique_symbols),
+        "risky_micro_episode_status_counts": [
+            {"status": key, "count": value}
+            for key, value in status_counts.most_common()
+        ],
+        "risky_micro_episode_reason_counts": [
+            {"reason": key, "count": value}
+            for key, value in reason_counts.most_common()
+        ],
+        "risky_micro_episode_source_stage_counts": [
+            {"source_stage": key, "count": value}
+            for key, value in source_stage_counts.most_common()
+        ],
+        "risky_micro_episode_source_only_candidate_count": status_counts.get(
+            "source_only_candidate", 0
+        ),
+        "risky_micro_episode_recheck_required_count": status_counts.get(
+            "recheck_required", 0
+        ),
+        "risky_micro_episode_excessive_risk_excluded_count": status_counts.get(
+            "excluded_excessive_risk", 0
+        ),
+        "risky_micro_episode_candidate_projection_ready": bool(rows),
+        "risky_micro_episode_executable_outcome_join_ready": False,
+    }, rows
+
+
 def build_report(
     target_date: str,
     *,
@@ -4573,6 +4708,9 @@ def build_report(
     ) = _build_nxt_session_observation(pipeline_path)
     adverse_micro_recovery_summary, adverse_micro_recovery_rows = (
         _build_adverse_micro_recovery_observation(pipeline_path)
+    )
+    risky_micro_episode_summary, risky_micro_episode_rows = (
+        _build_risky_micro_episode_source_candidates(pipeline_path)
     )
     if first_touch_source_quality_counts["first_touch_ai_provenance_missing_count"]:
         source_quality_status = "first_touch_ai_provenance_missing"
@@ -4881,6 +5019,25 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "risky_micro_episode_source_candidate": {
+                "metric_role": "source_candidate_classification",
+                "decision_authority": (
+                    "source_only_passive_episode_research_no_order_authority"
+                ),
+                "window_policy": "same_candidate_fresh_bbo_source_projection",
+                "sample_floor": "not_applicable_source_candidate_projection",
+                "primary_decision_metric": "candidate_status_counts",
+                "source_quality_gate": (
+                    "rising_missed_lineage_fresh_executable_bbo_tick_context_and_non_adverse_micro"
+                ),
+                "forbidden_uses": [
+                    *FORBIDDEN_USES,
+                    "broker_order_submission",
+                    "broker_order_cancel",
+                    "automated_sell",
+                    "live_promotion_from_candidate_counts",
+                ],
+            },
         },
         "source_paths": {"pipeline_events": str(resolved_pipeline_path)},
         "source_quality": {
@@ -4978,6 +5135,7 @@ def build_report(
                 rolling_nxt_post_block_window
             ),
             **adverse_micro_recovery_summary,
+            **risky_micro_episode_summary,
             "code_improvement_order_count": len(code_improvement_orders),
             "consumer_readiness": {
                 "scout_workorder_input_ready": bool(forced),
@@ -5019,6 +5177,7 @@ def build_report(
             -200:
         ],
         "rising_missed_adverse_micro_recovery_rows": adverse_micro_recovery_rows[-200:],
+        "risky_micro_episode_source_candidate_rows": risky_micro_episode_rows[-200:],
         "code_improvement_orders": code_improvement_orders,
     }
 
@@ -5211,6 +5370,12 @@ def write_outputs(
         f"{summary.get('rising_missed_adverse_micro_recovery_checkpoint_counts')}",
         f"- rising_missed_adverse_micro_recovery_outcome_counts: "
         f"{summary.get('rising_missed_adverse_micro_recovery_outcome_counts')}",
+        f"- risky_micro_episode_observation_count: "
+        f"{summary.get('risky_micro_episode_observation_count')}",
+        f"- risky_micro_episode_status_counts: "
+        f"{summary.get('risky_micro_episode_status_counts')}",
+        f"- risky_micro_episode_reason_counts: "
+        f"{summary.get('risky_micro_episode_reason_counts')}",
         f"- code_improvement_order_count: {summary.get('code_improvement_order_count')}",
         f"- consumer_readiness: {summary.get('consumer_readiness')}",
         "",
@@ -5268,6 +5433,23 @@ def write_outputs(
                 "min={min_move_pct} next_loop={next_scanner_loop_rechecked} "
                 "reentry_allowed={reentry_candidate_allowed} recovered={recovery_observed} "
                 "source={source_reason} raw_0B_route={raw_0b_route} outcome={outcome}".format(
+                    **item
+                )
+            )
+        lines.append("")
+    if report.get("risky_micro_episode_source_candidate_rows"):
+        lines.extend(["## Risky Micro Episode Source Candidates", ""])
+        for item in report.get("risky_micro_episode_source_candidate_rows") or []:
+            lines.append(
+                "- ts={ts} code={stock_code} name={stock_name} status={status} "
+                "reason={reason} source_stage={source_stage} block={source_block_reason} "
+                "bbo={best_bid}/{best_ask} spread_bps={spread_bps} "
+                "tick_accel={tick_acceleration_ratio} tick_span={tick_window_span_sec} "
+                "positive_micro={positive_micro_support} adverse={adverse_micro_detected} "
+                "large_sell={large_sell_detected} passive_entry={hypothetical_entry_price} "
+                "target={hypothetical_target_price} target_bps={gross_target_bps} "
+                "ttl={passive_ttl_sec}s max_hold={max_hold_sec}s "
+                "quantity_owner={quantity_owner} outcome_join={outcome_join_status}".format(
                     **item
                 )
             )

@@ -98,6 +98,14 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 세션 추가 후속
+
+- [ ] `[RiskyMicroEpisodeExecutableOutcomeJoin0814] risky rising-missed micro episode 실행가능 결과 결합 및 rolling EV 자격 확인` (`Due: 2026-08-14`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~20:20`, `Track: ScalpingLogic`)
+  - Source: [risky_micro_episode policy](/home/ubuntu/KORStockScan/src/engine/scalping/risky_micro_episode/policy.py), [rising_missed_intraday_feedback.py](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_intraday_feedback.py), [pipeline_events_2026-08-14.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-08-14.jsonl)
+  - 판정 기준: source candidate를 동일 후보의 실행가능 BBO 기준 passive fill 가능성·3/10/20/30초 target/adverse first-hit·timeout·비용 차감 결과와 결합하고, clean baseline 이후 rolling 30 resolved episode·10 symbols·3 trade dates를 충족한 경우에만 `source_quality_adjusted_ev_pct` 후보를 만든다.
+  - 금지: candidate count, mark-price MFE, daily-only win rate만으로 broker 주문, 취소, 자동매도, 수량/cap, hard safety, provider/bot 또는 PREOPEN live 승격을 열지 않는다. 기존 `position_sizing_dynamic_formula -> probe-first` 수량 owner와 episode/widget order ledger를 변경하거나 공유하지 않는다.
+  - 다음 액션: `outcome_join_ready_positive_ev`, `outcome_join_ready_non_positive_ev`, `fill_feasibility_unresolved`, `source_quality_blocked`, `sample_floor_pending` 중 하나로 닫는다.
+
 
 
 

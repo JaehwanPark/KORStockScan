@@ -52,6 +52,69 @@ def test_scanner_promotion_correlation_fields_preserve_forced_rising_missed_line
     assert fields["rising_missed_one_share_scout"] is True
 
 
+def test_rising_missed_risky_micro_episode_runtime_projection_is_source_only():
+    result = state_handlers._evaluate_rising_missed_risky_micro_episode_source_only(
+        stock={"code": "475560", "name": "THEBORN"},
+        runtime={},
+        latency_gate={
+            "quote_age_ms": 100.0,
+            "tick_window_span_sec": 5.0,
+            "tick_acceleration_ratio": 0.795,
+        },
+        ws_data={
+            "orderbook": {
+                "asks": [{"price": 16_310, "volume": 50}],
+                "bids": [{"price": 16_220, "volume": 50}],
+            }
+        },
+        orderbook_fields={
+            "orderbook_micro_state": "bullish",
+            "orderbook_micro_qi": 0.58,
+            "orderbook_micro_ofi_norm": 0.10,
+        },
+        microstructure_fields={},
+        source_stage="latency_block",
+        source_block_reason="wide_spread",
+        rising_missed_entry_lineage=True,
+    )
+
+    assert result["risky_micro_episode_status"] == "recheck_required"
+    assert result["risky_micro_episode_runtime_effect"] is False
+    assert result["risky_micro_episode_actual_order_submitted"] is False
+    assert result["risky_micro_episode_broker_order_forbidden"] is True
+    assert result["risky_micro_episode_hypothetical_entry_price"] < 16_310
+
+
+def test_rising_missed_risky_micro_episode_requires_strictly_positive_ofi():
+    result = state_handlers._evaluate_rising_missed_risky_micro_episode_source_only(
+        stock={"code": "475560", "name": "THEBORN"},
+        runtime={},
+        latency_gate={
+            "quote_age_ms": 100.0,
+            "tick_window_span_sec": 5.0,
+            "tick_acceleration_ratio": 1.1,
+        },
+        ws_data={
+            "orderbook": {
+                "asks": [{"price": 16_310, "volume": 50}],
+                "bids": [{"price": 16_220, "volume": 50}],
+            }
+        },
+        orderbook_fields={
+            "orderbook_micro_state": "neutral",
+            "orderbook_micro_qi": 0.50,
+            "orderbook_micro_ofi_norm": 0.0,
+        },
+        microstructure_fields={},
+        source_stage="latency_block",
+        source_block_reason="wide_spread",
+        rising_missed_entry_lineage=True,
+    )
+
+    assert result["risky_micro_episode_status"] == "recheck_required"
+    assert result["risky_micro_episode_reason"] == "positive_micro_support_not_confirmed"
+
+
 def test_scanner_fast_precheck_never_hydrates_promotion_runtime_context(monkeypatch):
     hydrated = []
     stock = {
