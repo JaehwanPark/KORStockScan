@@ -41,10 +41,18 @@ def _signal_bars() -> tuple[MinuteBar, ...]:
     return tuple(bars)
 
 
-def _write_first_episode(path: Path, *, second_status: str = "COMPLETE") -> None:
+def _write_first_episode(
+    path: Path,
+    *,
+    second_status: str = "COMPLETE",
+    trade_date: date = date(2026, 8, 13),
+) -> None:
+    completed_at = datetime(
+        trade_date.year, trade_date.month, trade_date.day, 9, 0, tzinfo=KST
+    )
     payload = {
         "schema": "samsung_morning_two_leg_state_v2",
-        "trade_date": "2026-08-13",
+        "trade_date": trade_date.isoformat(),
         "status": "COMPLETE",
         "position_qty": 0,
         "legs": [
@@ -61,12 +69,12 @@ def _write_first_episode(path: Path, *, second_status: str = "COMPLETE") -> None
         ],
         "audit": [
             {
-                "at_kst": _at(9, 0).isoformat(),
+                "at_kst": completed_at.isoformat(),
                 "action": "target_fill_confirmed",
                 "leg_id": "base_plus_1tick",
             },
             {
-                "at_kst": _at(9, 0).isoformat(),
+                "at_kst": completed_at.isoformat(),
                 "action": "target_fill_confirmed",
                 "leg_id": "base",
             },
@@ -331,6 +339,116 @@ def test_prior_reentry_position_blocks_next_day_first_episode(tmp_path):
     assert prior_reentry_allows_new_first_episode(
         path, target_date=date(2026, 8, 13)
     ) == (False, "prior_reentry_order_or_position_unresolved")
+
+
+def test_prior_blocked_without_exposure_allows_next_day_first_episode(tmp_path):
+    path = tmp_path / "reentry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": False,
+                "position_qty": 0,
+                "legs": [],
+                "owned_order_nos": [],
+                "blocked_reason": "first_episode_both_legs_not_complete",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert prior_reentry_allows_new_first_episode(
+        path, target_date=date(2026, 8, 14)
+    ) == (True, "prior_reentry_terminal_clear")
+
+
+def test_prior_blocked_with_owned_order_remains_blocked(tmp_path):
+    path = tmp_path / "reentry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": False,
+                "position_qty": 0,
+                "legs": [],
+                "owned_order_nos": ["12345"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert prior_reentry_allows_new_first_episode(
+        path, target_date=date(2026, 8, 14)
+    ) == (False, "prior_reentry_order_or_position_unresolved")
+
+
+def test_prior_blocked_for_non_precondition_reason_remains_blocked(tmp_path):
+    path = tmp_path / "reentry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": False,
+                "position_qty": 0,
+                "legs": [],
+                "owned_order_nos": [],
+                "blocked_reason": "state_contract_invalid",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert prior_reentry_allows_new_first_episode(
+        path, target_date=date(2026, 8, 14)
+    ) == (False, "prior_reentry_order_or_position_unresolved")
+
+
+def test_prior_safe_precondition_block_rolls_when_reentry_episode_starts(tmp_path):
+    first_state = tmp_path / "first.json"
+    _write_first_episode(first_state, trade_date=date(2026, 8, 14))
+    reentry_state = tmp_path / "reentry.json"
+    reentry_state.write_text(
+        json.dumps(
+            {
+                "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+                "trade_date": "2026-08-13",
+                "status": "BLOCKED",
+                "attempt_consumed": False,
+                "position_qty": 0,
+                "legs": [],
+                "owned_order_nos": [],
+                "blocked_reason": "first_episode_both_legs_not_complete",
+                "audit": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    gateway = ReentryGateway(_signal_bars())
+    machine = SamsungMorningSORReentryMachine(
+        gateway=gateway,
+        state_path=reentry_state,
+        first_episode_state_path=first_state,
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    state = machine.run_once(datetime(2026, 8, 14, 8, 30, tzinfo=KST))
+
+    assert state["trade_date"] == "2026-08-14"
+    assert state["status"] == "READY"
+    assert state["last_action"] == "waiting_for_morning_sor_reentry_window"
+    assert state["audit"][0] == {
+        "at_kst": "2026-08-14T08:30:00+09:00",
+        "action": "daily_state_initialized_from_safe_precondition_block",
+        "prior_trade_date": "2026-08-13",
+        "prior_blocked_reason": "first_episode_both_legs_not_complete",
+    }
 
 
 def test_same_date_armed_reentry_requires_consistent_completed_first_ledger(tmp_path):
