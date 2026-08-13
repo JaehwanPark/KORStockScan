@@ -158,8 +158,9 @@ HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
 HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION = (
     "holding_flow_bounded_defer_semantic_v1"
 )
-ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_bounded_chase_cost_semantic_v4"
+ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_cost_aware_downside_semantic_v5"
 ENTRY_PRICE_MAX_INCREMENTAL_CHASE_COST_BP = 25.0
+ENTRY_PRICE_MIN_REWARD_RISK_FOR_AGGRESSIVE_BASIS = 1.0
 ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
 BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
     "bounded_opportunity_offline_semantic_v1"
@@ -5375,6 +5376,29 @@ def _entry_price_response_errors(
                 errors.append("entry_price_aggressive_limit_exceeds_chase_cost_bound")
             if expected_downside_pct is None or expected_downside_pct >= 0:
                 errors.append("entry_price_aggressive_limit_requires_negative_downside")
+            else:
+                incremental_cost_pct = selected_delta_bp / 100.0
+                if abs(expected_downside_pct) < incremental_cost_pct:
+                    errors.append(
+                        "entry_price_aggressive_limit_downside_below_chase_cost"
+                    )
+                minimum_reward_risk = _number(
+                    (contract_facts or {}).get(
+                        "minimum_reward_risk_for_aggressive_basis"
+                    )
+                )
+                if minimum_reward_risk is None:
+                    minimum_reward_risk = (
+                        ENTRY_PRICE_MIN_REWARD_RISK_FOR_AGGRESSIVE_BASIS
+                    )
+                if (
+                    expected_upside_pct is None
+                    or expected_upside_pct / abs(expected_downside_pct)
+                    < minimum_reward_risk
+                ):
+                    errors.append(
+                        "entry_price_aggressive_limit_reward_risk_below_floor"
+                    )
     return errors
 
 

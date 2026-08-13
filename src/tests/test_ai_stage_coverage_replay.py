@@ -488,10 +488,10 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
     request = requests[0]
     facts = request["candidate_input"]["entry_price_exact_contract_facts_v1"]
     assert request["candidate"]["prompt_version"] == (
-        "decision_quality_entry_price_v2_3_bounded_chase_cost"
+        "decision_quality_entry_price_v2_4_cost_aware_downside"
     )
     assert request["candidate"]["semantic_validator_version"] == (
-        "entry_price_bounded_chase_cost_semantic_v4"
+        "entry_price_cost_aware_downside_semantic_v5"
     )
     assert request["candidate"]["response_schema"]["selected_price"] == (
         "positive_integer_or_null"
@@ -501,6 +501,7 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
     assert facts["control_selected_price"] == 99
     assert "REFERENCE" in facts["economically_distinct_bases"]
     assert facts["max_incremental_chase_cost_bp"] == 25.0
+    assert facts["minimum_reward_risk_for_aggressive_basis"] == 1.0
     assert "would_fill_now=false" in request["candidate"]["system_prompt"]
     assert "incremental chase cost" in request["candidate"]["system_prompt"]
 
@@ -529,7 +530,9 @@ def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch()
             },
         },
         "candidate": {
-            "semantic_validator_version": ("entry_price_bounded_chase_cost_semantic_v4")
+            "semantic_validator_version": (
+                "entry_price_cost_aware_downside_semantic_v5"
+            )
         },
         "candidate_input": {
             "entry_price_exact_contract_facts_v1": {
@@ -612,7 +615,9 @@ def test_entry_price_semantic_gate_rejects_action_only_relabel_and_weak_chase():
             },
         },
         "candidate": {
-            "semantic_validator_version": ("entry_price_bounded_chase_cost_semantic_v4")
+            "semantic_validator_version": (
+                "entry_price_cost_aware_downside_semantic_v5"
+            )
         },
         "candidate_input": {
             "entry_price_exact_contract_facts_v1": {
@@ -699,7 +704,9 @@ def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside(
             },
         },
         "candidate": {
-            "semantic_validator_version": ("entry_price_bounded_chase_cost_semantic_v4")
+            "semantic_validator_version": (
+                "entry_price_cost_aware_downside_semantic_v5"
+            )
         },
         "candidate_input": {
             "entry_price_exact_contract_facts_v1": {
@@ -721,6 +728,7 @@ def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside(
                     "BEST_ASK": 50.0,
                 },
                 "max_incremental_chase_cost_bp": 25.0,
+                "minimum_reward_risk_for_aggressive_basis": 1.0,
             }
         },
     }
@@ -753,6 +761,20 @@ def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside(
     zero_downside = {**bounded, "expected_downside_pct": 0.0}
     assert "entry_price_aggressive_limit_requires_negative_downside" in (
         replay.quality.validate_replay_candidate_response(request, zero_downside)
+    )
+
+    epsilon_downside = {**bounded, "expected_downside_pct": -0.001}
+    assert "entry_price_aggressive_limit_downside_below_chase_cost" in (
+        replay.quality.validate_replay_candidate_response(request, epsilon_downside)
+    )
+
+    weak_reward_risk = {
+        **bounded,
+        "expected_upside_pct": 0.3,
+        "expected_downside_pct": -0.4,
+    }
+    assert "entry_price_aggressive_limit_reward_risk_below_floor" in (
+        replay.quality.validate_replay_candidate_response(request, weak_reward_risk)
     )
 
     over_bound = {
@@ -1071,6 +1093,58 @@ def test_bedrock_candidate_uses_qwen_only_and_no_failback():
     assert result["candidate_response"]["selected_price"] == 100
     assert captured["profile"].family == "qwen3_32b"
     assert result["provider_provenance"]["failback_chain"] == []
+
+
+def test_bedrock_entry_price_correction_names_noncanonical_setup_code():
+    captured = {}
+
+    class FakeProvider:
+        def converse(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                payload={
+                    "edge_state": "EDGE",
+                    "action": "USE_DEFENSIVE",
+                    "expected_upside_pct": 1.0,
+                    "expected_downside_pct": -0.5,
+                    "confidence": 70,
+                    "reason_codes": ["edge_positive"],
+                    "evidence": {
+                        "trend": "supportive",
+                        "liquidity": "mixed",
+                        "tape": "mixed",
+                        "risk": "medium",
+                        "uncertainty": "medium",
+                        "setup": "continuation",
+                        "positive_edge": "moderate",
+                        "adverse_risk": "moderate",
+                        "trigger": "confirmed",
+                    },
+                    "selected_price": 100,
+                    "price_basis": "BEST_BID",
+                },
+                model_id="qwen.qwen3-32b-v1:0",
+                transport_meta=lambda: {
+                    "provider": "bedrock",
+                    "provider_response_id": "response-1",
+                },
+            )
+
+    request = {
+        "exact_payload": {"price": 100},
+        "control": {"provider": "bedrock", "model": "qwen3_32b"},
+        "candidate": {
+            "provider": "bedrock",
+            "model": "qwen3_32b",
+            "system_prompt": "Return JSON",
+        },
+        "candidate_schema_correction_errors": ["reason_codes_invalid"],
+        **replay.CONTRACT,
+    }
+
+    replay.execute_bedrock_candidate(request, provider=FakeProvider())
+
+    assert "evidence.setup=continuation" in captured["prompt"]
 
 
 def test_report_marks_action_collapse_before_outcome_comparison():

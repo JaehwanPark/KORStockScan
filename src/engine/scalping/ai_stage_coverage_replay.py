@@ -16,13 +16,13 @@ from statistics import fmean
 from typing import Any
 
 from src.engine.ai_prompt_contracts import (
-    DECISION_QUALITY_ENTRY_PRICE_V2_3_PROMPT_VERSION,
-    DECISION_QUALITY_ENTRY_PRICE_V2_3_RESPONSE_SCHEMA,
+    DECISION_QUALITY_ENTRY_PRICE_V2_4_PROMPT_VERSION,
+    DECISION_QUALITY_ENTRY_PRICE_V2_4_RESPONSE_SCHEMA,
     DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     DECISION_QUALITY_V2_RESPONSE_SCHEMA,
-    decision_quality_entry_price_v2_3_system_prompt,
+    decision_quality_entry_price_v2_4_system_prompt,
     decision_quality_holding_flow_v2_2_system_prompt,
     decision_quality_holding_v2_3_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
@@ -192,10 +192,10 @@ def prepare_stage_requests(
         "entry": decision_quality_v2_8_detailed_system_prompt("entry"),
         "holding": decision_quality_holding_v2_3_system_prompt(),
         "holding_flow": decision_quality_holding_flow_v2_2_system_prompt(),
-        "entry_price": decision_quality_entry_price_v2_3_system_prompt(),
+        "entry_price": decision_quality_entry_price_v2_4_system_prompt(),
     }[normalized_stage]
     response_schema = (
-        DECISION_QUALITY_ENTRY_PRICE_V2_3_RESPONSE_SCHEMA
+        DECISION_QUALITY_ENTRY_PRICE_V2_4_RESPONSE_SCHEMA
         if normalized_stage == "entry_price"
         else DECISION_QUALITY_V2_RESPONSE_SCHEMA
     )
@@ -209,7 +209,7 @@ def prepare_stage_requests(
                 else (
                     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION
                     if normalized_stage == "entry"
-                    else DECISION_QUALITY_ENTRY_PRICE_V2_3_PROMPT_VERSION
+                    else DECISION_QUALITY_ENTRY_PRICE_V2_4_PROMPT_VERSION
                 )
             )
         ),
@@ -365,6 +365,9 @@ def prepare_stage_requests(
             entry_price_facts["max_incremental_chase_cost_bp"] = (
                 quality.ENTRY_PRICE_MAX_INCREMENTAL_CHASE_COST_BP
             )
+            entry_price_facts["minimum_reward_risk_for_aggressive_basis"] = (
+                quality.ENTRY_PRICE_MIN_REWARD_RISK_FOR_AGGRESSIVE_BASIS
+            )
             candidate_input = {
                 "exact_payload": exact_payload,
                 "entry_price_exact_contract_facts_v1": entry_price_facts,
@@ -433,8 +436,10 @@ def execute_bedrock_candidate(
         if "reason_codes_invalid" in correction_errors:
             correction_rules.append(
                 "Remove every non-canonical reason code. Never use spread_bp, "
-                "wide_spread, or price_basis as a reason code; use "
-                "liquidity_adverse or fillability_adverse when supported"
+                "wide_spread, price_basis, or setup_continuation as a reason "
+                "code. Represent a continuation setup only as "
+                "evidence.setup=continuation. Use liquidity_adverse or "
+                "fillability_adverse when supported"
             )
         if "expected_edge_values_required" in correction_errors:
             correction_rules.append(
@@ -454,7 +459,10 @@ def execute_bedrock_candidate(
                 "minimum_upside_for_aggressive_basis_pct. Otherwise return the "
                 "exact DEFENSIVE price with USE_DEFENSIVE. Positive chase cost "
                 "must not exceed max_incremental_chase_cost_bp and requires a "
-                "strictly negative expected_downside_pct"
+                "strictly negative expected_downside_pct whose magnitude covers "
+                "the incremental cost. expected_upside_pct divided by absolute "
+                "expected_downside_pct must meet "
+                "minimum_reward_risk_for_aggressive_basis"
             )
         prompt += (
             "\n\nCorrection retry: the prior response violated: "

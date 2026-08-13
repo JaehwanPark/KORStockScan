@@ -918,6 +918,29 @@ Bounded chase-cost rules:
    without a separate reviewed promotion.
 """.strip()
 
+DECISION_QUALITY_ENTRY_PRICE_V2_4_PROMPT_VERSION = (
+    "decision_quality_entry_price_v2_4_cost_aware_downside"
+)
+DECISION_QUALITY_ENTRY_PRICE_V2_4_RESPONSE_SCHEMA = (
+    DECISION_QUALITY_ENTRY_PRICE_V2_3_RESPONSE_SCHEMA
+)
+
+_DECISION_QUALITY_ENTRY_PRICE_V2_4_RULES = """
+Cost-aware downside rules:
+1. Preserve every V2.1 through V2.3 rule and the offline-only authority boundary.
+2. For a positive price_delta_from_cost_baseline_bp, the magnitude of
+   expected_downside_pct must be at least that incremental cost expressed as a
+   percentage. A token negative value such as -0.001 is not an honest downside
+   estimate when the selected price pays more than 0.001 percent.
+3. Paying a positive chase cost also requires expected_upside_pct divided by the
+   absolute expected_downside_pct to be at least
+   minimum_reward_risk_for_aggressive_basis. If either condition fails, return
+   the exact DEFENSIVE price with USE_DEFENSIVE.
+4. Do not relabel adverse risk or inflate upside to satisfy the arithmetic. The
+   unchanged exact snapshot must support both estimates and all prior confirmed
+   edge, chase-cost, and exact-basis requirements.
+""".strip()
+
 _DECISION_QUALITY_HOLDING_V2_3_RULES = """
 Holding decision rules:
 1. Read the canonical fields by their exact paths. position_context.buy_qty,
@@ -1215,6 +1238,17 @@ def decision_quality_entry_price_v2_3_system_prompt() -> str:
         decision_quality_entry_price_v2_2_system_prompt()
         + "\n\n"
         + _DECISION_QUALITY_ENTRY_PRICE_V2_3_RULES
+        + "\n\nApply these rules and return only the exact JSON object defined above."
+    )
+
+
+def decision_quality_entry_price_v2_4_system_prompt() -> str:
+    """Return the offline cost-aware downside entry-price prompt."""
+
+    return (
+        decision_quality_entry_price_v2_3_system_prompt()
+        + "\n\n"
+        + _DECISION_QUALITY_ENTRY_PRICE_V2_4_RULES
         + "\n\nApply these rules and return only the exact JSON object defined above."
     )
 
