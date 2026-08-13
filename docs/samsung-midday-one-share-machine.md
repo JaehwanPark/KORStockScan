@@ -16,13 +16,18 @@ The implementation is deployable but default-OFF. Creating these files does not 
 - Exit: after either one-share fill is confirmed, submit a separate one-share SOR limit sell two ticks above that leg's actual fill price.
 - No stop loss, target timeout, forced sell, or best-price liquidation. If the target closes unfilled, the state becomes `HELD`; if it remains open, the original order is reconciled across dates.
 
+The `ka10080` source reuses one successful snapshot within the same KST minute
+and shares a cross-process 0.4-second episode read pacer. Explicit error 1700 or
+HTTP 429 reads receive at most two bounded-backoff retries. Failed snapshots are
+not cached, and order/cancel API IDs are never retried by this controller.
+
 ## Evidence and limitations
 
 Clean-baseline replay from 2026-06-05 through 2026-08-10 covered 46 trading days. The selected `[13:15, 13:55)` window's original conservative signal-close-minus-one-tick leg produced 25 attempts, 21 fills, 21 target completions, four unfilled entries, and zero held outcomes. Completed positions reached the two-tick target in a median one minute and a maximum four minutes; worst observed post-fill adverse excursion was -0.316%. The final 16-day holdout produced seven attempts, five fills/completions, zero held outcomes, median one minute, and maximum two minutes. At the 0.20% cost/slippage assumption, completed-trade equal-weight average profit was approximately +0.139%. The added signal-close leg is the execution-probability leg identified by the entry-price re-evaluation; minute OHLC touch is supporting counterfactual evidence, not queue-fill proof. Each leg keeps independent attribution.
 
 The sample is below the 60-day promotion floor and was selected from multiple intraday windows, so it is user-directed bounded two-leg authority rather than autonomous full-live promotion evidence. Minute OHLC replay cannot establish within-bar event order; target completion was conservatively counted only from the bar after the fill bar.
 
-Official Kiwoom contract gate: upstream commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, retrieved 2026-08-11 15:30:19 KST; inspected `kiwoom_docs/차트.md`, `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`, `kiwoom/specs.py`, API spec, and Postman for `ka10080`, `kt10000`, `kt10001`, `kt10003`, `kt00007`, SOR symbol suffix, request fields, continuation, and execution fields. No order example was executed.
+Official Kiwoom contract gate: upstream commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, retrieved 2026-08-13 10:07:49 KST; inspected `kiwoom_docs/차트.md`, `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`, `kiwoom/specs.py`, API spec, and Postman for `ka10080`, `kt10000`, `kt10001`, `kt10003`, `kt00007`, SOR symbol suffix, request fields, continuation, and execution fields. The official source defines 1700 as a request-limit error but does not specify the local pacing interval. No order example was executed.
 
 ## Runtime surfaces
 

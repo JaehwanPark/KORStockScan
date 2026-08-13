@@ -17,7 +17,7 @@ from src.trading.low_price_two_leg.machine import (
 )
 from src.trading.low_price_two_leg.preflight import validate_authority
 from src.trading.low_price_two_leg.policy_runtime import load_applied_profile_policy
-from src.trading.low_price_two_leg.profiles import PROFILES, get_profile
+from src.trading.low_price_two_leg.profiles import PROFILES, MachineProfile, get_profile
 from src.trading.order.regular_two_leg_machine import KST
 
 
@@ -43,6 +43,26 @@ def _acquire_lock(path: Path):
     handle.write(str(os.getpid()))
     handle.flush()
     return handle
+
+
+def _profile_with_applied_policy(
+    profile: MachineProfile, applied: dict, applied_hash: str
+) -> MachineProfile:
+    """Bind PREOPEN entry/target fields while quantity stays compiled safety."""
+
+    return replace(
+        profile,
+        policy=replace(
+            profile.policy,
+            rolling_high_drawdown_pct=float(applied["rolling_high_drawdown_pct"]),
+            rolling_low_proximity_pct=float(applied["rolling_low_proximity_pct"]),
+            lookback_bars=int(applied["lookback_bars"]),
+            entry_valid_completed_bars=int(applied["entry_valid_completed_bars"]),
+            target_ticks=int(applied["target_ticks"]),
+            runtime_policy_source="preopen_applied_policy",
+            runtime_policy_hash=applied_hash,
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -83,16 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         if applied is None:
             print(f"live applied entry policy blocked: {applied_reason}")
             return 5
-        profile = replace(
-            profile,
-            policy=replace(
-                profile.policy,
-                rolling_high_drawdown_pct=float(applied["rolling_high_drawdown_pct"]),
-                rolling_low_proximity_pct=float(applied["rolling_low_proximity_pct"]),
-                runtime_policy_source="preopen_applied_policy",
-                runtime_policy_hash=applied_hash,
-            ),
-        )
+        profile = _profile_with_applied_policy(profile, applied, applied_hash)
     state_path = args.state_path or (
         default_state_path(profile)
         if live_enabled

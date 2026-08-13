@@ -17,6 +17,11 @@ import requests
 
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
+from src.trading.order.kiwoom_episode_read_control import (
+    KiwoomEpisodeReadPacer,
+    SameMinuteSnapshotCache,
+    post_kiwoom_episode_read,
+)
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.samsung_morning_one_share.policy import MinuteBar
 from src.utils import kiwoom_utils
@@ -24,7 +29,7 @@ from src.utils import kiwoom_utils
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-12T10:05:25+09:00",
+    "retrieved_at_kst": "2026-08-13T10:07:49+09:00",
     "inspected_paths": [
         "kiwoom_docs/주문.md",
         "kiwoom_docs/계좌.md",
@@ -121,6 +126,9 @@ class KiwoomOneShareGateway:
         order_authority: bool = False,
         base_url: str | None = None,
         timeout_sec: float = 5.0,
+        read_pacing_enabled: bool | None = None,
+        read_pacer: KiwoomEpisodeReadPacer | None = None,
+        read_retry_sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.session = request_session or requests.Session()
         self.token_loader = token_loader or (
@@ -129,6 +137,14 @@ class KiwoomOneShareGateway:
         self.order_authority = bool(order_authority)
         self.base_url = str(base_url or kiwoom_utils.KIWOOM_BASE_URL).rstrip("/")
         self.timeout_sec = max(1.0, float(timeout_sec))
+        self.read_pacing_enabled = (
+            request_session is None
+            if read_pacing_enabled is None
+            else bool(read_pacing_enabled)
+        )
+        self.read_pacer = read_pacer
+        self.read_retry_sleep = read_retry_sleep
+        self._minute_bars_cache = SameMinuteSnapshotCache()
 
     def _token(self) -> str:
         token = str(self.token_loader() or "").replace("Bearer ", "").strip()
@@ -145,23 +161,37 @@ class KiwoomOneShareGateway:
         cont_yn: str = "N",
         next_key: str = "",
     ) -> tuple[requests.Response, dict[str, Any]]:
-        response = self.session.post(
-            f"{self.base_url}{endpoint}",
-            headers={
-                "Content-Type": "application/json;charset=UTF-8",
-                "authorization": f"Bearer {self._token()}",
-                "cont-yn": cont_yn,
-                "next-key": next_key,
-                "api-id": api_id,
-            },
-            json=payload,
-            timeout=(5, self.timeout_sec),
+        def post_once() -> tuple[requests.Response, dict[str, Any]]:
+            response = self.session.post(
+                f"{self.base_url}{endpoint}",
+                headers={
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "authorization": f"Bearer {self._token()}",
+                    "cont-yn": cont_yn,
+                    "next-key": next_key,
+                    "api-id": api_id,
+                },
+                json=payload,
+                timeout=(5, self.timeout_sec),
+            )
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            return response, body if isinstance(body, dict) else {}
+
+        if api_id != "ka10080":
+            return post_once()
+        kwargs: dict[str, Any] = {}
+        if self.read_retry_sleep is not None:
+            kwargs["sleep"] = self.read_retry_sleep
+        return post_kiwoom_episode_read(
+            api_id=api_id,
+            post_once=post_once,
+            pacing_enabled=self.read_pacing_enabled,
+            pacer=self.read_pacer,
+            **kwargs,
         )
-        try:
-            body = response.json()
-        except ValueError:
-            body = {}
-        return response, body if isinstance(body, dict) else {}
 
     def _require_write_authority(self) -> None:
         if not self.order_authority:
@@ -249,6 +279,11 @@ class KiwoomOneShareGateway:
     def completed_sor_minute_bars(
         self, *, trade_date: date, now: datetime
     ) -> MinuteBarsSnapshot:
+        minute_floor = now.astimezone(KST).replace(second=0, microsecond=0)
+        cache_key = (trade_date, minute_floor)
+        cached = self._minute_bars_cache.get(cache_key)
+        if isinstance(cached, MinuteBarsSnapshot):
+            return cached
         try:
             response, body = self._post(
                 endpoint="/api/dostk/chart",
@@ -266,7 +301,6 @@ class KiwoomOneShareGateway:
         rows = body.get("stk_min_pole_chart_qry")
         if not isinstance(rows, list):
             return MinuteBarsSnapshot(False, error="minute_bar_rows_contract_invalid")
-        minute_floor = now.astimezone(KST).replace(second=0, microsecond=0)
         parsed: dict[datetime, MinuteBar] = {}
         for row in rows:
             if not isinstance(row, dict):
@@ -307,7 +341,9 @@ class KiwoomOneShareGateway:
         bars = tuple(parsed[key] for key in sorted(parsed))
         if not bars:
             return MinuteBarsSnapshot(True, error="completed_sor_bars_unavailable")
-        return MinuteBarsSnapshot(True, bars)
+        snapshot = MinuteBarsSnapshot(True, bars)
+        self._minute_bars_cache.put(cache_key, snapshot)
+        return snapshot
 
     def submit_limit_buy(self, *, price: int, route: str = "SOR") -> SubmitResult:
         self._require_write_authority()
