@@ -39239,6 +39239,11 @@ def _abort_entry_split_probe_residual(
             timeout_cause = "timeout_source_quality_unrecovered"
         else:
             timeout_cause = "timeout_revalidation_not_completed"
+    elif reason == "probe_fill_submit_contract_missing":
+        timeout_cause = str(
+            stock.get("entry_split_probe_abort_detail_reason")
+            or "missing_fields:unknown"
+        ).strip()
     effective_venue = (
         str(
             stock.get("rising_missed_effective_venue")
@@ -39311,9 +39316,14 @@ def _abort_entry_split_probe_residual(
         not bounded_exploration_probe_only
         and (soft_abort or rising_missed_normal_winner_recheck)
     )
+    contract_integrity_abort = reason == "probe_fill_submit_contract_missing"
     residual_expand_forbidden = bool(
         preserve_position
-        and (bounded_exploration_probe_only or (action_guard_active and not soft_abort))
+        and (
+            contract_integrity_abort
+            or bounded_exploration_probe_only
+            or (action_guard_active and not soft_abort)
+        )
     )
     set_fields = {
         "entry_split_probe_phase": "aborted",
@@ -75027,6 +75037,44 @@ def _submit_entry_split_probe_residual_locked(
         trip_probe_runtime_circuit("duplicate_residual_claim")
         _abort_entry_split_probe_residual(
             stock, code, "duplicate_residual_claim", preserve_position=True
+        )
+        return False
+    missing_submit_contract_fields = [
+        key
+        for key, valid in (
+            ("entry_split_probe_bundle_id", bool(bundle_id)),
+            (
+                "entry_split_probe_requested_qty",
+                requested_qty > 1,
+            ),
+            (
+                "entry_split_probe_continuation",
+                isinstance(stock.get("entry_split_probe_continuation"), dict),
+            ),
+            (
+                "entry_split_probe_submit_best_ask",
+                _safe_int(stock.get("entry_split_probe_submit_best_ask"), 0) > 0,
+            ),
+        )
+        if not valid
+    ]
+    if missing_submit_contract_fields:
+        reason = "probe_fill_submit_contract_missing"
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_split_probe_abort_detail_reason": (
+                    "missing_fields:" + ",".join(missing_submit_contract_fields)
+                )
+            },
+        )
+        trip_probe_runtime_circuit(reason)
+        _abort_entry_split_probe_residual(
+            stock,
+            code,
+            reason,
+            preserve_position=True,
+            now_ts=now_ts,
         )
         return False
     if requested_qty <= 1 or filled_qty != 1 or fill_price <= 0:

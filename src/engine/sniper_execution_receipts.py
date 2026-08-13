@@ -15,6 +15,7 @@ from src.engine.scalping.opening_rotation import (
     shadow_ratchet_price as opening_rotation_shadow_ratchet_price,
 )
 from src.engine.scalping.entry_split_order_plan import (
+    recover_probe_submit_contract_for_fill,
     trip_probe_runtime_circuit,
     update_probe_runtime_bundle,
 )
@@ -3635,6 +3636,78 @@ def _handle_entry_buy_execution(
 
     probe_phase = str(target_stock.get("entry_split_probe_phase") or "").strip()
     if probe_phase in {"probe_submitting", "probe_submitted"}:
+        probe_contract_recovery = recover_probe_submit_contract_for_fill(
+            target_stock,
+            order_no=order_no,
+            now=now,
+        )
+        if probe_contract_recovery.get("recovered"):
+            _log_holding_pipeline(
+                target_stock.get("name"),
+                code,
+                target_id,
+                "probe_fill_submit_contract_recovered",
+                candidate_stock=target_stock,
+                probe_bundle_id=(probe_contract_recovery.get("bundle_id") or "-"),
+                broker_order_no=order_no or "-",
+                recovered_bundle_phase=(
+                    probe_contract_recovery.get("bundle_phase") or "-"
+                ),
+                recovered_field_count=len(
+                    probe_contract_recovery.get("restored_fields") or ()
+                ),
+                recovered_fields="|".join(
+                    probe_contract_recovery.get("restored_fields") or ()
+                )
+                or "-",
+                metric_role="source_quality_reconciliation",
+                decision_authority="probe_fill_submit_contract_recovery_only",
+                window_policy="same_broker_accepted_probe_fill",
+                sample_floor="one_exact_code_target_and_unique_persisted_bundle",
+                primary_decision_metric="probe_submit_contract_recovered",
+                source_quality_gate=(
+                    "exact_code_target_id_unique_nonterminal_probe_bundle_and_order_match"
+                ),
+                runtime_effect=True,
+                actual_order_submitted=True,
+                broker_order_forbidden=True,
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "new_order_submit|residual_authority_grant|quantity_increase|"
+                    "broker_guard_bypass|stale_quote_bypass|provider_route_change|"
+                    "hard_safety_bypass"
+                ),
+            )
+        elif probe_contract_recovery.get("reason") not in {
+            "submit_contract_already_hydrated",
+            "not_probe_fill_phase",
+        }:
+            _log_holding_pipeline(
+                target_stock.get("name"),
+                code,
+                target_id,
+                "probe_fill_submit_contract_recovery_failed",
+                candidate_stock=target_stock,
+                reason=probe_contract_recovery.get("reason") or "unknown",
+                broker_order_no=order_no or "-",
+                metric_role="source_quality_blocker",
+                decision_authority="probe_fill_submit_contract_fail_closed",
+                window_policy="same_broker_accepted_probe_fill",
+                sample_floor="one_probe_fill_with_missing_submit_contract",
+                primary_decision_metric="probe_submit_contract_recovered",
+                source_quality_gate=(
+                    "exact_code_target_id_unique_nonterminal_probe_bundle_and_order_match"
+                ),
+                runtime_effect=True,
+                actual_order_submitted=True,
+                broker_order_forbidden=True,
+                allowed_runtime_apply=False,
+                forbidden_uses=(
+                    "residual_submit|scale_in_submit|quantity_increase|"
+                    "broker_guard_bypass|stale_quote_bypass|provider_route_change|"
+                    "hard_safety_bypass"
+                ),
+            )
         bundle_id = str(target_stock.get("entry_split_probe_bundle_id") or "").strip()
         probe_order_no = str(
             target_stock.get("entry_split_probe_order_no") or ""

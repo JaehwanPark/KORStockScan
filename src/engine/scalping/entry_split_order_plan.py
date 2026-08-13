@@ -229,6 +229,165 @@ def probe_runtime_state_snapshot(*, now: datetime | None = None) -> dict[str, An
         return dict(_load_probe_runtime_state(target_date))
 
 
+def recover_probe_submit_contract_for_fill(
+    stock: dict[str, Any],
+    *,
+    order_no: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Hydrate immutable submit fields when a probe fill wins the submit race.
+
+    Kiwoom can deliver the execution receipt immediately after accepting the
+    order, before the submit thread has staged the returned order number and
+    pending-order row.  The probe reservation is persisted before that broker
+    call, so it is the only safe recovery source for the missing submit
+    contract.  This helper never changes the probe phase and never grants
+    residual submission authority.
+    """
+
+    code = str(stock.get("code") or stock.get("stock_code") or "").strip()[:6]
+    target_id = str(stock.get("id") or "").strip()
+    observed_order_no = str(order_no or "").strip()
+    phase = str(stock.get("entry_split_probe_phase") or "").strip()
+    if phase not in {"probe_submitting", "probe_submitted", "probe_filled"}:
+        return {"recovered": False, "reason": "not_probe_fill_phase"}
+    if not code or not target_id:
+        return {"recovered": False, "reason": "probe_fill_identity_missing"}
+
+    required_present = bool(
+        str(stock.get("entry_split_probe_bundle_id") or "").strip()
+        and _safe_int(stock.get("entry_split_probe_requested_qty"), 0) > 1
+        and isinstance(stock.get("entry_split_probe_continuation"), dict)
+        and _safe_int(stock.get("entry_split_probe_submit_best_ask"), 0) > 0
+    )
+    if required_present:
+        return {"recovered": False, "reason": "submit_contract_already_hydrated"}
+
+    target_date = _kst_date(now)
+    hydrated_bundle_id = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+    with _PROBE_RUNTIME_STATE_LOCK:
+        payload = _load_probe_runtime_state(target_date)
+        bundles = payload.get("bundles") or {}
+        if hydrated_bundle_id:
+            raw_candidates = [bundles.get(hydrated_bundle_id)]
+        else:
+            raw_candidates = list(bundles.values())
+        candidates = []
+        for raw_bundle in raw_candidates:
+            if not isinstance(raw_bundle, dict):
+                continue
+            bundle = dict(raw_bundle)
+            bundle_code = str(bundle.get("code") or "").strip()[:6]
+            bundle_target_id = str(bundle.get("target_id") or "").strip()
+            bundle_phase = str(bundle.get("phase") or "").strip()
+            bundle_order_no = str(bundle.get("order_no") or "").strip()
+            if bundle_code != code or bundle_target_id != target_id:
+                continue
+            if bundle_phase not in {
+                "probe_submitting",
+                "probe_submitted",
+                "probe_filled",
+            }:
+                continue
+            if (
+                observed_order_no
+                and bundle_order_no
+                and (observed_order_no != bundle_order_no)
+            ):
+                continue
+            candidates.append(bundle)
+
+    if not candidates:
+        return {"recovered": False, "reason": "probe_submit_bundle_not_found"}
+    if len(candidates) != 1:
+        return {"recovered": False, "reason": "probe_submit_bundle_ambiguous"}
+
+    bundle = candidates[0]
+    bundle_id = str(bundle.get("bundle_id") or "").strip()
+    requested_qty = _safe_int(bundle.get("requested_qty"), 0)
+    continuation = bundle.get("continuation")
+    submit_best_ask = _safe_int(bundle.get("probe_submit_best_ask"), 0)
+    if (
+        not bundle_id
+        or requested_qty <= 1
+        or not isinstance(continuation, dict)
+        or submit_best_ask <= 0
+    ):
+        return {"recovered": False, "reason": "probe_submit_bundle_incomplete"}
+
+    recovery_fields = {
+        "entry_split_probe_bundle_id": bundle_id,
+        "entry_split_probe_requested_qty": requested_qty,
+        "entry_split_probe_continuation": dict(continuation),
+        "entry_split_probe_submit_best_ask": submit_best_ask,
+        "entry_split_probe_timeout_sec": bundle.get("timeout_sec"),
+        "entry_split_probe_max_slippage_bps": bundle.get("max_slippage_bps"),
+        "entry_split_probe_anchor_mode": bundle.get("anchor_mode"),
+        "entry_split_probe_submitting_at": bundle.get("submitting_at"),
+        "entry_split_probe_submitted_at": bundle.get("submitted_at"),
+        "entry_split_probe_order_no": (
+            bundle.get("order_no") or observed_order_no or None
+        ),
+        "entry_split_probe_ai_action_at_submit": bundle.get("ai_action_at_submit"),
+        "entry_split_probe_ai_result_source_at_submit": bundle.get(
+            "ai_result_source_at_submit"
+        ),
+        "entry_split_probe_ai_confirmed_at_submit": bundle.get(
+            "ai_confirmed_at_submit"
+        ),
+        "entry_split_probe_ai_action_source_at_submit": bundle.get(
+            "ai_action_source_at_submit"
+        ),
+        "entry_split_probe_ai_decision_trace_id": bundle.get("ai_decision_trace_id"),
+        "probe_confirmation_count": bundle.get("probe_confirmation_count", 0),
+        "probe_confirmation_last_at": bundle.get("probe_confirmation_last_at", 0.0),
+        "probe_confirmation_last_state": bundle.get(
+            "probe_confirmation_last_state", "UNKNOWN"
+        ),
+        "probe_confirmation_last_signature": bundle.get(
+            "probe_confirmation_last_signature", ""
+        ),
+    }
+    if "wait_contract_at_submit" in bundle:
+        recovery_fields["entry_split_probe_wait_contract_at_submit"] = _safe_bool(
+            bundle.get("wait_contract_at_submit")
+        )
+    restored_fields = []
+    for key, value in recovery_fields.items():
+        if value is None:
+            continue
+        current_value = stock.get(key)
+        required_value_invalid = bool(
+            (
+                key == "entry_split_probe_bundle_id"
+                and not str(current_value or "").strip()
+            )
+            or (
+                key == "entry_split_probe_requested_qty"
+                and _safe_int(current_value, 0) <= 1
+            )
+            or (
+                key == "entry_split_probe_continuation"
+                and not isinstance(current_value, dict)
+            )
+            or (
+                key == "entry_split_probe_submit_best_ask"
+                and _safe_int(current_value, 0) <= 0
+            )
+        )
+        if current_value not in (None, "") and not required_value_invalid:
+            continue
+        stock[key] = value
+        restored_fields.append(key)
+    return {
+        "recovered": True,
+        "reason": "probe_submit_contract_recovered_for_fill",
+        "bundle_id": bundle_id,
+        "bundle_phase": str(bundle.get("phase") or "unknown"),
+        "restored_fields": tuple(restored_fields),
+    }
+
+
 def _probe_recovered_execution_provenance(
     bundle: dict[str, Any],
 ) -> dict[str, Any]:

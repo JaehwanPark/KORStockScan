@@ -15,6 +15,7 @@ import src.engine.sniper_sync as sniper_sync
 import src.engine.trade_pause_control as trade_pause_control
 import src.utils.runtime_flags as runtime_flags
 from src.engine import kiwoom_orders
+from src.engine.scalping import entry_split_order_plan
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.scalping.micro_estimator_state import (
     MicroEstimatorConfig,
@@ -33632,6 +33633,168 @@ def test_stage_buy_order_submission_preserves_early_fill_state(monkeypatch):
     assert stock["pending_entry_orders"][0]["ord_no"] == "O1"
     assert stock["pending_entry_orders"][0]["filled_qty"] == 1
     assert stock["pending_entry_orders"][0]["status"] == "FILLED"
+
+
+def test_probe_fill_recovers_submit_contract_before_residual_callback(
+    monkeypatch, tmp_path
+):
+    runtime_state_path = tmp_path / "entry_split_probe_runtime_state.json"
+    monkeypatch.setattr(
+        entry_split_order_plan,
+        "PROBE_RUNTIME_STATE_PATH",
+        runtime_state_path,
+    )
+    entry_split_order_plan.update_probe_runtime_bundle(
+        "123456-probe-race",
+        phase="probe_submitting",
+        now=datetime(2026, 8, 13),
+        code="123456",
+        target_id=1,
+        requested_qty=21,
+        continuation={"residual_quantities": [8, 12]},
+        probe_submit_best_ask=10_010,
+        timeout_sec=3,
+        max_slippage_bps=50.0,
+        anchor_mode="fill_clamped_to_fresh_bbo",
+        submitting_at=1_000.0,
+        wait_contract_at_submit=True,
+    )
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda _code: None
+    receipts.DB = _DummyDB()
+    receipts.KIWOOM_TOKEN = "token"
+    callback_snapshots = []
+    holding_events = []
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None, name=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            if self._target:
+                self._target(*self._args)
+
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+    monkeypatch.setattr(receipts, "_update_db_for_buy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        receipts,
+        "_probe_fill_continuation_callback",
+        lambda stock, _code: callback_snapshots.append(dict(stock)),
+    )
+    monkeypatch.setattr(
+        receipts,
+        "_log_holding_pipeline",
+        lambda name, code, target_id, stage, **fields: holding_events.append(
+            (stage, fields)
+        ),
+    )
+    monkeypatch.setattr(
+        receipts, "_request_broker_snapshot_refresh", lambda *a, **k: None
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "PROBE_RACE",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "position_tag": "MIDDLE",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "entry_requested_qty": 21,
+        "requested_buy_qty": 21,
+        "entry_split_probe_phase": "probe_submitting",
+        "entry_split_probe_bundle_id": "",
+        "entry_split_probe_requested_qty": 0,
+        "entry_split_probe_continuation": None,
+        "entry_split_probe_submit_best_ask": 0,
+        "entry_split_probe_submitting_at": 1_000.0,
+        "odno": "O1",
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_real_execution(
+        {
+            "code": "123456",
+            "type": "BUY",
+            "order_no": "O1",
+            "price": 10_000,
+            "qty": 1,
+        }
+    )
+
+    assert stock["entry_split_probe_bundle_id"] == "123456-probe-race"
+    assert stock["entry_split_probe_requested_qty"] == 21
+    assert stock["entry_split_probe_submit_best_ask"] == 10_010
+    assert stock["entry_split_probe_phase"] == "probe_filled"
+    assert callback_snapshots[0]["entry_split_probe_requested_qty"] == 21
+    assert callback_snapshots[0]["entry_split_probe_bundle_id"] == (
+        "123456-probe-race"
+    )
+    assert callback_snapshots[0]["entry_split_probe_submit_best_ask"] == 10_010
+    recovery_event = next(
+        fields
+        for stage, fields in holding_events
+        if stage == "probe_fill_submit_contract_recovered"
+    )
+    assert recovery_event["broker_order_forbidden"] is True
+    assert recovery_event["decision_authority"] == (
+        "probe_fill_submit_contract_recovery_only"
+    )
+    state = entry_split_order_plan.probe_runtime_state_snapshot(
+        now=datetime(2026, 8, 13)
+    )
+    assert state["circuit_open"] is False
+    assert state["bundles"]["123456-probe-race"]["phase"] == "probe_filled"
+
+
+def test_probe_residual_missing_submit_contract_has_canonical_abort(monkeypatch):
+    circuit_reasons = []
+    pipeline_events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "trip_probe_runtime_circuit",
+        lambda reason: circuit_reasons.append(reason),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: pipeline_events.append((stage, fields)),
+    )
+    stock = {
+        "entry_split_probe_phase": "probe_filled",
+        "entry_filled_qty": 1,
+        "entry_split_probe_fill_price": 10_000,
+        "entry_split_probe_filled_at": 1_000.0,
+        "entry_split_probe_submitting_at": 999.9,
+    }
+
+    submitted = state_handlers._submit_entry_split_probe_residual_locked(
+        stock,
+        "123456",
+        {},
+        now_ts=1_000.1,
+        now_dt=datetime(2026, 8, 13, 12, 4),
+    )
+
+    assert submitted is False
+    assert circuit_reasons == ["probe_fill_submit_contract_missing"]
+    assert stock["entry_split_probe_abort_reason"] == (
+        "probe_fill_submit_contract_missing"
+    )
+    assert stock["entry_split_probe_abort_detail_reason"].startswith(
+        "missing_fields:entry_split_probe_bundle_id"
+    )
+    assert stock["entry_split_probe_residual_expand_forbidden"] is True
+    assert stock["entry_split_probe_scale_in_forbidden"] is True
+    residual_block = next(
+        fields for stage, fields in pipeline_events if stage == "residual_blocked"
+    )
+    assert residual_block["entry_split_probe_terminal_abort_detail_reason"].startswith(
+        "missing_fields:entry_split_probe_bundle_id"
+    )
 
 
 def test_post_submit_db_state_preserves_receipt_advanced_fill():
