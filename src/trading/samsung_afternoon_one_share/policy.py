@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
+from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 
 
@@ -31,7 +32,7 @@ class AfternoonSignal:
 class AfternoonOneSharePolicy:
     symbol: str = "005930"
     route: str = "SOR"
-    quantity: int = 2
+    quantity: int = EPISODE_TOTAL_QUANTITY
     scan_start: time = time(14, 0)
     scan_last_bar: time = time(14, 40)
     lookback_bars: int = 30
@@ -45,8 +46,12 @@ class AfternoonOneSharePolicy:
     runtime_policy_hash: str = ""
 
     def __post_init__(self) -> None:
-        if self.symbol != "005930" or self.route != "SOR" or self.quantity != 2:
-            raise ValueError("policy_is_hard_limited_to_005930_two_share_sor")
+        if (
+            self.symbol != "005930"
+            or self.route != "SOR"
+            or self.quantity != EPISODE_TOTAL_QUANTITY
+        ):
+            raise ValueError("policy_is_hard_limited_to_005930_episode_quantity_sor")
         if not (self.scan_start <= self.scan_last_bar):
             raise ValueError("invalid_scan_window")
         if self.lookback_bars < 2:

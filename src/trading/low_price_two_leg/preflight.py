@@ -19,11 +19,15 @@ from src.trading.low_price_two_leg.policy_runtime import (
     load_applied_profile_policy,
     operator_policy_transitions,
 )
+from src.trading.order.episode_quantity import (
+    EPISODE_LEG_QUANTITY,
+    EPISODE_TOTAL_QUANTITY,
+)
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-AUTHORITY_SCHEMA = "low_price_two_leg_authority_v1"
+AUTHORITY_SCHEMA = "low_price_two_leg_authority_v2"
 RESEARCH_REPORT_PATH = (
     DATA_DIR
     / "report"
@@ -33,6 +37,7 @@ RESEARCH_REPORT_PATH = (
 RESEARCH_REPORT_SHA256 = (
     "cff37627ad294efce6dbbe6e5a95f763aa5fbf75fb21164818d4430fd1061105"
 )
+RESEARCH_EVIDENCE_TOTAL_QUANTITY = 2
 EPISODE_RESEARCH_REPORT_PATH = (
     DATA_DIR
     / "report"
@@ -192,7 +197,9 @@ def validate_research_evidence(
             "entry_offsets_ticks": list(policy.entry_offsets_ticks),
             "entry_valid_completed_bars": policy.entry_valid_completed_bars,
             "target_ticks": policy.target_ticks,
-            "quantity": policy.quantity,
+            # Historical clean-baseline replay was generated at two shares.
+            # The user-directed runtime size does not rewrite source evidence.
+            "quantity": RESEARCH_EVIDENCE_TOTAL_QUANTITY,
             "route": policy.route,
         }
         result_policy = dict(result.get("policy") or {})
@@ -356,9 +363,9 @@ def _policy_contract(
         "symbol": profile.symbol,
         "name": profile.name,
         "session": profile.session,
-        "quantity": 2,
+        "quantity": EPISODE_TOTAL_QUANTITY,
         "allocation": {
-            "leg_quantity": 1,
+            "leg_quantity": EPISODE_LEG_QUANTITY,
             "entry_offsets_ticks": list(policy.entry_offsets_ticks),
             "leg_ids": list(policy.entry_leg_ids),
         },
@@ -439,7 +446,7 @@ def build_authority_artifact(
             "other_machine_effect": "none",
         },
         "forbidden_uses": [
-            "quantity_above_two_or_leg_quantity_above_one",
+            "quantity_above_twenty_or_leg_quantity_above_ten",
             "non_sor_regular_route",
             "hard_safety_or_global_buy_pause_bypass",
             "use_other_machine_orders_or_positions_as_this_profile_ledger",

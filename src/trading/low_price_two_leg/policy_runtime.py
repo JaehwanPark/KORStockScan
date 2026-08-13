@@ -25,6 +25,8 @@ LEGACY_V1_PROFILE_IDS = frozenset(
 )
 LEGACY_V1_LAST_SOURCE_DATE = date(2026, 8, 11)
 LEGACY_APPLIED_LAST_TARGET_DATE = date(2026, 8, 12)
+LEGACY_TWO_SHARE_APPLIED_LAST_TARGET_DATE = date(2026, 8, 13)
+LEGACY_TWO_SHARE_CANDIDATE_LAST_SOURCE_DATE = date(2026, 8, 13)
 PRE_EXPANDED_V2_PROFILE_IDS = frozenset(
     {
         "samsung_heavy_midday",
@@ -186,7 +188,11 @@ def _validate_policy_mutations(value: Any) -> tuple[bool, str]:
 
 
 def validate_profile_policy(
-    profile_id: str, policy: Any, *, target_date: date | None = None
+    profile_id: str,
+    policy: Any,
+    *,
+    target_date: date | None = None,
+    legacy_two_share_candidate: bool = False,
 ) -> tuple[bool, str]:
     if profile_id not in BASELINE_POLICIES or not isinstance(policy, dict):
         return False, "profile_or_policy_invalid"
@@ -204,6 +210,18 @@ def validate_profile_policy(
         "quantity",
         "target_ticks",
     ):
+        if (
+            key == "quantity"
+            and policy.get(key) == 2
+            and (
+                legacy_two_share_candidate
+                or (
+                    target_date is not None
+                    and target_date <= LEGACY_TWO_SHARE_APPLIED_LAST_TARGET_DATE
+                )
+            )
+        ):
+            continue
         if policy.get(key) != expected_immutable[key]:
             return False, f"immutable_{key}_mismatch"
     drawdown = _finite_number(policy.get("rolling_high_drawdown_pct"))
@@ -284,7 +302,13 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
     for profile_id, item in profiles.items():
         if not isinstance(item, dict):
             return False, f"candidate_{profile_id}_invalid"
-        valid, reason = validate_profile_policy(profile_id, item.get("policy"))
+        valid, reason = validate_profile_policy(
+            profile_id,
+            item.get("policy"),
+            legacy_two_share_candidate=(
+                source_date <= LEGACY_TWO_SHARE_CANDIDATE_LAST_SOURCE_DATE
+            ),
+        )
         if not valid:
             return False, f"candidate_{profile_id}_{reason}"
         if item.get("allowed_runtime_apply") is not True:
@@ -302,13 +326,16 @@ def candidate_policies_with_current_baselines(
     valid, reason = validate_candidate(payload)
     if not valid:
         raise ValueError(reason)
-    return {
-        profile_id: dict(
+    normalized: dict[str, dict[str, Any]] = {}
+    for profile_id, baseline in BASELINE_POLICIES.items():
+        policy = dict(
             (payload.get("profiles") or {}).get(profile_id, {}).get("policy")
             or baseline
         )
-        for profile_id, baseline in BASELINE_POLICIES.items()
-    }
+        if policy.get("quantity") == 2:
+            policy["quantity"] = baseline["quantity"]
+        normalized[profile_id] = policy
+    return normalized
 
 
 def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:

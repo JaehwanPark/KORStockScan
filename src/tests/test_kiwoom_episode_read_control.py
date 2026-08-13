@@ -306,7 +306,7 @@ def test_gateway_recovers_1700_read_but_does_not_retry_order_write() -> None:
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
-    result = write_gateway.submit_limit_buy(price=50_000)
+    result = write_gateway.submit_limit_buy(price=50_000, quantity=10)
     assert result.accepted is False
     assert result.return_code == "1700"
     assert len(write_session.calls) == 1

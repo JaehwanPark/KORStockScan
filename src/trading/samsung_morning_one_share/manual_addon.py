@@ -1,6 +1,6 @@
 """Exact-date 100-share manual BUY add-on mirroring the morning episode.
 
-The normal two one-share episode remains unchanged. This process follows only
+The normal episode quantity remains independently configured. This process follows only
 the normal machine's accepted BUY legs, places two separate 50-share BUY orders
 at the same prices/routes, cancels only its own remaining quantity, and never
 submits a SELL. Any filled add-on quantity is handed to the operator.

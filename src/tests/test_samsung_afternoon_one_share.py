@@ -56,11 +56,13 @@ class FakeGateway:
         self.sequence += 1
         return SubmitResult(True, f"{prefix}{self.sequence}", "0", "OK")
 
-    def submit_limit_buy(self, *, price):
+    def submit_limit_buy(self, *, price, quantity):
+        assert quantity in {1, 10}
         self.buy_calls.append(price)
         return self._accepted("B")
 
-    def submit_limit_sell(self, *, price):
+    def submit_limit_sell(self, *, price, quantity):
+        assert 1 <= quantity <= 10
         self.sell_calls.append(price)
         return self._accepted("T")
 
@@ -68,8 +70,22 @@ class FakeGateway:
         self.cancel_calls.append(order_no)
         return self._accepted("C")
 
-    def execution_snapshot(self, *, order_no, order_date):
-        return self.snapshots.get(order_no, ExecutionSnapshot(True, True, 0, 1, 1))
+    def execution_snapshot(self, *, order_no, order_date, expected_order_qty):
+        snapshot = self.snapshots.get(
+            order_no,
+            ExecutionSnapshot(True, True, 0, expected_order_qty, expected_order_qty),
+        )
+        if snapshot.order_qty == 1 and expected_order_qty == 10:
+            return ExecutionSnapshot(
+                snapshot.source_ok,
+                snapshot.found,
+                snapshot.filled_qty * 10,
+                snapshot.remaining_qty * 10,
+                10,
+                snapshot.fill_price,
+                snapshot.error,
+            )
+        return snapshot
 
 
 def _machine(tmp_path: Path, gateway: FakeGateway, *, live: bool = True):
@@ -85,7 +101,7 @@ def test_policy_uses_fixed_sor_research_thresholds_and_two_leg_allocation():
     signal = DEFAULT_POLICY.evaluate(list(_signal_bars()))
     assert DEFAULT_POLICY.symbol == "005930"
     assert DEFAULT_POLICY.route == "SOR"
-    assert DEFAULT_POLICY.quantity == 2
+    assert DEFAULT_POLICY.quantity == 20
     assert DEFAULT_POLICY.entry_valid_completed_bars == 5
     assert signal is not None
     assert signal.entry_price == 98_000
@@ -117,7 +133,7 @@ def test_latest_completed_signal_submits_two_independent_sor_buys_once(tmp_path)
     assert state["status"] == "BUY_OPEN"
     assert state["attempt_consumed"] is True
     assert gateway.buy_calls == [98_100, 98_000]
-    assert [leg["quantity"] for leg in state["legs"]] == [1, 1]
+    assert [leg["quantity"] for leg in state["legs"]] == [10, 10]
     machine.run_once(_at(12, 14, 2))
     assert gateway.buy_calls == [98_100, 98_000]
 
@@ -145,7 +161,7 @@ def test_each_fill_submits_own_two_tick_target_and_completes(tmp_path):
     gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_100)
     gateway.snapshots["B2"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_000)
     filled = machine.run_once(_at(12, 14, 2))
-    assert filled["position_qty"] == 2
+    assert filled["position_qty"] == 20
     assert filled["status"] == "TARGET_OPEN"
     assert gateway.sell_calls == [98_300, 98_200]
     gateway.snapshots["T3"] = ExecutionSnapshot(True, True, 1, 0, 1, 98_300)
@@ -166,7 +182,7 @@ def test_target_has_no_timeout_cancel_and_reconciles_original_order_across_date(
     machine.run_once(_at(12, 14, 2))
     carried = machine.run_once(_at(13, 9, 0))
     assert carried["status"] == "TARGET_OPEN"
-    assert carried["position_qty"] == 1
+    assert carried["position_qty"] == 10
     assert gateway.cancel_calls == []
     assert gateway.buy_calls == [98_100, 98_000]
 
@@ -181,7 +197,7 @@ def test_target_closed_unfilled_becomes_held_without_forced_sell(tmp_path):
     gateway.snapshots["T3"] = ExecutionSnapshot(True, True, 0, 0, 1)
     held = machine.run_once(_at(12, 15, 20))
     assert held["status"] == "HELD"
-    assert held["position_qty"] == 1
+    assert held["position_qty"] == 10
     assert gateway.cancel_calls == []
     assert gateway.sell_calls == [98_300]
 
@@ -231,7 +247,7 @@ def test_dry_run_previews_but_never_writes_broker(tmp_path):
     gateway = FakeGateway()
     state = _machine(tmp_path, gateway, live=False).run_once(_at(12, 14, 1))
     assert state["last_action"] == "would_submit_sor_two_leg_buy"
-    assert state["preview"]["total_quantity"] == 2
+    assert state["preview"]["total_quantity"] == 20
     assert [leg["entry_price"] for leg in state["preview"]["legs"]] == [
         98_100,
         98_000,
@@ -255,7 +271,7 @@ def test_no_operator_exclusion_blocks_live_buy(tmp_path):
 
 def test_interrupted_submit_intent_fails_closed_without_duplicate(tmp_path):
     class TimeoutGateway(FakeGateway):
-        def submit_limit_buy(self, *, price):
+        def submit_limit_buy(self, *, price, quantity):
             self.buy_calls.append(price)
             raise TimeoutError("unknown broker result")
 
@@ -335,14 +351,17 @@ def test_gateway_hardcodes_sor_one_share_and_global_buy_pause(monkeypatch):
     gateway = KiwoomAfternoonOneShareGateway(
         request_session=session, token_loader=lambda: "TOKEN", order_authority=True
     )
-    result = gateway.submit_limit_buy(price=98_000)
+    result = gateway.submit_limit_buy(price=98_000, quantity=10)
     assert result.accepted is True
     _, call = session.calls[0]
     assert call["json"]["dmst_stex_tp"] == "SOR"
     assert call["json"]["stk_cd"] == "005930"
-    assert call["json"]["ord_qty"] == "1"
+    assert call["json"]["ord_qty"] == "10"
     monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: True)
-    assert gateway.submit_limit_buy(price=98_000).return_code == "TRADING_PAUSED"
+    assert (
+        gateway.submit_limit_buy(price=98_000, quantity=10).return_code
+        == "TRADING_PAUSED"
+    )
     assert len(session.calls) == 1
 
 

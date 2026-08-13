@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
+from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 
 SAMSUNG_HEAVY_MIDDAY_WINDOW = (time(13, 20), time(13, 29))
@@ -74,7 +75,7 @@ class RegularTwoLegPolicy:
     scan_start: time
     scan_last_bar: time
     route: str = "SOR"
-    quantity: int = 2
+    quantity: int = EPISODE_TOTAL_QUANTITY
     lookback_bars: int = 30
     rolling_high_drawdown_pct: float = 1.25
     rolling_low_proximity_pct: float = 0.20
@@ -88,8 +89,8 @@ class RegularTwoLegPolicy:
     def __post_init__(self) -> None:
         if self.symbol not in ALLOWED_SYMBOLS:
             raise ValueError("symbol_not_in_low_price_machine_allowlist")
-        if self.route != "SOR" or self.quantity != 2:
-            raise ValueError("policy_requires_two_share_integrated_sor")
+        if self.route != "SOR" or self.quantity != EPISODE_TOTAL_QUANTITY:
+            raise ValueError("policy_requires_episode_quantity_integrated_sor")
         if (self.scan_start, self.scan_last_bar) not in SUPPORTED_REGULAR_SCAN_WINDOWS:
             raise ValueError("unsupported_regular_scan_window")
         if self.lookback_bars < 2:

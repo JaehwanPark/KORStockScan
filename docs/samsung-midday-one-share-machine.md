@@ -2,7 +2,7 @@
 
 ## Decision
 
-This is a separate two-leg trading machine for Samsung Electronics (`005930`). The legacy package/unit filenames remain compatibility surfaces, but runtime authority is exactly two independent one-share orders. It shares only the cached Kiwoom token and common infrastructure. Its process, state, lock, same-day authority artifact, and exact broker-order ledger are independent from the morning machine, afternoon machine, and widget strategy. It never uses aggregate account holdings to choose a sell quantity.
+This is a separate two-leg trading machine for Samsung Electronics (`005930`). The legacy package/unit filenames remain compatibility surfaces, but new runtime authority is exactly two independent 10-share orders (20 shares maximum). It shares only the cached Kiwoom token and common infrastructure. Its process, state, lock, same-day authority artifact, and exact broker-order ledger are independent from the morning machine, afternoon machine, and widget strategy. It never uses aggregate account holdings to choose a sell quantity.
 
 The implementation is deployable but default-OFF. Creating these files does not install, enable, or start its systemd timers.
 
@@ -12,8 +12,8 @@ The implementation is deployable but default-OFF. Creating these files does not 
 - Source: official Kiwoom `ka10080`, one-minute `005930_AL`; only completed bars from the current trade date are accepted.
 - Scan: latest completed bar from 13:15 through 13:54 KST, equivalent to the analyzed half-open window `[13:15, 13:55)`. The latest 30 bars must be consecutive. A late process start never backfills and chases an older signal.
 - Signal: over the latest 30 completed bars, close is at least 1.25% below the rolling high and no more than 0.20% above the rolling low.
-- Entry: once per day, submit one one-share SOR limit at the executable signal close and one one-share SOR limit one tick below it. This is a fixed 50:50 allocation and is not a single two-share broker order. Each leg remains valid for the next five completed one-minute bars; after broker reconciliation, the machine may cancel only that leg's exact owned buy order.
-- Exit: after either one-share fill is confirmed, submit a separate one-share SOR limit sell two ticks above that leg's actual fill price.
+- Entry: once per day, submit one 10-share SOR limit at the executable signal close and one 10-share SOR limit one tick below it. This is a fixed 50:50 allocation and is not a single 20-share broker order. Each leg remains valid for the next five completed one-minute bars; after broker reconciliation, the machine may cancel only that leg's exact owned buy order.
+- Exit: a full buy fill submits a same-quantity target immediately. A partial buy fill first cancels the remaining quantity of only that exact owned order; after reconciliation, it submits a target for only the confirmed filled quantity, two ticks above that leg's actual average fill price.
 - No stop loss, target timeout, forced sell, or best-price liquidation. If the target closes unfilled, the state becomes `HELD`; if it remains open, the original order is reconciled across dates.
 
 The `ka10080` source reuses one successful snapshot within the same KST minute
@@ -53,4 +53,4 @@ When a live episode is armed, `signal_features` freezes the completed signal bar
 
 The report compares the current signal cohort only with stricter observed subsets: drawdown may move from 1.25% to at most 1.50%, or near-low distance from 0.20% to at least 0.10%. It cannot estimate a relaxed threshold or a different cancel window. A postclose candidate requires the source-quality preflight, cumulative episode and completed-leg floors, positive rolling10/20 and cumulative notional EV, and no held/unresolved inventory. Across midday and afternoon, at most one machine and one entry axis may tighten on a given next-session PREOPEN.
 
-The preflight wrapper materializes an exact-date applied policy before the live service starts. Missing or stale candidates use the verified baseline; an invalid latest candidate or exact-date artifact blocks before broker gateway construction. A valid exact-date artifact is immutable and reused by later preflights that day. No-stop holding, two one-share legs, five completed entry bars, +2 ticks, provider, bot, cap, and broker guards are outside tuning authority.
+The preflight wrapper materializes an exact-date applied policy before the live service starts. Missing or stale candidates use the verified baseline; an invalid latest candidate or exact-date artifact blocks before broker gateway construction. A valid exact-date artifact is immutable and reused by later preflights that day. No-stop holding, two 10-share legs, five completed entry bars, +2 ticks, provider, bot, cap, and broker guards are outside tuning authority. Existing owned one-share state remains supported and is never resized retroactively.

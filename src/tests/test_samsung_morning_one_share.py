@@ -37,11 +37,13 @@ class FakeGateway:
         price = self.opens.get(route)
         return OpenPriceSnapshot(bool(price), price, f"{trade_date:%Y%m%d}080000")
 
-    def submit_limit_buy(self, *, price, route="SOR"):
+    def submit_limit_buy(self, *, price, quantity, route="SOR"):
+        assert quantity in {1, 10}
         self.buy_calls.append((route, price))
         return self._accepted("B")
 
-    def submit_limit_sell(self, *, price, route="SOR"):
+    def submit_limit_sell(self, *, price, quantity, route="SOR"):
+        assert 1 <= quantity <= 10
         self.limit_sell_calls.append((route, price))
         return self._accepted("T")
 
@@ -52,8 +54,24 @@ class FakeGateway:
     def cancel_buy(self, *, order_no):
         return self.cancel(route="SOR", order_no=order_no)
 
-    def execution_snapshot(self, *, order_no, order_date, route="SOR"):
-        return self.snapshots.get(order_no, ExecutionSnapshot(True, True, 0, 1, 1))
+    def execution_snapshot(
+        self, *, order_no, order_date, expected_order_qty, route="SOR"
+    ):
+        snapshot = self.snapshots.get(
+            order_no,
+            ExecutionSnapshot(True, True, 0, expected_order_qty, expected_order_qty),
+        )
+        if snapshot.order_qty == 1 and expected_order_qty == 10:
+            return ExecutionSnapshot(
+                snapshot.source_ok,
+                snapshot.found,
+                snapshot.filled_qty * 10,
+                snapshot.remaining_qty * 10,
+                10,
+                snapshot.fill_price,
+                snapshot.error,
+            )
+        return snapshot
 
 
 def _at(day: int, hour: int, minute: int = 0) -> datetime:
@@ -69,8 +87,8 @@ def _machine(tmp_path: Path, gateway: FakeGateway, *, live: bool = True):
     )
 
 
-def test_policy_prices_are_fixed_to_two_independent_one_share_legs():
-    assert DEFAULT_POLICY.quantity == 2
+def test_policy_prices_are_fixed_to_two_independent_ten_share_legs():
+    assert DEFAULT_POLICY.quantity == 20
     assert DEFAULT_POLICY.symbol == "005930"
     assert DEFAULT_POLICY.nxt.route == "NXT"
     assert DEFAULT_POLICY.sor.route == "SOR"
@@ -95,7 +113,7 @@ def test_nxt_fills_submit_independent_two_tick_targets_and_complete(tmp_path):
     gateway.snapshots["B2"] = ExecutionSnapshot(True, True, 1, 0, 1, 291_000)
     filled = machine.run_once(_at(11, 8, 2))
     assert filled["attempt_consumed"] is True
-    assert filled["position_qty"] == 2
+    assert filled["position_qty"] == 20
     assert gateway.limit_sell_calls == [("NXT", 292_500), ("NXT", 292_000)]
 
     gateway.snapshots["T3"] = ExecutionSnapshot(True, True, 1, 0, 1, 292_500)
@@ -162,7 +180,7 @@ def test_filled_nxt_leg_keeps_target_while_only_unfilled_leg_falls_back(tmp_path
     machine.run_once(_at(11, 8, 1))
     gateway.snapshots["B1"] = ExecutionSnapshot(True, True, 1, 0, 1, 291_500)
     partial = machine.run_once(_at(11, 8, 2))
-    assert partial["position_qty"] == 1
+    assert partial["position_qty"] == 10
     assert gateway.limit_sell_calls == [("NXT", 292_500)]
 
     pending = machine.run_once(_at(11, 8, 11))
@@ -198,7 +216,7 @@ def test_target_has_no_timeout_cancel_or_forced_exit(tmp_path):
 
     still_open = machine.run_once(_at(11, 8, 15))
     assert still_open["status"] == "TARGET_OPEN"
-    assert still_open["position_qty"] == 2
+    assert still_open["position_qty"] == 20
     assert gateway.cancel_calls == []
     assert gateway.limit_sell_calls == [("NXT", 292_500), ("NXT", 292_000)]
 
@@ -214,14 +232,14 @@ def test_target_closed_unfilled_keeps_one_share_held(tmp_path):
     gateway.snapshots["T4"] = ExecutionSnapshot(True, True, 0, 0, 1)
     held = machine.run_once(_at(11, 20, 1))
     assert held["status"] == "HELD"
-    assert held["position_qty"] == 2
-    assert held["last_action"] == "target_closed_unfilled_position_held"
+    assert held["position_qty"] == 20
+    assert held["last_action"] == "target_closed_with_position_held"
     assert gateway.cancel_calls == []
     assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
 
     carried = machine.run_once(_at(12, 8, 1))
     assert carried["status"] == "HELD"
-    assert carried["position_qty"] == 2
+    assert carried["position_qty"] == 20
     assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
 
 
@@ -235,7 +253,7 @@ def test_open_target_reconciles_across_trade_date_without_new_entry(tmp_path):
 
     carried = machine.run_once(_at(12, 8, 1))
     assert carried["status"] == "TARGET_OPEN"
-    assert carried["position_qty"] == 2
+    assert carried["position_qty"] == 20
     assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
     assert gateway.cancel_calls == []
 
@@ -258,7 +276,7 @@ def test_dry_run_only_previews_and_never_calls_order_gateway(tmp_path):
     machine = _machine(tmp_path, gateway, live=False)
     state = machine.run_once(_at(11, 8, 1))
     assert state["last_action"] == "would_submit_nxt_two_leg_buy"
-    assert state["preview"]["total_quantity"] == 2
+    assert state["preview"]["total_quantity"] == 20
     assert [leg["entry_price"] for leg in state["preview"]["legs"]] == [
         291_500,
         291_000,
@@ -349,7 +367,7 @@ def test_restart_after_broker_write_intent_never_repeats_order(tmp_path):
 
 def test_timeout_during_submit_leaves_write_intent_for_fail_closed_restart(tmp_path):
     class TimeoutGateway(FakeGateway):
-        def submit_limit_buy(self, *, route, price):
+        def submit_limit_buy(self, *, route, price, quantity):
             self.buy_calls.append((route, price))
             raise TimeoutError("broker response unknown")
 
@@ -408,7 +426,7 @@ def test_gateway_hard_codes_symbol_quantity_limit_order_and_shared_token(monkeyp
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
-    result = gateway.submit_limit_buy(route="NXT", price=291_000)
+    result = gateway.submit_limit_buy(route="NXT", price=291_000, quantity=10)
     assert result.accepted is True
     _, call = session.calls[0]
     assert call["headers"]["authorization"] == "Bearer SHARED_TOKEN"
@@ -416,7 +434,7 @@ def test_gateway_hard_codes_symbol_quantity_limit_order_and_shared_token(monkeyp
     assert call["json"] == {
         "dmst_stex_tp": "NXT",
         "stk_cd": "005930",
-        "ord_qty": "1",
+        "ord_qty": "10",
         "ord_uv": "291000",
         "trde_tp": "0",
         "cond_uv": "",
@@ -432,7 +450,7 @@ def test_gateway_supports_sor_regular_limit_orders(monkeypatch):
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
-    result = gateway.submit_limit_buy(price=297_500)
+    result = gateway.submit_limit_buy(price=297_500, quantity=10)
     assert result.accepted is True
     assert session.calls[0][1]["json"]["dmst_stex_tp"] == "SOR"
 
@@ -442,7 +460,7 @@ def test_gateway_write_is_disabled_without_both_authority_and_production():
         token_loader=lambda: "token", order_authority=False
     )
     with pytest.raises(PermissionError, match="authority_disabled"):
-        disabled.submit_limit_buy(route="SOR", price=297_500)
+        disabled.submit_limit_buy(route="SOR", price=297_500, quantity=10)
 
     wrong_endpoint = KiwoomOneShareGateway(
         token_loader=lambda: "token",
@@ -450,7 +468,7 @@ def test_gateway_write_is_disabled_without_both_authority_and_production():
         base_url="https://example.test",
     )
     with pytest.raises(PermissionError, match="production_endpoint"):
-        wrong_endpoint.submit_limit_buy(route="SOR", price=297_500)
+        wrong_endpoint.submit_limit_buy(route="SOR", price=297_500, quantity=10)
 
 
 def test_gateway_rejects_direct_krx_route_for_regular_session(monkeypatch):
@@ -462,7 +480,7 @@ def test_gateway_rejects_direct_krx_route_for_regular_session(monkeypatch):
         base_url="https://api.kiwoom.com",
     )
     with pytest.raises(ValueError, match="invalid_order_route"):
-        gateway.submit_limit_buy(route="KRX", price=297_500)
+        gateway.submit_limit_buy(route="KRX", price=297_500, quantity=10)
 
 
 def test_gateway_open_price_uses_only_official_ka10080_fields():
@@ -575,7 +593,10 @@ def test_gateway_reconciles_only_machine_order_among_parallel_widget_orders():
         base_url="https://api.kiwoom.com",
     )
     snapshot = gateway.execution_snapshot(
-        route="NXT", order_no="ONE-SHARE-11", order_date="2026-08-11"
+        route="NXT",
+        order_no="ONE-SHARE-11",
+        order_date="2026-08-11",
+        expected_order_qty=1,
     )
     assert snapshot.source_ok is True
     assert snapshot.found is True

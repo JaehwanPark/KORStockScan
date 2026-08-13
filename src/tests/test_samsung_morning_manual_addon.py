@@ -335,10 +335,13 @@ def test_gateway_manual_addon_reconciles_50_share_order_without_widening_normal_
         base_url="https://api.kiwoom.com",
     )
     normal_snapshot = normal_gateway.execution_snapshot(
-        route="NXT", order_no="101", order_date="2026-08-13"
+        route="NXT",
+        order_no="101",
+        order_date="2026-08-13",
+        expected_order_qty=10,
     )
     assert normal_snapshot.source_ok is False
-    assert normal_snapshot.error == "invalid_one_share_execution_contract"
+    assert normal_snapshot.error == "invalid_episode_execution_contract"
 
 
 def test_exact_date_systemd_unit_is_non_persistent_and_has_explicit_live_confirmation():

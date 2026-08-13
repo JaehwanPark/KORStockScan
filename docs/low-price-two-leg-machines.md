@@ -25,10 +25,13 @@ authority artifact, and exact broker-order ledger.
 The 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
 near-low at most 0.35%; Samsung Heavy afternoon keeps 30 bars, 1.25%, and
-0.20%; SK Eternix midday uses 20 bars, 2.00%, and 0.75%. One signal may create
-exactly two independent one-share limit buys: one at the signal close and one at
-one tick below.  Entry orders remain valid for five subsequently completed
-one-minute bars.  Each confirmed fill owns one +2-tick limit target.  There is no
+0.20%; SK Eternix midday uses 20 bars, 2.00%, and 0.75%. From the explicit
+2026-08-13 operator quantity change, one signal creates exactly two independent
+10-share limit buys: one at the signal close and one at one tick below (maximum
+20 shares). Entry orders remain valid for five subsequently completed one-minute
+bars. A partial buy fill cancels only the remaining quantity of that exact owned
+order; after cancellation reconciliation, the confirmed filled quantity owns one
+same-quantity +2-tick limit target. There is no
 stop loss, target timeout, forced sale, or target cancellation; an unclosed
 position remains held.
 
@@ -101,8 +104,9 @@ exact profile and date:
 - the symbol has an explicit `manual_operator` exclusion from the primary bot;
 - the profile-bound frozen clean-baseline source replay and result pass;
 - the exact-date PREOPEN policy artifact and same-day authority artifact pass;
-- the endpoint is `https://api.kiwoom.com`, the route is SOR, and each order is
-  exactly one share.
+- the endpoint is `https://api.kiwoom.com`, the route is SOR, and each new entry
+  leg is exactly 10 shares. Legacy owned one-share orders remain valid custody
+  state and are never resized retroactively.
 
 Activation uses protected `manual_operator` markers for all eight symbols in
 `data/config/manual_control_excluded_codes.txt`. The reviewed installer adds
@@ -146,7 +150,8 @@ profile may propose one tightening axis for the next PREOPEN:
 Across all thirteen profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
-invalid, the lower-price family carries all policies forward. Quantity, each
+invalid, the lower-price family carries all policies forward. Quantity is fixed
+at 10 shares per leg (20 total) by explicit operator authority; each
 profile's frozen 50:50 entry offsets, target ticks, entry validity, route, stop/hold
 behavior, provider, bot, cap, and broker guards are immutable.  Each preflight
 first materializes or reuses the exact-date applied policy and binds its hash to
