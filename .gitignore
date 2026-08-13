@@ -83,6 +83,7 @@ data/runtime/kiwoom_episode_ka10080.lock
 data/runtime/rising_missed_nxt_post_block_sampler_state.lock
 data/runtime/widget_signal_auto_trade_state.lock
 data/runtime/samsung_*_one_share_state.lock
+data/runtime/samsung_morning_manual_addon_*.lock
 data/runtime/samsung_widget_manual_orders.lock
 data/runtime/low_price_two_leg/*.lock
 
