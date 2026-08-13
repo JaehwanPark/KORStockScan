@@ -1288,12 +1288,10 @@ def test_entry_opportunity_recheck_ws_handoff_reuses_fresh_exact_context(
         },
     }
 
-    effective, fields = (
-        state_handlers._consume_entry_opportunity_recheck_ws_handoff(
-            {"entry_opportunity_recheck_armed": True},
-            {"curr": 10_000, "last_ws_update_ts": now_ts - 0.2},
-            runtime,
-        )
+    effective, fields = state_handlers._consume_entry_opportunity_recheck_ws_handoff(
+        {"entry_opportunity_recheck_armed": True},
+        {"curr": 10_000, "last_ws_update_ts": now_ts - 0.2},
+        runtime,
     )
 
     assert fields["entry_opportunity_recheck_ws_handoff_attempted"] is True
@@ -1321,12 +1319,10 @@ def test_entry_opportunity_recheck_ws_handoff_rejects_stale_snapshot(monkeypatch
         },
     }
 
-    effective, fields = (
-        state_handlers._consume_entry_opportunity_recheck_ws_handoff(
-            {"entry_opportunity_recheck_armed": True},
-            original,
-            runtime,
-        )
+    effective, fields = state_handlers._consume_entry_opportunity_recheck_ws_handoff(
+        {"entry_opportunity_recheck_armed": True},
+        original,
+        runtime,
     )
 
     assert effective == original

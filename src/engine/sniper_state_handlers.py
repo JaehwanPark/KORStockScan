@@ -2611,21 +2611,27 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
     return context
 
 
-def _apply_opening_rotation_margin_budget_authority(
+def _apply_scalping_margin_one_share_authority(
     budget_context: dict[str, Any],
     *,
     unit_price: int,
+    field_prefix: str,
+    require_cash_shortfall: bool,
 ) -> dict[str, Any]:
-    """Select broker-confirmed margin capacity for an Opening one-share buy.
+    """Select exact-price broker-confirmed capacity for a one-share BUY.
 
-    ``kt00011.min_*`` remains the cash-only authority for every other scalping
-    path.  Opening may use the official applied margin tier only when the same
-    symbol/price response explicitly reports at least one share and enough
-    orderable notional.  Unknown, 100%, missing, or inconsistent tier data
-    fails closed to the existing cash budget.
+    The applied ``kt00011`` tier is eligible only when the same symbol/price
+    response explicitly reports at least one share and enough orderable
+    notional.  General entry consumes it only as a cash-shortfall fallback;
+    Opening keeps its existing mechanical one-share policy.  Unknown, 100%,
+    missing, or inconsistent tier data fails closed to the existing cash
+    budget.
     """
 
     resolved = dict(budget_context or {})
+    normalized_prefix = str(field_prefix or "").strip()
+    if not normalized_prefix:
+        raise ValueError("field_prefix is required")
     price = max(0, _safe_int(unit_price, 0))
     margin_rate = max(0, _safe_int(resolved.get("kt00011_applied_margin_rate"), 0))
     margin_amount = max(
@@ -2636,9 +2642,15 @@ def _apply_opening_rotation_margin_budget_authority(
     error = str(resolved.get("kt00011_error") or "").strip()
     checked_price = max(0, _safe_int(resolved.get("kt00011_requested_unit_price"), 0))
 
+    cash_authorized = _scalping_cash_one_share_authorized(
+        resolved,
+        unit_price=price,
+    )
     authorized = False
     if price <= 0:
         reason = "invalid_unit_price"
+    elif require_cash_shortfall and cash_authorized:
+        reason = "cash_one_share_capacity_available"
     elif error:
         reason = "kt00011_error"
     elif checked_price != price:
@@ -2659,28 +2671,60 @@ def _apply_opening_rotation_margin_budget_authority(
 
     resolved.update(
         {
-            "opening_rotation_margin_one_share_authorized": authorized,
-            "opening_rotation_margin_authority_reason": reason,
-            "opening_rotation_margin_rate": margin_rate,
-            "opening_rotation_margin_orderable_amount": margin_amount,
-            "opening_rotation_margin_orderable_qty_cap": margin_qty,
-            "opening_rotation_margin_requested_unit_price": checked_price,
-            "opening_rotation_margin_cash_guard_bypassed": bool(
+            f"{normalized_prefix}_margin_one_share_authorized": authorized,
+            f"{normalized_prefix}_margin_authority_reason": reason,
+            f"{normalized_prefix}_margin_rate": margin_rate,
+            f"{normalized_prefix}_margin_orderable_amount": margin_amount,
+            f"{normalized_prefix}_margin_orderable_qty_cap": margin_qty,
+            f"{normalized_prefix}_margin_requested_unit_price": checked_price,
+            f"{normalized_prefix}_margin_cash_guard_bypassed": bool(
                 authorized
                 and (
                     _safe_int(resolved.get("cash_orderable_amount"), 0) < price
                     or _safe_int(resolved.get("cash_orderable_qty_cap"), 0) < 1
                 )
             ),
+            f"{normalized_prefix}_margin_order_api": "kt10000",
+            f"{normalized_prefix}_margin_credit_order_api_used": False,
         }
     )
     return resolved
 
 
-def _opening_rotation_cash_one_share_authorized(
+def _apply_opening_rotation_margin_budget_authority(
+    budget_context: dict[str, Any],
+    *,
+    unit_price: int,
+) -> dict[str, Any]:
+    """Preserve the Opening Rotation exact-price one-share authority."""
+
+    return _apply_scalping_margin_one_share_authority(
+        budget_context,
+        unit_price=unit_price,
+        field_prefix="opening_rotation",
+        require_cash_shortfall=False,
+    )
+
+
+def _apply_general_entry_margin_budget_authority(
+    budget_context: dict[str, Any],
+    *,
+    unit_price: int,
+) -> dict[str, Any]:
+    """Use broker-confirmed margin only when general entry lacks cash capacity."""
+
+    return _apply_scalping_margin_one_share_authority(
+        budget_context,
+        unit_price=unit_price,
+        field_prefix="general_entry",
+        require_cash_shortfall=True,
+    )
+
+
+def _scalping_cash_one_share_authorized(
     budget_context: dict[str, Any], *, unit_price: int
 ) -> bool:
-    """Require exact-price broker cash capacity before Opening submission."""
+    """Require exact-price broker cash capacity before one-share submission."""
 
     context = budget_context or {}
     price = max(0, _safe_int(unit_price, 0))
@@ -2691,6 +2735,17 @@ def _opening_rotation_cash_one_share_authorized(
         and checked_price == price
         and _safe_int(context.get("cash_orderable_amount"), 0) >= price
         and _safe_int(context.get("cash_orderable_qty_cap"), 0) >= 1
+    )
+
+
+def _opening_rotation_cash_one_share_authorized(
+    budget_context: dict[str, Any], *, unit_price: int
+) -> bool:
+    """Compatibility wrapper for the Opening Rotation cash contract."""
+
+    return _scalping_cash_one_share_authorized(
+        budget_context,
+        unit_price=unit_price,
     )
 
 
@@ -2722,6 +2777,44 @@ def _opening_rotation_margin_budget_log_fields(
         ),
         "opening_rotation_margin_order_api": "kt10000",
         "opening_rotation_margin_credit_order_api_used": False,
+    }
+
+
+def _general_entry_margin_budget_log_fields(
+    budget_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    context = budget_context or {}
+    return {
+        "general_entry_margin_one_share_authorized": bool(
+            context.get("general_entry_margin_one_share_authorized", False)
+        ),
+        "general_entry_margin_authority_reason": context.get(
+            "general_entry_margin_authority_reason", "not_evaluated"
+        ),
+        "general_entry_margin_rate": _safe_int(
+            context.get("general_entry_margin_rate"), 0
+        ),
+        "general_entry_margin_orderable_amount": _safe_int(
+            context.get("general_entry_margin_orderable_amount"), 0
+        ),
+        "general_entry_margin_orderable_qty_cap": _safe_int(
+            context.get("general_entry_margin_orderable_qty_cap"), 0
+        ),
+        "general_entry_margin_requested_unit_price": _safe_int(
+            context.get("general_entry_margin_requested_unit_price"), 0
+        ),
+        "general_entry_margin_cash_guard_bypassed": bool(
+            context.get("general_entry_margin_cash_guard_bypassed", False)
+        ),
+        "general_entry_margin_order_api": context.get(
+            "general_entry_margin_order_api", "kt10000"
+        ),
+        "general_entry_margin_credit_order_api_used": bool(
+            context.get("general_entry_margin_credit_order_api_used", False)
+        ),
+        "general_entry_margin_scope": "cash_shortfall_one_share_only",
+        "general_entry_margin_quantity_owner": SCALPING_SIZING_FORMULA_VERSION,
+        "general_entry_margin_scale_in_allowed": False,
     }
 
 
@@ -26906,9 +26999,7 @@ def _pre_submit_refresh_real_ws_snapshot(
     # never inherited when the manager did not return it.  Exact provenance
     # must describe the latest event itself, not an earlier nearby event.
     refreshed = {
-        key: base[key]
-        for key in _PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS
-        if key in base
+        key: base[key] for key in _PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS if key in base
     }
     refreshed.update(latest)
     refreshed.update(fields)
@@ -60193,6 +60284,18 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             budget_context,
             unit_price=curr_price,
         )
+    elif strategy == "SCALPING" and _env_bool(
+        "KORSTOCKSCAN_GENERAL_ENTRY_MARGIN_ONE_SHARE_ENABLED", True
+    ):
+        budget_context = _apply_general_entry_margin_budget_authority(
+            budget_context,
+            unit_price=curr_price,
+        )
+    general_entry_margin_authorized = bool(
+        strategy == "SCALPING"
+        and not opening_rotation_active
+        and budget_context.get("general_entry_margin_one_share_authorized", False)
+    )
     budget_base = max(0, _safe_int(budget_context.get("budget_base"), deposit))
     budget_cap = 0
     if strategy == "SCALPING":
@@ -60258,16 +60361,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 if budget_context.get(
                     "opening_rotation_margin_one_share_authorized", False
                 )
+                or general_entry_margin_authorized
                 else budget_context.get("cash_orderable_qty_cap")
             ),
             broker_qty_cap=(
-                budget_context.get("opening_rotation_margin_orderable_qty_cap")
+                (
+                    budget_context.get("opening_rotation_margin_orderable_qty_cap")
+                    if budget_context.get(
+                        "opening_rotation_margin_one_share_authorized", False
+                    )
+                    else budget_context.get("general_entry_margin_orderable_qty_cap")
+                )
                 if budget_context.get(
                     "opening_rotation_margin_one_share_authorized", False
                 )
+                or general_entry_margin_authorized
                 else None
             ),
             min_one_share_floor_enabled=min_one_share_floor_enabled,
+            stage_qty_cap=1 if general_entry_margin_authorized else None,
             initial_tier=initial_tier,
             initial_formula_version=initial_formula_version,
         )
@@ -60419,7 +60531,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **(
                 _opening_rotation_margin_budget_log_fields(budget_context)
                 if opening_rotation_active
-                else {}
+                else _general_entry_margin_budget_log_fields(budget_context)
             ),
             **_quantity_zero_context_fields(
                 domain="buy_capacity",
@@ -60498,7 +60610,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **(
             _opening_rotation_margin_budget_log_fields(budget_context)
             if opening_rotation_active
-            else {}
+            else _general_entry_margin_budget_log_fields(budget_context)
         ),
         **_scalp_pre_ai_gate_context_log_fields(
             runtime.get("scalp_pre_ai_gate_context")
@@ -63594,6 +63706,109 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **_opening_rotation_contract_fields(runtime_effect=True),
         )
 
+    general_margin_pre_submit_context: dict[str, Any] = {}
+    general_margin_log_fields: dict[str, Any] = {}
+    if strategy == "SCALPING" and general_entry_margin_authorized:
+        general_margin_pre_submit_price = max(
+            [
+                max(0, _safe_int(curr_price, 0)),
+                max(0, _safe_int(best_ask_at_submit, 0)),
+                *[
+                    max(0, _safe_int((order or {}).get("price"), 0))
+                    for order in planned_orders or []
+                    if isinstance(order, dict)
+                ],
+            ]
+        )
+        general_margin_pre_submit_context = (
+            _apply_general_entry_margin_budget_authority(
+                _resolve_scalp_cash_budget_context(
+                    code,
+                    general_margin_pre_submit_price,
+                    deposit,
+                ),
+                unit_price=general_margin_pre_submit_price,
+            )
+        )
+        refreshed_general_margin_authorized = bool(
+            general_margin_pre_submit_context.get(
+                "general_entry_margin_one_share_authorized", False
+            )
+        )
+        refreshed_general_cash_authorized = _scalping_cash_one_share_authorized(
+            general_margin_pre_submit_context,
+            unit_price=general_margin_pre_submit_price,
+        )
+        budget_context = general_margin_pre_submit_context
+        if refreshed_general_margin_authorized and sizing_context is not None:
+            budget_base = max(0, _safe_int(budget_context.get("budget_base"), 0))
+            sizing_context = dataclass_replace(
+                sizing_context,
+                budget_base_krw=budget_base,
+                cash_orderable_qty_cap=None,
+                broker_qty_cap=max(
+                    0,
+                    _safe_int(
+                        budget_context.get("general_entry_margin_orderable_qty_cap"),
+                        0,
+                    ),
+                ),
+                max_position_qty_cap=max_position_qty_cap_from_budget(
+                    budget_base,
+                    general_margin_pre_submit_price,
+                    _rule_float("MAX_POSITION_PCT", 0.20),
+                ),
+                stage_qty_cap=1,
+            )
+        elif refreshed_general_cash_authorized and sizing_context is not None:
+            budget_base = max(0, _safe_int(budget_context.get("budget_base"), 0))
+            sizing_context = dataclass_replace(
+                sizing_context,
+                budget_base_krw=budget_base,
+                cash_orderable_qty_cap=max(
+                    0,
+                    _safe_int(budget_context.get("cash_orderable_qty_cap"), 0),
+                ),
+                broker_qty_cap=None,
+                max_position_qty_cap=max_position_qty_cap_from_budget(
+                    budget_base,
+                    general_margin_pre_submit_price,
+                    _rule_float("MAX_POSITION_PCT", 0.20),
+                ),
+                stage_qty_cap=1,
+            )
+        elif sizing_context is not None:
+            sizing_context = dataclass_replace(
+                sizing_context,
+                budget_base_krw=0,
+                cash_orderable_qty_cap=0,
+                broker_qty_cap=0,
+                max_position_qty_cap=0,
+                stage_qty_cap=0,
+            )
+        general_margin_log_fields = _general_entry_margin_budget_log_fields(
+            general_margin_pre_submit_context
+        )
+        submit_revalidation_fields.update(general_margin_log_fields)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "general_entry_margin_pre_submit_revalidated",
+            prior_margin_authorized=True,
+            refreshed_margin_authorized=refreshed_general_margin_authorized,
+            refreshed_cash_authorized=refreshed_general_cash_authorized,
+            exact_price_recheck=True,
+            rollback_env=("KORSTOCKSCAN_GENERAL_ENTRY_MARGIN_ONE_SHARE_ENABLED=false"),
+            actual_order_submitted=False,
+            broker_order_forbidden=bool(
+                not refreshed_general_margin_authorized
+                and not refreshed_general_cash_authorized
+            ),
+            runtime_effect=True,
+            allowed_runtime_apply=True,
+            **general_margin_log_fields,
+        )
+
     if strategy == "SCALPING":
         (
             sizing_context,
@@ -63636,6 +63851,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             safety_ratio=f"{used_safety_ratio:.4f}",
             actual_order_submitted=False,
             broker_order_forbidden=requested_qty <= 0,
+            **general_margin_log_fields,
             **final_price_sizing_fields,
         )
         if requested_qty <= 0:
@@ -63643,14 +63859,39 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             final_zero_stage = (
                 "opening_rotation_one_share_pre_submit_block"
                 if opening_rotation_active
-                else "blocked_zero_qty_final_price"
+                else (
+                    "general_entry_margin_one_share_pre_submit_block"
+                    if general_entry_margin_authorized
+                    else "blocked_zero_qty_final_price"
+                )
             )
             final_zero_reason = (
                 "opening_margin_pre_submit_recheck_failed"
                 if opening_rotation_active
                 and prior_margin_authorized
                 and not refreshed_margin_authorized
-                else final_price_sizing_fields.get("final_price_sizing_reason")
+                else (
+                    "general_margin_pre_submit_recheck_failed"
+                    if general_entry_margin_authorized
+                    and not bool(
+                        general_margin_pre_submit_context.get(
+                            "general_entry_margin_one_share_authorized", False
+                        )
+                    )
+                    and not _scalping_cash_one_share_authorized(
+                        general_margin_pre_submit_context,
+                        unit_price=max(
+                            0,
+                            _safe_int(
+                                general_margin_pre_submit_context.get(
+                                    "general_entry_margin_requested_unit_price"
+                                ),
+                                0,
+                            ),
+                        ),
+                    )
+                    else final_price_sizing_fields.get("final_price_sizing_reason")
+                )
             )
             _log_entry_pipeline(
                 stock,
@@ -63664,7 +63905,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **(
                     _opening_rotation_margin_budget_log_fields(budget_context)
                     if opening_rotation_active
-                    else {}
+                    else (
+                        _general_entry_margin_budget_log_fields(budget_context)
+                        if general_entry_margin_authorized
+                        else {}
+                    )
                 ),
                 **final_price_sizing_fields,
             )
@@ -64301,6 +64546,73 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             )
             continue
+        if general_entry_margin_authorized:
+            effective_leg_price = max(
+                0,
+                _safe_int(order_resolution.get("effective_order_price"), 0),
+            )
+            leg_margin_context = (
+                _apply_general_entry_margin_budget_authority(
+                    _resolve_scalp_cash_budget_context(
+                        code,
+                        effective_leg_price,
+                        deposit,
+                    ),
+                    unit_price=effective_leg_price,
+                )
+                if effective_leg_price > 0
+                else {}
+            )
+            leg_margin_authorized = bool(
+                leg_margin_context.get(
+                    "general_entry_margin_one_share_authorized", False
+                )
+            )
+            leg_cash_authorized = _scalping_cash_one_share_authorized(
+                leg_margin_context,
+                unit_price=effective_leg_price,
+            )
+            leg_margin_fields = {
+                **_general_entry_margin_budget_log_fields(leg_margin_context),
+                "general_entry_margin_exact_price_revalidated": bool(
+                    effective_leg_price > 0
+                ),
+                "general_entry_margin_order_leg_qty": qty,
+                "general_entry_margin_order_leg_limit_price": effective_leg_price,
+                "general_entry_margin_market_order_forbidden": True,
+                "general_entry_margin_scale_in_forbidden": True,
+            }
+            leg_submit_revalidation_fields.update(leg_margin_fields)
+            leg_margin_allowed = bool(
+                qty == 1
+                and effective_leg_price > 0
+                and (leg_margin_authorized or leg_cash_authorized)
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "general_entry_margin_order_leg_revalidated",
+                tag=request["tag"],
+                qty=qty,
+                price=effective_leg_price,
+                refreshed_margin_authorized=leg_margin_authorized,
+                refreshed_cash_authorized=leg_cash_authorized,
+                actual_order_submitted=False,
+                broker_order_forbidden=not leg_margin_allowed,
+                runtime_effect=True,
+                allowed_runtime_apply=True,
+                rollback_env=(
+                    "KORSTOCKSCAN_GENERAL_ENTRY_MARGIN_ONE_SHARE_ENABLED=false"
+                ),
+                **leg_margin_fields,
+            )
+            if not leg_margin_allowed:
+                log_info(
+                    f"[GENERAL_MARGIN_ONE_SHARE_BLOCK] {stock.get('name')}({code}) "
+                    f"qty={qty} effective_leg_price={effective_leg_price} "
+                    f"margin={leg_margin_authorized} cash={leg_cash_authorized}"
+                )
+                continue
         price_snapshot = _build_entry_price_snapshot_fields(
             latency_gate,
             request_price=price,
@@ -64872,6 +65184,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "order_type_remap_reason": order_resolution["order_type_remap_reason"],
                 "entry_order_lifecycle": submit_revalidation_fields.get(
                     "entry_order_lifecycle", "standard"
+                ),
+                **(
+                    {
+                        **leg_margin_fields,
+                        "probe_expand_forbidden": True,
+                        "entry_split_probe_residual_expand_forbidden": True,
+                        "entry_split_probe_scale_in_forbidden": True,
+                    }
+                    if general_entry_margin_authorized
+                    else {}
                 ),
                 "entry_passive_probe_applied": bool(
                     submit_revalidation_fields.get("entry_passive_probe_applied")
@@ -83162,6 +83484,50 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             phase="execute_start",
         )
         return None
+
+    if bool(stock.get("general_entry_margin_scale_in_forbidden")) and not (
+        _is_any_simulated_position(stock, stock.get("strategy"))
+    ):
+        add_type = str((action or {}).get("add_type") or "").strip().upper()
+        reason = "general_entry_margin_one_share_position"
+        _record_scale_in_submit_block(
+            stock,
+            stage="scale_in_margin_authority_block",
+            reason=reason,
+            add_reason=(action or {}).get("reason"),
+            add_type=add_type,
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_margin_authority_block",
+            add_type=add_type,
+            scale_in_arm=add_type,
+            scale_in_blocker_namespace=add_type or "UNKNOWN",
+            scale_in_blocker_reason=reason,
+            reason=reason,
+            metric_role="hard_safety_quantity_scope",
+            decision_authority="general_entry_margin_one_share_authority",
+            window_policy="position_lifecycle",
+            sample_floor="not_applicable_runtime_guard",
+            primary_decision_metric="general_entry_margin_scale_in_forbidden",
+            source_quality_gate="buy_receipt_margin_authority_provenance_present",
+            runtime_effect=True,
+            allowed_runtime_apply=True,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            forbidden_uses=(
+                "margin_quantity_expansion|residual_leg_expansion|scale_in|"
+                "credit_order_api|broker_guard_bypass|quantity_cap_release"
+            ),
+        )
+        log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason={reason}")
+        return {
+            "status": "blocked",
+            "block_stage": "scale_in_margin_authority_block",
+            "reason": reason,
+            "qty": 0,
+        }
 
     if not admin_id and not _is_any_simulated_position(stock, stock.get("strategy")):
         log_error(f"⚠️ [추가매수보류] {stock.get('name')}: 관리자 ID가 없습니다.")

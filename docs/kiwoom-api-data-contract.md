@@ -96,6 +96,42 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   operator for manual sale. The normal 1-share-by-2-leg episode remains
   unchanged.
 
+### 2026-08-13 General Scalping Margin One-Share Orderability Gate
+
+- Re-verified at `2026-08-13T11:41:09+09:00` against current upstream commit
+  `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`.
+- Inspected `kiwoom_docs/계좌.md`, `kiwoom_docs/주문.md`,
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, and
+  `postman/kiwoom-openapi.postman_collection.json` for `kt00011`, `kt10000`,
+  `kt10006`, raw six-digit `stk_cd`, KRW `uv`, `aplc_rt`,
+  `profa_{20|30|40|50|60|100}ord_alow_amt/q`, and
+  `min_ord_alow_amt/q`.
+- General SCALPING entry may use the applied `20/30/40/50/60%` bucket only as
+  a cash-shortfall fallback. The same symbol and exact positive limit price
+  must return no error, a recognized discrete tier, orderable quantity at
+  least one, and orderable amount at least the checked unit price. Exact-price
+  cash capacity remains primary when it can buy one share. Unknown, malformed,
+  `100%`, missing, mismatched-price, market-price-zero, zero-quantity, or
+  insufficient-amount responses fail closed.
+- Authority is rechecked at initial sizing, at the most expensive executable
+  pre-submit price, and once more at each resolved broker limit price. A
+  margin-authorized path submits only when the resolved leg is exactly one
+  share and has a positive limit price. It uses the ordinary domestic stock
+  BUY API `kt10000`; credit-order API `kt10006` is forbidden.
+- Margin authority changes only the capacity source passed into the existing
+  `position_sizing_dynamic_formula` allocator. It does not increase an
+  allocator-approved quantity: the stage cap is one share. Probe expansion,
+  residual multi-leg expansion, and every real scale-in are forbidden for the
+  resulting position lifecycle. Existing stale/conflict, effective-price,
+  liquidity/microstructure, account/order/cooldown, position, broker-response,
+  and hard/protect/emergency guards remain in force.
+- BUY/SELL receipt snapshots preserve exact-price, tier, capacity, ordinary
+  order API, cash-bypass, and scale-in-forbidden provenance for the position
+  lifecycle. Rollback is
+  `KORSTOCKSCAN_GENERAL_ENTRY_MARGIN_ONE_SHARE_ENABLED=false`; rollback restores
+  cash-only general entry and does not alter Opening Rotation's separate
+  one-share margin contract.
+
 ### 2026-08-10 Opening Rotation Margin Orderability Gate
 
 - Rechecked at `2026-08-10T18:35:18+09:00` from upstream commit

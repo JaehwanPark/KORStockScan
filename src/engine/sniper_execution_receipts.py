@@ -233,6 +233,25 @@ _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS = (
     "rising_missed_scout_parent_ai_probe_intent_after_cost_reward_risk",
 )
 _ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS = (ENTRY_CANDIDATE_LIFECYCLE_CONTEXT_KEY,)
+_GENERAL_ENTRY_MARGIN_POSITION_KEYS = (
+    "general_entry_margin_authority_reason",
+    "general_entry_margin_cash_guard_bypassed",
+    "general_entry_margin_credit_order_api_used",
+    "general_entry_margin_exact_price_revalidated",
+    "general_entry_margin_one_share_authorized",
+    "general_entry_margin_orderable_amount",
+    "general_entry_margin_orderable_qty_cap",
+    "general_entry_margin_order_api",
+    "general_entry_margin_order_leg_limit_price",
+    "general_entry_margin_order_leg_qty",
+    "general_entry_margin_market_order_forbidden",
+    "general_entry_margin_quantity_owner",
+    "general_entry_margin_rate",
+    "general_entry_margin_requested_unit_price",
+    "general_entry_margin_scale_in_allowed",
+    "general_entry_margin_scale_in_forbidden",
+    "general_entry_margin_scope",
+)
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     "buy_execution_notified",
@@ -242,6 +261,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "scale_in_filled_qty",
     "code",
     "actual_order_submitted",
+    *_GENERAL_ENTRY_MARGIN_POSITION_KEYS,
     "msg_audience",
     "name",
     "opening_rotation_entry_time_bucket",
@@ -286,6 +306,7 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "fast_exit_decision_peak_price",
     "fast_exit_decision_quote_state",
     "fast_exit_decision_quote_reason",
+    *_GENERAL_ENTRY_MARGIN_POSITION_KEYS,
     "exit_decision_mark_price",
     "exit_decision_executable_sell_price",
     "exit_decision_peak_price",
@@ -537,6 +558,7 @@ _SELL_REVIVE_RESET_KEYS = (
     "fast_exit_last_error",
     "fast_exit_trigger_kind",
     "fast_exit_rest_retry_after",
+    *_GENERAL_ENTRY_MARGIN_POSITION_KEYS,
     *_FAST_EXIT_DECISION_RESET_KEYS,
     *_EXIT_DECISION_RESET_KEYS,
     *_POSITION_PEAK_RESET_KEYS,
@@ -653,6 +675,7 @@ _SELL_COMPLETE_RESET_KEYS = (
     "fast_exit_last_error",
     "fast_exit_trigger_kind",
     "fast_exit_rest_retry_after",
+    *_GENERAL_ENTRY_MARGIN_POSITION_KEYS,
     *_FAST_EXIT_DECISION_RESET_KEYS,
     *_EXIT_DECISION_RESET_KEYS,
     *_POSITION_PEAK_RESET_KEYS,
@@ -3577,6 +3600,13 @@ def _handle_entry_buy_execution(
             if str(pending_order.get("ord_no", "") or "").strip() != order_no:
                 continue
             requested_qty = int(pending_order.get("qty", 0) or 0)
+            if pending_order.get("general_entry_margin_scale_in_forbidden"):
+                for key in _GENERAL_ENTRY_MARGIN_POSITION_KEYS:
+                    if key in pending_order:
+                        target_stock[key] = pending_order[key]
+                target_stock["probe_expand_forbidden"] = True
+                target_stock["entry_split_probe_residual_expand_forbidden"] = True
+                target_stock["entry_split_probe_scale_in_forbidden"] = True
             pending_order["last_fill_price"] = exec_price
             pending_order["last_fill_at"] = time.time()
             log_info(
@@ -4088,6 +4118,7 @@ def _handle_entry_buy_execution(
         opening_rotation_margin_credit_order_api_used=target_stock.get(
             "opening_rotation_margin_credit_order_api_used"
         ),
+        **_receipt_snapshot(target_stock, _GENERAL_ENTRY_MARGIN_POSITION_KEYS),
         buy_price=f"{float(new_avg or 0):.2f}",
         buy_qty=int(new_qty or 0),
         fill_price=int(exec_price or 0),
