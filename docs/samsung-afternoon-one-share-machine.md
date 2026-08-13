@@ -16,11 +16,18 @@ The implementation is deployable but default-OFF. Creating these files does not 
 - Exit: each confirmed one-share fill owns its own one-share SOR target two ticks above that leg's actual fill price.
 - No stop loss, target timeout, forced sell, or best-price liquidation. If the target closes unfilled, the state becomes `HELD`; if it remains open, the original order is reconciled across dates.
 
+The `ka10080` source reuses one successful snapshot within the same KST minute
+only after the immediately preceding completed candle is present. A boundary
+response that still ends earlier is not cached and is refetched on the next
+bounded poll. It shares a cross-process 0.4-second episode read pacer. Explicit error 1700 or
+HTTP 429 reads receive at most two bounded-backoff retries. Failed snapshots are
+not cached, and order/cancel API IDs are never retried by this controller.
+
 ## Evidence and limitations
 
 The clean-baseline replay covered 46 days. The original conservative signal-close-minus-one-tick leg had 22 attempts, 20 fills/completions, net EV +0.1612% at the 0.20% cost assumption, median target time 2 minutes, p90 14.1 minutes, and maximum 21 minutes. The added signal-close leg is an execution-probability leg from the entry-price re-evaluation and retains separate attribution; minute-bar touch does not prove queue position. The 46-day sample remains below the 60-day promotion floor, so this is user-directed bounded two-leg authority rather than autonomous full-live promotion evidence.
 
-Official Kiwoom contract gate: upstream commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, retrieved 2026-08-11 15:30:19 KST; inspected `kiwoom_docs/차트.md`, `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`, `kiwoom/specs.py`, API spec, and Postman for `ka10080`, `kt10000`, `kt10001`, `kt10003`, and `kt00007`.
+Official Kiwoom contract gate: upstream commit `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`, retrieved 2026-08-13 10:07:49 KST; inspected `kiwoom_docs/차트.md`, `kiwoom_docs/주문.md`, `kiwoom_docs/계좌.md`, `kiwoom/specs.py`, `kiwoom/core`, API spec, and Postman for `ka10080`, `kt10000`, `kt10001`, `kt10003`, and `kt00007`. The official source defines 1700 as a request-limit error but does not specify the local pacing interval.
 
 ## Runtime surfaces
 

@@ -42,6 +42,9 @@ EXECUTION_PLAN_GRID = (
     ((0, -1), 3, 4),
     ((-1, -2), 5, 4),
 )
+PROFILE_EXECUTION_PLAN_EXTENSIONS = {
+    "kakao_morning": (((0, -1), 5, 3),),
+}
 MAX_MANAGEABLE_HELD_LEG_RATE = 0.25
 MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT = 3.0
 OFFICIAL_REFERENCE = {
@@ -387,11 +390,13 @@ def candidate_grid(profile: MachineProfile) -> tuple[SpotCandidate, ...]:
         int(profile.policy.entry_valid_completed_bars),
         int(profile.policy.target_ticks),
     )
-    execution_plans = (
-        tuple(dict.fromkeys((baseline_plan, *EXECUTION_PLAN_GRID)))
-        if getattr(profile, "discovery_lane", "") == "existing_symbol_logic_improvement"
-        else (baseline_plan,)
-    )
+    profile_extensions = PROFILE_EXECUTION_PLAN_EXTENSIONS.get(profile.profile_id, ())
+    if profile_extensions:
+        execution_plans = tuple(dict.fromkeys((baseline_plan, *profile_extensions)))
+    elif getattr(profile, "discovery_lane", "") == "existing_symbol_logic_improvement":
+        execution_plans = tuple(dict.fromkeys((baseline_plan, *EXECUTION_PLAN_GRID)))
+    else:
+        execution_plans = (baseline_plan,)
     return tuple(
         SpotCandidate(
             start,

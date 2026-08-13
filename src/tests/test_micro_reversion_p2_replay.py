@@ -137,7 +137,7 @@ def test_canonical_stream_loader_rejects_exact_excluded_epoch(
                 "exchange_window_end": "2026-08-11T09:00:05+09:00",
                 "evidence": "test-evidence",
             }
-        ]
+        ],
     )
 
     with pytest.raises(ValueError, match="canary_auto_stop"):

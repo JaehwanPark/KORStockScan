@@ -666,6 +666,10 @@ class SamsungRegularTwoLegMachine:
             )
             self._save()
             return self.snapshot()
+        transient_source_wait = self._state.get("last_action") in {
+            "sor_minute_source_wait",
+            "stale_or_incomplete_sor_bar_wait",
+        }
         latest = source.bars[-1]
         lag_minutes = int(
             (now.replace(second=0, microsecond=0) - latest.timestamp).total_seconds()
@@ -680,8 +684,12 @@ class SamsungRegularTwoLegMachine:
             )
             self._save()
             return self.snapshot()
+        if transient_source_wait:
+            self._state["blocked_reason"] = ""
         latest_iso = latest.timestamp.isoformat()
         if self._state.get("last_evaluated_bar") == latest_iso:
+            if transient_source_wait:
+                self._record(now, "sor_minute_source_recovered", bar=latest_iso)
             return self.snapshot()
         if latest.timestamp.time() > self.policy.scan_last_bar:
             self._state["status"] = "NO_TRADE"

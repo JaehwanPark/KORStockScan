@@ -17,6 +17,7 @@ from src.engine.monitoring.low_price_two_leg_tuning import (
     build_candidate,
     build_report,
 )
+from src.engine.monitoring.low_price_two_leg_entry_spot_research import candidate_grid
 from src.trading.low_price_two_leg.gateway import (
     ExecutionSnapshot,
     KiwoomLowPriceTwoLegGateway,
@@ -26,7 +27,9 @@ from src.trading.low_price_two_leg.gateway import (
 from src.trading.low_price_two_leg.machine import LowPriceTwoLegMachine
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
+    KAKAO_MORNING_TARGET_TRANSITION,
     POLICY_BOUNDS,
+    apply_operator_policy_transitions,
     atomic_write_json,
     load_applied_profile_policy,
     policy_hash,
@@ -54,6 +57,7 @@ from src.trading.low_price_two_leg.profiles import (
     SK_ETERNIX_MORNING_WINDOW,
     MinuteBar,
 )
+from src.trading.low_price_two_leg.service import _profile_with_applied_policy
 from src.trading.order.regular_two_leg_machine import KST
 from src.trading.order.tick_utils import move_price_by_ticks
 
@@ -394,6 +398,43 @@ def test_machine_requires_profile_symbol_manual_exclusion(tmp_path):
     assert gateway.buy_calls == []
 
 
+def test_machine_clears_transient_source_error_after_valid_bar_recovers(tmp_path):
+    profile = PROFILES["sk_eternix_midday"]
+    signal_start = datetime.combine(
+        date(2026, 8, 12), profile.policy.scan_start, tzinfo=KST
+    )
+
+    class RecoveringGateway(FakeGateway):
+        def __init__(self):
+            super().__init__(profile.profile_id)
+            self.source_calls = 0
+
+        def completed_sor_minute_bars(self, *, trade_date, now):
+            self.source_calls += 1
+            if self.source_calls == 1:
+                return MinuteBarsSnapshot(False, error="[1700] request limit")
+            return MinuteBarsSnapshot(
+                True,
+                (MinuteBar(signal_start, 22_650, 22_650, 22_650, 22_650),),
+            )
+
+    gateway = RecoveringGateway()
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "source-recovery.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    failed = machine.run_once(signal_start + timedelta(minutes=1, seconds=10))
+    recovered = machine.run_once(signal_start + timedelta(minutes=1, seconds=16))
+
+    assert failed["blocked_reason"] == "[1700] request limit"
+    assert recovered["blocked_reason"] == ""
+    assert recovered["last_action"] == "bar_evaluated_no_signal"
+
+
 def test_gateway_uses_bound_symbol_sor_and_one_share_for_every_write():
     session = FakeSession(
         [
@@ -635,6 +676,40 @@ def test_expanded_recommendation_authority_binds_v5_evidence(profile_id):
     )
 
 
+def test_kakao_morning_authority_records_target_transition(tmp_path):
+    profile = PROFILES["kakao_morning"]
+    target_date = date(2026, 8, 14)
+    applied, _ = build_applied_policy(
+        target_date=target_date, candidate_dir=tmp_path / "none"
+    )
+    decision = evaluate_preflight(
+        target_date=target_date,
+        profile=profile,
+        main_bot_active=True,
+        shared_token_available=True,
+        operator_exclusion_source="manual_operator",
+        research_evidence_ready=True,
+        applied_policy_ready=True,
+        applied_policy_hash=applied["policy_hash"],
+    )
+    artifact = build_authority_artifact(
+        decision,
+        profile=profile,
+        applied_policy=applied["profiles"][profile.profile_id]["policy"],
+        applied_policy_hash=applied["policy_hash"],
+        observed_at=_at(14, 8, 55),
+    )
+
+    assert artifact["policy"]["target_ticks"] == 3
+    assert artifact["policy"]["target_ticks_baseline"] == 2
+    assert artifact["policy"]["target_ticks_authority"] == (
+        "explicit_user_directed_runtime_policy_transition"
+    )
+    assert artifact["policy"]["target_ticks_transition"] == (
+        KAKAO_MORNING_TARGET_TRANSITION
+    )
+
+
 def test_expanded_recommendation_preflight_rejects_source_only_contract_tamper(
     tmp_path,
 ):
@@ -681,6 +756,65 @@ def test_preopen_apply_writes_and_loads_safe_baseline_when_no_candidate(tmp_path
     assert reason == "ready"
     assert digest == applied["policy_hash"]
     assert policy == BASELINE_POLICIES["samsung_heavy_midday"]
+
+
+def test_kakao_morning_target_transition_starts_next_date_only(tmp_path):
+    today, _ = build_applied_policy(
+        target_date=date(2026, 8, 13), candidate_dir=tmp_path / "none"
+    )
+    tomorrow, _ = build_applied_policy(
+        target_date=date(2026, 8, 14), candidate_dir=tmp_path / "none"
+    )
+
+    assert today["profiles"]["kakao_morning"]["policy"]["target_ticks"] == 2
+    assert "operator_policy_transitions" not in today
+    assert validate_applied(today, target_date=date(2026, 8, 13)) == (
+        True,
+        "valid",
+    )
+    assert tomorrow["profiles"]["kakao_morning"]["policy"]["target_ticks"] == 3
+    assert tomorrow["profiles"]["kakao_late_morning"]["policy"]["target_ticks"] == 2
+    assert tomorrow["profiles"]["mirae_asset_morning"]["policy"]["target_ticks"] == 4
+    assert tomorrow["operator_policy_transitions"] == [KAKAO_MORNING_TARGET_TRANSITION]
+    assert validate_applied(tomorrow, target_date=date(2026, 8, 14)) == (
+        True,
+        "valid",
+    )
+
+    tampered = json.loads(json.dumps(tomorrow))
+    tampered.pop("operator_policy_transitions")
+    assert validate_applied(tampered, target_date=date(2026, 8, 14))[1] == (
+        "applied_operator_policy_transition_invalid"
+    )
+
+
+def test_kakao_morning_service_consumes_applied_three_tick_target():
+    transitioned = apply_operator_policy_transitions(
+        BASELINE_POLICIES, target_date=date(2026, 8, 14)
+    )
+    profile = _profile_with_applied_policy(
+        PROFILES["kakao_morning"], transitioned["kakao_morning"], "HASH"
+    )
+
+    assert profile.policy.target_ticks == 3
+    assert profile.policy.target_price(39_250) == 39_400
+    assert profile.policy.target_price(39_200) == 39_350
+    assert profile.policy.runtime_policy_source == "preopen_applied_policy"
+    assert profile.policy.runtime_policy_hash == "HASH"
+
+
+def test_three_tick_research_extension_is_scoped_to_kakao_morning():
+    kakao_targets = {
+        candidate.target_ticks
+        for candidate in candidate_grid(PROFILES["kakao_morning"])
+    }
+    kepco_targets = {
+        candidate.target_ticks
+        for candidate in candidate_grid(PROFILES["kepco_afternoon"])
+    }
+
+    assert 3 in kakao_targets
+    assert 3 not in kepco_targets
 
 
 def test_pre_expansion_applied_policy_is_scoped_to_legacy_profiles_and_date(tmp_path):
@@ -809,6 +943,23 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
         item["policy"] == BASELINE_POLICIES[profile_id]
         for profile_id, item in candidate["profiles"].items()
         if profile_id != target
+    )
+    transition_dir = tmp_path / "target_transition"
+    transition_dir.mkdir()
+    (transition_dir / "low_price_two_leg_policy_candidate_2026-08-11.json").write_text(
+        json.dumps(candidate), encoding="utf-8"
+    )
+    transitioned_applied, transitioned_status = build_applied_policy(
+        target_date=date(2026, 8, 14), candidate_dir=transition_dir
+    )
+    assert transitioned_status == "candidate_applied"
+    assert transitioned_applied["policy_mutations"] == candidate["policy_mutations"]
+    assert (
+        transitioned_applied["profiles"]["kakao_morning"]["policy"]["target_ticks"] == 3
+    )
+    assert validate_applied(transitioned_applied, target_date=date(2026, 8, 14)) == (
+        True,
+        "valid",
     )
 
     legacy_universe_candidate = json.loads(json.dumps(candidate))

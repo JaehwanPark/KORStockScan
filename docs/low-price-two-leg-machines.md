@@ -58,12 +58,25 @@ not a deployment dependency.
 
 | Profile | Lookback | Drawdown | Near low | Entry offsets | Valid bars | Target |
 |---|---:|---:|---:|---|---:|---:|
-| `kakao_morning` | 15 | 0.75% | 0.35% | close/-1 tick | 5 | +2 ticks |
+| `kakao_morning` | 15 | 0.75% | 0.35% | close/-1 tick | 5 | +3 ticks from 2026-08-14 |
 | `kepco_afternoon` | 60 | 0.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
 | `kakao_late_morning` | 15 | 0.50% | 0.35% | close/-1 tick | 5 | +2 ticks |
 | `sk_eternix_morning` | 15 | 1.50% | 0.75% | close/-1 tick | 5 | +2 ticks |
 | `mirae_asset_midday` | 45 | 1.00% | 0.50% | close/-1 tick | 5 | +2 ticks |
 | `sk_eternix_afternoon` | 45 | 2.50% | 0.50% | close/-1 tick | 5 | +2 ticks |
+
+Kakao morning keeps its frozen-research +2-tick baseline for the 2026-08-13
+execution record, then applies an explicit user-directed +3-tick target transition
+from the 2026-08-14 exact-date PREOPEN policy. The service consumes that applied
+target instead of the compiled baseline, and the authority artifact records the
+before/after value and effective date. At the observed 39,250/39,200 fills this
+means independent targets of 39,400/39,350. It does not change Kakao late morning,
+any other profile, entry criteria, two-share allocation, no-stop holding, or broker
+guards. Postclose research includes +3 ticks as a source-only execution-plan option;
+ordinary bounded entry tuning cannot change this operator-owned target axis.
+After postclose evidence review, rollback restores +2 ticks in a later exact-date
+PREOPEN policy only when explicitly directed by the user. It never cancels or
+replaces an already-owned target order.
 
 KEPCO afternoon had 16 completed holdout legs and two held legs (11.11% of
 filled legs), with completed-only notional EV `+0.064355%` and held mark
@@ -193,11 +206,27 @@ targets, stops, providers, the main bot, caps, or broker guards. A recommended
 profile still requires a separate user instruction, implementation, and review
 gate.
 
+## Episode market-data request control
+
+All live lower-price profiles share the episode-only `ka10080` read controller.
+A process reuses one successful completed-bar snapshot within the same KST
+minute, and independent episode processes serialize a remaining `ka10080`
+request at a conservative local interval of 0.4 seconds. An explicit Kiwoom
+`1700` or HTTP 429 read failure is retried at most twice with bounded backoff.
+The official reference identifies error 1700 but does not publish the local
+0.4-second value; that interval is an operational burst guard based on observed
+traffic. Failed/invalid snapshots are not cached. Order and cancel API IDs never
+enter this retry path, so an ambiguous broker write cannot be replayed.
+A successful response is cached for the rest of the KST minute only when it
+already contains the immediately preceding completed candle. A boundary response
+that still ends two or more minutes behind is returned once but not cached, so the
+next bounded poll can observe the newly published candle.
+
 ## Official Kiwoom reference evidence
 
 - Repository: `Kiwoom-Securities/Kiwoom-REST-API`
 - Commit: `69642586f7d84ba9fd8a6faf1f1537c7fda6568b`
-- Retrieved: `2026-08-11T21:27:49+09:00`
+- Retrieved: `2026-08-13T10:07:49+09:00`
 - Inspected: `kiwoom_docs/차트.md`, `kiwoom_docs/주문.md`,
   `kiwoom_docs/계좌.md`, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
   `kiwoom/core`, the Postman collection, and

@@ -48,6 +48,21 @@ CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "candidates
 APPLIED_DIR = DATA_DIR / "threshold_cycle" / "low_price_two_leg" / "applied"
 MAX_CANDIDATE_AGE_DAYS = 7
 CLEAN_BASELINE_DATE = "2026-06-05"
+KAKAO_MORNING_TARGET_TRANSITION = {
+    "profile_id": "kakao_morning",
+    "axis": "target_ticks",
+    "before": 2,
+    "after": 3,
+    "approved_at_kst": "2026-08-13T10:24:00+09:00",
+    "effective_target_date": "2026-08-14",
+    "decision_authority": "explicit_user_directed_runtime_policy_transition",
+    "reason": "keep_each_sell_above_observed_round_trip_cost_after_shared_average_price",
+    "rollback": {
+        "trigger": "explicit_user_revert_after_postclose_evidence_review",
+        "action": "restore_kakao_morning_target_ticks_2_at_next_preopen",
+        "existing_order_effect": "none_do_not_cancel_or_replace_owned_target_orders",
+    },
+}
 
 
 def _baseline_policy(profile_id: str) -> dict[str, Any]:
@@ -76,6 +91,32 @@ POLICY_BOUNDS = {
     }
     for profile_id, policy in BASELINE_POLICIES.items()
 }
+
+
+def operator_policy_transitions(target_date: date) -> list[dict[str, Any]]:
+    effective_date = date.fromisoformat(
+        str(KAKAO_MORNING_TARGET_TRANSITION["effective_target_date"])
+    )
+    return (
+        [dict(KAKAO_MORNING_TARGET_TRANSITION)] if target_date >= effective_date else []
+    )
+
+
+def apply_operator_policy_transitions(
+    policies: dict[str, dict[str, Any]], *, target_date: date
+) -> dict[str, dict[str, Any]]:
+    """Apply explicit date-scoped operator decisions after candidate selection."""
+
+    transitioned = {profile_id: dict(policy) for profile_id, policy in policies.items()}
+    for transition in operator_policy_transitions(target_date):
+        profile_id = str(transition["profile_id"])
+        axis = str(transition["axis"])
+        if profile_id not in transitioned:
+            raise ValueError("operator_transition_profile_missing")
+        if transitioned[profile_id].get(axis) != transition["before"]:
+            raise ValueError("operator_transition_before_value_mismatch")
+        transitioned[profile_id][axis] = transition["after"]
+    return transitioned
 
 
 def _canonical_hash(payload: Any) -> str:
@@ -144,10 +185,17 @@ def _validate_policy_mutations(value: Any) -> tuple[bool, str]:
     return True, "valid"
 
 
-def validate_profile_policy(profile_id: str, policy: Any) -> tuple[bool, str]:
+def validate_profile_policy(
+    profile_id: str, policy: Any, *, target_date: date | None = None
+) -> tuple[bool, str]:
     if profile_id not in BASELINE_POLICIES or not isinstance(policy, dict):
         return False, "profile_or_policy_invalid"
     baseline = BASELINE_POLICIES[profile_id]
+    expected_immutable = dict(baseline)
+    if target_date is not None:
+        for transition in operator_policy_transitions(target_date):
+            if transition["profile_id"] == profile_id:
+                expected_immutable[str(transition["axis"])] = transition["after"]
     if set(policy) != set(baseline):
         return False, "policy_key_contract_mismatch"
     for key in (
@@ -156,7 +204,7 @@ def validate_profile_policy(profile_id: str, policy: Any) -> tuple[bool, str]:
         "quantity",
         "target_ticks",
     ):
-        if policy.get(key) != baseline[key]:
+        if policy.get(key) != expected_immutable[key]:
             return False, f"immutable_{key}_mismatch"
     drawdown = _finite_number(policy.get("rolling_high_drawdown_pct"))
     near_low = _finite_number(policy.get("rolling_low_proximity_pct"))
@@ -282,6 +330,9 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
     valid, reason = _validate_policy_mutations(payload.get("policy_mutations"))
     if not valid:
         return False, reason
+    expected_transitions = operator_policy_transitions(target_date)
+    if list(payload.get("operator_policy_transitions") or []) != expected_transitions:
+        return False, "applied_operator_policy_transition_invalid"
     profiles = payload.get("profiles")
     if not isinstance(profiles, dict):
         return False, "applied_profile_set_invalid"
@@ -301,7 +352,9 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
     for profile_id, item in profiles.items():
         if not isinstance(item, dict):
             return False, f"applied_{profile_id}_invalid"
-        valid, reason = validate_profile_policy(profile_id, item.get("policy"))
+        valid, reason = validate_profile_policy(
+            profile_id, item.get("policy"), target_date=target_date
+        )
         if not valid:
             return False, f"applied_{profile_id}_{reason}"
         policies[profile_id] = item["policy"]
@@ -351,10 +404,11 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def baseline_applied_payload(*, target_date: date, reason: str) -> dict[str, Any]:
-    policies = {
-        profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()
-    }
-    return {
+    policies = apply_operator_policy_transitions(
+        {profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()},
+        target_date=target_date,
+    )
+    payload = {
         "schema": APPLIED_SCHEMA,
         "target_date": target_date.isoformat(),
         "applied_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
@@ -372,8 +426,13 @@ def baseline_applied_payload(*, target_date: date, reason: str) -> dict[str, Any
         "allowed_runtime_apply": True,
         "actual_order_submitted": False,
         "forbidden_uses": [
-            "quantity_target_or_entry_validity_change",
+            "candidate_quantity_target_or_entry_validity_change",
+            "target_change_outside_recorded_operator_policy_transition",
             "stop_loss_or_forced_exit_creation",
             "provider_bot_cap_or_broker_guard_change",
         ],
     }
+    transitions = operator_policy_transitions(target_date)
+    if transitions:
+        payload["operator_policy_transitions"] = transitions
+    return payload

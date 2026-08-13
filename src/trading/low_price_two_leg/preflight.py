@@ -15,7 +15,10 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.trading.low_price_two_leg.profiles import PROFILES, MachineProfile, get_profile
-from src.trading.low_price_two_leg.policy_runtime import load_applied_profile_policy
+from src.trading.low_price_two_leg.policy_runtime import (
+    load_applied_profile_policy,
+    operator_policy_transitions,
+)
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
@@ -344,9 +347,11 @@ def _policy_contract(
     profile: MachineProfile,
     applied_policy: dict,
     applied_policy_hash: str,
+    *,
+    target_date: date,
 ) -> dict:
     policy = profile.policy
-    return {
+    contract = {
         "profile_id": profile.profile_id,
         "symbol": profile.symbol,
         "name": profile.name,
@@ -370,6 +375,16 @@ def _policy_contract(
         "unfilled_target": "hold_position_without_forced_exit",
         "relationship": "parallel_independent_strategy_and_order_ledger",
     }
+    transitions = [
+        transition
+        for transition in operator_policy_transitions(target_date)
+        if transition["profile_id"] == profile.profile_id
+    ]
+    if transitions:
+        contract["target_ticks_authority"] = transitions[0]["decision_authority"]
+        contract["target_ticks_baseline"] = policy.target_ticks
+        contract["target_ticks_transition"] = transitions[0]
+    return contract
 
 
 def build_authority_artifact(
@@ -393,7 +408,12 @@ def build_authority_artifact(
             date.fromisoformat(decision.target_date), time(23, 59, 59), tzinfo=KST
         ).isoformat(),
         "decision": asdict(decision),
-        "policy": _policy_contract(profile, applied_policy, applied_policy_hash),
+        "policy": _policy_contract(
+            profile,
+            applied_policy,
+            applied_policy_hash,
+            target_date=date.fromisoformat(decision.target_date),
+        ),
         "evidence": {
             "path": str(research["path"]),
             "report_sha256": str(research["sha256"]),
@@ -491,7 +511,9 @@ def validate_authority(
     )
     if applied_policy is None:
         return False, f"authority_applied_policy_{applied_reason}"
-    if payload.get("policy") != _policy_contract(profile, applied_policy, applied_hash):
+    if payload.get("policy") != _policy_contract(
+        profile, applied_policy, applied_hash, target_date=now.date()
+    ):
         return False, "authority_policy_mismatch"
     evidence = payload.get("evidence")
     research = _research_evidence_contract(profile)

@@ -98,5 +98,6 @@ Baseline: `main_server_synthetic_0b_20260813T090755+0900`
 - silent-fail 검토: manifest missing/invalid/schema/authority/provenance/count/window drift는 모두 예외로 중단
 - authority 검토: discovery/selection/sim/trading/broker/threshold/provider/bot/quantity/cap 권한 추가 없음
 - 최종 미해결 코드 finding: `0`
+- 게시 CI 보완: 저장소 전체 Black gate가 기존 미포맷 4개 파일을 검출해 기계적 포맷만 적용했다. `p2_replay.py`의 동작·측정값·frozen limit는 변하지 않았고, frozen artifact의 해당 source hash만 `a05dde76... -> 2cc8cb78...`로 갱신해 `reason=black_formatting_only_no_runtime_or_measurement_change`, `runtime_effect=false` provenance를 남겼다.
 
 실행 중 observer는 기존 코드가 09:00 incident에서 이미 fail-closed했으므로 현재 중단 상태다. 변경 소스는 아직 로컬 커밋 전이어서 runbook의 clean runtime provenance 규칙에 따라 이 보고서 작성 시점에는 bot을 재기동하지 않았다.

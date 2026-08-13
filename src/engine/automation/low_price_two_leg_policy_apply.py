@@ -15,10 +15,12 @@ from src.trading.low_price_two_leg.policy_runtime import (
     CANDIDATE_DIR,
     KST,
     MAX_CANDIDATE_AGE_DAYS,
+    apply_operator_policy_transitions,
     applied_path,
     atomic_write_json,
     baseline_applied_payload,
     candidate_policies_with_current_baselines,
+    operator_policy_transitions,
     policy_hash,
     policy_mutations_between,
     validate_applied,
@@ -80,7 +82,7 @@ def build_applied_policy(
         raise ValueError(reason)
     if candidate.get("source_date") != candidate_date.isoformat():
         raise ValueError("candidate_filename_payload_date_mismatch")
-    policies = _candidate_policies(candidate)
+    candidate_policies = _candidate_policies(candidate)
     previous_path = _latest_prior_candidate(candidate_dir, candidate_date)
     previous_policies = {
         profile_id: dict(policy) for profile_id, policy in BASELINE_POLICIES.items()
@@ -96,9 +98,12 @@ def build_applied_policy(
         if not valid:
             raise ValueError(f"previous_candidate_{reason}")
         previous_policies = _candidate_policies(previous)
-    expected_mutations = policy_mutations_between(previous_policies, policies)
+    expected_mutations = policy_mutations_between(previous_policies, candidate_policies)
     if candidate.get("policy_mutations") != expected_mutations:
         raise ValueError("candidate_policy_mutation_lineage_mismatch")
+    policies = apply_operator_policy_transitions(
+        candidate_policies, target_date=target_date
+    )
     payload = {
         "schema": APPLIED_SCHEMA,
         "target_date": target_date.isoformat(),
@@ -134,12 +139,16 @@ def build_applied_policy(
             "fallback": "baseline_written_only_for_missing_or_stale_candidate",
         },
         "forbidden_uses": [
-            "quantity_target_or_entry_validity_change",
+            "candidate_quantity_target_or_entry_validity_change",
+            "target_change_outside_recorded_operator_policy_transition",
             "threshold_relaxation_below_baseline",
             "stop_loss_or_forced_exit_creation",
             "provider_bot_cap_or_broker_guard_change",
         ],
     }
+    transitions = operator_policy_transitions(target_date)
+    if transitions:
+        payload["operator_policy_transitions"] = transitions
     valid, reason = validate_applied(payload, target_date=target_date)
     if not valid:
         raise ValueError(reason)

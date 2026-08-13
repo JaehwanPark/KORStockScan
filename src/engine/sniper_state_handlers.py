@@ -53334,9 +53334,7 @@ def _expire_opening_rotation_ttl_promotion(
                         == normalized_code
                         and str(persisted.status or "").strip().upper() == "EXPIRED"
                         and normalize_strategy(persisted.strategy) == "SCALPING"
-                        and normalize_position_tag(
-                            "SCALPING", persisted.position_tag
-                        )
+                        and normalize_position_tag("SCALPING", persisted.position_tag)
                         == "SCANNER"
                         and str(persisted.scanner_promotion_id or "").strip()
                         == normalized_promotion_id
