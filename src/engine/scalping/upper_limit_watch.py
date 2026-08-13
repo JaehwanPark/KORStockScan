@@ -41,6 +41,9 @@ LIVE_POLICY_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
 
 UPPER_LIMIT_LIVE_RECLAIM_SOURCE = "UPPER_LIMIT_LIVE_RECLAIM"
 UPPER_LIMIT_LIVE_POLICY_VERSION = "upper_limit_ordered_reclaim_live_auto_v1"
+LABEL_CAPTURE_RETENTION_SEC = 245.0
+LABEL_CAPTURE_RECOVERY_STALE_SEC = 30.0
+LABEL_CAPTURE_RECOVERY_INTERVAL_SEC = 30.0
 METRIC_ROLE = "diagnostic"
 DECISION_AUTHORITY = "upper_limit_source_observation_only"
 WINDOW_POLICY = "same_symbol_same_krx_session_ordered_0b_trade_and_0d_quote"
@@ -620,6 +623,8 @@ class UpperLimitWatchManager:
             "consecutive_gap_hold_tick_count": 0,
             "trigger_confirmed_epoch": 0.0,
             "trigger_type": "",
+            "label_capture_recovery_count": 0,
+            "last_label_capture_recovery_epoch": 0.0,
             "required_realtime_types": ["0B", "0D"],
             "last_reg_request_epoch": 0.0,
             "reg_request_count": 0,
@@ -642,17 +647,33 @@ class UpperLimitWatchManager:
         )
         self._write_state()
 
-    def _request_registration(self, now_epoch: float, *, reason: str) -> None:
+    def _request_registration(
+        self,
+        now_epoch: float,
+        *,
+        reason: str,
+        force: bool = False,
+        repair_cycle: str = "",
+    ) -> None:
         if self.active is None:
             return
+        payload = {
+            "codes": [self.active.code],
+            "source": (
+                "upper_limit_watch_observation_recovery"
+                if force
+                else "upper_limit_watch_observation"
+            ),
+            "reason": reason,
+            "required_realtime_types": ("0B", "0D"),
+        }
+        if force:
+            payload["force"] = True
+        if repair_cycle:
+            payload["repair_cycle"] = repair_cycle
         self.event_bus.publish(
             "COMMAND_WS_REG",
-            {
-                "codes": [self.active.code],
-                "source": "upper_limit_watch_observation",
-                "reason": reason,
-                "required_realtime_types": ("0B", "0D"),
-            },
+            payload,
         )
         self.state["last_reg_request_epoch"] = now_epoch
         self.state["reg_request_count"] = (
@@ -661,6 +682,8 @@ class UpperLimitWatchManager:
         self._emit(
             "upper_limit_watch_reg_requested",
             reason=reason,
+            force=force,
+            repair_cycle=repair_cycle,
             reg_request_count=self.state["reg_request_count"],
         )
 
@@ -750,8 +773,67 @@ class UpperLimitWatchManager:
                 dwell = now_epoch - registered
                 unchanged = now_epoch - last_transition
                 label_capture_pending = bool(
-                    trigger_confirmed > 0.0 and now_epoch - trigger_confirmed < 245.0
+                    trigger_confirmed > 0.0
+                    and now_epoch - trigger_confirmed < LABEL_CAPTURE_RETENTION_SEC
                 )
+                if label_capture_pending:
+                    last_tick = _safe_float(self.state.get("last_tick_epoch"))
+                    last_quote = _safe_float(self.state.get("last_quote_epoch"))
+                    last_recovery = _safe_float(
+                        self.state.get("last_label_capture_recovery_epoch")
+                    )
+                    tick_stale = bool(
+                        last_tick <= 0.0
+                        or now_epoch - last_tick >= LABEL_CAPTURE_RECOVERY_STALE_SEC
+                    )
+                    quote_stale = bool(
+                        last_quote <= 0.0
+                        or now_epoch - last_quote >= LABEL_CAPTURE_RECOVERY_STALE_SEC
+                    )
+                    if (
+                        (tick_stale or quote_stale)
+                        and now_epoch - last_recovery
+                        >= LABEL_CAPTURE_RECOVERY_INTERVAL_SEC
+                        and now_epoch
+                        - _safe_float(
+                            self.state.get("last_reg_request_epoch"), registered
+                        )
+                        >= LABEL_CAPTURE_RECOVERY_INTERVAL_SEC
+                    ):
+                        self.state["label_capture_recovery_count"] = (
+                            _safe_int(self.state.get("label_capture_recovery_count"))
+                            + 1
+                        )
+                        self.state["last_label_capture_recovery_epoch"] = now_epoch
+                        self._request_registration(
+                            now_epoch,
+                            reason="label_capture_stale",
+                            force=True,
+                            repair_cycle="upper_limit_label_capture_stale",
+                        )
+                        recovery_fields = {
+                            "trigger_type": self.state.get("trigger_type"),
+                            "trigger_age_sec": round(now_epoch - trigger_confirmed, 3),
+                            "tick_present": last_tick > 0.0,
+                            "quote_present": last_quote > 0.0,
+                            "tick_stale": tick_stale,
+                            "quote_stale": quote_stale,
+                            "recovery_count": self.state[
+                                "label_capture_recovery_count"
+                            ],
+                        }
+                        if last_tick > 0.0:
+                            recovery_fields["tick_age_sec"] = round(
+                                now_epoch - last_tick, 3
+                            )
+                        if last_quote > 0.0:
+                            recovery_fields["quote_age_sec"] = round(
+                                now_epoch - last_quote, 3
+                            )
+                        self._emit(
+                            "upper_limit_watch_label_capture_recovery",
+                            **recovery_fields,
+                        )
                 if (
                     len(self.candidates) > 1
                     and not label_capture_pending

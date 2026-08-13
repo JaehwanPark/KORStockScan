@@ -186,6 +186,7 @@ def collect_visits(target_date: str) -> tuple[list[dict[str, Any]], dict[str, An
         ),
         "candidate_source": candidate_status,
         "matching_event_count": 0,
+        "label_capture_recovery_request_count": 0,
         "invalid_row_count": 0,
         "contract_violation_count": 0,
         "valid": False,
@@ -226,6 +227,11 @@ def collect_visits(target_date: str) -> tuple[list[dict[str, Any]], dict[str, An
             if not code or emitted is None:
                 source["invalid_row_count"] += 1
                 continue
+            if (
+                stage == "upper_limit_watch_reg_requested"
+                and str(fields.get("reason") or "") == "label_capture_stale"
+            ):
+                source["label_capture_recovery_request_count"] += 1
             if stage == "upper_limit_watch_registered":
                 close(code, "implicit_reregister")
                 sequences[code] += 1
@@ -722,6 +728,9 @@ def build_artifacts(target_date: str) -> dict[str, Path]:
             else 0.0
         ),
         "bounded_live_ready_candidate_count": len(ready_cells),
+        "label_capture_recovery_request_count": source.get(
+            "label_capture_recovery_request_count", 0
+        ),
         "source_status": source,
         **OBSERVATION_CONTRACT,
         "runtime_effect": False,

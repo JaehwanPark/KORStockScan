@@ -222,6 +222,14 @@ def test_report_one_verified_positive_path_opens_next_date_policy(
             "pipeline": "UPPER_LIMIT_WATCH",
             "stock_code": "123450",
             "stock_name": "테스트",
+            "stage": "upper_limit_watch_reg_requested",
+            "emitted_at": (start + timedelta(seconds=180)).isoformat(),
+            "fields": _observation_fields(reason="label_capture_stale", force=True),
+        },
+        {
+            "pipeline": "UPPER_LIMIT_WATCH",
+            "stock_code": "123450",
+            "stock_name": "테스트",
             "stage": "upper_limit_watch_snapshot",
             "emitted_at": (start + timedelta(seconds=190)).isoformat(),
             "fields": _observation_fields(
@@ -248,6 +256,9 @@ def test_report_one_verified_positive_path_opens_next_date_policy(
     assert bounded["status"] == "live_auto_apply_ready"
     assert bounded["operator_approval_required"] is False
     assert bounded["ready_candidate_count"] == 1
+    daily = json.loads(paths["report"].read_text(encoding="utf-8"))
+    assert daily["label_capture_recovery_request_count"] == 1
+    assert daily["source_status"]["label_capture_recovery_request_count"] == 1
     assert cumulative["cumulative_update"]["current_row_count"] == 1
     assert cumulative["sample_count"] == 1
 
@@ -725,6 +736,161 @@ def test_ordered_raw_path_requires_two_reclaim_ticks_and_fresh_quote(monkeypatch
     ]
     assert trigger[0]["best_ask"] == 1001
     assert trigger[0]["quote_age_sec"] == 3.0
+
+
+def test_triggered_label_capture_reissues_bounded_forced_reg_when_feed_stalls(
+    monkeypatch,
+):
+    published = []
+    event_bus = type(
+        "EventBus",
+        (),
+        {"publish": lambda self, event, payload: published.append((event, payload))},
+    )()
+    manager = watch.UpperLimitWatchManager("token", object(), event_bus)
+    candidate = watch.UpperLimitCandidate(
+        code="123450",
+        name="테스트",
+        source_trade_date="2026-08-12",
+        limit_up_close=1000,
+        source_open=900,
+        source_high=1000,
+        source_low=850,
+        consecutive_count=1,
+        cohort="single_limit_up_intraday_traded_close_locked",
+        price_band="1천~5천",
+        volume=10,
+    )
+    manager.candidates = [candidate]
+    manager.active = candidate
+    manager.loaded_date = "2026-08-13"
+    manager.state = {
+        "phase": "ABOVE_PRIOR_LIMIT_CLOSE",
+        "registered_epoch": 800.0,
+        "last_transition_epoch": 900.0,
+        "trigger_confirmed_epoch": 900.0,
+        "trigger_type": "gap_hold_breakout",
+        "last_tick_epoch": 950.0,
+        "last_quote_epoch": 970.0,
+        "last_reg_request_epoch": 960.0,
+        "last_label_capture_recovery_epoch": 0.0,
+        "label_capture_recovery_count": 0,
+        "first_tick_epoch": 850.0,
+        "reg_request_count": 1,
+    }
+    emitted = []
+    monkeypatch.setattr(watch, "feature_enabled", lambda: True)
+    monkeypatch.setattr(watch, "_krx_session_phase", lambda _epoch: "OPEN")
+    monkeypatch.setattr(manager, "_load_candidates", lambda _epoch: None)
+    monkeypatch.setattr(
+        manager, "_emit", lambda stage, **fields: emitted.append((stage, fields))
+    )
+    monkeypatch.setattr(manager, "_write_state", lambda: None)
+
+    manager.reconcile(now_epoch=1000.0, allow_activation=False)
+
+    assert published == [
+        (
+            "COMMAND_WS_REG",
+            {
+                "codes": ["123450"],
+                "source": "upper_limit_watch_observation_recovery",
+                "reason": "label_capture_stale",
+                "required_realtime_types": ("0B", "0D"),
+                "force": True,
+                "repair_cycle": "upper_limit_label_capture_stale",
+            },
+        )
+    ]
+    assert manager.state["label_capture_recovery_count"] == 1
+    assert manager.state["last_label_capture_recovery_epoch"] == 1000.0
+    assert any(
+        stage == "upper_limit_watch_label_capture_recovery"
+        and fields["tick_stale"] is True
+        and fields["quote_stale"] is True
+        for stage, fields in emitted
+    )
+
+    manager.reconcile(now_epoch=1010.0, allow_activation=False)
+    assert len(published) == 1
+
+    manager.state["last_tick_epoch"] = 1039.0
+    manager.state["last_quote_epoch"] = 1039.0
+    manager.reconcile(now_epoch=1040.0, allow_activation=False)
+    assert len(published) == 1
+
+
+def test_label_capture_recovery_does_not_extend_rotation_beyond_retention(
+    monkeypatch,
+):
+    published = []
+    event_bus = type(
+        "EventBus",
+        (),
+        {"publish": lambda self, event, payload: published.append((event, payload))},
+    )()
+    manager = watch.UpperLimitWatchManager("token", object(), event_bus)
+    first = watch.UpperLimitCandidate(
+        code="123450",
+        name="테스트",
+        source_trade_date="2026-08-12",
+        limit_up_close=1000,
+        source_open=900,
+        source_high=1000,
+        source_low=850,
+        consecutive_count=1,
+        cohort="single_limit_up_intraday_traded_close_locked",
+        price_band="1천~5천",
+        volume=10,
+    )
+    second = watch.UpperLimitCandidate(
+        code="234560",
+        name="다음",
+        source_trade_date="2026-08-12",
+        limit_up_close=2000,
+        source_open=1800,
+        source_high=2000,
+        source_low=1700,
+        consecutive_count=1,
+        cohort="single_limit_up_intraday_traded_close_locked",
+        price_band="1천~5천",
+        volume=9,
+    )
+    manager.candidates = [first, second]
+    manager.active = first
+    manager.loaded_date = "2026-08-13"
+    manager.state = {
+        "phase": "ABOVE_PRIOR_LIMIT_CLOSE",
+        "registered_epoch": 700.0,
+        "last_transition_epoch": 800.0,
+        "trigger_confirmed_epoch": 900.0,
+        "last_tick_epoch": 900.0,
+        "last_quote_epoch": 900.0,
+        "last_reg_request_epoch": 900.0,
+        "last_label_capture_recovery_epoch": 900.0,
+        "label_capture_recovery_count": 1,
+        "first_tick_epoch": 750.0,
+        "reg_request_count": 2,
+    }
+    monkeypatch.setattr(watch, "feature_enabled", lambda: True)
+    monkeypatch.setattr(watch, "_krx_session_phase", lambda _epoch: "OPEN")
+    monkeypatch.setattr(manager, "_load_candidates", lambda _epoch: None)
+    monkeypatch.setattr(manager, "_write_state", lambda: None)
+    monkeypatch.setattr(
+        watch.UPPER_LIMIT_OBSERVATION_REGISTRY, "release", lambda _code: True
+    )
+
+    manager.reconcile(now_epoch=1146.0, allow_activation=False)
+
+    assert manager.active is None
+    assert not any(
+        event == "COMMAND_WS_REG" and payload.get("reason") == "label_capture_stale"
+        for event, payload in published
+    )
+    assert any(
+        event == "COMMAND_WS_UNREG" and payload.get("reason") == "rotation_due"
+        for event, payload in published
+    )
 
 
 def test_full_budget_reclaims_one_rising_before_upper_reg(monkeypatch):
