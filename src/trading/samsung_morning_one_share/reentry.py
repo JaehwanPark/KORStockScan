@@ -12,7 +12,11 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
 from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
-from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
+from src.trading.order.regular_two_leg_machine import (
+    KST,
+    SamsungRegularTwoLegMachine,
+    _fresh_state,
+)
 from src.trading.samsung_morning_one_share.machine import (
     DEFAULT_STATE_PATH as DEFAULT_FIRST_EPISODE_STATE_PATH,
 )
@@ -25,6 +29,7 @@ from src.utils.constants import DATA_DIR
 DEFAULT_REENTRY_STATE_PATH = (
     DATA_DIR / "runtime" / "samsung_morning_sor_reentry_state.json"
 )
+SAFE_PRECONDITION_BLOCK_REASONS = frozenset({"first_episode_both_legs_not_complete"})
 
 
 def _first_episode_payload_complete(payload: object, target_date: date) -> bool:
@@ -86,6 +91,9 @@ def prior_reentry_allows_new_first_episode(
     except (TypeError, ValueError):
         return False, "prior_reentry_position_invalid"
     legs = payload.get("legs")
+    owned_order_nos = payload.get("owned_order_nos", [])
+    if not isinstance(owned_order_nos, list):
+        return False, "prior_reentry_order_ledger_invalid"
     status = str(payload.get("status") or "")
     safe_status = status in {"READY", "COMPLETE", "NO_TRADE"}
     try:
@@ -105,11 +113,23 @@ def prior_reentry_allows_new_first_episode(
         status in {"READY", "NO_TRADE"}
         and payload.get("attempt_consumed") is False
         and legs == []
+        and owned_order_nos == []
+    )
+    safe_precondition_block = (
+        status == "BLOCKED"
+        and str(payload.get("blocked_reason") or "")
+        in SAFE_PRECONDITION_BLOCK_REASONS
+        and payload.get("attempt_consumed") is False
+        and legs == []
+        and owned_order_nos == []
     )
     completed_terminal = (
         status == "COMPLETE" and payload.get("attempt_consumed") is True and safe_legs
     )
-    if position_qty == 0 and safe_status and (empty_terminal or completed_terminal):
+    if position_qty == 0 and (
+        (safe_status and (empty_terminal or completed_terminal))
+        or safe_precondition_block
+    ):
         return True, "prior_reentry_terminal_clear"
     return False, "prior_reentry_order_or_position_unresolved"
 
@@ -255,6 +275,40 @@ class SamsungMorningSORReentryMachine(SamsungRegularTwoLegMachine):
                 self._block(now, "reentry_prerequisite_contract_invalid")
                 return False
         return True
+
+    def _roll_safe_precondition_block(self, now: datetime) -> None:
+        """Roll only a prior-day, zero-exposure prerequisite miss.
+
+        The base machine intentionally keeps every BLOCKED state terminal.  A
+        re-entry episode is different only for the narrow case where the first
+        episode never completed and therefore no re-entry order could exist.
+        """
+
+        if (
+            not self._state
+            or self._state.get("trade_date") == now.date().isoformat()
+            or self._state.get("status") != "BLOCKED"
+        ):
+            return
+        clear, reason = prior_reentry_allows_new_first_episode(
+            self.state_path, target_date=now.date()
+        )
+        if not clear or reason != "prior_reentry_terminal_clear":
+            return
+        prior_date = str(self._state.get("trade_date") or "")
+        prior_reason = str(self._state.get("blocked_reason") or "")
+        self._state = _fresh_state(now, self.schema)
+        self._record(
+            now,
+            "daily_state_initialized_from_safe_precondition_block",
+            prior_trade_date=prior_date,
+            prior_blocked_reason=prior_reason,
+        )
+
+    def run_once(self, now: datetime | None = None) -> dict:
+        now = (now or datetime.now(tz=KST)).astimezone(KST)
+        self._roll_safe_precondition_block(now)
+        return super().run_once(now)
 
     def _consider_entry(self, now: datetime) -> dict:
         completed_at, reason = self._first_episode_completion(now)
