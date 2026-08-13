@@ -17,7 +17,9 @@ The implementation is deployable but default-OFF. Creating these files does not 
 - No stop loss, target timeout, forced sell, or best-price liquidation. If the target closes unfilled, the state becomes `HELD`; if it remains open, the original order is reconciled across dates.
 
 The `ka10080` source reuses one successful snapshot within the same KST minute
-and shares a cross-process 0.4-second episode read pacer. Explicit error 1700 or
+only after the immediately preceding completed candle is present. A boundary
+response that still ends earlier is not cached and is refetched on the next
+bounded poll. It shares a cross-process 0.4-second episode read pacer. Explicit error 1700 or
 HTTP 429 reads receive at most two bounded-backoff retries. Failed snapshots are
 not cached, and order/cancel API IDs are never retried by this controller.
 

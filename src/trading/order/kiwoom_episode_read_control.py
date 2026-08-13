@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import fcntl
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -96,6 +97,14 @@ class SameMinuteSnapshotCache:
     def put(self, key: tuple[object, object], snapshot: object) -> None:
         self._key = key
         self._snapshot = snapshot
+
+
+def snapshot_contains_latest_completed_minute(
+    *, latest_timestamp: datetime, minute_floor: datetime
+) -> bool:
+    """Allow minute-wide reuse only after the immediately prior bar is present."""
+
+    return minute_floor - timedelta(minutes=1) <= latest_timestamp < minute_floor
 
 
 _DEFAULT_PACER = KiwoomEpisodeReadPacer()

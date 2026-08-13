@@ -193,6 +193,65 @@ def test_episode_gateways_cache_successful_completed_bars_within_same_minute(
     assert len(session.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("gateway_factory", "stale_timestamp", "fresh_timestamp", "now"),
+    [
+        (
+            lambda session: KiwoomLowPriceTwoLegGateway(
+                symbol="475150", request_session=session, token_loader=lambda: "TOKEN"
+            ),
+            "20260813131400",
+            "20260813131500",
+            datetime(2026, 8, 13, 13, 16, 2, tzinfo=KST),
+        ),
+        (
+            lambda session: KiwoomOneShareGateway(
+                request_session=session, token_loader=lambda: "TOKEN"
+            ),
+            "20260813091600",
+            "20260813091700",
+            datetime(2026, 8, 13, 9, 18, 2, tzinfo=KST),
+        ),
+        (
+            lambda session: KiwoomMiddayOneShareGateway(
+                request_session=session, token_loader=lambda: "TOKEN"
+            ),
+            "20260813131400",
+            "20260813131500",
+            datetime(2026, 8, 13, 13, 16, 2, tzinfo=KST),
+        ),
+        (
+            lambda session: KiwoomAfternoonOneShareGateway(
+                request_session=session, token_loader=lambda: "TOKEN"
+            ),
+            "20260813135900",
+            "20260813140000",
+            datetime(2026, 8, 13, 14, 1, 2, tzinfo=KST),
+        ),
+    ],
+)
+def test_episode_gateways_refetch_prepublication_snapshot_within_same_minute(
+    gateway_factory,
+    stale_timestamp: str,
+    fresh_timestamp: str,
+    now: datetime,
+) -> None:
+    session = FakeSession(
+        [_minute_response(stale_timestamp), _minute_response(fresh_timestamp)]
+    )
+    gateway = gateway_factory(session)
+
+    stale = gateway.completed_sor_minute_bars(trade_date=date(2026, 8, 13), now=now)
+    fresh = gateway.completed_sor_minute_bars(
+        trade_date=date(2026, 8, 13), now=now.replace(second=4)
+    )
+
+    assert stale.source_ok is True
+    assert fresh.source_ok is True
+    assert stale.bars[-1].timestamp < fresh.bars[-1].timestamp
+    assert len(session.calls) == 2
+
+
 def test_episode_gateway_does_not_cache_failed_snapshot() -> None:
     session = FakeSession(
         [

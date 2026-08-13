@@ -217,6 +217,10 @@ The official reference identifies error 1700 but does not publish the local
 0.4-second value; that interval is an operational burst guard based on observed
 traffic. Failed/invalid snapshots are not cached. Order and cancel API IDs never
 enter this retry path, so an ambiguous broker write cannot be replayed.
+A successful response is cached for the rest of the KST minute only when it
+already contains the immediately preceding completed candle. A boundary response
+that still ends two or more minutes behind is returned once but not cached, so the
+next bounded poll can observe the newly published candle.
 
 ## Official Kiwoom reference evidence
 

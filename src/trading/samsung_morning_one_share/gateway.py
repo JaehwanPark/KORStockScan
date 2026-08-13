@@ -21,6 +21,7 @@ from src.trading.order.kiwoom_episode_read_control import (
     KiwoomEpisodeReadPacer,
     SameMinuteSnapshotCache,
     post_kiwoom_episode_read,
+    snapshot_contains_latest_completed_minute,
 )
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.samsung_morning_one_share.policy import MinuteBar
@@ -342,7 +343,10 @@ class KiwoomOneShareGateway:
         if not bars:
             return MinuteBarsSnapshot(True, error="completed_sor_bars_unavailable")
         snapshot = MinuteBarsSnapshot(True, bars)
-        self._minute_bars_cache.put(cache_key, snapshot)
+        if snapshot_contains_latest_completed_minute(
+            latest_timestamp=bars[-1].timestamp, minute_floor=minute_floor
+        ):
+            self._minute_bars_cache.put(cache_key, snapshot)
         return snapshot
 
     def submit_limit_buy(self, *, price: int, route: str = "SOR") -> SubmitResult:
