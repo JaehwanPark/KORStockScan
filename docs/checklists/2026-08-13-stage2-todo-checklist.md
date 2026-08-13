@@ -192,6 +192,13 @@
 
 ## Project/Calendar 동기화
 
+- [ ] `[LatencyFalseNegativeVenueBackfill0813] clean-baseline latency false-negative venue/session rolling backfill` (`Due: 2026-08-13`, `Slot: POSTCLOSE`, `TimeWindow: 19:55~20:10`, `Track: ScalpingLogic`)
+  - Source: [rising missed feedback producer](/home/ubuntu/KORStockScan/src/engine/monitoring/rising_missed_intraday_feedback.py), [current feedback artifact](/home/ubuntu/KORStockScan/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_2026-08-13.json), [traceability contract](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 현재 판정: 최신 20개 artifact의 latency candidate 482행 중 과거 schema 470행은 explicit venue/session 결손으로 격리됐고, 2026-08-13 KRX 12행만 rolling usable이다. KRX true-OFI cohort는 11행, low-adverse 3행(`27.272727%`), ready 2행(`18.181818%`)으로 두 최소비율 `30%`에 미달하므로 `hold_no_consistent_low_adverse_edge`다.
+  - 실행/검증: clean baseline 이후 보존된 exact-date pipeline만 최신 19거래일 범위에서 bounded 순차 재생하고 KRX/NXT/PREMARKET_KRX_LIKE·session·cohort를 혼합하지 않는다. backfill 후 usable/source-gap row와 날짜 coverage, executable ask→후행 executable bid MFE/MAE, `runtime_effect=false`, `allowed_runtime_apply=false`, `decision_authority=source_only_no_retry_or_runtime_mutation`을 검증한다.
+  - 금지: 삭제된 latency retry/repass 경로 복원, 장중 threshold/env mutation, stale/broker/order/quantity/cooldown/price guard 완화, provider/bot/cap 변경, 과거 mark/last-trade-only 행의 executable BBO 대체를 허용하지 않는다.
+  - 다음 액션: `rolling_venue_backfill_pass`, `source_pipeline_missing`, `source_quality_blocked`, `bounded_replay_resource_deferred` 중 하나로 닫고, pass여도 다음 scanner loop의 normal feature-envelope 검토 근거로만 사용한다.
+
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
 
 ```bash

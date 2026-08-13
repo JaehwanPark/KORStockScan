@@ -28649,6 +28649,10 @@ def test_pre_submit_liquidity_relief_ignores_stale_ai_feature_probe(monkeypatch)
 def test_scalping_overbought_reaches_ai_but_submit_requires_pullback_or_rebreak(
     monkeypatch,
 ):
+    # Keep this unit test independent from a process-level full-market context
+    # promotion left by another test or the operator runtime environment.
+    monkeypatch.setenv("KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED", "false")
+
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -33730,9 +33734,7 @@ def test_probe_fill_recovers_submit_contract_before_residual_callback(
     assert stock["entry_split_probe_submit_best_ask"] == 10_010
     assert stock["entry_split_probe_phase"] == "probe_filled"
     assert callback_snapshots[0]["entry_split_probe_requested_qty"] == 21
-    assert callback_snapshots[0]["entry_split_probe_bundle_id"] == (
-        "123456-probe-race"
-    )
+    assert callback_snapshots[0]["entry_split_probe_bundle_id"] == ("123456-probe-race")
     assert callback_snapshots[0]["entry_split_probe_submit_best_ask"] == 10_010
     recovery_event = next(
         fields
@@ -39325,6 +39327,59 @@ def test_non_exploration_scale_in_block_is_not_cleared_as_stale_arm():
     assert cleared is False
     assert stock["entry_split_probe_scale_in_forbidden"] is True
     assert stock["probe_expand_forbidden"] is True
+
+
+def test_one_share_exploration_scale_in_block_reports_terminal_owner(monkeypatch):
+    stock = {
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_split_probe_scale_in_forbidden": True,
+        "probe_expand_forbidden": True,
+        "entry_setup_live_policy_mode": "one_share_exploration",
+    }
+
+    decision = state_handlers.can_consider_scale_in(
+        stock,
+        "123456",
+        {"curr": 10_000},
+        "SCALPING",
+        "NORMAL",
+    )
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "probe_expand_forbidden"
+    assert decision["scale_in_block_owner"] == (
+        "entry_setup_v2_14_one_share_exploration"
+    )
+    assert decision["scale_in_block_authority"] == (
+        "terminal_one_share_exploration_residual_and_scale_in_forbidden"
+    )
+    assert decision["rising_missed_scout_pyramid_bridge_applicable"] is False
+    assert decision["rising_missed_scout_pyramid_bridge_non_applicable_reason"] == (
+        "owner_priority_entry_setup_one_share_exploration"
+    )
+
+    logged = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: logged.append(kwargs),
+    )
+    state_handlers._log_scale_in_arm_blocked(
+        stock,
+        "123456",
+        arm="PYRAMID",
+        blocked_reason=decision["reason"],
+        profit_rate=1.0,
+        peak_profit=1.2,
+        current_ai_score=70,
+        held_sec=120,
+        gate=decision,
+    )
+
+    assert logged[0]["scale_in_block_owner"] == (
+        "entry_setup_v2_14_one_share_exploration"
+    )
+    assert logged[0]["rising_missed_scout_pyramid_bridge_applicable"] is False
 
 
 def test_exploration_submit_cap_guard_rechecks_qty_and_durable_count(monkeypatch):

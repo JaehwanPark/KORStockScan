@@ -19633,6 +19633,17 @@ def _emit_stat_action_decision_snapshot(
         "sell_reason_type": sell_reason_type or "-",
         "scale_in_gate_allowed": bool(gate.get("allowed")),
         "scale_in_gate_reason": gate.get("reason", "-"),
+        "scale_in_block_owner": gate.get("scale_in_block_owner", "-"),
+        "scale_in_block_authority": gate.get("scale_in_block_authority", "-"),
+        "entry_setup_live_policy_mode": gate.get(
+            "entry_setup_live_policy_mode", "-"
+        ),
+        "rising_missed_scout_pyramid_bridge_applicable": gate.get(
+            "rising_missed_scout_pyramid_bridge_applicable"
+        ),
+        "rising_missed_scout_pyramid_bridge_non_applicable_reason": gate.get(
+            "rising_missed_scout_pyramid_bridge_non_applicable_reason", "-"
+        ),
         "scale_in_action_type": action.get("add_type", "-"),
         "scale_in_action_reason": action.get("reason", "-"),
         "scale_in_arm": scale_in_arm,
@@ -19763,6 +19774,17 @@ def _log_scale_in_arm_blocked(
         "scale_in_blocker_reason": blocked_reason or "-",
         "blocked_reason": blocked_reason or "-",
         "gate_reason": gate.get("reason") or "-",
+        "scale_in_block_owner": gate.get("scale_in_block_owner") or "-",
+        "scale_in_block_authority": gate.get("scale_in_block_authority") or "-",
+        "entry_setup_live_policy_mode": gate.get("entry_setup_live_policy_mode")
+        or "-",
+        "rising_missed_scout_pyramid_bridge_applicable": gate.get(
+            "rising_missed_scout_pyramid_bridge_applicable"
+        ),
+        "rising_missed_scout_pyramid_bridge_non_applicable_reason": gate.get(
+            "rising_missed_scout_pyramid_bridge_non_applicable_reason"
+        )
+        or "-",
         "profit_rate": f"{_safe_float(profit_rate, 0.0):+.2f}",
         "peak_profit": f"{_safe_float(peak_profit, 0.0):+.2f}",
         "ai_score": f"{_safe_float(current_ai_score, 0.0):.0f}",
@@ -82183,12 +82205,38 @@ def can_consider_scale_in(
             "residual_partial_submitted",
         }
     ):
+        exploration_probe_only = bool(
+            stock.get("entry_opportunity_recheck_exploration_probe_only")
+            or str(stock.get("entry_setup_live_policy_mode") or "").strip().lower()
+            == "one_share_exploration"
+        )
         return {
             "allowed": False,
             "reason": (
                 "probe_expand_forbidden"
                 if stock.get("probe_expand_forbidden")
                 else "entry_split_probe_scale_in_forbidden"
+            ),
+            "scale_in_block_owner": (
+                "entry_setup_v2_14_one_share_exploration"
+                if exploration_probe_only
+                else "entry_split_probe_lifecycle"
+            ),
+            "scale_in_block_authority": (
+                "terminal_one_share_exploration_residual_and_scale_in_forbidden"
+                if exploration_probe_only
+                else "probe_lifecycle_scale_in_forbidden"
+            ),
+            "entry_setup_live_policy_mode": stock.get(
+                "entry_setup_live_policy_mode"
+            ),
+            "rising_missed_scout_pyramid_bridge_applicable": (
+                not exploration_probe_only
+            ),
+            "rising_missed_scout_pyramid_bridge_non_applicable_reason": (
+                "owner_priority_entry_setup_one_share_exploration"
+                if exploration_probe_only
+                else None
             ),
         }
 

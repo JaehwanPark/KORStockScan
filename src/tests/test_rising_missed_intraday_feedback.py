@@ -3207,3 +3207,75 @@ def test_clean_baseline_rolling_nxt_post_block_outcomes(monkeypatch, tmp_path):
     assert window["excluded_reports"] == [
         {"target_date": "2026-07-30", "reason": "report_unreadable"}
     ]
+
+
+def test_clean_baseline_rolling_latency_candidates_separates_venue_and_gaps(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+
+    def candidate(venue, session, mfe, mae, grade="ready_for_recheck"):
+        return {
+            "effective_venue": venue,
+            "market_session_bucket": session,
+            "canary_cohort": "true_ofi_near_zero_false_negative",
+            "canary_grade": grade,
+            "mfe_after_block_pct": mfe,
+            "mae_after_block_pct": mae,
+        }
+
+    prior_rows = [candidate("KRX", "krx_regular", 3.5, -0.4) for _ in range(9)]
+    prior_rows.extend(
+        [
+            candidate("NXT", "nxt_entry_window", 4.0, -0.5),
+            candidate("UNKNOWN", "krx_regular", 8.0, -0.1),
+        ]
+    )
+    valid_prior = {
+        "report_type": "rising_missed_intraday_feedback",
+        "target_date": "2026-08-12",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "latency_false_negative_canary_candidate_rows": prior_rows,
+    }
+    (tmp_path / "rising_missed_intraday_feedback_2026-08-12.json").write_text(
+        json.dumps(valid_prior), encoding="utf-8"
+    )
+    # Pre-baseline evidence must never enter a tuning window.
+    (tmp_path / "rising_missed_intraday_feedback_2026-06-01.json").write_text(
+        json.dumps(
+            {
+                **valid_prior,
+                "target_date": "2026-06-01",
+                "latency_false_negative_canary_candidate_rows": [
+                    candidate("KRX", "krx_regular", 99.0, 0.0)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows, window = mod._clean_baseline_rolling_latency_false_negative_candidates(
+        "2026-08-13",
+        [candidate("KRX", "krx_regular", 4.5, -0.3)],
+    )
+
+    assert len(rows) == 2
+    krx = next(row for row in rows if row["effective_venue"] == "KRX")
+    nxt = next(row for row in rows if row["effective_venue"] == "NXT")
+    assert krx["completed_sample_count"] == 10
+    assert krx["low_adverse_opportunity_count"] == 10
+    assert krx["rolling_assessment"] == (
+        "source_only_next_scanner_loop_feature_review_priority"
+    )
+    assert krx["runtime_effect"] is False
+    assert krx["allowed_runtime_apply"] is False
+    assert nxt["completed_sample_count"] == 1
+    assert nxt["rolling_assessment"] == "hold_sample"
+    assert window["clean_tuning_baseline_date"] == "2026-06-05"
+    assert window["source_gap_row_count"] == 1
+    assert window["source_quality_state"] == "pass_with_row_exclusions"
+    assert window["usable_row_count"] == 11
+    assert window["total_input_row_count"] == 12
+    assert window["inspected_source_dates"] == ["2026-08-12", "2026-08-13"]
+    assert window["source_dates"] == ["2026-08-12", "2026-08-13"]

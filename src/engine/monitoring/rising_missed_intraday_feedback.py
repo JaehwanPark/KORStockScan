@@ -15,6 +15,7 @@ REPORT_DIR = PROJECT_ROOT / "data" / "report" / "rising_missed_intraday_feedback
 KST = timezone(timedelta(hours=9))
 CLEAN_BASELINE_DATE = "2026-06-05"
 NXT_POST_BLOCK_ROLLING_REPORT_DAYS = 20
+LATENCY_FALSE_NEGATIVE_ROLLING_REPORT_DAYS = 20
 FORCED_REASON = "rising_missed_one_share_entry"
 AVG_DOWN_FAIL_FLOOR = 2
 FORCED_SUBMIT_LINEAGE_JOIN_WINDOW_MINUTES = 15
@@ -31,6 +32,8 @@ LATENCY_CANARY_TRUE_OFI_MIN_SAMPLE_COUNT = 100
 LATENCY_CANARY_FRESH_WS_MAX_AGE_MS = 150.0
 LATENCY_CANARY_TRUE_OFI_NEAR_ZERO_FLOOR = -0.10
 LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS = 90.0
+LATENCY_ROLLING_MIN_LOW_ADVERSE_RATE_PCT = 30.0
+LATENCY_ROLLING_MIN_READY_RATE_PCT = 30.0
 EXECUTABLE_BBO_COUNTERFACTUAL_STAGES = frozenset(
     {"latency_block", "rising_missed_tick_speed_entry_block"}
 )
@@ -1279,6 +1282,10 @@ def _submit_safety_block_row(row: dict[str, Any]) -> dict[str, Any]:
         "record_id": str(row.get("record_id") or "").strip(),
         "stock_code": _event_code(row),
         "stock_name": _event_name(row),
+        "effective_venue": _tp1_effective_venue(fields),
+        "market_session_bucket": fields.get("rising_missed_market_session_bucket")
+        or fields.get("market_session_bucket")
+        or "unknown",
         "reason": reason,
         "blocker_bucket": bucket,
         "components": components,
@@ -1961,6 +1968,8 @@ def _build_latency_false_negative_review(
                 "record_id": block.get("record_id"),
                 "stock_code": block.get("stock_code"),
                 "stock_name": block.get("stock_name"),
+                "effective_venue": block.get("effective_venue"),
+                "market_session_bucket": block.get("market_session_bucket"),
                 "review_bucket": review_bucket,
                 "review_reason": "latency_submit_safety_block_high_mfe_low_mae",
                 "blocker_bucket": blocker_bucket,
@@ -2181,7 +2190,7 @@ def _build_latency_false_negative_canary_candidates(
                 "canary_fresh_ws_max_age_ms": LATENCY_CANARY_FRESH_WS_MAX_AGE_MS,
                 "canary_spread_only_max_spread_bps": LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS,
                 "canary_next_action": (
-                    "bounded_latency_remeasure_enqueue"
+                    "next_scanner_loop_feature_envelope_review"
                     if grade == "ready_for_recheck"
                     else "source_only_accumulate_more_false_negative_samples"
                 ),
@@ -2244,6 +2253,213 @@ def _build_latency_false_negative_canary_candidates(
         "latency_false_negative_canary_spread_only_max_spread_bps": LATENCY_CANARY_SPREAD_ONLY_MAX_SPREAD_BPS,
     }
     return summary, rows
+
+
+def _clean_baseline_rolling_latency_false_negative_candidates(
+    target_date: str,
+    current_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Roll source-only latency false negatives without restoring retry authority."""
+
+    source_rows: list[tuple[str, dict[str, Any]]] = [
+        (target_date, dict(row)) for row in current_rows
+    ]
+    inspected_source_dates = {target_date}
+    excluded_reports: list[dict[str, str]] = []
+    prefix = "rising_missed_intraday_feedback_"
+    eligible_paths: list[Path] = []
+    for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
+        report_date = path.stem.removeprefix(prefix)
+        if CLEAN_BASELINE_DATE <= report_date < target_date:
+            eligible_paths.append(path)
+    prior_limit = max(0, LATENCY_FALSE_NEGATIVE_ROLLING_REPORT_DAYS - 1)
+    for path in eligible_paths[-prior_limit:] if prior_limit else []:
+        report_date = path.stem.removeprefix(prefix)
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "report_unreadable"}
+            )
+            continue
+        if not isinstance(payload, dict) or (
+            payload.get("report_type") != "rising_missed_intraday_feedback"
+            or payload.get("target_date") != report_date
+            or bool(payload.get("runtime_effect"))
+            or bool(payload.get("allowed_runtime_apply"))
+        ):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "report_contract_invalid"}
+            )
+            continue
+        daily_rows = payload.get("latency_false_negative_canary_candidate_rows")
+        if not isinstance(daily_rows, list):
+            excluded_reports.append(
+                {"target_date": report_date, "reason": "daily_candidates_missing"}
+            )
+            continue
+        inspected_source_dates.add(report_date)
+        source_rows.extend(
+            (report_date, dict(row)) for row in daily_rows if isinstance(row, dict)
+        )
+
+    valid_venues = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    source_gap_rows = 0
+    grouped: dict[tuple[str, str, str], list[tuple[str, dict[str, Any]]]] = {}
+    for report_date, row in source_rows:
+        venue = str(row.get("effective_venue") or "").strip().upper()
+        session = str(row.get("market_session_bucket") or "").strip()
+        cohort = str(row.get("canary_cohort") or "").strip()
+        mfe = _safe_float(row.get("mfe_after_block_pct"))
+        mae = _safe_float(row.get("mae_after_block_pct"))
+        if (
+            venue not in valid_venues
+            or not session
+            or session == "unknown"
+            or not cohort
+            or mfe is None
+            or mae is None
+        ):
+            source_gap_rows += 1
+            continue
+        grouped.setdefault((venue, session, cohort), []).append((report_date, row))
+
+    rolling_rows: list[dict[str, Any]] = []
+    for (venue, session, cohort), dated_rows in grouped.items():
+        sample_count = len(dated_rows)
+        mfe_values = [float(row["mfe_after_block_pct"]) for _, row in dated_rows]
+        mae_values = [float(row["mae_after_block_pct"]) for _, row in dated_rows]
+        ready_count = sum(
+            str(row.get("canary_grade") or "") == "ready_for_recheck"
+            for _, row in dated_rows
+        )
+        low_adverse_count = sum(
+            float(row.get("mae_after_block_pct")) >= TP1_ADVERSE_STOP_PCT
+            and float(row.get("mfe_after_block_pct"))
+            >= LATENCY_FALSE_NEGATIVE_MIN_MFE_PCT
+            for _, row in dated_rows
+        )
+        ready_rate_pct = ready_count * 100.0 / sample_count
+        low_adverse_rate_pct = low_adverse_count * 100.0 / sample_count
+        sample_floor_met = sample_count >= 10
+        consistent_low_adverse_edge = bool(
+            sample_floor_met
+            and low_adverse_count >= 3
+            and ready_count >= 3
+            and low_adverse_rate_pct >= LATENCY_ROLLING_MIN_LOW_ADVERSE_RATE_PCT
+            and ready_rate_pct >= LATENCY_ROLLING_MIN_READY_RATE_PCT
+        )
+        rolling_rows.append(
+            {
+                "effective_venue": venue,
+                "market_session_bucket": session,
+                "canary_cohort": cohort,
+                "completed_sample_count": sample_count,
+                "ready_for_recheck_count": ready_count,
+                "ready_for_recheck_rate_pct": round(ready_rate_pct, 6),
+                "low_adverse_opportunity_count": low_adverse_count,
+                "low_adverse_opportunity_rate_pct": round(low_adverse_rate_pct, 6),
+                "equal_weight_avg_mfe_after_block_pct": round(
+                    sum(mfe_values) / sample_count, 6
+                ),
+                "equal_weight_avg_mae_after_block_pct": round(
+                    sum(mae_values) / sample_count, 6
+                ),
+                "rolling_assessment": (
+                    "source_only_next_scanner_loop_feature_review_priority"
+                    if consistent_low_adverse_edge
+                    else (
+                        "hold_sample"
+                        if not sample_floor_met
+                        else "hold_no_consistent_low_adverse_edge"
+                    )
+                ),
+                "next_action": (
+                    "review_normal_entry_feature_envelope_on_next_scanner_loop"
+                    if consistent_low_adverse_edge
+                    else "source_only_accumulate"
+                ),
+                "metric_role": "source_only_latency_false_negative_rolling_attribution",
+                "decision_authority": "source_only_no_retry_or_runtime_mutation",
+                "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+                "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+                "source_dates": sorted({report_date for report_date, _ in dated_rows}),
+                "sample_floor": "10_executable_bbo_latency_false_negative_rows_per_venue_session_cohort",
+                "sample_floor_met": sample_floor_met,
+                "minimum_low_adverse_rate_pct": (
+                    LATENCY_ROLLING_MIN_LOW_ADVERSE_RATE_PCT
+                ),
+                "minimum_ready_for_recheck_rate_pct": (
+                    LATENCY_ROLLING_MIN_READY_RATE_PCT
+                ),
+                "primary_decision_metric": (
+                    "low_adverse_opportunity_rate_pct_and_ready_for_recheck_rate_pct_"
+                    "with_equal_weight_mfe_mae"
+                ),
+                "source_quality_gate": (
+                    "explicit_venue_session_executable_ask_and_post_block_executable_bid"
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+        )
+    rolling_rows.sort(
+        key=lambda row: (
+            (
+                0
+                if row.get("rolling_assessment")
+                == "source_only_next_scanner_loop_feature_review_priority"
+                else 1
+            ),
+            -_safe_int(row.get("completed_sample_count")),
+            str(row.get("effective_venue")),
+            str(row.get("market_session_bucket")),
+            str(row.get("canary_cohort")),
+        )
+    )
+    usable_source_dates = sorted(
+        {
+            report_date
+            for dated_rows in grouped.values()
+            for report_date, _ in dated_rows
+        }
+    )
+    usable_row_count = sum(len(dated_rows) for dated_rows in grouped.values())
+    total_input_row_count = usable_row_count + source_gap_rows
+    return rolling_rows, {
+        "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+        "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+        "rolling_report_day_limit": LATENCY_FALSE_NEGATIVE_ROLLING_REPORT_DAYS,
+        "start_date": usable_source_dates[0] if usable_source_dates else target_date,
+        "end_date": target_date,
+        "source_dates": usable_source_dates,
+        "source_date_count": len(usable_source_dates),
+        "inspected_source_dates": sorted(inspected_source_dates),
+        "inspected_source_date_count": len(inspected_source_dates),
+        "usable_row_count": usable_row_count,
+        "total_input_row_count": total_input_row_count,
+        "usable_row_rate_pct": (
+            round(usable_row_count * 100.0 / total_input_row_count, 6)
+            if total_input_row_count
+            else 0.0
+        ),
+        "source_gap_row_count": source_gap_rows,
+        "source_quality_state": (
+            (
+                "pass_with_row_exclusions"
+                if usable_row_count
+                else "source_quality_blocked_no_usable_rows"
+            )
+            if source_gap_rows
+            else "pass"
+        ),
+        "excluded_report_count": len(excluded_reports),
+        "excluded_reports": excluded_reports,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def _tp1_label_timestamp(value: Any) -> datetime | None:
@@ -4316,6 +4532,13 @@ def build_report(
     latency_canary_summary, latency_canary_rows = (
         _build_latency_false_negative_canary_candidates(latency_false_negative_rows)
     )
+    (
+        rolling_latency_false_negative_rows,
+        rolling_latency_false_negative_window,
+    ) = _clean_baseline_rolling_latency_false_negative_candidates(
+        target_date,
+        latency_canary_rows,
+    )
     tp1_label_events, tp1_observation_watermark = _load_tp1_label_event_projection(
         pipeline_path
     )
@@ -4530,6 +4753,20 @@ def build_report(
                 ),
                 "forbidden_uses": FORBIDDEN_USES,
             },
+            "rising_missed_latency_false_negative_rolling_attribution": {
+                "metric_role": "source_only_latency_false_negative_rolling_attribution",
+                "decision_authority": "source_only_no_retry_or_runtime_mutation",
+                "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
+                "sample_floor": "10_executable_bbo_rows_per_venue_session_cohort",
+                "primary_decision_metric": (
+                    "low_adverse_opportunity_rate_pct_and_ready_for_recheck_rate_pct_"
+                    "with_equal_weight_mfe_mae"
+                ),
+                "source_quality_gate": (
+                    "explicit_venue_session_executable_ask_and_post_block_executable_bid"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            },
             "rising_missed_dynamic_age_post_apply_attribution": {
                 "metric_role": "source_only_post_apply_attribution",
                 "decision_authority": "source_only_dynamic_age_post_apply_attribution",
@@ -4720,6 +4957,12 @@ def build_report(
             **submit_backoff_summary,
             **latency_false_negative_summary,
             **latency_canary_summary,
+            "latency_false_negative_rolling_attribution": (
+                rolling_latency_false_negative_rows
+            ),
+            "latency_false_negative_rolling_window": (
+                rolling_latency_false_negative_window
+            ),
             **tp1_label_summary,
             **tp1_counterfactual_summary,
             **tp1_counterfactual_label_summary,
@@ -4759,6 +5002,9 @@ def build_report(
         "backoff_opportunity_audit_rows": backoff_audit_rows[:200],
         "latency_false_negative_review_rows": latency_false_negative_rows[:200],
         "latency_false_negative_canary_candidate_rows": latency_canary_rows[:200],
+        "latency_false_negative_rolling_attribution_rows": (
+            rolling_latency_false_negative_rows
+        ),
         "dynamic_age_post_apply_attribution_rows": dynamic_age_post_apply_rows[:200],
         "rising_missed_tp1_first_hit_label_rows": tp1_label_rows[:200],
         "rising_missed_tp1_counterfactual_submit_safety_rows": tp1_counterfactual_rows[
@@ -4861,6 +5107,10 @@ def write_outputs(
         f"{summary.get('latency_false_negative_runtime_dynamic_age_eligible_count')}",
         f"- latency_false_negative_runtime_dynamic_age_applied_count: "
         f"{summary.get('latency_false_negative_runtime_dynamic_age_applied_count')}",
+        f"- latency_false_negative_rolling_attribution: "
+        f"{summary.get('latency_false_negative_rolling_attribution')}",
+        f"- latency_false_negative_rolling_window: "
+        f"{summary.get('latency_false_negative_rolling_window')}",
         f"- dynamic_age_post_apply_episode_count: "
         f"{summary.get('dynamic_age_post_apply_episode_count')}",
         f"- dynamic_age_post_apply_latency_pass_count: "
@@ -5118,6 +5368,24 @@ def write_outputs(
             "spread_bps={spread_bps} true_ofi={true_ofi_ewma} samples={true_ofi_sample_count} "
             "ws_age_ms={ws_age_ms} reason={canary_reason} next_action={canary_next_action} "
             "runtime_dynamic_age_state={runtime_dynamic_age_band_provenance_state} "
+            "decision_authority={decision_authority}".format(**item)
+        )
+    lines.extend(
+        [
+            "",
+            "## Latency False Negative Rolling Attribution",
+            "",
+        ]
+    )
+    for item in report.get("latency_false_negative_rolling_attribution_rows") or []:
+        lines.append(
+            "- venue={effective_venue} session={market_session_bucket} "
+            "cohort={canary_cohort} samples={completed_sample_count} "
+            "ready_rate={ready_for_recheck_rate_pct} "
+            "low_adverse_rate={low_adverse_opportunity_rate_pct} "
+            "avg_mfe={equal_weight_avg_mfe_after_block_pct} "
+            "avg_mae={equal_weight_avg_mae_after_block_pct} "
+            "assessment={rolling_assessment} next_action={next_action} "
             "decision_authority={decision_authority}".format(**item)
         )
     lines.extend(["", "## Dynamic-age Post-apply Attribution", ""])
