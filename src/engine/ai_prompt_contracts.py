@@ -892,6 +892,32 @@ Fill-adjusted distinct-limit rules:
    same price has zero decision value and cannot pass the price-effect gate.
 """.strip()
 
+DECISION_QUALITY_ENTRY_PRICE_V2_3_PROMPT_VERSION = (
+    "decision_quality_entry_price_v2_3_bounded_chase_cost"
+)
+DECISION_QUALITY_ENTRY_PRICE_V2_3_RESPONSE_SCHEMA = (
+    DECISION_QUALITY_ENTRY_PRICE_V2_2_RESPONSE_SCHEMA
+)
+
+_DECISION_QUALITY_ENTRY_PRICE_V2_3_RULES = """
+Bounded chase-cost rules:
+1. Preserve every V2.1 and V2.2 exact-price, source-quality, SKIP, and
+   downstream-guard rule. This remains offline replay with no order authority.
+2. A positive price_delta_from_cost_baseline_bp is allowed only when it is no
+   greater than max_incremental_chase_cost_bp. Above that bound, return the exact
+   DEFENSIVE price with USE_DEFENSIVE. Do not increase expected_upside_pct merely
+   to justify a price outside the bound.
+3. For every positive chase cost, expected_downside_pct must be strictly negative.
+   Zero downside is not a risk estimate and cannot justify paying for fill. The
+   existing minimum-upside buffer and confirmed-edge requirements still apply.
+4. Prefer a bounded price improvement when the unchanged exact snapshot supports
+   a real fill benefit. Preserve the Control/DEFENSIVE price when the candidate
+   merely pays more for a limit that the passive price is already likely to touch.
+5. The bound is an offline candidate policy learned from the frozen cohort. It
+   must not be copied into a live price, threshold, provider, or submit setting
+   without a separate reviewed promotion.
+""".strip()
+
 _DECISION_QUALITY_HOLDING_V2_3_RULES = """
 Holding decision rules:
 1. Read the canonical fields by their exact paths. position_context.buy_qty,
@@ -1178,6 +1204,17 @@ def decision_quality_entry_price_v2_2_system_prompt() -> str:
         decision_quality_entry_price_v2_1_system_prompt()
         + "\n\n"
         + _DECISION_QUALITY_ENTRY_PRICE_V2_2_RULES
+        + "\n\nApply these rules and return only the exact JSON object defined above."
+    )
+
+
+def decision_quality_entry_price_v2_3_system_prompt() -> str:
+    """Return the offline bounded chase-cost entry-price prompt."""
+
+    return (
+        decision_quality_entry_price_v2_2_system_prompt()
+        + "\n\n"
+        + _DECISION_QUALITY_ENTRY_PRICE_V2_3_RULES
         + "\n\nApply these rules and return only the exact JSON object defined above."
     )
 

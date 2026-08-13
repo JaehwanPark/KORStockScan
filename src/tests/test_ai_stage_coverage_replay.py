@@ -488,10 +488,10 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
     request = requests[0]
     facts = request["candidate_input"]["entry_price_exact_contract_facts_v1"]
     assert request["candidate"]["prompt_version"] == (
-        "decision_quality_entry_price_v2_2_fill_adjusted_distinct_limit"
+        "decision_quality_entry_price_v2_3_bounded_chase_cost"
     )
     assert request["candidate"]["semantic_validator_version"] == (
-        "entry_price_fill_adjusted_distinct_limit_semantic_v3"
+        "entry_price_bounded_chase_cost_semantic_v4"
     )
     assert request["candidate"]["response_schema"]["selected_price"] == (
         "positive_integer_or_null"
@@ -500,6 +500,7 @@ def test_prepare_entry_price_uses_conditional_selection_contract():
     assert facts["would_fill_now"] is False
     assert facts["control_selected_price"] == 99
     assert "REFERENCE" in facts["economically_distinct_bases"]
+    assert facts["max_incremental_chase_cost_bp"] == 25.0
     assert "would_fill_now=false" in request["candidate"]["system_prompt"]
     assert "incremental chase cost" in request["candidate"]["system_prompt"]
 
@@ -528,9 +529,7 @@ def test_entry_price_semantic_gate_rejects_unjustified_skip_and_basis_mismatch()
             },
         },
         "candidate": {
-            "semantic_validator_version": (
-                "entry_price_fill_adjusted_distinct_limit_semantic_v3"
-            )
+            "semantic_validator_version": ("entry_price_bounded_chase_cost_semantic_v4")
         },
         "candidate_input": {
             "entry_price_exact_contract_facts_v1": {
@@ -613,9 +612,7 @@ def test_entry_price_semantic_gate_rejects_action_only_relabel_and_weak_chase():
             },
         },
         "candidate": {
-            "semantic_validator_version": (
-                "entry_price_fill_adjusted_distinct_limit_semantic_v3"
-            )
+            "semantic_validator_version": ("entry_price_bounded_chase_cost_semantic_v4")
         },
         "candidate_input": {
             "entry_price_exact_contract_facts_v1": {
@@ -636,6 +633,7 @@ def test_entry_price_semantic_gate_rejects_action_only_relabel_and_weak_chase():
                     "BEST_BID": 0.0,
                     "BEST_ASK": 200.0,
                 },
+                "max_incremental_chase_cost_bp": 25.0,
             }
         },
     }
@@ -674,6 +672,98 @@ def test_entry_price_semantic_gate_rejects_action_only_relabel_and_weak_chase():
     errors = replay.quality.validate_replay_candidate_response(request, weak_chase)
     assert "entry_price_aggressive_limit_without_confirmed_edge" in errors
     assert "entry_price_aggressive_limit_insufficient_edge_buffer" in errors
+    assert "entry_price_aggressive_limit_exceeds_chase_cost_bound" in errors
+
+
+def test_entry_price_semantic_gate_bounds_chase_cost_and_requires_real_downside():
+    request = {
+        "stage": "entry_price",
+        "exact_payload": {
+            "price_context": {
+                "best_bid": 1000,
+                "best_ask": 1005,
+                "defensive_order_price": 1000,
+                "reference_target_price": 1002,
+                "resolved_order_price": 1003,
+            },
+            "entry_context_features": {
+                "quote_fresh_for_entry": True,
+                "quote_stale": False,
+            },
+            "ai_market_snapshot_v1": {
+                "ai_input_preflight_v1": {
+                    "allowed": True,
+                    "blockers": [],
+                    "venue_consistent": True,
+                }
+            },
+        },
+        "candidate": {
+            "semantic_validator_version": ("entry_price_bounded_chase_cost_semantic_v4")
+        },
+        "candidate_input": {
+            "entry_price_exact_contract_facts_v1": {
+                "candidate_prices": {
+                    "DEFENSIVE": 1000,
+                    "REFERENCE": 1002,
+                    "RESOLVED": 1003,
+                    "BEST_BID": 1000,
+                    "BEST_ASK": 1005,
+                },
+                "skip_permitted": False,
+                "control_selected_price": 1000,
+                "price_cost_baseline": 1000,
+                "price_delta_from_cost_baseline_bp": {
+                    "DEFENSIVE": 0.0,
+                    "REFERENCE": 20.0,
+                    "RESOLVED": 30.0,
+                    "BEST_BID": 0.0,
+                    "BEST_ASK": 50.0,
+                },
+                "max_incremental_chase_cost_bp": 25.0,
+            }
+        },
+    }
+    common = {
+        "edge_state": "EDGE",
+        "expected_upside_pct": 0.6,
+        "expected_downside_pct": -0.3,
+        "confidence": 75,
+        "reason_codes": ["edge_positive"],
+        "evidence": {
+            "trend": "supportive",
+            "liquidity": "supportive",
+            "tape": "supportive",
+            "risk": "medium",
+            "uncertainty": "medium",
+            "setup": "continuation",
+            "positive_edge": "moderate",
+            "adverse_risk": "moderate",
+            "trigger": "confirmed",
+        },
+    }
+    bounded = {
+        **common,
+        "action": "USE_REFERENCE",
+        "selected_price": 1002,
+        "price_basis": "REFERENCE",
+    }
+    assert replay.quality.validate_replay_candidate_response(request, bounded) == []
+
+    zero_downside = {**bounded, "expected_downside_pct": 0.0}
+    assert "entry_price_aggressive_limit_requires_negative_downside" in (
+        replay.quality.validate_replay_candidate_response(request, zero_downside)
+    )
+
+    over_bound = {
+        **common,
+        "action": "IMPROVE_LIMIT",
+        "selected_price": 1003,
+        "price_basis": "RESOLVED",
+    }
+    assert "entry_price_aggressive_limit_exceeds_chase_cost_bound" in (
+        replay.quality.validate_replay_candidate_response(request, over_bound)
+    )
 
 
 def test_entry_price_equivalent_action_canonicalization_changes_label_only():

@@ -158,9 +158,8 @@ HOLDING_SEMANTIC_VALIDATOR_VERSION = "holding_exact_semantic_gate_v1"
 HOLDING_FLOW_BOUNDED_DEFER_SEMANTIC_VALIDATOR_VERSION = (
     "holding_flow_bounded_defer_semantic_v1"
 )
-ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = (
-    "entry_price_fill_adjusted_distinct_limit_semantic_v3"
-)
+ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION = "entry_price_bounded_chase_cost_semantic_v4"
+ENTRY_PRICE_MAX_INCREMENTAL_CHASE_COST_BP = 25.0
 ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION = "anticipatory_reversal_offline_semantic_v1"
 BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
     "bounded_opportunity_offline_semantic_v1"
@@ -5349,6 +5348,7 @@ def _entry_price_response_errors(
             evidence = response.get("evidence")
             evidence = evidence if isinstance(evidence, dict) else {}
             expected_upside_pct = _number(response.get("expected_upside_pct"))
+            expected_downside_pct = _number(response.get("expected_downside_pct"))
             supportive_immediacy = any(
                 str(evidence.get(key) or "").strip().lower() == "supportive"
                 for key in ("trend", "tape")
@@ -5366,6 +5366,15 @@ def _entry_price_response_errors(
             required_upside_pct = (selected_delta_bp / 100.0) + 0.20
             if expected_upside_pct is None or expected_upside_pct < required_upside_pct:
                 errors.append("entry_price_aggressive_limit_insufficient_edge_buffer")
+            max_chase_cost_bp = _number(
+                (contract_facts or {}).get("max_incremental_chase_cost_bp")
+            )
+            if max_chase_cost_bp is None:
+                max_chase_cost_bp = ENTRY_PRICE_MAX_INCREMENTAL_CHASE_COST_BP
+            if selected_delta_bp > max_chase_cost_bp:
+                errors.append("entry_price_aggressive_limit_exceeds_chase_cost_bound")
+            if expected_downside_pct is None or expected_downside_pct >= 0:
+                errors.append("entry_price_aggressive_limit_requires_negative_downside")
     return errors
 
 
