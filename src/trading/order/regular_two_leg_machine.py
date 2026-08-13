@@ -61,6 +61,8 @@ def _new_leg(leg_id: str, price_role: str, entry_price: int) -> dict:
         "target_order_date": "",
         "target_quantity": 0,
         "target_filled_qty": 0,
+        "target_fill_price": 0,
+        "target_filled_at": "",
     }
 
 
@@ -207,6 +209,8 @@ class SamsungRegularTwoLegMachine:
                 return self._invalid_loaded_state("state_leg_numeric_field_invalid")
             leg.setdefault("buy_filled_qty", inferred_filled_qty)
             leg.setdefault("target_quantity", inferred_filled_qty)
+            leg.setdefault("target_fill_price", 0)
+            leg.setdefault("target_filled_at", "")
         return payload
 
     def _invalid_loaded_state(self, reason: str) -> dict:
@@ -386,6 +390,7 @@ class SamsungRegularTwoLegMachine:
                     buy_filled_qty = int(leg.get("buy_filled_qty", 0) or 0)
                     target_quantity = int(leg.get("target_quantity", 0) or 0)
                     target_filled_qty = int(leg.get("target_filled_qty", 0) or 0)
+                    target_fill_price = int(leg.get("target_fill_price", 0) or 0)
                     entry_price = int(leg.get("entry_price", 0) or 0)
                     fill_price = int(leg.get("fill_price", 0) or 0)
                 except (TypeError, ValueError):
@@ -403,8 +408,11 @@ class SamsungRegularTwoLegMachine:
                 ):
                     self._block(now, "state_leg_position_invalid")
                     return False
-                if entry_price < 0 or fill_price < 0:
+                if entry_price < 0 or fill_price < 0 or target_fill_price < 0:
                     self._block(now, "state_leg_price_invalid")
+                    return False
+                if target_fill_price > 0 and target_filled_qty <= 0:
+                    self._block(now, "state_target_fill_price_without_fill")
                     return False
                 leg_status = str(leg.get("status") or "")
                 if leg_status not in allowed_leg_statuses:
@@ -578,6 +586,9 @@ class SamsungRegularTwoLegMachine:
             target_filled_qty = int(snapshot.filled_qty)
             leg["target_filled_qty"] = target_filled_qty
             leg["position_qty"] = target_quantity - target_filled_qty
+            if target_filled_qty > 0 and snapshot.fill_price:
+                leg["target_fill_price"] = int(snapshot.fill_price)
+                leg["target_filled_at"] = _iso(now)
         if (
             snapshot.source_ok
             and snapshot.found
@@ -589,6 +600,12 @@ class SamsungRegularTwoLegMachine:
                 "target_fill_confirmed",
                 leg_id=leg["leg_id"],
                 filled_qty=snapshot.filled_qty,
+                fill_price=int(snapshot.fill_price or 0),
+                fill_price_source=(
+                    "broker_kt00007_cntr_uv"
+                    if snapshot.fill_price
+                    else "unavailable_target_price_proxy_required"
+                ),
             )
         elif snapshot.source_ok and snapshot.found and snapshot.remaining_qty == 0:
             leg["status"] = "HELD" if leg["position_qty"] > 0 else "COMPLETE"

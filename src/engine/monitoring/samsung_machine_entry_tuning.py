@@ -20,11 +20,13 @@ from zoneinfo import ZoneInfo
 
 from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
 from src.trading.order.samsung_entry_policy import (
+    APPLIED_DIR,
     BASELINE_POLICIES,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
     candidate_policies_with_current_baselines,
+    load_applied_machine_policy,
     policy_hash,
     validate_candidate,
 )
@@ -33,18 +35,21 @@ from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "samsung_machine_entry_tuning"
-REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v4"
+REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v5"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "samsung_machine_entry_tuning_report_v2",
         "samsung_machine_entry_tuning_report_v3",
+        "samsung_machine_entry_tuning_report_v4",
         REPORT_SCHEMA,
     }
 )
 CLEAN_BASELINE_DATE = date.fromisoformat("2026-06-05")
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
+ROLLING_WINDOWS = {"rolling_10d": 10, "rolling_20d": 20}
 SAMPLE_FLOOR = 20
 AUTO_MIN_COMPLETED_LEGS = 20
+APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 MACHINE_FILES = {
     "morning": "samsung_morning_one_share_state.json",
@@ -85,17 +90,19 @@ METRIC_CONTRACT = {
     "metric_role": "samsung_machine_entry_tuning_observation",
     "decision_authority": "report_only_independent_machine_entry_tuning",
     "window_policy": (
-        "daily_and_all_available_actual_observations_since_clean_baseline"
+        "daily_clean_baseline_cumulative_and_rolling_10d_20d_actual_observations"
     ),
     "sample_floor": {
         "clean_baseline_cumulative_completed_signal_episodes": SAMPLE_FLOOR,
         "clean_baseline_cumulative_completed_legs": AUTO_MIN_COMPLETED_LEGS,
+        "broker_priced_completed_legs": AUTO_MIN_COMPLETED_LEGS,
     },
     "primary_decision_metric": [
         "completed_signal_episodes",
         "completed_legs_per_attempted_leg",
         "equal_weight_avg_profit_pct",
     ],
+    "profit_cost_model": "broker_target_fill_price_minus_fixed_round_trip_cost_pct",
     "source_quality_gate": [
         "target_date_matches_state",
         "two_leg_v2_schema",
@@ -106,6 +113,8 @@ METRIC_CONTRACT = {
         "target_date_krx_trading_day_for_candidate",
         "prebaseline_and_nontrading_reports_excluded",
         "historical_replay_not_mixed_with_actual_outcomes",
+        "positive_rolling_10d_20d_and_cumulative_notional_ev",
+        "exact_date_applied_policy_hash_and_fields",
     ],
     "forbidden_uses": [
         "direct_or_same_day_runtime_or_threshold_mutation",
@@ -235,6 +244,7 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     target_submitted = bool(str(leg.get("target_order_no") or "").strip())
     position_qty = _as_int(leg.get("position_qty"))
     target_filled_qty = _as_int(leg.get("target_filled_qty"))
+    target_fill_price = _as_int(leg.get("target_fill_price"))
     buy_filled_qty = _as_int(
         leg.get("buy_filled_qty", position_qty + target_filled_qty)
     )
@@ -247,8 +257,14 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     held = status == "HELD" or position_qty > 0
     terminal = status in TERMINAL_LEG_STATUSES
     profit_pct = None
-    if completed and fill_price > 0 and target_price > 0:
-        profit_pct = round((target_price / fill_price - 1.0) * 100.0 - cost_pct, 6)
+    profit_exit_price = target_fill_price or target_price
+    profit_price_source = (
+        "broker_target_fill_price"
+        if completed and target_fill_price > 0
+        else "configured_target_price_proxy" if completed else "not_completed"
+    )
+    if completed and fill_price > 0 and profit_exit_price > 0:
+        profit_pct = round((profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct, 6)
     return {
         "leg_id": str(leg.get("leg_id") or ""),
         "price_role": str(leg.get("price_role") or ""),
@@ -264,6 +280,9 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "position_qty": position_qty,
         "buy_filled_qty": buy_filled_qty,
         "target_filled_qty": target_filled_qty,
+        "target_fill_price": target_fill_price,
+        "profit_exit_price": profit_exit_price if completed else 0,
+        "profit_price_source": profit_price_source,
         "completed": completed,
         "held": held,
         "unresolved": not terminal,
@@ -305,6 +324,7 @@ def _leg_outcome_contract_valid(leg: dict[str, Any]) -> bool:
     position_qty = _as_int(leg.get("position_qty"))
     buy_filled_qty = _as_int(leg.get("buy_filled_qty"))
     target_filled_qty = _as_int(leg.get("target_filled_qty"))
+    target_fill_price = _as_int(leg.get("target_fill_price"))
     if (
         status not in KNOWN_LEG_STATUSES
         or quantity not in SUPPORTED_OWNED_LEG_QUANTITIES
@@ -315,6 +335,11 @@ def _leg_outcome_contract_valid(leg: dict[str, Any]) -> bool:
         or not 0 <= target_filled_qty <= buy_filled_qty <= quantity
         or not 0 <= position_qty <= quantity
         or position_qty != buy_filled_qty - target_filled_qty
+        or (target_fill_price > 0 and target_filled_qty <= 0)
+        or (
+            target_fill_price > 0
+            and target_fill_price < _as_int(leg.get("target_price"))
+        )
     ):
         return False
     if status == "COMPLETE":
@@ -329,6 +354,32 @@ def _leg_outcome_contract_valid(leg: dict[str, Any]) -> bool:
             and status in {"POSITION_OPEN", "TARGET_SUBMITTING", "TARGET_OPEN", "HELD"}
         )
     return not leg.get("completed")
+
+
+def _normalize_historical_machine_row(row: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(row)
+    normalized["legs"] = [
+        {
+            **leg,
+            "profit_price_source": (
+                str(leg.get("profit_price_source"))
+                if leg.get("profit_price_source")
+                else (
+                    "broker_target_fill_price"
+                    if leg.get("completed") and _as_int(leg.get("target_fill_price"))
+                    else (
+                        "configured_target_price_proxy"
+                        if leg.get("completed")
+                        and leg.get("equal_weight_profit_pct") is not None
+                        else "not_completed"
+                    )
+                )
+            ),
+        }
+        for leg in row.get("legs", [])
+        if isinstance(leg, dict)
+    ]
+    return normalized
 
 
 def _sanitize_signal_features(machine: str, raw: Any) -> dict[str, Any]:
@@ -513,7 +564,12 @@ def _signal_feature_contract_valid(machine: str, features: dict[str, Any]) -> bo
 
 
 def extract_machine_row(
-    *, machine: str, state_path: Path, target_date: str, cost_pct: float
+    *,
+    machine: str,
+    state_path: Path,
+    target_date: str,
+    cost_pct: float,
+    applied_dir: Path = APPLIED_DIR,
 ) -> dict[str, Any]:
     state = _read_json(state_path)
     if state is None:
@@ -575,6 +631,72 @@ def extract_machine_row(
         reasons.append("non_attempted_machine_not_terminal")
     if attempted and not _signal_feature_contract_valid(machine, signal_features):
         reasons.append("attempted_episode_signal_features_missing_or_invalid")
+    parsed_target_date = date.fromisoformat(target_date)
+    if (
+        attempted
+        and machine != "morning_reentry"
+        and parsed_target_date >= APPLIED_POLICY_PROVENANCE_REQUIRED_DATE
+    ):
+        applied_policy, applied_hash, applied_reason = load_applied_machine_policy(
+            machine,
+            target_date=parsed_target_date,
+            applied_dir=applied_dir,
+        )
+        if applied_policy is None:
+            reasons.append(f"exact_date_applied_policy_invalid:{applied_reason}")
+        else:
+            raw_state_legs = state.get("legs")
+            if not isinstance(raw_state_legs, list) or any(
+                _as_int(leg.get("quantity")) * 2 != int(applied_policy["quantity"])
+                for leg in raw_state_legs
+                if isinstance(leg, dict)
+            ):
+                reasons.append("exact_date_applied_quantity_mismatch")
+            expected_fields = {
+                "target_ticks": int(applied_policy["target_ticks"]),
+            }
+            if machine == "morning":
+                expected_fields.update(
+                    {
+                        "nxt_drawdown_pct": float(applied_policy["nxt_drawdown_pct"]),
+                        "sor_drawdown_pct": float(applied_policy["sor_drawdown_pct"]),
+                    }
+                )
+                observed_matches = bool(
+                    _as_int(signal_features.get("target_ticks"))
+                    == expected_fields["target_ticks"]
+                    and _as_float(
+                        (
+                            signal_features.get("required_drawdown_pct_by_route") or {}
+                        ).get("NXT")
+                    )
+                    in {None, expected_fields["nxt_drawdown_pct"]}
+                    and _as_float(
+                        (
+                            signal_features.get("required_drawdown_pct_by_route") or {}
+                        ).get("SOR")
+                    )
+                    in {None, expected_fields["sor_drawdown_pct"]}
+                )
+            else:
+                observed_matches = bool(
+                    _as_int(signal_features.get("target_ticks"))
+                    == expected_fields["target_ticks"]
+                    and _as_float(signal_features.get("required_drawdown_pct"))
+                    == float(applied_policy["rolling_high_drawdown_pct"])
+                    and _as_float(signal_features.get("max_near_low_pct"))
+                    == float(applied_policy["rolling_low_proximity_pct"])
+                    and _as_int(signal_features.get("lookback_bars"))
+                    == int(applied_policy["lookback_bars"])
+                    and _as_int(signal_features.get("entry_valid_completed_bars"))
+                    == int(applied_policy["entry_valid_completed_bars"])
+                )
+            if (
+                signal_features.get("runtime_policy_source") != "preopen_applied_policy"
+                or signal_features.get("runtime_policy_hash") != applied_hash
+                or not observed_matches
+            ):
+                reasons.append("signal_feature_exact_date_applied_policy_mismatch")
     raw_legs = state.get("legs")
     if not isinstance(raw_legs, list):
         raw_legs = []
@@ -634,19 +756,38 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for leg in row.get("legs", [])
         if leg.get("equal_weight_profit_pct") is not None
     ]
+    broker_priced_completed = [
+        leg
+        for row in attempted
+        for leg in row.get("legs", [])
+        if leg.get("equal_weight_profit_pct") is not None
+        and leg.get("profit_price_source") == "broker_target_fill_price"
+    ]
+    target_proxy_completed = [
+        leg
+        for row in attempted
+        for leg in row.get("legs", [])
+        if leg.get("equal_weight_profit_pct") is not None
+        and leg.get("profit_price_source") == "configured_target_price_proxy"
+    ]
     attempted_notional = sum(
         _as_int(leg.get("entry_price")) * _as_int(leg.get("quantity"))
         for row in attempted
         for leg in row.get("legs", [])
     )
-    completed_net_profit = sum(
+    broker_completed_net_profit = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
         * float(leg["equal_weight_profit_pct"])
         / 100.0
-        for row in attempted
-        for leg in row.get("legs", [])
-        if leg.get("equal_weight_profit_pct") is not None
+        for leg in broker_priced_completed
+    )
+    target_proxy_net_profit = sum(
+        _as_int(leg.get("fill_price"))
+        * _as_int(leg.get("buy_filled_qty"))
+        * float(leg["equal_weight_profit_pct"])
+        / 100.0
+        for leg in target_proxy_completed
     )
     attempted_legs = sum(_as_int(item.get("attempted_legs")) for item in summaries)
     submitted_legs = sum(_as_int(item.get("submitted_legs")) for item in summaries)
@@ -671,6 +812,8 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         candidate_status = "inventory_or_order_unresolved"
     elif complete_episodes < SAMPLE_FLOOR:
         candidate_status = "collect_sample"
+    elif len(broker_priced_completed) < AUTO_MIN_COMPLETED_LEGS:
+        candidate_status = "collect_broker_sell_fill_price"
     elif equal_weight_avg_profit_pct is None or equal_weight_avg_profit_pct <= 0:
         candidate_status = "hold_non_positive_ev"
     else:
@@ -689,6 +832,13 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "submitted_legs": submitted_legs,
         "filled_legs": sum(_as_int(item.get("filled_legs")) for item in summaries),
         "completed_legs": completed_legs,
+        "broker_priced_completed_legs": len(broker_priced_completed),
+        "target_price_proxy_completed_legs": len(target_proxy_completed),
+        "broker_sell_fill_price_coverage": (
+            round(len(broker_priced_completed) / completed_legs, 6)
+            if completed_legs
+            else None
+        ),
         "held_legs": held_legs,
         "unresolved_legs": unresolved_legs,
         "actual_fill_rate": (
@@ -705,7 +855,12 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "equal_weight_avg_profit_pct": equal_weight_avg_profit_pct,
         "notional_weighted_ev_pct": (
-            round(completed_net_profit / attempted_notional * 100.0, 6)
+            round(broker_completed_net_profit / attempted_notional * 100.0, 6)
+            if attempted_notional > 0
+            else None
+        ),
+        "target_price_proxy_notional_weighted_ev_pct": (
+            round(target_proxy_net_profit / attempted_notional * 100.0, 6)
             if attempted_notional > 0
             else None
         ),
@@ -839,6 +994,15 @@ def build_policy_candidate(
                 "entry_axis_observations"
             ]
         }
+        rolling_window_axes = {
+            window_name: {
+                item["axis"]: item
+                for item in report["windows"][window_name][machine][
+                    "entry_axis_observations"
+                ]
+            }
+            for window_name in ROLLING_WINDOWS
+        }
         current_policy = dict((prior_policies or {}).get(machine, baseline))
         starting_policies[machine] = dict(current_policy)
         eligible: list[tuple[float, str, dict[str, Any]]] = []
@@ -873,8 +1037,22 @@ def build_policy_candidate(
                 continue
             if outcome.get("completed_legs", 0) < AUTO_MIN_COMPLETED_LEGS:
                 continue
+            if outcome.get("broker_priced_completed_legs", 0) < AUTO_MIN_COMPLETED_LEGS:
+                continue
             ev = outcome.get("notional_weighted_ev_pct")
-            if ev is not None and float(ev) > 0:
+            rolling_outcomes = {
+                window_name: (axes.get(axis) or {}).get("outcome")
+                for window_name, axes in rolling_window_axes.items()
+            }
+            rolling_positive = all(
+                isinstance(window_outcome, dict)
+                and window_outcome.get("notional_weighted_ev_pct") is not None
+                and float(window_outcome["notional_weighted_ev_pct"]) > 0
+                for window_outcome in rolling_outcomes.values()
+            )
+            if ev is not None and float(ev) > 0 and rolling_positive:
+                item = dict(item)
+                item["rolling_outcomes"] = rolling_outcomes
                 eligible.append((float(ev), axis, item))
         if eligible:
             selection_ev, selected_axis, selected = max(
@@ -892,6 +1070,7 @@ def build_policy_candidate(
             )
             evidence = {
                 CLEAN_WINDOW_NAME: selected["outcome"],
+                **selected["rolling_outcomes"],
             }
         else:
             selection_ev = None
@@ -1046,7 +1225,7 @@ def _load_prior_daily_rows(
         if isinstance(machines, dict):
             by_date[filename_date] = {
                 machine: (
-                    machines[machine]
+                    _normalize_historical_machine_row(machines[machine])
                     if isinstance(machines.get(machine), dict)
                     else _empty_machine_row(
                         machine, filename_date, "prior_report_machine_row_missing"
@@ -1073,25 +1252,67 @@ def build_report(
     output_dir: Path,
     cost_pct: float,
     source_quality_dir: Path = SOURCE_QUALITY_DIR,
+    applied_dir: Path = APPLIED_DIR,
 ) -> dict[str, Any]:
     parsed_date = date.fromisoformat(target_date)
     expected_clean_dates = _clean_trading_dates_through(parsed_date)
     target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
         raise ValueError("cost_pct_must_be_finite_percentage")
-    daily_machines = {
-        machine: (
-            extract_machine_row(
+    daily_machines: dict[str, dict[str, Any]] = {}
+    prior_state_reconciliations: dict[str, dict[str, Any]] = {}
+    for machine, filename in MACHINE_FILES.items():
+        if not _machine_effective(machine, parsed_date):
+            daily_machines[machine] = _pre_effective_machine_row(machine, target_date)
+            continue
+        state_path = state_dir / filename
+        state = _read_json(state_path)
+        raw_state_date = str((state or {}).get("trade_date") or "")
+        try:
+            state_date = date.fromisoformat(raw_state_date)
+        except ValueError:
+            state_date = None
+        if (
+            state_date is not None
+            and CLEAN_BASELINE_DATE <= state_date < parsed_date
+            and is_krx_trading_day(state_date)
+        ):
+            resolved_row = extract_machine_row(
                 machine=machine,
-                state_path=state_dir / filename,
-                target_date=target_date,
+                state_path=state_path,
+                target_date=state_date.isoformat(),
                 cost_pct=cost_pct,
+                applied_dir=applied_dir,
             )
-            if _machine_effective(machine, parsed_date)
-            else _pre_effective_machine_row(machine, target_date)
+            original_preflight = _source_quality_preflight(
+                state_date.isoformat(), source_quality_dir
+            )
+            if not original_preflight["tuning_input_allowed"]:
+                resolved_row["eligible_for_cumulative_tuning"] = False
+                resolved_row["source_quality"] = "gap"
+                reasons = list(resolved_row.get("source_quality_reasons") or [])
+                if "original_date_source_quality_audit_blocked" not in reasons:
+                    reasons.append("original_date_source_quality_audit_blocked")
+                resolved_row["source_quality_reasons"] = reasons
+            prior_state_reconciliations[machine] = {
+                "source_date": state_date.isoformat(),
+                "state_status": resolved_row["state_status"],
+                "row": resolved_row,
+                "source_quality_preflight": original_preflight,
+            }
+            daily_machines[machine] = _empty_machine_row(
+                machine,
+                target_date,
+                "prior_episode_custody_no_current_date_episode",
+            )
+            continue
+        daily_machines[machine] = extract_machine_row(
+            machine=machine,
+            state_path=state_path,
+            target_date=target_date,
+            cost_pct=cost_pct,
+            applied_dir=applied_dir,
         )
-        for machine, filename in MACHINE_FILES.items()
-    }
     source_quality_preflight = _source_quality_preflight(
         target_date, source_quality_dir
     )
@@ -1106,6 +1327,21 @@ def build_report(
                 reasons.append("observation_source_quality_audit_blocked")
             row["source_quality_reasons"] = reasons
     history = _load_prior_daily_rows(output_dir, parsed_date, cost_pct)
+    for machine, reconciliation in prior_state_reconciliations.items():
+        source_date = reconciliation["source_date"]
+        history.setdefault(
+            source_date,
+            {
+                item: _empty_machine_row(
+                    item,
+                    source_date,
+                    "prior_report_missing_during_state_reconciliation",
+                )
+                for item in MACHINE_FILES
+                if _machine_effective(item, date.fromisoformat(source_date))
+            },
+        )
+        history[source_date][machine] = reconciliation["row"]
     if target_date_is_trading:
         history[target_date] = daily_machines
     ordered_dates = sorted(history)
@@ -1115,9 +1351,17 @@ def build_report(
         for item in expected_clean_dates
         if item not in observed_date_set
     ]
-    windows: dict[str, dict[str, Any]] = {CLEAN_WINDOW_NAME: {}}
+    windows: dict[str, dict[str, Any]] = {
+        CLEAN_WINDOW_NAME: {},
+        **{name: {} for name in ROLLING_WINDOWS},
+    }
+    rolling_date_sets = {
+        name: set(item.isoformat() for item in expected_clean_dates[-days:])
+        for name, days in ROLLING_WINDOWS.items()
+    }
     for machine in MACHINE_FILES:
-        rows = [history[day].get(machine) for day in ordered_dates]
+        dated_rows = [(day, history[day].get(machine)) for day in ordered_dates]
+        rows = [row for _, row in dated_rows]
         clean_rows = [
             row
             for row in rows
@@ -1128,6 +1372,19 @@ def build_report(
             "summary": _aggregate_rows(clean_rows),
             "entry_axis_observations": _axis_observations(clean_rows, machine),
         }
+        for window_name, window_dates in rolling_date_sets.items():
+            rolling_rows = [
+                row
+                for day, row in dated_rows
+                if day in window_dates
+                and isinstance(row, dict)
+                and row.get("cohort") != "pre_effective_not_applicable"
+            ]
+            windows[window_name][machine] = {
+                "summary": _aggregate_rows(rolling_rows),
+                "entry_axis_observations": _axis_observations(rolling_rows, machine),
+                "expected_trading_dates": sorted(window_dates),
+            }
     review_gate: dict[str, dict[str, Any]] = {}
     for machine in MACHINE_FILES:
         clean_cumulative = windows[CLEAN_WINDOW_NAME][machine]["summary"]
@@ -1150,6 +1407,15 @@ def build_report(
             "clean_baseline_notional_weighted_ev_pct": clean_cumulative[
                 "notional_weighted_ev_pct"
             ],
+            "rolling_10d_notional_weighted_ev_pct": windows["rolling_10d"][machine][
+                "summary"
+            ]["notional_weighted_ev_pct"],
+            "rolling_20d_notional_weighted_ev_pct": windows["rolling_20d"][machine][
+                "summary"
+            ]["notional_weighted_ev_pct"],
+            "broker_priced_completed_legs": clean_cumulative[
+                "broker_priced_completed_legs"
+            ],
             "allowed_runtime_apply": False,
         }
     return {
@@ -1168,6 +1434,7 @@ def build_report(
         "actual_order_submitted": False,
         "observes_actual_order_outcomes": True,
         "daily": {"machines": daily_machines},
+        "prior_state_reconciliations": prior_state_reconciliations,
         "clean_baseline_window": {
             "start_date": CLEAN_BASELINE_DATE.isoformat(),
             "end_date": target_date,
@@ -1189,6 +1456,7 @@ def build_report(
         ),
         "next_action": (
             "collect_clean_two_leg_episodes_until_auto_apply_floors; "
+            "require_positive_rolling_10d_20d_and_cumulative_broker_priced_ev; "
             "eligible_tightening_is_materialized_only_for_next_preopen; "
             "held_or_unresolved_inventory_must_close_naturally_before_candidate_readiness"
         ),
@@ -1225,7 +1493,10 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"complete episodes {gate['clean_baseline_completed_signal_episodes']}/{SAMPLE_FLOOR}, "
             f"clean-baseline cumulative equal-weight/weighted EV "
             f"{gate['clean_baseline_equal_weight_avg_profit_pct']}/"
-            f"{gate['clean_baseline_notional_weighted_ev_pct']}."
+            f"{gate['clean_baseline_notional_weighted_ev_pct']}; rolling10/20 "
+            f"{gate['rolling_10d_notional_weighted_ev_pct']}/"
+            f"{gate['rolling_20d_notional_weighted_ev_pct']}; broker-priced legs "
+            f"{gate['broker_priced_completed_legs']}/{AUTO_MIN_COMPLETED_LEGS}."
         )
     lines.extend(
         [
@@ -1260,6 +1531,7 @@ def main() -> int:
     )
     parser.add_argument("--candidate-dir", type=Path, default=CANDIDATE_DIR)
     parser.add_argument("--source-quality-dir", type=Path, default=SOURCE_QUALITY_DIR)
+    parser.add_argument("--applied-policy-dir", type=Path, default=APPLIED_DIR)
     parser.add_argument("--cost-pct", type=float, default=0.20)
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args()
@@ -1271,6 +1543,7 @@ def main() -> int:
         output_dir=args.output_dir,
         cost_pct=args.cost_pct,
         source_quality_dir=args.source_quality_dir,
+        applied_dir=args.applied_policy_dir,
     )
     json_path, md_path = write_report(report, args.output_dir)
     candidate_path = write_policy_candidate(report, args.candidate_dir)

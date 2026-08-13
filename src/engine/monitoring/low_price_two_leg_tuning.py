@@ -18,12 +18,14 @@ from typing import Any
 
 from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
 from src.trading.low_price_two_leg.policy_runtime import (
+    APPLIED_DIR,
     BASELINE_POLICIES,
     POLICY_BOUNDS,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
     candidate_policies_with_current_baselines,
+    load_applied_profile_policy,
     policy_hash,
     policy_mutations_between,
     validate_candidate,
@@ -31,6 +33,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
 from src.trading.low_price_two_leg.profiles import PROFILES
 from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
 from src.trading.order.regular_two_leg_machine import KST
+from src.trading.order.tick_utils import move_price_by_ticks
 from src.trading.order.samsung_entry_policy import (
     CANDIDATE_DIR as SAMSUNG_CANDIDATE_DIR,
 )
@@ -41,13 +44,18 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v2"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v3"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
-    {"low_price_two_leg_tuning_report_v1", REPORT_SCHEMA}
+    {
+        "low_price_two_leg_tuning_report_v1",
+        "low_price_two_leg_tuning_report_v2",
+        REPORT_SCHEMA,
+    }
 )
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 SAMPLE_FLOOR_COMPLETED_LEGS = 20
+APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
 PROFILE_FIRST_OPERATIONAL_DATES = {
@@ -89,6 +97,7 @@ METRIC_CONTRACT = {
         "clean_baseline_cumulative_completed_legs": SAMPLE_FLOOR_COMPLETED_LEGS,
     },
     "primary_decision_metric": "notional_weighted_ev_pct",
+    "profit_cost_model": "broker_target_fill_price_minus_fixed_round_trip_cost_pct",
     "source_quality_gate": [
         "target_date_profile_state_match",
         "actual_broker_receipt_terminal_leg_contract",
@@ -212,6 +221,29 @@ def _historical_profile_row(
 ) -> dict:
     row = profiles.get(profile_id)
     if isinstance(row, dict):
+        row = dict(row)
+        row["legs"] = [
+            {
+                **leg,
+                "profit_price_source": (
+                    str(leg.get("profit_price_source"))
+                    if leg.get("profit_price_source")
+                    else (
+                        "broker_target_fill_price"
+                        if leg.get("completed")
+                        and _as_int(leg.get("target_fill_price"))
+                        else (
+                            "configured_target_price_proxy"
+                            if leg.get("completed")
+                            and leg.get("net_profit_pct") is not None
+                            else "not_completed"
+                        )
+                    )
+                ),
+            }
+            for leg in row.get("legs", [])
+            if isinstance(leg, dict)
+        ]
         reasons = list(row.get("source_quality_reasons") or [])
         if (
             not _profile_was_operational(profile_id, report_date)
@@ -235,6 +267,7 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
     target_price = _as_int(raw.get("target_price"))
     position_qty = _as_int(raw.get("position_qty"))
     target_filled_qty = _as_int(raw.get("target_filled_qty"))
+    target_fill_price = _as_int(raw.get("target_fill_price"))
     buy_filled_qty = _as_int(
         raw.get("buy_filled_qty", position_qty + target_filled_qty)
     )
@@ -261,14 +294,22 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         and position_qty == buy_filled_qty - target_filled_qty
         and (status not in positive_position_statuses or position_qty > 0)
         and (target_filled_qty == 0 or status in {"TARGET_OPEN", "HELD", "COMPLETE"})
+        and (target_fill_price == 0 or target_filled_qty > 0)
+        and (target_fill_price == 0 or target_fill_price >= target_price)
         and (status != "COMPLETE" or completed)
         and (
             status != "NO_FILL"
             or (fill_price == 0 and position_qty == 0 and target_filled_qty == 0)
         )
     )
+    profit_exit_price = target_fill_price or target_price
+    profit_price_source = (
+        "broker_target_fill_price"
+        if completed and target_fill_price > 0
+        else "configured_target_price_proxy" if completed else "not_completed"
+    )
     net_profit_pct = (
-        (target_price / fill_price - 1.0) * 100.0 - cost_pct if completed else None
+        (profit_exit_price / fill_price - 1.0) * 100.0 - cost_pct if completed else None
     )
     return {
         "leg_id": str(raw.get("leg_id") or ""),
@@ -280,6 +321,9 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "position_qty": position_qty,
         "buy_filled_qty": buy_filled_qty,
         "target_filled_qty": target_filled_qty,
+        "target_fill_price": target_fill_price,
+        "profit_exit_price": profit_exit_price if completed else 0,
+        "profit_price_source": profit_price_source,
         "completed": completed,
         "held": held,
         "terminal": status in TERMINAL_LEG_STATUSES,
@@ -291,7 +335,12 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
 
 
 def extract_profile_row(
-    *, profile_id: str, state_path: Path, target_date: str, cost_pct: float
+    *,
+    profile_id: str,
+    state_path: Path,
+    target_date: str,
+    cost_pct: float,
+    applied_dir: Path = APPLIED_DIR,
 ) -> dict:
     profile = PROFILES[profile_id]
     state = _read_json(state_path)
@@ -323,6 +372,36 @@ def extract_profile_row(
         reasons.append("legs_invalid")
     legs = [_sanitize_leg(leg, cost_pct) for leg in raw_legs if isinstance(leg, dict)]
     if attempted:
+        parsed_target_date = date.fromisoformat(target_date)
+        applied_policy: dict[str, Any] | None = None
+        applied_hash = ""
+        if parsed_target_date >= APPLIED_POLICY_PROVENANCE_REQUIRED_DATE:
+            applied_policy, applied_hash, applied_reason = load_applied_profile_policy(
+                profile_id,
+                target_date=parsed_target_date,
+                applied_dir=applied_dir,
+            )
+            if applied_policy is None:
+                reasons.append(f"exact_date_applied_policy_invalid:{applied_reason}")
+            elif (
+                features.get("runtime_policy_source") != "preopen_applied_policy"
+                or features.get("runtime_policy_hash") != applied_hash
+                or _as_float(features.get("required_drawdown_pct"))
+                != float(applied_policy["rolling_high_drawdown_pct"])
+                or _as_float(features.get("max_near_low_pct"))
+                != float(applied_policy["rolling_low_proximity_pct"])
+                or _as_int(features.get("lookback_bars"))
+                != int(applied_policy["lookback_bars"])
+                or _as_int(features.get("entry_valid_completed_bars"))
+                != int(applied_policy["entry_valid_completed_bars"])
+                or _as_int(features.get("target_ticks"))
+                != int(applied_policy["target_ticks"])
+            ):
+                reasons.append("signal_feature_exact_date_applied_policy_mismatch")
+            if applied_policy is not None and any(
+                leg["quantity"] * 2 != int(applied_policy["quantity"]) for leg in legs
+            ):
+                reasons.append("exact_date_applied_quantity_mismatch")
         if len(legs) != 2 or {leg["leg_id"] for leg in legs} != set(
             profile.policy.entry_leg_ids
         ):
@@ -349,9 +428,13 @@ def extract_profile_row(
                 for leg in legs
             ):
                 reasons.append("leg_entry_price_profile_contract_invalid")
+        expected_target_ticks = int(
+            (applied_policy or {}).get("target_ticks", profile.policy.target_ticks)
+        )
         if any(
             leg["fill_price"] > 0
-            and leg["target_price"] != profile.policy.target_price(leg["fill_price"])
+            and leg["target_price"]
+            != move_price_by_ticks(leg["fill_price"], expected_target_ticks)
             for leg in legs
         ):
             reasons.append("leg_target_price_profile_contract_invalid")
@@ -395,17 +478,38 @@ def _aggregate(rows: list[dict]) -> dict:
     legs = [leg for row in attempted_rows for leg in row.get("legs", [])]
     all_legs = [leg for row in all_attempted_rows for leg in row.get("legs", [])]
     completed = [leg for leg in legs if leg.get("completed")]
+    broker_priced_completed = [
+        leg
+        for leg in completed
+        if leg.get("profit_price_source") == "broker_target_fill_price"
+    ]
+    target_proxy_completed = [
+        leg
+        for leg in completed
+        if leg.get("profit_price_source") == "configured_target_price_proxy"
+    ]
     attempted_notional = sum(
         _as_int(leg.get("entry_price")) * _as_int(leg.get("quantity")) for leg in legs
     )
-    realized_profit = sum(
+    broker_realized_profit = sum(
         _as_int(leg.get("fill_price"))
         * _as_int(leg.get("buy_filled_qty"))
         * float(leg["net_profit_pct"])
         / 100.0
-        for leg in completed
+        for leg in broker_priced_completed
     )
-    ev = realized_profit / attempted_notional * 100.0 if attempted_notional else None
+    target_proxy_profit = sum(
+        _as_int(leg.get("fill_price"))
+        * _as_int(leg.get("buy_filled_qty"))
+        * float(leg["net_profit_pct"])
+        / 100.0
+        for leg in target_proxy_completed
+    )
+    ev = (
+        broker_realized_profit / attempted_notional * 100.0
+        if attempted_notional
+        else None
+    )
     return {
         "eligible_days": sum(row.get("eligible_for_tuning") for row in rows),
         "source_gap_days": sum(
@@ -416,11 +520,23 @@ def _aggregate(rows: list[dict]) -> dict:
         ),
         "attempted_episodes": len(attempted_rows),
         "completed_legs": len(completed),
+        "broker_priced_completed_legs": len(broker_priced_completed),
+        "target_price_proxy_completed_legs": len(target_proxy_completed),
+        "broker_sell_fill_price_coverage": (
+            round(len(broker_priced_completed) / len(completed), 6)
+            if completed
+            else None
+        ),
         "no_fill_legs": sum(leg.get("status") == "NO_FILL" for leg in legs),
         "held_or_unresolved_legs": sum(
             leg.get("held") or not leg.get("terminal") for leg in all_legs
         ),
         "notional_weighted_ev_pct": round(ev, 6) if ev is not None else None,
+        "target_price_proxy_notional_weighted_ev_pct": (
+            round(target_proxy_profit / attempted_notional * 100.0, 6)
+            if attempted_notional
+            else None
+        ),
     }
 
 
@@ -551,6 +667,7 @@ def build_report(
     state_dir: Path = DEFAULT_STATE_DIR,
     output_dir: Path = OUTPUT_DIR,
     source_quality_dir: Path = SOURCE_QUALITY_DIR,
+    applied_dir: Path = APPLIED_DIR,
     cost_pct: float = 0.20,
 ) -> dict:
     parsed_date = date.fromisoformat(target_date)
@@ -578,6 +695,7 @@ def build_report(
                 state_path=state_path,
                 target_date=state_date.isoformat(),
                 cost_pct=cost_pct,
+                applied_dir=applied_dir,
             )
             original_preflight = _source_quality_preflight(
                 state_date.isoformat(), source_quality_dir
@@ -609,6 +727,7 @@ def build_report(
             state_path=state_path,
             target_date=target_date,
             cost_pct=cost_pct,
+            applied_dir=applied_dir,
         )
     source_preflight = _source_quality_preflight(target_date, source_quality_dir)
     if not source_preflight["tuning_input_allowed"]:
@@ -743,6 +862,8 @@ def build_candidate(
                 == "pass"
                 and profile_inventory_clear
                 and clean_outcome["completed_legs"] >= SAMPLE_FLOOR_COMPLETED_LEGS
+                and clean_outcome["broker_priced_completed_legs"]
+                >= SAMPLE_FLOOR_COMPLETED_LEGS
                 and clean_outcome["held_or_unresolved_legs"] == 0
                 and candidate_ev is not None
                 and current_ev is not None
@@ -886,6 +1007,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--candidate-dir", type=Path, default=CANDIDATE_DIR)
     parser.add_argument("--source-quality-dir", type=Path, default=SOURCE_QUALITY_DIR)
+    parser.add_argument("--applied-policy-dir", type=Path, default=APPLIED_DIR)
     parser.add_argument("--cost-pct", type=float, default=0.20)
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
@@ -894,6 +1016,7 @@ def main(argv: list[str] | None = None) -> int:
         state_dir=args.state_dir,
         output_dir=args.output_dir,
         source_quality_dir=args.source_quality_dir,
+        applied_dir=args.applied_policy_dir,
         cost_pct=args.cost_pct,
     )
     candidate = build_candidate(report, candidate_dir=args.candidate_dir)

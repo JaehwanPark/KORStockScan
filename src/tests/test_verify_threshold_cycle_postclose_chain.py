@@ -20,6 +20,68 @@ def test_low_price_postclose_contract_rejects_missing_handoff_artifacts():
     assert status["runtime_effect"] is False
 
 
+def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidate():
+    from src.engine.monitoring.samsung_machine_entry_tuning import (
+        MACHINE_FILES,
+        REPORT_SCHEMA,
+    )
+    from src.trading.order.samsung_entry_policy import (
+        BASELINE_POLICIES,
+        CANDIDATE_SCHEMA,
+        policy_hash,
+    )
+
+    target_date = "2026-08-14"
+    machines = {
+        machine: {
+            "selection_status": "carry_forward_current_policy_insufficient_evidence",
+            "selected_axis": None,
+            "policy": dict(policy),
+            "evidence": {},
+            "allowed_runtime_apply": True,
+        }
+        for machine, policy in BASELINE_POLICIES.items()
+    }
+    candidate = {
+        "schema": CANDIDATE_SCHEMA,
+        "source_date": target_date,
+        "source_report": "samsung_machine_entry_tuning",
+        "source_report_schema": REPORT_SCHEMA,
+        "clean_tuning_baseline_date": "2026-06-05",
+        "policy_hash": policy_hash(
+            {machine: item["policy"] for machine, item in machines.items()}
+        ),
+        "policy_mutations": [],
+        "machines": machines,
+        "decision_authority": "postclose_bounded_candidate_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+    }
+    report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "daily": {"machines": {machine: {} for machine in MACHINE_FILES}},
+        "windows": {
+            name: {machine: {} for machine in MACHINE_FILES}
+            for name in ("clean_baseline_cumulative", "rolling_10d", "rolling_20d")
+        },
+    }
+
+    status = mod._samsung_machine_entry_postclose_contract_status(
+        report, candidate, target_date=target_date
+    )
+    assert status["status"] == "pass"
+    del report["windows"]["rolling_10d"]
+    invalid = mod._samsung_machine_entry_postclose_contract_status(
+        report, candidate, target_date=target_date
+    )
+    assert "tuning_window_contract_invalid" in invalid["issues"]
+
+
 def _smoothing_journal(sample_floor: int, *, arm_id: str) -> dict:
     return {
         "schema": "smoothing_source_only_path_journal_v3",

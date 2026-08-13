@@ -223,6 +223,8 @@ def test_each_fill_submits_own_two_tick_target_and_completes(tmp_path):
     complete = machine.run_once(_scan_at(12, 3))
     assert complete["status"] == "COMPLETE"
     assert complete["position_qty"] == 0
+    assert [leg["target_fill_price"] for leg in complete["legs"]] == [98_300, 98_200]
+    assert all(leg["target_filled_at"] for leg in complete["legs"])
 
 
 def test_partial_buy_cancels_remainder_then_sells_only_confirmed_quantity(tmp_path):
@@ -260,6 +262,7 @@ def test_partial_buy_cancels_remainder_then_sells_only_confirmed_quantity(tmp_pa
     assert signal_leg["status"] == "TARGET_OPEN"
     assert signal_leg["position_qty"] == 2
     assert signal_leg["target_filled_qty"] == 2
+    assert signal_leg["target_fill_price"] == 98_300
 
 
 def test_one_filled_leg_keeps_target_while_other_leg_expires(tmp_path):

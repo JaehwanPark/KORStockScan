@@ -17,6 +17,7 @@ from src.engine.monitoring.low_price_two_leg_tuning import (
     REPORT_SCHEMA,
     build_candidate,
     build_report,
+    extract_profile_row,
 )
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import candidate_grid
 from src.trading.low_price_two_leg.gateway import (
@@ -931,11 +932,13 @@ def _tuning_row(profile_id: str, index: int, *, strong: bool) -> dict:
                 "entry_price": 20_000,
                 "fill_price": 20_000,
                 "target_price": 20_100,
+                "target_fill_price": 20_100,
                 "completed": True,
                 "held": False,
                 "terminal": True,
                 "buy_filled_qty": 1,
                 "net_profit_pct": profit_pct,
+                "profit_price_source": "broker_target_fill_price",
             }
             for leg_id in profile.policy.entry_leg_ids
         ],
@@ -980,6 +983,7 @@ def test_tuning_accepts_ten_share_partial_fill_and_weights_actual_quantity(
                 "buy_filled_qty": completed_fill_qty,
                 "target_price": target_price,
                 "target_filled_qty": completed_fill_qty,
+                "target_fill_price": target_price,
             },
             {
                 "leg_id": no_fill_plan["leg_id"],
@@ -1025,6 +1029,106 @@ def test_tuning_accepts_ten_share_partial_fill_and_weights_actual_quantity(
     )
     assert mixed_row["source_quality"] == "gap"
     assert "leg_quantity_or_status_invalid" in mixed_row["source_quality_reasons"]
+
+
+def test_tuning_accepts_exact_date_kakao_three_tick_policy_and_hash(tmp_path):
+    profile_id = "kakao_morning"
+    target_date = date(2026, 8, 14)
+    applied_dir = tmp_path / "applied"
+    applied, status = build_applied_policy(
+        target_date=target_date,
+        candidate_dir=tmp_path / "candidates",
+    )
+    assert status == "baseline_no_prior_candidate"
+    atomic_write_json(
+        applied_dir / f"low_price_two_leg_policy_{target_date.isoformat()}.json",
+        applied,
+    )
+    profile = PROFILES[profile_id]
+    signal_close = 39_250
+    policy = applied["profiles"][profile_id]["policy"]
+    plans = profile.policy.entry_legs(signal_close)
+    legs = []
+    for plan in plans:
+        fill_price = int(plan["entry_price"])
+        legs.append(
+            {
+                "leg_id": plan["leg_id"],
+                "quantity": 10,
+                "entry_price": fill_price,
+                "status": "COMPLETE",
+                "fill_price": fill_price,
+                "position_qty": 0,
+                "buy_filled_qty": 10,
+                "target_price": move_price_by_ticks(fill_price, 3),
+                "target_filled_qty": 10,
+                "target_fill_price": move_price_by_ticks(fill_price, 3),
+            }
+        )
+    state = {
+        "schema": f"low_price_two_leg_{profile_id}_state_v1",
+        "trade_date": target_date.isoformat(),
+        "status": "COMPLETE",
+        "attempt_consumed": True,
+        "signal_features": {
+            "schema": "regular_two_leg_entry_signal_features_v1",
+            "strategy": profile_id,
+            "symbol": profile.symbol,
+            "signal_close": signal_close,
+            "observed_drawdown_pct": 1.0,
+            "observed_near_low_pct": 0.1,
+            "required_drawdown_pct": policy["rolling_high_drawdown_pct"],
+            "max_near_low_pct": policy["rolling_low_proximity_pct"],
+            "lookback_bars": policy["lookback_bars"],
+            "entry_valid_completed_bars": policy["entry_valid_completed_bars"],
+            "target_ticks": policy["target_ticks"],
+            "runtime_policy_source": "preopen_applied_policy",
+            "runtime_policy_hash": applied["policy_hash"],
+        },
+        "legs": legs,
+    }
+    state_path = tmp_path / "kakao.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    row = extract_profile_row(
+        profile_id=profile_id,
+        state_path=state_path,
+        target_date=target_date.isoformat(),
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+
+    assert row["source_quality"] == "pass"
+    assert all(
+        leg["profit_price_source"] == "broker_target_fill_price" for leg in row["legs"]
+    )
+    state["signal_features"]["runtime_policy_hash"] = "f" * 64
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    mismatched = extract_profile_row(
+        profile_id=profile_id,
+        state_path=state_path,
+        target_date=target_date.isoformat(),
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+    assert (
+        "signal_feature_exact_date_applied_policy_mismatch"
+        in mismatched["source_quality_reasons"]
+    )
+    state["signal_features"]["runtime_policy_hash"] = applied["policy_hash"]
+    state["legs"][0]["quantity"] = 1
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    quantity_mismatch = extract_profile_row(
+        profile_id=profile_id,
+        state_path=state_path,
+        target_date=target_date.isoformat(),
+        cost_pct=0.20,
+        applied_dir=applied_dir,
+    )
+    assert (
+        "exact_date_applied_quantity_mismatch"
+        in quantity_mismatch["source_quality_reasons"]
+    )
 
 
 def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
@@ -1530,3 +1634,15 @@ def test_contradictory_complete_receipt_is_quarantined(tmp_path):
     row = report["daily"]["profiles"][profile_id]
     assert row["eligible_for_tuning"] is False
     assert "leg_execution_contract_invalid" in row["source_quality_reasons"]
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["legs"][0]["position_qty"] = 0
+    payload["legs"][0]["target_fill_price"] = payload["legs"][0]["target_price"] - 50
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    below_limit = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=tmp_path / "reports-below-limit",
+        source_quality_dir=source_quality_dir,
+    )["daily"]["profiles"][profile_id]
+    assert "leg_execution_contract_invalid" in below_limit["source_quality_reasons"]
